@@ -30,7 +30,7 @@ exclusively.
 | Symmetric encryption | AES-256-GCM      | Payload encryption after KEM   |
 | Key derivation       | HKDF-SHA3-256    | Derive symmetric key from KEM shared secret |
 | Hashing              | SHA3-256          | Fingerprints, mailbox addresses, node IDs |
-| TLS                  | PQ via OQS-OpenSSL 3.x provider | Statically linked |
+| Transport            | Plain HTTP        | No TLS — application-layer crypto makes it redundant |
 
 No classical crypto (RSA, ECDSA, ECDH, Ed25519, X25519) is used anywhere in the
 protocol.
@@ -153,6 +153,8 @@ No daily rotation — profiles are persistent, not ephemeral.
 
 7. **Group messaging:** Deferred to later design.
 
-8. **Transport:** REST endpoints, PQ TLS details.
+8. **Transport:** REST endpoints, plain HTTP (no TLS — all security at
+   application layer via ML-DSA signatures and ML-KEM encryption).
 
 9. **Tech stack:** C++, cpp-httplib, liboqs, libmdbx, jsoncpp, spdlog.
+   No OpenSSL dependency.
