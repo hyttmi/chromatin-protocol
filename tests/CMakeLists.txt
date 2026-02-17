@@ -1,6 +1,6 @@
 add_executable(helix-tests)
 target_sources(helix-tests PRIVATE
-    placeholder_test.cpp
+    test_crypto.cpp
 )
 target_link_libraries(helix-tests PRIVATE
     helix-core
