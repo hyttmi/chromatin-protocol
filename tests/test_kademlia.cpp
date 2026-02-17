@@ -732,3 +732,123 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
     // Verify n2's repl log also has the entry
     EXPECT_EQ(n2.repl_log->current_seq(key), 1u);
 }
+
+// ---------------------------------------------------------------------------
+// Test 14: TickRefreshesRoutingTable — tick() discovers late-joining node
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, TickRefreshesRoutingTable) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    // Only start n1 initially
+    n1.start_recv();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // n1 bootstraps from n2's port, but n2 isn't receiving yet — no discovery
+    n1.kad->set_bootstrap_addrs({{"127.0.0.1", n2.info.udp_port}});
+    EXPECT_EQ(n1.table->size(), 0u) << "n1 should not know any nodes yet";
+
+    // Now start n2
+    n2.start_recv();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Call tick() on n1 — should trigger re-bootstrap and discover n2
+    n1.kad->tick();
+
+    // Wait for FIND_NODE -> NODES exchange
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    EXPECT_GE(n1.table->size(), 1u) << "tick() should have discovered n2 via re-bootstrap";
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: PongUpdatesLastSeen — PONG updates last_seen in routing table
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PongUpdatesLastSeen) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    start_all();
+
+    // Bootstrap so they know each other
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Record n2's view of n1's last_seen
+    auto before = n1.table->find(n2.info.id);
+    ASSERT_TRUE(before.has_value()) << "n1 should know about n2";
+    auto old_last_seen = before->last_seen;
+
+    // Wait a bit so the timestamp will differ
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // n1 sends PING to n2, n2 responds with PONG, PONG handler updates n2 in n1's table
+    Message ping_msg;
+    ping_msg.type = MessageType::PING;
+    ping_msg.sender = n1.info.id;
+    ping_msg.payload = {};
+    sign_message(ping_msg, n1.keypair.secret_key);
+    n1.transport->send("127.0.0.1", n2.info.udp_port, ping_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    auto after = n1.table->find(n2.info.id);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_GT(after->last_seen, old_last_seen) << "PONG should have updated last_seen";
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: StaleNodeEviction — evict nodes not seen for > threshold
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StaleNodeEviction) {
+    auto& n1 = create_node();
+
+    // Manually add a "stale" node to n1's routing table with old timestamp
+    NodeInfo stale;
+    stale.id = NodeId::from_pubkey(generate_keypair().public_key);
+    stale.address = "127.0.0.1";
+    stale.udp_port = 9999;
+    stale.ws_port = 0;
+    stale.last_seen = std::chrono::steady_clock::now() - std::chrono::seconds(200);
+    n1.table->add_or_update(stale);
+
+    ASSERT_EQ(n1.table->size(), 1u);
+
+    // evict_older_than should remove it
+    auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(120);
+    n1.table->evict_older_than(cutoff);
+
+    EXPECT_EQ(n1.table->size(), 0u) << "Stale node should have been evicted";
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: PingUpdatesRoutingTable — handle_ping adds sender to routing table
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PingUpdatesRoutingTable) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    start_all();
+
+    // n1 doesn't know about n2 yet
+    EXPECT_EQ(n1.table->size(), 0u);
+
+    // n2 sends PING to n1 — handle_ping should add n2 to n1's routing table
+    Message ping_msg;
+    ping_msg.type = MessageType::PING;
+    ping_msg.sender = n2.info.id;
+    ping_msg.payload = {};
+    sign_message(ping_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.udp_port, ping_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    EXPECT_GE(n1.table->size(), 1u) << "handle_ping should have added n2 to n1's routing table";
+    auto found = n1.table->find(n2.info.id);
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->udp_port, n2.info.udp_port);
+}

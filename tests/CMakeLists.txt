@@ -7,6 +7,7 @@ target_sources(helix-tests PRIVATE
     test_udp_transport.cpp
     test_kademlia.cpp
     test_repl_log.cpp
+    test_config.cpp
 )
 target_link_libraries(helix-tests PRIVATE
     helix-core
@@ -14,3 +15,7 @@ target_link_libraries(helix-tests PRIVATE
 )
 include(GoogleTest)
 gtest_discover_tests(helix-tests)
+
+# Performance benchmark (not a test — standalone binary)
+add_executable(helix-bench bench_kademlia.cpp)
+target_link_libraries(helix-bench PRIVATE helix-core)

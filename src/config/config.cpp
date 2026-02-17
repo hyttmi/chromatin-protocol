@@ -1,0 +1,155 @@
+#include "config/config.h"
+
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+
+#include <json/json.h>
+#include <spdlog/spdlog.h>
+
+namespace helix::config {
+
+namespace {
+
+// Parse "host:port" into a pair. Throws on bad format.
+std::pair<std::string, uint16_t> parse_endpoint(const std::string& s) {
+    auto colon = s.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon == s.size() - 1) {
+        throw std::runtime_error("invalid bootstrap endpoint: " + s);
+    }
+    auto host = s.substr(0, colon);
+    int port = std::stoi(s.substr(colon + 1));
+    if (port <= 0 || port > 65535) {
+        throw std::runtime_error("invalid port in bootstrap endpoint: " + s);
+    }
+    return {host, static_cast<uint16_t>(port)};
+}
+
+} // namespace
+
+Config load_config(const std::filesystem::path& path) {
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("cannot open config file: " + path.string());
+    }
+
+    Json::Value root;
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    if (!Json::parseFromStream(builder, ifs, &root, &errors)) {
+        throw std::runtime_error("config parse error: " + errors);
+    }
+
+    Config cfg;
+
+    if (root.isMember("data_dir")) {
+        cfg.data_dir = root["data_dir"].asString();
+    }
+    if (root.isMember("bind")) {
+        cfg.bind = root["bind"].asString();
+    }
+    if (root.isMember("udp_port")) {
+        cfg.udp_port = static_cast<uint16_t>(root["udp_port"].asUInt());
+    }
+    if (root.isMember("ws_port")) {
+        cfg.ws_port = static_cast<uint16_t>(root["ws_port"].asUInt());
+    }
+    if (root.isMember("bootstrap") && root["bootstrap"].isArray()) {
+        for (const auto& entry : root["bootstrap"]) {
+            cfg.bootstrap.push_back(parse_endpoint(entry.asString()));
+        }
+    }
+
+    return cfg;
+}
+
+void generate_default_config(const std::filesystem::path& path) {
+    Json::Value root;
+    root["data_dir"] = ".";
+    root["bind"] = "0.0.0.0";
+    root["udp_port"] = 4000;
+    root["ws_port"] = 4001;
+
+    Json::Value bootstrap(Json::arrayValue);
+    bootstrap.append("0.bootstrap.cpunk.io:4000");
+    bootstrap.append("1.bootstrap.cpunk.io:4000");
+    bootstrap.append("2.bootstrap.cpunk.io:4000");
+    root["bootstrap"] = bootstrap;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "  ";
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) {
+        throw std::runtime_error("cannot write config file: " + path.string());
+    }
+    ofs << Json::writeString(writer, root) << '\n';
+}
+
+crypto::KeyPair load_or_generate_keypair(const std::filesystem::path& data_dir) {
+    auto key_path = data_dir / "node.key";
+
+    if (std::filesystem::exists(key_path)) {
+        // Load existing keypair
+        std::ifstream ifs(key_path, std::ios::binary);
+        if (!ifs.is_open()) {
+            throw std::runtime_error("cannot open key file: " + key_path.string());
+        }
+
+        auto read_u32 = [&]() -> uint32_t {
+            uint8_t buf[4];
+            ifs.read(reinterpret_cast<char*>(buf), 4);
+            if (!ifs) throw std::runtime_error("truncated key file");
+            return (static_cast<uint32_t>(buf[0]) << 24) |
+                   (static_cast<uint32_t>(buf[1]) << 16) |
+                   (static_cast<uint32_t>(buf[2]) << 8) |
+                   static_cast<uint32_t>(buf[3]);
+        };
+
+        uint32_t pub_len = read_u32();
+        uint32_t sec_len = read_u32();
+
+        if (pub_len != crypto::PUBLIC_KEY_SIZE || sec_len != crypto::SECRET_KEY_SIZE) {
+            throw std::runtime_error("invalid key file: unexpected key sizes");
+        }
+
+        crypto::KeyPair kp;
+        kp.public_key.resize(pub_len);
+        kp.secret_key.resize(sec_len);
+        ifs.read(reinterpret_cast<char*>(kp.public_key.data()), pub_len);
+        ifs.read(reinterpret_cast<char*>(kp.secret_key.data()), sec_len);
+        if (!ifs) {
+            throw std::runtime_error("truncated key file: " + key_path.string());
+        }
+
+        spdlog::info("loaded keypair from {}", key_path.string());
+        return kp;
+    }
+
+    // Generate new keypair
+    auto kp = crypto::generate_keypair();
+
+    std::ofstream ofs(key_path, std::ios::binary);
+    if (!ofs.is_open()) {
+        throw std::runtime_error("cannot write key file: " + key_path.string());
+    }
+
+    auto write_u32 = [&](uint32_t val) {
+        uint8_t buf[4] = {
+            static_cast<uint8_t>(val >> 24),
+            static_cast<uint8_t>(val >> 16),
+            static_cast<uint8_t>(val >> 8),
+            static_cast<uint8_t>(val)
+        };
+        ofs.write(reinterpret_cast<const char*>(buf), 4);
+    };
+
+    write_u32(static_cast<uint32_t>(kp.public_key.size()));
+    write_u32(static_cast<uint32_t>(kp.secret_key.size()));
+    ofs.write(reinterpret_cast<const char*>(kp.public_key.data()), kp.public_key.size());
+    ofs.write(reinterpret_cast<const char*>(kp.secret_key.data()), kp.secret_key.size());
+
+    spdlog::info("generated new keypair at {}", key_path.string());
+    return kp;
+}
+
+} // namespace helix::config

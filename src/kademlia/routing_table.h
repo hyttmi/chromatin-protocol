@@ -29,6 +29,7 @@ public:
     std::vector<NodeInfo> all_nodes() const;
     std::vector<NodeInfo> closest_to(const crypto::Hash& key, size_t count) const;
     size_t size() const;
+    void evict_older_than(std::chrono::steady_clock::time_point cutoff);
 
 private:
     mutable std::mutex mutex_;

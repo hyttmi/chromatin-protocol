@@ -232,6 +232,46 @@ accepting writes. Only the key owner can update their data (higher sequence
 
 All messages are ML-DSA signed by the sending node.
 
+### 6.5 Self-Healing & Periodic Maintenance
+
+Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
+
+**Re-bootstrap (refresh):**
+- Every 30s (or 5s if routing table has < 3 nodes), the node sends FIND_NODE
+  to its configured bootstrap peers AND all known nodes
+- This ensures late-joining nodes are discovered, and nodes that started
+  before bootstraps were ready will eventually connect
+- Iterative: each round discovers new peers that were learned by existing ones
+
+**Stale node detection:**
+- Every 10s, nodes not seen for > 60s are PINGed
+- PONG response updates `last_seen` in the routing table
+- PING also updates `last_seen` for the sender (bidirectional liveness)
+
+**Dead node eviction:**
+- Every 10s, nodes not seen for > 120s are evicted from the routing table
+- This prevents stale entries from accumulating
+
+**Constants:**
+
+| Parameter              | Value | Purpose                           |
+|------------------------|-------|-----------------------------------|
+| REFRESH_INTERVAL       | 30s   | Normal re-bootstrap interval      |
+| REFRESH_INTERVAL_SPARSE| 5s    | When routing table has < 3 nodes  |
+| PING_SWEEP_INTERVAL    | 10s   | How often to check for stale nodes|
+| STALE_THRESHOLD        | 60s   | Ping nodes not seen for this long |
+| EVICT_THRESHOLD        | 120s  | Remove nodes not seen this long   |
+
+**Bootstrap node resilience:**
+- If a bootstrap node goes down and comes back at the same address, existing
+  nodes re-discover it automatically via periodic refresh
+- If a bootstrap node is permanently replaced (new IP/identity), existing
+  nodes in the network are unaffected — they maintain connections via the
+  surviving bootstrap(s) and direct peer-to-peer discovery
+- New nodes joining need at least one working bootstrap address in their config
+- Future: DNS-based bootstrap (`bootstrap.cpunk.io` resolving to current IPs)
+  would allow transparent bootstrap rotation without config changes
+
 ---
 
 ## 7. Sequence-Based Replication
@@ -512,11 +552,11 @@ No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
 
 ## 13. Open Questions
 
-1. **Gossip protocol:** SWIM or simpler for node membership and failure
-   detection.
+1. ~~**Gossip protocol**~~ — Resolved: periodic tick-based refresh with
+   PING/PONG liveness and dead node eviction (section 6.5).
 
-2. **Write quorum:** W = 2 of 3? Or W = 1 (fire-and-forget with background
-   sync)?
+2. ~~**Write quorum**~~ — Resolved: W = min(2, R). A STORE is durable when
+   W nodes have confirmed (local + STORE_ACK).
 
 3. **Max message size:** Limit for a single encrypted blob?
 
@@ -528,3 +568,6 @@ No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
 
 6. **Responsibility transfer protocol:** Detailed handoff when nodes
    join/leave. How to avoid data loss during transitions?
+
+7. **DNS bootstrap:** Use DNS records (e.g. `bootstrap.cpunk.io`) instead
+   of hardcoded IPs to allow transparent bootstrap node rotation.

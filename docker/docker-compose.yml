@@ -1,0 +1,128 @@
+networks:
+  helixnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+x-node-common: &node-common
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  networks:
+    helixnet: {}
+  expose:
+    - "4000/udp"
+
+services:
+  node0:
+    <<: *node-common
+    container_name: helix-node0
+    volumes:
+      - ./configs/node0.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.10
+
+  node1:
+    <<: *node-common
+    container_name: helix-node1
+    volumes:
+      - ./configs/node1.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.11
+
+  node2:
+    <<: *node-common
+    container_name: helix-node2
+    volumes:
+      - ./configs/node2.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.12
+
+  node3:
+    <<: *node-common
+    container_name: helix-node3
+    volumes:
+      - ./configs/node3.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.13
+
+  node4:
+    <<: *node-common
+    container_name: helix-node4
+    volumes:
+      - ./configs/node4.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.14
+
+  node5:
+    <<: *node-common
+    container_name: helix-node5
+    volumes:
+      - ./configs/node5.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.15
+
+  node6:
+    <<: *node-common
+    container_name: helix-node6
+    volumes:
+      - ./configs/node6.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.16
+
+  node7:
+    <<: *node-common
+    container_name: helix-node7
+    volumes:
+      - ./configs/node7.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.17
+
+  node8:
+    <<: *node-common
+    container_name: helix-node8
+    volumes:
+      - ./configs/node8.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.18
+
+  node9:
+    <<: *node-common
+    container_name: helix-node9
+    volumes:
+      - ./configs/node9.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.19
+
+  test-runner:
+    <<: *node-common
+    container_name: helix-test-runner
+    entrypoint: ["helix-integration-test"]
+    command: ["--config", "/etc/helix/config.json"]
+    volumes:
+      - ./configs/test-runner.json:/etc/helix/config.json:ro
+    networks:
+      helixnet:
+        ipv4_address: 172.20.0.100
+    depends_on:
+      - node0
+      - node1
+      - node2
+      - node3
+      - node4
+      - node5
+      - node6
+      - node7
+      - node8
+      - node9

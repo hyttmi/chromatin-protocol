@@ -16,6 +16,24 @@ FetchContent_Declare(
 )
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# Only build the algorithms we actually use (ML-DSA-87 for signing).
+# SHA3 is part of liboqs common code and always available.
+# Add ML-KEM here when encryption is implemented.
+set(OQS_ENABLE_KEM_BIKE            OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_CLASSIC_MCELIECE OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_FRODOKEM        OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_HQC             OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_ML_KEM          OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_NTRUPRIME       OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_ML_DSA          ON  CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_FALCON          OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_SPHINCS         OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_MAYO            OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_CROSS           OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_UOV             OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_SNOVA           OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_STFL_LMS        OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_SIG_STFL_XMSS       OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(liboqs)
 
 # --- libmdbx (storage) ---
@@ -101,3 +119,4 @@ find_package(Threads REQUIRED)
 add_subdirectory(src)
 enable_testing()
 add_subdirectory(tests)
+add_subdirectory(tests/integration)

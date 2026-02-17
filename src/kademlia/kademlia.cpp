@@ -39,6 +39,70 @@ void Kademlia::bootstrap(const std::vector<std::pair<std::string, uint16_t>>& ad
 }
 
 // ---------------------------------------------------------------------------
+// Bootstrap address persistence
+// ---------------------------------------------------------------------------
+
+void Kademlia::set_bootstrap_addrs(std::vector<std::pair<std::string, uint16_t>> addrs) {
+    bootstrap_addrs_ = std::move(addrs);
+}
+
+// ---------------------------------------------------------------------------
+// Periodic maintenance (self-healing)
+// ---------------------------------------------------------------------------
+
+static constexpr auto REFRESH_INTERVAL        = std::chrono::seconds(30);
+static constexpr auto REFRESH_INTERVAL_SPARSE  = std::chrono::seconds(5);
+static constexpr auto PING_SWEEP_INTERVAL      = std::chrono::seconds(10);
+static constexpr auto STALE_THRESHOLD          = std::chrono::seconds(60);
+static constexpr auto EVICT_THRESHOLD          = std::chrono::seconds(120);
+static constexpr size_t SPARSE_TABLE_SIZE      = 3;
+
+void Kademlia::tick() {
+    auto now = std::chrono::steady_clock::now();
+
+    // 1. Re-bootstrap / refresh
+    auto refresh_interval = (table_.size() < SPARSE_TABLE_SIZE)
+                                ? REFRESH_INTERVAL_SPARSE
+                                : REFRESH_INTERVAL;
+
+    if (now - last_refresh_ >= refresh_interval) {
+        last_refresh_ = now;
+
+        // Send FIND_NODE to bootstrap peers
+        if (!bootstrap_addrs_.empty()) {
+            bootstrap(bootstrap_addrs_);
+        }
+
+        // Also query all known nodes (iterative discovery)
+        auto known = table_.all_nodes();
+        for (const auto& node : known) {
+            Message msg = make_message(MessageType::FIND_NODE, {});
+            send_to_node(node, msg);
+        }
+    }
+
+    // 2. Ping stale nodes + evict dead nodes
+    if (now - last_ping_sweep_ >= PING_SWEEP_INTERVAL) {
+        last_ping_sweep_ = now;
+
+        auto stale_cutoff = now - STALE_THRESHOLD;
+        auto evict_cutoff = now - EVICT_THRESHOLD;
+
+        // Evict dead nodes first
+        table_.evict_older_than(evict_cutoff);
+
+        // Ping stale (but not yet dead) nodes
+        auto nodes = table_.all_nodes();
+        for (const auto& node : nodes) {
+            if (node.last_seen < stale_cutoff) {
+                Message msg = make_message(MessageType::PING, {});
+                send_to_node(node, msg);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Message dispatch
 // ---------------------------------------------------------------------------
 
@@ -84,14 +148,33 @@ void Kademlia::handle_message(const Message& msg, const std::string& from_addr, 
 // PING / PONG
 // ---------------------------------------------------------------------------
 
-void Kademlia::handle_ping(const Message& /*msg*/, const std::string& from, uint16_t port) {
+void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t port) {
     spdlog::debug("Received PING from {}:{}", from, port);
+
+    // Update routing table — the sender is alive
+    NodeInfo sender_info;
+    sender_info.id = msg.sender;
+    sender_info.address = from;
+    sender_info.udp_port = port;
+    sender_info.ws_port = 0;
+    sender_info.last_seen = std::chrono::steady_clock::now();
+    table_.add_or_update(sender_info);
+
     Message reply = make_message(MessageType::PONG, {});
     transport_.send(from, port, reply);
 }
 
-void Kademlia::handle_pong(const Message& /*msg*/, const std::string& from, uint16_t port) {
+void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t port) {
     spdlog::debug("Received PONG from {}:{}", from, port);
+
+    // Update routing table — the sender is alive
+    NodeInfo sender_info;
+    sender_info.id = msg.sender;
+    sender_info.address = from;
+    sender_info.udp_port = port;
+    sender_info.ws_port = 0;
+    sender_info.last_seen = std::chrono::steady_clock::now();
+    table_.add_or_update(sender_info);
 }
 
 // ---------------------------------------------------------------------------
@@ -883,7 +966,7 @@ void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uin
     spdlog::debug("STORE_ACK from {}:{} — {}/{} confirmed (W={})",
                   from, port, total_confirmed, it->second.expected + (it->second.local_stored ? 1 : 0), w);
 
-    if (total_confirmed >= w) {
+    if (total_confirmed == w) {
         spdlog::info("Write quorum reached for key ({}/{} confirmed)", total_confirmed, w);
     }
 

@@ -7,6 +7,7 @@ target_sources(helix-core PRIVATE
     kademlia/udp_transport.cpp
     kademlia/kademlia.cpp
     replication/repl_log.cpp
+    config/config.cpp
 )
 target_include_directories(helix-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # liboqs SHA3 internal headers are only exposed via the build include dir

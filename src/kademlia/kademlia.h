@@ -47,6 +47,12 @@ public:
     std::vector<NodeInfo> responsible_nodes(const crypto::Hash& key) const;
     size_t replication_factor() const;
 
+    // Periodic maintenance — call from main loop (~200ms interval)
+    void tick();
+
+    // Save bootstrap addresses for periodic re-bootstrap
+    void set_bootstrap_addrs(std::vector<std::pair<std::string, uint16_t>> addrs);
+
     const NodeInfo& self() const { return self_; }
 
     // Configurable PoW difficulty for name registration (default 28 per spec).
@@ -69,6 +75,11 @@ private:
     replication::ReplLog& repl_log_;
     crypto::KeyPair keypair_;
     int name_pow_difficulty_ = 28;
+
+    // Self-healing: saved bootstrap addresses and timer state
+    std::vector<std::pair<std::string, uint16_t>> bootstrap_addrs_;
+    std::chrono::steady_clock::time_point last_refresh_{};
+    std::chrono::steady_clock::time_point last_ping_sweep_{};
 
     // Pending STORE quorum tracking (key -> status)
     mutable std::mutex pending_mutex_;

@@ -62,4 +62,9 @@ size_t RoutingTable::size() const {
     return nodes_.size();
 }
 
+void RoutingTable::evict_older_than(std::chrono::steady_clock::time_point cutoff) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::erase_if(nodes_, [&](const NodeInfo& n) { return n.last_seen < cutoff; });
+}
+
 } // namespace helix::kademlia
