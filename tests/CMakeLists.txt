@@ -1,6 +1,9 @@
 add_executable(helix-tests)
 target_sources(helix-tests PRIVATE
     test_crypto.cpp
+    test_storage.cpp
+    test_node_id.cpp
+    test_routing_table.cpp
 )
 target_link_libraries(helix-tests PRIVATE
     helix-core

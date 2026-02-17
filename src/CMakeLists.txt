@@ -1,6 +1,9 @@
 add_library(helix-core STATIC)
 target_sources(helix-core PRIVATE
     crypto/crypto.cpp
+    storage/storage.cpp
+    kademlia/node_id.cpp
+    kademlia/routing_table.cpp
 )
 target_include_directories(helix-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # liboqs SHA3 internal headers are only exposed via the build include dir
