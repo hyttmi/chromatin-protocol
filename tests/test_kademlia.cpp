@@ -5,6 +5,7 @@
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
 #include "kademlia/udp_transport.h"
+#include "replication/repl_log.h"
 #include "storage/storage.h"
 
 #include <atomic>
@@ -19,6 +20,7 @@
 
 using namespace helix::kademlia;
 using namespace helix::crypto;
+using namespace helix::replication;
 using namespace helix::storage;
 
 // ---------------------------------------------------------------------------
@@ -31,6 +33,7 @@ struct TestNode {
     std::unique_ptr<UdpTransport> transport;
     std::unique_ptr<RoutingTable> table;
     std::unique_ptr<Storage> storage;
+    std::unique_ptr<ReplLog> repl_log;
     std::unique_ptr<Kademlia> kad;
     std::thread recv_thread;
     std::filesystem::path db_path;
@@ -103,9 +106,13 @@ protected:
         // Create routing table
         node->table = std::make_unique<RoutingTable>();
 
+        // Create replication log
+        node->repl_log = std::make_unique<ReplLog>(*node->storage);
+
         // Create kademlia engine
         node->kad = std::make_unique<Kademlia>(
-            node->info, *node->transport, *node->table, *node->storage, node->keypair);
+            node->info, *node->transport, *node->table, *node->storage,
+            *node->repl_log, node->keypair);
         node->kad->set_name_pow_difficulty(name_pow_difficulty);
 
         nodes_.push_back(std::move(node));
@@ -470,4 +477,71 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
     auto result2 = n1.storage->get(TABLE_NAMES, key);
     ASSERT_TRUE(result2.has_value());
     EXPECT_EQ(*result2, record1) << "Name should still belong to first claimant";
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: SyncBetweenNodes — store on n1, n2 sends SYNC_REQ, gets data
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, SyncBetweenNodes) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    // Bootstrap all nodes so they know each other
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Re-bootstrap so n2 knows n3
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Store a name record on node 1 directly (simulating a STORE)
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "synctest";
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+    auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
+    Hash key = name_key(name);
+
+    // Store directly on n1 (local storage + repl_log)
+    n1.storage->put(TABLE_NAMES, key, record);
+    n1.repl_log->append(key, Op::ADD, record);
+
+    // Verify n1 has the data and repl log entry
+    ASSERT_TRUE(n1.storage->get(TABLE_NAMES, key).has_value());
+    ASSERT_EQ(n1.repl_log->current_seq(key), 1u);
+
+    // Verify n2 does NOT have the data yet
+    ASSERT_FALSE(n2.storage->get(TABLE_NAMES, key).has_value());
+
+    // Node 2 sends SYNC_REQ to node 1 for the key
+    // SYNC_REQ payload: [32 bytes: key][8 bytes BE: after_seq=0]
+    std::vector<uint8_t> sync_payload;
+    sync_payload.insert(sync_payload.end(), key.begin(), key.end());
+    for (int i = 7; i >= 0; --i) {
+        sync_payload.push_back(static_cast<uint8_t>((static_cast<uint64_t>(0) >> (i * 8)) & 0xFF));
+    }
+
+    Message sync_msg;
+    sync_msg.type = MessageType::SYNC_REQ;
+    sync_msg.sender = n2.info.id;
+    sync_msg.payload = sync_payload;
+    sign_message(sync_msg, n2.keypair.secret_key);
+
+    n2.transport->send("127.0.0.1", n1.info.udp_port, sync_msg);
+
+    // Wait for SYNC_REQ -> SYNC_RESP exchange
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    // Verify node 2 now has the data
+    auto n2_data = n2.storage->get(TABLE_NAMES, key);
+    ASSERT_TRUE(n2_data.has_value()) << "n2 should have received the name record via SYNC";
+    EXPECT_EQ(*n2_data, record) << "Synced data should match original";
+
+    // Verify n2's repl log also has the entry
+    EXPECT_EQ(n2.repl_log->current_seq(key), 1u);
 }

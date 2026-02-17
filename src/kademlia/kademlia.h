@@ -10,6 +10,7 @@
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
 #include "kademlia/udp_transport.h"
+#include "replication/repl_log.h"
 #include "storage/storage.h"
 
 namespace helix::kademlia {
@@ -17,7 +18,8 @@ namespace helix::kademlia {
 class Kademlia {
 public:
     Kademlia(NodeInfo self, UdpTransport& transport, RoutingTable& table,
-             storage::Storage& storage, const crypto::KeyPair& keypair);
+             storage::Storage& storage, replication::ReplLog& repl_log,
+             const crypto::KeyPair& keypair);
 
     // Join network via bootstrap nodes
     void bootstrap(const std::vector<std::pair<std::string, uint16_t>>& addrs);
@@ -46,6 +48,7 @@ private:
     UdpTransport& transport_;
     RoutingTable& table_;
     storage::Storage& storage_;
+    replication::ReplLog& repl_log_;
     crypto::KeyPair keypair_;
     int name_pow_difficulty_ = 28;
 
@@ -57,6 +60,8 @@ private:
     void handle_store(const Message& msg, const std::string& from, uint16_t port);
     void handle_find_value(const Message& msg, const std::string& from, uint16_t port);
     void handle_value(const Message& msg, const std::string& from, uint16_t port);
+    void handle_sync_req(const Message& msg, const std::string& from, uint16_t port);
+    void handle_sync_resp(const Message& msg, const std::string& from, uint16_t port);
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     void send_to_node(const NodeInfo& node, const Message& msg);
