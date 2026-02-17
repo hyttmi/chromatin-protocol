@@ -10,6 +10,18 @@ namespace helix::crypto {
 
 using Hash = std::array<uint8_t, 32>;
 
+// Hash functor for use in unordered containers.
+struct HashHash {
+    size_t operator()(const Hash& h) const noexcept {
+        size_t result = 0;
+        // Use first 8 bytes as the hash value (the data is already well-distributed).
+        for (int i = 0; i < 8 && i < static_cast<int>(h.size()); ++i) {
+            result = (result << 8) | h[i];
+        }
+        return result;
+    }
+};
+
 // SHA3-256
 Hash sha3_256(std::span<const uint8_t> data);
 Hash sha3_256_prefixed(std::string_view prefix, std::span<const uint8_t> data);

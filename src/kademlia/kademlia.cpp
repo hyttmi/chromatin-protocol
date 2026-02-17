@@ -71,6 +71,9 @@ void Kademlia::handle_message(const Message& msg, const std::string& from_addr, 
     case MessageType::SYNC_RESP:
         handle_sync_resp(msg, from_addr, from_port);
         break;
+    case MessageType::STORE_ACK:
+        handle_store_ack(msg, from_addr, from_port);
+        break;
     default:
         spdlog::warn("Unhandled message type: 0x{:02X}", static_cast<uint8_t>(msg.type));
         break;
@@ -311,6 +314,13 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     repl_log_.append(key, replication::Op::ADD, value);
 
     spdlog::info("Stored data_type=0x{:02X} for key from {}:{}", data_type, from, port);
+
+    // Send STORE_ACK back: [32 bytes: key][1 byte: status=0x00 OK]
+    std::vector<uint8_t> ack_payload;
+    ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+    ack_payload.push_back(0x00); // OK
+    Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+    transport_.send(from, port, ack);
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +409,9 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
     payload.insert(payload.end(), value.begin(), value.end());
 
     bool stored_any = false;
+    bool local_stored = false;
+    size_t remote_count = 0;
+
     for (const auto& node : nodes) {
         if (node.id == self_.id) {
             // Store locally — perform same validation as handle_store
@@ -428,12 +441,25 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
             repl_log_.append(key, replication::Op::ADD, value);
 
             stored_any = true;
+            local_stored = true;
         } else {
-            // Send STORE to remote node
+            // Send STORE to remote node (async — don't block)
             Message msg = make_message(MessageType::STORE, payload);
             send_to_node(node, msg);
             stored_any = true;
+            ++remote_count;
         }
+    }
+
+    // Track pending replication if we sent STORE to any remote nodes
+    if (remote_count > 0) {
+        std::lock_guard lock(pending_mutex_);
+        PendingStore ps;
+        ps.expected = remote_count;
+        ps.acked = 0;
+        ps.local_stored = local_stored;
+        ps.created = std::chrono::steady_clock::now();
+        pending_stores_[key] = ps;
     }
 
     return stored_any;
@@ -819,6 +845,67 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     }
 
     spdlog::info("Applied {} SYNC entries for key from {}:{}", entries.size(), from, port);
+}
+
+// ---------------------------------------------------------------------------
+// STORE_ACK (PROTOCOL-SPEC.md section 2)
+// ---------------------------------------------------------------------------
+
+void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uint16_t port) {
+    const auto& data = msg.payload;
+
+    // STORE_ACK payload: [32 bytes: key][1 byte: status]
+    if (data.size() < 33) {
+        spdlog::warn("STORE_ACK payload too short from {}:{}", from, port);
+        return;
+    }
+
+    crypto::Hash key{};
+    std::copy_n(data.data(), 32, key.begin());
+    uint8_t status = data[32];
+
+    if (status != 0x00) {
+        spdlog::warn("STORE_ACK rejected (status=0x{:02X}) from {}:{}", status, from, port);
+        return;
+    }
+
+    std::lock_guard lock(pending_mutex_);
+    auto it = pending_stores_.find(key);
+    if (it == pending_stores_.end()) {
+        spdlog::debug("STORE_ACK for unknown key from {}:{} (already completed or expired)", from, port);
+        return;
+    }
+
+    it->second.acked++;
+    size_t total_confirmed = it->second.acked + (it->second.local_stored ? 1 : 0);
+    size_t w = write_quorum();
+
+    spdlog::debug("STORE_ACK from {}:{} — {}/{} confirmed (W={})",
+                  from, port, total_confirmed, it->second.expected + (it->second.local_stored ? 1 : 0), w);
+
+    if (total_confirmed >= w) {
+        spdlog::info("Write quorum reached for key ({}/{} confirmed)", total_confirmed, w);
+    }
+
+    // Clean up if all expected ACKs received
+    if (it->second.acked >= it->second.expected) {
+        pending_stores_.erase(it);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Write quorum + pending store status
+// ---------------------------------------------------------------------------
+
+size_t Kademlia::write_quorum() const {
+    return std::min(static_cast<size_t>(2), replication_factor());
+}
+
+std::optional<PendingStore> Kademlia::pending_store_status(const crypto::Hash& key) const {
+    std::lock_guard lock(pending_mutex_);
+    auto it = pending_stores_.find(key);
+    if (it == pending_stores_.end()) return std::nullopt;
+    return it->second;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "crypto/crypto.h"
@@ -14,6 +17,14 @@
 #include "storage/storage.h"
 
 namespace helix::kademlia {
+
+// Tracks replication status for a pending STORE operation.
+struct PendingStore {
+    size_t expected;     // number of remote nodes we sent STORE to
+    size_t acked;        // number of STORE_ACKs received
+    bool local_stored;   // whether we stored locally (counts toward quorum)
+    std::chrono::steady_clock::time_point created;
+};
 
 class Kademlia {
 public:
@@ -43,6 +54,13 @@ public:
     void set_name_pow_difficulty(int bits) { name_pow_difficulty_ = bits; }
     int name_pow_difficulty() const { return name_pow_difficulty_; }
 
+    // Write quorum: W = min(2, R). A store is "durably replicated" when W
+    // nodes (including self if responsible) have confirmed.
+    size_t write_quorum() const;
+
+    // Query replication status for a key. Returns nullopt if no pending store.
+    std::optional<PendingStore> pending_store_status(const crypto::Hash& key) const;
+
 private:
     NodeInfo self_;
     UdpTransport& transport_;
@@ -51,6 +69,10 @@ private:
     replication::ReplLog& repl_log_;
     crypto::KeyPair keypair_;
     int name_pow_difficulty_ = 28;
+
+    // Pending STORE quorum tracking (key -> status)
+    mutable std::mutex pending_mutex_;
+    std::unordered_map<crypto::Hash, PendingStore, crypto::HashHash> pending_stores_;
 
     // Message handlers
     void handle_ping(const Message& msg, const std::string& from, uint16_t port);
@@ -62,6 +84,7 @@ private:
     void handle_value(const Message& msg, const std::string& from, uint16_t port);
     void handle_sync_req(const Message& msg, const std::string& from, uint16_t port);
     void handle_sync_resp(const Message& msg, const std::string& from, uint16_t port);
+    void handle_store_ack(const Message& msg, const std::string& from, uint16_t port);
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     void send_to_node(const NodeInfo& node, const Message& msg);

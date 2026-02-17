@@ -79,6 +79,7 @@ All multi-byte integers in the protocol are **big-endian** (network byte order).
 | 0x06  | VALUE      | Response          | Value response                      |
 | 0x07  | SYNC_REQ   | Request           | Request replication log entries     |
 | 0x08  | SYNC_RESP  | Response          | Replication log entries response    |
+| 0x09  | STORE_ACK  | Response          | Acknowledgment of a STORE request   |
 
 ---
 
@@ -168,6 +169,28 @@ For each entry:
   [4 bytes BE: data_length]
   [data_length bytes: data]
 ```
+
+### STORE_ACK (0x09)
+
+Sent by a node back to the requesting node after successfully processing a STORE.
+
+```
+[32 bytes: key]
+[1 byte: status]              // 0x00 = OK, 0x01 = rejected
+```
+
+**Replication model (two-tier ACK):**
+
+Client-facing operations (WebSocket SEND) are acknowledged immediately after
+the receiving node stores the data locally. Replication to peer nodes is
+asynchronous. STORE_ACK is a node-to-node signal — the originating node tracks
+how many peers have confirmed storage. This information is internal bookkeeping
+for replication health; the client is never blocked waiting for it.
+
+Write quorum `W = min(2, R)` where `R = min(3, network_size)`. A store is
+considered "durably replicated" when `W` nodes (including the originator) have
+confirmed. If a peer does not ACK within a reasonable window, the originating
+node relies on SYNC_REQ/SYNC_RESP to reconcile later.
 
 ---
 
@@ -471,4 +494,4 @@ The protocol is designed for future extension:
 - **Protocol version:** The version byte in the UDP header allows breaking
   changes. Nodes reject unknown versions, and implementations can support
   multiple versions simultaneously.
-- **Message types:** Values 0x09-0xFF are reserved for future UDP message types.
+- **Message types:** Values 0x0A-0xFF are reserved for future UDP message types.

@@ -480,7 +480,194 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: SyncBetweenNodes — store on n1, n2 sends SYNC_REQ, gets data
+// Test 9: WriteQuorum — W = min(2, R)
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, WriteQuorum) {
+    auto& n1 = create_node();
+    EXPECT_EQ(n1.kad->write_quorum(), 1u); // Single node: min(2, 1) = 1
+
+    auto& n2 = create_node();
+    start_all();
+
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // 2 nodes: R=2, W=min(2, 2) = 2
+    EXPECT_EQ(n1.kad->write_quorum(), 2u);
+    EXPECT_EQ(n2.kad->write_quorum(), 2u);
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: StoreAckSent — handle_store sends STORE_ACK back
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreAckSent) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Bootstrap
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Store a profile on n1 directly, then send a STORE message from n2 to n1
+    Hash key{};
+    key.fill(0x55);
+    std::vector<uint8_t> value = {0xCA, 0xFE};
+
+    // Build STORE payload: [32 key][1 data_type=0x00][4 vlen][value]
+    std::vector<uint8_t> store_payload;
+    store_payload.insert(store_payload.end(), key.begin(), key.end());
+    store_payload.push_back(0x00); // profile
+    uint32_t vlen = static_cast<uint32_t>(value.size());
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+    store_payload.insert(store_payload.end(), value.begin(), value.end());
+
+    // Track received STORE_ACK
+    std::atomic<bool> got_ack{false};
+    uint8_t ack_status = 0xFF;
+
+    // Restart n2 with custom handler to capture STORE_ACK
+    n2.stop();
+    n2.recv_thread = std::thread([&]() {
+        n2.transport->run([&](const Message& msg, const std::string& from_addr, uint16_t from_port) {
+            if (msg.type == MessageType::STORE_ACK) {
+                if (msg.payload.size() >= 33) {
+                    ack_status = msg.payload[32];
+                    got_ack.store(true);
+                }
+                n2.transport->stop();
+            } else {
+                n2.kad->handle_message(msg, from_addr, from_port);
+            }
+        });
+    });
+    n2.running.store(true);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Send STORE from n2 to n1
+    Message store_msg;
+    store_msg.type = MessageType::STORE;
+    store_msg.sender = n2.info.id;
+    store_msg.payload = store_payload;
+    sign_message(store_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.udp_port, store_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    n2.transport->stop();
+    if (n2.recv_thread.joinable()) n2.recv_thread.join();
+    n2.running.store(false);
+
+    ASSERT_TRUE(got_ack.load()) << "n2 should have received STORE_ACK from n1";
+    EXPECT_EQ(ack_status, 0x00) << "STORE_ACK status should be OK";
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: PendingStoreTracking — store() creates and resolves pending entries
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PendingStoreTracking) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Bootstrap so both nodes know each other (R=2)
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    ASSERT_EQ(n1.kad->replication_factor(), 2u);
+
+    // Store a profile via n1 — it will store locally and STORE to n2
+    Hash key{};
+    key.fill(0x77);
+    std::vector<uint8_t> value = {0xBE, 0xEF};
+
+    bool ok = n1.kad->store(key, 0x00, value);
+    ASSERT_TRUE(ok);
+
+    // Immediately after store(), there should be a pending entry
+    auto status = n1.kad->pending_store_status(key);
+    ASSERT_TRUE(status.has_value()) << "Should have a pending store entry";
+    EXPECT_EQ(status->expected, 1u) << "Expected 1 remote STORE";
+    EXPECT_EQ(status->acked, 0u) << "No ACKs received yet";
+    EXPECT_TRUE(status->local_stored);
+
+    // Wait for n2 to process the STORE and send STORE_ACK back
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    // After ACK, the pending entry should be resolved (removed)
+    auto status2 = n1.kad->pending_store_status(key);
+    EXPECT_FALSE(status2.has_value()) << "Pending store should be resolved after STORE_ACK";
+
+    // Verify n2 actually stored the data
+    auto n2_data = n2.storage->get(TABLE_PROFILES, key);
+    ASSERT_TRUE(n2_data.has_value());
+    EXPECT_EQ(*n2_data, value);
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: ThreeNodeQuorum — W=2 of R=3, quorum reached after 1 remote ACK
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ThreeNodeQuorum) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    // Bootstrap all nodes
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    ASSERT_EQ(n1.kad->replication_factor(), 3u);
+    ASSERT_EQ(n1.kad->write_quorum(), 2u); // W = min(2, 3) = 2
+
+    // Store a profile via n1
+    Hash key{};
+    key.fill(0x88);
+    std::vector<uint8_t> value = {0xAB, 0xCD};
+
+    bool ok = n1.kad->store(key, 0x00, value);
+    ASSERT_TRUE(ok);
+
+    // n1 stored locally + sent to 2 remote nodes
+    auto status = n1.kad->pending_store_status(key);
+    ASSERT_TRUE(status.has_value());
+    EXPECT_EQ(status->expected, 2u);
+    EXPECT_TRUE(status->local_stored);
+
+    // Wait for both ACKs (poll with timeout for reliability under load)
+    bool cleared = false;
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!n1.kad->pending_store_status(key).has_value()) {
+            cleared = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(cleared) << "Pending store should be cleared after all ACKs";
+
+    // Verify all 3 nodes have the data
+    EXPECT_TRUE(n1.storage->get(TABLE_PROFILES, key).has_value());
+    EXPECT_TRUE(n2.storage->get(TABLE_PROFILES, key).has_value());
+    EXPECT_TRUE(n3.storage->get(TABLE_PROFILES, key).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: SyncBetweenNodes — store on n1, n2 sends SYNC_REQ, gets data
 // ---------------------------------------------------------------------------
 
 TEST_F(KademliaTest, SyncBetweenNodes) {
