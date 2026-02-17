@@ -5,6 +5,7 @@ target_sources(helix-tests PRIVATE
     test_node_id.cpp
     test_routing_table.cpp
     test_udp_transport.cpp
+    test_kademlia.cpp
 )
 target_link_libraries(helix-tests PRIVATE
     helix-core
