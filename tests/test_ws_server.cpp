@@ -59,6 +59,39 @@ Json::Value parse_json(const std::string& s) {
     return root;
 }
 
+std::string to_base64(std::span<const uint8_t> data) {
+    static constexpr char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((data.size() + 2) / 3) * 4);
+
+    size_t i = 0;
+    for (; i + 2 < data.size(); i += 3) {
+        uint32_t triple = (static_cast<uint32_t>(data[i]) << 16) |
+                          (static_cast<uint32_t>(data[i + 1]) << 8) |
+                          static_cast<uint32_t>(data[i + 2]);
+        out.push_back(table[(triple >> 18) & 0x3F]);
+        out.push_back(table[(triple >> 12) & 0x3F]);
+        out.push_back(table[(triple >> 6) & 0x3F]);
+        out.push_back(table[triple & 0x3F]);
+    }
+
+    if (i < data.size()) {
+        uint32_t triple = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < data.size())
+            triple |= static_cast<uint32_t>(data[i + 1]) << 8;
+
+        out.push_back(table[(triple >> 18) & 0x3F]);
+        out.push_back(table[(triple >> 12) & 0x3F]);
+        if (i + 1 < data.size())
+            out.push_back(table[(triple >> 6) & 0x3F]);
+        else
+            out.push_back('=');
+        out.push_back('=');
+    }
+    return out;
+}
+
 } // anonymous namespace
 
 using namespace chromatin;
@@ -416,4 +449,79 @@ TEST_F(WsServerTest, FetchWithMessages) {
     EXPECT_EQ(entry["blob"].asString(), "SGVsbG8=");
 
     client.close();
+}
+
+// ---------- SEND tests ----------
+
+TEST_F(WsServerTest, SendAndFetch) {
+    start_ws_server();
+
+    // Create sender and recipient keypairs
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    // Manually add sender to recipient's allowlist.
+    // Allowlist key: recipient_fp(32) || sender_fp(32) = 64 bytes
+    std::vector<uint8_t> allow_key;
+    allow_key.insert(allow_key.end(), recipient_fp.begin(), recipient_fp.end());
+    allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
+    std::vector<uint8_t> allow_value = {0x01};  // non-empty = allowed
+    storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
+
+    // Connect and authenticate as sender
+    TestWsClient sender_client;
+    ASSERT_TRUE(sender_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(sender_client, sender_kp));
+
+    // SEND a message to recipient
+    std::vector<uint8_t> blob_data = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
+    std::string blob_b64 = to_base64(blob_data);
+
+    Json::Value send_msg;
+    send_msg["type"] = "SEND";
+    send_msg["id"] = 100;
+    send_msg["to"] = to_hex(recipient_fp);
+    send_msg["blob"] = blob_b64;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string send_json = Json::writeString(writer, send_msg);
+    ASSERT_TRUE(sender_client.send_text(send_json));
+
+    // Use longer timeout (5s) since the store is async via worker pool
+    auto send_resp = sender_client.recv_text(5000);
+    ASSERT_TRUE(send_resp.has_value()) << "no response to SEND";
+
+    auto send_root = parse_json(*send_resp);
+    EXPECT_EQ(send_root["type"].asString(), "SEND_ACK");
+    EXPECT_EQ(send_root["id"].asInt(), 100);
+    EXPECT_FALSE(send_root["msg_id"].asString().empty());
+    EXPECT_EQ(send_root["msg_id"].asString().size(), 64u);  // 32 bytes = 64 hex chars
+
+    sender_client.close();
+
+    // Now connect as recipient and FETCH the message
+    TestWsClient recipient_client;
+    ASSERT_TRUE(recipient_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(recipient_client, recipient_kp));
+
+    ASSERT_TRUE(recipient_client.send_text(R"({"type":"FETCH","id":200})"));
+
+    auto fetch_resp = recipient_client.recv_text(5000);
+    ASSERT_TRUE(fetch_resp.has_value()) << "no response to FETCH";
+
+    auto fetch_root = parse_json(*fetch_resp);
+    EXPECT_EQ(fetch_root["type"].asString(), "MESSAGES");
+    EXPECT_EQ(fetch_root["id"].asInt(), 200);
+    ASSERT_TRUE(fetch_root["messages"].isArray());
+    ASSERT_EQ(fetch_root["messages"].size(), 1u);
+
+    auto& entry = fetch_root["messages"][0];
+    EXPECT_EQ(entry["msg_id"].asString(), send_root["msg_id"].asString());
+    EXPECT_EQ(entry["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(entry["blob"].asString(), blob_b64);
+
+    recipient_client.close();
 }

@@ -2,6 +2,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <random>
 #include <sstream>
 
@@ -28,7 +29,8 @@ void WsServer::run() {
         .maxPayloadLength = 512 * 1024,
         .idleTimeout = 120,
 
-        .open = [](ws_t* /*ws*/) {
+        .open = [this](ws_t* ws) {
+            connections_.insert(ws);
             spdlog::info("WS: client connected");
         },
 
@@ -38,6 +40,7 @@ void WsServer::run() {
         },
 
         .close = [this](ws_t* ws, int /*code*/, std::string_view /*message*/) {
+            connections_.erase(ws);
             auto* session = ws->getUserData();
             if (session->authenticated) {
                 authenticated_.erase(session->fingerprint);
@@ -122,7 +125,10 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
     } else if (type == "FETCH") {
         if (!require_auth(ws, id)) return;
         handle_fetch(ws, root);
-    } else if (type == "SEND" || type == "ALLOW" ||
+    } else if (type == "SEND") {
+        if (!require_auth(ws, id)) return;
+        handle_send(ws, root);
+    } else if (type == "ALLOW" ||
                type == "REVOKE" || type == "CONTACT_REQUEST") {
         if (!require_auth(ws, id)) return;
         // Individual handlers will be added in later tasks
@@ -197,6 +203,53 @@ std::string to_base64(std::span<const uint8_t> data) {
         else
             out.push_back('=');
         out.push_back('=');
+    }
+    return out;
+}
+
+std::optional<std::vector<uint8_t>> from_base64(const std::string& input) {
+    static constexpr uint8_t decode_table[] = {
+        // 0-42: invalid
+        255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+        255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+        255,255,255,255,255,255,255,255,255,255,255,
+        // 43: '+' = 62
+        62,
+        // 44-46: invalid
+        255,255,255,
+        // 47: '/' = 63
+        63,
+        // 48-57: '0'-'9' = 52-61
+        52,53,54,55,56,57,58,59,60,61,
+        // 58-64: invalid
+        255,255,255,255,255,255,255,
+        // 65-90: 'A'-'Z' = 0-25
+        0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
+        // 91-96: invalid
+        255,255,255,255,255,255,
+        // 97-122: 'a'-'z' = 26-51
+        26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51
+    };
+
+    std::vector<uint8_t> out;
+    out.reserve((input.size() / 4) * 3);
+
+    uint32_t accum = 0;
+    int bits = 0;
+
+    for (char c : input) {
+        if (c == '=') break;
+        if (c < 0 || static_cast<unsigned char>(c) >= sizeof(decode_table))
+            return std::nullopt;
+        uint8_t val = decode_table[static_cast<unsigned char>(c)];
+        if (val == 255) return std::nullopt;
+
+        accum = (accum << 6) | val;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<uint8_t>((accum >> bits) & 0xFF));
+        }
     }
     return out;
 }
@@ -422,6 +475,122 @@ void WsServer::handle_fetch(ws_t* ws, const Json::Value& msg) {
     resp["id"] = id;
     resp["messages"] = messages;
     send_json(ws, resp);
+}
+
+void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse recipient fingerprint
+    std::string to_hex_str = msg.get("to", "").asString();
+    if (to_hex_str.size() != 64) {
+        send_error(ws, id, 400, "to must be 64 hex chars");
+        return;
+    }
+    auto to_bytes = from_hex(to_hex_str);
+    if (!to_bytes) {
+        send_error(ws, id, 400, "invalid hex in to");
+        return;
+    }
+    crypto::Hash recipient_fp{};
+    std::copy(to_bytes->begin(), to_bytes->end(), recipient_fp.begin());
+
+    // Parse blob (base64)
+    std::string blob_b64 = msg.get("blob", "").asString();
+    if (blob_b64.empty()) {
+        send_error(ws, id, 400, "missing blob");
+        return;
+    }
+    auto blob = from_base64(blob_b64);
+    if (!blob) {
+        send_error(ws, id, 400, "invalid base64 in blob");
+        return;
+    }
+    static constexpr size_t MAX_BLOB_SIZE = 256 * 1024;  // 256 KiB
+    if (blob->size() > MAX_BLOB_SIZE) {
+        send_error(ws, id, 400, "blob exceeds 256 KiB");
+        return;
+    }
+
+    // Generate random 32-byte msg_id
+    crypto::Hash msg_id{};
+    std::random_device rd;
+    for (auto& byte : msg_id) {
+        byte = static_cast<uint8_t>(rd());
+    }
+
+    // Timestamp (seconds since epoch)
+    auto now = std::chrono::system_clock::now();
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            now.time_since_epoch()).count());
+
+    // Build inbox message binary:
+    // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    uint32_t blob_len = static_cast<uint32_t>(blob->size());
+    std::vector<uint8_t> message_binary;
+    message_binary.reserve(32 + 32 + 8 + 4 + blob_len);
+    message_binary.insert(message_binary.end(), msg_id.begin(), msg_id.end());
+    message_binary.insert(message_binary.end(),
+                          session->fingerprint.begin(), session->fingerprint.end());
+    for (int i = 7; i >= 0; --i) {
+        message_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    message_binary.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    message_binary.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    message_binary.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    message_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    message_binary.insert(message_binary.end(), blob->begin(), blob->end());
+
+    // Build composite inbox storage key:
+    // recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
+    std::vector<uint8_t> inbox_storage_key;
+    inbox_storage_key.reserve(72);
+    inbox_storage_key.insert(inbox_storage_key.end(),
+                             recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        inbox_storage_key.push_back(
+            static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    inbox_storage_key.insert(inbox_storage_key.end(), msg_id.begin(), msg_id.end());
+
+    // Compute inbox_key = SHA3-256("inbox:" || recipient_fp)
+    // Used for Kademlia routing (responsibility check) and replication.
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+
+    // Capture values needed by the worker/deferred callbacks
+    auto msg_id_copy = msg_id;
+
+    // Dispatch to worker pool
+    workers_.post([this, ws, id, inbox_key,
+                   inbox_storage_key = std::move(inbox_storage_key),
+                   message_binary = std::move(message_binary),
+                   msg_id_copy]() {
+        // Store locally with the composite key so FETCH can scan by fingerprint
+        bool ok = storage_.put(storage::TABLE_INBOXES,
+                               inbox_storage_key, message_binary);
+
+        // Also replicate via Kademlia (fire-and-forget for the response)
+        if (ok) {
+            kad_.store(inbox_key, 0x02, message_binary);
+        }
+
+        // Defer response back to the uWS event loop thread
+        loop_->defer([this, ws, id, ok, msg_id_copy]() {
+            // Check if the connection is still alive
+            if (connections_.count(ws) == 0) return;
+
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "SEND_ACK";
+                resp["id"] = id;
+                resp["msg_id"] = to_hex(msg_id_copy);
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 500, "store failed");
+            }
+        });
+    });
 }
 
 void WsServer::send_json(ws_t* ws, const Json::Value& msg) {

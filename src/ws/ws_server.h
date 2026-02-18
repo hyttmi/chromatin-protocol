@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <App.h>
@@ -67,6 +68,10 @@ private:
     struct us_timer_t* tick_timer_ = nullptr;
     std::atomic<uint16_t> listening_port_{0};
 
+    // All open connections (uWS thread only).  Used by deferred callbacks
+    // to verify a ws pointer is still valid before sending a reply.
+    std::unordered_set<ws_t*> connections_;
+
     // Authenticated sessions: fingerprint -> ws pointer (uWS thread only)
     std::unordered_map<crypto::Hash, ws_t*, crypto::HashHash> authenticated_;
 
@@ -80,6 +85,7 @@ private:
 
     // Command handlers
     void handle_fetch(ws_t* ws, const Json::Value& msg);
+    void handle_send(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
