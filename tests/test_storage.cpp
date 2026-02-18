@@ -150,3 +150,74 @@ TEST_F(StorageTest, ForeachEmptyTable) {
     });
     EXPECT_EQ(count, 0);
 }
+
+TEST_F(StorageTest, ScanMatchesPrefix) {
+    // Keys with prefix "AA" and "BB"
+    auto k1 = to_bytes("AA_msg1");
+    auto k2 = to_bytes("AA_msg2");
+    auto k3 = to_bytes("BB_msg1");
+    auto k4 = to_bytes("BB_msg2");
+    auto v = to_bytes("data");
+
+    store_->put(TABLE_INBOXES, k1, v);
+    store_->put(TABLE_INBOXES, k2, v);
+    store_->put(TABLE_INBOXES, k3, v);
+    store_->put(TABLE_INBOXES, k4, v);
+
+    std::vector<std::vector<uint8_t>> matched_keys;
+    auto prefix = to_bytes("AA");
+    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t> key, std::span<const uint8_t>) {
+        matched_keys.emplace_back(key.begin(), key.end());
+        return true;
+    });
+
+    ASSERT_EQ(matched_keys.size(), 2u);
+    EXPECT_EQ(matched_keys[0], k1);
+    EXPECT_EQ(matched_keys[1], k2);
+}
+
+TEST_F(StorageTest, ScanEarlyStop) {
+    auto k1 = to_bytes("XX_1");
+    auto k2 = to_bytes("XX_2");
+    auto k3 = to_bytes("XX_3");
+    auto v = to_bytes("data");
+
+    store_->put(TABLE_INBOXES, k1, v);
+    store_->put(TABLE_INBOXES, k2, v);
+    store_->put(TABLE_INBOXES, k3, v);
+
+    int count = 0;
+    auto prefix = to_bytes("XX");
+    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+        ++count;
+        return false; // stop after first
+    });
+
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(StorageTest, ScanNoMatches) {
+    auto k = to_bytes("AA_msg1");
+    auto v = to_bytes("data");
+    store_->put(TABLE_INBOXES, k, v);
+
+    int count = 0;
+    auto prefix = to_bytes("ZZ");
+    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+        ++count;
+        return true;
+    });
+
+    EXPECT_EQ(count, 0);
+}
+
+TEST_F(StorageTest, ScanEmptyTable) {
+    int count = 0;
+    auto prefix = to_bytes("AA");
+    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+        ++count;
+        return true;
+    });
+
+    EXPECT_EQ(count, 0);
+}

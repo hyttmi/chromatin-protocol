@@ -1,5 +1,6 @@
 #include "storage/storage.h"
 
+#include <cstring>
 #include <stdexcept>
 
 namespace chromatin::storage {
@@ -90,6 +91,29 @@ void Storage::foreach(std::string_view table, Callback cb) const {
     auto result = cursor.to_first(false);
     while (result) {
         auto k = result.key;
+        auto v = result.value;
+        std::span<const uint8_t> key_span(static_cast<const uint8_t*>(k.data()), k.size());
+        std::span<const uint8_t> val_span(static_cast<const uint8_t*>(v.data()), v.size());
+        if (!cb(key_span, val_span)) {
+            break;
+        }
+        result = cursor.to_next(false);
+    }
+}
+
+void Storage::scan(std::string_view table, std::span<const uint8_t> prefix, Callback cb) const {
+    auto map = get_map(table);
+    auto txn = env_.start_read();
+    auto cursor = txn.open_cursor(map);
+
+    auto result = cursor.lower_bound(mdbx::slice(prefix.data(), prefix.size()), false);
+    while (result) {
+        auto k = result.key;
+        // Stop if key is shorter than prefix or doesn't start with prefix
+        if (k.size() < prefix.size() ||
+            std::memcmp(k.data(), prefix.data(), prefix.size()) != 0) {
+            break;
+        }
         auto v = result.value;
         std::span<const uint8_t> key_span(static_cast<const uint8_t*>(k.data()), k.size());
         std::span<const uint8_t> val_span(static_cast<const uint8_t*>(v.data()), v.size());

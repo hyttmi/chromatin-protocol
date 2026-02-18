@@ -37,6 +37,7 @@ public:
 
     using Callback = std::function<bool(std::span<const uint8_t> key, std::span<const uint8_t> value)>;
     void foreach(std::string_view table, Callback cb) const;
+    void scan(std::string_view table, std::span<const uint8_t> prefix, Callback cb) const;
 
 private:
     mdbx::env_managed env_;
