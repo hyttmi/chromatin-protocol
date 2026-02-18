@@ -2,6 +2,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <random>
 #include <sstream>
 
 namespace chromatin::ws {
@@ -113,8 +114,209 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         return;
     }
 
-    // Command dispatch -- will be filled in by subsequent tasks.
-    send_error(ws, id, 400, "unknown command: " + type);
+    // Command dispatch
+    if (type == "HELLO") {
+        handle_hello(ws, root);
+    } else if (type == "AUTH") {
+        handle_auth(ws, root);
+    } else if (type == "FETCH" || type == "SEND" || type == "ALLOW" ||
+               type == "REVOKE" || type == "CONTACT_REQUEST") {
+        if (!require_auth(ws, id)) return;
+        // Individual handlers will be added in later tasks
+        send_error(ws, id, 400, "not yet implemented: " + type);
+    } else {
+        send_error(ws, id, 400, "unknown command: " + type);
+    }
+}
+
+// ---------- hex helpers (local to this TU) ----------
+
+namespace {
+
+std::string to_hex(std::span<const uint8_t> data) {
+    static constexpr char hex_chars[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(data.size() * 2);
+    for (uint8_t byte : data) {
+        result.push_back(hex_chars[byte >> 4]);
+        result.push_back(hex_chars[byte & 0x0F]);
+    }
+    return result;
+}
+
+std::optional<std::vector<uint8_t>> from_hex(const std::string& hex) {
+    if (hex.size() % 2 != 0) return std::nullopt;
+    std::vector<uint8_t> bytes;
+    bytes.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        auto hi = hex[i];
+        auto lo = hex[i + 1];
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+            if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+            return -1;
+        };
+        int h = nibble(hi);
+        int l = nibble(lo);
+        if (h < 0 || l < 0) return std::nullopt;
+        bytes.push_back(static_cast<uint8_t>((h << 4) | l));
+    }
+    return bytes;
+}
+
+} // anonymous namespace
+
+// ---------- auth handlers ----------
+
+void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
+    int id = msg.get("id", 0).asInt();
+    std::string fp_hex = msg.get("fingerprint", "").asString();
+    if (fp_hex.size() != 64) {
+        send_error(ws, id, 400, "fingerprint must be 64 hex chars");
+        return;
+    }
+
+    auto fp_bytes = from_hex(fp_hex);
+    if (!fp_bytes) {
+        send_error(ws, 0, 400, "invalid hex in fingerprint");
+        return;
+    }
+
+    crypto::Hash fingerprint{};
+    std::copy(fp_bytes->begin(), fp_bytes->end(), fingerprint.begin());
+
+    // Compute inbox key for responsibility check
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", fingerprint);
+
+    if (!kad_.is_responsible(inbox_key)) {
+        // REDIRECT — tell client which nodes are responsible.
+        // TODO: query each node's repl_log seq via worker pool for proper ordering.
+        // For now, seq is 0 (placeholder) since remote seq queries need TCP round-trips.
+        auto nodes = kad_.responsible_nodes(inbox_key);
+        Json::Value resp;
+        resp["type"] = "REDIRECT";
+        resp["id"] = id;
+        Json::Value node_list(Json::arrayValue);
+        for (const auto& node : nodes) {
+            Json::Value n;
+            n["address"] = node.address;
+            n["ws_port"] = node.ws_port;
+            n["seq"] = 0;
+            node_list.append(n);
+        }
+        resp["nodes"] = node_list;
+        send_json(ws, resp);
+        ws->close();
+        return;
+    }
+
+    // Generate random 32-byte nonce for challenge
+    crypto::Hash nonce{};
+    std::random_device rd;
+    for (auto& byte : nonce) {
+        byte = static_cast<uint8_t>(rd());
+    }
+
+    // Store in session
+    auto* session = ws->getUserData();
+    session->fingerprint = fingerprint;
+    session->challenge_nonce = nonce;
+
+    // Send CHALLENGE
+    Json::Value resp;
+    resp["type"] = "CHALLENGE";
+    resp["id"] = id;
+    resp["nonce"] = to_hex(nonce);
+    send_json(ws, resp);
+}
+
+void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Must have received HELLO first (nonce must be set)
+    bool nonce_empty = true;
+    for (auto b : session->challenge_nonce) {
+        if (b != 0) { nonce_empty = false; break; }
+    }
+    if (nonce_empty) {
+        send_error(ws, id, 400, "send HELLO first");
+        return;
+    }
+
+    std::string sig_hex = msg.get("signature", "").asString();
+    std::string pk_hex = msg.get("pubkey", "").asString();
+
+    if (sig_hex.empty() || pk_hex.empty()) {
+        send_error(ws, id, 400, "missing signature or pubkey");
+        return;
+    }
+
+    auto sig_bytes = from_hex(sig_hex);
+    auto pk_bytes = from_hex(pk_hex);
+
+    if (!sig_bytes || !pk_bytes) {
+        send_error(ws, id, 400, "invalid hex in signature or pubkey");
+        return;
+    }
+
+    if (pk_bytes->size() != crypto::PUBLIC_KEY_SIZE) {
+        send_error(ws, id, 400, "invalid pubkey size");
+        return;
+    }
+
+    if (sig_bytes->size() != crypto::SIGNATURE_SIZE) {
+        send_error(ws, id, 400, "invalid signature size");
+        return;
+    }
+
+    // Verify SHA3-256(pubkey) == session fingerprint
+    auto pk_hash = crypto::sha3_256(*pk_bytes);
+    if (pk_hash != session->fingerprint) {
+        send_error(ws, id, 401, "pubkey does not match fingerprint");
+        return;
+    }
+
+    // Verify signature over the nonce
+    std::span<const uint8_t> nonce_span(session->challenge_nonce.data(),
+                                         session->challenge_nonce.size());
+    if (!crypto::verify(nonce_span, *sig_bytes, *pk_bytes)) {
+        send_error(ws, id, 401, "invalid signature");
+        return;
+    }
+
+    // Auth succeeded
+    session->authenticated = true;
+    session->pubkey = std::move(*pk_bytes);
+    authenticated_[session->fingerprint] = ws;
+
+    // Count pending inbox messages
+    int pending = 0;
+    storage_.scan(storage::TABLE_INBOXES, session->fingerprint,
+                  [&pending](std::span<const uint8_t> /*key*/,
+                             std::span<const uint8_t> /*value*/) -> bool {
+                      ++pending;
+                      return true;  // continue scanning
+                  });
+
+    Json::Value resp;
+    resp["type"] = "OK";
+    resp["id"] = id;
+    resp["pending_messages"] = pending;
+    send_json(ws, resp);
+
+    spdlog::info("WS: client authenticated, fingerprint={}, pending={}",
+                 to_hex(session->fingerprint), pending);
+}
+
+bool WsServer::require_auth(ws_t* ws, int id) {
+    auto* session = ws->getUserData();
+    if (!session->authenticated) {
+        send_error(ws, id, 401, "not authenticated");
+        return false;
+    }
+    return true;
 }
 
 void WsServer::send_json(ws_t* ws, const Json::Value& msg) {

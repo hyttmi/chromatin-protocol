@@ -11,11 +11,55 @@
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <sstream>
 #include <thread>
 
 #include <json/json.h>
+
+// ---------- hex helpers (test-local) ----------
+
+namespace {
+
+std::string to_hex(std::span<const uint8_t> data) {
+    static constexpr char hex_chars[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(data.size() * 2);
+    for (uint8_t byte : data) {
+        result.push_back(hex_chars[byte >> 4]);
+        result.push_back(hex_chars[byte & 0x0F]);
+    }
+    return result;
+}
+
+std::vector<uint8_t> from_hex(const std::string& hex) {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(hex.size() / 2);
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+            if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+            return -1;
+        };
+        int h = nibble(hex[i]);
+        int l = nibble(hex[i + 1]);
+        bytes.push_back(static_cast<uint8_t>((h << 4) | l));
+    }
+    return bytes;
+}
+
+Json::Value parse_json(const std::string& s) {
+    Json::Value root;
+    Json::CharReaderBuilder builder;
+    std::string errs;
+    std::istringstream stream(s);
+    Json::parseFromStream(builder, stream, &root, &errs);
+    return root;
+}
+
+} // anonymous namespace
 
 using namespace chromatin;
 
@@ -129,4 +173,105 @@ TEST_F(WsServerTest, UnknownCommandReturnsError) {
     EXPECT_EQ(root["type"].asString(), "ERROR");
     EXPECT_EQ(root["id"].asInt(), 42);
     EXPECT_EQ(root["code"].asInt(), 400);
+}
+
+// ---------- Auth flow tests ----------
+
+TEST_F(WsServerTest, HelloChallenge) {
+    start_ws_server();
+
+    // Generate a user keypair and compute fingerprint
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+    std::string fp_hex = to_hex(fingerprint);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    // Send HELLO
+    std::string hello = R"({"type":"HELLO","fingerprint":")" + fp_hex + R"("})";
+    ASSERT_TRUE(client.send_text(hello));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to HELLO";
+
+    auto root = parse_json(*resp);
+
+    // With a single node, it is always responsible — expect CHALLENGE
+    EXPECT_EQ(root["type"].asString(), "CHALLENGE");
+    EXPECT_FALSE(root["nonce"].asString().empty());
+    EXPECT_EQ(root["nonce"].asString().size(), 64u) << "nonce must be 32 bytes (64 hex chars)";
+
+    client.close();
+}
+
+TEST_F(WsServerTest, FullAuthFlow) {
+    start_ws_server();
+
+    // Generate a user keypair and compute fingerprint
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+    std::string fp_hex = to_hex(fingerprint);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    // Step 1: HELLO
+    std::string hello = R"({"type":"HELLO","fingerprint":")" + fp_hex + R"("})";
+    ASSERT_TRUE(client.send_text(hello));
+
+    auto resp1 = client.recv_text();
+    ASSERT_TRUE(resp1.has_value()) << "no CHALLENGE response";
+    auto challenge = parse_json(*resp1);
+    ASSERT_EQ(challenge["type"].asString(), "CHALLENGE");
+
+    // Step 2: Sign the nonce
+    std::string nonce_hex = challenge["nonce"].asString();
+    auto nonce_bytes = from_hex(nonce_hex);
+    ASSERT_EQ(nonce_bytes.size(), 32u);
+
+    auto signature = crypto::sign(nonce_bytes, user_kp.secret_key);
+    ASSERT_EQ(signature.size(), crypto::SIGNATURE_SIZE);
+
+    // Step 3: AUTH
+    Json::Value auth_msg;
+    auth_msg["type"] = "AUTH";
+    auth_msg["id"] = 1;
+    auth_msg["signature"] = to_hex(signature);
+    auth_msg["pubkey"] = to_hex(user_kp.public_key);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string auth_json = Json::writeString(writer, auth_msg);
+    ASSERT_TRUE(client.send_text(auth_json));
+
+    auto resp2 = client.recv_text();
+    ASSERT_TRUE(resp2.has_value()) << "no OK response";
+    auto ok = parse_json(*resp2);
+
+    EXPECT_EQ(ok["type"].asString(), "OK");
+    EXPECT_EQ(ok["id"].asInt(), 1);
+    EXPECT_EQ(ok["pending_messages"].asInt(), 0);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, CommandBeforeAuthFails) {
+    start_ws_server();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    // Try FETCH without authenticating
+    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":7})"));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to unauthenticated FETCH";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["id"].asInt(), 7);
+    EXPECT_EQ(root["code"].asInt(), 401);
+
+    client.close();
 }

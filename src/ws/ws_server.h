@@ -73,6 +73,11 @@ private:
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
 
+    // Auth handlers
+    void handle_hello(ws_t* ws, const Json::Value& msg);
+    void handle_auth(ws_t* ws, const Json::Value& msg);
+    bool require_auth(ws_t* ws, int id);
+
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
     void send_error(ws_t* ws, int id, int code, const std::string& reason);
