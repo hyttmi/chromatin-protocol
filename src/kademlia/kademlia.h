@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -55,6 +56,14 @@ public:
 
     const NodeInfo& self() const { return self_; }
 
+    // Callback invoked after every successful local store (both handle_store
+    // and the local-storage path inside store()).  Used by the WebSocket
+    // server to push real-time notifications to connected clients.
+    using StoreCallback = std::function<void(const crypto::Hash& key,
+                                             uint8_t data_type,
+                                             std::span<const uint8_t> value)>;
+    void set_on_store(StoreCallback cb);
+
     // Configurable PoW difficulty for name registration (default 28 per spec).
     // Lower values are useful for testing.
     void set_name_pow_difficulty(int bits) { name_pow_difficulty_ = bits; }
@@ -75,6 +84,7 @@ private:
     replication::ReplLog& repl_log_;
     crypto::KeyPair keypair_;
     int name_pow_difficulty_ = 28;
+    StoreCallback on_store_;
 
     // Self-healing: saved bootstrap addresses and timer state
     std::vector<std::pair<std::string, uint16_t>> bootstrap_addrs_;

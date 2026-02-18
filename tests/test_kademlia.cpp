@@ -870,3 +870,75 @@ TEST_F(KademliaTest, PingUpdatesRoutingTable) {
     ASSERT_TRUE(found.has_value());
     EXPECT_EQ(found->tcp_port, n2.info.tcp_port);
 }
+
+// ---------------------------------------------------------------------------
+// Test 18: OnStoreCallback — on_store fires after successful store
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, OnStoreCallback) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Bootstrap so both nodes know each other
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Set on_store callback on both nodes to capture events
+    std::atomic<int> n1_cb_count{0};
+    std::atomic<int> n2_cb_count{0};
+    Hash n1_cb_key{};
+    uint8_t n1_cb_dtype = 0xFF;
+    Hash n2_cb_key{};
+    uint8_t n2_cb_dtype = 0xFF;
+
+    n1.kad->set_on_store([&](const Hash& key, uint8_t data_type,
+                             std::span<const uint8_t> /*value*/) {
+        n1_cb_key = key;
+        n1_cb_dtype = data_type;
+        n1_cb_count.fetch_add(1);
+    });
+
+    n2.kad->set_on_store([&](const Hash& key, uint8_t data_type,
+                             std::span<const uint8_t> /*value*/) {
+        n2_cb_key = key;
+        n2_cb_dtype = data_type;
+        n2_cb_count.fetch_add(1);
+    });
+
+    // Build a name record (same pattern as StoreNameRecord test)
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "callbacktest";
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+    auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
+    Hash key = name_key(name);
+
+    // Store via n1 — n1 stores locally (callback fires on n1's thread)
+    // and sends STORE to n2 (callback fires on n2's accept thread)
+    bool ok = n1.kad->store(key, 0x01, record);
+    ASSERT_TRUE(ok);
+
+    // Wait for the remote STORE to arrive at n2 and fire its callback
+    bool both_fired = false;
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (n1_cb_count.load() >= 1 && n2_cb_count.load() >= 1) {
+            both_fired = true;
+            break;
+        }
+    }
+
+    // n1 is responsible (it initiated the store and stores locally)
+    EXPECT_GE(n1_cb_count.load(), 1) << "on_store should have fired on n1 (local store)";
+    EXPECT_EQ(n1_cb_key, key);
+    EXPECT_EQ(n1_cb_dtype, 0x01);
+
+    // n2 should also have received the STORE and fired its callback
+    EXPECT_GE(n2_cb_count.load(), 1) << "on_store should have fired on n2 (remote store)";
+    EXPECT_EQ(n2_cb_key, key);
+    EXPECT_EQ(n2_cb_dtype, 0x01);
+
+    EXPECT_TRUE(both_fired) << "Callbacks should have fired on both nodes";
+}

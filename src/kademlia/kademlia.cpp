@@ -46,6 +46,10 @@ void Kademlia::set_bootstrap_addrs(std::vector<std::pair<std::string, uint16_t>>
     bootstrap_addrs_ = std::move(addrs);
 }
 
+void Kademlia::set_on_store(StoreCallback cb) {
+    on_store_ = std::move(cb);
+}
+
 // ---------------------------------------------------------------------------
 // Periodic maintenance (self-healing)
 // ---------------------------------------------------------------------------
@@ -398,6 +402,10 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
 
     spdlog::info("Stored data_type=0x{:02X} for key from {}:{}", data_type, from, port);
 
+    if (on_store_) {
+        on_store_(key, data_type, value);
+    }
+
     // Send STORE_ACK back: [32 bytes: key][1 byte: status=0x00 OK]
     std::vector<uint8_t> ack_payload;
     ack_payload.insert(ack_payload.end(), key.begin(), key.end());
@@ -522,6 +530,10 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 
             // Record mutation in the replication log
             repl_log_.append(key, replication::Op::ADD, value);
+
+            if (on_store_) {
+                on_store_(key, data_type, value);
+            }
 
             stored_any = true;
             local_stored = true;
