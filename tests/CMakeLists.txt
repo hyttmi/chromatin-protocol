@@ -9,6 +9,7 @@ target_sources(chromatin-tests PRIVATE
     test_repl_log.cpp
     test_config.cpp
     test_worker_pool.cpp
+    test_ws_server.cpp
 )
 target_link_libraries(chromatin-tests PRIVATE
     chromatin-core

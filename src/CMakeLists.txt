@@ -8,6 +8,7 @@ target_sources(chromatin-core PRIVATE
     kademlia/kademlia.cpp
     replication/repl_log.cpp
     config/config.cpp
+    ws/ws_server.cpp
 )
 target_include_directories(chromatin-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # liboqs SHA3 internal headers are only exposed via the build include dir
@@ -17,6 +18,7 @@ target_link_libraries(chromatin-core PUBLIC
     mdbx-static
     jsoncpp_static
     spdlog::spdlog
+    uWebSockets
     Threads::Threads
 )
 
