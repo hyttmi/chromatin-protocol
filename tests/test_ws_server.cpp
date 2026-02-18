@@ -660,3 +660,118 @@ TEST_F(WsServerTest, AllowRejectsStaleSequence) {
 
     client.close();
 }
+
+// ---------- CONTACT_REQUEST tests ----------
+
+TEST_F(WsServerTest, ContactRequestWithPoW) {
+    start_ws_server();
+
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    // Connect and authenticate as sender
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, sender_kp));
+
+    // Compute PoW nonce: preimage = "request:" || sender_fp || recipient_fp
+    // Need 16 leading zero bits (~65k attempts avg)
+    std::vector<uint8_t> preimage;
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    uint64_t pow_nonce = 0;
+    for (uint64_t n = 0; n < 10'000'000; ++n) {
+        if (crypto::verify_pow(preimage, n, 16)) {
+            pow_nonce = n;
+            break;
+        }
+    }
+    // Sanity: verify we actually found a valid nonce
+    ASSERT_TRUE(crypto::verify_pow(preimage, pow_nonce, 16))
+        << "Failed to find valid PoW nonce within 10M iterations";
+
+    // Build CONTACT_REQUEST message
+    std::vector<uint8_t> blob_data = {0xDE, 0xAD, 0xBE, 0xEF};
+    std::string blob_b64 = to_base64(blob_data);
+
+    Json::Value req;
+    req["type"] = "CONTACT_REQUEST";
+    req["id"] = 50;
+    req["to"] = to_hex(recipient_fp);
+    req["blob"] = blob_b64;
+    req["pow_nonce"] = Json::UInt64(pow_nonce);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string req_json = Json::writeString(writer, req);
+    ASSERT_TRUE(client.send_text(req_json));
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value()) << "no response to CONTACT_REQUEST";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "OK");
+    EXPECT_EQ(root["id"].asInt(), 50);
+
+    client.close();
+}
+
+// ---------- Push notification tests ----------
+
+TEST_F(WsServerTest, PushNotification) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Build a fake inbox message binary:
+    // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    crypto::Hash msg_id{};
+    msg_id.fill(0xCC);
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xDD);
+    uint64_t timestamp = 1700000042;
+    std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
+
+    std::vector<uint8_t> msg_binary;
+    msg_binary.insert(msg_binary.end(), msg_id.begin(), msg_id.end());
+    msg_binary.insert(msg_binary.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        msg_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
+
+    // Compute inbox_key = SHA3-256("inbox:" || user_fp)
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+
+    // Simulate a Kademlia STORE arriving for this user's inbox
+    server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
+
+    // The push should arrive as a NEW_MESSAGE on the WebSocket
+    auto resp = client.recv_text(3000);
+    ASSERT_TRUE(resp.has_value()) << "no push notification received";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "NEW_MESSAGE");
+    EXPECT_EQ(root["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(root["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(root["timestamp"].asUInt64(), timestamp);
+    EXPECT_EQ(root["blob"].asString(), "SGVsbG8=");  // base64("Hello")
+
+    client.close();
+}

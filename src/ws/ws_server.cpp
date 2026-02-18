@@ -91,13 +91,6 @@ void WsServer::stop() {
     }
 }
 
-void WsServer::on_kademlia_store(const crypto::Hash& /*key*/,
-                                  uint8_t /*data_type*/,
-                                  std::span<const uint8_t> /*value*/) {
-    // Will be implemented in Task 9 (push notifications).
-    // For now, this is a no-op placeholder.
-}
-
 void WsServer::on_message(ws_t* ws, std::string_view message) {
     Json::Value root;
     Json::CharReaderBuilder builder;
@@ -136,8 +129,7 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         handle_revoke(ws, root);
     } else if (type == "CONTACT_REQUEST") {
         if (!require_auth(ws, id)) return;
-        // Will be added in Task 9
-        send_error(ws, id, 400, "not yet implemented: " + type);
+        handle_contact_request(ws, root);
     } else {
         send_error(ws, id, 400, "unknown command: " + type);
     }
@@ -825,6 +817,164 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
         });
     });
 }
+
+// ---------- CONTACT_REQUEST handler ----------
+
+void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse recipient fingerprint (64 hex chars = 32 bytes)
+    std::string to_hex_str = msg.get("to", "").asString();
+    if (to_hex_str.size() != 64) {
+        send_error(ws, id, 400, "to must be 64 hex chars");
+        return;
+    }
+    auto to_bytes = from_hex(to_hex_str);
+    if (!to_bytes) {
+        send_error(ws, id, 400, "invalid hex in to");
+        return;
+    }
+    crypto::Hash recipient_fp{};
+    std::copy(to_bytes->begin(), to_bytes->end(), recipient_fp.begin());
+
+    // Parse blob (base64, max 64 KiB)
+    std::string blob_b64 = msg.get("blob", "").asString();
+    if (blob_b64.empty()) {
+        send_error(ws, id, 400, "missing blob");
+        return;
+    }
+    auto blob = from_base64(blob_b64);
+    if (!blob) {
+        send_error(ws, id, 400, "invalid base64 in blob");
+        return;
+    }
+    static constexpr size_t MAX_REQUEST_BLOB_SIZE = 64 * 1024;  // 64 KiB
+    if (blob->size() > MAX_REQUEST_BLOB_SIZE) {
+        send_error(ws, id, 400, "blob exceeds 64 KiB");
+        return;
+    }
+
+    // Parse pow_nonce
+    if (!msg.isMember("pow_nonce") || !msg["pow_nonce"].isUInt64()) {
+        send_error(ws, id, 400, "missing or invalid pow_nonce");
+        return;
+    }
+    uint64_t pow_nonce = msg["pow_nonce"].asUInt64();
+
+    // Verify PoW: preimage = "request:" || sender_fp || recipient_fp
+    std::vector<uint8_t> preimage;
+    preimage.reserve(8 + 32 + 32);  // "request:" is 8 bytes
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(),
+                    session->fingerprint.begin(), session->fingerprint.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    if (!crypto::verify_pow(preimage, pow_nonce, 16)) {
+        send_error(ws, id, 400, "invalid PoW");
+        return;
+    }
+
+    // Build contact request binary: sender_fp(32) || pow_nonce(8 BE) || blob
+    std::vector<uint8_t> request_binary;
+    request_binary.reserve(32 + 8 + blob->size());
+    request_binary.insert(request_binary.end(),
+                          session->fingerprint.begin(), session->fingerprint.end());
+    for (int i = 7; i >= 0; --i) {
+        request_binary.push_back(
+            static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+    }
+    request_binary.insert(request_binary.end(), blob->begin(), blob->end());
+
+    // Compute requests_key = SHA3-256("requests:" || recipient_fp)
+    auto requests_key = crypto::sha3_256_prefixed("requests:", recipient_fp);
+
+    // Dispatch to worker pool
+    workers_.post([this, ws, id, requests_key,
+                   request_binary = std::move(request_binary)]() {
+        kad_.store(requests_key, 0x03, request_binary);
+
+        loop_->defer([this, ws, id]() {
+            if (connections_.count(ws) == 0) return;
+
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            send_json(ws, resp);
+        });
+    });
+}
+
+// ---------- push notifications ----------
+
+void WsServer::on_kademlia_store(const crypto::Hash& key,
+                                  uint8_t data_type,
+                                  std::span<const uint8_t> value) {
+    // Only push inbox messages (0x02) and contact requests (0x03)
+    if (data_type != 0x02 && data_type != 0x03) return;
+
+    // Copy value for the deferred lambda (span may be invalidated)
+    std::vector<uint8_t> value_copy(value.begin(), value.end());
+    auto key_copy = key;
+
+    loop_->defer([this, key_copy, data_type, value_copy = std::move(value_copy)]() {
+        // Find which connected client this store belongs to
+        for (auto& [fp, ws] : authenticated_) {
+            auto inbox_key = crypto::sha3_256_prefixed("inbox:", fp);
+            auto request_key = crypto::sha3_256_prefixed("requests:", fp);
+
+            if ((data_type == 0x02 && key_copy == inbox_key) ||
+                (data_type == 0x03 && key_copy == request_key)) {
+                // Verify connection is still alive
+                if (connections_.count(ws) == 0) break;
+
+                if (data_type == 0x02) {
+                    // NEW_MESSAGE push
+                    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+                    if (value_copy.size() < 76) break;
+                    auto msg_id = std::span<const uint8_t>(value_copy.data(), 32);
+                    auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
+                    uint64_t ts = 0;
+                    for (int i = 0; i < 8; ++i) {
+                        ts = (ts << 8) | value_copy[64 + i];
+                    }
+                    uint32_t blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
+                                        (static_cast<uint32_t>(value_copy[73]) << 16) |
+                                        (static_cast<uint32_t>(value_copy[74]) << 8) |
+                                        static_cast<uint32_t>(value_copy[75]);
+
+                    if (value_copy.size() < 76 + blob_len) break;
+                    auto blob = std::span<const uint8_t>(value_copy.data() + 76, blob_len);
+
+                    Json::Value push;
+                    push["type"] = "NEW_MESSAGE";
+                    push["msg_id"] = to_hex(msg_id);
+                    push["from"] = to_hex(sender);
+                    push["timestamp"] = Json::UInt64(ts);
+                    push["blob"] = to_base64(blob);
+                    send_json(ws, push);
+                } else {
+                    // CONTACT_REQUEST push
+                    // Value layout: sender_fp(32) || pow_nonce(8 BE) || blob
+                    if (value_copy.size() < 40) break;
+                    auto sender = std::span<const uint8_t>(value_copy.data(), 32);
+                    auto blob = std::span<const uint8_t>(
+                        value_copy.data() + 40, value_copy.size() - 40);
+
+                    Json::Value push;
+                    push["type"] = "CONTACT_REQUEST";
+                    push["from"] = to_hex(sender);
+                    push["blob"] = to_base64(blob);
+                    send_json(ws, push);
+                }
+                break;
+            }
+        }
+    });
+}
+
+// ---------- helpers ----------
 
 void WsServer::send_json(ws_t* ws, const Json::Value& msg) {
     Json::StreamWriterBuilder writer_builder;

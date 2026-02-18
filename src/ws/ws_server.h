@@ -45,7 +45,7 @@ public:
     void stop();
 
     // Called from TCP thread when a STORE arrives via Kademlia.
-    // No-op until Task 9; will use defer() for thread safety.
+    // Pushes NEW_MESSAGE / CONTACT_REQUEST to connected clients via defer().
     void on_kademlia_store(const crypto::Hash& key,
                            uint8_t data_type,
                            std::span<const uint8_t> value);
@@ -88,6 +88,7 @@ private:
     void handle_send(ws_t* ws, const Json::Value& msg);
     void handle_allow(ws_t* ws, const Json::Value& msg);
     void handle_revoke(ws_t* ws, const Json::Value& msg);
+    void handle_contact_request(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
