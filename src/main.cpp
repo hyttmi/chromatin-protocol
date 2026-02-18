@@ -1,4 +1,3 @@
-#include <atomic>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
@@ -16,12 +15,7 @@
 #include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
-
-static std::atomic<bool> g_running{true};
-
-static void signal_handler(int /*sig*/) {
-    g_running.store(false);
-}
+#include "ws/ws_server.h"
 
 static std::string hex(const chromatin::crypto::Hash& h) {
     std::ostringstream oss;
@@ -125,19 +119,27 @@ int main(int argc, char* argv[]) {
         spdlog::info("no bootstrap peers — running as standalone bootstrap node");
     }
 
-    // --- 13. Install signal handlers and wait ---
+    // --- 13. WebSocket server is the main event loop ---
+    chromatin::ws::WsServer ws(cfg, kademlia, storage, repl_log, keypair);
+    kademlia.set_on_store([&](const chromatin::crypto::Hash& key, uint8_t type,
+                              std::span<const uint8_t> value) {
+        ws.on_kademlia_store(key, type, value);
+    });
+
+    // Signal handler stops the WS event loop
+    static chromatin::ws::WsServer* g_ws = nullptr;
+    g_ws = &ws;
     struct sigaction sa{};
-    sa.sa_handler = signal_handler;
+    sa.sa_handler = [](int) {
+        if (g_ws) g_ws->stop();
+    };
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    spdlog::info("node ready — press Ctrl-C to stop");
-    while (g_running.load()) {
-        kademlia.tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+    spdlog::info("node ready — WS on port {}, TCP on port {}", cfg.ws_port, cfg.tcp_port);
+    ws.run();  // blocks until signal
 
     // --- 14. Shutdown ---
     spdlog::info("shutting down...");
