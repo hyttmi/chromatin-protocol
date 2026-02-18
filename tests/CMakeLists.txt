@@ -8,6 +8,7 @@ target_sources(chromatin-tests PRIVATE
     test_kademlia.cpp
     test_repl_log.cpp
     test_config.cpp
+    test_worker_pool.cpp
 )
 target_link_libraries(chromatin-tests PRIVATE
     chromatin-core
