@@ -116,6 +116,48 @@ protected:
         cfg_.data_dir = db_path_;
     }
 
+    // Authenticate helper: does HELLO -> CHALLENGE -> AUTH flow.
+    // Returns true if authenticated successfully, false on REDIRECT or failure.
+    bool authenticate(TestWsClient& client, const crypto::KeyPair& user_kp) {
+        auto fingerprint = crypto::sha3_256(user_kp.public_key);
+        std::string fp_hex = to_hex(fingerprint);
+
+        // HELLO
+        std::string hello = R"({"type":"HELLO","fingerprint":")" + fp_hex + R"("})";
+        if (!client.send_text(hello)) return false;
+
+        auto resp1 = client.recv_text();
+        if (!resp1.has_value()) return false;
+
+        auto challenge = parse_json(*resp1);
+        if (challenge["type"].asString() != "CHALLENGE") return false;
+
+        // Sign the nonce
+        std::string nonce_hex = challenge["nonce"].asString();
+        auto nonce_bytes = from_hex(nonce_hex);
+        if (nonce_bytes.size() != 32) return false;
+
+        auto signature = crypto::sign(nonce_bytes, user_kp.secret_key);
+
+        // AUTH
+        Json::Value auth_msg;
+        auth_msg["type"] = "AUTH";
+        auth_msg["id"] = 1;
+        auth_msg["signature"] = to_hex(signature);
+        auth_msg["pubkey"] = to_hex(user_kp.public_key);
+
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        std::string auth_json = Json::writeString(writer, auth_msg);
+        if (!client.send_text(auth_json)) return false;
+
+        auto resp2 = client.recv_text();
+        if (!resp2.has_value()) return false;
+
+        auto ok = parse_json(*resp2);
+        return ok["type"].asString() == "OK";
+    }
+
     void start_ws_server() {
         server_ = std::make_unique<ws::WsServer>(
             cfg_, *kademlia_, *storage_, *repl_log_, node_keypair_);
@@ -272,6 +314,106 @@ TEST_F(WsServerTest, CommandBeforeAuthFails) {
     EXPECT_EQ(root["type"].asString(), "ERROR");
     EXPECT_EQ(root["id"].asInt(), 7);
     EXPECT_EQ(root["code"].asInt(), 401);
+
+    client.close();
+}
+
+// ---------- FETCH tests ----------
+
+TEST_F(WsServerTest, FetchEmptyInbox) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // FETCH with no messages in inbox
+    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":10})"));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to FETCH";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "MESSAGES");
+    EXPECT_EQ(root["id"].asInt(), 10);
+    ASSERT_TRUE(root["messages"].isArray());
+    EXPECT_EQ(root["messages"].size(), 0u);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, FetchWithMessages) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // Manually insert a message into TABLE_INBOXES before connecting.
+    // Key layout: recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
+    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
+
+    // Create a fake msg_id (32 bytes)
+    crypto::Hash msg_id{};
+    msg_id.fill(0xAA);
+
+    // Create a fake sender fingerprint (32 bytes)
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xBB);
+
+    // Timestamp
+    uint64_t timestamp = 1700000000;
+
+    // Build key: fp(32) || timestamp(8 BE) || msg_id(32)
+    std::vector<uint8_t> key;
+    key.insert(key.end(), fingerprint.begin(), fingerprint.end());
+    for (int i = 7; i >= 0; --i) {
+        key.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    key.insert(key.end(), msg_id.begin(), msg_id.end());
+    ASSERT_EQ(key.size(), 72u);
+
+    // Build value: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
+    std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
+    std::vector<uint8_t> value;
+    value.insert(value.end(), msg_id.begin(), msg_id.end());
+    value.insert(value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+    value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    value.insert(value.end(), blob.begin(), blob.end());
+
+    storage_->put(storage::TABLE_INBOXES, key, value);
+
+    // Now connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // FETCH
+    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":20})"));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to FETCH";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "MESSAGES");
+    EXPECT_EQ(root["id"].asInt(), 20);
+    ASSERT_TRUE(root["messages"].isArray());
+    ASSERT_EQ(root["messages"].size(), 1u);
+
+    auto& entry = root["messages"][0];
+    EXPECT_EQ(entry["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(entry["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(entry["timestamp"].asUInt64(), timestamp);
+    // blob "Hello" -> base64 "SGVsbG8="
+    EXPECT_EQ(entry["blob"].asString(), "SGVsbG8=");
 
     client.close();
 }

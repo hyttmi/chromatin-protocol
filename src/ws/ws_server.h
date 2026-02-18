@@ -78,6 +78,9 @@ private:
     void handle_auth(ws_t* ws, const Json::Value& msg);
     bool require_auth(ws_t* ws, int id);
 
+    // Command handlers
+    void handle_fetch(ws_t* ws, const Json::Value& msg);
+
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
     void send_error(ws_t* ws, int id, int code, const std::string& reason);

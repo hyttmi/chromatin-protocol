@@ -119,7 +119,10 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         handle_hello(ws, root);
     } else if (type == "AUTH") {
         handle_auth(ws, root);
-    } else if (type == "FETCH" || type == "SEND" || type == "ALLOW" ||
+    } else if (type == "FETCH") {
+        if (!require_auth(ws, id)) return;
+        handle_fetch(ws, root);
+    } else if (type == "SEND" || type == "ALLOW" ||
                type == "REVOKE" || type == "CONTACT_REQUEST") {
         if (!require_auth(ws, id)) return;
         // Individual handlers will be added in later tasks
@@ -163,6 +166,39 @@ std::optional<std::vector<uint8_t>> from_hex(const std::string& hex) {
         bytes.push_back(static_cast<uint8_t>((h << 4) | l));
     }
     return bytes;
+}
+
+std::string to_base64(std::span<const uint8_t> data) {
+    static constexpr char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((data.size() + 2) / 3) * 4);
+
+    size_t i = 0;
+    for (; i + 2 < data.size(); i += 3) {
+        uint32_t triple = (static_cast<uint32_t>(data[i]) << 16) |
+                          (static_cast<uint32_t>(data[i + 1]) << 8) |
+                          static_cast<uint32_t>(data[i + 2]);
+        out.push_back(table[(triple >> 18) & 0x3F]);
+        out.push_back(table[(triple >> 12) & 0x3F]);
+        out.push_back(table[(triple >> 6) & 0x3F]);
+        out.push_back(table[triple & 0x3F]);
+    }
+
+    if (i < data.size()) {
+        uint32_t triple = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < data.size())
+            triple |= static_cast<uint32_t>(data[i + 1]) << 8;
+
+        out.push_back(table[(triple >> 18) & 0x3F]);
+        out.push_back(table[(triple >> 12) & 0x3F]);
+        if (i + 1 < data.size())
+            out.push_back(table[(triple >> 6) & 0x3F]);
+        else
+            out.push_back('=');
+        out.push_back('=');
+    }
+    return out;
 }
 
 } // anonymous namespace
@@ -317,6 +353,75 @@ bool WsServer::require_auth(ws_t* ws, int id) {
         return false;
     }
     return true;
+}
+
+// ---------- command handlers ----------
+
+void WsServer::handle_fetch(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Optional "since" timestamp filter (default: 0 = fetch all)
+    uint64_t since = 0;
+    if (msg.isMember("since")) {
+        since = msg["since"].asUInt64();
+    }
+
+    // Key layout: recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
+    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
+
+    Json::Value messages(Json::arrayValue);
+
+    storage_.scan(storage::TABLE_INBOXES, session->fingerprint,
+                  [&](std::span<const uint8_t> key,
+                      std::span<const uint8_t> value) -> bool {
+        // Validate key length: 32 (fp) + 8 (timestamp) + 32 (msg_id) = 72
+        if (key.size() != 72) return true;  // skip malformed
+
+        // Extract timestamp from key (big-endian, bytes 32..39)
+        uint64_t ts = 0;
+        for (int i = 0; i < 8; ++i) {
+            ts = (ts << 8) | key[32 + i];
+        }
+
+        // Skip messages older than 'since'
+        if (ts < since) return true;
+
+        // Validate minimum value size: 32 (msg_id) + 32 (sender_fp) + 8 (ts) + 4 (blob_len) = 76
+        if (value.size() < 76) return true;  // skip malformed
+
+        // Extract fields from value
+        auto msg_id_span = value.subspan(0, 32);
+        auto sender_fp_span = value.subspan(32, 32);
+        // timestamp from value (bytes 64..71)
+        uint64_t val_ts = 0;
+        for (int i = 0; i < 8; ++i) {
+            val_ts = (val_ts << 8) | value[64 + i];
+        }
+        // blob_len (4 bytes big-endian at offset 72)
+        uint32_t blob_len = (static_cast<uint32_t>(value[72]) << 24) |
+                            (static_cast<uint32_t>(value[73]) << 16) |
+                            (static_cast<uint32_t>(value[74]) << 8) |
+                            static_cast<uint32_t>(value[75]);
+
+        if (value.size() < 76 + blob_len) return true;  // skip malformed
+        auto blob_span = value.subspan(76, blob_len);
+
+        Json::Value entry;
+        entry["msg_id"] = to_hex(msg_id_span);
+        entry["from"] = to_hex(sender_fp_span);
+        entry["timestamp"] = Json::Value(val_ts);
+        entry["blob"] = to_base64(blob_span);
+
+        messages.append(entry);
+        return true;  // continue scanning
+    });
+
+    Json::Value resp;
+    resp["type"] = "MESSAGES";
+    resp["id"] = id;
+    resp["messages"] = messages;
+    send_json(ws, resp);
 }
 
 void WsServer::send_json(ws_t* ws, const Json::Value& msg) {
