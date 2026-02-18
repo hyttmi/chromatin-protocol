@@ -1,7 +1,7 @@
 // Performance benchmark for Kademlia operations.
-// Uses real UDP sockets, real PQ crypto, real mdbx storage on localhost.
+// Uses real TCP sockets, real PQ crypto, real mdbx storage on localhost.
 //
-// Usage: ./helix-bench
+// Usage: ./chromatin-bench
 
 #include <chrono>
 #include <cstdint>
@@ -20,11 +20,11 @@
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
-using namespace helix;
+using namespace chromatin;
 using namespace std::chrono;
 using Clock = steady_clock;
 
@@ -35,7 +35,7 @@ using Clock = steady_clock;
 struct BenchNode {
     crypto::KeyPair keypair;
     kademlia::NodeInfo info;
-    std::unique_ptr<kademlia::UdpTransport> transport;
+    std::unique_ptr<kademlia::TcpTransport> transport;
     std::unique_ptr<kademlia::RoutingTable> table;
     std::unique_ptr<storage::Storage> storage;
     std::unique_ptr<replication::ReplLog> repl_log;
@@ -66,14 +66,14 @@ static std::unique_ptr<BenchNode> make_node() {
     auto nid = kademlia::NodeId::from_pubkey(n->keypair.public_key);
 
     n->db_path = std::filesystem::temp_directory_path() /
-                 ("helix_bench_" + std::to_string(reinterpret_cast<uintptr_t>(n.get())));
+                 ("chromatin_bench_" + std::to_string(reinterpret_cast<uintptr_t>(n.get())));
     std::filesystem::create_directories(n->db_path);
     n->storage = std::make_unique<storage::Storage>(n->db_path / "bench.mdbx");
-    n->transport = std::make_unique<kademlia::UdpTransport>("127.0.0.1", 0);
+    n->transport = std::make_unique<kademlia::TcpTransport>("127.0.0.1", 0);
 
     n->info.id = nid;
     n->info.address = "127.0.0.1";
-    n->info.udp_port = n->transport->local_port();
+    n->info.tcp_port = n->transport->local_port();
     n->info.ws_port = 0;
     n->info.pubkey = n->keypair.public_key;
     n->info.last_seen = Clock::now();
@@ -208,7 +208,7 @@ static BenchResult bench_sha3(int n) {
 
 // mdbx put + get round-trip
 static BenchResult bench_storage(int n) {
-    auto tmp = std::filesystem::temp_directory_path() / "helix_bench_storage";
+    auto tmp = std::filesystem::temp_directory_path() / "chromatin_bench_storage";
     std::filesystem::create_directories(tmp);
     storage::Storage st(tmp / "bench.mdbx");
 
@@ -233,8 +233,8 @@ static BenchResult bench_storage(int n) {
     return compute_stats("mdbx put+get (512B)", samples);
 }
 
-// UDP serialize + deserialize round-trip (no network)
-static BenchResult bench_udp_serde(int n) {
+// TCP serialize + deserialize round-trip (no network)
+static BenchResult bench_tcp_serde(int n) {
     auto kp = crypto::generate_keypair();
     kademlia::Message msg;
     msg.type = kademlia::MessageType::STORE;
@@ -254,10 +254,10 @@ static BenchResult bench_udp_serde(int n) {
         (void)parsed;
         samples.push_back(duration<double, std::milli>(t1 - t0).count());
     }
-    return compute_stats("UDP serde (512B payload)", samples);
+    return compute_stats("TCP serde (512B payload)", samples);
 }
 
-// PING/PONG round-trip over real UDP (localhost)
+// PING/PONG round-trip over real TCP (localhost)
 static BenchResult bench_ping_pong(int n) {
     auto n1 = make_node();
     auto n2 = make_node();
@@ -266,7 +266,7 @@ static BenchResult bench_ping_pong(int n) {
     std::this_thread::sleep_for(milliseconds(50));
 
     // Bootstrap so they know each other
-    n2->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+    n2->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
     std::this_thread::sleep_for(milliseconds(500));
 
     std::vector<double> samples;
@@ -282,9 +282,10 @@ static BenchResult bench_ping_pong(int n) {
         kademlia::Message ping;
         ping.type = kademlia::MessageType::PING;
         ping.sender = n1->info.id;
+        ping.sender_port = n1->info.tcp_port;
         ping.payload = {};
         sign_message(ping, n1->keypair.secret_key);
-        n1->transport->send("127.0.0.1", n2->info.udp_port, ping);
+        n1->transport->send("127.0.0.1", n2->info.tcp_port, ping);
 
         // Poll for PONG (last_seen update on n2's entry in n1's table)
         bool got_pong = false;
@@ -319,7 +320,7 @@ static BenchResult bench_store_quorum(int n) {
     n2->start_recv();
     std::this_thread::sleep_for(milliseconds(50));
 
-    n2->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+    n2->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
     std::this_thread::sleep_for(milliseconds(500));
 
     std::vector<double> samples;
@@ -369,11 +370,11 @@ static BenchResult bench_store_3node(int n) {
     n3->start_recv();
     std::this_thread::sleep_for(milliseconds(50));
 
-    n2->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+    n2->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
     std::this_thread::sleep_for(milliseconds(500));
-    n3->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+    n3->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
     std::this_thread::sleep_for(milliseconds(500));
-    n2->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+    n2->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
     std::this_thread::sleep_for(milliseconds(500));
 
     std::vector<double> samples;
@@ -430,12 +431,12 @@ static BenchResult bench_discovery(int n) {
         std::this_thread::sleep_for(milliseconds(50));
 
         // n2 bootstraps from n1
-        n2->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+        n2->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
         std::this_thread::sleep_for(milliseconds(300));
 
         // Time: n3 bootstraps and discovers both n1 and n2
         auto t0 = Clock::now();
-        n3->kad->bootstrap({{"127.0.0.1", n1->info.udp_port}});
+        n3->kad->bootstrap({{"127.0.0.1", n1->info.tcp_port}});
 
         bool found_both = false;
         for (int j = 0; j < 200; ++j) {
@@ -469,9 +470,9 @@ static BenchResult bench_discovery(int n) {
 int main() {
     spdlog::set_level(spdlog::level::warn);
 
-    std::cout << "Helix Performance Benchmark\n";
+    std::cout << "Chromatin Performance Benchmark\n";
     std::cout << "===========================\n";
-    std::cout << "Real UDP, real PQ crypto (ML-DSA-87), real mdbx storage\n";
+    std::cout << "Real TCP, real PQ crypto (ML-DSA-87), real mdbx storage\n";
     std::cout << "All network tests on localhost (127.0.0.1)\n\n";
 
     std::vector<BenchResult> results;
@@ -496,8 +497,8 @@ int main() {
     results.push_back(bench_storage(500));
     std::cout << " done\n";
 
-    std::cout << "Running: UDP serde..." << std::flush;
-    results.push_back(bench_udp_serde(200));
+    std::cout << "Running: TCP serde..." << std::flush;
+    results.push_back(bench_tcp_serde(200));
     std::cout << " done\n";
 
     std::cout << "Running: PING/PONG..." << std::flush;

@@ -13,7 +13,7 @@
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
@@ -23,7 +23,7 @@ static void signal_handler(int /*sig*/) {
     g_running.store(false);
 }
 
-static std::string hex(const helix::crypto::Hash& h) {
+static std::string hex(const chromatin::crypto::Hash& h) {
     std::ostringstream oss;
     for (auto b : h) {
         oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
@@ -36,7 +36,7 @@ static void print_usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
-    spdlog::info("helix-node v0.1.0 starting");
+    spdlog::info("chromatin-node v0.1.0 starting");
 
     // --- 1. Parse --config <path> ---
     std::filesystem::path config_path;
@@ -52,15 +52,15 @@ int main(int argc, char* argv[]) {
 
     // --- 2. Load or generate config ---
     if (!std::filesystem::exists(config_path)) {
-        helix::config::generate_default_config(config_path);
+        chromatin::config::generate_default_config(config_path);
         spdlog::info("generated config template at {}", config_path.string());
         spdlog::info("edit the file and re-run");
         return 0;
     }
 
-    helix::config::Config cfg;
+    chromatin::config::Config cfg;
     try {
-        cfg = helix::config::load_config(config_path);
+        cfg = chromatin::config::load_config(config_path);
     } catch (const std::exception& e) {
         spdlog::error("failed to load config: {}", e.what());
         return 1;
@@ -71,47 +71,46 @@ int main(int argc, char* argv[]) {
     std::filesystem::create_directories(cfg.data_dir);
 
     // --- 4. Load or generate keypair ---
-    helix::crypto::KeyPair keypair;
+    chromatin::crypto::KeyPair keypair;
     try {
-        keypair = helix::config::load_or_generate_keypair(cfg.data_dir);
+        keypair = chromatin::config::load_or_generate_keypair(cfg.data_dir);
     } catch (const std::exception& e) {
         spdlog::error("keypair error: {}", e.what());
         return 1;
     }
 
     // --- 5. Compute NodeId, build NodeInfo ---
-    auto node_id = helix::kademlia::NodeId::from_pubkey(keypair.public_key);
+    auto node_id = chromatin::kademlia::NodeId::from_pubkey(keypair.public_key);
     spdlog::info("node id: {}", hex(node_id.id));
 
-    helix::kademlia::NodeInfo self;
+    chromatin::kademlia::NodeInfo self;
     self.id = node_id;
     self.address = cfg.bind;
-    self.udp_port = cfg.udp_port;
+    self.tcp_port = cfg.tcp_port;
     self.ws_port = cfg.ws_port;
     self.pubkey = keypair.public_key;
     self.last_seen = std::chrono::steady_clock::now();
 
     // --- 6. Create Storage ---
-    auto db_path = cfg.data_dir / "helix.mdbx";
-    helix::storage::Storage storage(db_path);
+    auto db_path = cfg.data_dir / "chromatin.mdbx";
+    chromatin::storage::Storage storage(db_path);
     spdlog::info("storage opened at {}", db_path.string());
 
     // --- 7. Create ReplLog ---
-    helix::replication::ReplLog repl_log(storage);
+    chromatin::replication::ReplLog repl_log(storage);
 
     // --- 8. Create RoutingTable ---
-    helix::kademlia::RoutingTable routing_table;
+    chromatin::kademlia::RoutingTable routing_table;
 
-    // --- 9. Create UdpTransport ---
-    helix::kademlia::UdpTransport transport(cfg.bind, cfg.udp_port);
-    spdlog::info("UDP bound to {}:{}", cfg.bind, transport.local_port());
+    // --- 9. Create TcpTransport ---
+    chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port);
 
     // --- 10. Create Kademlia engine ---
-    helix::kademlia::Kademlia kademlia(self, transport, routing_table, storage, repl_log, keypair);
+    chromatin::kademlia::Kademlia kademlia(self, transport, routing_table, storage, repl_log, keypair);
 
-    // --- 11. Start UDP recv loop in background thread ---
+    // --- 11. Start TCP accept loop in background thread ---
     std::thread recv_thread([&]() {
-        transport.run([&](const helix::kademlia::Message& msg,
+        transport.run([&](const chromatin::kademlia::Message& msg,
                          const std::string& from_addr, uint16_t from_port) {
             kademlia.handle_message(msg, from_addr, from_port);
         });
@@ -144,7 +143,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("shutting down...");
     transport.stop();
     recv_thread.join();
-    spdlog::info("helix-node shutdown");
+    spdlog::info("chromatin-node shutdown");
 
     return 0;
 }

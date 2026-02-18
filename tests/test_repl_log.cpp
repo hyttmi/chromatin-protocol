@@ -9,9 +9,9 @@
 #include <memory>
 #include <vector>
 
-using namespace helix::replication;
-using namespace helix::crypto;
-using namespace helix::storage;
+using namespace chromatin::replication;
+using namespace chromatin::crypto;
+using namespace chromatin::storage;
 
 class ReplLogTest : public ::testing::Test {
 protected:
@@ -21,7 +21,7 @@ protected:
 
     void SetUp() override {
         db_path_ = std::filesystem::temp_directory_path() /
-                   ("helix_repl_test_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
+                   ("chromatin_repl_test_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
         std::filesystem::create_directories(db_path_);
         storage_ = std::make_unique<Storage>(db_path_ / "test.mdbx");
         repl_log_ = std::make_unique<ReplLog>(*storage_);

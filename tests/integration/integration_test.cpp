@@ -1,7 +1,7 @@
 // Integration test binary — acts as the 11th node in a 10-node Docker cluster.
 // Bootstraps into the network, then runs store/quorum/find/sync tests.
 //
-// Usage: helix-integration-test --config <path>
+// Usage: chromatin-integration-test --config <path>
 
 #include <atomic>
 #include <chrono>
@@ -22,11 +22,11 @@
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
-using namespace helix;
+using namespace chromatin;
 using namespace std::chrono_literals;
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ static void print_results(const std::vector<TestResult>& results) {
 
 int main(int argc, char* argv[]) {
     spdlog::set_level(spdlog::level::info);
-    spdlog::info("helix integration test starting");
+    spdlog::info("chromatin integration test starting");
 
     // --- Parse --config ---
     std::filesystem::path config_path;
@@ -196,16 +196,16 @@ int main(int argc, char* argv[]) {
     kademlia::NodeInfo self;
     self.id = node_id;
     self.address = cfg.bind;
-    self.udp_port = cfg.udp_port;
+    self.tcp_port = cfg.tcp_port;
     self.ws_port = cfg.ws_port;
     self.pubkey = keypair.public_key;
     self.last_seen = std::chrono::steady_clock::now();
 
-    auto db_path = cfg.data_dir / "helix.mdbx";
+    auto db_path = cfg.data_dir / "chromatin.mdbx";
     storage::Storage storage(db_path);
     replication::ReplLog repl_log(storage);
     kademlia::RoutingTable routing_table;
-    kademlia::UdpTransport transport(cfg.bind, cfg.udp_port);
+    kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port);
 
     kademlia::Kademlia kademlia(self, transport, routing_table, storage, repl_log, keypair);
     // Use low PoW difficulty for testing
@@ -356,9 +356,10 @@ int main(int argc, char* argv[]) {
                 kademlia::Message msg;
                 msg.type = kademlia::MessageType::FIND_VALUE;
                 msg.sender = self.id;
+                msg.sender_port = self.tcp_port;
                 msg.payload = payload;
                 sign_message(msg, keypair.secret_key);
-                transport.send(node.address, node.udp_port, msg);
+                transport.send(node.address, node.tcp_port, msg);
             }
         }
 
@@ -404,9 +405,10 @@ int main(int argc, char* argv[]) {
                 kademlia::Message msg;
                 msg.type = kademlia::MessageType::SYNC_REQ;
                 msg.sender = self.id;
+                msg.sender_port = self.tcp_port;
                 msg.payload = payload;
                 sign_message(msg, keypair.secret_key);
-                transport.send(node.address, node.udp_port, msg);
+                transport.send(node.address, node.tcp_port, msg);
             }
         }
 

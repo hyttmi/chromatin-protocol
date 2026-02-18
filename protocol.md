@@ -1,4 +1,4 @@
-# Helix Protocol — Server Design
+# Chromatin Protocol — Server Design
 
 > Working document — v2 redesign. Server-only scope.
 > Client protocol (message encryption, GEK, message format) deferred.
@@ -7,7 +7,7 @@
 
 ## 1. Overview
 
-Helix is a decentralized, post-quantum-safe messaging node. It uses a
+Chromatin is a decentralized, post-quantum-safe messaging node. It uses a
 **unified Kademlia-routed, mdbx-backed architecture**: XOR distance determines
 which nodes are responsible for storing which data (profiles, names, and
 message inboxes), and all data is persisted in libmdbx with sequence-based
@@ -24,7 +24,7 @@ messages as opaque encrypted blobs — it never sees plaintext.
 - Zero classical cryptography — PQ only, everywhere
 - Unified storage — Kademlia responsibility for ALL data (profiles, names, inboxes)
 - Sequence-based replication — mdbx-backed, crash-recoverable
-- Delete-after-fetch — minimal storage footprint
+- 7-day TTL message expiry — automatic cleanup, multi-device friendly
 - Recipient inbox model — one connection, all messages
 - Allowlist-enforced delivery — only approved contacts can message you
 - Censorship resistant — anyone can run a node, network is unstoppable
@@ -36,9 +36,9 @@ messages as opaque encrypted blobs — it never sees plaintext.
 
 | Purpose              | Algorithm              | Notes                                    |
 |----------------------|------------------------|------------------------------------------|
-| Node identity        | ML-DSA-1024 (Dilithium5) | Node signing, signature verification   |
+| Node identity        | ML-DSA-87 (FIPS 204, Level 5) | Node signing, signature verification   |
 | Hashing              | SHA3-256               | Node IDs, data keys, PoW verification    |
-| Node-to-node         | UDP                    | Kademlia protocol + replication          |
+| Node-to-node         | TCP                    | Kademlia protocol + replication          |
 | Client-to-node       | WebSocket              | Inbox delivery, auth, commands           |
 
 The server verifies ML-DSA signatures on profiles, name records, and client
@@ -98,7 +98,7 @@ Human-readable names mapped to fingerprints, stored on the network.
 
 ```
 {
-    name:        string,       // 3-36 chars, [a-z0-9._-]
+    name:        string,       // 3-36 chars, [a-z0-9]
     fingerprint: 32 bytes,
     pow_nonce:   uint64,
     sequence:    uint64,
@@ -110,7 +110,7 @@ Storage key: `SHA3-256("name:" || name)`
 
 ### 4.2 Server Validation Rules
 
-1. Verify PoW: `SHA3-256("helix:name:" || name || fingerprint || nonce)`
+1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce)`
    has >= 28 leading zero bits
 2. Verify ML-DSA signature
 3. **First claim wins** — reject if name already registered to a different
@@ -147,10 +147,10 @@ replication strategy.
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                   HELIX NODE                      │
+│                   CHROMATIN NODE                      │
 │                                                   │
 │  ┌──────────────────────────────────────────────┐ │
-│  │           Kademlia Engine (UDP)               │ │
+│  │           Kademlia Engine (TCP)               │ │
 │  │                                               │ │
 │  │  - Node discovery & gossip                    │ │
 │  │  - XOR responsibility computation             │ │
@@ -179,12 +179,12 @@ replication strategy.
 │  │  - Contact request handling                   │ │
 │  └──────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────┘
-        │ UDP                        │ WebSocket
+        │ TCP                        │ WebSocket
         ▼                            ▼
   Other Nodes                   Clients
 ```
 
-Single binary. One process, two listeners (UDP + WebSocket), one storage engine.
+Single binary. One process, two listeners (TCP + WebSocket), one storage engine.
 
 ---
 
@@ -192,14 +192,14 @@ Single binary. One process, two listeners (UDP + WebSocket), one storage engine.
 
 ### 6.1 Simplified Kademlia
 
-Helix targets dozens to hundreds of nodes. Every node maintains **full
+Chromatin targets dozens to hundreds of nodes. Every node maintains **full
 membership** — no k-buckets, no iterative lookups.
 
 - 256-bit key space (SHA3-256 output)
 - Node ID: `SHA3-256(node_ml_dsa_pubkey)`
 - Distance: `XOR(id_a, id_b)` as unsigned 256-bit integer
 - XOR distance determines **responsibility**, not routing
-- All communication is **single-hop** (direct node-to-node UDP)
+- All communication is **single-hop** (direct node-to-node TCP)
 
 ### 6.2 Responsibility
 
@@ -212,11 +212,11 @@ responsible for storing data associated with K.
 
 ### 6.3 Signed Values
 
-All stored values are ML-DSA-1024 signed. Nodes verify signatures before
+All stored values are ML-DSA-87 signed. Nodes verify signatures before
 accepting writes. Only the key owner can update their data (higher sequence
 + valid signature). Same security as OpenDHT's `putSigned`.
 
-### 6.4 Kademlia Messages (UDP)
+### 6.4 Kademlia Messages (TCP)
 
 | Message      | Purpose                                    |
 |--------------|--------------------------------------------|
@@ -286,7 +286,7 @@ Key: inbox:alice
 
   seq=1  ADD  { msg_id: "abc", blob: <encrypted>, ts: 1708000000 }
   seq=2  ADD  { msg_id: "def", blob: <encrypted>, ts: 1708000060 }
-  seq=3  DEL  { msg_id: "abc" }    ← ACK received, message deleted
+  seq=3  DEL  { msg_id: "abc" }    ← TTL expired or client DELETE
   seq=4  ADD  { msg_id: "ghi", blob: <encrypted>, ts: 1708000120 }
 ```
 
@@ -336,16 +336,21 @@ When a client stores data (e.g., sends a message to an inbox):
 3. Write is confirmed when **W of R** nodes ACK (W = quorum, e.g. 2 of 3)
 4. Background sync ensures the remaining nodes catch up
 
-### 7.6 Delete-After-Fetch Replication
+### 7.6 Message Expiry & Deletion
 
-When a recipient ACKs a message:
+Messages expire automatically after 7 days (TTL). The node's periodic `tick()`
+prunes expired messages from storage. This supports **multi-device**: all
+devices can fetch messages independently within the 7-day window.
 
-1. The node receiving the ACK writes a `DEL` entry to the replication log
+Clients may optionally send `DELETE` for messages they no longer need:
+
+1. The node receiving the DELETE writes a `DEL` entry to the replication log
 2. Seq increments
 3. Other responsible nodes sync the DEL entry
 4. All R copies are deleted
 
-This ensures delete-after-fetch is consistent across all replicas.
+Deletion is client-driven and optional. Each device tracks its own
+`last_fetch_timestamp` locally for efficient incremental fetches.
 
 ---
 
@@ -383,11 +388,11 @@ Node also verifies it is responsible for this fingerprint's inbox.
 | Message           | Purpose                                      |
 |-------------------|----------------------------------------------|
 | SEND              | Push encrypted blob to recipient's inbox     |
-| ACK               | Confirm receipt, triggers delete on all R    |
+| DELETE            | Optionally delete messages (client-driven)   |
 | ALLOW             | Add fingerprint to allowlist                 |
 | REVOKE            | Remove fingerprint from allowlist            |
 | CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
-| FETCH_PENDING     | Pull queued messages                         |
+| FETCH             | Pull messages (optionally since timestamp)   |
 
 **Node → Client:**
 
@@ -405,7 +410,7 @@ When Alice sends a message to Bob:
 1. Alice sends `SEND { to: bob_fp, blob }` to her connected node
 2. Alice's node computes `inbox_key = SHA3-256("inbox:" || bob_fp)`
 3. Alice's node determines R responsible nodes for Bob's inbox
-4. Alice's node forwards the blob to **all R responsible nodes** via UDP STORE
+4. Alice's node forwards the blob to **all R responsible nodes** via TCP STORE
 5. Responsible nodes check Bob's allowlist — reject if Alice not allowed
 6. Responsible nodes append to Bob's inbox replication log
 7. If Bob is connected to one of those nodes, push `NEW_MESSAGE` immediately
@@ -461,9 +466,9 @@ senders with proof-of-work.
 ### 10.1 Node Identity
 
 Each node has:
-- Its own ML-DSA-1024 keypair (generated on first run)
+- Its own ML-DSA-87 keypair (generated on first run)
 - Node ID: `SHA3-256(node_ml_dsa_pubkey)`
-- Publicly reachable address (IP:port for UDP, IP:port for WebSocket)
+- Publicly reachable address (IP:port for TCP, IP:port for WebSocket)
 - All node-to-node messages are ML-DSA signed
 
 ### 10.2 Bootstrap
@@ -512,7 +517,7 @@ that data after confirming the new responsible node is synced.
 |------------------|-------------------------------------|---------------------------|
 | profiles         | `SHA3-256("dna:" \|\| fp)`          | Signed profile document   |
 | names            | `SHA3-256("name:" \|\| name)`       | Signed name record        |
-| inboxes          | `SHA3-256("inbox:" \|\| fp)`        | Pending encrypted blobs   |
+| inboxes          | `recipient_fp \|\| timestamp \|\| msg_id` | Encrypted message blobs (7-day TTL) |
 | requests         | `SHA3-256("requests:" \|\| fp)`     | Pending contact requests  |
 | allowlists       | `SHA3-256("allowlist:" \|\| fp)`    | Set of allowed fps        |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
@@ -544,7 +549,7 @@ Each entry in `repl_log`:
 | Local storage      | libmdbx (C++ API)              |
 | JSON               | jsoncpp                        |
 | Logging            | spdlog                         |
-| UDP networking     | POSIX sockets                  |
+| TCP networking     | POSIX sockets                  |
 
 No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
 
@@ -558,7 +563,9 @@ No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
 2. ~~**Write quorum**~~ — Resolved: W = min(2, R). A STORE is durable when
    W nodes have confirmed (local + STORE_ACK).
 
-3. **Max message size:** Limit for a single encrypted blob?
+3. ~~**Max message size:**~~ — Resolved: No hard protocol limit (TCP stream).
+   Implementation limit is configurable (default: 50 MiB). Future: dedicated
+   storage nodes (IPFS-style) for large files.
 
 4. **Reputation specifics:** Metrics, thresholds, slashing criteria. How to
    prevent bootstraps from becoming censorship points?

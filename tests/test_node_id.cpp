@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-using namespace helix::kademlia;
-using namespace helix::crypto;
+using namespace chromatin::kademlia;
+using namespace chromatin::crypto;
 
 TEST(NodeId, FromPubkeyMatchesSHA3_256) {
     // Use a fake pubkey (just some bytes)

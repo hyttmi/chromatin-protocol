@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 NodeId NodeId::from_pubkey(std::span<const uint8_t> pubkey) {
     NodeId result;
@@ -24,4 +24,4 @@ size_t NodeIdHash::operator()(const NodeId& n) const {
     return result;
 }
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

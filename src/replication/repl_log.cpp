@@ -6,7 +6,7 @@
 
 #include <spdlog/spdlog.h>
 
-namespace helix::replication {
+namespace chromatin::replication {
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -252,4 +252,4 @@ void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq) {
     spdlog::debug("ReplLog: compacted {} entries before seq {}", to_delete.size(), before_seq);
 }
 
-} // namespace helix::replication
+} // namespace chromatin::replication

@@ -7,7 +7,7 @@
 #include <json/json.h>
 #include <spdlog/spdlog.h>
 
-namespace helix::config {
+namespace chromatin::config {
 
 namespace {
 
@@ -48,8 +48,8 @@ Config load_config(const std::filesystem::path& path) {
     if (root.isMember("bind")) {
         cfg.bind = root["bind"].asString();
     }
-    if (root.isMember("udp_port")) {
-        cfg.udp_port = static_cast<uint16_t>(root["udp_port"].asUInt());
+    if (root.isMember("tcp_port")) {
+        cfg.tcp_port = static_cast<uint16_t>(root["tcp_port"].asUInt());
     }
     if (root.isMember("ws_port")) {
         cfg.ws_port = static_cast<uint16_t>(root["ws_port"].asUInt());
@@ -67,7 +67,7 @@ void generate_default_config(const std::filesystem::path& path) {
     Json::Value root;
     root["data_dir"] = ".";
     root["bind"] = "0.0.0.0";
-    root["udp_port"] = 4000;
+    root["tcp_port"] = 4000;
     root["ws_port"] = 4001;
 
     Json::Value bootstrap(Json::arrayValue);
@@ -152,4 +152,4 @@ crypto::KeyPair load_or_generate_keypair(const std::filesystem::path& data_dir) 
     return kp;
 }
 
-} // namespace helix::config
+} // namespace chromatin::config

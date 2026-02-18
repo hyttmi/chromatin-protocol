@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-using namespace helix::crypto;
+using namespace chromatin::crypto;
 
 // ---------------------------------------------------------------------------
 // SHA3-256 tests
@@ -32,7 +32,7 @@ TEST(SHA3_256, EmptyInput_MatchesNISTVector) {
 }
 
 TEST(SHA3_256, Deterministic) {
-    std::string input = "hello helix";
+    std::string input = "hello chromatin";
     std::span<const uint8_t> data(reinterpret_cast<const uint8_t*>(input.data()), input.size());
     Hash h1 = sha3_256(data);
     Hash h2 = sha3_256(data);

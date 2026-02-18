@@ -11,7 +11,7 @@ COPY src/ src/
 COPY tests/ tests/
 
 RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build build --parallel "$(nproc)" --target helix-node helix-integration-test
+    && cmake --build build --parallel "$(nproc)" --target chromatin-node chromatin-integration-test
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim
@@ -20,12 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/build/src/helix-node /usr/local/bin/helix-node
-COPY --from=builder /build/build/tests/integration/helix-integration-test /usr/local/bin/helix-integration-test
+COPY --from=builder /build/build/src/chromatin-node /usr/local/bin/chromatin-node
+COPY --from=builder /build/build/tests/integration/chromatin-integration-test /usr/local/bin/chromatin-integration-test
 
 RUN mkdir -p /data
 
-EXPOSE 4000/udp 4001
+EXPOSE 4000 4001
 
-ENTRYPOINT ["helix-node"]
-CMD ["--config", "/etc/helix/config.json"]
+ENTRYPOINT ["chromatin-node"]
+CMD ["--config", "/etc/chromatin/config.json"]

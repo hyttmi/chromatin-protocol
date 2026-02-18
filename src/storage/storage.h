@@ -12,7 +12,7 @@
 
 #include "mdbx.h++"
 
-namespace helix::storage {
+namespace chromatin::storage {
 
 inline constexpr const char* TABLE_PROFILES   = "profiles";
 inline constexpr const char* TABLE_NAMES      = "names";
@@ -45,4 +45,4 @@ private:
     mdbx::map_handle get_map(std::string_view table) const;
 };
 
-} // namespace helix::storage
+} // namespace chromatin::storage

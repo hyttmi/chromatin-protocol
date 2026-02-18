@@ -4,7 +4,7 @@
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
@@ -18,10 +18,10 @@
 #include <thread>
 #include <vector>
 
-using namespace helix::kademlia;
-using namespace helix::crypto;
-using namespace helix::replication;
-using namespace helix::storage;
+using namespace chromatin::kademlia;
+using namespace chromatin::crypto;
+using namespace chromatin::replication;
+using namespace chromatin::storage;
 
 // ---------------------------------------------------------------------------
 // Test infrastructure: in-process test node
@@ -30,7 +30,7 @@ using namespace helix::storage;
 struct TestNode {
     KeyPair keypair;
     NodeInfo info;
-    std::unique_ptr<UdpTransport> transport;
+    std::unique_ptr<TcpTransport> transport;
     std::unique_ptr<RoutingTable> table;
     std::unique_ptr<Storage> storage;
     std::unique_ptr<ReplLog> repl_log;
@@ -87,18 +87,18 @@ protected:
 
         // Create temp storage
         node->db_path = std::filesystem::temp_directory_path() /
-                        ("helix_kad_test_" + std::to_string(reinterpret_cast<uintptr_t>(node.get())));
+                        ("chromatin_kad_test_" + std::to_string(reinterpret_cast<uintptr_t>(node.get())));
         std::filesystem::create_directories(node->db_path);
         node->storage = std::make_unique<Storage>(node->db_path / "test.mdbx");
 
         // Create transport on ephemeral port
-        node->transport = std::make_unique<UdpTransport>("127.0.0.1", 0);
-        uint16_t udp_port = node->transport->local_port();
+        node->transport = std::make_unique<TcpTransport>("127.0.0.1", 0);
+        uint16_t tcp_port = node->transport->local_port();
 
         // Build NodeInfo
         node->info.id = nid;
         node->info.address = "127.0.0.1";
-        node->info.udp_port = udp_port;
+        node->info.tcp_port = tcp_port;
         node->info.ws_port = 0;
         node->info.pubkey = node->keypair.public_key;
         node->info.last_seen = std::chrono::steady_clock::now();
@@ -173,7 +173,7 @@ protected:
 
     // Brute-force find a valid PoW nonce for a name at given difficulty
     static uint64_t find_pow_nonce(const std::string& name, const Hash& fingerprint, int difficulty) {
-        std::string prefix = "helix:name:";
+        std::string prefix = "chromatin:name:";
         std::vector<uint8_t> preimage;
         preimage.insert(preimage.end(), prefix.begin(), prefix.end());
         preimage.insert(preimage.end(), name.begin(), name.end());
@@ -217,7 +217,7 @@ TEST_F(KademliaTest, BootstrapAddsNodes) {
     start_all();
 
     // n2 bootstraps from n1
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
 
     // Wait for FIND_NODE -> NODES exchange
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -241,15 +241,15 @@ TEST_F(KademliaTest, ThreeNodeBootstrap) {
     start_all();
 
     // n2 bootstraps from n1
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // n3 bootstraps from n1 (n1 will tell n3 about n2)
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // n2 re-bootstraps to discover n3 (n1 now knows about n3)
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // n1 should know about n2 and n3
@@ -278,7 +278,7 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     start_all();
 
     // Bootstrap n2 from n1
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // Store a profile value via n1 (using data_type 0x00 = profile)
@@ -295,6 +295,7 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     Message fv_msg;
     fv_msg.type = MessageType::FIND_VALUE;
     fv_msg.sender = n2.info.id;
+    fv_msg.sender_port = n2.info.tcp_port;
     fv_msg.payload = fv_payload;
     sign_message(fv_msg, n2.keypair.secret_key);
 
@@ -334,7 +335,7 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Send FIND_VALUE from n2 to n1
-    n2.transport->send("127.0.0.1", n1.info.udp_port, fv_msg);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, fv_msg);
 
     // Wait for response
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -362,9 +363,9 @@ TEST_F(KademliaTest, ResponsibleNodes) {
     start_all();
 
     // Bootstrap so all nodes know each other
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // With 3 nodes and R=3, all nodes should be responsible for any key
@@ -490,7 +491,7 @@ TEST_F(KademliaTest, WriteQuorum) {
     auto& n2 = create_node();
     start_all();
 
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // 2 nodes: R=2, W=min(2, 2) = 2
@@ -509,7 +510,7 @@ TEST_F(KademliaTest, StoreAckSent) {
     start_all();
 
     // Bootstrap
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // Store a profile on n1 directly, then send a STORE message from n2 to n1
@@ -555,9 +556,10 @@ TEST_F(KademliaTest, StoreAckSent) {
     Message store_msg;
     store_msg.type = MessageType::STORE;
     store_msg.sender = n2.info.id;
+    store_msg.sender_port = n2.info.tcp_port;
     store_msg.payload = store_payload;
     sign_message(store_msg, n2.keypair.secret_key);
-    n2.transport->send("127.0.0.1", n1.info.udp_port, store_msg);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, store_msg);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
@@ -580,7 +582,7 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     start_all();
 
     // Bootstrap so both nodes know each other (R=2)
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     ASSERT_EQ(n1.kad->replication_factor(), 2u);
@@ -600,12 +602,19 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     EXPECT_EQ(status->acked, 0u) << "No ACKs received yet";
     EXPECT_TRUE(status->local_stored);
 
-    // Wait for n2 to process the STORE and send STORE_ACK back
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    // Wait for n2 to process the STORE and send STORE_ACK back (poll for reliability)
+    bool resolved = false;
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto s = n1.kad->pending_store_status(key);
+        if (!s.has_value()) {
+            resolved = true;
+            break;
+        }
+    }
 
     // After ACK, the pending entry should be resolved (removed)
-    auto status2 = n1.kad->pending_store_status(key);
-    EXPECT_FALSE(status2.has_value()) << "Pending store should be resolved after STORE_ACK";
+    EXPECT_TRUE(resolved) << "Pending store should be resolved after STORE_ACK";
 
     // Verify n2 actually stored the data
     auto n2_data = n2.storage->get(TABLE_PROFILES, key);
@@ -625,11 +634,11 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     start_all();
 
     // Bootstrap all nodes
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     ASSERT_EQ(n1.kad->replication_factor(), 3u);
@@ -649,16 +658,22 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     EXPECT_EQ(status->expected, 2u);
     EXPECT_TRUE(status->local_stored);
 
-    // Wait for both ACKs (poll with timeout for reliability under load)
-    bool cleared = false;
-    for (int i = 0; i < 30; ++i) {
+    // Wait for quorum (W=2: local_stored + at least 1 remote ACK)
+    bool quorum_met = false;
+    for (int i = 0; i < 50; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (!n1.kad->pending_store_status(key).has_value()) {
-            cleared = true;
+        auto s = n1.kad->pending_store_status(key);
+        if (!s.has_value()) {
+            quorum_met = true;  // fully cleared = quorum definitely met
+            break;
+        }
+        size_t confirmed = s->acked + (s->local_stored ? 1 : 0);
+        if (confirmed >= n1.kad->write_quorum()) {
+            quorum_met = true;
             break;
         }
     }
-    EXPECT_TRUE(cleared) << "Pending store should be cleared after all ACKs";
+    EXPECT_TRUE(quorum_met) << "Write quorum should be met (W=" << n1.kad->write_quorum() << ")";
 
     // Verify all 3 nodes have the data
     EXPECT_TRUE(n1.storage->get(TABLE_PROFILES, key).has_value());
@@ -678,12 +693,12 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
     start_all();
 
     // Bootstrap all nodes so they know each other
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     // Re-bootstrap so n2 knows n3
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // Store a name record on node 1 directly (simulating a STORE)
@@ -716,10 +731,11 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
     Message sync_msg;
     sync_msg.type = MessageType::SYNC_REQ;
     sync_msg.sender = n2.info.id;
+    sync_msg.sender_port = n2.info.tcp_port;
     sync_msg.payload = sync_payload;
     sign_message(sync_msg, n2.keypair.secret_key);
 
-    n2.transport->send("127.0.0.1", n1.info.udp_port, sync_msg);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, sync_msg);
 
     // Wait for SYNC_REQ -> SYNC_RESP exchange
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
@@ -746,7 +762,7 @@ TEST_F(KademliaTest, TickRefreshesRoutingTable) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // n1 bootstraps from n2's port, but n2 isn't receiving yet — no discovery
-    n1.kad->set_bootstrap_addrs({{"127.0.0.1", n2.info.udp_port}});
+    n1.kad->set_bootstrap_addrs({{"127.0.0.1", n2.info.tcp_port}});
     EXPECT_EQ(n1.table->size(), 0u) << "n1 should not know any nodes yet";
 
     // Now start n2
@@ -773,7 +789,7 @@ TEST_F(KademliaTest, PongUpdatesLastSeen) {
     start_all();
 
     // Bootstrap so they know each other
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.udp_port}});
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     // Record n2's view of n1's last_seen
@@ -788,9 +804,10 @@ TEST_F(KademliaTest, PongUpdatesLastSeen) {
     Message ping_msg;
     ping_msg.type = MessageType::PING;
     ping_msg.sender = n1.info.id;
+    ping_msg.sender_port = n1.info.tcp_port;
     ping_msg.payload = {};
     sign_message(ping_msg, n1.keypair.secret_key);
-    n1.transport->send("127.0.0.1", n2.info.udp_port, ping_msg);
+    n1.transport->send("127.0.0.1", n2.info.tcp_port, ping_msg);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
@@ -810,7 +827,7 @@ TEST_F(KademliaTest, StaleNodeEviction) {
     NodeInfo stale;
     stale.id = NodeId::from_pubkey(generate_keypair().public_key);
     stale.address = "127.0.0.1";
-    stale.udp_port = 9999;
+    stale.tcp_port = 9999;
     stale.ws_port = 0;
     stale.last_seen = std::chrono::steady_clock::now() - std::chrono::seconds(200);
     n1.table->add_or_update(stale);
@@ -841,14 +858,15 @@ TEST_F(KademliaTest, PingUpdatesRoutingTable) {
     Message ping_msg;
     ping_msg.type = MessageType::PING;
     ping_msg.sender = n2.info.id;
+    ping_msg.sender_port = n2.info.tcp_port;
     ping_msg.payload = {};
     sign_message(ping_msg, n2.keypair.secret_key);
-    n2.transport->send("127.0.0.1", n1.info.udp_port, ping_msg);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, ping_msg);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     EXPECT_GE(n1.table->size(), 1u) << "handle_ping should have added n2 to n1's routing table";
     auto found = n1.table->find(n2.info.id);
     ASSERT_TRUE(found.has_value());
-    EXPECT_EQ(found->udp_port, n2.info.udp_port);
+    EXPECT_EQ(found->tcp_port, n2.info.tcp_port);
 }

@@ -2,14 +2,14 @@
 
 #include <algorithm>
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 void RoutingTable::add_or_update(NodeInfo info) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& existing : nodes_) {
         if (existing.id == info.id) {
             existing.address = std::move(info.address);
-            existing.udp_port = info.udp_port;
+            existing.tcp_port = info.tcp_port;
             existing.ws_port = info.ws_port;
             existing.pubkey = std::move(info.pubkey);
             existing.last_seen = info.last_seen;
@@ -67,4 +67,4 @@ void RoutingTable::evict_older_than(std::chrono::steady_clock::time_point cutoff
     std::erase_if(nodes_, [&](const NodeInfo& n) { return n.last_seen < cutoff; });
 }
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

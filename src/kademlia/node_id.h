@@ -6,7 +6,7 @@
 
 #include "crypto/crypto.h"
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 struct NodeId {
     crypto::Hash id{};
@@ -22,4 +22,4 @@ struct NodeIdHash {
     size_t operator()(const NodeId& n) const;
 };
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

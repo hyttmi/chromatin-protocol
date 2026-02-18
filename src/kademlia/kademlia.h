@@ -12,11 +12,11 @@
 #include "crypto/crypto.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 // Tracks replication status for a pending STORE operation.
 struct PendingStore {
@@ -28,14 +28,14 @@ struct PendingStore {
 
 class Kademlia {
 public:
-    Kademlia(NodeInfo self, UdpTransport& transport, RoutingTable& table,
+    Kademlia(NodeInfo self, TcpTransport& transport, RoutingTable& table,
              storage::Storage& storage, replication::ReplLog& repl_log,
              const crypto::KeyPair& keypair);
 
     // Join network via bootstrap nodes
     void bootstrap(const std::vector<std::pair<std::string, uint16_t>>& addrs);
 
-    // Handle incoming UDP message (called from recv loop)
+    // Handle incoming message (called from TCP accept loop)
     void handle_message(const Message& msg, const std::string& from_addr, uint16_t from_port);
 
     // High-level operations
@@ -69,7 +69,7 @@ public:
 
 private:
     NodeInfo self_;
-    UdpTransport& transport_;
+    TcpTransport& transport_;
     RoutingTable& table_;
     storage::Storage& storage_;
     replication::ReplLog& repl_log_;
@@ -104,4 +104,4 @@ private:
     bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key);
 };
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

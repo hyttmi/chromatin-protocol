@@ -8,18 +8,18 @@
 #include <string>
 #include <vector>
 
-using namespace helix::kademlia;
-using namespace helix::crypto;
+using namespace chromatin::kademlia;
+using namespace chromatin::crypto;
 
 namespace {
 
 NodeInfo make_node(const std::string& name, const std::string& addr = "127.0.0.1",
-                   uint16_t udp = 5000, uint16_t ws = 8080) {
+                   uint16_t tcp = 5000, uint16_t ws = 8080) {
     std::vector<uint8_t> pk(name.begin(), name.end());
     NodeInfo info;
     info.id = NodeId::from_pubkey(pk);
     info.address = addr;
-    info.udp_port = udp;
+    info.tcp_port = tcp;
     info.ws_port = ws;
     info.pubkey = pk;
     info.last_seen = std::chrono::steady_clock::now();
@@ -39,7 +39,7 @@ TEST(RoutingTable, AddAndFind) {
     ASSERT_TRUE(found.has_value());
     EXPECT_EQ(found->id, id);
     EXPECT_EQ(found->address, "127.0.0.1");
-    EXPECT_EQ(found->udp_port, 5000);
+    EXPECT_EQ(found->tcp_port, 5000);
     EXPECT_EQ(found->ws_port, 8080);
 }
 
@@ -84,7 +84,7 @@ TEST(RoutingTable, UpdateExisting) {
     auto found = rt.find(id);
     ASSERT_TRUE(found.has_value());
     EXPECT_EQ(found->address, "10.0.0.2");
-    EXPECT_EQ(found->udp_port, 6000);
+    EXPECT_EQ(found->tcp_port, 6000);
     EXPECT_EQ(found->ws_port, 9090);
 }
 

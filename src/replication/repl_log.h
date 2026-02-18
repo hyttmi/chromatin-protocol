@@ -7,7 +7,7 @@
 #include "crypto/crypto.h"
 #include "storage/storage.h"
 
-namespace helix::replication {
+namespace chromatin::replication {
 
 enum class Op : uint8_t { ADD = 0x00, DEL = 0x01, UPD = 0x02 };
 
@@ -54,4 +54,4 @@ private:
     static std::vector<uint8_t> make_composite_key(const crypto::Hash& key, uint64_t seq);
 };
 
-} // namespace helix::replication
+} // namespace chromatin::replication

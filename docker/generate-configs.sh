@@ -13,7 +13,7 @@ cat > "$CONFIGS_DIR/node0.json" <<'EOF'
 {
   "data_dir": "/data",
   "bind": "172.20.0.10",
-  "udp_port": 4000,
+  "tcp_port": 4000,
   "ws_port": 4001,
   "bootstrap": []
 }
@@ -25,7 +25,7 @@ cat > "$CONFIGS_DIR/node${i}.json" <<EOF
 {
   "data_dir": "/data",
   "bind": "172.20.0.$((10 + i))",
-  "udp_port": 4000,
+  "tcp_port": 4000,
   "ws_port": 4001,
   "bootstrap": ["172.20.0.10:4000"]
 }
@@ -37,7 +37,7 @@ cat > "$CONFIGS_DIR/test-runner.json" <<'EOF'
 {
   "data_dir": "/data",
   "bind": "172.20.0.100",
-  "udp_port": 4000,
+  "tcp_port": 4000,
   "ws_port": 4001,
   "bootstrap": ["172.20.0.10:4000"]
 }

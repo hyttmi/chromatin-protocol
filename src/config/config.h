@@ -7,12 +7,12 @@
 
 #include "crypto/crypto.h"
 
-namespace helix::config {
+namespace chromatin::config {
 
 struct Config {
     std::filesystem::path data_dir = ".";
     std::string bind = "0.0.0.0";
-    uint16_t udp_port = 4000;
+    uint16_t tcp_port = 4000;
     uint16_t ws_port = 4001;
     std::vector<std::pair<std::string, uint16_t>> bootstrap;
 };
@@ -28,4 +28,4 @@ void generate_default_config(const std::filesystem::path& path);
 // Returns the keypair (generating and saving if the file doesn't exist).
 crypto::KeyPair load_or_generate_keypair(const std::filesystem::path& data_dir);
 
-} // namespace helix::config
+} // namespace chromatin::config

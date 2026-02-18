@@ -1,18 +1,18 @@
-add_library(helix-core STATIC)
-target_sources(helix-core PRIVATE
+add_library(chromatin-core STATIC)
+target_sources(chromatin-core PRIVATE
     crypto/crypto.cpp
     storage/storage.cpp
     kademlia/node_id.cpp
     kademlia/routing_table.cpp
-    kademlia/udp_transport.cpp
+    kademlia/tcp_transport.cpp
     kademlia/kademlia.cpp
     replication/repl_log.cpp
     config/config.cpp
 )
-target_include_directories(helix-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(chromatin-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # liboqs SHA3 internal headers are only exposed via the build include dir
-target_include_directories(helix-core PRIVATE ${liboqs_BINARY_DIR}/include)
-target_link_libraries(helix-core PUBLIC
+target_include_directories(chromatin-core PRIVATE ${liboqs_BINARY_DIR}/include)
+target_link_libraries(chromatin-core PUBLIC
     oqs
     mdbx-static
     jsoncpp_static
@@ -20,5 +20,5 @@ target_link_libraries(helix-core PUBLIC
     Threads::Threads
 )
 
-add_executable(helix-node main.cpp)
-target_link_libraries(helix-node PRIVATE helix-core)
+add_executable(chromatin-node main.cpp)
+target_link_libraries(chromatin-node PRIVATE chromatin-core)

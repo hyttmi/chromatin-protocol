@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-namespace helix::crypto {
+namespace chromatin::crypto {
 
 using Hash = std::array<uint8_t, 32>;
 
@@ -44,4 +44,4 @@ bool verify(std::span<const uint8_t> message, std::span<const uint8_t> signature
 bool verify_pow(std::span<const uint8_t> preimage, uint64_t nonce, int required_zero_bits);
 int leading_zero_bits(const Hash& hash);
 
-} // namespace helix::crypto
+} // namespace chromatin::crypto

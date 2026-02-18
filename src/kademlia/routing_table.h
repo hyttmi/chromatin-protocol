@@ -10,12 +10,12 @@
 #include "crypto/crypto.h"
 #include "kademlia/node_id.h"
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 struct NodeInfo {
     NodeId id;
     std::string address;
-    uint16_t udp_port = 0;
+    uint16_t tcp_port = 0;
     uint16_t ws_port = 0;
     std::vector<uint8_t> pubkey;
     std::chrono::steady_clock::time_point last_seen;
@@ -36,4 +36,4 @@ private:
     std::vector<NodeInfo> nodes_;
 };
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

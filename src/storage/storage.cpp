@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace helix::storage {
+namespace chromatin::storage {
 
 Storage::Storage(const std::filesystem::path& db_path) {
     // Ensure parent directory exists
@@ -100,4 +100,4 @@ void Storage::foreach(std::string_view table, Callback cb) const {
     }
 }
 
-} // namespace helix::storage
+} // namespace chromatin::storage

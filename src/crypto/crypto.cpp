@@ -7,7 +7,7 @@
 #include <oqs/oqs.h>
 #include <oqs/sha3.h>
 
-namespace helix::crypto {
+namespace chromatin::crypto {
 
 // ---------------------------------------------------------------------------
 // SHA3-256
@@ -138,4 +138,4 @@ bool verify_pow(std::span<const uint8_t> preimage, uint64_t nonce, int required_
     return leading_zero_bits(h) >= required_zero_bits;
 }
 
-} // namespace helix::crypto
+} // namespace chromatin::crypto

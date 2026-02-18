@@ -1,26 +1,28 @@
-# Helix Wire Protocol Specification
+# Chromatin Wire Protocol Specification
 
 > Version 0x01 — 2026-02-17
 
-This document defines the exact wire format and validation rules for the Helix
+This document defines the exact wire format and validation rules for the Chromatin
 protocol. It is the implementor's reference — any conforming node MUST follow
-this spec to interoperate with the Helix network.
+this spec to interoperate with the Chromatin network.
 
 For architectural overview and design rationale, see `protocol.md`.
 
 ---
 
-## 1. UDP Node-to-Node Wire Format
+## 1. TCP Node-to-Node Wire Format
 
-All node-to-node communication uses UDP datagrams with the following structure:
+All node-to-node communication uses TCP with the following message structure.
+Messages are self-framing: the receiver reads header fields sequentially, then
+uses the payload and signature length fields to read the variable-length portions.
 
 ```
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|      'H'      |      'E'      |      'L'      |      'I'      |
+|      'C'      |      'H'      |      'R'      |      'M'      |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|      'X'      |    Version    |     Type      |   Reserved    |
+|    Version    |     Type      |      Sender Port (2 bytes)    |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                                                               |
 |                     Sender Node ID (32 bytes)                 |
@@ -40,10 +42,10 @@ All node-to-node communication uses UDP datagrams with the following structure:
 
 | Field          | Size    | Description                                         |
 |----------------|---------|-----------------------------------------------------|
-| Magic          | 5 bytes | `HELIX` (0x48 0x45 0x4C 0x49 0x58). Always present. |
+| Magic          | 4 bytes | `CHRM` (0x43 0x48 0x52 0x4D). Always present.       |
 | Version        | 1 byte  | Protocol version. Currently `0x01`.                 |
 | Type           | 1 byte  | Message type (see table below).                     |
-| Reserved       | 1 byte  | Must be `0x00`. Ignored on receipt.                 |
+| Sender Port    | 2 bytes | Big-endian. Sender's TCP listening port.              |
 | Sender Node ID | 32 bytes| SHA3-256 of sender's ML-DSA-87 public key.          |
 | Payload Length  | 4 bytes | Big-endian. Length of the Payload field in bytes.    |
 | Payload        | variable| Type-specific binary payload.                       |
@@ -55,7 +57,7 @@ All node-to-node communication uses UDP datagrams with the following structure:
 The signature is computed over all bytes preceding the Signature Length field:
 
 ```
-signed_data = magic || version || type || reserved || sender_id || payload_length || payload
+signed_data = magic || version || type || sender_port || sender_id || payload_length || payload
 ```
 
 ### Byte Order
@@ -64,7 +66,9 @@ All multi-byte integers in the protocol are **big-endian** (network byte order).
 
 ### Maximum Message Size
 
-65507 bytes (maximum practical UDP payload size).
+No hard protocol limit (TCP stream). Implementations SHOULD enforce a
+configurable per-message limit (default: 50 MiB) to prevent memory exhaustion.
+Future versions may introduce dedicated storage nodes for large files.
 
 ### Message Types
 
@@ -83,7 +87,7 @@ All multi-byte integers in the protocol are **big-endian** (network byte order).
 
 ---
 
-## 2. UDP Payload Formats
+## 2. TCP Payload Formats
 
 ### PING (0x00)
 
@@ -106,7 +110,7 @@ Response with the full node list.
 For each node:
   [32 bytes: node_id]
   [4 bytes: IPv4 address]
-  [2 bytes BE: udp_port]
+  [2 bytes BE: tcp_port]
   [2 bytes BE: ws_port]
   [2 bytes BE: pubkey_length]
   [pubkey_length bytes: ML-DSA-87 public key]
@@ -255,7 +259,10 @@ Storage key: `SHA3-256("name:" || name)`
 [blob_length bytes: encrypted blob]
 ```
 
-Storage key: `SHA3-256("inbox:" || recipient_fingerprint)`
+Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
+
+Local mdbx key: `recipient_fingerprint || timestamp || msg_id` (composite key
+for ordered retrieval and prefix scan).
 
 ### Contact Request (data_type 0x03)
 
@@ -321,10 +328,14 @@ Response:
 {"type": "SEND_ACK", "id": 2, "msg_id": "<hex>"}
 ```
 
-**ACK** — Confirm receipt (triggers delete-after-fetch on all R replicas):
+**DELETE** — Optionally delete messages the client no longer needs:
 ```json
-{"type": "ACK", "id": 3, "msg_ids": ["<hex>", "<hex>"]}
+{"type": "DELETE", "id": 3, "msg_ids": ["<hex>", "<hex>"]}
 ```
+
+Deletion is client-driven and optional. Messages expire automatically after
+7 days via TTL. Multi-device users may choose not to delete until all devices
+have fetched.
 
 **ALLOW** — Add fingerprint to allowlist:
 ```json
@@ -341,10 +352,15 @@ Response:
 {"type": "CONTACT_REQUEST", "id": 6, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345}
 ```
 
-**FETCH_PENDING** — Pull queued messages:
+**FETCH** — Pull messages, optionally since a timestamp:
 ```json
-{"type": "FETCH_PENDING", "id": 7}
+{"type": "FETCH", "id": 7, "since": 1708000000}
 ```
+
+If `since` is omitted, returns all stored messages (up to 7 days). Returns
+messages ordered by timestamp. Clients track their own `last_fetch_timestamp`
+locally for efficient incremental fetches. Supports multi-device: each device
+tracks its own timestamp independently.
 
 ### Server Push (unsolicited, no id)
 
@@ -379,15 +395,15 @@ Response:
 
 ## 5. Validation Rules
 
-### UDP Message Validation
+### TCP Message Validation
 
-On every incoming UDP message, a conforming node MUST:
+On every incoming TCP message, a conforming node MUST:
 
-1. Verify magic == `HELIX`
+1. Verify magic == `CHRM`
 2. Verify version == `0x01` (or a supported version)
 3. Verify ML-DSA-87 signature over `magic || version || type || reserved || sender_id || payload_length || payload`
 4. Verify sender node ID exists in membership table (exception: FIND_NODE from unknown nodes during bootstrap)
-5. Verify message size <= 65507 bytes
+5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
 
 ### Profile STORE Validation
 
@@ -398,8 +414,8 @@ On every incoming UDP message, a conforming node MUST:
 
 ### Name Registration STORE Validation
 
-1. Name matches `^[a-z0-9._-]{3,36}$`
-2. `SHA3-256("helix:name:" || name || fingerprint || nonce)` has >= 28 leading zero bits
+1. Name matches `^[a-z0-9]{3,36}$`
+2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 28 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
 4. If name already registered to a different fingerprint — reject (first claim wins)
 5. If same fingerprint — `sequence` must be higher than stored
@@ -432,7 +448,7 @@ XOR distance, where `R = min(3, network_size)`.
 
 | Constant                   | Value                                  |
 |----------------------------|----------------------------------------|
-| Magic                      | `HELIX` (0x48 0x45 0x4C 0x49 0x58)    |
+| Magic                      | `CHRM` (0x43 0x48 0x52 0x4D)          |
 | Protocol version           | `0x01`                                 |
 | Hash algorithm             | SHA3-256 (32-byte output)              |
 | Signing algorithm          | ML-DSA-87 (FIPS 204, Level 5)         |
@@ -441,13 +457,13 @@ XOR distance, where `R = min(3, network_size)`.
 | Replication factor (R)     | `min(3, network_size)`                 |
 | Name PoW difficulty        | 28 leading zero bits                   |
 | Contact request PoW        | 16 leading zero bits                   |
-| Name regex                 | `^[a-z0-9._-]{3,36}$`                 |
+| Name regex                 | `^[a-z0-9]{3,36}$`                 |
 | Max profile size           | 1 MiB                                  |
 | Max message blob           | 256 KiB                                |
 | Max contact request blob   | 64 KiB                                 |
 | Message TTL                | 7 days (604800 seconds)                |
-| Max UDP message            | 65507 bytes                            |
-| Default UDP port           | 4000                                   |
+| Max TCP message            | 50 MiB (implementation limit)          |
+| Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
 | Bootstrap nodes            | `0.bootstrap.cpunk.io`                 |
 |                            | `1.bootstrap.cpunk.io`                 |
@@ -491,7 +507,7 @@ The protocol is designed for future extension:
 - **Profile fields:** New fields can be appended to the profile format in future
   protocol versions. The `sequence` + signature mechanism handles versioned
   updates.
-- **Protocol version:** The version byte in the UDP header allows breaking
+- **Protocol version:** The version byte in the TCP header allows breaking
   changes. Nodes reject unknown versions, and implementations can support
   multiple versions simultaneously.
-- **Message types:** Values 0x0A-0xFF are reserved for future UDP message types.
+- **Message types:** Values 0x0A-0xFF are reserved for future TCP message types.

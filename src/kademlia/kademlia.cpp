@@ -9,13 +9,13 @@
 
 #include <spdlog/spdlog.h>
 
-namespace helix::kademlia {
+namespace chromatin::kademlia {
 
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
-Kademlia::Kademlia(NodeInfo self, UdpTransport& transport, RoutingTable& table,
+Kademlia::Kademlia(NodeInfo self, TcpTransport& transport, RoutingTable& table,
                    storage::Storage& storage, replication::ReplLog& repl_log,
                    const crypto::KeyPair& keypair)
     : self_(std::move(self))
@@ -155,7 +155,7 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
     NodeInfo sender_info;
     sender_info.id = msg.sender;
     sender_info.address = from;
-    sender_info.udp_port = port;
+    sender_info.tcp_port = port;
     sender_info.ws_port = 0;
     sender_info.last_seen = std::chrono::steady_clock::now();
     table_.add_or_update(sender_info);
@@ -171,7 +171,7 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
     NodeInfo sender_info;
     sender_info.id = msg.sender;
     sender_info.address = from;
-    sender_info.udp_port = port;
+    sender_info.tcp_port = port;
     sender_info.ws_port = 0;
     sender_info.last_seen = std::chrono::steady_clock::now();
     table_.add_or_update(sender_info);
@@ -191,7 +191,7 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         NodeInfo sender_info;
         sender_info.id = msg.sender;
         sender_info.address = from;
-        sender_info.udp_port = port;
+        sender_info.tcp_port = port;
         sender_info.ws_port = 0;
         sender_info.last_seen = std::chrono::steady_clock::now();
         table_.add_or_update(sender_info);
@@ -214,7 +214,7 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
     // Per node:
     //   [32 bytes: node_id]
     //   [4 bytes: IPv4 address]
-    //   [2 bytes BE: udp_port]
+    //   [2 bytes BE: tcp_port]
     //   [2 bytes BE: ws_port]
     //   [2 bytes BE: pubkey_length]
     //   [pubkey_length bytes: ML-DSA public key]
@@ -237,9 +237,9 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         auto* bytes = reinterpret_cast<const uint8_t*>(&addr_bin.s_addr);
         payload.insert(payload.end(), bytes, bytes + 4);
 
-        // udp_port (2 bytes BE)
-        payload.push_back(static_cast<uint8_t>((node.udp_port >> 8) & 0xFF));
-        payload.push_back(static_cast<uint8_t>(node.udp_port & 0xFF));
+        // tcp_port (2 bytes BE)
+        payload.push_back(static_cast<uint8_t>((node.tcp_port >> 8) & 0xFF));
+        payload.push_back(static_cast<uint8_t>(node.tcp_port & 0xFF));
 
         // ws_port (2 bytes BE)
         payload.push_back(static_cast<uint8_t>((node.ws_port >> 8) & 0xFF));
@@ -293,8 +293,8 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
         inet_ntop(AF_INET, &addr_bin, addr_str, sizeof(addr_str));
         info.address = addr_str;
 
-        // udp_port (2 bytes BE)
-        info.udp_port = static_cast<uint16_t>(
+        // tcp_port (2 bytes BE)
+        info.tcp_port = static_cast<uint16_t>(
             (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]);
         offset += 2;
 
@@ -321,7 +321,7 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
         // Skip ourselves
         if (info.id == self_.id) continue;
 
-        spdlog::info("Discovered node {} at {}:{}", i, info.address, info.udp_port);
+        spdlog::info("Discovered node {} at {}:{}", i, info.address, info.tcp_port);
         table_.add_or_update(info);
     }
 }
@@ -653,8 +653,8 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     std::string name(reinterpret_cast<const char*>(value.data() + offset), name_length);
     offset += name_length;
 
-    // 1. Name regex: ^[a-z0-9._-]{3,36}$
-    static const std::regex name_regex("^[a-z0-9._-]{3,36}$");
+    // 1. Name regex: ^[a-z0-9]{3,36}$
+    static const std::regex name_regex("^[a-z0-9]{3,36}$");
     if (!std::regex_match(name, name_regex)) {
         spdlog::warn("Name record validation: name '{}' does not match regex", name);
         return false;
@@ -692,9 +692,9 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
 
     std::span<const uint8_t> signature(value.data() + offset, sig_length);
 
-    // 2. PoW: SHA3-256("helix:name:" || name || fingerprint || nonce) >= required zero bits
-    // Build PoW preimage: "helix:name:" || name || fingerprint
-    std::string prefix = "helix:name:";
+    // 2. PoW: SHA3-256("chromatin:name:" || name || fingerprint || nonce) >= required zero bits
+    // Build PoW preimage: "chromatin:name:" || name || fingerprint
+    std::string prefix = "chromatin:name:";
     std::vector<uint8_t> pow_preimage;
     pow_preimage.insert(pow_preimage.end(), prefix.begin(), prefix.end());
     pow_preimage.insert(pow_preimage.end(), name.begin(), name.end());
@@ -999,13 +999,14 @@ Message Kademlia::make_message(MessageType type, const std::vector<uint8_t>& pay
     Message msg;
     msg.type = type;
     msg.sender = self_.id;
+    msg.sender_port = self_.tcp_port;
     msg.payload = payload;
     sign_message(msg, keypair_.secret_key);
     return msg;
 }
 
 void Kademlia::send_to_node(const NodeInfo& node, const Message& msg) {
-    transport_.send(node.address, node.udp_port, msg);
+    transport_.send(node.address, node.tcp_port, msg);
 }
 
-} // namespace helix::kademlia
+} // namespace chromatin::kademlia

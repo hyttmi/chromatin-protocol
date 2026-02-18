@@ -2,7 +2,7 @@
 
 #include "crypto/crypto.h"
 #include "kademlia/node_id.h"
-#include "kademlia/udp_transport.h"
+#include "kademlia/tcp_transport.h"
 
 #include <chrono>
 #include <cstdint>
@@ -10,18 +10,20 @@
 #include <thread>
 #include <vector>
 
-using namespace helix::kademlia;
-using namespace helix::crypto;
+using namespace chromatin::kademlia;
+using namespace chromatin::crypto;
 
 // ---------------------------------------------------------------------------
 // Helper: create a test message with a known sender and payload
 // ---------------------------------------------------------------------------
 
 static Message make_test_message(MessageType type, const NodeId& sender,
-                                 const std::vector<uint8_t>& payload = {}) {
+                                 const std::vector<uint8_t>& payload = {},
+                                 uint16_t sender_port = 0) {
     Message msg;
     msg.type = type;
     msg.sender = sender;
+    msg.sender_port = sender_port;
     msg.payload = payload;
     return msg;
 }
@@ -30,7 +32,7 @@ static Message make_test_message(MessageType type, const NodeId& sender,
 // Serialization round-trip
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, SerializeDeserializeRoundTrip) {
+TEST(TcpTransport, SerializeDeserializeRoundTrip) {
     NodeId sender;
     sender.id.fill(0xAB);
 
@@ -40,6 +42,7 @@ TEST(UdpTransport, SerializeDeserializeRoundTrip) {
     Message msg;
     msg.type = MessageType::STORE;
     msg.sender = sender;
+    msg.sender_port = 4000;
     msg.payload = payload;
     msg.signature = fake_sig;
 
@@ -49,6 +52,7 @@ TEST(UdpTransport, SerializeDeserializeRoundTrip) {
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->type, MessageType::STORE);
     EXPECT_EQ(result->sender, sender);
+    EXPECT_EQ(result->sender_port, 4000);
     EXPECT_EQ(result->payload, payload);
     EXPECT_EQ(result->signature, fake_sig);
 }
@@ -57,7 +61,7 @@ TEST(UdpTransport, SerializeDeserializeRoundTrip) {
 // Invalid magic
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, DeserializeInvalidMagic) {
+TEST(TcpTransport, DeserializeInvalidMagic) {
     NodeId sender;
     sender.id.fill(0x01);
 
@@ -76,15 +80,15 @@ TEST(UdpTransport, DeserializeInvalidMagic) {
 // Invalid version
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, DeserializeInvalidVersion) {
+TEST(TcpTransport, DeserializeInvalidVersion) {
     NodeId sender;
     sender.id.fill(0x02);
 
     Message msg = make_test_message(MessageType::PING, sender);
     auto serialized = serialize_message(msg);
 
-    // Corrupt version byte (offset 5)
-    serialized[5] = 0xFF;
+    // Version byte is at offset 4 (after 4-byte CHRM magic)
+    serialized[4] = 0xFF;
 
     auto result = deserialize_message(serialized);
     EXPECT_FALSE(result.has_value());
@@ -94,9 +98,9 @@ TEST(UdpTransport, DeserializeInvalidVersion) {
 // Truncated data
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, DeserializeTruncatedData) {
+TEST(TcpTransport, DeserializeTruncatedData) {
     // Too short to even contain a header
-    std::vector<uint8_t> short_data = {'H', 'E', 'L', 'I', 'X', 0x01, 0x00};
+    std::vector<uint8_t> short_data = {'C', 'H', 'R', 'M', 0x01, 0x00};
     auto result = deserialize_message(short_data);
     EXPECT_FALSE(result.has_value());
 
@@ -116,11 +120,11 @@ TEST(UdpTransport, DeserializeTruncatedData) {
 // Sign and verify with real ML-DSA-87 keys
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, SignAndVerifyMessage) {
+TEST(TcpTransport, SignAndVerifyMessage) {
     KeyPair kp = generate_keypair();
     NodeId sender = NodeId::from_pubkey(kp.public_key);
 
-    Message msg = make_test_message(MessageType::FIND_NODE, sender, {0xCA, 0xFE});
+    Message msg = make_test_message(MessageType::FIND_NODE, sender, {0xCA, 0xFE}, 5000);
     sign_message(msg, kp.secret_key);
 
     EXPECT_FALSE(msg.signature.empty());
@@ -131,7 +135,7 @@ TEST(UdpTransport, SignAndVerifyMessage) {
 // Verify rejects tampered payload
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, VerifyRejectsTamperedPayload) {
+TEST(TcpTransport, VerifyRejectsTamperedPayload) {
     KeyPair kp = generate_keypair();
     NodeId sender = NodeId::from_pubkey(kp.public_key);
 
@@ -150,7 +154,7 @@ TEST(UdpTransport, VerifyRejectsTamperedPayload) {
 // Verify rejects wrong key
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, VerifyRejectsWrongKey) {
+TEST(TcpTransport, VerifyRejectsWrongKey) {
     KeyPair kp1 = generate_keypair();
     KeyPair kp2 = generate_keypair();
     NodeId sender = NodeId::from_pubkey(kp1.public_key);
@@ -163,11 +167,11 @@ TEST(UdpTransport, VerifyRejectsWrongKey) {
 }
 
 // ---------------------------------------------------------------------------
-// Loopback send/recv test
+// Loopback send/recv test over TCP
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, SendRecvLoopback) {
-    UdpTransport transport("127.0.0.1", 0);
+TEST(TcpTransport, SendRecvLoopback) {
+    TcpTransport transport("127.0.0.1", 0);
     uint16_t port = transport.local_port();
     ASSERT_GT(port, 0);
 
@@ -178,6 +182,7 @@ TEST(UdpTransport, SendRecvLoopback) {
     Message sent_msg;
     sent_msg.type = MessageType::FIND_VALUE;
     sent_msg.sender = sender;
+    sent_msg.sender_port = port;
     sent_msg.payload = payload;
     sent_msg.signature = {0xAA, 0xBB};
 
@@ -197,7 +202,7 @@ TEST(UdpTransport, SendRecvLoopback) {
         });
     });
 
-    // Give the recv loop time to start
+    // Give the accept loop time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Send to self
@@ -211,17 +216,18 @@ TEST(UdpTransport, SendRecvLoopback) {
     ASSERT_TRUE(got_message) << "Did not receive message via loopback";
     EXPECT_EQ(received_msg.type, MessageType::FIND_VALUE);
     EXPECT_EQ(received_msg.sender, sender);
+    EXPECT_EQ(received_msg.sender_port, port);
     EXPECT_EQ(received_msg.payload, payload);
     EXPECT_EQ(received_msg.signature, (std::vector<uint8_t>{0xAA, 0xBB}));
     EXPECT_EQ(received_addr, "127.0.0.1");
-    EXPECT_GT(received_port, 0);
+    EXPECT_EQ(received_port, port);
 }
 
 // ---------------------------------------------------------------------------
 // All message types serialize/deserialize correctly
 // ---------------------------------------------------------------------------
 
-TEST(UdpTransport, AllMessageTypes) {
+TEST(TcpTransport, AllMessageTypes) {
     const MessageType all_types[] = {
         MessageType::PING,
         MessageType::PONG,
@@ -241,6 +247,7 @@ TEST(UdpTransport, AllMessageTypes) {
         Message msg;
         msg.type = type;
         msg.sender = sender;
+        msg.sender_port = 9000;
         msg.payload = {static_cast<uint8_t>(type), 0xFF};
         msg.signature = {0x01, 0x02, 0x03};
 
@@ -250,7 +257,30 @@ TEST(UdpTransport, AllMessageTypes) {
         ASSERT_TRUE(result.has_value()) << "Failed for type " << static_cast<int>(type);
         EXPECT_EQ(result->type, type);
         EXPECT_EQ(result->sender, sender);
+        EXPECT_EQ(result->sender_port, 9000);
         EXPECT_EQ(result->payload, msg.payload);
         EXPECT_EQ(result->signature, msg.signature);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sender port round-trip through header
+// ---------------------------------------------------------------------------
+
+TEST(TcpTransport, SenderPortRoundTrip) {
+    NodeId sender;
+    sender.id.fill(0x11);
+
+    Message msg;
+    msg.type = MessageType::PING;
+    msg.sender = sender;
+    msg.sender_port = 12345;
+    msg.payload = {};
+    msg.signature = {0x00};
+
+    auto serialized = serialize_message(msg);
+    auto result = deserialize_message(serialized);
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->sender_port, 12345);
 }

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-using namespace helix::storage;
+using namespace chromatin::storage;
 
 class StorageTest : public ::testing::Test {
 protected:
@@ -18,7 +18,7 @@ protected:
     void SetUp() override {
         // Create a unique temporary directory for each test
         db_path_ = std::filesystem::temp_directory_path() /
-                   ("helix_test_" + std::to_string(::testing::UnitTest::GetInstance()
+                   ("chromatin_test_" + std::to_string(::testing::UnitTest::GetInstance()
                                                        ->current_test_info()
                                                        ->line()) +
                     "_" + std::to_string(reinterpret_cast<uintptr_t>(this)));
