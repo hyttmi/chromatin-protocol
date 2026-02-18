@@ -128,10 +128,15 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
     } else if (type == "SEND") {
         if (!require_auth(ws, id)) return;
         handle_send(ws, root);
-    } else if (type == "ALLOW" ||
-               type == "REVOKE" || type == "CONTACT_REQUEST") {
+    } else if (type == "ALLOW") {
         if (!require_auth(ws, id)) return;
-        // Individual handlers will be added in later tasks
+        handle_allow(ws, root);
+    } else if (type == "REVOKE") {
+        if (!require_auth(ws, id)) return;
+        handle_revoke(ws, root);
+    } else if (type == "CONTACT_REQUEST") {
+        if (!require_auth(ws, id)) return;
+        // Will be added in Task 9
         send_error(ws, id, 400, "not yet implemented: " + type);
     } else {
         send_error(ws, id, 400, "unknown command: " + type);
@@ -589,6 +594,234 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
             } else {
                 send_error(ws, id, 500, "store failed");
             }
+        });
+    });
+}
+
+// ---------- allowlist handlers ----------
+
+void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse allowed contact fingerprint (64 hex chars = 32 bytes)
+    std::string fp_hex = msg.get("fingerprint", "").asString();
+    if (fp_hex.size() != 64) {
+        send_error(ws, id, 400, "fingerprint must be 64 hex chars");
+        return;
+    }
+    auto fp_bytes = from_hex(fp_hex);
+    if (!fp_bytes) {
+        send_error(ws, id, 400, "invalid hex in fingerprint");
+        return;
+    }
+    crypto::Hash allowed_fp{};
+    std::copy(fp_bytes->begin(), fp_bytes->end(), allowed_fp.begin());
+
+    // Parse sequence number
+    if (!msg.isMember("sequence") || !msg["sequence"].isUInt64()) {
+        send_error(ws, id, 400, "missing or invalid sequence");
+        return;
+    }
+    uint64_t sequence = msg["sequence"].asUInt64();
+
+    // Parse signature
+    std::string sig_hex = msg.get("signature", "").asString();
+    if (sig_hex.empty()) {
+        send_error(ws, id, 400, "missing signature");
+        return;
+    }
+    auto sig_bytes = from_hex(sig_hex);
+    if (!sig_bytes) {
+        send_error(ws, id, 400, "invalid hex in signature");
+        return;
+    }
+    if (sig_bytes->size() != crypto::SIGNATURE_SIZE) {
+        send_error(ws, id, 400, "invalid signature size");
+        return;
+    }
+
+    // Build signed data: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    std::vector<uint8_t> signed_data;
+    signed_data.reserve(1 + 32 + 8);
+    signed_data.push_back(0x01);  // action = allow
+    signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        signed_data.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    }
+
+    // Verify ML-DSA-87 signature using session's pubkey
+    if (!crypto::verify(signed_data, *sig_bytes, session->pubkey)) {
+        send_error(ws, id, 401, "invalid signature");
+        return;
+    }
+
+    // Compute allowlist_key = SHA3-256("allowlist:" || owner_fp)
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", session->fingerprint);
+
+    // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
+    std::vector<uint8_t> storage_key;
+    storage_key.reserve(64);
+    storage_key.insert(storage_key.end(), allowlist_key.begin(), allowlist_key.end());
+    storage_key.insert(storage_key.end(), allowed_fp.begin(), allowed_fp.end());
+
+    // Check sequence > currently stored sequence
+    auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
+    if (existing) {
+        // Existing entry format: action(1) || sequence(8 BE) || signature(SIGNATURE_SIZE)
+        if (existing->size() >= 9) {
+            uint64_t stored_seq = 0;
+            for (int i = 0; i < 8; ++i) {
+                stored_seq = (stored_seq << 8) | (*existing)[1 + i];
+            }
+            if (sequence <= stored_seq) {
+                send_error(ws, id, 400, "sequence must be greater than current");
+                return;
+            }
+        }
+    }
+
+    // Build allowlist entry value: action(1) || sequence(8 BE) || signature
+    std::vector<uint8_t> entry_value;
+    entry_value.reserve(1 + 8 + sig_bytes->size());
+    entry_value.push_back(0x01);  // action = allow
+    for (int i = 7; i >= 0; --i) {
+        entry_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    }
+    entry_value.insert(entry_value.end(), sig_bytes->begin(), sig_bytes->end());
+
+    // Dispatch to worker pool
+    workers_.post([this, ws, id, allowlist_key,
+                   storage_key = std::move(storage_key),
+                   entry_value = std::move(entry_value)]() {
+        bool ok = storage_.put(storage::TABLE_ALLOWLISTS, storage_key, entry_value);
+
+        if (ok) {
+            kad_.store(allowlist_key, 0x04, entry_value);
+        }
+
+        loop_->defer([this, ws, id, ok]() {
+            if (connections_.count(ws) == 0) return;
+
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 500, "store failed");
+            }
+        });
+    });
+}
+
+void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse allowed contact fingerprint (64 hex chars = 32 bytes)
+    std::string fp_hex = msg.get("fingerprint", "").asString();
+    if (fp_hex.size() != 64) {
+        send_error(ws, id, 400, "fingerprint must be 64 hex chars");
+        return;
+    }
+    auto fp_bytes = from_hex(fp_hex);
+    if (!fp_bytes) {
+        send_error(ws, id, 400, "invalid hex in fingerprint");
+        return;
+    }
+    crypto::Hash allowed_fp{};
+    std::copy(fp_bytes->begin(), fp_bytes->end(), allowed_fp.begin());
+
+    // Parse sequence number
+    if (!msg.isMember("sequence") || !msg["sequence"].isUInt64()) {
+        send_error(ws, id, 400, "missing or invalid sequence");
+        return;
+    }
+    uint64_t sequence = msg["sequence"].asUInt64();
+
+    // Parse signature
+    std::string sig_hex = msg.get("signature", "").asString();
+    if (sig_hex.empty()) {
+        send_error(ws, id, 400, "missing signature");
+        return;
+    }
+    auto sig_bytes = from_hex(sig_hex);
+    if (!sig_bytes) {
+        send_error(ws, id, 400, "invalid hex in signature");
+        return;
+    }
+    if (sig_bytes->size() != crypto::SIGNATURE_SIZE) {
+        send_error(ws, id, 400, "invalid signature size");
+        return;
+    }
+
+    // Build signed data: action(0x00) || allowed_fp(32) || sequence(8 BE)
+    std::vector<uint8_t> signed_data;
+    signed_data.reserve(1 + 32 + 8);
+    signed_data.push_back(0x00);  // action = revoke
+    signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        signed_data.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    }
+
+    // Verify ML-DSA-87 signature using session's pubkey
+    if (!crypto::verify(signed_data, *sig_bytes, session->pubkey)) {
+        send_error(ws, id, 401, "invalid signature");
+        return;
+    }
+
+    // Compute allowlist_key = SHA3-256("allowlist:" || owner_fp)
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", session->fingerprint);
+
+    // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
+    std::vector<uint8_t> storage_key;
+    storage_key.reserve(64);
+    storage_key.insert(storage_key.end(), allowlist_key.begin(), allowlist_key.end());
+    storage_key.insert(storage_key.end(), allowed_fp.begin(), allowed_fp.end());
+
+    // Check sequence > currently stored sequence
+    auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
+    if (existing) {
+        if (existing->size() >= 9) {
+            uint64_t stored_seq = 0;
+            for (int i = 0; i < 8; ++i) {
+                stored_seq = (stored_seq << 8) | (*existing)[1 + i];
+            }
+            if (sequence <= stored_seq) {
+                send_error(ws, id, 400, "sequence must be greater than current");
+                return;
+            }
+        }
+    }
+
+    // Dispatch to worker pool — delete local entry, replicate revoke
+    workers_.post([this, ws, id, allowlist_key,
+                   storage_key = std::move(storage_key),
+                   sig_bytes = std::move(*sig_bytes),
+                   sequence]() {
+        bool ok = storage_.del(storage::TABLE_ALLOWLISTS, storage_key);
+
+        // Build revoke entry for replication: action(0x00) || sequence(8 BE) || signature
+        std::vector<uint8_t> revoke_value;
+        revoke_value.reserve(1 + 8 + sig_bytes.size());
+        revoke_value.push_back(0x00);  // action = revoke
+        for (int i = 7; i >= 0; --i) {
+            revoke_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+        }
+        revoke_value.insert(revoke_value.end(), sig_bytes.begin(), sig_bytes.end());
+
+        kad_.store(allowlist_key, 0x04, revoke_value);
+
+        loop_->defer([this, ws, id, ok]() {
+            if (connections_.count(ws) == 0) return;
+
+            // Even if del returns false (key didn't exist), the revoke is still valid
+            (void)ok;
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            send_json(ws, resp);
         });
     });
 }

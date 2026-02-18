@@ -525,3 +525,138 @@ TEST_F(WsServerTest, SendAndFetch) {
 
     recipient_client.close();
 }
+
+// ---------- ALLOW / REVOKE tests ----------
+
+TEST_F(WsServerTest, AllowAndRevoke) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto contact_kp = crypto::generate_keypair();
+    auto contact_fp = crypto::sha3_256(contact_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    if (!authenticate(client, user_kp)) {
+        GTEST_SKIP() << "Node not responsible";
+    }
+
+    // Build signature for ALLOW: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    std::vector<uint8_t> signed_data;
+    signed_data.push_back(0x01);  // action = allow
+    signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+    uint64_t seq = 1;
+    for (int i = 7; i >= 0; --i)
+        signed_data.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+
+    auto sig = crypto::sign(signed_data, user_kp.secret_key);
+
+    std::string allow_msg = R"({"type":"ALLOW","id":4,"fingerprint":")" + to_hex(contact_fp) +
+                            R"(","sequence":1,"signature":")" + to_hex(sig) + R"("})";
+    client.send_text(allow_msg);
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value()) << "no response to ALLOW";
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "OK");
+    EXPECT_EQ(root["id"].asInt(), 4);
+
+    // Verify the entry was stored in TABLE_ALLOWLISTS
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", user_fp);
+    std::vector<uint8_t> storage_key;
+    storage_key.insert(storage_key.end(), allowlist_key.begin(), allowlist_key.end());
+    storage_key.insert(storage_key.end(), contact_fp.begin(), contact_fp.end());
+
+    auto stored = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
+    ASSERT_TRUE(stored.has_value()) << "allowlist entry not found in storage";
+    ASSERT_GE(stored->size(), 9u);
+    EXPECT_EQ((*stored)[0], 0x01);  // action = allow
+
+    // Extract stored sequence (bytes 1..8 big-endian)
+    uint64_t stored_seq = 0;
+    for (int i = 0; i < 8; ++i) {
+        stored_seq = (stored_seq << 8) | (*stored)[1 + i];
+    }
+    EXPECT_EQ(stored_seq, 1u);
+
+    // Now REVOKE the same contact with sequence=2
+    std::vector<uint8_t> revoke_data;
+    revoke_data.push_back(0x00);  // action = revoke
+    revoke_data.insert(revoke_data.end(), contact_fp.begin(), contact_fp.end());
+    uint64_t revoke_seq = 2;
+    for (int i = 7; i >= 0; --i)
+        revoke_data.push_back(static_cast<uint8_t>((revoke_seq >> (i * 8)) & 0xFF));
+
+    auto revoke_sig = crypto::sign(revoke_data, user_kp.secret_key);
+
+    std::string revoke_msg = R"({"type":"REVOKE","id":5,"fingerprint":")" + to_hex(contact_fp) +
+                             R"(","sequence":2,"signature":")" + to_hex(revoke_sig) + R"("})";
+    client.send_text(revoke_msg);
+
+    auto resp2 = client.recv_text(5000);
+    ASSERT_TRUE(resp2.has_value()) << "no response to REVOKE";
+    auto root2 = parse_json(*resp2);
+    EXPECT_EQ(root2["type"].asString(), "OK");
+    EXPECT_EQ(root2["id"].asInt(), 5);
+
+    // Verify the entry was deleted from storage
+    auto deleted = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
+    EXPECT_FALSE(deleted.has_value()) << "allowlist entry should be deleted after REVOKE";
+
+    client.close();
+}
+
+TEST_F(WsServerTest, AllowRejectsStaleSequence) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto contact_kp = crypto::generate_keypair();
+    auto contact_fp = crypto::sha3_256(contact_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    if (!authenticate(client, user_kp)) {
+        GTEST_SKIP() << "Node not responsible";
+    }
+
+    // First ALLOW with sequence=5
+    std::vector<uint8_t> signed_data;
+    signed_data.push_back(0x01);
+    signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+    uint64_t seq = 5;
+    for (int i = 7; i >= 0; --i)
+        signed_data.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+
+    auto sig = crypto::sign(signed_data, user_kp.secret_key);
+
+    std::string allow_msg = R"({"type":"ALLOW","id":10,"fingerprint":")" + to_hex(contact_fp) +
+                            R"(","sequence":5,"signature":")" + to_hex(sig) + R"("})";
+    client.send_text(allow_msg);
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(parse_json(*resp)["type"].asString(), "OK");
+
+    // Try ALLOW again with sequence=3 (stale) — should fail
+    std::vector<uint8_t> stale_data;
+    stale_data.push_back(0x01);
+    stale_data.insert(stale_data.end(), contact_fp.begin(), contact_fp.end());
+    uint64_t stale_seq = 3;
+    for (int i = 7; i >= 0; --i)
+        stale_data.push_back(static_cast<uint8_t>((stale_seq >> (i * 8)) & 0xFF));
+
+    auto stale_sig = crypto::sign(stale_data, user_kp.secret_key);
+
+    std::string stale_msg = R"({"type":"ALLOW","id":11,"fingerprint":")" + to_hex(contact_fp) +
+                            R"(","sequence":3,"signature":")" + to_hex(stale_sig) + R"("})";
+    client.send_text(stale_msg);
+
+    auto resp2 = client.recv_text(5000);
+    ASSERT_TRUE(resp2.has_value());
+    auto root2 = parse_json(*resp2);
+    EXPECT_EQ(root2["type"].asString(), "ERROR");
+    EXPECT_EQ(root2["code"].asInt(), 400);
+
+    client.close();
+}
