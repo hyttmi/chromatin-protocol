@@ -313,9 +313,27 @@ frames. Every client request includes an `id` field for response correlation.
 ```
 
 The node verifies:
-1. `fingerprint == SHA3-256(pubkey)`
-2. ML-DSA-87 signature over the nonce is valid
-3. This node is responsible for the fingerprint's inbox
+1. This node is responsible for the fingerprint's inbox — if NOT responsible,
+   respond with REDIRECT (see below) and close the connection
+2. `fingerprint == SHA3-256(pubkey)`
+3. ML-DSA-87 signature over the nonce is valid
+
+### REDIRECT
+
+If the node receiving HELLO is not responsible for the client's inbox, it
+queries the R responsible nodes for their replication log sequence number and
+returns them sorted by highest seq first. The client reconnects to the most
+up-to-date node.
+
+```json
+{"type": "REDIRECT", "id": 1, "nodes": [
+  {"address": "10.0.0.7", "ws_port": 4001, "seq": 45},
+  {"address": "10.0.0.9", "ws_port": 4001, "seq": 45},
+  {"address": "10.0.0.3", "ws_port": 4001, "seq": 42}
+]}
+```
+
+The connection is closed after sending REDIRECT.
 
 ### Client Commands (after authentication)
 
@@ -339,13 +357,20 @@ have fetched.
 
 **ALLOW** — Add fingerprint to allowlist:
 ```json
-{"type": "ALLOW", "id": 4, "fingerprint": "<hex>"}
+{"type": "ALLOW", "id": 4, "fingerprint": "<hex>", "sequence": 1, "signature": "<hex>"}
 ```
+
+The client signs `action(0x01) || allowed_fingerprint || sequence` with its
+ML-DSA-87 key. The node verifies the signature and that sequence > currently
+stored sequence. Response: `{"type": "OK", "id": 4}`
 
 **REVOKE** — Remove fingerprint from allowlist:
 ```json
-{"type": "REVOKE", "id": 5, "fingerprint": "<hex>"}
+{"type": "REVOKE", "id": 5, "fingerprint": "<hex>", "sequence": 2, "signature": "<hex>"}
 ```
+
+Same as ALLOW but with `action(0x00)`. Deletes the allowlist entry for the
+specified fingerprint. Response: `{"type": "OK", "id": 5}`
 
 **CONTACT_REQUEST** — Send contact request with PoW:
 ```json
@@ -361,6 +386,14 @@ If `since` is omitted, returns all stored messages (up to 7 days). Returns
 messages ordered by timestamp. Clients track their own `last_fetch_timestamp`
 locally for efficient incremental fetches. Supports multi-device: each device
 tracks its own timestamp independently.
+
+Response:
+```json
+{"type": "MESSAGES", "id": 7, "messages": [
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "blob": "<base64>", "timestamp": 1708000100},
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "blob": "<base64>", "timestamp": 1708000200}
+]}
+```
 
 ### Server Push (unsolicited, no id)
 
@@ -401,7 +434,7 @@ On every incoming TCP message, a conforming node MUST:
 
 1. Verify magic == `CHRM`
 2. Verify version == `0x01` (or a supported version)
-3. Verify ML-DSA-87 signature over `magic || version || type || reserved || sender_id || payload_length || payload`
+3. Verify ML-DSA-87 signature over `magic || version || type || sender_port || sender_id || payload_length || payload`
 4. Verify sender node ID exists in membership table (exception: FIND_NODE from unknown nodes during bootstrap)
 5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
 

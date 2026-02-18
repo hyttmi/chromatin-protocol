@@ -367,19 +367,27 @@ client connects to any one of them via WebSocket
 ```
 
 The client can discover responsible nodes by querying any node in the network
-(since all nodes know full membership).
+(since all nodes know full membership). If the node is not responsible, it
+responds with **REDIRECT** — a list of responsible nodes sorted by replication
+log sequence number (highest first). The client reconnects to the most
+up-to-date node.
 
 ### 8.2 Client Authentication
 
 ```
 1. Client → Node:   HELLO { fingerprint }
+
+   Node checks is_responsible(SHA3-256("inbox:" || fingerprint)):
+   - If NOT responsible: query R responsible nodes for their seq number,
+     respond with REDIRECT sorted by highest seq first, close connection.
+   - If responsible: generate 32-byte random nonce, continue.
+
 2. Node   → Client: CHALLENGE { nonce }
 3. Client → Node:   AUTH { ML-DSA-sign(nonce), pubkey }
 4. Node   → Client: OK { pending_message_count }
 ```
 
 Node verifies: `fingerprint == SHA3-256(pubkey)` and signature is valid.
-Node also verifies it is responsible for this fingerprint's inbox.
 
 ### 8.3 WebSocket Messages
 
@@ -389,8 +397,8 @@ Node also verifies it is responsible for this fingerprint's inbox.
 |-------------------|----------------------------------------------|
 | SEND              | Push encrypted blob to recipient's inbox     |
 | DELETE            | Optionally delete messages (client-driven)   |
-| ALLOW             | Add fingerprint to allowlist                 |
-| REVOKE            | Remove fingerprint from allowlist            |
+| ALLOW             | Add fingerprint to allowlist (client-signed)  |
+| REVOKE            | Remove fingerprint from allowlist (client-signed)|
 | CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
 | FETCH             | Pull messages (optionally since timestamp)   |
 
@@ -401,6 +409,8 @@ Node also verifies it is responsible for this fingerprint's inbox.
 | NEW_MESSAGE       | Incoming encrypted blob from allowed contact |
 | CONTACT_REQUEST   | Incoming contact request (PoW-verified)      |
 | SEND_ACK          | Confirmation that message was stored         |
+| REDIRECT          | List of responsible nodes (sorted by seq)    |
+| MESSAGES          | Response to FETCH with inbox messages        |
 | ERROR             | Rejection with reason                        |
 
 ### 8.4 Message Send Flow
@@ -420,10 +430,15 @@ When Alice sends a message to Bob:
 
 Each user has an allowlist stored on their responsible nodes.
 
-- Managed via `ALLOW` / `REVOKE` commands
+- Managed via `ALLOW` / `REVOKE` commands (signed by the client)
+- The client signs `action || allowed_fingerprint || sequence` with ML-DSA-87
+- The node verifies the signature — only the inbox owner can modify their allowlist
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
 - Allowlist key: `SHA3-256("allowlist:" || fingerprint)`
+- Local mdbx key: `allowlist_key(32) || allowed_fp(32)` — O(1) lookup for SEND validation
 - Replicated with the same seq-based mechanism
+- Race condition: server does best-effort enforcement; client maintains authoritative
+  allowlist locally and discards messages from revoked contacts
 
 ---
 
