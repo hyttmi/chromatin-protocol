@@ -389,20 +389,52 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     }
 
     // 3. Store in appropriate table
-    const char* table_name = nullptr;
-    switch (data_type) {
-    case 0x00: table_name = storage::TABLE_PROFILES;   break;
-    case 0x01: table_name = storage::TABLE_NAMES;      break;
-    case 0x02: table_name = storage::TABLE_INBOXES;    break;
-    case 0x03: table_name = storage::TABLE_REQUESTS;   break;
-    case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
-    default:
-        spdlog::warn("STORE rejected: unknown data_type 0x{:02X}", data_type);
-        return;
-    }
+    if (data_type == 0x02) {
+        // Inbox: two-table write
+        // Value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+        std::span<const uint8_t> recipient_fp(value.data(), 32);
+        std::span<const uint8_t> msg_id(value.data() + 32, 32);
+        std::span<const uint8_t> sender_fp(value.data() + 64, 32);
+        // timestamp at offset 96, blob_len at offset 104
+        uint32_t blob_len = (static_cast<uint32_t>(value[104]) << 24)
+                          | (static_cast<uint32_t>(value[105]) << 16)
+                          | (static_cast<uint32_t>(value[106]) << 8)
+                          | static_cast<uint32_t>(value[107]);
 
-    std::vector<uint8_t> value_vec(value.begin(), value.end());
-    storage_.put(table_name, key, value_vec);
+        // INDEX key: recipient_fp(32) || msg_id(32)
+        std::vector<uint8_t> idx_key;
+        idx_key.reserve(64);
+        idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+
+        // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE)
+        std::vector<uint8_t> idx_value;
+        idx_value.reserve(44);
+        idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+        idx_value.insert(idx_value.end(), value.data() + 96, value.data() + 104); // timestamp
+        idx_value.insert(idx_value.end(), value.data() + 104, value.data() + 108); // blob_len
+
+        // BLOB key: msg_id(32), value: raw blob
+        std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+        std::vector<uint8_t> blob_value(value.data() + 108, value.data() + 108 + blob_len);
+
+        storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+        storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
+    } else {
+        const char* table_name = nullptr;
+        switch (data_type) {
+        case 0x00: table_name = storage::TABLE_PROFILES;   break;
+        case 0x01: table_name = storage::TABLE_NAMES;      break;
+        case 0x03: table_name = storage::TABLE_REQUESTS;   break;
+        case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
+        default:
+            spdlog::warn("STORE rejected: unknown data_type 0x{:02X}", data_type);
+            return;
+        }
+
+        std::vector<uint8_t> value_vec(value.begin(), value.end());
+        storage_.put(table_name, key, value_vec);
+    }
 
     // Record mutation in the replication log
     repl_log_.append(key, replication::Op::ADD, data_type, value);
@@ -527,20 +559,48 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
                 continue;
             }
 
-            const char* table_name = nullptr;
-            switch (data_type) {
-            case 0x00: table_name = storage::TABLE_PROFILES;   break;
-            case 0x01: table_name = storage::TABLE_NAMES;      break;
-            case 0x02: table_name = storage::TABLE_INBOXES;    break;
-            case 0x03: table_name = storage::TABLE_REQUESTS;   break;
-            case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
-            default:
-                spdlog::warn("store(): unknown data_type 0x{:02X}", data_type);
-                continue;
-            }
+            if (data_type == 0x02) {
+                // Inbox: two-table write
+                // Value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
+                std::span<const uint8_t> recip(value.data(), 32);
+                std::span<const uint8_t> mid(value.data() + 32, 32);
+                std::span<const uint8_t> sfp(value.data() + 64, 32);
+                uint32_t blen = (static_cast<uint32_t>(value[104]) << 24)
+                              | (static_cast<uint32_t>(value[105]) << 16)
+                              | (static_cast<uint32_t>(value[106]) << 8)
+                              | static_cast<uint32_t>(value[107]);
 
-            std::vector<uint8_t> val_vec(value.begin(), value.end());
-            storage_.put(table_name, key, val_vec);
+                std::vector<uint8_t> idx_key;
+                idx_key.reserve(64);
+                idx_key.insert(idx_key.end(), recip.begin(), recip.end());
+                idx_key.insert(idx_key.end(), mid.begin(), mid.end());
+
+                std::vector<uint8_t> idx_value;
+                idx_value.reserve(44);
+                idx_value.insert(idx_value.end(), sfp.begin(), sfp.end());
+                idx_value.insert(idx_value.end(), value.data() + 96, value.data() + 104);
+                idx_value.insert(idx_value.end(), value.data() + 104, value.data() + 108);
+
+                std::vector<uint8_t> blob_key(mid.begin(), mid.end());
+                std::vector<uint8_t> blob_val(value.data() + 108, value.data() + 108 + blen);
+
+                storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+                storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_val);
+            } else {
+                const char* table_name = nullptr;
+                switch (data_type) {
+                case 0x00: table_name = storage::TABLE_PROFILES;   break;
+                case 0x01: table_name = storage::TABLE_NAMES;      break;
+                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
+                case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
+                default:
+                    spdlog::warn("store(): unknown data_type 0x{:02X}", data_type);
+                    continue;
+                }
+
+                std::vector<uint8_t> val_vec(value.begin(), value.end());
+                storage_.put(table_name, key, val_vec);
+            }
 
             // Record mutation in the replication log
             repl_log_.append(key, replication::Op::ADD, data_type, value);
@@ -932,11 +992,11 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
-    // Format: msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
-    // Minimum: 32 + 32 + 8 + 4 = 76 bytes
+    // Format: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    // Minimum: 32 + 32 + 32 + 8 + 4 = 108 bytes
     static constexpr size_t MAX_MESSAGE_SIZE = 50ULL * 1024 * 1024; // 50 MiB
 
-    if (value.size() < 76) {
+    if (value.size() < 108) {
         spdlog::warn("Inbox validation: too short ({} bytes)", value.size());
         return false;
     }
@@ -947,7 +1007,7 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
     }
 
     // Parse blob_len and verify it matches remaining data
-    size_t offset = 32 + 32 + 8; // skip msg_id + sender_fp + timestamp
+    size_t offset = 32 + 32 + 32 + 8; // skip recipient_fp + msg_id + sender_fp + timestamp
     uint32_t blob_len = (static_cast<uint32_t>(value[offset]) << 24)
                       | (static_cast<uint32_t>(value[offset + 1]) << 16)
                       | (static_cast<uint32_t>(value[offset + 2]) << 8)
@@ -1135,24 +1195,53 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     // For ADD entries, route to the correct storage table using data_type.
     for (const auto& entry : entries) {
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
-            const char* table_name = nullptr;
-            switch (entry.data_type) {
-            case 0x00: table_name = storage::TABLE_PROFILES;   break;
-            case 0x01: table_name = storage::TABLE_NAMES;      break;
-            case 0x02:
-                // Inbox: two-table write handled separately (Task 4)
-                table_name = storage::TABLE_INBOXES;
-                break;
-            case 0x03: table_name = storage::TABLE_REQUESTS;   break;
-            case 0x04:
+            if (entry.data_type == 0x02) {
+                // Inbox: two-table write
+                // Data: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
+                if (entry.data.size() < 108) {
+                    spdlog::warn("SYNC: inbox entry too short ({} bytes)", entry.data.size());
+                    continue;
+                }
+                std::span<const uint8_t> d(entry.data);
+                std::span<const uint8_t> recipient_fp(d.data(), 32);
+                std::span<const uint8_t> msg_id(d.data() + 32, 32);
+                std::span<const uint8_t> sender_fp(d.data() + 64, 32);
+                uint32_t blob_len = (static_cast<uint32_t>(d[104]) << 24)
+                                  | (static_cast<uint32_t>(d[105]) << 16)
+                                  | (static_cast<uint32_t>(d[106]) << 8)
+                                  | static_cast<uint32_t>(d[107]);
+
+                std::vector<uint8_t> idx_key;
+                idx_key.reserve(64);
+                idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+                idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+
+                std::vector<uint8_t> idx_value;
+                idx_value.reserve(44);
+                idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+                idx_value.insert(idx_value.end(), d.data() + 96, d.data() + 104);
+                idx_value.insert(idx_value.end(), d.data() + 104, d.data() + 108);
+
+                std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+                std::vector<uint8_t> blob_value(d.data() + 108, d.data() + 108 + blob_len);
+
+                storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+                storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
+            } else if (entry.data_type == 0x04) {
                 // Allowlist: composite key handled separately (Task 5)
-                table_name = storage::TABLE_ALLOWLISTS;
-                break;
-            default:
-                spdlog::warn("SYNC: unknown data_type 0x{:02X}, skipping", entry.data_type);
-                continue;
+                storage_.put(storage::TABLE_ALLOWLISTS, key, entry.data);
+            } else {
+                const char* table_name = nullptr;
+                switch (entry.data_type) {
+                case 0x00: table_name = storage::TABLE_PROFILES;   break;
+                case 0x01: table_name = storage::TABLE_NAMES;      break;
+                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
+                default:
+                    spdlog::warn("SYNC: unknown data_type 0x{:02X}, skipping", entry.data_type);
+                    continue;
+                }
+                storage_.put(table_name, key, entry.data);
             }
-            storage_.put(table_name, key, entry.data);
         }
     }
 

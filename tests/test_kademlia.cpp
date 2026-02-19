@@ -1019,24 +1019,22 @@ TEST_F(KademliaTest, InboxStoreValidation_OversizedBlob) {
     auto& n1 = create_node();
     start_all();
 
-    // Build an inbox message with oversized blob_len declared
-    // msg_id(32) + sender_fp(32) + timestamp(8) + blob_len(4) + blob
+    // Build an inbox message with mismatched blob_len
+    // recipient_fp(32) + msg_id(32) + sender_fp(32) + timestamp(8) + blob_len(4) + blob
     std::vector<uint8_t> msg;
-    msg.resize(76, 0x00);  // 32+32+8+4 = 76 bytes, no blob data
+    msg.resize(108, 0x00);  // 32+32+32+8+4 = 108 bytes, no blob data
 
-    // Set blob_len to 50 MiB + 1 (but don't actually include the data — size check fails first)
-    // Actually the validator checks total value.size() > 50 MiB, so we need the overall size
-    // to exceed the limit. Let's construct a message that's > 50 MiB.
-    // That's impractical for a test, so instead check that blob_len doesn't match remaining data.
-    // Set blob_len = 100 but only provide 0 bytes of blob
-    msg[72] = 0x00; msg[73] = 0x00; msg[74] = 0x00; msg[75] = 100;
-    // blob_len says 100 but actual remaining data is 0 → mismatch
+    // Set blob_len = 100 but only provide 0 bytes of blob → mismatch
+    msg[104] = 0x00; msg[105] = 0x00; msg[106] = 0x00; msg[107] = 100;
 
     Hash key{};
     key.fill(0xAB);
 
     bool ok = n1.kad->store(key, 0x02, msg);
-    auto result = n1.storage->get(TABLE_INBOXES, key);
+    // Two-table model: inbox writes go to TABLE_INBOX_INDEX, not TABLE_INBOXES
+    // Build the index key that would be used: recipient_fp(32)||msg_id(32) = all zeros
+    std::vector<uint8_t> idx_key(64, 0x00);
+    auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
     EXPECT_FALSE(result.has_value()) << "Inbox message with mismatched blob_len should not be stored";
 }
 
@@ -1091,4 +1089,59 @@ TEST_F(KademliaTest, AllowlistValidation_InvalidAction) {
     bool ok = n1.kad->store(key, 0x04, entry);
     auto result = n1.storage->get(TABLE_ALLOWLISTS, key);
     EXPECT_FALSE(result.has_value()) << "Allowlist entry with invalid action should not be stored";
+}
+
+// ---------------------------------------------------------------------------
+// Test 25: InboxStoreWritesTwoTables — inbox STORE writes to INDEX + BLOBS
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, InboxStoreWritesTwoTables) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Build a valid inbox message:
+    // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    Hash recipient_fp{};
+    recipient_fp.fill(0x11);
+    Hash msg_id{};
+    msg_id.fill(0x22);
+    Hash sender_fp{};
+    sender_fp.fill(0x33);
+
+    uint64_t timestamp = 1700000000;
+    std::vector<uint8_t> blob = {0xCA, 0xFE, 0xBA, 0xBE};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> value;
+    value.reserve(108 + blob.size());
+    value.insert(value.end(), recipient_fp.begin(), recipient_fp.end());
+    value.insert(value.end(), msg_id.begin(), msg_id.end());
+    value.insert(value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    value.insert(value.end(), blob.begin(), blob.end());
+
+    auto inbox_key = sha3_256_prefixed("inbox:", recipient_fp);
+
+    bool ok = n1.kad->store(inbox_key, 0x02, value);
+    EXPECT_TRUE(ok);
+
+    // Verify TABLE_INBOX_INDEX: key = recipient_fp(32) || msg_id(32)
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    auto idx_result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
+    ASSERT_TRUE(idx_result.has_value()) << "INDEX entry should exist after inbox STORE";
+    // INDEX value: sender_fp(32) || timestamp(8) || size(4) = 44 bytes
+    EXPECT_EQ(idx_result->size(), 44u);
+
+    // Verify TABLE_MESSAGE_BLOBS: key = msg_id(32)
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    auto blob_result = n1.storage->get(TABLE_MESSAGE_BLOBS, blob_key);
+    ASSERT_TRUE(blob_result.has_value()) << "BLOB entry should exist after inbox STORE";
+    EXPECT_EQ(*blob_result, blob);
 }

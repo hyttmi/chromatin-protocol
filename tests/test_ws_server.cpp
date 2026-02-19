@@ -974,8 +974,8 @@ TEST_F(WsServerTest, PushNotification) {
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, user_kp));
 
-    // Build a fake inbox message binary:
-    // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    // Build a fake inbox message binary (Kademlia STORE value):
+    // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
     crypto::Hash msg_id{};
     msg_id.fill(0xCC);
     crypto::Hash sender_fp{};
@@ -984,6 +984,7 @@ TEST_F(WsServerTest, PushNotification) {
     std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
 
     std::vector<uint8_t> msg_binary;
+    msg_binary.insert(msg_binary.end(), user_fp.begin(), user_fp.end());  // recipient_fp
     msg_binary.insert(msg_binary.end(), msg_id.begin(), msg_id.end());
     msg_binary.insert(msg_binary.end(), sender_fp.begin(), sender_fp.end());
     for (int i = 7; i >= 0; --i) {
@@ -1028,6 +1029,7 @@ TEST_F(WsServerTest, PushLargeMessageBlobNull) {
     ASSERT_TRUE(authenticate(client, user_kp));
 
     // Build inbox message with blob > INLINE_THRESHOLD (64 KB)
+    // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
     crypto::Hash msg_id{};
     msg_id.fill(0xAA);
     crypto::Hash sender_fp{};
@@ -1036,6 +1038,7 @@ TEST_F(WsServerTest, PushLargeMessageBlobNull) {
     std::vector<uint8_t> blob(70000, 0x42);  // 70 KB > 64 KB threshold
 
     std::vector<uint8_t> msg_binary;
+    msg_binary.insert(msg_binary.end(), user_fp.begin(), user_fp.end());  // recipient_fp
     msg_binary.insert(msg_binary.end(), msg_id.begin(), msg_id.end());
     msg_binary.insert(msg_binary.end(), sender_fp.begin(), sender_fp.end());
     for (int i = 7; i >= 0; --i) {

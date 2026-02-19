@@ -382,14 +382,42 @@ void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
         std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
         auto msg_id_copy = msg_id;
 
+        // Build message_binary for Kademlia replication:
+        // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+        std::vector<uint8_t> message_binary;
+        message_binary.reserve(32 + 32 + 8 + 4 + blob_data.size());
+        message_binary.insert(message_binary.end(), msg_id.begin(), msg_id.end());
+        message_binary.insert(message_binary.end(), sender_fp.begin(), sender_fp.end());
+        for (int i = 7; i >= 0; --i)
+            message_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+        message_binary.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
+        message_binary.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
+        message_binary.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
+        message_binary.push_back(static_cast<uint8_t>(sz & 0xFF));
+        message_binary.insert(message_binary.end(), blob_data.begin(), blob_data.end());
+
+        // Build kad_value: recipient_fp(32) || message_binary
+        std::vector<uint8_t> kad_value;
+        kad_value.reserve(32 + message_binary.size());
+        kad_value.insert(kad_value.end(), recipient_fp.begin(), recipient_fp.end());
+        kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
+
+        auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+
         // Dispatch to worker pool for storage
         workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
                        idx_value = std::move(idx_value),
                        blob_key = std::move(blob_key),
                        blob_data = std::move(blob_data),
+                       kad_value = std::move(kad_value),
+                       inbox_key,
                        msg_id_copy]() {
             bool ok = storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
             if (ok) storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_data);
+
+            if (ok) {
+                kad_.store(inbox_key, 0x02, kad_value);
+            }
 
             loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
                 if (connections_.count(ws) == 0) return;
@@ -911,9 +939,16 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
                               blob_key, blob_value);
         }
 
-        // Also replicate via Kademlia (fire-and-forget for the response)
+        // Replicate via Kademlia: prepend recipient_fp so receiving nodes
+        // can build the two-table inbox model (INDEX key needs recipient_fp).
         if (ok) {
-            kad_.store(inbox_key, 0x02, message_binary);
+            auto inbox_key_local = inbox_key;
+            // Retrieve recipient_fp from index_key (first 32 bytes)
+            std::vector<uint8_t> kad_value;
+            kad_value.reserve(32 + message_binary.size());
+            kad_value.insert(kad_value.end(), index_key.begin(), index_key.begin() + 32);
+            kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
+            kad_.store(inbox_key_local, 0x02, kad_value);
         }
 
         // Defer response back to the uWS event loop thread
@@ -1310,21 +1345,21 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
 
                 if (data_type == 0x02) {
                     // NEW_MESSAGE push
-                    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
-                    if (value_copy.size() < 76) break;
-                    auto msg_id = std::span<const uint8_t>(value_copy.data(), 32);
-                    auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
+                    // Value layout: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+                    if (value_copy.size() < 108) break;
+                    auto msg_id = std::span<const uint8_t>(value_copy.data() + 32, 32);
+                    auto sender = std::span<const uint8_t>(value_copy.data() + 64, 32);
                     uint64_t ts = 0;
                     for (int i = 0; i < 8; ++i) {
-                        ts = (ts << 8) | value_copy[64 + i];
+                        ts = (ts << 8) | value_copy[96 + i];
                     }
-                    uint32_t blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
-                                        (static_cast<uint32_t>(value_copy[73]) << 16) |
-                                        (static_cast<uint32_t>(value_copy[74]) << 8) |
-                                        static_cast<uint32_t>(value_copy[75]);
+                    uint32_t blob_len = (static_cast<uint32_t>(value_copy[104]) << 24) |
+                                        (static_cast<uint32_t>(value_copy[105]) << 16) |
+                                        (static_cast<uint32_t>(value_copy[106]) << 8) |
+                                        static_cast<uint32_t>(value_copy[107]);
 
-                    if (value_copy.size() < 76 + blob_len) break;
-                    auto blob = std::span<const uint8_t>(value_copy.data() + 76, blob_len);
+                    if (value_copy.size() < 108 + blob_len) break;
+                    auto blob = std::span<const uint8_t>(value_copy.data() + 108, blob_len);
 
                     Json::Value push;
                     push["type"] = "NEW_MESSAGE";
