@@ -28,6 +28,7 @@ Storage::Storage(const std::filesystem::path& db_path) {
     const char* tables[] = {
         TABLE_PROFILES, TABLE_NAMES, TABLE_INBOXES, TABLE_REQUESTS,
         TABLE_ALLOWLISTS, TABLE_REPL_LOG, TABLE_NODES, TABLE_REPUTATION,
+        TABLE_INBOX_INDEX, TABLE_MESSAGE_BLOBS,
     };
 
     for (const auto* table : tables) {

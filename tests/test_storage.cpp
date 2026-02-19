@@ -221,3 +221,19 @@ TEST_F(StorageTest, ScanEmptyTable) {
 
     EXPECT_EQ(count, 0);
 }
+
+TEST_F(StorageTest, InboxIndexAndBlobTables) {
+    // Verify we can put/get in both new tables
+    std::vector<uint8_t> key = {0x01, 0x02, 0x03};
+    std::vector<uint8_t> value = {0xAA, 0xBB};
+
+    EXPECT_TRUE(store_->put(TABLE_INBOX_INDEX, key, value));
+    auto got = store_->get(TABLE_INBOX_INDEX, key);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(*got, value);
+
+    EXPECT_TRUE(store_->put(TABLE_MESSAGE_BLOBS, key, value));
+    auto got2 = store_->get(TABLE_MESSAGE_BLOBS, key);
+    ASSERT_TRUE(got2.has_value());
+    EXPECT_EQ(*got2, value);
+}

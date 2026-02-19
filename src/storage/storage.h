@@ -20,8 +20,10 @@ inline constexpr const char* TABLE_INBOXES    = "inboxes";
 inline constexpr const char* TABLE_REQUESTS   = "requests";
 inline constexpr const char* TABLE_ALLOWLISTS = "allowlists";
 inline constexpr const char* TABLE_REPL_LOG   = "repl_log";
-inline constexpr const char* TABLE_NODES      = "nodes";
-inline constexpr const char* TABLE_REPUTATION = "reputation";
+inline constexpr const char* TABLE_NODES          = "nodes";
+inline constexpr const char* TABLE_REPUTATION     = "reputation";
+inline constexpr const char* TABLE_INBOX_INDEX    = "inbox_index";
+inline constexpr const char* TABLE_MESSAGE_BLOBS  = "message_blobs";
 
 class Storage {
 public:
