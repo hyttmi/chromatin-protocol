@@ -85,6 +85,7 @@ private:
 
     // Command handlers
     void handle_list(ws_t* ws, const Json::Value& msg);
+    void handle_get(ws_t* ws, const Json::Value& msg);
     void handle_send(ws_t* ws, const Json::Value& msg);
     void handle_allow(ws_t* ws, const Json::Value& msg);
     void handle_revoke(ws_t* ws, const Json::Value& msg);

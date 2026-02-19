@@ -791,6 +791,107 @@ TEST_F(WsServerTest, ContactRequestWithPoW) {
     client.close();
 }
 
+// ---------- GET tests ----------
+
+TEST_F(WsServerTest, GetSmallBlob) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // Create a fake msg_id (32 bytes) and blob
+    crypto::Hash msg_id{};
+    msg_id.fill(0xEE);
+    std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
+
+    // Store inbox index entry (required for authorization)
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xBB);
+    uint64_t timestamp = 1700000000;
+    uint32_t blob_size = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> index_key;
+    index_key.insert(index_key.end(), fingerprint.begin(), fingerprint.end());
+    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
+
+    std::vector<uint8_t> index_value;
+    index_value.insert(index_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 24) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 16) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 8) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>(blob_size & 0xFF));
+
+    storage_->put(storage::TABLE_INBOX_INDEX, index_key, index_value);
+
+    // Store the blob in TABLE_MESSAGE_BLOBS
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    storage_->put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send GET with the msg_id
+    Json::Value get_msg;
+    get_msg["type"] = "GET";
+    get_msg["id"] = 40;
+    get_msg["msg_id"] = to_hex(msg_id);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string get_json = Json::writeString(writer, get_msg);
+    ASSERT_TRUE(client.send_text(get_json));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to GET";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "GET_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 40);
+    EXPECT_EQ(root["msg_id"].asString(), to_hex(msg_id));
+    // blob "Hello" -> base64 "SGVsbG8="
+    EXPECT_EQ(root["blob"].asString(), "SGVsbG8=");
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GetNotFound) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send GET with a non-existent msg_id
+    std::string fake_msg_id(64, 'f');  // 64 hex chars of 'f'
+
+    Json::Value get_msg;
+    get_msg["type"] = "GET";
+    get_msg["id"] = 41;
+    get_msg["msg_id"] = fake_msg_id;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string get_json = Json::writeString(writer, get_msg);
+    ASSERT_TRUE(client.send_text(get_json));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to GET";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["id"].asInt(), 41);
+    EXPECT_EQ(root["code"].asInt(), 404);
+
+    client.close();
+}
+
 // ---------- Push notification tests ----------
 
 TEST_F(WsServerTest, PushNotification) {

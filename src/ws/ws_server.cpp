@@ -118,6 +118,9 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
     } else if (type == "LIST") {
         if (!require_auth(ws, id)) return;
         handle_list(ws, root);
+    } else if (type == "GET") {
+        if (!require_auth(ws, id)) return;
+        handle_get(ws, root);
     } else if (type == "SEND") {
         if (!require_auth(ws, id)) return;
         handle_send(ws, root);
@@ -250,6 +253,8 @@ std::optional<std::vector<uint8_t>> from_base64(const std::string& input) {
     }
     return out;
 }
+
+static constexpr size_t INLINE_THRESHOLD = 64 * 1024;  // 64 KB
 
 } // anonymous namespace
 
@@ -414,7 +419,7 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     // INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
     // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
 
-    static constexpr size_t INLINE_THRESHOLD = 64 * 1024;
+
 
     // Collect index entries first (scan holds a read txn, can't nest another).
     struct IndexEntry {
@@ -488,6 +493,55 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     resp["id"] = id;
     resp["messages"] = messages;
     send_json(ws, resp);
+}
+
+void WsServer::handle_get(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Extract and validate msg_id (64 hex chars = 32 bytes)
+    std::string msg_id_hex = msg.get("msg_id", "").asString();
+    if (msg_id_hex.size() != 64) {
+        send_error(ws, id, 400, "msg_id must be 64 hex chars");
+        return;
+    }
+    auto msg_id_bytes = from_hex(msg_id_hex);
+    if (!msg_id_bytes) {
+        send_error(ws, id, 400, "invalid hex in msg_id");
+        return;
+    }
+
+    // Authorization: verify the message belongs to this user's inbox
+    std::vector<uint8_t> index_key;
+    index_key.reserve(64);
+    index_key.insert(index_key.end(),
+                     session->fingerprint.begin(), session->fingerprint.end());
+    index_key.insert(index_key.end(),
+                     msg_id_bytes->begin(), msg_id_bytes->end());
+    if (!storage_.get(storage::TABLE_INBOX_INDEX, index_key)) {
+        send_error(ws, id, 404, "message not found");
+        return;
+    }
+
+    // Look up the blob in TABLE_MESSAGE_BLOBS
+    auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, *msg_id_bytes);
+    if (!blob) {
+        send_error(ws, id, 404, "message not found");
+        return;
+    }
+
+
+
+    if (blob->size() <= INLINE_THRESHOLD) {
+        Json::Value resp;
+        resp["type"] = "GET_RESULT";
+        resp["id"] = id;
+        resp["msg_id"] = msg_id_hex;
+        resp["blob"] = to_base64(*blob);
+        send_json(ws, resp);
+    } else {
+        send_error(ws, id, 500, "chunked download not yet implemented");
+    }
 }
 
 void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
