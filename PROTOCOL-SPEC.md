@@ -170,6 +170,7 @@ For each entry:
   [8 bytes BE: seq]
   [1 byte: op]                // 0x00 = ADD, 0x01 = DEL, 0x02 = UPD
   [8 bytes BE: timestamp]     // Unix timestamp
+  [1 byte: data_type]         // 0x00=profile, 0x01=name, 0x02=inbox, 0x03=request, 0x04=allowlist
   [4 bytes BE: data_length]
   [data_length bytes: data]
 ```
@@ -243,7 +244,9 @@ Storage key: `SHA3-256("name:" || name)`
 
 ### Inbox Message (data_type 0x02)
 
+Kademlia STORE value (includes recipient_fp for two-table routing):
 ```
+[32 bytes: recipient_fingerprint]
 [32 bytes: msg_id]
 [32 bytes: sender_fingerprint]
 [8 bytes BE: timestamp]
@@ -253,7 +256,8 @@ Storage key: `SHA3-256("name:" || name)`
 
 Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
 
-Local mdbx storage uses two tables:
+Receiving nodes parse `recipient_fp` from the value to build the two-table
+storage model. Local mdbx storage uses two tables:
 
 **TABLE_INBOX_INDEX** — Lightweight metadata for LIST responses:
 ```
@@ -283,17 +287,27 @@ Storage key: `SHA3-256("requests:" || recipient_fingerprint)`
 
 ### Allowlist Entry (data_type 0x04)
 
+Kademlia STORE value (includes allowed_fp for composite key construction):
 ```
-[1 byte: action]                         // 0x01 = allow, 0x00 = revoke
 [32 bytes: allowed_fingerprint]
+[1 byte: action]                         // 0x01 = allow, 0x00 = revoke
 [8 bytes BE: sequence]
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature over all preceding fields]
 ```
 
-Storage key: `SHA3-256("allowlist:" || owner_fingerprint)`
+Storage key (DHT routing): `SHA3-256("allowlist:" || owner_fingerprint)`
 
-To block a user, REVOKE them from the allowlist. There is no separate blocklist.
+Local mdbx storage uses composite key for O(1) lookup:
+```
+Key:   SHA3-256("allowlist:" || owner_fp)(32) || allowed_fp(32)
+Value: action(1) || sequence(8 BE) || signature
+```
+
+Receiving nodes parse `allowed_fp` from the Kademlia value to build the
+composite storage key. REVOKE (action=0x00) deletes the entry rather than
+storing it. To block a user, REVOKE them from the allowlist. There is no
+separate blocklist.
 
 ---
 
@@ -417,6 +431,7 @@ Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 4.6).
 Deletion is client-driven and optional. Messages expire automatically after
 7 days via TTL. Multi-device users may choose not to delete until all devices
 have fetched. Deletes from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS.
+Response: `{"type": "OK", "id": 6}`
 
 **ALLOW** — Add fingerprint to allowlist:
 ```json
@@ -439,6 +454,7 @@ specified fingerprint. Response: `{"type": "OK", "id": 8}`
 ```json
 {"type": "CONTACT_REQUEST", "id": 9, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345}
 ```
+Response: `{"type": "OK", "id": 9}`
 
 ### 4.4 Server Push (unsolicited, no id)
 
@@ -470,6 +486,7 @@ specified fingerprint. Response: `{"type": "OK", "id": 8}`
 | 403  | Forbidden (not on allowlist, bad signature)   |
 | 404  | Not found                                     |
 | 409  | Conflict (name already registered)            |
+| 408  | Upload timeout (incomplete chunked upload)    |
 | 413  | Attachment too large (>50 MiB)                |
 | 429  | Rate limited / upload already in progress     |
 | 500  | Internal error                                |
@@ -498,9 +515,9 @@ Large blob transfers (>64 KB) use binary WebSocket frames with fixed 1 MiB
 
 Number of chunks = `ceil(blob_size / 1_048_576)`.
 
-**Server memory model:** Upload chunks are written directly to a temp file
-(max 1 MiB memory per active upload). On completion, the file is moved to
-TABLE_MESSAGE_BLOBS. Downloads read 1 MiB at a time from storage.
+**Server memory model:** Upload chunks are accumulated in memory. On
+completion, the assembled blob is stored in TABLE_INBOX_INDEX (metadata)
+and TABLE_MESSAGE_BLOBS (blob data), and replicated via Kademlia.
 
 **Limits:** Maximum 1 concurrent chunked upload per connection. A second SEND
 with `size` > 64 KB while an upload is in progress receives error 429.

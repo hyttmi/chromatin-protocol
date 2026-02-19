@@ -204,7 +204,7 @@ membership** — no k-buckets, no iterative lookups.
 For a given key K, the R nodes with the smallest `XOR(node_id, K)` are
 responsible for storing data associated with K.
 
-- R = replication factor = `min(3, network_size - 1)`
+- R = replication factor = `min(3, network_size)`
 - Any node can compute responsibility (full membership knowledge)
 - Applies uniformly to profiles, names, AND inboxes
 

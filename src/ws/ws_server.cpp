@@ -1307,28 +1307,42 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
+    // Parse msg_ids on the event loop (lightweight)
+    std::vector<std::vector<uint8_t>> parsed_ids;
     const auto& ids = msg["msg_ids"];
     for (const auto& mid : ids) {
         std::string mid_hex = mid.asString();
         if (mid_hex.size() != 64) continue;
         auto mid_bytes = from_hex(mid_hex);
         if (!mid_bytes) continue;
-
-        // Delete from TABLE_INBOX_INDEX: key = fingerprint(32) || msg_id(32)
-        std::vector<uint8_t> idx_key;
-        idx_key.reserve(64);
-        idx_key.insert(idx_key.end(), session->fingerprint.begin(), session->fingerprint.end());
-        idx_key.insert(idx_key.end(), mid_bytes->begin(), mid_bytes->end());
-        storage_.del(storage::TABLE_INBOX_INDEX, idx_key);
-
-        // Delete from TABLE_MESSAGE_BLOBS: key = msg_id(32)
-        storage_.del(storage::TABLE_MESSAGE_BLOBS, *mid_bytes);
+        parsed_ids.push_back(std::move(*mid_bytes));
     }
 
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    send_json(ws, resp);
+    auto fp = session->fingerprint;
+
+    // Dispatch storage ops to worker pool
+    workers_.post([this, ws, id, fp, parsed_ids = std::move(parsed_ids)]() {
+        for (const auto& mid_bytes : parsed_ids) {
+            // Delete from TABLE_INBOX_INDEX: key = fingerprint(32) || msg_id(32)
+            std::vector<uint8_t> idx_key;
+            idx_key.reserve(64);
+            idx_key.insert(idx_key.end(), fp.begin(), fp.end());
+            idx_key.insert(idx_key.end(), mid_bytes.begin(), mid_bytes.end());
+            storage_.del(storage::TABLE_INBOX_INDEX, idx_key);
+
+            // Delete from TABLE_MESSAGE_BLOBS: key = msg_id(32)
+            storage_.del(storage::TABLE_MESSAGE_BLOBS, mid_bytes);
+        }
+
+        loop_->defer([this, ws, id]() {
+            if (connections_.count(ws) == 0) return;
+
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            send_json(ws, resp);
+        });
+    });
 }
 
 // ---------- push notifications ----------
