@@ -6,7 +6,7 @@ This document defines the exact wire format and validation rules for the Chromat
 protocol. It is the implementor's reference — any conforming node MUST follow
 this spec to interoperate with the Chromatin network.
 
-For architectural overview and design rationale, see `protocol.md`.
+For architectural overview and design rationale, see `PROTOCOL.md`.
 
 ---
 

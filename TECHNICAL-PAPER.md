@@ -203,5 +203,5 @@ and controlled.
 ---
 
 *For technical details, see [PROTOCOL-SPEC.md](PROTOCOL-SPEC.md) and
-[protocol.md](protocol.md). For a visual walkthrough of message delivery,
+[PROTOCOL.md](PROTOCOL.md). For a visual walkthrough of message delivery,
 see [MESSAGING-FLOW.md](MESSAGING-FLOW.md).*

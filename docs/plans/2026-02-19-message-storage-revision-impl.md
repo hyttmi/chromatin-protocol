@@ -11,7 +11,7 @@
 **Key files to reference:**
 - Design doc: `docs/plans/2026-02-19-message-storage-revision-design.md`
 - Protocol spec: `PROTOCOL-SPEC.md` (Section 4)
-- Architecture doc: `protocol.md` (Section 8)
+- Architecture doc: `PROTOCOL.md` (Section 8)
 - WS server: `src/ws/ws_server.h`, `src/ws/ws_server.cpp`
 - Storage: `src/storage/storage.h`, `src/storage/storage.cpp`
 - Tests: `tests/test_ws_server.cpp`, `tests/test_ws_client.h`
