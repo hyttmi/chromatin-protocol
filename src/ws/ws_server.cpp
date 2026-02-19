@@ -1062,13 +1062,18 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
     entry_value.insert(entry_value.end(), sig_bytes->begin(), sig_bytes->end());
 
     // Dispatch to worker pool
-    workers_.post([this, ws, id, allowlist_key,
+    workers_.post([this, ws, id, allowlist_key, allowed_fp,
                    storage_key = std::move(storage_key),
                    entry_value = std::move(entry_value)]() {
         bool ok = storage_.put(storage::TABLE_ALLOWLISTS, storage_key, entry_value);
 
         if (ok) {
-            kad_.store(allowlist_key, 0x04, entry_value);
+            // Prepend allowed_fp so receiving nodes can build the composite storage key
+            std::vector<uint8_t> kad_value;
+            kad_value.reserve(32 + entry_value.size());
+            kad_value.insert(kad_value.end(), allowed_fp.begin(), allowed_fp.end());
+            kad_value.insert(kad_value.end(), entry_value.begin(), entry_value.end());
+            kad_.store(allowlist_key, 0x04, kad_value);
         }
 
         loop_->defer([this, ws, id, ok]() {
@@ -1167,15 +1172,16 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
     }
 
     // Dispatch to worker pool — delete local entry, replicate revoke
-    workers_.post([this, ws, id, allowlist_key,
+    workers_.post([this, ws, id, allowlist_key, allowed_fp,
                    storage_key = std::move(storage_key),
                    sig_bytes = std::move(*sig_bytes),
                    sequence]() {
         bool ok = storage_.del(storage::TABLE_ALLOWLISTS, storage_key);
 
-        // Build revoke entry for replication: action(0x00) || sequence(8 BE) || signature
+        // Build revoke entry for replication: allowed_fp(32) || action(0x00) || sequence(8 BE) || signature
         std::vector<uint8_t> revoke_value;
-        revoke_value.reserve(1 + 8 + sig_bytes.size());
+        revoke_value.reserve(32 + 1 + 8 + sig_bytes.size());
+        revoke_value.insert(revoke_value.end(), allowed_fp.begin(), allowed_fp.end());
         revoke_value.push_back(0x00);  // action = revoke
         for (int i = 7; i >= 0; --i) {
             revoke_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));

@@ -420,13 +420,33 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
 
         storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
         storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
+    } else if (data_type == 0x04) {
+        // Allowlist: composite key storage
+        // Value: allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        std::span<const uint8_t> allowed_fp(value.data(), 32);
+        uint8_t action = value[32];
+        std::span<const uint8_t> entry_data(value.data() + 32, value.size() - 32);
+
+        // Build composite storage key: routing_key(32) || allowed_fp(32)
+        std::vector<uint8_t> composite_key;
+        composite_key.reserve(64);
+        composite_key.insert(composite_key.end(), key.begin(), key.end());
+        composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
+
+        if (action == 0x01) {
+            // ALLOW: store entry
+            std::vector<uint8_t> entry_vec(entry_data.begin(), entry_data.end());
+            storage_.put(storage::TABLE_ALLOWLISTS, composite_key, entry_vec);
+        } else {
+            // REVOKE: delete entry
+            storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
+        }
     } else {
         const char* table_name = nullptr;
         switch (data_type) {
         case 0x00: table_name = storage::TABLE_PROFILES;   break;
         case 0x01: table_name = storage::TABLE_NAMES;      break;
         case 0x03: table_name = storage::TABLE_REQUESTS;   break;
-        case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
         default:
             spdlog::warn("STORE rejected: unknown data_type 0x{:02X}", data_type);
             return;
@@ -586,13 +606,30 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 
                 storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
                 storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_val);
+            } else if (data_type == 0x04) {
+                // Allowlist: composite key storage
+                // Value: allowed_fp(32) || action(1) || sequence(8 BE) || signature
+                std::span<const uint8_t> afp(value.data(), 32);
+                uint8_t action = value[32];
+                std::span<const uint8_t> edata(value.data() + 32, value.size() - 32);
+
+                std::vector<uint8_t> comp_key;
+                comp_key.reserve(64);
+                comp_key.insert(comp_key.end(), key.begin(), key.end());
+                comp_key.insert(comp_key.end(), afp.begin(), afp.end());
+
+                if (action == 0x01) {
+                    std::vector<uint8_t> eval(edata.begin(), edata.end());
+                    storage_.put(storage::TABLE_ALLOWLISTS, comp_key, eval);
+                } else {
+                    storage_.del(storage::TABLE_ALLOWLISTS, comp_key);
+                }
             } else {
                 const char* table_name = nullptr;
                 switch (data_type) {
                 case 0x00: table_name = storage::TABLE_PROFILES;   break;
                 case 0x01: table_name = storage::TABLE_NAMES;      break;
                 case 0x03: table_name = storage::TABLE_REQUESTS;   break;
-                case 0x04: table_name = storage::TABLE_ALLOWLISTS; break;
                 default:
                     spdlog::warn("store(): unknown data_type 0x{:02X}", data_type);
                     continue;
@@ -1066,14 +1103,14 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
-    // Format: action(1) || sequence(8 BE) || signature
-    // Minimum: 1 + 8 = 9 bytes (signature may be 0 if not present yet)
-    if (value.size() < 9) {
+    // Format: allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    // Minimum: 32 + 1 + 8 = 41 bytes
+    if (value.size() < 41) {
         spdlog::warn("Allowlist validation: too short ({} bytes)", value.size());
         return false;
     }
 
-    uint8_t action = value[0];
+    uint8_t action = value[32];  // action is after allowed_fp
     if (action != 0x00 && action != 0x01) {
         spdlog::warn("Allowlist validation: invalid action byte 0x{:02X}", action);
         return false;
@@ -1228,8 +1265,24 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
                 storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
             } else if (entry.data_type == 0x04) {
-                // Allowlist: composite key handled separately (Task 5)
-                storage_.put(storage::TABLE_ALLOWLISTS, key, entry.data);
+                // Allowlist: composite key storage
+                // Data: allowed_fp(32) || action(1) || sequence(8 BE) || signature
+                if (entry.data.size() < 41) {
+                    spdlog::warn("SYNC: allowlist entry too short ({} bytes)", entry.data.size());
+                    continue;
+                }
+                std::span<const uint8_t> allowed_fp(entry.data.data(), 32);
+                uint8_t action = entry.data[32];
+                std::vector<uint8_t> composite_key;
+                composite_key.reserve(64);
+                composite_key.insert(composite_key.end(), key.begin(), key.end());
+                composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
+                if (action == 0x01) {
+                    std::vector<uint8_t> entry_val(entry.data.begin() + 32, entry.data.end());
+                    storage_.put(storage::TABLE_ALLOWLISTS, composite_key, entry_val);
+                } else {
+                    storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
+                }
             } else {
                 const char* table_name = nullptr;
                 switch (entry.data_type) {

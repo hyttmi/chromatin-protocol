@@ -516,8 +516,11 @@ TEST_F(KademliaTest, StoreAckSent) {
     // Send a STORE message from n2 to n1 using allowlist entry (minimal validation)
     Hash key{};
     key.fill(0x55);
-    // Valid allowlist entry: action(1) + sequence(8 BE) = 9 bytes
-    std::vector<uint8_t> value = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
+    std::vector<uint8_t> value(32, 0xAA);  // allowed_fp
+    value.push_back(0x01);  // action = allow
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);  // sequence = 1
 
     // Build STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
     std::vector<uint8_t> store_payload;
@@ -591,8 +594,11 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     // Store an allowlist entry via n1 — it will store locally and STORE to n2
     Hash key{};
     key.fill(0x77);
-    // Valid allowlist entry: action(1) + sequence(8 BE)
-    std::vector<uint8_t> value = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
+    std::vector<uint8_t> value(32, 0xBB);  // allowed_fp
+    value.push_back(0x01);  // action = allow
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);  // sequence = 1
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -618,10 +624,14 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     // After ACK, the pending entry should be resolved (removed)
     EXPECT_TRUE(resolved) << "Pending store should be resolved after STORE_ACK";
 
-    // Verify n2 actually stored the data
-    auto n2_data = n2.storage->get(TABLE_ALLOWLISTS, key);
+    // Verify n2 actually stored the data (composite key: key||allowed_fp)
+    std::vector<uint8_t> composite_key(key.begin(), key.end());
+    composite_key.insert(composite_key.end(), value.begin(), value.begin() + 32); // allowed_fp
+    auto n2_data = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
     ASSERT_TRUE(n2_data.has_value());
-    EXPECT_EQ(*n2_data, value);
+    // Stored value is entry without allowed_fp prefix: action(1) || sequence(8 BE)
+    std::vector<uint8_t> expected_entry(value.begin() + 32, value.end());
+    EXPECT_EQ(*n2_data, expected_entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -649,8 +659,11 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     // Store an allowlist entry via n1
     Hash key{};
     key.fill(0x88);
-    // Valid allowlist entry: action(1) + sequence(8 BE)
-    std::vector<uint8_t> value = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
+    std::vector<uint8_t> value(32, 0xCC);  // allowed_fp
+    value.push_back(0x01);  // action = allow
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);  // sequence = 1
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -678,10 +691,12 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     }
     EXPECT_TRUE(quorum_met) << "Write quorum should be met (W=" << n1.kad->write_quorum() << ")";
 
-    // Verify all 3 nodes have the data
-    EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, key).has_value());
-    EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, key).has_value());
-    EXPECT_TRUE(n3.storage->get(TABLE_ALLOWLISTS, key).has_value());
+    // Verify all 3 nodes have the data (composite key: key||allowed_fp)
+    std::vector<uint8_t> comp_key(key.begin(), key.end());
+    comp_key.insert(comp_key.end(), value.begin(), value.begin() + 32);
+    EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+    EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+    EXPECT_TRUE(n3.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,7 +1091,8 @@ TEST_F(KademliaTest, AllowlistValidation_InvalidAction) {
     start_all();
 
     // Build an allowlist entry with invalid action byte
-    std::vector<uint8_t> entry;
+    // allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    std::vector<uint8_t> entry(32, 0xDD);  // allowed_fp
     entry.push_back(0x02);  // invalid action (only 0x00 and 0x01 are valid)
     // sequence (8 BE)
     for (int i = 0; i < 8; ++i) entry.push_back(0x00);
@@ -1087,7 +1103,10 @@ TEST_F(KademliaTest, AllowlistValidation_InvalidAction) {
     key.fill(0xEF);
 
     bool ok = n1.kad->store(key, 0x04, entry);
-    auto result = n1.storage->get(TABLE_ALLOWLISTS, key);
+    // Composite storage key: key(32)||allowed_fp(32)
+    std::vector<uint8_t> composite_key(key.begin(), key.end());
+    composite_key.insert(composite_key.end(), entry.begin(), entry.begin() + 32);
+    auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
     EXPECT_FALSE(result.has_value()) << "Allowlist entry with invalid action should not be stored";
 }
 
@@ -1144,4 +1163,39 @@ TEST_F(KademliaTest, InboxStoreWritesTwoTables) {
     auto blob_result = n1.storage->get(TABLE_MESSAGE_BLOBS, blob_key);
     ASSERT_TRUE(blob_result.has_value()) << "BLOB entry should exist after inbox STORE";
     EXPECT_EQ(*blob_result, blob);
+}
+
+// ---------------------------------------------------------------------------
+// Test 26: AllowlistStoreUsesCompositeKey — allowlist uses routing_key||allowed_fp
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
+    auto& n1 = create_node();
+    start_all();
+
+    Hash allowed_fp{};
+    allowed_fp.fill(0x44);
+
+    // Build allowlist STORE value: allowed_fp(32) || action(1) || sequence(8 BE)
+    std::vector<uint8_t> value(allowed_fp.begin(), allowed_fp.end());
+    value.push_back(0x01);  // action = allow
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);  // sequence = 1
+
+    // Use a routing key (normally SHA3-256("allowlist:"||owner_fp))
+    Hash routing_key{};
+    routing_key.fill(0x55);
+
+    bool ok = n1.kad->store(routing_key, 0x04, value);
+    EXPECT_TRUE(ok);
+
+    // Verify composite storage key: routing_key(32) || allowed_fp(32)
+    std::vector<uint8_t> composite_key(routing_key.begin(), routing_key.end());
+    composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
+    auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
+    ASSERT_TRUE(result.has_value()) << "Allowlist entry should be stored with composite key";
+    // Stored value should be the entry without the allowed_fp prefix:
+    // action(1) || sequence(8 BE)
+    EXPECT_EQ(result->size(), 9u);
+    EXPECT_EQ((*result)[0], 0x01);  // action = allow
 }
