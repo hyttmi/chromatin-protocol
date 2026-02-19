@@ -531,9 +531,11 @@ TEST_F(WsServerTest, SendAndList) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Manually add sender to recipient's allowlist.
-    // Allowlist key: recipient_fp(32) || sender_fp(32) = 64 bytes
+    // Allowlist key: SHA3-256("allowlist:" || recipient_fp) || sender_fp = 64 bytes
+    auto allowlist_prefix = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
     std::vector<uint8_t> allow_key;
-    allow_key.insert(allow_key.end(), recipient_fp.begin(), recipient_fp.end());
+    allow_key.reserve(64);
+    allow_key.insert(allow_key.end(), allowlist_prefix.begin(), allowlist_prefix.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
     std::vector<uint8_t> allow_value = {0x01};  // non-empty = allowed
     storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);

@@ -811,10 +811,24 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
         send_error(ws, id, 400, "invalid base64 in blob");
         return;
     }
-    static constexpr size_t MAX_BLOB_SIZE = 256 * 1024;  // 256 KiB
-    if (blob->size() > MAX_BLOB_SIZE) {
-        send_error(ws, id, 400, "blob exceeds 256 KiB");
+    if (blob->size() > INLINE_THRESHOLD) {
+        send_error(ws, id, 400, "blob exceeds inline threshold, use chunked upload");
         return;
+    }
+
+    // Check allowlist: sender must be allowed to write to recipient's inbox
+    {
+        auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+        std::vector<uint8_t> allow_check;
+        allow_check.reserve(64);
+        allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
+        allow_check.insert(allow_check.end(),
+                           session->fingerprint.begin(), session->fingerprint.end());
+        auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
+        if (!allowed) {
+            send_error(ws, id, 403, "not on allowlist");
+            return;
+        }
     }
 
     // Generate random 32-byte msg_id
