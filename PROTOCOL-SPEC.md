@@ -137,7 +137,7 @@ Data types:
 | 0x03  | Contact request |
 | 0x04  | Allowlist entry |
 
-Values 0x05-0xFF are reserved for future use (wallets, groups, channels, etc.).
+Values 0x05-0xFF are reserved for future use (groups, channels, etc.).
 
 ### FIND_VALUE (0x05)
 
@@ -210,8 +210,6 @@ These define the structure of values carried inside STORE and VALUE payloads.
 [pubkey_length bytes: ml_dsa_pubkey]
 [2 bytes BE: kem_pubkey_length]
 [kem_pubkey_length bytes: ml_kem_pubkey]
-[1 byte: display_name_length]
-[display_name_length bytes: display_name (UTF-8)]
 [2 bytes BE: bio_length]
 [bio_length bytes: bio (UTF-8)]
 [4 bytes BE: avatar_length]              // 0 if no avatar
@@ -222,12 +220,6 @@ These define the structure of values carried inside STORE and VALUE payloads.
     [platform_length bytes: platform (UTF-8)]
     [1 byte: handle_length]
     [handle_length bytes: handle (UTF-8)]
-[1 byte: wallet_count]
-  For each:
-    [1 byte: chain_length]
-    [chain_length bytes: chain (UTF-8)]
-    [1 byte: address_length]
-    [address_length bytes: address (UTF-8)]
 [8 bytes BE: sequence]
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature over all preceding fields]
@@ -628,7 +620,7 @@ responsible for storing data associated with that key.
 The protocol is designed for future extension:
 
 - **Data types:** Values 0x05-0xFF in the STORE `data_type` field are reserved
-  for future use (wallets, groups, channels, and any new data kind).
+  for future use (groups, channels, and any new data kind).
 - **Profile fields:** New fields can be appended to the profile format in future
   protocol versions. The `sequence` + signature mechanism handles versioned
   updates.
