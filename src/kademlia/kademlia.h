@@ -110,8 +110,12 @@ private:
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     void send_to_node(const NodeInfo& node, const Message& msg);
 
-    // Name registration validation (PROTOCOL-SPEC.md section 5)
+    // Data type validators (PROTOCOL-SPEC.md)
     bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key);
+    bool validate_profile(std::span<const uint8_t> value, const crypto::Hash& key);
+    bool validate_inbox_message(std::span<const uint8_t> value);
+    bool validate_contact_request(std::span<const uint8_t> value);
+    bool validate_allowlist_entry(std::span<const uint8_t> value);
 };
 
 } // namespace chromatin::kademlia
