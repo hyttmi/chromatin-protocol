@@ -793,6 +793,80 @@ TEST_F(WsServerTest, ContactRequestWithPoW) {
     client.close();
 }
 
+TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
+    start_ws_server();
+
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, sender_kp));
+
+    // Compute PoW nonce
+    std::vector<uint8_t> preimage;
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    uint64_t pow_nonce = 0;
+    for (uint64_t n = 0; n < 10'000'000; ++n) {
+        if (crypto::verify_pow(preimage, n, 16)) {
+            pow_nonce = n;
+            break;
+        }
+    }
+    ASSERT_TRUE(crypto::verify_pow(preimage, pow_nonce, 16));
+
+    std::vector<uint8_t> blob_data = {0xCA, 0xFE, 0xBA, 0xBE};
+    std::string blob_b64 = to_base64(blob_data);
+
+    Json::Value req;
+    req["type"] = "CONTACT_REQUEST";
+    req["id"] = 51;
+    req["to"] = to_hex(recipient_fp);
+    req["blob"] = blob_b64;
+    req["pow_nonce"] = Json::UInt64(pow_nonce);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string req_json = Json::writeString(writer, req);
+    ASSERT_TRUE(client.send_text(req_json));
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "OK");
+
+    // Verify stored binary format: sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    auto requests_key = crypto::sha3_256_prefixed("requests:", recipient_fp);
+    auto stored = storage_->get(storage::TABLE_REQUESTS, requests_key);
+    ASSERT_TRUE(stored.has_value()) << "contact request should be stored";
+
+    // Minimum: 32 + 8 + 4 + 4 = 48 bytes (sender_fp + nonce + blob_len + blob)
+    ASSERT_GE(stored->size(), 48u);
+
+    // Verify sender_fp at offset 0
+    EXPECT_TRUE(std::equal(sender_fp.begin(), sender_fp.end(), stored->begin()));
+
+    // Verify blob_length at offset 40 (4 bytes BE)
+    uint32_t stored_blob_len = (static_cast<uint32_t>((*stored)[40]) << 24)
+                             | (static_cast<uint32_t>((*stored)[41]) << 16)
+                             | (static_cast<uint32_t>((*stored)[42]) << 8)
+                             | static_cast<uint32_t>((*stored)[43]);
+    EXPECT_EQ(stored_blob_len, 4u) << "blob_length should be 4 (0xCAFEBABE)";
+
+    // Verify blob at offset 44
+    EXPECT_EQ(stored->size(), 48u); // 32 + 8 + 4 + 4
+    std::vector<uint8_t> stored_blob(stored->begin() + 44, stored->end());
+    EXPECT_EQ(stored_blob, blob_data);
+
+    client.close();
+}
+
 // ---------- GET tests ----------
 
 TEST_F(WsServerTest, GetSmallBlob) {

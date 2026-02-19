@@ -1199,3 +1199,80 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
     EXPECT_EQ(result->size(), 9u);
     EXPECT_EQ((*result)[0], 0x01);  // action = allow
 }
+
+// ---------------------------------------------------------------------------
+// Test 27: SyncPreservesDataType — sync routes to correct table via data_type
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, SyncPreservesDataType) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    // Bootstrap all nodes
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Build a valid profile and store directly on n1
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00);
+    // sequence = 1
+    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
+    // sign it
+    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+
+    Hash key = sha3_256_prefixed("dna:", user_fp);
+
+    // Store directly on n1 with data_type 0x00 (profile)
+    n1.storage->put(TABLE_PROFILES, key, profile);
+    n1.repl_log->append(key, Op::ADD, 0x00, profile);
+
+    ASSERT_TRUE(n1.storage->get(TABLE_PROFILES, key).has_value());
+    ASSERT_FALSE(n2.storage->get(TABLE_PROFILES, key).has_value());
+
+    // n2 sends SYNC_REQ to n1
+    std::vector<uint8_t> sync_payload;
+    sync_payload.insert(sync_payload.end(), key.begin(), key.end());
+    for (int i = 0; i < 8; ++i) sync_payload.push_back(0x00); // after_seq = 0
+
+    Message sync_msg;
+    sync_msg.type = MessageType::SYNC_REQ;
+    sync_msg.sender = n2.info.id;
+    sync_msg.sender_port = n2.info.tcp_port;
+    sync_msg.payload = sync_payload;
+    sign_message(sync_msg, n2.keypair.secret_key);
+
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, sync_msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    // Verify n2 stored the profile in TABLE_PROFILES (not TABLE_NAMES)
+    auto n2_profile = n2.storage->get(TABLE_PROFILES, key);
+    ASSERT_TRUE(n2_profile.has_value()) << "n2 should have the profile via SYNC";
+    EXPECT_EQ(*n2_profile, profile);
+
+    // Verify it's NOT in TABLE_NAMES (wrong table)
+    auto n2_names = n2.storage->get(TABLE_NAMES, key);
+    EXPECT_FALSE(n2_names.has_value()) << "profile should not be in TABLE_NAMES";
+}
