@@ -110,6 +110,7 @@ private:
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
     void send_error(ws_t* ws, int id, int code, const std::string& reason);
+    void check_upload_timeouts();
 };
 
 } // namespace chromatin::ws

@@ -68,13 +68,15 @@ void WsServer::run() {
 
     // Periodic tick timer (200ms)
     auto* us_loop = reinterpret_cast<struct us_loop_t*>(loop_);
-    struct TimerData { kademlia::Kademlia* kad; };
+    struct TimerData { kademlia::Kademlia* kad; WsServer* server; };
     tick_timer_ = us_create_timer(us_loop, 0, sizeof(TimerData));
     auto* td = static_cast<TimerData*>(us_timer_ext(tick_timer_));
     td->kad = &kad_;
+    td->server = this;
     us_timer_set(tick_timer_, [](struct us_timer_t* t) {
         auto* data = static_cast<TimerData*>(us_timer_ext(t));
         data->kad->tick();
+        data->server->check_upload_timeouts();
     }, 200, 200);
 
     app.run();
@@ -1303,6 +1305,22 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
             }
         }
     });
+}
+
+// ---------- upload timeout ----------
+
+void WsServer::check_upload_timeouts() {
+    static constexpr auto UPLOAD_TIMEOUT = std::chrono::seconds(30);
+    auto now = std::chrono::steady_clock::now();
+
+    for (auto* ws : connections_) {
+        auto* session = ws->getUserData();
+        if (session->pending_upload &&
+            (now - session->pending_upload->started) > UPLOAD_TIMEOUT) {
+            send_error(ws, session->pending_upload->id, 408, "upload timeout");
+            session->pending_upload.reset();
+        }
+    }
 }
 
 // ---------- helpers ----------

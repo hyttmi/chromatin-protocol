@@ -1233,3 +1233,60 @@ TEST_F(WsServerTest, SendTooLargeRejects) {
 
     client.close();
 }
+
+TEST_F(WsServerTest, UploadAlreadyInProgressRejects) {
+    start_ws_server();
+
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    // Add sender to recipient's allowlist
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    std::vector<uint8_t> allow_key;
+    allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
+    allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
+    std::vector<uint8_t> allow_value = {0x01};
+    storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, sender_kp));
+
+    // First large SEND (no blob, just size) — should get SEND_READY
+    Json::Value send1;
+    send1["type"] = "SEND";
+    send1["id"] = 500;
+    send1["to"] = to_hex(recipient_fp);
+    send1["size"] = Json::UInt64(100 * 1024);  // 100 KB
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, send1)));
+
+    auto resp1 = client.recv_text(5000);
+    ASSERT_TRUE(resp1.has_value()) << "no SEND_READY response";
+    auto root1 = parse_json(*resp1);
+    EXPECT_EQ(root1["type"].asString(), "SEND_READY");
+
+    // Second large SEND while first is still pending — should get 429
+    Json::Value send2;
+    send2["type"] = "SEND";
+    send2["id"] = 501;
+    send2["to"] = to_hex(recipient_fp);
+    send2["size"] = Json::UInt64(100 * 1024);
+
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, send2)));
+
+    auto resp2 = client.recv_text(5000);
+    ASSERT_TRUE(resp2.has_value()) << "no response to second SEND";
+    auto root2 = parse_json(*resp2);
+    EXPECT_EQ(root2["type"].asString(), "ERROR");
+    EXPECT_EQ(root2["id"].asInt(), 501);
+    EXPECT_EQ(root2["code"].asInt(), 429);
+    EXPECT_EQ(root2["reason"].asString(), "upload already in progress");
+
+    client.close();
+}
