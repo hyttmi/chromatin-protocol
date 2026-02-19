@@ -115,9 +115,9 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         handle_hello(ws, root);
     } else if (type == "AUTH") {
         handle_auth(ws, root);
-    } else if (type == "FETCH") {
+    } else if (type == "LIST") {
         if (!require_auth(ws, id)) return;
-        handle_fetch(ws, root);
+        handle_list(ws, root);
     } else if (type == "SEND") {
         if (!require_auth(ws, id)) return;
         handle_send(ws, root);
@@ -379,7 +379,7 @@ void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
 
     // Count pending inbox messages
     int pending = 0;
-    storage_.scan(storage::TABLE_INBOXES, session->fingerprint,
+    storage_.scan(storage::TABLE_INBOX_INDEX, session->fingerprint,
                   [&pending](std::span<const uint8_t> /*key*/,
                              std::span<const uint8_t> /*value*/) -> bool {
                       ++pending;
@@ -407,68 +407,84 @@ bool WsServer::require_auth(ws_t* ws, int id) {
 
 // ---------- command handlers ----------
 
-void WsServer::handle_fetch(ws_t* ws, const Json::Value& msg) {
+void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
-    // Optional "since" timestamp filter (default: 0 = fetch all)
-    uint64_t since = 0;
-    if (msg.isMember("since")) {
-        since = msg["since"].asUInt64();
-    }
+    // INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
+    // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
 
-    // Key layout: recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
-    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
+    static constexpr size_t INLINE_THRESHOLD = 64 * 1024;
 
-    Json::Value messages(Json::arrayValue);
+    // Collect index entries first (scan holds a read txn, can't nest another).
+    struct IndexEntry {
+        std::vector<uint8_t> msg_id;
+        std::string from_hex;
+        uint64_t timestamp;
+        uint32_t size;
+    };
+    std::vector<IndexEntry> entries;
 
-    storage_.scan(storage::TABLE_INBOXES, session->fingerprint,
+    storage_.scan(storage::TABLE_INBOX_INDEX, session->fingerprint,
                   [&](std::span<const uint8_t> key,
                       std::span<const uint8_t> value) -> bool {
-        // Validate key length: 32 (fp) + 8 (timestamp) + 32 (msg_id) = 72
-        if (key.size() != 72) return true;  // skip malformed
+        // Validate key length: 32 (fp) + 32 (msg_id) = 64
+        if (key.size() != 64) return true;  // skip malformed
 
-        // Extract timestamp from key (big-endian, bytes 32..39)
-        uint64_t ts = 0;
+        // Validate value length: 32 (sender_fp) + 8 (timestamp) + 4 (size) = 44
+        if (value.size() != 44) return true;  // skip malformed
+
+        IndexEntry e;
+
+        // Extract msg_id from key (bytes 32..63)
+        auto msg_id_span = key.subspan(32, 32);
+        e.msg_id.assign(msg_id_span.begin(), msg_id_span.end());
+
+        // Extract sender_fp from value
+        e.from_hex = to_hex(value.subspan(0, 32));
+
+        // timestamp (8 bytes big-endian at offset 32)
+        e.timestamp = 0;
         for (int i = 0; i < 8; ++i) {
-            ts = (ts << 8) | key[32 + i];
+            e.timestamp = (e.timestamp << 8) | value[32 + i];
         }
 
-        // Skip messages older than 'since'
-        if (ts < since) return true;
+        // size (4 bytes big-endian at offset 40)
+        e.size = (static_cast<uint32_t>(value[40]) << 24) |
+                 (static_cast<uint32_t>(value[41]) << 16) |
+                 (static_cast<uint32_t>(value[42]) << 8) |
+                 static_cast<uint32_t>(value[43]);
 
-        // Validate minimum value size: 32 (msg_id) + 32 (sender_fp) + 8 (ts) + 4 (blob_len) = 76
-        if (value.size() < 76) return true;  // skip malformed
-
-        // Extract fields from value
-        auto msg_id_span = value.subspan(0, 32);
-        auto sender_fp_span = value.subspan(32, 32);
-        // timestamp from value (bytes 64..71)
-        uint64_t val_ts = 0;
-        for (int i = 0; i < 8; ++i) {
-            val_ts = (val_ts << 8) | value[64 + i];
-        }
-        // blob_len (4 bytes big-endian at offset 72)
-        uint32_t blob_len = (static_cast<uint32_t>(value[72]) << 24) |
-                            (static_cast<uint32_t>(value[73]) << 16) |
-                            (static_cast<uint32_t>(value[74]) << 8) |
-                            static_cast<uint32_t>(value[75]);
-
-        if (value.size() < 76 + blob_len) return true;  // skip malformed
-        auto blob_span = value.subspan(76, blob_len);
-
-        Json::Value entry;
-        entry["msg_id"] = to_hex(msg_id_span);
-        entry["from"] = to_hex(sender_fp_span);
-        entry["timestamp"] = Json::Value(val_ts);
-        entry["blob"] = to_base64(blob_span);
-
-        messages.append(entry);
+        entries.push_back(std::move(e));
         return true;  // continue scanning
     });
 
+    // Now build the JSON response, fetching blobs outside the scan transaction.
+    Json::Value messages(Json::arrayValue);
+    for (const auto& e : entries) {
+        Json::Value entry;
+        entry["msg_id"] = to_hex(e.msg_id);
+        entry["from"] = e.from_hex;
+        entry["timestamp"] = Json::UInt64(e.timestamp);
+        entry["size"] = e.size;
+
+        if (e.size <= INLINE_THRESHOLD) {
+            // Fetch blob from TABLE_MESSAGE_BLOBS and inline as base64
+            auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, e.msg_id);
+            if (blob) {
+                entry["blob"] = to_base64(*blob);
+            } else {
+                entry["blob"] = Json::nullValue;
+            }
+        } else {
+            entry["blob"] = Json::nullValue;
+        }
+
+        messages.append(entry);
+    }
+
     Json::Value resp;
-    resp["type"] = "MESSAGES";
+    resp["type"] = "LIST_RESULT";
     resp["id"] = id;
     resp["messages"] = messages;
     send_json(ws, resp);
@@ -539,17 +555,29 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
     message_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     message_binary.insert(message_binary.end(), blob->begin(), blob->end());
 
-    // Build composite inbox storage key:
-    // recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
-    std::vector<uint8_t> inbox_storage_key;
-    inbox_storage_key.reserve(72);
-    inbox_storage_key.insert(inbox_storage_key.end(),
-                             recipient_fp.begin(), recipient_fp.end());
+    // Build INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
+    std::vector<uint8_t> index_key;
+    index_key.reserve(64);
+    index_key.insert(index_key.end(),
+                     recipient_fp.begin(), recipient_fp.end());
+    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
+
+    // Build INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
+    std::vector<uint8_t> index_value;
+    index_value.reserve(44);
+    index_value.insert(index_value.end(),
+                       session->fingerprint.begin(), session->fingerprint.end());
     for (int i = 7; i >= 0; --i) {
-        inbox_storage_key.push_back(
-            static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
     }
-    inbox_storage_key.insert(inbox_storage_key.end(), msg_id.begin(), msg_id.end());
+    index_value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+
+    // BLOB key: msg_id(32), value: raw blob bytes
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    auto blob_value = std::move(*blob);
 
     // Compute inbox_key = SHA3-256("inbox:" || recipient_fp)
     // Used for Kademlia routing (responsibility check) and replication.
@@ -560,12 +588,19 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
 
     // Dispatch to worker pool
     workers_.post([this, ws, id, inbox_key,
-                   inbox_storage_key = std::move(inbox_storage_key),
+                   index_key = std::move(index_key),
+                   index_value = std::move(index_value),
+                   blob_key = std::move(blob_key),
+                   blob_value = std::move(blob_value),
                    message_binary = std::move(message_binary),
                    msg_id_copy]() {
-        // Store locally with the composite key so FETCH can scan by fingerprint
-        bool ok = storage_.put(storage::TABLE_INBOXES,
-                               inbox_storage_key, message_binary);
+        // Store locally in the two-table model so LIST can scan by fingerprint
+        bool ok = storage_.put(storage::TABLE_INBOX_INDEX,
+                               index_key, index_value);
+        if (ok) {
+            ok = storage_.put(storage::TABLE_MESSAGE_BLOBS,
+                              blob_key, blob_value);
+        }
 
         // Also replicate via Kademlia (fire-and-forget for the response)
         if (ok) {

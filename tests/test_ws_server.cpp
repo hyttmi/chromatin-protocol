@@ -337,11 +337,11 @@ TEST_F(WsServerTest, CommandBeforeAuthFails) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
 
-    // Try FETCH without authenticating
-    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":7})"));
+    // Try LIST without authenticating
+    ASSERT_TRUE(client.send_text(R"({"type":"LIST","id":7})"));
 
     auto resp = client.recv_text();
-    ASSERT_TRUE(resp.has_value()) << "no response to unauthenticated FETCH";
+    ASSERT_TRUE(resp.has_value()) << "no response to unauthenticated LIST";
 
     auto root = parse_json(*resp);
     EXPECT_EQ(root["type"].asString(), "ERROR");
@@ -351,9 +351,9 @@ TEST_F(WsServerTest, CommandBeforeAuthFails) {
     client.close();
 }
 
-// ---------- FETCH tests ----------
+// ---------- LIST tests ----------
 
-TEST_F(WsServerTest, FetchEmptyInbox) {
+TEST_F(WsServerTest, ListEmptyInbox) {
     start_ws_server();
 
     auto user_kp = crypto::generate_keypair();
@@ -362,14 +362,14 @@ TEST_F(WsServerTest, FetchEmptyInbox) {
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, user_kp));
 
-    // FETCH with no messages in inbox
-    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":10})"));
+    // LIST with no messages in inbox
+    ASSERT_TRUE(client.send_text(R"({"type":"LIST","id":10})"));
 
     auto resp = client.recv_text();
-    ASSERT_TRUE(resp.has_value()) << "no response to FETCH";
+    ASSERT_TRUE(resp.has_value()) << "no response to LIST";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "MESSAGES");
+    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
     EXPECT_EQ(root["id"].asInt(), 10);
     ASSERT_TRUE(root["messages"].isArray());
     EXPECT_EQ(root["messages"].size(), 0u);
@@ -377,15 +377,15 @@ TEST_F(WsServerTest, FetchEmptyInbox) {
     client.close();
 }
 
-TEST_F(WsServerTest, FetchWithMessages) {
+TEST_F(WsServerTest, ListWithInlineMessage) {
     start_ws_server();
 
     auto user_kp = crypto::generate_keypair();
     auto fingerprint = crypto::sha3_256(user_kp.public_key);
 
-    // Manually insert a message into TABLE_INBOXES before connecting.
-    // Key layout: recipient_fp(32) || timestamp(8 BE) || msg_id(32) = 72 bytes
-    // Value layout: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
+    // Manually insert data into the new two-table model.
+    // INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
+    // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
 
     // Create a fake msg_id (32 bytes)
     crypto::Hash msg_id{};
@@ -398,45 +398,47 @@ TEST_F(WsServerTest, FetchWithMessages) {
     // Timestamp
     uint64_t timestamp = 1700000000;
 
-    // Build key: fp(32) || timestamp(8 BE) || msg_id(32)
-    std::vector<uint8_t> key;
-    key.insert(key.end(), fingerprint.begin(), fingerprint.end());
-    for (int i = 7; i >= 0; --i) {
-        key.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-    }
-    key.insert(key.end(), msg_id.begin(), msg_id.end());
-    ASSERT_EQ(key.size(), 72u);
+    // Blob data: "Hello"
+    std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};
+    uint32_t blob_size = static_cast<uint32_t>(blob.size());
 
-    // Build value: msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4 BE) || blob
-    std::vector<uint8_t> blob = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
-    std::vector<uint8_t> value;
-    value.insert(value.end(), msg_id.begin(), msg_id.end());
-    value.insert(value.end(), sender_fp.begin(), sender_fp.end());
-    for (int i = 7; i >= 0; --i) {
-        value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-    }
-    uint32_t blob_len = static_cast<uint32_t>(blob.size());
-    value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
-    value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
-    value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
-    value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
-    value.insert(value.end(), blob.begin(), blob.end());
+    // Build INDEX key: fp(32) || msg_id(32)
+    std::vector<uint8_t> index_key;
+    index_key.insert(index_key.end(), fingerprint.begin(), fingerprint.end());
+    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
+    ASSERT_EQ(index_key.size(), 64u);
 
-    storage_->put(storage::TABLE_INBOXES, key, value);
+    // Build INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE)
+    std::vector<uint8_t> index_value;
+    index_value.insert(index_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 24) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 16) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 8) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>(blob_size & 0xFF));
+    ASSERT_EQ(index_value.size(), 44u);
+
+    storage_->put(storage::TABLE_INBOX_INDEX, index_key, index_value);
+
+    // Store blob in TABLE_MESSAGE_BLOBS: key = msg_id, value = raw blob
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    storage_->put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob);
 
     // Now connect and authenticate
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, user_kp));
 
-    // FETCH
-    ASSERT_TRUE(client.send_text(R"({"type":"FETCH","id":20})"));
+    // LIST
+    ASSERT_TRUE(client.send_text(R"({"type":"LIST","id":20})"));
 
     auto resp = client.recv_text();
-    ASSERT_TRUE(resp.has_value()) << "no response to FETCH";
+    ASSERT_TRUE(resp.has_value()) << "no response to LIST";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "MESSAGES");
+    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
     EXPECT_EQ(root["id"].asInt(), 20);
     ASSERT_TRUE(root["messages"].isArray());
     ASSERT_EQ(root["messages"].size(), 1u);
@@ -445,15 +447,81 @@ TEST_F(WsServerTest, FetchWithMessages) {
     EXPECT_EQ(entry["msg_id"].asString(), to_hex(msg_id));
     EXPECT_EQ(entry["from"].asString(), to_hex(sender_fp));
     EXPECT_EQ(entry["timestamp"].asUInt64(), timestamp);
+    EXPECT_EQ(entry["size"].asUInt(), blob_size);
     // blob "Hello" -> base64 "SGVsbG8="
     EXPECT_EQ(entry["blob"].asString(), "SGVsbG8=");
 
     client.close();
 }
 
+TEST_F(WsServerTest, ListLargeMessageBlobNull) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // Insert an index entry with size > 64 KB (the blob itself is not stored
+    // in TABLE_MESSAGE_BLOBS for this test since LIST should not attempt to
+    // read it when size > threshold).
+
+    crypto::Hash msg_id{};
+    msg_id.fill(0xCC);
+
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xDD);
+
+    uint64_t timestamp = 1700000001;
+    uint32_t large_size = 65 * 1024;  // 65 KB > 64 KB threshold
+
+    // Build INDEX key: fp(32) || msg_id(32)
+    std::vector<uint8_t> index_key;
+    index_key.insert(index_key.end(), fingerprint.begin(), fingerprint.end());
+    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
+
+    // Build INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE)
+    std::vector<uint8_t> index_value;
+    index_value.insert(index_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    index_value.push_back(static_cast<uint8_t>((large_size >> 24) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((large_size >> 16) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((large_size >> 8) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>(large_size & 0xFF));
+
+    storage_->put(storage::TABLE_INBOX_INDEX, index_key, index_value);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // LIST
+    ASSERT_TRUE(client.send_text(R"({"type":"LIST","id":30})"));
+
+    auto resp = client.recv_text();
+    ASSERT_TRUE(resp.has_value()) << "no response to LIST";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 30);
+    ASSERT_TRUE(root["messages"].isArray());
+    ASSERT_EQ(root["messages"].size(), 1u);
+
+    auto& entry = root["messages"][0];
+    EXPECT_EQ(entry["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(entry["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(entry["timestamp"].asUInt64(), timestamp);
+    EXPECT_EQ(entry["size"].asUInt(), large_size);
+    // Blob should be null for messages larger than 64 KB
+    EXPECT_TRUE(entry["blob"].isNull());
+
+    client.close();
+}
+
 // ---------- SEND tests ----------
 
-TEST_F(WsServerTest, SendAndFetch) {
+TEST_F(WsServerTest, SendAndList) {
     start_ws_server();
 
     // Create sender and recipient keypairs
@@ -502,25 +570,27 @@ TEST_F(WsServerTest, SendAndFetch) {
 
     sender_client.close();
 
-    // Now connect as recipient and FETCH the message
+    // Now connect as recipient and LIST the messages
     TestWsClient recipient_client;
     ASSERT_TRUE(recipient_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(recipient_client, recipient_kp));
 
-    ASSERT_TRUE(recipient_client.send_text(R"({"type":"FETCH","id":200})"));
+    ASSERT_TRUE(recipient_client.send_text(R"({"type":"LIST","id":200})"));
 
-    auto fetch_resp = recipient_client.recv_text(5000);
-    ASSERT_TRUE(fetch_resp.has_value()) << "no response to FETCH";
+    auto list_resp = recipient_client.recv_text(5000);
+    ASSERT_TRUE(list_resp.has_value()) << "no response to LIST";
 
-    auto fetch_root = parse_json(*fetch_resp);
-    EXPECT_EQ(fetch_root["type"].asString(), "MESSAGES");
-    EXPECT_EQ(fetch_root["id"].asInt(), 200);
-    ASSERT_TRUE(fetch_root["messages"].isArray());
-    ASSERT_EQ(fetch_root["messages"].size(), 1u);
+    auto list_root = parse_json(*list_resp);
+    EXPECT_EQ(list_root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(list_root["id"].asInt(), 200);
+    ASSERT_TRUE(list_root["messages"].isArray());
+    ASSERT_EQ(list_root["messages"].size(), 1u);
 
-    auto& entry = fetch_root["messages"][0];
+    auto& entry = list_root["messages"][0];
     EXPECT_EQ(entry["msg_id"].asString(), send_root["msg_id"].asString());
     EXPECT_EQ(entry["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(entry["size"].asUInt(), static_cast<uint32_t>(blob_data.size()));
+    // Small blob should be inlined
     EXPECT_EQ(entry["blob"].asString(), blob_b64);
 
     recipient_client.close();

@@ -84,7 +84,7 @@ private:
     bool require_auth(ws_t* ws, int id);
 
     // Command handlers
-    void handle_fetch(ws_t* ws, const Json::Value& msg);
+    void handle_list(ws_t* ws, const Json::Value& msg);
     void handle_send(ws_t* ws, const Json::Value& msg);
     void handle_allow(ws_t* ws, const Json::Value& msg);
     void handle_revoke(ws_t* ws, const Json::Value& msg);
