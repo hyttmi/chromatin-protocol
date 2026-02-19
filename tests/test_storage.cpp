@@ -106,12 +106,12 @@ TEST_F(StorageTest, Foreach) {
     auto v2 = to_bytes("2");
     auto v3 = to_bytes("3");
 
-    store_->put(TABLE_INBOXES, k1, v1);
-    store_->put(TABLE_INBOXES, k2, v2);
-    store_->put(TABLE_INBOXES, k3, v3);
+    store_->put(TABLE_INBOX_INDEX, k1, v1);
+    store_->put(TABLE_INBOX_INDEX, k2, v2);
+    store_->put(TABLE_INBOX_INDEX, k3, v3);
 
     std::vector<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> entries;
-    store_->foreach(TABLE_INBOXES, [&](std::span<const uint8_t> key, std::span<const uint8_t> value) {
+    store_->foreach(TABLE_INBOX_INDEX, [&](std::span<const uint8_t> key, std::span<const uint8_t> value) {
         entries.emplace_back(
             std::vector<uint8_t>(key.begin(), key.end()),
             std::vector<uint8_t>(value.begin(), value.end()));
@@ -129,12 +129,12 @@ TEST_F(StorageTest, ForeachEarlyStop) {
     auto v2 = to_bytes("2");
     auto v3 = to_bytes("3");
 
-    store_->put(TABLE_INBOXES, k1, v1);
-    store_->put(TABLE_INBOXES, k2, v2);
-    store_->put(TABLE_INBOXES, k3, v3);
+    store_->put(TABLE_INBOX_INDEX, k1, v1);
+    store_->put(TABLE_INBOX_INDEX, k2, v2);
+    store_->put(TABLE_INBOX_INDEX, k3, v3);
 
     int count = 0;
-    store_->foreach(TABLE_INBOXES, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+    store_->foreach(TABLE_INBOX_INDEX, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
         ++count;
         return false; // stop after first entry
     });
@@ -159,14 +159,14 @@ TEST_F(StorageTest, ScanMatchesPrefix) {
     auto k4 = to_bytes("BB_msg2");
     auto v = to_bytes("data");
 
-    store_->put(TABLE_INBOXES, k1, v);
-    store_->put(TABLE_INBOXES, k2, v);
-    store_->put(TABLE_INBOXES, k3, v);
-    store_->put(TABLE_INBOXES, k4, v);
+    store_->put(TABLE_INBOX_INDEX, k1, v);
+    store_->put(TABLE_INBOX_INDEX, k2, v);
+    store_->put(TABLE_INBOX_INDEX, k3, v);
+    store_->put(TABLE_INBOX_INDEX, k4, v);
 
     std::vector<std::vector<uint8_t>> matched_keys;
     auto prefix = to_bytes("AA");
-    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t> key, std::span<const uint8_t>) {
+    store_->scan(TABLE_INBOX_INDEX, prefix, [&](std::span<const uint8_t> key, std::span<const uint8_t>) {
         matched_keys.emplace_back(key.begin(), key.end());
         return true;
     });
@@ -182,13 +182,13 @@ TEST_F(StorageTest, ScanEarlyStop) {
     auto k3 = to_bytes("XX_3");
     auto v = to_bytes("data");
 
-    store_->put(TABLE_INBOXES, k1, v);
-    store_->put(TABLE_INBOXES, k2, v);
-    store_->put(TABLE_INBOXES, k3, v);
+    store_->put(TABLE_INBOX_INDEX, k1, v);
+    store_->put(TABLE_INBOX_INDEX, k2, v);
+    store_->put(TABLE_INBOX_INDEX, k3, v);
 
     int count = 0;
     auto prefix = to_bytes("XX");
-    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+    store_->scan(TABLE_INBOX_INDEX, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
         ++count;
         return false; // stop after first
     });
@@ -199,11 +199,11 @@ TEST_F(StorageTest, ScanEarlyStop) {
 TEST_F(StorageTest, ScanNoMatches) {
     auto k = to_bytes("AA_msg1");
     auto v = to_bytes("data");
-    store_->put(TABLE_INBOXES, k, v);
+    store_->put(TABLE_INBOX_INDEX, k, v);
 
     int count = 0;
     auto prefix = to_bytes("ZZ");
-    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+    store_->scan(TABLE_INBOX_INDEX, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
         ++count;
         return true;
     });
@@ -214,7 +214,7 @@ TEST_F(StorageTest, ScanNoMatches) {
 TEST_F(StorageTest, ScanEmptyTable) {
     int count = 0;
     auto prefix = to_bytes("AA");
-    store_->scan(TABLE_INBOXES, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+    store_->scan(TABLE_INBOX_INDEX, prefix, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
         ++count;
         return true;
     });
