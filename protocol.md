@@ -391,40 +391,58 @@ Node verifies: `fingerprint == SHA3-256(pubkey)` and signature is valid.
 
 ### 8.3 WebSocket Messages
 
+Control messages use JSON text frames. Large blob transfers (>64 KB) use binary
+WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
+
 **Client → Node:**
 
 | Message           | Purpose                                      |
 |-------------------|----------------------------------------------|
 | SEND              | Push encrypted blob to recipient's inbox     |
+| LIST              | Retrieve message index (small blobs inlined) |
+| GET               | Fetch a specific large blob by msg_id        |
 | DELETE            | Optionally delete messages (client-driven)   |
 | ALLOW             | Add fingerprint to allowlist (client-signed)  |
 | REVOKE            | Remove fingerprint from allowlist (client-signed)|
 | CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
-| FETCH             | Pull messages (optionally since timestamp)   |
 
 **Node → Client:**
 
 | Message           | Purpose                                      |
 |-------------------|----------------------------------------------|
-| NEW_MESSAGE       | Incoming encrypted blob from allowed contact |
+| NEW_MESSAGE       | Incoming message (inline <=64KB, else metadata-only) |
 | CONTACT_REQUEST   | Incoming contact request (PoW-verified)      |
 | SEND_ACK          | Confirmation that message was stored         |
+| SEND_READY        | Ready for chunked upload (large SEND)        |
+| LIST_RESULT       | Message index response                       |
+| GET_RESULT        | Blob response (inline or chunked)            |
 | REDIRECT          | List of responsible nodes (sorted by seq)    |
-| MESSAGES          | Response to FETCH with inbox messages        |
 | ERROR             | Rejection with reason                        |
 
 ### 8.4 Message Send Flow
 
 When Alice sends a message to Bob:
 
-1. Alice sends `SEND { to: bob_fp, blob }` to her connected node
+**Small message (<=64 KB):**
+1. Alice sends `SEND { to: bob_fp, blob }` (inline base64) to her connected node
 2. Alice's node computes `inbox_key = SHA3-256("inbox:" || bob_fp)`
 3. Alice's node determines R responsible nodes for Bob's inbox
-4. Alice's node forwards the blob to **all R responsible nodes** via TCP STORE
-5. Responsible nodes check Bob's allowlist — reject if Alice not allowed
-6. Responsible nodes append to Bob's inbox replication log
-7. If Bob is connected to one of those nodes, push `NEW_MESSAGE` immediately
+4. Alice's node stores in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS locally
+5. Alice's node forwards via TCP STORE to **all R responsible nodes**
+6. Responsible nodes check Bob's allowlist — reject if Alice not allowed
+7. If Bob is connected, push `NEW_MESSAGE` with blob inlined
 8. Alice receives `SEND_ACK`
+
+**Large message (>64 KB, up to 50 MiB):**
+1. Alice sends `SEND { to: bob_fp, size }` (no blob, declares size)
+2. Node responds `SEND_READY { request_id }` (or ERROR 413 if too large)
+3. Alice uploads blob as binary 1 MiB chunks (UPLOAD_CHUNK frames)
+4. On completion, node stores in both tables and replicates via TCP STORE
+5. If Bob is connected, push `NEW_MESSAGE` with `blob: null` (metadata only)
+6. Alice receives `SEND_ACK`
+7. Bob fetches the blob later with `GET { msg_id }`
+
+Incomplete chunked uploads are discarded after 30 seconds.
 
 ### 8.5 Allowlist
 
@@ -532,7 +550,8 @@ that data after confirming the new responsible node is synced.
 |------------------|-------------------------------------|---------------------------|
 | profiles         | `SHA3-256("dna:" \|\| fp)`          | Signed profile document   |
 | names            | `SHA3-256("name:" \|\| name)`       | Signed name record        |
-| inboxes          | `recipient_fp \|\| timestamp \|\| msg_id` | Encrypted message blobs (7-day TTL) |
+| inbox_index      | `recipient_fp(32) \|\| msg_id(32)`  | sender_fp + timestamp + size (44 bytes) |
+| message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | requests         | `SHA3-256("requests:" \|\| fp)`     | Pending contact requests  |
 | allowlists       | `SHA3-256("allowlist:" \|\| fp)`    | Set of allowed fps        |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
@@ -578,9 +597,9 @@ No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
 2. ~~**Write quorum**~~ — Resolved: W = min(2, R). A STORE is durable when
    W nodes have confirmed (local + STORE_ACK).
 
-3. ~~**Max message size:**~~ — Resolved: No hard protocol limit (TCP stream).
-   Implementation limit is configurable (default: 50 MiB). Future: dedicated
-   storage nodes (IPFS-style) for large files.
+3. ~~**Max message size:**~~ — Resolved: 50 MiB max blob via WebSocket chunked
+   transfer (1 MiB chunks). Messages <=64 KB inline in JSON, larger blobs use
+   binary WebSocket frames. See PROTOCOL-SPEC.md Section 4.6.
 
 4. **Reputation specifics:** Metrics, thresholds, slashing criteria. How to
    prevent bootstraps from becoming censorship points?

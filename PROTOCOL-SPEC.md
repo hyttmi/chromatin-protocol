@@ -261,8 +261,22 @@ Storage key: `SHA3-256("name:" || name)`
 
 Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
 
-Local mdbx key: `recipient_fingerprint || timestamp || msg_id` (composite key
-for ordered retrieval and prefix scan).
+Local mdbx storage uses two tables:
+
+**TABLE_INBOX_INDEX** — Lightweight metadata for LIST responses:
+```
+Key:   recipient_fp(32) || msg_id(32)
+Value: sender_fp(32) || timestamp(8 BE) || size(4 BE)
+```
+
+**TABLE_MESSAGE_BLOBS** — Raw encrypted blob data:
+```
+Key:   msg_id(32)
+Value: encrypted blob (up to 50 MiB)
+```
+
+Prefix scan on TABLE_INBOX_INDEX by `recipient_fp` returns all message metadata.
+DELETE removes entries from both tables.
 
 ### Contact Request (data_type 0x03)
 
@@ -293,10 +307,11 @@ To block a user, REVOKE them from the allowlist. There is no separate blocklist.
 
 ## 4. WebSocket Client-to-Node Protocol
 
-Clients connect to a responsible node via WebSocket. All messages are JSON text
-frames. Every client request includes an `id` field for response correlation.
+Clients connect to a responsible node via WebSocket. Control messages are JSON
+text frames. Large blob transfers use binary WebSocket frames (see Section 4.6).
+Every client request includes an `id` field for response correlation.
 
-### Authentication
+### 4.1 Authentication
 
 ```json
 // 1. Client -> Node
@@ -318,7 +333,7 @@ The node verifies:
 2. `fingerprint == SHA3-256(pubkey)`
 3. ML-DSA-87 signature over the nonce is valid
 
-### REDIRECT
+### 4.2 REDIRECT
 
 If the node receiving HELLO is not responsible for the client's inbox, it
 queries the R responsible nodes for their replication log sequence number and
@@ -335,9 +350,9 @@ up-to-date node.
 
 The connection is closed after sending REDIRECT.
 
-### Client Commands (after authentication)
+### 4.3 Client Commands (after authentication)
 
-**SEND** — Push encrypted blob to recipient's inbox:
+**SEND (small, <=64 KB)** — Push encrypted blob inline to recipient's inbox:
 ```json
 {"type": "SEND", "id": 2, "to": "<fingerprint hex>", "blob": "<base64>"}
 ```
@@ -346,60 +361,103 @@ Response:
 {"type": "SEND_ACK", "id": 2, "msg_id": "<hex>"}
 ```
 
+**SEND (large, >64 KB up to 50 MiB)** — Two-step: announce then chunked upload:
+```json
+// Step 1: Announce
+{"type": "SEND", "id": 3, "to": "<fingerprint hex>", "size": 5242880}
+
+// Response: ready for chunks
+{"type": "SEND_READY", "id": 3, "request_id": 42}
+
+// Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 4.6)
+
+// Step 3: After all chunks received
+{"type": "SEND_ACK", "id": 3, "msg_id": "<hex>"}
+```
+
+If `size` > 50 MiB:
+```json
+{"type": "ERROR", "id": 3, "code": 413, "reason": "attachment too large"}
+```
+
+Incomplete chunked uploads are discarded after 30 seconds.
+
+**LIST** — Retrieve message index with small blobs inlined:
+```json
+{"type": "LIST", "id": 4}
+```
+Response:
+```json
+{"type": "LIST_RESULT", "id": 4, "messages": [
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000100, "size": 1200, "blob": "<base64>"},
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000200, "size": 5242880, "blob": null}
+]}
+```
+
+Messages with `size` <= 64 KB have their blob inlined (base64). Larger messages
+have `blob: null` — the client must fetch them separately with GET.
+
+LIST always returns all messages within the 7-day TTL window. Clients track
+known `msg_id`s locally and skip GET for messages they already have (client-side
+deduplication).
+
+**GET** — Fetch a specific message blob by msg_id:
+```json
+{"type": "GET", "id": 5, "msg_id": "<hex>"}
+```
+
+Small blob response (<=64 KB):
+```json
+{"type": "GET_RESULT", "id": 5, "msg_id": "<hex>", "blob": "<base64>"}
+```
+
+Large blob response (>64 KB): JSON header followed by binary chunks:
+```json
+{"type": "GET_RESULT", "id": 5, "msg_id": "<hex>", "size": 5242880, "chunks": 5}
+```
+Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 4.6).
+
 **DELETE** — Optionally delete messages the client no longer needs:
 ```json
-{"type": "DELETE", "id": 3, "msg_ids": ["<hex>", "<hex>"]}
+{"type": "DELETE", "id": 6, "msg_ids": ["<hex>", "<hex>"]}
 ```
 
 Deletion is client-driven and optional. Messages expire automatically after
 7 days via TTL. Multi-device users may choose not to delete until all devices
-have fetched.
+have fetched. Deletes from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS.
 
 **ALLOW** — Add fingerprint to allowlist:
 ```json
-{"type": "ALLOW", "id": 4, "fingerprint": "<hex>", "sequence": 1, "signature": "<hex>"}
+{"type": "ALLOW", "id": 7, "fingerprint": "<hex>", "sequence": 1, "signature": "<hex>"}
 ```
 
 The client signs `action(0x01) || allowed_fingerprint || sequence` with its
 ML-DSA-87 key. The node verifies the signature and that sequence > currently
-stored sequence. Response: `{"type": "OK", "id": 4}`
+stored sequence. Response: `{"type": "OK", "id": 7}`
 
 **REVOKE** — Remove fingerprint from allowlist:
 ```json
-{"type": "REVOKE", "id": 5, "fingerprint": "<hex>", "sequence": 2, "signature": "<hex>"}
+{"type": "REVOKE", "id": 8, "fingerprint": "<hex>", "sequence": 2, "signature": "<hex>"}
 ```
 
 Same as ALLOW but with `action(0x00)`. Deletes the allowlist entry for the
-specified fingerprint. Response: `{"type": "OK", "id": 5}`
+specified fingerprint. Response: `{"type": "OK", "id": 8}`
 
 **CONTACT_REQUEST** — Send contact request with PoW:
 ```json
-{"type": "CONTACT_REQUEST", "id": 6, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345}
+{"type": "CONTACT_REQUEST", "id": 9, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345}
 ```
 
-**FETCH** — Pull messages, optionally since a timestamp:
+### 4.4 Server Push (unsolicited, no id)
+
+**NEW_MESSAGE (small, <=64 KB)** — Incoming message inlined:
 ```json
-{"type": "FETCH", "id": 7, "since": 1708000000}
+{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 1200, "blob": "<base64>", "timestamp": 1708000100}
 ```
 
-If `since` is omitted, returns all stored messages (up to 7 days). Returns
-messages ordered by timestamp. Clients track their own `last_fetch_timestamp`
-locally for efficient incremental fetches. Supports multi-device: each device
-tracks its own timestamp independently.
-
-Response:
+**NEW_MESSAGE (large, >64 KB)** — Metadata only, client fetches with GET:
 ```json
-{"type": "MESSAGES", "id": 7, "messages": [
-  {"msg_id": "<hex>", "from": "<fingerprint hex>", "blob": "<base64>", "timestamp": 1708000100},
-  {"msg_id": "<hex>", "from": "<fingerprint hex>", "blob": "<base64>", "timestamp": 1708000200}
-]}
-```
-
-### Server Push (unsolicited, no id)
-
-**NEW_MESSAGE** — Incoming message from an allowed contact:
-```json
-{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "blob": "<base64>", "timestamp": 1708000000}
+{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 5242880, "blob": null, "timestamp": 1708000200}
 ```
 
 **CONTACT_REQUEST** — Incoming contact request (PoW already verified by node):
@@ -407,7 +465,7 @@ Response:
 {"type": "CONTACT_REQUEST", "from": "<hex>", "blob": "<base64>"}
 ```
 
-### Error Responses
+### 4.5 Error Responses
 
 ```json
 {"type": "ERROR", "id": 1, "code": 403, "reason": "signature verification failed"}
@@ -420,9 +478,40 @@ Response:
 | 403  | Forbidden (not on allowlist, bad signature)   |
 | 404  | Not found                                     |
 | 409  | Conflict (name already registered)            |
-| 413  | Payload too large                             |
-| 429  | Rate limited                                  |
+| 413  | Attachment too large (>50 MiB)                |
+| 429  | Rate limited / upload already in progress     |
 | 500  | Internal error                                |
+
+### 4.6 Binary WebSocket Frames — Chunked Transfer
+
+Large blob transfers (>64 KB) use binary WebSocket frames with fixed 1 MiB
+(1,048,576 byte) chunks. The last chunk may be smaller.
+
+**Frame format:**
+```
+[1 byte: frame_type]
+[4 bytes BE: request_id]
+[2 bytes BE: chunk_index]    // 0-based
+[payload: up to 1 MiB]
+```
+
+7 bytes overhead per chunk.
+
+**Frame types:**
+
+| Value | Type           | Direction        | Description                   |
+|-------|----------------|------------------|-------------------------------|
+| 0x01  | UPLOAD_CHUNK   | Client -> Node   | Chunk of a SEND blob          |
+| 0x02  | DOWNLOAD_CHUNK | Node -> Client   | Chunk of a GET response       |
+
+Number of chunks = `ceil(blob_size / 1_048_576)`.
+
+**Server memory model:** Upload chunks are written directly to a temp file
+(max 1 MiB memory per active upload). On completion, the file is moved to
+TABLE_MESSAGE_BLOBS. Downloads read 1 MiB at a time from storage.
+
+**Limits:** Maximum 1 concurrent chunked upload per connection. A second SEND
+with `size` > 64 KB while an upload is in progress receives error 429.
 
 ---
 
@@ -456,7 +545,7 @@ On every incoming TCP message, a conforming node MUST:
 ### Inbox Message STORE Validation
 
 1. Recipient's allowlist contains `sender_fingerprint` — reject if not allowed
-2. `blob_length` <= 256 KiB
+2. `blob_length` <= 50 MiB
 3. `msg_id` is unique — reject duplicates
 
 ### Contact Request STORE Validation
@@ -492,7 +581,10 @@ XOR distance, where `R = min(3, network_size)`.
 | Contact request PoW        | 16 leading zero bits                   |
 | Name regex                 | `^[a-z0-9]{3,36}$`                 |
 | Max profile size           | 1 MiB                                  |
-| Max message blob           | 256 KiB                                |
+| Max message blob           | 50 MiB                                 |
+| Inline threshold (WS)      | 64 KiB                                 |
+| Chunk size (WS binary)     | 1 MiB (1,048,576 bytes)                |
+| Chunked upload timeout     | 30 seconds                             |
 | Max contact request blob   | 64 KiB                                 |
 | Message TTL                | 7 days (604800 seconds)                |
 | Max TCP message            | 50 MiB (implementation limit)          |
