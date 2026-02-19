@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -25,6 +27,18 @@ struct Session {
     std::vector<uint8_t> pubkey;
     bool authenticated = false;
     crypto::Hash challenge_nonce{};
+
+    struct PendingUpload {
+        uint32_t request_id = 0;
+        crypto::Hash recipient_fp{};
+        int id = 0;                // JSON id for the SEND that started this
+        uint32_t expected_size = 0;
+        uint32_t received = 0;
+        uint16_t next_chunk = 0;
+        std::vector<uint8_t> data; // accumulated blob data
+        std::chrono::steady_clock::time_point started;
+    };
+    std::optional<PendingUpload> pending_upload;
 };
 
 class WsServer {
@@ -77,6 +91,8 @@ private:
 
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
+    void on_binary(ws_t* ws, std::span<const uint8_t> data);
+    std::atomic<uint32_t> next_request_id_{1};
 
     // Auth handlers
     void handle_hello(ws_t* ws, const Json::Value& msg);

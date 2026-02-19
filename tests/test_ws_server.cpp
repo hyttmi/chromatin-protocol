@@ -946,3 +946,33 @@ TEST_F(WsServerTest, PushNotification) {
 
     client.close();
 }
+
+// ---------- Binary frame tests ----------
+
+TEST_F(WsServerTest, BinaryFrameWithoutUploadReturnsError) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send a binary frame with no active upload — should get error
+    std::vector<uint8_t> binary_frame = {
+        0x01,                    // frame_type = UPLOAD_CHUNK
+        0x00, 0x00, 0x00, 0x01, // request_id = 1
+        0x00, 0x00,              // chunk_index = 0
+        0xDE, 0xAD              // payload
+    };
+    ASSERT_TRUE(client.send_binary(binary_frame));
+
+    auto resp = client.recv_text(3000);
+    ASSERT_TRUE(resp.has_value());
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["code"].asInt(), 400);
+
+    client.close();
+}

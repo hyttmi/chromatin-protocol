@@ -35,8 +35,13 @@ void WsServer::run() {
         },
 
         .message = [this](ws_t* ws, std::string_view message, uWS::OpCode opCode) {
-            if (opCode != uWS::OpCode::TEXT) return;
-            on_message(ws, message);
+            if (opCode == uWS::OpCode::TEXT) {
+                on_message(ws, message);
+            } else if (opCode == uWS::OpCode::BINARY) {
+                auto data = std::span<const uint8_t>(
+                    reinterpret_cast<const uint8_t*>(message.data()), message.size());
+                on_binary(ws, data);
+            }
         },
 
         .close = [this](ws_t* ws, int /*code*/, std::string_view /*message*/) {
@@ -135,6 +140,84 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         handle_contact_request(ws, root);
     } else {
         send_error(ws, id, 400, "unknown command: " + type);
+    }
+}
+
+void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
+    auto* session = ws->getUserData();
+
+    // Must be authenticated
+    if (!session->authenticated) {
+        send_error(ws, 0, 401, "not authenticated");
+        return;
+    }
+
+    // Minimum 7 bytes: frame_type(1) + request_id(4) + chunk_index(2)
+    if (data.size() < 7) {
+        send_error(ws, 0, 400, "binary frame too short");
+        return;
+    }
+
+    // Parse header
+    uint8_t frame_type = data[0];
+    uint32_t request_id = (static_cast<uint32_t>(data[1]) << 24) |
+                          (static_cast<uint32_t>(data[2]) << 16) |
+                          (static_cast<uint32_t>(data[3]) << 8) |
+                          static_cast<uint32_t>(data[4]);
+    uint16_t chunk_index = (static_cast<uint16_t>(data[5]) << 8) |
+                           static_cast<uint16_t>(data[6]);
+
+    // Only accept UPLOAD_CHUNK (0x01) from client
+    if (frame_type != 0x01) {
+        send_error(ws, 0, 400, "unsupported binary frame type");
+        return;
+    }
+
+    // Must have an active pending upload with matching request_id
+    if (!session->pending_upload ||
+        session->pending_upload->request_id != request_id) {
+        send_error(ws, 0, 400, "no active upload for this request_id");
+        return;
+    }
+
+    auto& upload = *session->pending_upload;
+
+    // Chunk index must match expected next chunk
+    if (chunk_index != upload.next_chunk) {
+        send_error(ws, 0, 400, "unexpected chunk index");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Payload is everything after the 7-byte header
+    auto payload = data.subspan(7);
+
+    // Validate payload size <= 1 MiB
+    static constexpr size_t MAX_CHUNK_SIZE = 1048576;  // 1 MiB
+    if (payload.size() > MAX_CHUNK_SIZE) {
+        send_error(ws, 0, 400, "chunk exceeds 1 MiB");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Guard against exceeding declared size
+    if (upload.received + static_cast<uint32_t>(payload.size()) > upload.expected_size) {
+        send_error(ws, upload.id, 400, "upload exceeds declared size");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Append payload to accumulated data
+    upload.data.insert(upload.data.end(), payload.begin(), payload.end());
+    upload.received += static_cast<uint32_t>(payload.size());
+    upload.next_chunk++;
+
+    // Check if upload is complete
+    if (upload.received >= upload.expected_size) {
+        spdlog::info("WS: chunked upload complete, request_id={}, total={} bytes",
+                     upload.request_id, upload.received);
+        // Task 6 will implement actual storage and response here.
+        session->pending_upload.reset();
     }
 }
 
