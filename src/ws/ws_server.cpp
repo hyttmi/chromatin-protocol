@@ -1277,7 +1277,13 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
                     push["msg_id"] = to_hex(msg_id);
                     push["from"] = to_hex(sender);
                     push["timestamp"] = Json::UInt64(ts);
-                    push["blob"] = to_base64(blob);
+                    push["size"] = blob_len;
+
+                    if (blob_len <= INLINE_THRESHOLD) {
+                        push["blob"] = to_base64(blob);
+                    } else {
+                        push["blob"] = Json::nullValue;
+                    }
                     send_json(ws, push);
                 } else {
                     // CONTACT_REQUEST push

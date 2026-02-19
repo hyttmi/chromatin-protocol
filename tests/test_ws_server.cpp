@@ -942,7 +942,56 @@ TEST_F(WsServerTest, PushNotification) {
     EXPECT_EQ(root["msg_id"].asString(), to_hex(msg_id));
     EXPECT_EQ(root["from"].asString(), to_hex(sender_fp));
     EXPECT_EQ(root["timestamp"].asUInt64(), timestamp);
+    EXPECT_EQ(root["size"].asUInt(), blob.size());
     EXPECT_EQ(root["blob"].asString(), "SGVsbG8=");  // base64("Hello")
+
+    client.close();
+}
+
+TEST_F(WsServerTest, PushLargeMessageBlobNull) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Build inbox message with blob > INLINE_THRESHOLD (64 KB)
+    crypto::Hash msg_id{};
+    msg_id.fill(0xAA);
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xBB);
+    uint64_t timestamp = 1700000099;
+    std::vector<uint8_t> blob(70000, 0x42);  // 70 KB > 64 KB threshold
+
+    std::vector<uint8_t> msg_binary;
+    msg_binary.insert(msg_binary.end(), msg_id.begin(), msg_id.end());
+    msg_binary.insert(msg_binary.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        msg_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
+
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
+
+    auto resp = client.recv_text(3000);
+    ASSERT_TRUE(resp.has_value()) << "no push notification received";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "NEW_MESSAGE");
+    EXPECT_EQ(root["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(root["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(root["timestamp"].asUInt64(), timestamp);
+    EXPECT_EQ(root["size"].asUInt(), 70000u);
+    EXPECT_TRUE(root["blob"].isNull()) << "large blob should be null, not inlined";
 
     client.close();
 }
