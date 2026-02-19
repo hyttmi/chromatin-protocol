@@ -1,5 +1,6 @@
 build/
 .cache/
+.worktrees/
 compile_commands.json
 *.o
 *.a
