@@ -10,7 +10,13 @@
 #include <string>
 #include <vector>
 
-// Minimal WebSocket client for testing. Sends/receives JSON text frames.
+struct WsFrame {
+    uint8_t opcode;  // 0x01 = text, 0x02 = binary
+    std::vector<uint8_t> data;
+};
+
+// Minimal WebSocket client for testing. Sends/receives JSON text frames
+// and binary frames for chunked uploads/downloads.
 class TestWsClient {
 public:
     TestWsClient() = default;
@@ -53,33 +59,14 @@ public:
     }
 
     bool send_text(const std::string& msg) {
-        if (fd_ < 0) return false;
-
-        std::vector<uint8_t> frame;
-        frame.push_back(0x81);  // FIN + text opcode
-
-        // Mask bit set (client must mask), payload length
-        if (msg.size() < 126) {
-            frame.push_back(0x80 | static_cast<uint8_t>(msg.size()));
-        } else {
-            frame.push_back(0x80 | 126);
-            frame.push_back(static_cast<uint8_t>((msg.size() >> 8) & 0xFF));
-            frame.push_back(static_cast<uint8_t>(msg.size() & 0xFF));
-        }
-
-        // Mask key (fixed for simplicity)
-        uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
-        frame.insert(frame.end(), mask, mask + 4);
-
-        // Masked payload
-        for (size_t i = 0; i < msg.size(); ++i) {
-            frame.push_back(msg[i] ^ mask[i % 4]);
-        }
-
-        return write_all(reinterpret_cast<const char*>(frame.data()), frame.size()) >= 0;
+        return send_frame(0x81, reinterpret_cast<const uint8_t*>(msg.data()), msg.size());
     }
 
-    std::optional<std::string> recv_text(int timeout_ms = 2000) {
+    bool send_binary(const std::vector<uint8_t>& data) {
+        return send_frame(0x82, data.data(), data.size());
+    }
+
+    std::optional<WsFrame> recv_frame(int timeout_ms = 2000) {
         if (fd_ < 0) return std::nullopt;
 
         // Set receive timeout
@@ -91,8 +78,7 @@ public:
         uint8_t header[2];
         if (recv_all(header, 2) < 0) return std::nullopt;
 
-        // Check FIN + text opcode
-        if ((header[0] & 0x0F) != 0x01) return std::nullopt;
+        uint8_t opcode = header[0] & 0x0F;
 
         uint64_t payload_len = header[1] & 0x7F;
         if (payload_len == 126) {
@@ -107,11 +93,19 @@ public:
                 payload_len = (payload_len << 8) | ext[i];
         }
 
-        std::vector<char> buf(payload_len);
-        if (recv_all(reinterpret_cast<uint8_t*>(buf.data()), payload_len) < 0)
-            return std::nullopt;
+        std::vector<uint8_t> data(payload_len);
+        if (payload_len > 0) {
+            if (recv_all(data.data(), payload_len) < 0)
+                return std::nullopt;
+        }
 
-        return std::string(buf.begin(), buf.end());
+        return WsFrame{opcode, std::move(data)};
+    }
+
+    std::optional<std::string> recv_text(int timeout_ms = 2000) {
+        auto frame = recv_frame(timeout_ms);
+        if (!frame || frame->opcode != 0x01) return std::nullopt;
+        return std::string(frame->data.begin(), frame->data.end());
     }
 
     void close() {
@@ -125,6 +119,37 @@ public:
 
 private:
     int fd_ = -1;
+
+    bool send_frame(uint8_t opcode_byte, const uint8_t* payload, size_t len) {
+        if (fd_ < 0) return false;
+
+        std::vector<uint8_t> frame;
+        frame.push_back(opcode_byte);  // FIN + opcode
+
+        // Mask bit set (client must mask), payload length
+        if (len < 126) {
+            frame.push_back(0x80 | static_cast<uint8_t>(len));
+        } else if (len <= 65535) {
+            frame.push_back(0x80 | 126);
+            frame.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
+            frame.push_back(static_cast<uint8_t>(len & 0xFF));
+        } else {
+            frame.push_back(0x80 | 127);
+            for (int i = 7; i >= 0; --i)
+                frame.push_back(static_cast<uint8_t>((len >> (i * 8)) & 0xFF));
+        }
+
+        // Mask key (fixed for simplicity)
+        uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
+        frame.insert(frame.end(), mask, mask + 4);
+
+        // Masked payload
+        for (size_t i = 0; i < len; ++i) {
+            frame.push_back(payload[i] ^ mask[i % 4]);
+        }
+
+        return write_all(reinterpret_cast<const char*>(frame.data()), frame.size()) >= 0;
+    }
 
     ssize_t write_all(const char* data, size_t len) {
         size_t sent = 0;
