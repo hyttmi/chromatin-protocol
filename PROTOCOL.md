@@ -60,11 +60,9 @@ A DNA profile is a signed, versioned document. The server stores and validates:
 | fingerprint      | 32 bytes                     | SHA3-256(ml_dsa_pubkey)            |
 | ml_dsa_pubkey    | bytes                        | Public signing key                 |
 | ml_kem_pubkey    | bytes                        | Public encryption key              |
-| display_name     | string                       | Human-readable name                |
 | bio              | string                       | Free text                          |
 | avatar           | blob                         | Profile image                      |
 | social_links     | list of {platform, handle}   | Social media addresses             |
-| wallet_addresses | list of {chain, address}     | Crypto wallet addresses            |
 | sequence         | uint64                       | Monotonically increasing version   |
 | signature        | bytes                        | ML-DSA signature over all above    |
 
