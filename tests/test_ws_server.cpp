@@ -976,3 +976,126 @@ TEST_F(WsServerTest, BinaryFrameWithoutUploadReturnsError) {
 
     client.close();
 }
+
+TEST_F(WsServerTest, SendLargeChunked) {
+    start_ws_server();
+
+    // Create sender and recipient keypairs
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    // Manually add sender to recipient's allowlist
+    // Key format: SHA3-256("allowlist:" || recipient_fp) || sender_fp
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    std::vector<uint8_t> allow_key;
+    allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
+    allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
+    std::vector<uint8_t> allow_value = {0x01};
+    storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
+
+    // Connect and authenticate as sender
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, sender_kp));
+
+    // Prepare a 70 KB blob
+    const size_t blob_size = 70 * 1024;
+    std::vector<uint8_t> blob_data(blob_size);
+    for (size_t i = 0; i < blob_size; ++i) {
+        blob_data[i] = static_cast<uint8_t>(i & 0xFF);
+    }
+
+    // Send SEND with "size" field (no "blob") to initiate chunked upload
+    Json::Value send_msg;
+    send_msg["type"] = "SEND";
+    send_msg["id"] = 300;
+    send_msg["to"] = to_hex(recipient_fp);
+    send_msg["size"] = Json::UInt64(blob_size);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string send_json_str = Json::writeString(writer, send_msg);
+    ASSERT_TRUE(client.send_text(send_json_str));
+
+    // Expect SEND_READY with request_id
+    auto ready_resp = client.recv_text(5000);
+    ASSERT_TRUE(ready_resp.has_value()) << "no SEND_READY response";
+
+    auto ready_root = parse_json(*ready_resp);
+    EXPECT_EQ(ready_root["type"].asString(), "SEND_READY");
+    EXPECT_EQ(ready_root["id"].asInt(), 300);
+    ASSERT_TRUE(ready_root.isMember("request_id"));
+    uint32_t request_id = ready_root["request_id"].asUInt();
+
+    // Send the blob as a single UPLOAD_CHUNK binary frame (70 KB < 1 MiB)
+    // Binary frame header: frame_type(1) + request_id(4) + chunk_index(2)
+    std::vector<uint8_t> binary_frame;
+    binary_frame.reserve(7 + blob_size);
+    binary_frame.push_back(0x01);  // frame_type = UPLOAD_CHUNK
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+    binary_frame.push_back(0x00);  // chunk_index high byte
+    binary_frame.push_back(0x00);  // chunk_index low byte
+    binary_frame.insert(binary_frame.end(), blob_data.begin(), blob_data.end());
+    ASSERT_TRUE(client.send_binary(binary_frame));
+
+    // Expect SEND_ACK with msg_id
+    auto ack_resp = client.recv_text(5000);
+    ASSERT_TRUE(ack_resp.has_value()) << "no SEND_ACK response";
+
+    auto ack_root = parse_json(*ack_resp);
+    EXPECT_EQ(ack_root["type"].asString(), "SEND_ACK");
+    EXPECT_EQ(ack_root["id"].asInt(), 300);
+    EXPECT_FALSE(ack_root["msg_id"].asString().empty());
+    EXPECT_EQ(ack_root["msg_id"].asString().size(), 64u);  // 32 bytes = 64 hex chars
+
+    // Verify blob is stored in TABLE_MESSAGE_BLOBS
+    auto msg_id_bytes = from_hex(ack_root["msg_id"].asString());
+    ASSERT_EQ(msg_id_bytes.size(), 32u);
+
+    auto stored_blob = storage_->get(storage::TABLE_MESSAGE_BLOBS, msg_id_bytes);
+    ASSERT_TRUE(stored_blob.has_value()) << "blob not found in TABLE_MESSAGE_BLOBS";
+    EXPECT_EQ(stored_blob->size(), blob_size);
+    EXPECT_EQ(*stored_blob, blob_data);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, SendTooLargeRejects) {
+    start_ws_server();
+
+    auto sender_kp = crypto::generate_keypair();
+    auto recipient_kp = crypto::generate_keypair();
+    auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, sender_kp));
+
+    // Send SEND with size > 50 MiB
+    Json::Value send_msg;
+    send_msg["type"] = "SEND";
+    send_msg["id"] = 400;
+    send_msg["to"] = to_hex(recipient_fp);
+    send_msg["size"] = Json::UInt64(51ULL * 1024 * 1024);  // 51 MiB > 50 MiB limit
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string send_json_str = Json::writeString(writer, send_msg);
+    ASSERT_TRUE(client.send_text(send_json_str));
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value()) << "no response to oversized SEND";
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["code"].asInt(), 413);
+    EXPECT_EQ(root["reason"].asString(), "attachment too large");
+
+    client.close();
+}

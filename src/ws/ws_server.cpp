@@ -26,7 +26,7 @@ void WsServer::run() {
     app.ws<Session>("/*", {
         .compression = uWS::DISABLED,
         // 512 KiB: base64-encoded 256 KiB blobs (~341 KiB) + JSON overhead
-        .maxPayloadLength = 512 * 1024,
+        .maxPayloadLength = 1048576 + 64,  // 1 MiB chunk + header overhead
         .idleTimeout = 120,
 
         .open = [this](ws_t* ws) {
@@ -140,84 +140,6 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         handle_contact_request(ws, root);
     } else {
         send_error(ws, id, 400, "unknown command: " + type);
-    }
-}
-
-void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
-    auto* session = ws->getUserData();
-
-    // Must be authenticated
-    if (!session->authenticated) {
-        send_error(ws, 0, 401, "not authenticated");
-        return;
-    }
-
-    // Minimum 7 bytes: frame_type(1) + request_id(4) + chunk_index(2)
-    if (data.size() < 7) {
-        send_error(ws, 0, 400, "binary frame too short");
-        return;
-    }
-
-    // Parse header
-    uint8_t frame_type = data[0];
-    uint32_t request_id = (static_cast<uint32_t>(data[1]) << 24) |
-                          (static_cast<uint32_t>(data[2]) << 16) |
-                          (static_cast<uint32_t>(data[3]) << 8) |
-                          static_cast<uint32_t>(data[4]);
-    uint16_t chunk_index = (static_cast<uint16_t>(data[5]) << 8) |
-                           static_cast<uint16_t>(data[6]);
-
-    // Only accept UPLOAD_CHUNK (0x01) from client
-    if (frame_type != 0x01) {
-        send_error(ws, 0, 400, "unsupported binary frame type");
-        return;
-    }
-
-    // Must have an active pending upload with matching request_id
-    if (!session->pending_upload ||
-        session->pending_upload->request_id != request_id) {
-        send_error(ws, 0, 400, "no active upload for this request_id");
-        return;
-    }
-
-    auto& upload = *session->pending_upload;
-
-    // Chunk index must match expected next chunk
-    if (chunk_index != upload.next_chunk) {
-        send_error(ws, 0, 400, "unexpected chunk index");
-        session->pending_upload.reset();
-        return;
-    }
-
-    // Payload is everything after the 7-byte header
-    auto payload = data.subspan(7);
-
-    // Validate payload size <= 1 MiB
-    static constexpr size_t MAX_CHUNK_SIZE = 1048576;  // 1 MiB
-    if (payload.size() > MAX_CHUNK_SIZE) {
-        send_error(ws, 0, 400, "chunk exceeds 1 MiB");
-        session->pending_upload.reset();
-        return;
-    }
-
-    // Guard against exceeding declared size
-    if (upload.received + static_cast<uint32_t>(payload.size()) > upload.expected_size) {
-        send_error(ws, upload.id, 400, "upload exceeds declared size");
-        session->pending_upload.reset();
-        return;
-    }
-
-    // Append payload to accumulated data
-    upload.data.insert(upload.data.end(), payload.begin(), payload.end());
-    upload.received += static_cast<uint32_t>(payload.size());
-    upload.next_chunk++;
-
-    // Check if upload is complete
-    if (upload.received >= upload.expected_size) {
-        spdlog::info("WS: chunked upload complete, request_id={}, total={} bytes",
-                     upload.request_id, upload.received);
-        // Task 6 will implement actual storage and response here.
-        session->pending_upload.reset();
     }
 }
 
@@ -340,6 +262,145 @@ std::optional<std::vector<uint8_t>> from_base64(const std::string& input) {
 static constexpr size_t INLINE_THRESHOLD = 64 * 1024;  // 64 KB
 
 } // anonymous namespace
+
+void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
+    auto* session = ws->getUserData();
+
+    // Must be authenticated
+    if (!session->authenticated) {
+        send_error(ws, 0, 401, "not authenticated");
+        return;
+    }
+
+    // Minimum 7 bytes: frame_type(1) + request_id(4) + chunk_index(2)
+    if (data.size() < 7) {
+        send_error(ws, 0, 400, "binary frame too short");
+        return;
+    }
+
+    // Parse header
+    uint8_t frame_type = data[0];
+    uint32_t request_id = (static_cast<uint32_t>(data[1]) << 24) |
+                          (static_cast<uint32_t>(data[2]) << 16) |
+                          (static_cast<uint32_t>(data[3]) << 8) |
+                          static_cast<uint32_t>(data[4]);
+    uint16_t chunk_index = (static_cast<uint16_t>(data[5]) << 8) |
+                           static_cast<uint16_t>(data[6]);
+
+    // Only accept UPLOAD_CHUNK (0x01) from client
+    if (frame_type != 0x01) {
+        send_error(ws, 0, 400, "unsupported binary frame type");
+        return;
+    }
+
+    // Must have an active pending upload with matching request_id
+    if (!session->pending_upload ||
+        session->pending_upload->request_id != request_id) {
+        send_error(ws, 0, 400, "no active upload for this request_id");
+        return;
+    }
+
+    auto& upload = *session->pending_upload;
+
+    // Chunk index must match expected next chunk
+    if (chunk_index != upload.next_chunk) {
+        send_error(ws, 0, 400, "unexpected chunk index");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Payload is everything after the 7-byte header
+    auto payload = data.subspan(7);
+
+    // Validate payload size <= 1 MiB
+    static constexpr size_t MAX_CHUNK_SIZE = 1048576;  // 1 MiB
+    if (payload.size() > MAX_CHUNK_SIZE) {
+        send_error(ws, 0, 400, "chunk exceeds 1 MiB");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Guard against exceeding declared size
+    if (upload.received + static_cast<uint32_t>(payload.size()) > upload.expected_size) {
+        send_error(ws, upload.id, 400, "upload exceeds declared size");
+        session->pending_upload.reset();
+        return;
+    }
+
+    // Append payload to accumulated data
+    upload.data.insert(upload.data.end(), payload.begin(), payload.end());
+    upload.received += static_cast<uint32_t>(payload.size());
+    upload.next_chunk++;
+
+    // Check if upload is complete
+    if (upload.received >= upload.expected_size) {
+        spdlog::info("WS: chunked upload complete, request_id={}, total={} bytes",
+                     upload.request_id, upload.received);
+
+        // Truncate to expected size (last chunk may have filled exactly)
+        upload.data.resize(upload.expected_size);
+
+        // Generate msg_id
+        crypto::Hash msg_id{};
+        std::random_device rd2;
+        for (auto& b : msg_id) b = static_cast<uint8_t>(rd2());
+
+        auto now = std::chrono::system_clock::now();
+        uint64_t timestamp = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                now.time_since_epoch()).count());
+
+        // Capture upload data before resetting
+        auto recipient_fp = upload.recipient_fp;
+        auto sender_fp = session->fingerprint;
+        int send_id = upload.id;
+        auto blob_data = std::move(upload.data);
+        session->pending_upload.reset();
+
+        // Build index key/value (same format as small SEND)
+        std::vector<uint8_t> idx_key;
+        idx_key.reserve(64);
+        idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+
+        std::vector<uint8_t> idx_value;
+        idx_value.reserve(44);
+        idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+        for (int i = 7; i >= 0; --i)
+            idx_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+        uint32_t sz = static_cast<uint32_t>(blob_data.size());
+        idx_value.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>(sz & 0xFF));
+
+        std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+        auto msg_id_copy = msg_id;
+
+        // Dispatch to worker pool for storage
+        workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
+                       idx_value = std::move(idx_value),
+                       blob_key = std::move(blob_key),
+                       blob_data = std::move(blob_data),
+                       msg_id_copy]() {
+            bool ok = storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+            if (ok) storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_data);
+
+            loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
+                if (connections_.count(ws) == 0) return;
+                if (ok) {
+                    Json::Value resp;
+                    resp["type"] = "SEND_ACK";
+                    resp["id"] = send_id;
+                    resp["msg_id"] = to_hex(msg_id_copy);
+                    send_json(ws, resp);
+                } else {
+                    send_error(ws, send_id, 500, "store failed");
+                }
+            });
+        });
+    }
+}
 
 // ---------- auth handlers ----------
 
@@ -631,7 +692,7 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
-    // Parse recipient fingerprint
+    // Parse recipient fingerprint (needed by both small and large paths)
     std::string to_hex_str = msg.get("to", "").asString();
     if (to_hex_str.size() != 64) {
         send_error(ws, id, 400, "to must be 64 hex chars");
@@ -645,8 +706,62 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
     crypto::Hash recipient_fp{};
     std::copy(to_bytes->begin(), to_bytes->end(), recipient_fp.begin());
 
-    // Parse blob (base64)
+    // Detect large vs small path:
+    // If "size" field is present and "blob" is empty/missing -> large chunked upload
+    // Otherwise -> small inline SEND
     std::string blob_b64 = msg.get("blob", "").asString();
+    bool has_size = msg.isMember("size") && msg["size"].isUInt64();
+
+    if (has_size && blob_b64.empty()) {
+        // ---- Large chunked SEND path ----
+        static constexpr uint64_t MAX_LARGE_SIZE = 50ULL * 1024 * 1024;  // 50 MiB
+        static_assert(MAX_LARGE_SIZE <= UINT32_MAX, "expected_size is uint32_t");
+        uint64_t declared_size = msg["size"].asUInt64();
+
+        if (declared_size > MAX_LARGE_SIZE) {
+            send_error(ws, id, 413, "attachment too large");
+            return;
+        }
+
+        // Check allowlist: sender must be allowed to write to recipient's inbox
+        auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+        std::vector<uint8_t> allow_check;
+        allow_check.reserve(64);
+        allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
+        allow_check.insert(allow_check.end(),
+                           session->fingerprint.begin(), session->fingerprint.end());
+        auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
+        if (!allowed) {
+            send_error(ws, id, 403, "not on allowlist");
+            return;
+        }
+
+        if (session->pending_upload) {
+            send_error(ws, id, 429, "upload already in progress");
+            return;
+        }
+
+        uint32_t request_id = next_request_id_.fetch_add(1);
+
+        Session::PendingUpload upload;
+        upload.request_id = request_id;
+        upload.recipient_fp = recipient_fp;
+        upload.id = id;
+        upload.expected_size = static_cast<uint32_t>(declared_size);
+        upload.received = 0;
+        upload.next_chunk = 0;
+        upload.started = std::chrono::steady_clock::now();
+        session->pending_upload = std::move(upload);
+
+        Json::Value resp;
+        resp["type"] = "SEND_READY";
+        resp["id"] = id;
+        resp["request_id"] = request_id;
+        send_json(ws, resp);
+        return;
+    }
+
+    // ---- Small inline SEND path ----
     if (blob_b64.empty()) {
         send_error(ws, id, 400, "missing blob");
         return;
