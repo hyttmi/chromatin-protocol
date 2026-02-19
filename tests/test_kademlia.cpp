@@ -1046,7 +1046,7 @@ TEST_F(KademliaTest, InboxStoreValidation_OversizedBlob) {
     key.fill(0xAB);
 
     bool ok = n1.kad->store(key, 0x02, msg);
-    // Two-table model: inbox writes go to TABLE_INBOX_INDEX, not TABLE_INBOXES
+    // Two-table model: inbox writes go to TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS
     // Build the index key that would be used: recipient_fp(32)||msg_id(32) = all zeros
     std::vector<uint8_t> idx_key(64, 0x00);
     auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
@@ -1344,4 +1344,61 @@ TEST_F(KademliaTest, TamperedMessageRejected) {
     // The tampered STORE should have been rejected — key should NOT be stored
     auto result = n1.storage->get(TABLE_PROFILES, key);
     EXPECT_FALSE(result.has_value()) << "Tampered message should have been rejected";
+}
+
+// ---------------------------------------------------------------------------
+// Test 29: FindValueSkipsStaleInboxTable — FIND_VALUE doesn't search inbox tables
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, FindValueSkipsStaleInboxTable) {
+    auto& n1 = create_node(8);
+
+    start_all();
+
+    // Create a user keypair and build routing keys
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+
+    // Build a valid profile and store it directly
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    profile.push_back(0x00); profile.push_back(0x00); // kem_pubkey_len
+    profile.push_back(0x00); profile.push_back(0x00); // bio_len
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); // avatar_len
+    profile.push_back(0x00); // social_count
+    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00); // seq=1
+    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+
+    Hash profile_key = sha3_256_prefixed("dna:", user_fp);
+    n1.storage->put(TABLE_PROFILES, profile_key, profile);
+
+    // find_value should return the profile
+    auto found = n1.kad->find_value(profile_key);
+    ASSERT_TRUE(found.has_value()) << "FIND_VALUE should find profiles";
+    EXPECT_EQ(*found, profile);
+
+    // Store inbox data in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS
+    Hash inbox_routing_key = sha3_256_prefixed("inbox:", user_fp);
+    Hash msg_id{};
+    msg_id[0] = 0xAA;
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), user_fp.begin(), user_fp.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    std::vector<uint8_t> idx_val(44, 0x01); // sender_fp(32) + timestamp(8) + blob_len(4)
+    n1.storage->put(TABLE_INBOX_INDEX, idx_key, idx_val);
+    std::vector<uint8_t> blob_data = {0xDE, 0xAD};
+    n1.storage->put(TABLE_MESSAGE_BLOBS, msg_id, blob_data);
+
+    // find_value with inbox routing key should NOT find inbox data
+    // (inbox uses SYNC, not FIND_VALUE)
+    auto inbox_found = n1.kad->find_value(inbox_routing_key);
+    EXPECT_FALSE(inbox_found.has_value()) << "FIND_VALUE should not search inbox tables";
 }

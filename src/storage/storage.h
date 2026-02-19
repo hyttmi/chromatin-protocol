@@ -16,7 +16,6 @@ namespace chromatin::storage {
 
 inline constexpr const char* TABLE_PROFILES   = "profiles";
 inline constexpr const char* TABLE_NAMES      = "names";
-inline constexpr const char* TABLE_INBOXES    = "inboxes";
 inline constexpr const char* TABLE_REQUESTS   = "requests";
 inline constexpr const char* TABLE_ALLOWLISTS = "allowlists";
 inline constexpr const char* TABLE_REPL_LOG   = "repl_log";

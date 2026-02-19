@@ -499,11 +499,12 @@ void Kademlia::handle_find_value(const Message& msg, const std::string& from, ui
     crypto::Hash key{};
     std::copy_n(msg.payload.data(), 32, key.begin());
 
-    // Try all tables for the key
+    // Try relevant tables for the key. Inbox data uses SYNC (not FIND_VALUE)
+    // because its routing key is SHA3-256("inbox:"||fp) but TABLE_INBOX_INDEX
+    // uses composite key fp(32)||msg_id(32) — can't derive fp from the hash.
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
-        storage::TABLE_INBOXES, storage::TABLE_REQUESTS,
-        storage::TABLE_ALLOWLISTS,
+        storage::TABLE_REQUESTS, storage::TABLE_ALLOWLISTS,
     };
 
     std::vector<uint8_t> payload;
@@ -689,11 +690,10 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 // ---------------------------------------------------------------------------
 
 std::optional<std::vector<uint8_t>> Kademlia::find_value(const crypto::Hash& key) {
-    // First check locally
+    // First check locally (inbox uses SYNC, not FIND_VALUE)
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
-        storage::TABLE_INBOXES, storage::TABLE_REQUESTS,
-        storage::TABLE_ALLOWLISTS,
+        storage::TABLE_REQUESTS, storage::TABLE_ALLOWLISTS,
     };
 
     for (const char* table : tables) {
