@@ -125,13 +125,13 @@ int leading_zero_bits(const Hash& hash) {
 }
 
 bool verify_pow(std::span<const uint8_t> preimage, uint64_t nonce, int required_zero_bits) {
-    // Concatenate preimage + nonce (little-endian 8 bytes)
+    // Concatenate preimage + nonce (big-endian 8 bytes per spec)
     std::vector<uint8_t> buf(preimage.size() + 8);
     std::memcpy(buf.data(), preimage.data(), preimage.size());
 
-    // Write nonce as little-endian
-    for (int i = 0; i < 8; ++i) {
-        buf[preimage.size() + i] = static_cast<uint8_t>(nonce >> (i * 8));
+    // Write nonce as big-endian (spec: all integers are big-endian)
+    for (int i = 7; i >= 0; --i) {
+        buf[preimage.size() + (7 - i)] = static_cast<uint8_t>((nonce >> (i * 8)) & 0xFF);
     }
 
     Hash h = sha3_256(buf);
