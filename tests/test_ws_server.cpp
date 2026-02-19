@@ -894,6 +894,73 @@ TEST_F(WsServerTest, GetNotFound) {
     client.close();
 }
 
+// ---------- DELETE tests ----------
+
+TEST_F(WsServerTest, DeleteMessage) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // Store a message in both tables
+    crypto::Hash msg_id{};
+    msg_id.fill(0xDE);
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xAD);
+    uint64_t timestamp = 1700000500;
+    std::vector<uint8_t> blob = {0x01, 0x02, 0x03};
+
+    // INDEX key: recipient_fp(32) || msg_id(32)
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), fingerprint.begin(), fingerprint.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE)
+    std::vector<uint8_t> idx_value;
+    idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        idx_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    uint32_t sz = static_cast<uint32_t>(blob.size());
+    idx_value.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
+    idx_value.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
+    idx_value.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
+    idx_value.push_back(static_cast<uint8_t>(sz & 0xFF));
+    storage_->put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+
+    // BLOB key: msg_id(32), value: raw blob
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    storage_->put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // DELETE the message
+    Json::Value del;
+    del["type"] = "DELETE";
+    del["id"] = 60;
+    Json::Value ids(Json::arrayValue);
+    ids.append(to_hex(msg_id));
+    del["msg_ids"] = ids;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, del)));
+
+    auto resp = client.recv_text(3000);
+    ASSERT_TRUE(resp.has_value());
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "OK");
+    EXPECT_EQ(root["id"].asInt(), 60);
+
+    // Verify both tables are cleaned up
+    EXPECT_FALSE(storage_->get(storage::TABLE_INBOX_INDEX, idx_key).has_value());
+    EXPECT_FALSE(storage_->get(storage::TABLE_MESSAGE_BLOBS, blob_key).has_value());
+
+    client.close();
+}
+
 // ---------- Push notification tests ----------
 
 TEST_F(WsServerTest, PushNotification) {

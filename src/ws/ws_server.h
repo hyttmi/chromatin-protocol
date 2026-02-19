@@ -106,6 +106,7 @@ private:
     void handle_allow(ws_t* ws, const Json::Value& msg);
     void handle_revoke(ws_t* ws, const Json::Value& msg);
     void handle_contact_request(ws_t* ws, const Json::Value& msg);
+    void handle_delete(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
