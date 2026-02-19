@@ -1065,6 +1065,91 @@ TEST_F(WsServerTest, SendLargeChunked) {
     client.close();
 }
 
+TEST_F(WsServerTest, GetLargeChunked) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // Store a 70 KB blob (> 64 KB threshold)
+    crypto::Hash msg_id{};
+    msg_id.fill(0xFA);
+    std::vector<uint8_t> blob(70000, 0x42);  // 70 KB of 'B'
+
+    // Store inbox index entry (needed for auth check)
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xBB);
+    uint64_t timestamp = 1700000000;
+    uint32_t blob_size = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> index_key;
+    index_key.insert(index_key.end(), fingerprint.begin(), fingerprint.end());
+    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
+
+    std::vector<uint8_t> index_value;
+    index_value.insert(index_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 24) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 16) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>((blob_size >> 8) & 0xFF));
+    index_value.push_back(static_cast<uint8_t>(blob_size & 0xFF));
+
+    storage_->put(storage::TABLE_INBOX_INDEX, index_key, index_value);
+
+    // Store blob in TABLE_MESSAGE_BLOBS
+    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+    storage_->put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    Json::Value get_msg;
+    get_msg["type"] = "GET";
+    get_msg["id"] = 50;
+    get_msg["msg_id"] = to_hex(msg_id);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, get_msg)));
+
+    // First: JSON header
+    auto header_resp = client.recv_text(3000);
+    ASSERT_TRUE(header_resp.has_value());
+
+    auto header = parse_json(*header_resp);
+    EXPECT_EQ(header["type"].asString(), "GET_RESULT");
+    EXPECT_EQ(header["id"].asInt(), 50);
+    EXPECT_EQ(header["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(header["size"].asUInt(), blob.size());
+    uint32_t expected_chunks = (blob.size() + 1048575) / 1048576;
+    EXPECT_EQ(header["chunks"].asUInt(), expected_chunks);
+
+    // Then: binary DOWNLOAD_CHUNK frames
+    std::vector<uint8_t> received_data;
+    for (uint32_t i = 0; i < expected_chunks; ++i) {
+        auto frame = client.recv_frame(3000);
+        ASSERT_TRUE(frame.has_value()) << "missing chunk " << i;
+        ASSERT_EQ(frame->opcode, 0x02) << "chunk must be binary frame";
+
+        // Parse header: [1B type][4B request_id][2B chunk_index]
+        ASSERT_GE(frame->data.size(), 7u);
+        EXPECT_EQ(frame->data[0], 0x02);  // DOWNLOAD_CHUNK
+        uint16_t cidx = (static_cast<uint16_t>(frame->data[5]) << 8) | frame->data[6];
+        EXPECT_EQ(cidx, i);
+
+        auto payload_start = frame->data.data() + 7;
+        auto payload_size = frame->data.size() - 7;
+        received_data.insert(received_data.end(), payload_start, payload_start + payload_size);
+    }
+
+    EXPECT_EQ(received_data.size(), blob.size());
+    EXPECT_EQ(received_data, blob);
+
+    client.close();
+}
+
 TEST_F(WsServerTest, SendTooLargeRejects) {
     start_ws_server();
 

@@ -684,7 +684,45 @@ void WsServer::handle_get(ws_t* ws, const Json::Value& msg) {
         resp["blob"] = to_base64(*blob);
         send_json(ws, resp);
     } else {
-        send_error(ws, id, 500, "chunked download not yet implemented");
+        // Chunked download: send JSON header then binary DOWNLOAD_CHUNK frames
+        static constexpr size_t CHUNK_SIZE = 1048576;  // 1 MiB
+        uint32_t num_chunks = static_cast<uint32_t>(
+            (blob->size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+        uint32_t request_id = next_request_id_.fetch_add(1);
+
+        // Send JSON header with size and chunk count
+        Json::Value resp;
+        resp["type"] = "GET_RESULT";
+        resp["id"] = id;
+        resp["msg_id"] = msg_id_hex;
+        resp["size"] = static_cast<Json::UInt>(blob->size());
+        resp["chunks"] = num_chunks;
+        send_json(ws, resp);
+
+        // Send binary DOWNLOAD_CHUNK frames
+        // Frame format: [0x02][4B request_id BE][2B chunk_index BE][payload]
+        for (uint32_t i = 0; i < num_chunks; ++i) {
+            size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
+            size_t payload_size = std::min(CHUNK_SIZE, blob->size() - offset);
+
+            std::vector<uint8_t> frame;
+            frame.reserve(7 + payload_size);
+            frame.push_back(0x02);  // DOWNLOAD_CHUNK frame type
+            frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+            frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+            frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+            frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+            uint16_t chunk_index = static_cast<uint16_t>(i);
+            frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
+            frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
+            frame.insert(frame.end(),
+                         blob->data() + offset,
+                         blob->data() + offset + payload_size);
+
+            std::string_view sv(reinterpret_cast<const char*>(frame.data()),
+                                frame.size());
+            ws->send(sv, uWS::OpCode::BINARY);
+        }
     }
 }
 
