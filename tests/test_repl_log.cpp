@@ -50,9 +50,9 @@ TEST_F(ReplLogTest, AppendIncrementsSeq) {
     std::vector<uint8_t> data2 = {0xBB};
     std::vector<uint8_t> data3 = {0xCC};
 
-    uint64_t seq1 = repl_log_->append(key, Op::ADD, data1);
-    uint64_t seq2 = repl_log_->append(key, Op::ADD, data2);
-    uint64_t seq3 = repl_log_->append(key, Op::ADD, data3);
+    uint64_t seq1 = repl_log_->append(key, Op::ADD, 0x00,data1);
+    uint64_t seq2 = repl_log_->append(key, Op::ADD, 0x00,data2);
+    uint64_t seq3 = repl_log_->append(key, Op::ADD, 0x00,data3);
 
     EXPECT_EQ(seq1, 1u);
     EXPECT_EQ(seq2, 2u);
@@ -69,13 +69,13 @@ TEST_F(ReplLogTest, CurrentSeq) {
     EXPECT_EQ(repl_log_->current_seq(key), 0u);
 
     std::vector<uint8_t> data = {0x11};
-    repl_log_->append(key, Op::ADD, data);
+    repl_log_->append(key, Op::ADD, 0x00,data);
     EXPECT_EQ(repl_log_->current_seq(key), 1u);
 
-    repl_log_->append(key, Op::UPD, data);
+    repl_log_->append(key, Op::UPD, 0x00,data);
     EXPECT_EQ(repl_log_->current_seq(key), 2u);
 
-    repl_log_->append(key, Op::DEL, data);
+    repl_log_->append(key, Op::DEL, 0x00,data);
     EXPECT_EQ(repl_log_->current_seq(key), 3u);
 }
 
@@ -90,10 +90,10 @@ TEST_F(ReplLogTest, EntriesAfter) {
     std::vector<uint8_t> d3 = {0x03};
     std::vector<uint8_t> d4 = {0x04};
 
-    repl_log_->append(key, Op::ADD, d1);
-    repl_log_->append(key, Op::ADD, d2);
-    repl_log_->append(key, Op::ADD, d3);
-    repl_log_->append(key, Op::ADD, d4);
+    repl_log_->append(key, Op::ADD, 0x00,d1);
+    repl_log_->append(key, Op::ADD, 0x00,d2);
+    repl_log_->append(key, Op::ADD, 0x00,d3);
+    repl_log_->append(key, Op::ADD, 0x00,d4);
 
     auto entries = repl_log_->entries_after(key, 2);
     ASSERT_EQ(entries.size(), 2u);
@@ -112,8 +112,8 @@ TEST_F(ReplLogTest, EntriesAfterZero) {
     std::vector<uint8_t> d1 = {0x10};
     std::vector<uint8_t> d2 = {0x20};
 
-    repl_log_->append(key, Op::ADD, d1);
-    repl_log_->append(key, Op::ADD, d2);
+    repl_log_->append(key, Op::ADD, 0x00,d1);
+    repl_log_->append(key, Op::ADD, 0x00,d2);
 
     auto entries = repl_log_->entries_after(key, 0);
     ASSERT_EQ(entries.size(), 2u);
@@ -132,20 +132,22 @@ TEST_F(ReplLogTest, ApplyIdempotent) {
     std::vector<uint8_t> d1 = {0xA1};
     std::vector<uint8_t> d2 = {0xA2};
 
-    repl_log_->append(key, Op::ADD, d1);
-    repl_log_->append(key, Op::ADD, d2);
+    repl_log_->append(key, Op::ADD, 0x00,d1);
+    repl_log_->append(key, Op::ADD, 0x00,d2);
 
     // Build entries to apply: seq 2 (duplicate) and seq 3 (new)
     LogEntry dup_entry;
     dup_entry.seq = 2;
     dup_entry.op = Op::ADD;
     dup_entry.timestamp = 1000;
+    dup_entry.data_type = 0x00;
     dup_entry.data = {0xA2};
 
     LogEntry new_entry;
     new_entry.seq = 3;
     new_entry.op = Op::ADD;
     new_entry.timestamp = 2000;
+    new_entry.data_type = 0x00;
     new_entry.data = {0xA3};
 
     repl_log_->apply(key, {dup_entry, new_entry});
@@ -169,9 +171,9 @@ TEST_F(ReplLogTest, SeparateKeys) {
 
     std::vector<uint8_t> data = {0xFF};
 
-    uint64_t seq_a1 = repl_log_->append(key_a, Op::ADD, data);
-    uint64_t seq_a2 = repl_log_->append(key_a, Op::ADD, data);
-    uint64_t seq_b1 = repl_log_->append(key_b, Op::ADD, data);
+    uint64_t seq_a1 = repl_log_->append(key_a, Op::ADD, 0x00, data);
+    uint64_t seq_a2 = repl_log_->append(key_a, Op::ADD, 0x00, data);
+    uint64_t seq_b1 = repl_log_->append(key_b, Op::ADD, 0x00, data);
 
     EXPECT_EQ(seq_a1, 1u);
     EXPECT_EQ(seq_a2, 2u);
@@ -192,10 +194,10 @@ TEST_F(ReplLogTest, Compact) {
     std::vector<uint8_t> d3 = {0x03};
     std::vector<uint8_t> d4 = {0x04};
 
-    repl_log_->append(key, Op::ADD, d1);
-    repl_log_->append(key, Op::ADD, d2);
-    repl_log_->append(key, Op::ADD, d3);
-    repl_log_->append(key, Op::ADD, d4);
+    repl_log_->append(key, Op::ADD, 0x00,d1);
+    repl_log_->append(key, Op::ADD, 0x00,d2);
+    repl_log_->append(key, Op::ADD, 0x00,d3);
+    repl_log_->append(key, Op::ADD, 0x00,d4);
 
     // Compact: delete entries with seq < 3 (entries 1 and 2)
     repl_log_->compact(key, 3);
@@ -217,6 +219,7 @@ TEST_F(ReplLogTest, SerializeDeserializeEntry) {
     original.seq = 42;
     original.op = Op::UPD;
     original.timestamp = 1708000000;
+    original.data_type = 0x02;
     original.data = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE};
 
     auto serialized = serialize_entry(original);
@@ -225,5 +228,6 @@ TEST_F(ReplLogTest, SerializeDeserializeEntry) {
     EXPECT_EQ(deserialized.seq, original.seq);
     EXPECT_EQ(deserialized.op, original.op);
     EXPECT_EQ(deserialized.timestamp, original.timestamp);
+    EXPECT_EQ(deserialized.data_type, original.data_type);
     EXPECT_EQ(deserialized.data, original.data);
 }

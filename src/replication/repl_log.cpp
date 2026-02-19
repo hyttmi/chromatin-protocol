@@ -14,7 +14,7 @@ namespace chromatin::replication {
 
 std::vector<uint8_t> serialize_entry(const LogEntry& entry) {
     std::vector<uint8_t> buf;
-    buf.reserve(8 + 1 + 8 + 4 + entry.data.size());
+    buf.reserve(8 + 1 + 8 + 1 + 4 + entry.data.size());
 
     // seq (8 bytes BE)
     for (int i = 7; i >= 0; --i) {
@@ -28,6 +28,9 @@ std::vector<uint8_t> serialize_entry(const LogEntry& entry) {
     for (int i = 7; i >= 0; --i) {
         buf.push_back(static_cast<uint8_t>((entry.timestamp >> (i * 8)) & 0xFF));
     }
+
+    // data_type (1 byte)
+    buf.push_back(entry.data_type);
 
     // data_length (4 bytes BE)
     uint32_t data_len = static_cast<uint32_t>(entry.data.size());
@@ -43,8 +46,8 @@ std::vector<uint8_t> serialize_entry(const LogEntry& entry) {
 }
 
 LogEntry deserialize_entry(std::span<const uint8_t> data) {
-    // Minimum: 8 (seq) + 1 (op) + 8 (timestamp) + 4 (data_length) = 21 bytes
-    if (data.size() < 21) {
+    // Minimum: 8 (seq) + 1 (op) + 8 (timestamp) + 1 (data_type) + 4 (data_length) = 22 bytes
+    if (data.size() < 22) {
         throw std::runtime_error("LogEntry data too short to deserialize");
     }
 
@@ -68,6 +71,10 @@ LogEntry deserialize_entry(std::span<const uint8_t> data) {
         entry.timestamp = (entry.timestamp << 8) | data[offset + i];
     }
     offset += 8;
+
+    // data_type (1 byte)
+    entry.data_type = data[offset];
+    offset += 1;
 
     // data_length (4 bytes BE)
     uint32_t data_len = (static_cast<uint32_t>(data[offset]) << 24)
@@ -107,7 +114,7 @@ std::vector<uint8_t> ReplLog::make_composite_key(const crypto::Hash& key, uint64
     return composite;
 }
 
-uint64_t ReplLog::append(const crypto::Hash& key, Op op, std::span<const uint8_t> data) {
+uint64_t ReplLog::append(const crypto::Hash& key, Op op, uint8_t data_type, std::span<const uint8_t> data) {
     uint64_t seq = current_seq(key) + 1;
 
     auto now = std::chrono::system_clock::now();
@@ -118,6 +125,7 @@ uint64_t ReplLog::append(const crypto::Hash& key, Op op, std::span<const uint8_t
     entry.seq = seq;
     entry.op = op;
     entry.timestamp = timestamp;
+    entry.data_type = data_type;
     entry.data.assign(data.begin(), data.end());
 
     auto composite_key = make_composite_key(key, seq);

@@ -711,7 +711,7 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
 
     // Store directly on n1 (local storage + repl_log)
     n1.storage->put(TABLE_NAMES, key, record);
-    n1.repl_log->append(key, Op::ADD, record);
+    n1.repl_log->append(key, Op::ADD, 0x01, record);
 
     // Verify n1 has the data and repl log entry
     ASSERT_TRUE(n1.storage->get(TABLE_NAMES, key).has_value());

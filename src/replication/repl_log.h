@@ -15,6 +15,7 @@ struct LogEntry {
     uint64_t seq;
     Op op;
     uint64_t timestamp;
+    uint8_t data_type = 0xFF;  // 0x00=profile, 0x01=name, 0x02=inbox, 0x03=request, 0x04=allowlist
     std::vector<uint8_t> data;
 };
 
@@ -23,6 +24,7 @@ struct LogEntry {
 //   [8 bytes BE: seq]
 //   [1 byte: op]
 //   [8 bytes BE: timestamp]
+//   [1 byte: data_type]
 //   [4 bytes BE: data_length]
 //   [data bytes]
 std::vector<uint8_t> serialize_entry(const LogEntry& entry);
@@ -33,7 +35,7 @@ public:
     explicit ReplLog(storage::Storage& storage);
 
     // Append new entry, returns assigned seq number
-    uint64_t append(const crypto::Hash& key, Op op, std::span<const uint8_t> data);
+    uint64_t append(const crypto::Hash& key, Op op, uint8_t data_type, std::span<const uint8_t> data);
 
     // Get entries after a given seq (for SYNC_REQ response)
     std::vector<LogEntry> entries_after(const crypto::Hash& key, uint64_t after_seq) const;

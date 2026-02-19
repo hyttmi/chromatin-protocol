@@ -398,7 +398,7 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     storage_.put(table_name, key, value_vec);
 
     // Record mutation in the replication log
-    repl_log_.append(key, replication::Op::ADD, value);
+    repl_log_.append(key, replication::Op::ADD, data_type, value);
 
     spdlog::info("Stored data_type=0x{:02X} for key from {}:{}", data_type, from, port);
 
@@ -529,7 +529,7 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
             storage_.put(table_name, key, val_vec);
 
             // Record mutation in the replication log
-            repl_log_.append(key, replication::Op::ADD, value);
+            repl_log_.append(key, replication::Op::ADD, data_type, value);
 
             if (on_store_) {
                 on_store_(key, data_type, value);
@@ -877,8 +877,8 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     entries.reserve(entry_count);
 
     for (uint16_t i = 0; i < entry_count; ++i) {
-        // Minimum per entry: 8 (seq) + 1 (op) + 8 (timestamp) + 4 (data_length) = 21 bytes
-        if (offset + 21 > data.size()) {
+        // Minimum per entry: 8 (seq) + 1 (op) + 8 (timestamp) + 1 (data_type) + 4 (data_length) = 22 bytes
+        if (offset + 22 > data.size()) {
             spdlog::warn("SYNC_RESP truncated at entry {} from {}:{}", i, from, port);
             return;
         }
@@ -887,7 +887,7 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
         std::span<const uint8_t> entry_data(data.data() + offset, data.size() - offset);
         try {
             auto entry = replication::deserialize_entry(entry_data);
-            offset += 8 + 1 + 8 + 4 + entry.data.size(); // advance past this entry
+            offset += 8 + 1 + 8 + 1 + 4 + entry.data.size(); // advance past this entry
             entries.push_back(std::move(entry));
         } catch (const std::exception& e) {
             spdlog::warn("SYNC_RESP: failed to deserialize entry {} from {}:{}: {}", i, from, port, e.what());
@@ -898,44 +898,27 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     // Apply entries to replication log (idempotent)
     repl_log_.apply(key, entries);
 
-    // For ADD entries, also store the data in the appropriate storage table.
-    // Since we don't know the data_type from SYNC entries, we store as a
-    // generic value. The replication log data contains the raw value that
-    // was originally stored. We try all known tables to find the right one
-    // based on whether the key already exists there, otherwise default to
-    // profiles as a best effort. In practice, the data_type would be encoded
-    // in the repl log or a separate mapping table.
-    //
-    // For now, we store ADD entries into profiles table. The calling code
-    // that triggered the original STORE already knows the table. During
-    // sync, the data is replicated as-is.
+    // For ADD entries, route to the correct storage table using data_type.
     for (const auto& entry : entries) {
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
-            // Check if the key already has data in any table
-            const char* tables[] = {
-                storage::TABLE_PROFILES, storage::TABLE_NAMES,
-                storage::TABLE_INBOXES, storage::TABLE_REQUESTS,
-                storage::TABLE_ALLOWLISTS,
-            };
-
-            bool found_existing = false;
-            for (const char* table : tables) {
-                auto existing = storage_.get(table, key);
-                if (existing) {
-                    // Update in the same table
-                    storage_.put(table, key, entry.data);
-                    found_existing = true;
-                    break;
-                }
+            const char* table_name = nullptr;
+            switch (entry.data_type) {
+            case 0x00: table_name = storage::TABLE_PROFILES;   break;
+            case 0x01: table_name = storage::TABLE_NAMES;      break;
+            case 0x02:
+                // Inbox: two-table write handled separately (Task 4)
+                table_name = storage::TABLE_INBOXES;
+                break;
+            case 0x03: table_name = storage::TABLE_REQUESTS;   break;
+            case 0x04:
+                // Allowlist: composite key handled separately (Task 5)
+                table_name = storage::TABLE_ALLOWLISTS;
+                break;
+            default:
+                spdlog::warn("SYNC: unknown data_type 0x{:02X}, skipping", entry.data_type);
+                continue;
             }
-
-            if (!found_existing) {
-                // No existing data -- store in names table as a default for
-                // the sync test scenario (name records are most commonly synced).
-                // A production implementation would encode the table in the
-                // replication log metadata.
-                storage_.put(storage::TABLE_NAMES, key, entry.data);
-            }
+            storage_.put(table_name, key, entry.data);
         }
     }
 
