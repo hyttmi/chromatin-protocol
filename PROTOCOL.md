@@ -583,30 +583,4 @@ Each entry in `repl_log`:
 | Logging            | spdlog                         |
 | TCP networking     | POSIX sockets                  |
 
-No OpenSSL, no Boost, no OpenDHT. Single binary deployment.
-
----
-
-## 13. Open Questions
-
-1. ~~**Gossip protocol**~~ — Resolved: periodic tick-based refresh with
-   PING/PONG liveness and dead node eviction (section 6.5).
-
-2. ~~**Write quorum**~~ — Resolved: W = min(2, R). A STORE is durable when
-   W nodes have confirmed (local + STORE_ACK).
-
-3. ~~**Max message size:**~~ — Resolved: 50 MiB max blob via WebSocket chunked
-   transfer (1 MiB chunks). Messages <=64 KB inline in JSON, larger blobs use
-   binary WebSocket frames. See PROTOCOL-SPEC.md Section 4.6.
-
-4. **Reputation specifics:** Metrics, thresholds, slashing criteria. How to
-   prevent bootstraps from becoming censorship points?
-
-5. **Sync frequency:** How often do responsible nodes sync replication logs?
-   Event-driven (on write) vs periodic (every N seconds)?
-
-6. **Responsibility transfer protocol:** Detailed handoff when nodes
-   join/leave. How to avoid data loss during transitions?
-
-7. **DNS bootstrap:** Use DNS records (e.g. `bootstrap.cpunk.io`) instead
-   of hardcoded IPs to allow transparent bootstrap node rotation.
+Minimal dependencies. Single binary deployment.
