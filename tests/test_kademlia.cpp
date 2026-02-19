@@ -1276,3 +1276,72 @@ TEST_F(KademliaTest, SyncPreservesDataType) {
     auto n2_names = n2.storage->get(TABLE_NAMES, key);
     EXPECT_FALSE(n2_names.has_value()) << "profile should not be in TABLE_NAMES";
 }
+
+// ---------------------------------------------------------------------------
+// Test 28: TamperedMessageRejected — signature verification rejects tampered messages
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, TamperedMessageRejected) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Bootstrap bidirectionally so both nodes have each other's pubkey via NODES
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n1.kad->bootstrap({{"127.0.0.1", n2.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Build a valid profile to use as STORE payload
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00);
+    // sequence = 1
+    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
+    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+
+    Hash key = sha3_256_prefixed("dna:", user_fp);
+
+    // Build STORE message payload: data_type(1) + key(32) + value
+    std::vector<uint8_t> store_payload;
+    store_payload.push_back(0x00); // data_type = profile
+    store_payload.insert(store_payload.end(), key.begin(), key.end());
+    store_payload.insert(store_payload.end(), profile.begin(), profile.end());
+
+    // Create a properly signed STORE from n2
+    Message store_msg;
+    store_msg.type = MessageType::STORE;
+    store_msg.sender = n2.info.id;
+    store_msg.sender_port = n2.info.tcp_port;
+    store_msg.payload = store_payload;
+    sign_message(store_msg, n2.keypair.secret_key);
+
+    // Now tamper with the payload AFTER signing (flip a byte)
+    if (!store_msg.payload.empty()) {
+        store_msg.payload.back() ^= 0xFF;
+    }
+
+    // Send tampered message to n1
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, store_msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // The tampered STORE should have been rejected — key should NOT be stored
+    auto result = n1.storage->get(TABLE_PROFILES, key);
+    EXPECT_FALSE(result.has_value()) << "Tampered message should have been rejected";
+}

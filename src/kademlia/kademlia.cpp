@@ -111,6 +111,19 @@ void Kademlia::tick() {
 // ---------------------------------------------------------------------------
 
 void Kademlia::handle_message(const Message& msg, const std::string& from_addr, uint16_t from_port) {
+    // Verify ML-DSA-87 signature for messages from known nodes.
+    // Skip PING (identity establishment from unknown nodes) and NODES (response
+    // containing routing info — sender may not be in our routing table yet).
+    if (msg.type != MessageType::PING && msg.type != MessageType::NODES) {
+        auto node_info = table_.find(msg.sender);
+        if (node_info && !node_info->pubkey.empty()) {
+            if (!verify_message(msg, node_info->pubkey)) {
+                spdlog::warn("Rejected message with invalid signature from {}:{}", from_addr, from_port);
+                return;
+            }
+        }
+    }
+
     switch (msg.type) {
     case MessageType::PING:
         handle_ping(msg, from_addr, from_port);
