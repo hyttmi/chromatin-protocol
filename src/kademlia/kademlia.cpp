@@ -61,6 +61,9 @@ static constexpr auto PING_SWEEP_INTERVAL      = std::chrono::seconds(10);
 static constexpr auto STALE_THRESHOLD          = std::chrono::seconds(60);
 static constexpr auto EVICT_THRESHOLD          = std::chrono::seconds(120);
 static constexpr size_t SPARSE_TABLE_SIZE      = 3;
+static constexpr auto TTL_DURATION             = std::chrono::hours(7 * 24);  // 7 days
+static constexpr auto TTL_SWEEP_INTERVAL       = std::chrono::minutes(5);
+static constexpr auto PENDING_STORE_TIMEOUT    = std::chrono::seconds(30);
 
 void Kademlia::tick() {
     auto now = std::chrono::steady_clock::now();
@@ -103,6 +106,88 @@ void Kademlia::tick() {
                 Message msg = make_message(MessageType::PING, {});
                 send_to_node(node, msg);
             }
+        }
+    }
+
+    // 3. TTL expiry sweep
+    if (now - last_ttl_sweep_ >= TTL_SWEEP_INTERVAL) {
+        last_ttl_sweep_ = now;
+        expire_ttl();
+    }
+
+    // 4. Pending stores cleanup
+    cleanup_pending_stores();
+}
+
+// ---------------------------------------------------------------------------
+// TTL expiry — delete inbox messages and contact requests older than 7 days
+// ---------------------------------------------------------------------------
+
+void Kademlia::expire_ttl() {
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    auto ttl_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(TTL_DURATION).count());
+    uint64_t cutoff = (now_ms > ttl_ms) ? (now_ms - ttl_ms) : 0;
+
+    // Convert cutoff to seconds for comparison with stored timestamps
+    uint64_t cutoff_sec = cutoff / 1000;
+
+    // Expire inbox messages: scan TABLE_INBOX_INDEX
+    // Index value format: sender_fp(32) || timestamp(8 BE) || blob_len(4)
+    std::vector<std::vector<uint8_t>> expired_idx_keys;
+    std::vector<std::vector<uint8_t>> expired_blob_keys;
+
+    storage_.foreach(storage::TABLE_INBOX_INDEX,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+            if (value.size() < 44) return true;  // skip malformed
+            // Timestamp is at offset 32 in the value (after sender_fp)
+            uint64_t ts = 0;
+            for (int i = 0; i < 8; ++i)
+                ts = (ts << 8) | value[32 + i];
+
+            if (ts < cutoff_sec) {
+                expired_idx_keys.emplace_back(key.begin(), key.end());
+                // msg_id is at offset 32 in the key (after recipient_fp)
+                if (key.size() >= 64) {
+                    expired_blob_keys.emplace_back(key.begin() + 32, key.begin() + 64);
+                }
+            }
+            return true;
+        });
+
+    for (const auto& k : expired_idx_keys)
+        storage_.del(storage::TABLE_INBOX_INDEX, k);
+    for (const auto& k : expired_blob_keys)
+        storage_.del(storage::TABLE_MESSAGE_BLOBS, k);
+
+    if (!expired_idx_keys.empty()) {
+        spdlog::info("TTL expiry: removed {} expired inbox messages", expired_idx_keys.size());
+    }
+
+    // Expire contact requests: scan TABLE_REQUESTS
+    // Contact request value: sender_fp(32) || pow_nonce(8) || blob_len(4) || blob
+    // No timestamp in the value itself — use repl_log timestamp instead.
+    // For simplicity, we skip contact request expiry here since the repl_log
+    // timestamp requires correlating with the repl_log entries. This can be
+    // added when contact requests include a timestamp field.
+}
+
+// ---------------------------------------------------------------------------
+// Pending store cleanup — remove entries that never received all ACKs
+// ---------------------------------------------------------------------------
+
+void Kademlia::cleanup_pending_stores() {
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard lock(pending_mutex_);
+    for (auto it = pending_stores_.begin(); it != pending_stores_.end();) {
+        if (now - it->second.created > PENDING_STORE_TIMEOUT) {
+            spdlog::debug("Pending store timed out (expected {} ACKs, got {})",
+                          it->second.expected, it->second.acked);
+            it = pending_stores_.erase(it);
+        } else {
+            ++it;
         }
     }
 }

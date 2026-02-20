@@ -100,6 +100,11 @@ private:
     std::vector<std::pair<std::string, uint16_t>> bootstrap_addrs_;
     std::chrono::steady_clock::time_point last_refresh_{};
     std::chrono::steady_clock::time_point last_ping_sweep_{};
+    std::chrono::steady_clock::time_point last_ttl_sweep_{};
+
+    // TTL expiry and pending store cleanup
+    void expire_ttl();
+    void cleanup_pending_stores();
 
     // Pending STORE quorum tracking (key -> status)
     mutable std::mutex pending_mutex_;
