@@ -183,24 +183,23 @@ void ReplLog::apply(const crypto::Hash& key, const std::vector<LogEntry>& entrie
 }
 
 uint64_t ReplLog::current_seq(const crypto::Hash& key) const {
-    uint64_t max_seq = 0;
+    // Build upper bound: key || 0xFF...FF (8 bytes) — past all possible seqs
     std::vector<uint8_t> prefix(key.begin(), key.end());
+    std::vector<uint8_t> upper(40);
+    std::copy(key.begin(), key.end(), upper.begin());
+    std::fill(upper.begin() + 32, upper.end(), 0xFF);
 
-    storage_.scan(storage::TABLE_REPL_LOG, prefix, [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
-        if (k.size() < 40) return true;
-
-        // Extract seq from composite key (bytes 32..39, BE)
-        uint64_t entry_seq = 0;
-        for (int i = 0; i < 8; ++i) {
-            entry_seq = (entry_seq << 8) | k[32 + i];
-        }
-
-        if (entry_seq > max_seq) {
-            max_seq = entry_seq;
-        }
-
-        return true;
-    });
+    // Seek to last entry with this prefix — O(1) instead of O(N)
+    uint64_t max_seq = 0;
+    storage_.reverse_scan_one(storage::TABLE_REPL_LOG, prefix, upper,
+        [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
+            if (k.size() >= 40) {
+                for (int i = 0; i < 8; ++i) {
+                    max_seq = (max_seq << 8) | k[32 + i];
+                }
+            }
+            return false;
+        });
 
     return max_seq;
 }

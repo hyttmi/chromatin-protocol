@@ -628,15 +628,17 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         table_.add_or_update(sender_info);
     }
 
-    // Build NODES payload: all known nodes (from table) + self
+    // Build NODES payload: K closest nodes to the requester's ID + self.
+    // Using the requester's ID as target ensures they get the most relevant
+    // routing information. K=20 is a common Kademlia parameter.
+    static constexpr size_t K_CLOSEST = 20;
+    auto closest = table_.closest_to(msg.sender.id, K_CLOSEST);
+
     std::vector<NodeInfo> all;
     all.push_back(self_);
-    auto table_nodes = table_.all_nodes();
-    for (auto& n : table_nodes) {
-        // Don't include the requester back to itself
-        if (n.id == msg.sender) continue;
-        // Don't duplicate self
-        if (n.id == self_.id) continue;
+    for (auto& n : closest) {
+        if (n.id == msg.sender) continue;  // don't include requester
+        if (n.id == self_.id) continue;    // don't duplicate self
         all.push_back(std::move(n));
     }
 
@@ -1958,11 +1960,14 @@ void Kademlia::handle_seq_resp(const Message& msg, const std::string& from, uint
     for (int i = 0; i < 8; ++i)
         seq = (seq << 8) | msg.payload[32 + i];
 
-    std::lock_guard lock(seq_query_mutex_);
-    auto it = pending_seq_queries_.find(key);
-    if (it != pending_seq_queries_.end()) {
-        it->second.responses[msg.sender] = seq;
+    {
+        std::lock_guard lock(seq_query_mutex_);
+        auto it = pending_seq_queries_.find(key);
+        if (it != pending_seq_queries_.end()) {
+            it->second.responses[msg.sender] = seq;
+        }
     }
+    seq_query_cv_.notify_all();
 }
 
 std::vector<Kademlia::NodeSeq> Kademlia::query_remote_seqs(
@@ -1986,18 +1991,14 @@ std::vector<Kademlia::NodeSeq> Kademlia::query_remote_seqs(
         send_to_node(node, msg);
     }
 
-    // Poll for responses with timeout
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        {
-            std::lock_guard lock(seq_query_mutex_);
+    // Wait for responses with condition variable (no busy-wait)
+    {
+        std::unique_lock lock(seq_query_mutex_);
+        seq_query_cv_.wait_for(lock, timeout, [&] {
             auto it = pending_seq_queries_.find(key);
-            if (it != pending_seq_queries_.end() &&
-                it->second.responses.size() >= it->second.expected) {
-                break; // All responses received
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return it != pending_seq_queries_.end() &&
+                   it->second.responses.size() >= it->second.expected;
+        });
     }
 
     // Collect results
@@ -2047,7 +2048,12 @@ Message Kademlia::make_message(MessageType type, const std::vector<uint8_t>& pay
     msg.sender = self_.id;
     msg.sender_port = self_.tcp_port;
     msg.payload = payload;
-    sign_message(msg, keypair_.secret_key);
+    // Skip ML-DSA-87 signing for discovery messages that don't modify state
+    // and are needed before a node's pubkey is known. All other types
+    // (PONG, NODES, STORE, etc.) are signed and verified by receivers.
+    if (type != MessageType::PING && type != MessageType::FIND_NODE) {
+        sign_message(msg, keypair_.secret_key);
+    }
     return msg;
 }
 

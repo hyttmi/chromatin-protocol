@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -156,6 +157,7 @@ private:
         size_t expected = 0;
     };
     mutable std::mutex seq_query_mutex_;
+    std::condition_variable seq_query_cv_;
     std::unordered_map<crypto::Hash, PendingSeqQuery, crypto::HashHash> pending_seq_queries_;
 
     // Message handlers

@@ -48,6 +48,12 @@ public:
     void foreach(std::string_view table, Callback cb) const;
     void scan(std::string_view table, std::span<const uint8_t> prefix, Callback cb) const;
 
+    // Reverse scan: find the last key matching the given prefix.
+    // Seeks to upper_bound and reads the previous entry.
+    // Calls cb once with the last key/value, or not at all if no match.
+    void reverse_scan_one(std::string_view table, std::span<const uint8_t> prefix,
+                          std::span<const uint8_t> upper_bound, Callback cb) const;
+
 private:
     mdbx::env_managed env_;
     std::unordered_map<std::string, mdbx::map_handle> maps_;

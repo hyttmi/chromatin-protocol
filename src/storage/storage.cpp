@@ -137,4 +137,34 @@ void Storage::scan(std::string_view table, std::span<const uint8_t> prefix, Call
     }
 }
 
+void Storage::reverse_scan_one(std::string_view table, std::span<const uint8_t> prefix,
+                               std::span<const uint8_t> upper_bound, Callback cb) const {
+    auto map = get_map(table);
+    auto txn = env_.start_read();
+    auto cursor = txn.open_cursor(map);
+
+    // Seek to upper_bound (or past it)
+    auto result = cursor.lower_bound(mdbx::slice(upper_bound.data(), upper_bound.size()), false);
+
+    // If lower_bound found a key >= upper_bound, move back one position
+    if (result) {
+        result = cursor.to_previous(false);
+    } else {
+        // No key >= upper_bound, try the very last key in the table
+        result = cursor.to_last(false);
+    }
+
+    if (!result) return;
+
+    auto k = result.key;
+    // Verify the found key starts with our prefix
+    if (k.size() >= prefix.size() &&
+        std::memcmp(k.data(), prefix.data(), prefix.size()) == 0) {
+        auto v = result.value;
+        std::span<const uint8_t> key_span(static_cast<const uint8_t*>(k.data()), k.size());
+        std::span<const uint8_t> val_span(static_cast<const uint8_t*>(v.data()), v.size());
+        cb(key_span, val_span);
+    }
+}
+
 } // namespace chromatin::storage
