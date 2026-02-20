@@ -298,13 +298,26 @@ DELETE removes entries from both tables.
 ### Contact Request (data_type 0x03)
 
 ```
+[32 bytes: recipient_fingerprint]
 [32 bytes: sender_fingerprint]
 [8 bytes BE: pow_nonce]
 [4 bytes BE: blob_length]
 [blob_length bytes: encrypted blob]
 ```
 
-Storage key: `SHA3-256("requests:" || recipient_fingerprint)`
+DHT routing key: `SHA3-256("requests:" || recipient_fingerprint)`
+
+Local mdbx storage uses composite key for multi-sender support:
+```
+Key:   recipient_fp(32) || sender_fp(32)
+Value: full contact request binary (recipient_fp || sender_fp || pow_nonce || blob_len || blob)
+```
+
+PoW preimage: `"request:" || sender_fingerprint || recipient_fingerprint`
+Required: 16 leading zero bits in `SHA3-256(preimage || nonce_BE)`.
+
+Including `recipient_fp` in the binary allows Kademlia nodes to verify PoW
+independently without access to the routing key derivation.
 
 ### Allowlist Entry (data_type 0x04)
 
@@ -620,10 +633,10 @@ response to FIND_NODE during bootstrap. Once a node is in the routing table
 
 ### FIND_VALUE Scope
 
-FIND_VALUE searches profiles, names, contact requests, and allowlists. It does
-**not** search inbox data. Inbox messages use a two-table storage model with
-composite keys that cannot be derived from the DHT routing key. Inbox
-replication uses SYNC_REQ/SYNC_RESP instead.
+FIND_VALUE searches profiles and names only. Inbox messages, contact requests,
+and allowlists use composite storage keys that cannot be derived from the DHT
+routing key alone. These data types are accessed via scan() or replicated via
+SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 

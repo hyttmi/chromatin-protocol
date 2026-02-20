@@ -1286,10 +1286,12 @@ void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Build contact request binary: sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    // Build contact request binary: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
     uint32_t blob_len = static_cast<uint32_t>(blob->size());
     std::vector<uint8_t> request_binary;
-    request_binary.reserve(32 + 8 + 4 + blob->size());
+    request_binary.reserve(32 + 32 + 8 + 4 + blob->size());
+    request_binary.insert(request_binary.end(),
+                          recipient_fp.begin(), recipient_fp.end());
     request_binary.insert(request_binary.end(),
                           session->fingerprint.begin(), session->fingerprint.end());
     for (int i = 7; i >= 0; --i) {
@@ -1436,16 +1438,16 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
                     send_json(ws, push);
                 } else {
                     // CONTACT_REQUEST push
-                    // Value layout: sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-                    if (value_copy.size() < 44) break;
-                    auto sender = std::span<const uint8_t>(value_copy.data(), 32);
-                    uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[40]) << 24) |
-                                           (static_cast<uint32_t>(value_copy[41]) << 16) |
-                                           (static_cast<uint32_t>(value_copy[42]) << 8) |
-                                           static_cast<uint32_t>(value_copy[43]);
-                    if (value_copy.size() < 44 + cr_blob_len) break;
+                    // Value layout: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+                    if (value_copy.size() < 76) break;
+                    auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
+                    uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
+                                           (static_cast<uint32_t>(value_copy[73]) << 16) |
+                                           (static_cast<uint32_t>(value_copy[74]) << 8) |
+                                           static_cast<uint32_t>(value_copy[75]);
+                    if (value_copy.size() < 76 + cr_blob_len) break;
                     auto blob = std::span<const uint8_t>(
-                        value_copy.data() + 44, cr_blob_len);
+                        value_copy.data() + 76, cr_blob_len);
 
                     Json::Value push;
                     push["type"] = "CONTACT_REQUEST";

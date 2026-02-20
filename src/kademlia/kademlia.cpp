@@ -177,7 +177,7 @@ void Kademlia::expire_ttl() {
     }
 
     // Expire contact requests: scan TABLE_REQUESTS
-    // Contact request value: sender_fp(32) || pow_nonce(8) || blob_len(4) || blob
+    // Contact request value: recipient_fp(32) || sender_fp(32) || pow_nonce(8) || blob_len(4) || blob
     // No timestamp in the value itself — use repl_log timestamp instead.
     // For simplicity, we skip contact request expiry here since the repl_log
     // timestamp requires correlating with the repl_log entries. This can be
@@ -678,12 +678,24 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
             // REVOKE: delete entry
             storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
         }
+    } else if (data_type == 0x03) {
+        // Contact request: composite key storage
+        // Value: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+        crypto::Hash rfp, sfp;
+        std::copy_n(value.data(), 32, rfp.begin());
+        std::copy_n(value.data() + 32, 32, sfp.begin());
+        // Composite storage key: recipient_fp(32) || sender_fp(32)
+        std::vector<uint8_t> storage_key;
+        storage_key.reserve(64);
+        storage_key.insert(storage_key.end(), rfp.begin(), rfp.end());
+        storage_key.insert(storage_key.end(), sfp.begin(), sfp.end());
+        std::vector<uint8_t> value_vec(value.begin(), value.end());
+        storage_.put(storage::TABLE_REQUESTS, storage_key, value_vec);
     } else {
         const char* table_name = nullptr;
         switch (data_type) {
         case 0x00: table_name = storage::TABLE_PROFILES;   break;
         case 0x01: table_name = storage::TABLE_NAMES;      break;
-        case 0x03: table_name = storage::TABLE_REQUESTS;   break;
         default:
             spdlog::warn("STORE rejected: unknown data_type 0x{:02X}", data_type);
             return;
@@ -723,12 +735,11 @@ void Kademlia::handle_find_value(const Message& msg, const std::string& from, ui
     crypto::Hash key{};
     std::copy_n(msg.payload.data(), 32, key.begin());
 
-    // Try relevant tables for the key. Inbox data uses SYNC (not FIND_VALUE)
-    // because its routing key is SHA3-256("inbox:"||fp) but TABLE_INBOX_INDEX
-    // uses composite key fp(32)||msg_id(32) — can't derive fp from the hash.
+    // Try relevant tables for the key. Inbox, contact requests, and allowlists
+    // use composite keys and can't be looked up by routing key alone — they use
+    // SYNC or scan() instead of FIND_VALUE.
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
-        storage::TABLE_REQUESTS, storage::TABLE_ALLOWLISTS,
     };
 
     std::vector<uint8_t> payload;
@@ -870,12 +881,23 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
                 } else {
                     storage_.del(storage::TABLE_ALLOWLISTS, comp_key);
                 }
+            } else if (data_type == 0x03) {
+                // Contact request: composite key storage
+                // Value: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+                crypto::Hash rfp, sfp_cr;
+                std::copy_n(value.data(), 32, rfp.begin());
+                std::copy_n(value.data() + 32, 32, sfp_cr.begin());
+                std::vector<uint8_t> cr_key;
+                cr_key.reserve(64);
+                cr_key.insert(cr_key.end(), rfp.begin(), rfp.end());
+                cr_key.insert(cr_key.end(), sfp_cr.begin(), sfp_cr.end());
+                std::vector<uint8_t> val_vec(value.begin(), value.end());
+                storage_.put(storage::TABLE_REQUESTS, cr_key, val_vec);
             } else {
                 const char* table_name = nullptr;
                 switch (data_type) {
                 case 0x00: table_name = storage::TABLE_PROFILES;   break;
                 case 0x01: table_name = storage::TABLE_NAMES;      break;
-                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
                 default:
                     spdlog::warn("store(): unknown data_type 0x{:02X}", data_type);
                     continue;
@@ -935,10 +957,10 @@ void Kademlia::delete_value(const crypto::Hash& key, uint8_t data_type,
 // ---------------------------------------------------------------------------
 
 std::optional<std::vector<uint8_t>> Kademlia::find_value(const crypto::Hash& key) {
-    // First check locally (inbox uses SYNC, not FIND_VALUE)
+    // First check locally. Inbox, contact requests, and allowlists use
+    // composite keys — they're accessed via scan(), not find_value().
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
-        storage::TABLE_REQUESTS, storage::TABLE_ALLOWLISTS,
     };
 
     for (const char* table : tables) {
@@ -1419,35 +1441,54 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
-    // Format: sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-    // Minimum: 32 + 8 + 4 = 44 bytes
+    // Format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    // Minimum: 32 + 32 + 8 + 4 = 76 bytes
     static constexpr size_t MAX_REQUEST_BLOB = 64 * 1024; // 64 KiB
 
-    if (value.size() < 44) {
+    if (value.size() < 76) {
         spdlog::warn("Contact request validation: too short ({} bytes)", value.size());
         return false;
     }
 
-    // Parse blob_length and verify it matches remaining data
-    size_t offset = 32 + 8; // skip sender_fp + pow_nonce
-    uint32_t blob_len = (static_cast<uint32_t>(value[offset]) << 24)
-                      | (static_cast<uint32_t>(value[offset + 1]) << 16)
-                      | (static_cast<uint32_t>(value[offset + 2]) << 8)
-                      | static_cast<uint32_t>(value[offset + 3]);
-    offset += 4;
+    // Extract recipient_fp and sender_fp
+    std::span<const uint8_t> recipient_fp = value.subspan(0, 32);
+    std::span<const uint8_t> sender_fp = value.subspan(32, 32);
+
+    // Extract pow_nonce (8 bytes BE at offset 64)
+    uint64_t pow_nonce = 0;
+    for (int i = 0; i < 8; ++i) {
+        pow_nonce = (pow_nonce << 8) | value[64 + i];
+    }
+
+    // Verify PoW: preimage = "request:" || sender_fp || recipient_fp
+    std::vector<uint8_t> preimage;
+    preimage.reserve(8 + 32 + 32);
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    if (!crypto::verify_pow(preimage, pow_nonce, 16)) {
+        spdlog::debug("Contact request rejected: insufficient PoW");
+        return false;
+    }
+
+    // Validate blob_length
+    uint32_t blob_len = (static_cast<uint32_t>(value[72]) << 24)
+                      | (static_cast<uint32_t>(value[73]) << 16)
+                      | (static_cast<uint32_t>(value[74]) << 8)
+                      | static_cast<uint32_t>(value[75]);
 
     if (blob_len > MAX_REQUEST_BLOB) {
         spdlog::warn("Contact request validation: blob_len {} exceeds 64 KiB", blob_len);
         return false;
     }
 
-    if (offset + blob_len != value.size()) {
+    if (76 + blob_len != value.size()) {
         spdlog::warn("Contact request validation: blob_len {} doesn't match remaining data", blob_len);
         return false;
     }
 
-    // Trust boundary: PoW verification requires recipient_fp (hashed in key),
-    // so Kademlia can't verify it. WS server validates before calling store().
     return true;
 }
 
@@ -1600,13 +1641,17 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 storage_.del(storage::TABLE_MESSAGE_BLOBS, blob_key);
 
                 spdlog::debug("SYNC: applied DEL for inbox message");
+            } else if (entry.data_type == 0x03 && entry.data.size() >= 64) {
+                // Contact request delete: delete_info = recipient_fp(32) || sender_fp(32)
+                std::vector<uint8_t> cr_key(entry.data.begin(), entry.data.begin() + 64);
+                storage_.del(storage::TABLE_REQUESTS, cr_key);
+                spdlog::debug("SYNC: applied DEL for contact request");
             } else {
                 // For other types, delete by key from the appropriate table
                 const char* table_name = nullptr;
                 switch (entry.data_type) {
                 case 0x00: table_name = storage::TABLE_PROFILES;   break;
                 case 0x01: table_name = storage::TABLE_NAMES;      break;
-                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
                 default: continue;
                 }
                 storage_.del(table_name, key);
@@ -1667,12 +1712,26 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 } else {
                     storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
                 }
+            } else if (entry.data_type == 0x03) {
+                // Contact request: composite key storage
+                // Data: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+                if (entry.data.size() < 76) {
+                    spdlog::warn("SYNC: contact request too short ({} bytes)", entry.data.size());
+                    continue;
+                }
+                crypto::Hash rfp, sfp_cr;
+                std::copy_n(entry.data.data(), 32, rfp.begin());
+                std::copy_n(entry.data.data() + 32, 32, sfp_cr.begin());
+                std::vector<uint8_t> cr_key;
+                cr_key.reserve(64);
+                cr_key.insert(cr_key.end(), rfp.begin(), rfp.end());
+                cr_key.insert(cr_key.end(), sfp_cr.begin(), sfp_cr.end());
+                storage_.put(storage::TABLE_REQUESTS, cr_key, entry.data);
             } else {
                 const char* table_name = nullptr;
                 switch (entry.data_type) {
                 case 0x00: table_name = storage::TABLE_PROFILES;   break;
                 case 0x01: table_name = storage::TABLE_NAMES;      break;
-                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
                 default:
                     spdlog::warn("SYNC: unknown data_type 0x{:02X}, skipping", entry.data_type);
                     continue;

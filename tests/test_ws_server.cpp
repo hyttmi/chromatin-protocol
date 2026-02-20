@@ -841,27 +841,33 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     auto root = parse_json(*resp);
     EXPECT_EQ(root["type"].asString(), "OK");
 
-    // Verify stored binary format: sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-    auto requests_key = crypto::sha3_256_prefixed("requests:", recipient_fp);
-    auto stored = storage_->get(storage::TABLE_REQUESTS, requests_key);
+    // Verify stored binary format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    // Storage key is now composite: recipient_fp(32) || sender_fp(32)
+    std::vector<uint8_t> storage_key;
+    storage_key.insert(storage_key.end(), recipient_fp.begin(), recipient_fp.end());
+    storage_key.insert(storage_key.end(), sender_fp.begin(), sender_fp.end());
+    auto stored = storage_->get(storage::TABLE_REQUESTS, storage_key);
     ASSERT_TRUE(stored.has_value()) << "contact request should be stored";
 
-    // Minimum: 32 + 8 + 4 + 4 = 48 bytes (sender_fp + nonce + blob_len + blob)
-    ASSERT_GE(stored->size(), 48u);
+    // Minimum: 32 + 32 + 8 + 4 + 4 = 80 bytes (recipient_fp + sender_fp + nonce + blob_len + blob)
+    ASSERT_GE(stored->size(), 80u);
 
-    // Verify sender_fp at offset 0
-    EXPECT_TRUE(std::equal(sender_fp.begin(), sender_fp.end(), stored->begin()));
+    // Verify recipient_fp at offset 0
+    EXPECT_TRUE(std::equal(recipient_fp.begin(), recipient_fp.end(), stored->begin()));
 
-    // Verify blob_length at offset 40 (4 bytes BE)
-    uint32_t stored_blob_len = (static_cast<uint32_t>((*stored)[40]) << 24)
-                             | (static_cast<uint32_t>((*stored)[41]) << 16)
-                             | (static_cast<uint32_t>((*stored)[42]) << 8)
-                             | static_cast<uint32_t>((*stored)[43]);
+    // Verify sender_fp at offset 32
+    EXPECT_TRUE(std::equal(sender_fp.begin(), sender_fp.end(), stored->begin() + 32));
+
+    // Verify blob_length at offset 72 (4 bytes BE)
+    uint32_t stored_blob_len = (static_cast<uint32_t>((*stored)[72]) << 24)
+                             | (static_cast<uint32_t>((*stored)[73]) << 16)
+                             | (static_cast<uint32_t>((*stored)[74]) << 8)
+                             | static_cast<uint32_t>((*stored)[75]);
     EXPECT_EQ(stored_blob_len, 4u) << "blob_length should be 4 (0xCAFEBABE)";
 
-    // Verify blob at offset 44
-    EXPECT_EQ(stored->size(), 48u); // 32 + 8 + 4 + 4
-    std::vector<uint8_t> stored_blob(stored->begin() + 44, stored->end());
+    // Verify blob at offset 76
+    EXPECT_EQ(stored->size(), 80u); // 32 + 32 + 8 + 4 + 4
+    std::vector<uint8_t> stored_blob(stored->begin() + 76, stored->end());
     EXPECT_EQ(stored_blob, blob_data);
 
     client.close();

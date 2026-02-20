@@ -1056,32 +1056,138 @@ TEST_F(KademliaTest, InboxStoreValidation_OversizedBlob) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 22: ContactRequestValidation_OversizedBlob — blob > 64KiB rejected
+// Test 22: ContactRequestValidation_OversizedBlob — invalid request rejected
 // ---------------------------------------------------------------------------
 
 TEST_F(KademliaTest, ContactRequestValidation_OversizedBlob) {
     auto& n1 = create_node();
     start_all();
 
-    // Build a contact request with blob > 64 KiB
-    // sender_fp(32) + pow_nonce(8) + blob_length(4) + blob
+    // Build a contact request with new format but no valid PoW
+    // recipient_fp(32) + sender_fp(32) + pow_nonce(8) + blob_length(4) + blob
+    // This will be rejected at PoW verification (before blob size check)
+    Hash recipient_fp{};
+    recipient_fp.fill(0xAA);
+    Hash sender_fp{};
+    sender_fp.fill(0xBB);
+
     uint32_t blob_size = 65 * 1024;  // 65 KiB
     std::vector<uint8_t> request;
-    request.resize(32 + 8, 0x00);  // sender_fp + pow_nonce
+    request.insert(request.end(), recipient_fp.begin(), recipient_fp.end());
+    request.insert(request.end(), sender_fp.begin(), sender_fp.end());
+    request.resize(32 + 32 + 8, 0x00);  // pow_nonce = 0 (invalid)
     // blob_length (4 BE)
     request.push_back(static_cast<uint8_t>((blob_size >> 24) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_size >> 16) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_size >> 8) & 0xFF));
     request.push_back(static_cast<uint8_t>(blob_size & 0xFF));
     // blob data
-    request.resize(32 + 8 + 4 + blob_size, 0x42);
+    request.resize(32 + 32 + 8 + 4 + blob_size, 0x42);
 
     Hash key{};
     key.fill(0xCD);
 
     bool ok = n1.kad->store(key, 0x03, request);
-    auto result = n1.storage->get(TABLE_REQUESTS, key);
-    EXPECT_FALSE(result.has_value()) << "Contact request with oversized blob should not be stored";
+    // Composite storage key: recipient_fp(32) || sender_fp(32)
+    std::vector<uint8_t> composite_key(recipient_fp.begin(), recipient_fp.end());
+    composite_key.insert(composite_key.end(), sender_fp.begin(), sender_fp.end());
+    auto result = n1.storage->get(TABLE_REQUESTS, composite_key);
+    EXPECT_FALSE(result.has_value()) << "Contact request with invalid PoW should not be stored";
+}
+
+// ---------------------------------------------------------------------------
+// Test 22b: ContactRequestPoWEnforced — valid PoW succeeds, invalid rejected
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ContactRequestPoWEnforced) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Generate real fingerprints for PoW computation
+    Hash recipient_fp{};
+    recipient_fp.fill(0x11);
+    Hash sender_fp{};
+    sender_fp.fill(0x22);
+
+    // Build PoW preimage: "request:" || sender_fp || recipient_fp
+    std::vector<uint8_t> preimage;
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    // Find a valid PoW nonce (16 leading zero bits, ~65k avg iterations)
+    uint64_t pow_nonce = 0;
+    for (uint64_t n = 0; n < 10'000'000; ++n) {
+        if (verify_pow(preimage, n, 16)) {
+            pow_nonce = n;
+            break;
+        }
+    }
+    ASSERT_TRUE(verify_pow(preimage, pow_nonce, 16))
+        << "Failed to find valid PoW nonce within 10M iterations";
+
+    std::vector<uint8_t> blob = {0xCA, 0xFE, 0xBA, 0xBE};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    // --- Test 1: Valid PoW should succeed ---
+    {
+        std::vector<uint8_t> request;
+        request.insert(request.end(), recipient_fp.begin(), recipient_fp.end());
+        request.insert(request.end(), sender_fp.begin(), sender_fp.end());
+        // pow_nonce (8 bytes BE)
+        for (int i = 7; i >= 0; --i)
+            request.push_back(static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+        // blob_length (4 BE)
+        request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+        request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+        request.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+        request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+        request.insert(request.end(), blob.begin(), blob.end());
+
+        auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+
+        bool ok = n1.kad->store(requests_key, 0x03, request);
+        EXPECT_TRUE(ok) << "Contact request with valid PoW should succeed";
+
+        // Verify stored with composite key: recipient_fp(32) || sender_fp(32)
+        std::vector<uint8_t> composite_key(recipient_fp.begin(), recipient_fp.end());
+        composite_key.insert(composite_key.end(), sender_fp.begin(), sender_fp.end());
+        auto result = n1.storage->get(TABLE_REQUESTS, composite_key);
+        ASSERT_TRUE(result.has_value())
+            << "Contact request with valid PoW should be stored";
+        EXPECT_EQ(result->size(), 32u + 32u + 8u + 4u + blob.size());
+    }
+
+    // --- Test 2: Invalid PoW (nonce=0 with different sender) should be rejected ---
+    {
+        Hash bad_sender{};
+        bad_sender.fill(0xFF);
+
+        std::vector<uint8_t> request;
+        request.insert(request.end(), recipient_fp.begin(), recipient_fp.end());
+        request.insert(request.end(), bad_sender.begin(), bad_sender.end());
+        // pow_nonce = 0 (won't be valid for these fingerprints)
+        for (int i = 0; i < 8; ++i)
+            request.push_back(0x00);
+        // blob_length (4 BE)
+        request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+        request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+        request.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+        request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+        request.insert(request.end(), blob.begin(), blob.end());
+
+        auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+
+        bool ok = n1.kad->store(requests_key, 0x03, request);
+
+        // Verify not stored with composite key: recipient_fp(32) || bad_sender(32)
+        std::vector<uint8_t> composite_key(recipient_fp.begin(), recipient_fp.end());
+        composite_key.insert(composite_key.end(), bad_sender.begin(), bad_sender.end());
+        auto result = n1.storage->get(TABLE_REQUESTS, composite_key);
+        EXPECT_FALSE(result.has_value())
+            << "Contact request with invalid PoW should be rejected";
+    }
 }
 
 // ---------------------------------------------------------------------------
