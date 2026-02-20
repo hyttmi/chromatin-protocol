@@ -128,6 +128,16 @@ protected:
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    // Bidirectional bootstrap between two nodes so both have each other's pubkeys.
+    // After FIND_NODE→NODES exchange, only the initiator learns the peer's pubkey.
+    // The reverse bootstrap ensures both sides can verify signed messages.
+    void bootstrap_bidirectional(TestNode& a, TestNode& b) {
+        a.kad->bootstrap({{"127.0.0.1", b.info.tcp_port}});
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        b.kad->bootstrap({{"127.0.0.1", a.info.tcp_port}});
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
     // Build a name record binary blob per PROTOCOL-SPEC.md section 3
     static std::vector<uint8_t> build_name_record(
         const std::string& name,
@@ -277,9 +287,8 @@ TEST_F(KademliaTest, StoreAndFindValue) {
 
     start_all();
 
-    // Bootstrap n2 from n1
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap bidirectionally so both nodes have each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
 
     // Store a profile value via n1 (using data_type 0x00 = profile)
     Hash key{};
@@ -509,9 +518,8 @@ TEST_F(KademliaTest, StoreAckSent) {
 
     start_all();
 
-    // Bootstrap
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap bidirectionally so both nodes have each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
 
     // Send a STORE message from n2 to n1 using allowlist entry (minimal validation)
     Hash key{};
@@ -585,9 +593,8 @@ TEST_F(KademliaTest, PendingStoreTracking) {
 
     start_all();
 
-    // Bootstrap so both nodes know each other (R=2)
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap bidirectionally so both nodes have each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
 
     ASSERT_EQ(n1.kad->replication_factor(), 2u);
 
@@ -645,13 +652,11 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
 
     start_all();
 
-    // Bootstrap all nodes
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap all nodes bidirectionally so everyone has each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    // Re-bootstrap n2 so it discovers n3 (and vice versa)
+    bootstrap_bidirectional(n2, n1);
 
     ASSERT_EQ(n1.kad->replication_factor(), 3u);
     ASSERT_EQ(n1.kad->write_quorum(), 2u); // W = min(2, 3) = 2
@@ -710,14 +715,11 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
 
     start_all();
 
-    // Bootstrap all nodes so they know each other
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    // Re-bootstrap so n2 knows n3
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap all nodes bidirectionally so everyone has each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    // Re-bootstrap so n2 discovers n3
+    bootstrap_bidirectional(n2, n1);
 
     // Store a name record on node 1 directly (simulating a STORE)
     KeyPair user_kp = generate_keypair();
@@ -1211,13 +1213,10 @@ TEST_F(KademliaTest, SyncPreservesDataType) {
 
     start_all();
 
-    // Bootstrap all nodes
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap all nodes bidirectionally so everyone has each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    bootstrap_bidirectional(n2, n1);
 
     // Build a valid profile and store directly on n1
     KeyPair user_kp = generate_keypair();
@@ -1483,13 +1482,10 @@ TEST_F(KademliaTest, SyncHandlesDelete) {
 
     start_all();
 
-    // Bootstrap all nodes
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap all nodes bidirectionally so everyone has each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    bootstrap_bidirectional(n2, n1);
 
     // Create an inbox message on n1
     KeyPair user_kp = generate_keypair();
@@ -1723,9 +1719,9 @@ TEST_F(KademliaTest, PendingStoreTimeout) {
     auto& n2 = create_node(8);
     start_all();
 
-    // Bootstrap so nodes know each other
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // Bootstrap bidirectionally so both nodes have each other's pubkeys
+    // (required since STORE_ACK needs verified pubkey)
+    bootstrap_bidirectional(n1, n2);
 
     // Build a valid name record and store it
     KeyPair user_kp = generate_keypair();
@@ -1771,13 +1767,11 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     ASSERT_TRUE(n1.kad->store(key, 0x01, record));
     ASSERT_TRUE(n1.storage->get(TABLE_NAMES, key).has_value());
 
-    // Now create n2 and bootstrap — this changes the routing table
+    // Now create n2 and bootstrap bidirectionally — this changes the routing table
+    // Both nodes need each other's pubkeys for STORE verification
     auto& n2 = create_node(8);
     n2.start_recv();
-    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    n1.kad->bootstrap({{"127.0.0.1", n2.info.tcp_port}});
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    bootstrap_bidirectional(n2, n1);
 
     // n1's routing table changed (n2 joined). tick() should trigger transfer.
     n1.kad->tick();
@@ -1787,4 +1781,99 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     auto result = n2.storage->get(TABLE_NAMES, key);
     EXPECT_TRUE(result.has_value())
         << "n2 should have received the name record via responsibility transfer";
+}
+
+// ---------------------------------------------------------------------------
+// Test 36: EmptyPubkeyStoreRejected — STORE rejected from unverified nodes
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Step 1: n1 sends a raw PING to n2.
+    // n2 will add n1 to its routing table with an empty pubkey
+    // (handle_ping doesn't know n1's pubkey).
+    {
+        Message ping;
+        ping.type = MessageType::PING;
+        ping.sender = n1.info.id;
+        ping.sender_port = n1.info.tcp_port;
+        sign_message(ping, n1.keypair.secret_key);
+        n1.transport->send("127.0.0.1", n2.info.tcp_port, ping);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Verify n2 knows about n1 (added via PING) but with empty pubkey
+    auto found = n2.table->find(n1.info.id);
+    ASSERT_TRUE(found.has_value()) << "n2 should have n1 in routing table after PING";
+    EXPECT_TRUE(found->pubkey.empty()) << "n1's pubkey should be empty (added via PING)";
+
+    // Step 2: n1 sends a STORE to n2 — should be rejected (empty pubkey).
+    // Build an allowlist STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
+    Hash key{};
+    key.fill(0x55);
+    std::vector<uint8_t> value(32, 0xAA);  // allowed_fp
+    value.push_back(0x01);                 // action = allow
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);                 // sequence = 1
+
+    std::vector<uint8_t> store_payload;
+    store_payload.insert(store_payload.end(), key.begin(), key.end());
+    store_payload.push_back(0x04); // allowlist data type
+    uint32_t vlen = static_cast<uint32_t>(value.size());
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+    store_payload.insert(store_payload.end(), value.begin(), value.end());
+
+    {
+        Message store_msg;
+        store_msg.type = MessageType::STORE;
+        store_msg.sender = n1.info.id;
+        store_msg.sender_port = n1.info.tcp_port;
+        store_msg.payload = store_payload;
+        sign_message(store_msg, n1.keypair.secret_key);
+        n1.transport->send("127.0.0.1", n2.info.tcp_port, store_msg);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Allowlist uses composite key: routing_key(32) || allowed_fp(32)
+    std::vector<uint8_t> composite_key(key.begin(), key.end());
+    composite_key.insert(composite_key.end(), value.begin(), value.begin() + 32);
+
+    // The STORE should have been rejected — n1's pubkey is empty in n2's table
+    auto stored = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
+    EXPECT_FALSE(stored.has_value())
+        << "STORE from node with empty pubkey should be rejected";
+
+    // Step 3: Bootstrap properly so pubkeys are exchanged via NODES responses.
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // After bootstrap, n2 should have n1's pubkey (received via NODES response)
+    found = n2.table->find(n1.info.id);
+    ASSERT_TRUE(found.has_value()) << "n2 should still have n1 in routing table";
+    EXPECT_FALSE(found->pubkey.empty())
+        << "n1's pubkey should be populated after bootstrap NODES exchange";
+
+    // Step 4: n1 sends a signed STORE to n2 — should succeed now.
+    {
+        Message store_msg;
+        store_msg.type = MessageType::STORE;
+        store_msg.sender = n1.info.id;
+        store_msg.sender_port = n1.info.tcp_port;
+        store_msg.payload = store_payload;
+        sign_message(store_msg, n1.keypair.secret_key);
+        n1.transport->send("127.0.0.1", n2.info.tcp_port, store_msg);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // The STORE should succeed now — n1's pubkey is verified
+    stored = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
+    EXPECT_TRUE(stored.has_value())
+        << "STORE from node with verified pubkey should succeed";
 }

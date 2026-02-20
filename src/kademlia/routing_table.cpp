@@ -11,7 +11,13 @@ void RoutingTable::add_or_update(NodeInfo info) {
             existing.address = std::move(info.address);
             existing.tcp_port = info.tcp_port;
             existing.ws_port = info.ws_port;
-            existing.pubkey = std::move(info.pubkey);
+            // Don't overwrite a verified pubkey with an empty one.
+            // PING/FIND_NODE handlers add nodes without pubkeys; NODES
+            // responses populate them later.  A subsequent PING/FIND_NODE
+            // must not erase the already-verified pubkey.
+            if (!info.pubkey.empty()) {
+                existing.pubkey = std::move(info.pubkey);
+            }
             existing.last_seen = info.last_seen;
             return;
         }
