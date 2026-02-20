@@ -23,7 +23,7 @@ struct NodeInfo {
 
 class RoutingTable {
 public:
-    static constexpr size_t MAX_NODES = 256;
+    explicit RoutingTable(size_t max_nodes = 256) : max_nodes_(max_nodes) {}
 
     void add_or_update(NodeInfo info);
     void remove(const NodeId& id);
@@ -33,7 +33,10 @@ public:
     size_t size() const;
     void evict_older_than(std::chrono::steady_clock::time_point cutoff);
 
+    size_t max_nodes() const { return max_nodes_; }
+
 private:
+    size_t max_nodes_;
     mutable std::mutex mutex_;
     std::vector<NodeInfo> nodes_;
 };

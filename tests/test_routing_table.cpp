@@ -183,11 +183,11 @@ TEST(RoutingTable, SizeLimit) {
     }
 
     // Table should be capped at MAX_NODES
-    EXPECT_EQ(rt.size(), RoutingTable::MAX_NODES);
+    EXPECT_EQ(rt.size(), rt.max_nodes());
 
     // The earliest nodes (0..43) should have been evicted because they had
     // the oldest last_seen timestamps. Nodes 44..299 remain (256 nodes).
-    size_t evicted_count = 300 - RoutingTable::MAX_NODES; // 44
+    size_t evicted_count = 300 - rt.max_nodes(); // 44
     for (size_t i = 0; i < evicted_count; ++i) {
         EXPECT_FALSE(rt.find(ids[i]).has_value())
             << "Node " << i << " should have been evicted";
@@ -205,17 +205,17 @@ TEST(RoutingTable, SizeLimitUpdateDoesNotEvict) {
 
     // Fill the table to capacity
     std::vector<NodeId> ids;
-    for (size_t i = 0; i < RoutingTable::MAX_NODES; ++i) {
+    for (size_t i = 0; i < rt.max_nodes(); ++i) {
         auto node = make_node("cap-node-" + std::to_string(i));
         ids.push_back(node.id);
         rt.add_or_update(std::move(node));
     }
-    EXPECT_EQ(rt.size(), RoutingTable::MAX_NODES);
+    EXPECT_EQ(rt.size(), rt.max_nodes());
 
     // Updating an existing node should not change the size
     auto updated = make_node("cap-node-0", "10.0.0.99", 9999, 9999);
     rt.add_or_update(std::move(updated));
-    EXPECT_EQ(rt.size(), RoutingTable::MAX_NODES);
+    EXPECT_EQ(rt.size(), rt.max_nodes());
 
     auto found = rt.find(ids[0]);
     ASSERT_TRUE(found.has_value());

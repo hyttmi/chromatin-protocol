@@ -69,7 +69,10 @@ bool verify_message(const Message& msg, std::span<const uint8_t> public_key);
 // Reuses connections via an internal pool to avoid per-message TCP handshakes.
 class TcpTransport {
 public:
-    TcpTransport(const std::string& bind_addr, uint16_t port);
+    TcpTransport(const std::string& bind_addr, uint16_t port,
+                 uint16_t connect_timeout = 5, uint16_t read_timeout = 5,
+                 size_t max_pool_size = 64, uint16_t conn_idle_seconds = 60,
+                 uint64_t max_message_size = 50ULL * 1024 * 1024);
     ~TcpTransport();
 
     // Non-copyable
@@ -96,13 +99,14 @@ public:
     // Safe to call periodically (e.g. from Kademlia::tick()).
     void cleanup_idle_connections();
 
-    // Connection pool tuning constants
-    static constexpr auto CONN_MAX_IDLE = std::chrono::seconds(60);
-    static constexpr size_t MAX_POOL_SIZE = 64;
-
 private:
     int listen_fd_ = -1;
     uint16_t port_;
+    uint16_t connect_timeout_;
+    uint16_t read_timeout_;
+    size_t max_pool_size_;
+    std::chrono::seconds conn_max_idle_;
+    uint64_t max_message_size_;
     std::atomic<bool> running_{false};
 
     // Connection pool: keyed by "addr:port"

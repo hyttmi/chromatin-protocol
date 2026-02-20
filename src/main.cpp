@@ -80,7 +80,10 @@ int main(int argc, char* argv[]) {
 
     chromatin::kademlia::NodeInfo self;
     self.id = node_id;
-    self.address = cfg.bind;
+    self.address = cfg.external_address.empty() ? cfg.bind : cfg.external_address;
+    if (self.address == "0.0.0.0" || self.address == "::") {
+        spdlog::warn("external_address not set, node will advertise '{}' to peers", self.address);
+    }
     self.tcp_port = cfg.tcp_port;
     self.ws_port = cfg.ws_port;
     self.pubkey = keypair.public_key;
@@ -88,20 +91,22 @@ int main(int argc, char* argv[]) {
 
     // --- 6. Create Storage ---
     auto db_path = cfg.data_dir / "chromatin.mdbx";
-    chromatin::storage::Storage storage(db_path);
+    chromatin::storage::Storage storage(db_path, cfg.mdbx_max_size);
     spdlog::info("storage opened at {}", db_path.string());
 
     // --- 7. Create ReplLog ---
     chromatin::replication::ReplLog repl_log(storage);
 
     // --- 8. Create RoutingTable ---
-    chromatin::kademlia::RoutingTable routing_table;
+    chromatin::kademlia::RoutingTable routing_table(cfg.max_routing_table_size);
 
     // --- 9. Create TcpTransport ---
-    chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port);
+    chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port,
+        cfg.tcp_connect_timeout, cfg.tcp_read_timeout,
+        cfg.conn_pool_max, cfg.conn_pool_idle_seconds, cfg.max_message_size);
 
     // --- 10. Create Kademlia engine ---
-    chromatin::kademlia::Kademlia kademlia(self, transport, routing_table, storage, repl_log, keypair);
+    chromatin::kademlia::Kademlia kademlia(cfg, self, transport, routing_table, storage, repl_log, keypair);
 
     // --- 11. Start TCP accept loop in background thread ---
     std::thread recv_thread([&]() {

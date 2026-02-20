@@ -181,8 +181,9 @@ static std::optional<Message> read_framed_message(int fd) {
                          | (static_cast<uint32_t>(header[pl_offset + 2]) << 8)
                          | static_cast<uint32_t>(header[pl_offset + 3]);
 
-    // Sanity check: reject absurdly large payloads (50 MiB)
-    if (payload_len > 50u * 1024u * 1024u) return std::nullopt;
+    // Sanity check: reject absurdly large payloads
+    // Note: uses a generous upper bound; real enforcement is at the application layer
+    if (payload_len > 100u * 1024u * 1024u) return std::nullopt;
 
     // 3. Read payload
     std::vector<uint8_t> payload(payload_len);
@@ -214,7 +215,16 @@ static std::optional<Message> read_framed_message(int fd) {
 // TcpTransport
 // ---------------------------------------------------------------------------
 
-TcpTransport::TcpTransport(const std::string& bind_addr, uint16_t port) : port_(port) {
+TcpTransport::TcpTransport(const std::string& bind_addr, uint16_t port,
+                           uint16_t connect_timeout, uint16_t read_timeout,
+                           size_t max_pool_size, uint16_t conn_idle_seconds,
+                           uint64_t max_message_size)
+    : port_(port)
+    , connect_timeout_(connect_timeout)
+    , read_timeout_(read_timeout)
+    , max_pool_size_(max_pool_size)
+    , conn_max_idle_(conn_idle_seconds)
+    , max_message_size_(max_message_size) {
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
         throw std::runtime_error("socket() failed: " + std::string(strerror(errno)));
@@ -279,7 +289,7 @@ void TcpTransport::cleanup_idle_connections() {
     auto now = std::chrono::steady_clock::now();
     std::lock_guard lock(pool_mutex_);
     for (auto it = conn_pool_.begin(); it != conn_pool_.end(); ) {
-        if (now - it->second.last_used > CONN_MAX_IDLE) {
+        if (now - it->second.last_used > conn_max_idle_) {
             close(it->second.fd);
             it = conn_pool_.erase(it);
         } else {
@@ -316,7 +326,7 @@ static bool is_connection_alive(int fd) {
 }
 
 // Helper: create a new TCP connection to addr:port. Returns fd or -1 on failure.
-static int create_connection(const std::string& addr, uint16_t port) {
+static int create_connection(const std::string& addr, uint16_t port, uint16_t connect_timeout = 5) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         spdlog::error("send socket() failed: {}", strerror(errno));
@@ -327,9 +337,9 @@ static int create_connection(const std::string& addr, uint16_t port) {
     int flag = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-    // Connect timeout via SO_SNDTIMEO (5 seconds)
+    // Connect timeout via SO_SNDTIMEO
     struct timeval tv{};
-    tv.tv_sec = 5;
+    tv.tv_sec = connect_timeout;
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_in dest{};
@@ -395,7 +405,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
 
     // If no pooled connection, create a new one
     if (fd < 0) {
-        fd = create_connection(addr, port);
+        fd = create_connection(addr, port, connect_timeout_);
         if (fd < 0) return;
         spdlog::debug("Created new connection to {} (fd={})", pool_key, fd);
     }
@@ -408,7 +418,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
     if (!send_ok && from_pool) {
         spdlog::debug("Send on pooled fd={} failed, retrying with new connection", fd);
         close(fd);
-        fd = create_connection(addr, port);
+        fd = create_connection(addr, port, connect_timeout_);
         if (fd < 0) return;
         send_ok = send_all(fd, data);
     }
@@ -416,7 +426,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
     if (send_ok) {
         // Return connection to pool
         std::lock_guard lock(pool_mutex_);
-        if (conn_pool_.size() < MAX_POOL_SIZE) {
+        if (conn_pool_.size() < max_pool_size_) {
             conn_pool_[pool_key] = {fd, std::chrono::steady_clock::now()};
             spdlog::debug("Returned fd={} to pool for {}", fd, pool_key);
         } else {
@@ -474,9 +484,9 @@ void TcpTransport::run(Handler handler) {
             socklen_t client_len = sizeof(client_addr);
             int client_fd = accept(listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
             if (client_fd >= 0) {
-                // Set read timeout on accepted connection (5 seconds)
+                // Set read timeout on accepted connection
                 struct timeval read_tv{};
-                read_tv.tv_sec = 5;
+                read_tv.tv_sec = read_timeout_;
                 setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_tv, sizeof(read_tv));
 
                 clients.push_back({client_fd, client_addr});

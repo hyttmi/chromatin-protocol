@@ -95,7 +95,7 @@ private:
     replication::ReplLog& repl_log_;
     const crypto::KeyPair& keypair_;
 
-    WorkerPool workers_{4};
+    WorkerPool workers_;
     std::chrono::steady_clock::time_point start_time_ = std::chrono::steady_clock::now();
     uWS::Loop* loop_ = nullptr;
     us_listen_socket_t* listen_socket_ = nullptr;

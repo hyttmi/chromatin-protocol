@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config/config.h"
 #include "crypto/crypto.h"
 #include "kademlia/node_id.h"
 #include "kademlia/routing_table.h"
@@ -29,9 +30,9 @@ struct PendingStore {
 
 class Kademlia {
 public:
-    Kademlia(NodeInfo self, TcpTransport& transport, RoutingTable& table,
-             storage::Storage& storage, replication::ReplLog& repl_log,
-             const crypto::KeyPair& keypair);
+    Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& transport,
+             RoutingTable& table, storage::Storage& storage,
+             replication::ReplLog& repl_log, const crypto::KeyPair& keypair);
 
     // Join network via bootstrap nodes
     void bootstrap(const std::vector<std::pair<std::string, uint16_t>>& addrs);
@@ -88,6 +89,7 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds(2000));
 
 private:
+    const config::Config& cfg_;
     NodeInfo self_;
     TcpTransport& transport_;
     RoutingTable& table_;
@@ -95,7 +97,24 @@ private:
     replication::ReplLog& repl_log_;
     crypto::KeyPair keypair_;
     int name_pow_difficulty_ = 28;
+    int contact_pow_difficulty_ = 16;
     StoreCallback on_store_;
+
+    // Timing intervals (from config)
+    std::chrono::seconds refresh_interval_{30};
+    std::chrono::seconds refresh_interval_sparse_{5};
+    std::chrono::seconds ping_sweep_interval_{10};
+    std::chrono::seconds stale_threshold_{60};
+    std::chrono::seconds evict_threshold_{120};
+    std::chrono::hours ttl_duration_{7 * 24};
+    std::chrono::minutes ttl_sweep_interval_{5};
+    std::chrono::seconds pending_store_timeout_{30};
+    std::chrono::seconds transfer_check_interval_{60};
+    std::chrono::minutes compact_interval_{60};
+    size_t compact_keep_entries_ = 10000;
+    size_t replication_factor_ = 3;
+    uint32_t max_profile_size_ = 1024 * 1024;
+    uint32_t max_request_blob_size_ = 64 * 1024;
 
     // Self-healing: saved bootstrap addresses and timer state
     std::vector<std::pair<std::string, uint16_t>> bootstrap_addrs_;

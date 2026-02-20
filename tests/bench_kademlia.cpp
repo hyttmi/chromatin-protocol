@@ -16,6 +16,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include "config/config.h"
 #include "crypto/crypto.h"
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
@@ -33,6 +34,7 @@ using Clock = steady_clock;
 // ---------------------------------------------------------------------------
 
 struct BenchNode {
+    config::Config cfg;
     crypto::KeyPair keypair;
     kademlia::NodeInfo info;
     std::unique_ptr<kademlia::TcpTransport> transport;
@@ -80,9 +82,10 @@ static std::unique_ptr<BenchNode> make_node() {
 
     n->table = std::make_unique<kademlia::RoutingTable>();
     n->repl_log = std::make_unique<replication::ReplLog>(*n->storage);
+    n->cfg.name_pow_difficulty = 8;
+    n->cfg.contact_pow_difficulty = 8;
     n->kad = std::make_unique<kademlia::Kademlia>(
-        n->info, *n->transport, *n->table, *n->storage, *n->repl_log, n->keypair);
-    n->kad->set_name_pow_difficulty(8);
+        n->cfg, n->info, *n->transport, *n->table, *n->storage, *n->repl_log, n->keypair);
 
     return n;
 }

@@ -76,7 +76,8 @@ TEST(WorkerPool, BackpressureTest) {
     // Fill the queue up to MAX_QUEUE_SIZE
     int accepted = 0;
     int rejected = 0;
-    for (size_t i = 0; i < WorkerPool::MAX_QUEUE_SIZE + 100; ++i) {
+    constexpr size_t DEFAULT_QUEUE_SIZE = 1024;
+    for (size_t i = 0; i < DEFAULT_QUEUE_SIZE + 100; ++i) {
         if (pool.post([] {})) {
             ++accepted;
         } else {
@@ -84,8 +85,8 @@ TEST(WorkerPool, BackpressureTest) {
         }
     }
 
-    // We should have accepted exactly MAX_QUEUE_SIZE jobs and rejected the rest
-    EXPECT_EQ(accepted, static_cast<int>(WorkerPool::MAX_QUEUE_SIZE));
+    // We should have accepted exactly the default queue size jobs and rejected the rest
+    EXPECT_EQ(accepted, static_cast<int>(DEFAULT_QUEUE_SIZE));
     EXPECT_EQ(rejected, 100);
 
     // Release the worker so the pool can drain and shut down cleanly

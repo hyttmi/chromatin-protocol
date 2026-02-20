@@ -5,13 +5,13 @@
 
 namespace chromatin::storage {
 
-Storage::Storage(const std::filesystem::path& db_path) {
+Storage::Storage(const std::filesystem::path& db_path, uint64_t max_size) {
     // Ensure parent directory exists
     std::filesystem::create_directories(db_path.parent_path());
 
     mdbx::env_managed::create_parameters create_params;
     create_params.geometry.size_lower = 1UL << 20;       // 1 MB
-    create_params.geometry.size_upper = 1UL << 30;       // 1 GB
+    create_params.geometry.size_upper = max_size;
     create_params.geometry.growth_step = 1UL << 20;      // 1 MB
     create_params.geometry.shrink_threshold = 2UL << 20;  // 2 MB
     create_params.geometry.pagesize = 4096;

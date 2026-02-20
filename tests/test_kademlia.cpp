@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "config/config.h"
 #include "crypto/crypto.h"
 #include "kademlia/kademlia.h"
 #include "kademlia/node_id.h"
@@ -28,6 +29,7 @@ using namespace chromatin::storage;
 // ---------------------------------------------------------------------------
 
 struct TestNode {
+    chromatin::config::Config cfg;
     KeyPair keypair;
     NodeInfo info;
     std::unique_ptr<TcpTransport> transport;
@@ -110,10 +112,11 @@ protected:
         node->repl_log = std::make_unique<ReplLog>(*node->storage);
 
         // Create kademlia engine
+        node->cfg.name_pow_difficulty = name_pow_difficulty;
+        node->cfg.contact_pow_difficulty = 8;  // low for testing
         node->kad = std::make_unique<Kademlia>(
-            node->info, *node->transport, *node->table, *node->storage,
+            node->cfg, node->info, *node->transport, *node->table, *node->storage,
             *node->repl_log, node->keypair);
-        node->kad->set_name_pow_difficulty(name_pow_difficulty);
 
         nodes_.push_back(std::move(node));
         return *nodes_.back();
@@ -2311,6 +2314,12 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
 
 TEST_F(KademliaTest, ReplLogCompaction) {
     auto& n1 = create_node(8);
+    // Override compact_keep_entries so that 150 entries triggers compaction
+    n1.cfg.compact_keep_entries = 100;
+    // Recreate Kademlia with updated config
+    n1.kad = std::make_unique<Kademlia>(
+        n1.cfg, n1.info, *n1.transport, *n1.table, *n1.storage,
+        *n1.repl_log, n1.keypair);
     start_all();
 
     // Create a routing key and store many entries into the repl_log

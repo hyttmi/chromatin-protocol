@@ -26,7 +26,7 @@ inline constexpr const char* TABLE_MESSAGE_BLOBS  = "message_blobs";
 
 class Storage {
 public:
-    explicit Storage(const std::filesystem::path& db_path);
+    explicit Storage(const std::filesystem::path& db_path, uint64_t max_size = 1ULL << 30);
     ~Storage();
 
     Storage(const Storage&) = delete;

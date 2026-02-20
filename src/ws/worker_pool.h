@@ -14,7 +14,8 @@ namespace chromatin::ws {
 /// uWebSockets event loop (e.g. kademlia.store() calls).
 class WorkerPool {
 public:
-    explicit WorkerPool(size_t num_threads = 4) {
+    explicit WorkerPool(size_t num_threads = 4, size_t max_queue_size = 1024)
+        : max_queue_size_(max_queue_size) {
         workers_.reserve(num_threads);
         for (size_t i = 0; i < num_threads; ++i) {
             workers_.emplace_back([this] { worker_loop(); });
@@ -38,14 +39,12 @@ public:
     WorkerPool(WorkerPool&&) = delete;
     WorkerPool& operator=(WorkerPool&&) = delete;
 
-    static constexpr size_t MAX_QUEUE_SIZE = 1024;
-
     /// Enqueue a job for execution on a worker thread.
     /// Returns false if the queue is full (backpressure).
     bool post(std::function<void()> job) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (jobs_.size() >= MAX_QUEUE_SIZE) {
+            if (jobs_.size() >= max_queue_size_) {
                 return false;  // queue full, reject
             }
             jobs_.push(std::move(job));
@@ -71,6 +70,7 @@ private:
         }
     }
 
+    size_t max_queue_size_;
     std::vector<std::thread> workers_;
     std::queue<std::function<void()>> jobs_;
     std::mutex mutex_;

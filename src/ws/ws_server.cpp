@@ -19,7 +19,8 @@ WsServer<SSL>::WsServer(const config::Config& cfg,
     , kad_(kad)
     , storage_(storage)
     , repl_log_(repl_log)
-    , keypair_(keypair) {}
+    , keypair_(keypair)
+    , workers_(cfg.worker_pool_threads, cfg.worker_pool_queue_max) {}
 
 template<bool SSL>
 void WsServer<SSL>::run() {
@@ -35,10 +36,15 @@ void WsServer<SSL>::run() {
         .compression = uWS::DISABLED,
         // 512 KiB: base64-encoded 256 KiB blobs (~341 KiB) + JSON overhead
         .maxPayloadLength = 1048576 + 64,  // 1 MiB chunk + header overhead
-        .idleTimeout = 120,
+        .idleTimeout = cfg_.ws_idle_timeout,
 
         .open = [this](ws_t* ws) {
             connections_.insert(ws);
+            auto* session = ws->getUserData();
+            session->rate_limiter.tokens = cfg_.rate_limit_tokens;
+            session->rate_limiter.max_tokens = cfg_.rate_limit_max;
+            session->rate_limiter.refill_rate = cfg_.rate_limit_refill;
+            session->rate_limiter.last_refill = std::chrono::steady_clock::now();
             spdlog::info("WS: client connected");
         },
 
@@ -843,11 +849,9 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
 
     if (has_size && blob_b64.empty()) {
         // ---- Large chunked SEND path ----
-        static constexpr uint64_t MAX_LARGE_SIZE = 50ULL * 1024 * 1024;  // 50 MiB
-        static_assert(MAX_LARGE_SIZE <= UINT32_MAX, "expected_size is uint32_t");
         uint64_t declared_size = msg["size"].asUInt64();
 
-        if (declared_size > MAX_LARGE_SIZE) {
+        if (declared_size > cfg_.max_message_size) {
             send_error(ws, id, 413, "attachment too large");
             return;
         }
@@ -1304,9 +1308,8 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
         send_error(ws, id, 400, "invalid base64 in blob");
         return;
     }
-    static constexpr size_t MAX_REQUEST_BLOB_SIZE = 64 * 1024;  // 64 KiB
-    if (blob->size() > MAX_REQUEST_BLOB_SIZE) {
-        send_error(ws, id, 400, "blob exceeds 64 KiB");
+    if (blob->size() > cfg_.max_request_blob_size) {
+        send_error(ws, id, 400, "blob exceeds max size");
         return;
     }
 
@@ -1326,7 +1329,7 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
                     session->fingerprint.begin(), session->fingerprint.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
 
-    if (!crypto::verify_pow(preimage, pow_nonce, 16)) {
+    if (!crypto::verify_pow(preimage, pow_nonce, cfg_.contact_pow_difficulty)) {
         send_error(ws, id, 400, "invalid PoW");
         return;
     }
@@ -1542,13 +1545,13 @@ void WsServer<SSL>::handle_status(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::check_upload_timeouts() {
-    static constexpr auto UPLOAD_TIMEOUT = std::chrono::seconds(30);
+    auto upload_timeout = std::chrono::seconds(cfg_.upload_timeout);
     auto now = std::chrono::steady_clock::now();
 
     for (auto* ws : connections_) {
         auto* session = ws->getUserData();
         if (session->pending_upload &&
-            (now - session->pending_upload->started) > UPLOAD_TIMEOUT) {
+            (now - session->pending_upload->started) > upload_timeout) {
             send_error(ws, session->pending_upload->id, 408, "upload timeout");
             session->pending_upload.reset();
         }

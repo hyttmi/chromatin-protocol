@@ -16,15 +16,24 @@ namespace chromatin::kademlia {
 // Construction
 // ---------------------------------------------------------------------------
 
-Kademlia::Kademlia(NodeInfo self, TcpTransport& transport, RoutingTable& table,
-                   storage::Storage& storage, replication::ReplLog& repl_log,
-                   const crypto::KeyPair& keypair)
-    : self_(std::move(self))
+Kademlia::Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& transport,
+                   RoutingTable& table, storage::Storage& storage,
+                   replication::ReplLog& repl_log, const crypto::KeyPair& keypair)
+    : cfg_(cfg)
+    , self_(std::move(self))
     , transport_(transport)
     , table_(table)
     , storage_(storage)
     , repl_log_(repl_log)
-    , keypair_(keypair) {}
+    , keypair_(keypair)
+    , name_pow_difficulty_(cfg.name_pow_difficulty)
+    , contact_pow_difficulty_(cfg.contact_pow_difficulty)
+    , ttl_duration_(std::chrono::hours(cfg.ttl_days * 24))
+    , compact_interval_(std::chrono::minutes(cfg.compact_interval_minutes))
+    , compact_keep_entries_(cfg.compact_keep_entries)
+    , replication_factor_(cfg.replication_factor)
+    , max_profile_size_(cfg.max_profile_size)
+    , max_request_blob_size_(cfg.max_request_blob_size) {}
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -55,26 +64,15 @@ void Kademlia::set_on_store(StoreCallback cb) {
 // Periodic maintenance (self-healing)
 // ---------------------------------------------------------------------------
 
-static constexpr auto REFRESH_INTERVAL        = std::chrono::seconds(30);
-static constexpr auto REFRESH_INTERVAL_SPARSE  = std::chrono::seconds(5);
-static constexpr auto PING_SWEEP_INTERVAL      = std::chrono::seconds(10);
-static constexpr auto STALE_THRESHOLD          = std::chrono::seconds(60);
-static constexpr auto EVICT_THRESHOLD          = std::chrono::seconds(120);
-static constexpr size_t SPARSE_TABLE_SIZE      = 3;
-static constexpr auto TTL_DURATION             = std::chrono::hours(7 * 24);  // 7 days
-static constexpr auto TTL_SWEEP_INTERVAL       = std::chrono::minutes(5);
-static constexpr auto PENDING_STORE_TIMEOUT    = std::chrono::seconds(30);
-static constexpr auto TRANSFER_CHECK_INTERVAL  = std::chrono::seconds(60);
-static constexpr auto COMPACT_INTERVAL         = std::chrono::hours(1);
-static constexpr size_t COMPACT_KEEP_ENTRIES   = 100;  // Keep last N entries per key
+static constexpr size_t SPARSE_TABLE_SIZE = 3;
 
 void Kademlia::tick() {
     auto now = std::chrono::steady_clock::now();
 
     // 1. Re-bootstrap / refresh
     auto refresh_interval = (table_.size() < SPARSE_TABLE_SIZE)
-                                ? REFRESH_INTERVAL_SPARSE
-                                : REFRESH_INTERVAL;
+                                ? refresh_interval_sparse_
+                                : refresh_interval_;
 
     if (now - last_refresh_ >= refresh_interval) {
         last_refresh_ = now;
@@ -93,11 +91,11 @@ void Kademlia::tick() {
     }
 
     // 2. Ping stale nodes + evict dead nodes
-    if (now - last_ping_sweep_ >= PING_SWEEP_INTERVAL) {
+    if (now - last_ping_sweep_ >= ping_sweep_interval_) {
         last_ping_sweep_ = now;
 
-        auto stale_cutoff = now - STALE_THRESHOLD;
-        auto evict_cutoff = now - EVICT_THRESHOLD;
+        auto stale_cutoff = now - stale_threshold_;
+        auto evict_cutoff = now - evict_threshold_;
 
         // Evict dead nodes first
         table_.evict_older_than(evict_cutoff);
@@ -113,7 +111,7 @@ void Kademlia::tick() {
     }
 
     // 3. TTL expiry sweep
-    if (now - last_ttl_sweep_ >= TTL_SWEEP_INTERVAL) {
+    if (now - last_ttl_sweep_ >= ttl_sweep_interval_) {
         last_ttl_sweep_ = now;
         expire_ttl();
     }
@@ -124,14 +122,14 @@ void Kademlia::tick() {
     // 5. Responsibility transfer when routing table changes
     size_t current_size = table_.size();
     if (current_size != last_table_size_ &&
-        now - last_transfer_check_ >= TRANSFER_CHECK_INTERVAL) {
+        now - last_transfer_check_ >= transfer_check_interval_) {
         last_transfer_check_ = now;
         last_table_size_ = current_size;
         transfer_responsibility();
     }
 
     // 6. Periodic repl_log compaction
-    if (now - last_compact_ > COMPACT_INTERVAL) {
+    if (now - last_compact_ > compact_interval_) {
         last_compact_ = now;
         compact_repl_log();
     }
@@ -149,7 +147,7 @@ void Kademlia::expire_ttl() {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
     auto ttl_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(TTL_DURATION).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(ttl_duration_).count());
     uint64_t cutoff = (now_ms > ttl_ms) ? (now_ms - ttl_ms) : 0;
 
     // Convert cutoff to seconds for comparison with stored timestamps
@@ -246,7 +244,7 @@ void Kademlia::cleanup_pending_stores() {
     auto now = std::chrono::steady_clock::now();
     std::lock_guard lock(pending_mutex_);
     for (auto it = pending_stores_.begin(); it != pending_stores_.end();) {
-        if (now - it->second.created > PENDING_STORE_TIMEOUT) {
+        if (now - it->second.created > pending_store_timeout_) {
             spdlog::debug("Pending store timed out (expected {} ACKs, got {})",
                           it->second.expected, it->second.acked);
             it = pending_stores_.erase(it);
@@ -418,8 +416,8 @@ void Kademlia::compact_repl_log() {
     size_t total_compacted = 0;
     for (const auto& key : unique_keys) {
         uint64_t max_seq = repl_log_.current_seq(key);
-        if (max_seq > COMPACT_KEEP_ENTRIES) {
-            uint64_t before_seq = max_seq - COMPACT_KEEP_ENTRIES;
+        if (max_seq > compact_keep_entries_) {
+            uint64_t before_seq = max_seq - compact_keep_entries_;
             repl_log_.compact(key, before_seq);
             ++total_compacted;
         }
@@ -427,7 +425,7 @@ void Kademlia::compact_repl_log() {
 
     if (total_compacted > 0) {
         spdlog::info("Repl log compaction: compacted {} keys (keeping last {} entries each)",
-                     total_compacted, COMPACT_KEEP_ENTRIES);
+                     total_compacted, compact_keep_entries_);
     }
 }
 
@@ -1158,7 +1156,7 @@ std::optional<std::vector<uint8_t>> Kademlia::find_value(const crypto::Hash& key
 
 size_t Kademlia::replication_factor() const {
     size_t network_size = table_.size() + 1; // +1 for self
-    return std::min(static_cast<size_t>(3), network_size);
+    return std::min(replication_factor_, network_size);
 }
 
 std::vector<NodeInfo> Kademlia::responsible_nodes(const crypto::Hash& key) const {
@@ -1415,10 +1413,8 @@ static std::optional<uint64_t> extract_profile_sequence(std::span<const uint8_t>
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Hash& key) {
-    static constexpr size_t MAX_PROFILE_SIZE = 1024 * 1024; // 1 MiB
-
-    if (value.size() > MAX_PROFILE_SIZE) {
-        spdlog::warn("Profile validation: size {} exceeds 1 MiB limit", value.size());
+    if (value.size() > max_profile_size_) {
+        spdlog::warn("Profile validation: size {} exceeds {} byte limit", value.size(), max_profile_size_);
         return false;
     }
 
@@ -1541,14 +1537,12 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
 bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
     // Format: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
     // Minimum: 32 + 32 + 32 + 8 + 4 = 108 bytes
-    static constexpr size_t MAX_MESSAGE_SIZE = 50ULL * 1024 * 1024; // 50 MiB
-
     if (value.size() < 108) {
         spdlog::warn("Inbox validation: too short ({} bytes)", value.size());
         return false;
     }
 
-    if (value.size() > MAX_MESSAGE_SIZE) {
+    if (value.size() > cfg_.max_message_size) {
         spdlog::warn("Inbox validation: size {} exceeds 50 MiB limit", value.size());
         return false;
     }
@@ -1610,8 +1604,6 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
 bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
     // Format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
     // Minimum: 32 + 32 + 8 + 4 = 76 bytes
-    static constexpr size_t MAX_REQUEST_BLOB = 64 * 1024; // 64 KiB
-
     if (value.size() < 76) {
         spdlog::warn("Contact request validation: too short ({} bytes)", value.size());
         return false;
@@ -1635,8 +1627,8 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
 
-    if (!crypto::verify_pow(preimage, pow_nonce, 16)) {
-        spdlog::debug("Contact request rejected: insufficient PoW");
+    if (!crypto::verify_pow(preimage, pow_nonce, contact_pow_difficulty_)) {
+        spdlog::debug("Contact request rejected: insufficient PoW (required {} bits)", contact_pow_difficulty_);
         return false;
     }
 
@@ -1646,8 +1638,8 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
                       | (static_cast<uint32_t>(value[74]) << 8)
                       | static_cast<uint32_t>(value[75]);
 
-    if (blob_len > MAX_REQUEST_BLOB) {
-        spdlog::warn("Contact request validation: blob_len {} exceeds 64 KiB", blob_len);
+    if (blob_len > max_request_blob_size_) {
+        spdlog::warn("Contact request validation: blob_len {} exceeds {} bytes", blob_len, max_request_blob_size_);
         return false;
     }
 

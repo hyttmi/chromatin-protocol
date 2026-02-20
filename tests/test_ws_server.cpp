@@ -132,9 +132,14 @@ protected:
         self.pubkey = node_keypair_.public_key;
         self.last_seen = std::chrono::steady_clock::now();
 
+        cfg_.bind = "127.0.0.1";
+        cfg_.ws_port = 0;  // ephemeral
+        cfg_.data_dir = db_path_;
+        cfg_.name_pow_difficulty = 8;
+        cfg_.contact_pow_difficulty = 8;
+
         kademlia_ = std::make_unique<kademlia::Kademlia>(
-            self, *transport_, *routing_table_, *storage_, *repl_log_, node_keypair_);
-        kademlia_->set_name_pow_difficulty(8);
+            cfg_, self, *transport_, *routing_table_, *storage_, *repl_log_, node_keypair_);
 
         // Start TCP accept thread
         tcp_thread_ = std::thread([this]() {
@@ -143,10 +148,6 @@ protected:
                 kademlia_->handle_message(msg, from, port);
             });
         });
-
-        cfg_.bind = "127.0.0.1";
-        cfg_.ws_port = 0;  // ephemeral
-        cfg_.data_dir = db_path_;
     }
 
     // Authenticate helper: does HELLO -> CHALLENGE -> AUTH flow.

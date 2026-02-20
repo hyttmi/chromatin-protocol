@@ -23,7 +23,7 @@ void RoutingTable::add_or_update(NodeInfo info) {
         }
     }
     // If full, evict the node with the oldest last_seen timestamp.
-    if (nodes_.size() >= MAX_NODES) {
+    if (nodes_.size() >= max_nodes_) {
         auto oldest = std::min_element(nodes_.begin(), nodes_.end(),
             [](const auto& a, const auto& b) { return a.last_seen < b.last_seen; });
         *oldest = std::move(info);
