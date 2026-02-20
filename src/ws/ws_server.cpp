@@ -157,6 +157,9 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"CONTACT_REQUEST", {&WsServer::handle_contact_request, true,  3.0}},
         {"DELETE",          {&WsServer::handle_delete,          true,  1.0}},
         {"STATUS",          {&WsServer::handle_status,          false, 0.0}},
+        {"RESOLVE_NAME",   {&WsServer::handle_resolve_name,   true,  1.0}},
+        {"GET_PROFILE",    {&WsServer::handle_get_profile,    true,  1.0}},
+        {"LIST_REQUESTS",  {&WsServer::handle_list_requests,  true,  1.0}},
     };
 
     auto it = commands.find(type);
@@ -1595,6 +1598,220 @@ void WsServer<SSL>::handle_status(ws_t* ws, const Json::Value& msg) {
     resp["connected_clients"] = static_cast<Json::UInt64>(connections_.size());
     resp["authenticated_clients"] = static_cast<Json::UInt64>(authenticated_.size());
     resp["routing_table_size"] = static_cast<Json::UInt64>(kad_.routing_table_size());
+    send_json(ws, resp);
+}
+
+// ---------- RESOLVE_NAME handler ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_resolve_name(ws_t* ws, const Json::Value& msg) {
+    int id = msg.get("id", 0).asInt();
+
+    std::string name = msg.get("name", "").asString();
+    if (name.empty()) {
+        send_error(ws, id, 400, "missing name");
+        return;
+    }
+
+    // Look up in TABLE_NAMES: key = SHA3-256("name:" || name)
+    std::vector<uint8_t> name_bytes(name.begin(), name.end());
+    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+
+    auto record = storage_.get(storage::TABLE_NAMES,
+        std::vector<uint8_t>(name_key.begin(), name_key.end()));
+
+    Json::Value resp;
+    resp["type"] = "RESOLVE_NAME_RESULT";
+    resp["id"] = id;
+
+    if (!record || record->empty()) {
+        resp["found"] = false;
+        send_json(ws, resp);
+        return;
+    }
+
+    // Parse name record: name_len(1) || name(N) || fingerprint(32) || ...
+    uint8_t name_len = (*record)[0];
+    size_t fp_offset = 1 + name_len;
+    if (record->size() < fp_offset + 32) {
+        resp["found"] = false;
+        send_json(ws, resp);
+        return;
+    }
+
+    crypto::Hash fingerprint{};
+    std::copy_n(record->data() + fp_offset, 32, fingerprint.begin());
+
+    resp["found"] = true;
+    resp["fingerprint"] = to_hex(fingerprint);
+    send_json(ws, resp);
+}
+
+// ---------- GET_PROFILE handler ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_get_profile(ws_t* ws, const Json::Value& msg) {
+    int id = msg.get("id", 0).asInt();
+
+    std::string fp_hex = msg.get("fingerprint", "").asString();
+    if (fp_hex.size() != 64) {
+        send_error(ws, id, 400, "fingerprint must be 64 hex chars");
+        return;
+    }
+    auto fp_bytes = from_hex(fp_hex);
+    if (!fp_bytes) {
+        send_error(ws, id, 400, "invalid hex in fingerprint");
+        return;
+    }
+    crypto::Hash fingerprint{};
+    std::copy(fp_bytes->begin(), fp_bytes->end(), fingerprint.begin());
+
+    // Look up in TABLE_PROFILES: key = SHA3-256("profile:" || fingerprint)
+    auto profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
+
+    auto profile = storage_.get(storage::TABLE_PROFILES,
+        std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
+
+    Json::Value resp;
+    resp["type"] = "PROFILE_RESULT";
+    resp["id"] = id;
+
+    if (!profile || profile->empty()) {
+        resp["found"] = false;
+        send_json(ws, resp);
+        return;
+    }
+
+    resp["found"] = true;
+
+    // Parse profile binary:
+    // fingerprint(32) || pubkey_len(2 BE) || pubkey || kem_pubkey_len(2 BE) || kem_pubkey
+    // || bio_len(2 BE) || bio || avatar_len(4 BE) || avatar || social_count(1)
+    // || [platform_len(1) || platform || handle_len(1) || handle]...
+    // || sequence(8 BE) || sig_len(2 BE) || signature
+    const auto& data = *profile;
+    size_t offset = 0;
+
+    if (data.size() < 53) {
+        resp["found"] = false;
+        send_json(ws, resp);
+        return;
+    }
+
+    // fingerprint (32)
+    resp["fingerprint"] = to_hex(std::span<const uint8_t>(data.data(), 32));
+    offset += 32;
+
+    // pubkey_len + pubkey
+    uint16_t pk_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+    offset += 2;
+    if (offset + pk_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    resp["pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, pk_len));
+    offset += pk_len;
+
+    // kem_pubkey_len + kem_pubkey
+    if (offset + 2 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    uint16_t kem_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+    offset += 2;
+    if (offset + kem_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    resp["kem_pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, kem_len));
+    offset += kem_len;
+
+    // bio_len + bio
+    if (offset + 2 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    uint16_t bio_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+    offset += 2;
+    if (offset + bio_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    resp["bio"] = std::string(reinterpret_cast<const char*>(data.data() + offset), bio_len);
+    offset += bio_len;
+
+    // avatar_len + avatar (base64)
+    if (offset + 4 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    uint32_t avatar_len = (static_cast<uint32_t>(data[offset]) << 24)
+                        | (static_cast<uint32_t>(data[offset + 1]) << 16)
+                        | (static_cast<uint32_t>(data[offset + 2]) << 8)
+                        | static_cast<uint32_t>(data[offset + 3]);
+    offset += 4;
+    if (offset + avatar_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    if (avatar_len > 0) {
+        resp["avatar"] = to_base64(std::span<const uint8_t>(data.data() + offset, avatar_len));
+    }
+    offset += avatar_len;
+
+    // social links
+    if (offset + 1 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
+    uint8_t social_count = data[offset];
+    offset += 1;
+    Json::Value socials(Json::arrayValue);
+    for (uint8_t i = 0; i < social_count; ++i) {
+        if (offset + 1 > data.size()) break;
+        uint8_t platform_len = data[offset]; offset += 1;
+        if (offset + platform_len > data.size()) break;
+        std::string platform(reinterpret_cast<const char*>(data.data() + offset), platform_len);
+        offset += platform_len;
+        if (offset + 1 > data.size()) break;
+        uint8_t handle_len = data[offset]; offset += 1;
+        if (offset + handle_len > data.size()) break;
+        std::string handle(reinterpret_cast<const char*>(data.data() + offset), handle_len);
+        offset += handle_len;
+
+        Json::Value link;
+        link["platform"] = platform;
+        link["handle"] = handle;
+        socials.append(link);
+    }
+    resp["social_links"] = socials;
+
+    send_json(ws, resp);
+}
+
+// ---------- LIST_REQUESTS handler ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_list_requests(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Prefix scan TABLE_REQUESTS with recipient_fp (authenticated user's fingerprint)
+    // Contact request storage key: recipient_fp(32) || sender_fp(32)
+    // Contact request value: recipient_fp(32) || sender_fp(32) || pow_nonce(8) || timestamp(8) || blob_len(4) || blob
+    std::vector<uint8_t> prefix(session->fingerprint.begin(), session->fingerprint.end());
+
+    Json::Value resp;
+    resp["type"] = "LIST_REQUESTS_RESULT";
+    resp["id"] = id;
+    Json::Value requests(Json::arrayValue);
+
+    storage_.scan(storage::TABLE_REQUESTS, prefix,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) {
+            if (value.size() < 84) return true;  // skip malformed
+
+            // sender_fp at offset 32
+            Json::Value entry;
+            entry["from"] = to_hex(std::span<const uint8_t>(value.data() + 32, 32));
+
+            // timestamp at offset 72 (8 bytes BE, milliseconds)
+            uint64_t ts = 0;
+            for (int i = 0; i < 8; ++i) {
+                ts = (ts << 8) | value[72 + i];
+            }
+            entry["timestamp"] = Json::UInt64(ts);
+
+            // blob at offset 84
+            uint32_t blob_len = (static_cast<uint32_t>(value[80]) << 24)
+                              | (static_cast<uint32_t>(value[81]) << 16)
+                              | (static_cast<uint32_t>(value[82]) << 8)
+                              | static_cast<uint32_t>(value[83]);
+            if (84 + blob_len <= value.size()) {
+                entry["blob"] = to_base64(
+                    std::span<const uint8_t>(value.data() + 84, blob_len));
+            }
+
+            requests.append(entry);
+            return true;  // continue scanning
+        });
+
+    resp["requests"] = requests;
     send_json(ws, resp);
 }
 

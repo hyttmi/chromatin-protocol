@@ -1744,3 +1744,221 @@ TEST_F(WsServerTest, MultiDevicePush) {
 
     device2.close();
 }
+
+TEST_F(WsServerTest, ResolveNameFound) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Store a name record in TABLE_NAMES
+    // name record: name_len(1) || name(N) || fingerprint(32) || ...
+    std::string name = "alice";
+    std::vector<uint8_t> name_record;
+    name_record.push_back(static_cast<uint8_t>(name.size()));
+    name_record.insert(name_record.end(), name.begin(), name.end());
+    name_record.insert(name_record.end(), user_fp.begin(), user_fp.end());
+    // Append minimal remaining data (pow_nonce + sequence + sig_len=0)
+    name_record.resize(name_record.size() + 8 + 8 + 2, 0x00);
+
+    std::vector<uint8_t> name_bytes(name.begin(), name.end());
+    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+    storage_->put(storage::TABLE_NAMES,
+        std::vector<uint8_t>(name_key.begin(), name_key.end()), name_record);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send RESOLVE_NAME
+    client.send_text(R"({"type":"RESOLVE_NAME","id":100,"name":"alice"})");
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "RESOLVE_NAME_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 100);
+    EXPECT_TRUE(root["found"].asBool());
+    EXPECT_EQ(root["fingerprint"].asString(), to_hex(user_fp));
+
+    client.close();
+}
+
+TEST_F(WsServerTest, ResolveNameNotFound) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    client.send_text(R"({"type":"RESOLVE_NAME","id":101,"name":"nonexistent"})");
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "RESOLVE_NAME_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 101);
+    EXPECT_FALSE(root["found"].asBool());
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GetProfileFound) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Store a minimal profile in TABLE_PROFILES
+    // fingerprint(32) || pubkey_len(2 BE) || pubkey || kem_pubkey_len(2 BE=0)
+    // || bio_len(2 BE) || bio || avatar_len(4 BE=0) || social_count(1=0)
+    // || sequence(8 BE) || sig_len(2 BE=0)
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    // pubkey_len
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>(pk_len >> 8));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    // bio
+    std::string bio = "hello world";
+    uint16_t bio_len = static_cast<uint16_t>(bio.size());
+    profile.push_back(static_cast<uint8_t>(bio_len >> 8));
+    profile.push_back(static_cast<uint8_t>(bio_len & 0xFF));
+    profile.insert(profile.end(), bio.begin(), bio.end());
+    // avatar_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00);
+    // social_count = 0
+    profile.push_back(0x00);
+    // sequence = 1
+    for (int i = 0; i < 7; ++i) profile.push_back(0x00);
+    profile.push_back(0x01);
+    // sig_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+
+    auto profile_key = crypto::sha3_256_prefixed("profile:", user_fp);
+    storage_->put(storage::TABLE_PROFILES,
+        std::vector<uint8_t>(profile_key.begin(), profile_key.end()), profile);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send GET_PROFILE
+    std::string msg = R"({"type":"GET_PROFILE","id":102,"fingerprint":")" +
+                      to_hex(user_fp) + R"("})";
+    client.send_text(msg);
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "PROFILE_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 102);
+    EXPECT_TRUE(root["found"].asBool());
+    EXPECT_EQ(root["fingerprint"].asString(), to_hex(user_fp));
+    EXPECT_EQ(root["bio"].asString(), "hello world");
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GetProfileNotFound) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    crypto::Hash fake_fp{};
+    fake_fp.fill(0xDD);
+    std::string msg = R"({"type":"GET_PROFILE","id":103,"fingerprint":")" +
+                      to_hex(fake_fp) + R"("})";
+    client.send_text(msg);
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "PROFILE_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 103);
+    EXPECT_FALSE(root["found"].asBool());
+
+    client.close();
+}
+
+TEST_F(WsServerTest, ListRequestsEmpty) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    client.send_text(R"({"type":"LIST_REQUESTS","id":104})");
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "LIST_REQUESTS_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 104);
+    EXPECT_TRUE(root["requests"].isArray());
+    EXPECT_EQ(root["requests"].size(), 0u);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, ListRequestsWithData) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    auto sender_kp = crypto::generate_keypair();
+    auto sender_fp = crypto::sha3_256(sender_kp.public_key);
+
+    // Store a contact request directly in TABLE_REQUESTS
+    // key: recipient_fp(32) || sender_fp(32)
+    // value: recipient_fp(32) || sender_fp(32) || pow_nonce(8) || timestamp(8) || blob_len(4) || blob
+    uint64_t timestamp = 1700000000000ULL;  // some timestamp in ms
+    std::vector<uint8_t> blob = {0xDE, 0xAD};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> storage_key;
+    storage_key.insert(storage_key.end(), user_fp.begin(), user_fp.end());
+    storage_key.insert(storage_key.end(), sender_fp.begin(), sender_fp.end());
+
+    std::vector<uint8_t> value;
+    value.insert(value.end(), user_fp.begin(), user_fp.end());
+    value.insert(value.end(), sender_fp.begin(), sender_fp.end());
+    // pow_nonce = 0
+    for (int i = 0; i < 8; ++i) value.push_back(0x00);
+    // timestamp (8 BE ms)
+    for (int i = 7; i >= 0; --i)
+        value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    // blob_len (4 BE)
+    value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    value.insert(value.end(), blob.begin(), blob.end());
+
+    storage_->put(storage::TABLE_REQUESTS, storage_key, value);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    client.send_text(R"({"type":"LIST_REQUESTS","id":105})");
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "LIST_REQUESTS_RESULT");
+    EXPECT_EQ(root["id"].asInt(), 105);
+    ASSERT_TRUE(root["requests"].isArray());
+    ASSERT_EQ(root["requests"].size(), 1u);
+    EXPECT_EQ(root["requests"][0]["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(root["requests"][0]["timestamp"].asUInt64(), timestamp);
+
+    client.close();
+}

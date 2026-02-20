@@ -129,6 +129,9 @@ private:
     void handle_contact_request(ws_t* ws, const Json::Value& msg);
     void handle_delete(ws_t* ws, const Json::Value& msg);
     void handle_status(ws_t* ws, const Json::Value& msg);
+    void handle_resolve_name(ws_t* ws, const Json::Value& msg);
+    void handle_get_profile(ws_t* ws, const Json::Value& msg);
+    void handle_list_requests(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
