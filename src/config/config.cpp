@@ -59,6 +59,12 @@ Config load_config(const std::filesystem::path& path) {
             cfg.bootstrap.push_back(parse_endpoint(entry.asString()));
         }
     }
+    if (root.isMember("tls_cert_path")) {
+        cfg.tls_cert_path = root["tls_cert_path"].asString();
+    }
+    if (root.isMember("tls_key_path")) {
+        cfg.tls_key_path = root["tls_key_path"].asString();
+    }
 
     validate_config(cfg);
     return cfg;
@@ -83,6 +89,13 @@ void validate_config(const Config& cfg) {
             throw std::runtime_error(rule.message);
         }
     }
+
+    // TLS: both fields must be set or both empty
+    bool has_cert = !cfg.tls_cert_path.empty();
+    bool has_key = !cfg.tls_key_path.empty();
+    if (has_cert != has_key) {
+        throw std::runtime_error("tls_cert_path and tls_key_path must both be set or both empty");
+    }
 }
 
 void generate_default_config(const std::filesystem::path& path) {
@@ -97,6 +110,10 @@ void generate_default_config(const std::filesystem::path& path) {
     bootstrap.append("1.bootstrap.cpunk.io:4000");
     bootstrap.append("2.bootstrap.cpunk.io:4000");
     root["bootstrap"] = bootstrap;
+
+    // TLS (empty = plaintext WebSocket)
+    root["tls_cert_path"] = "";
+    root["tls_key_path"] = "";
 
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "  ";

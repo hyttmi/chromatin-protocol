@@ -59,6 +59,7 @@ struct Session {
     std::optional<PendingUpload> pending_upload;
 };
 
+template<bool SSL = false>
 class WsServer {
 public:
     WsServer(const config::Config& cfg,
@@ -86,7 +87,7 @@ public:
     uint16_t listening_port() const { return listening_port_.load(); }
 
 private:
-    using ws_t = uWS::WebSocket<false, true, Session>;
+    using ws_t = uWS::WebSocket<SSL, true, Session>;
 
     const config::Config& cfg_;
     kademlia::Kademlia& kad_;

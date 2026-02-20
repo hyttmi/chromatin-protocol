@@ -381,6 +381,11 @@ Deletion is client-driven and optional. Each device tracks its own
 
 ### 8.1 Connection Model
 
+Nodes support optional **TLS** (WSS) to protect connection metadata from network
+observers. When `tls_cert_path` and `tls_key_path` are configured, the node
+serves WebSocket over TLS on the same port. Clients SHOULD prefer `wss://`
+connections.
+
 A client connects to **any of the R nodes responsible for their inbox**:
 
 ```

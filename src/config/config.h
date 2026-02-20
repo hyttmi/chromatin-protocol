@@ -15,6 +15,10 @@ struct Config {
     uint16_t tcp_port = 4000;
     uint16_t ws_port = 4001;
     std::vector<std::pair<std::string, uint16_t>> bootstrap;
+
+    // TLS: both must be set, or both empty (empty = plaintext WS)
+    std::string tls_cert_path;  // PEM certificate file path
+    std::string tls_key_path;   // PEM private key file path
 };
 
 // Load config from JSON file. Throws std::runtime_error on parse failure

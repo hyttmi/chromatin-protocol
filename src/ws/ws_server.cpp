@@ -9,22 +9,29 @@
 
 namespace chromatin::ws {
 
-WsServer::WsServer(const config::Config& cfg,
-                   kademlia::Kademlia& kad,
-                   storage::Storage& storage,
-                   replication::ReplLog& repl_log,
-                   const crypto::KeyPair& keypair)
+template<bool SSL>
+WsServer<SSL>::WsServer(const config::Config& cfg,
+                        kademlia::Kademlia& kad,
+                        storage::Storage& storage,
+                        replication::ReplLog& repl_log,
+                        const crypto::KeyPair& keypair)
     : cfg_(cfg)
     , kad_(kad)
     , storage_(storage)
     , repl_log_(repl_log)
     , keypair_(keypair) {}
 
-void WsServer::run() {
-    uWS::App app;
+template<bool SSL>
+void WsServer<SSL>::run() {
+    uWS::SocketContextOptions ssl_options = {};
+    if constexpr (SSL) {
+        ssl_options.key_file_name = cfg_.tls_key_path.c_str();
+        ssl_options.cert_file_name = cfg_.tls_cert_path.c_str();
+    }
+    uWS::TemplatedApp<SSL> app(ssl_options);
     loop_ = uWS::Loop::get();
 
-    app.ws<Session>("/*", {
+    app.template ws<Session>("/*", {
         .compression = uWS::DISABLED,
         // 512 KiB: base64-encoded 256 KiB blobs (~341 KiB) + JSON overhead
         .maxPayloadLength = 1048576 + 64,  // 1 MiB chunk + header overhead
@@ -66,7 +73,7 @@ void WsServer::run() {
             listen_socket_ = socket;
             listening_port_.store(static_cast<uint16_t>(
                 us_socket_local_port(
-                    /*ssl=*/0, reinterpret_cast<us_socket_t*>(socket))));
+                    SSL ? 1 : 0, reinterpret_cast<us_socket_t*>(socket))));
             spdlog::info("WS: listening on port {}", listening_port_.load());
         } else {
             spdlog::error("WS: failed to listen on port {}", cfg_.ws_port);
@@ -89,7 +96,8 @@ void WsServer::run() {
     app.run();
 }
 
-void WsServer::stop() {
+template<bool SSL>
+void WsServer<SSL>::stop() {
     if (loop_) {
         loop_->defer([this]() {
             if (tick_timer_) {
@@ -97,7 +105,7 @@ void WsServer::stop() {
                 tick_timer_ = nullptr;
             }
             if (listen_socket_) {
-                us_listen_socket_close(0, listen_socket_);
+                us_listen_socket_close(SSL ? 1 : 0, listen_socket_);
                 listen_socket_ = nullptr;
             }
             // uWS will exit run() when no listeners, timers, and connections remain.
@@ -105,7 +113,8 @@ void WsServer::stop() {
     }
 }
 
-void WsServer::on_message(ws_t* ws, std::string_view message) {
+template<bool SSL>
+void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
     Json::Value root;
     Json::CharReaderBuilder builder;
     std::string errs;
@@ -282,7 +291,8 @@ static constexpr size_t INLINE_THRESHOLD = 64 * 1024;  // 64 KB
 
 } // anonymous namespace
 
-void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
+template<bool SSL>
+void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
     auto* session = ws->getUserData();
 
     // Must be authenticated
@@ -453,7 +463,8 @@ void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 
 // ---------- auth handlers ----------
 
-void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_hello(ws_t* ws, const Json::Value& msg) {
     int id = msg.get("id", 0).asInt();
     std::string fp_hex = msg.get("fingerprint", "").asString();
     if (fp_hex.size() != 64) {
@@ -521,7 +532,8 @@ void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
     send_json(ws, resp);
 }
 
-void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_auth(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -603,7 +615,8 @@ void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
                  to_hex(session->fingerprint), pending);
 }
 
-bool WsServer::require_auth(ws_t* ws, int id) {
+template<bool SSL>
+bool WsServer<SSL>::require_auth(ws_t* ws, int id) {
     auto* session = ws->getUserData();
     if (!session->authenticated) {
         send_error(ws, id, 401, "not authenticated");
@@ -614,7 +627,8 @@ bool WsServer::require_auth(ws_t* ws, int id) {
 
 // ---------- command handlers ----------
 
-void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_list(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -714,7 +728,8 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     send_json(ws, resp);
 }
 
-void WsServer::handle_get(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_get(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -801,7 +816,8 @@ void WsServer::handle_get(ws_t* ws, const Json::Value& msg) {
     }
 }
 
-void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -1013,7 +1029,8 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
 
 // ---------- allowlist handlers ----------
 
-void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -1134,7 +1151,8 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
     }
 }
 
-void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -1256,7 +1274,8 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
 
 // ---------- CONTACT_REQUEST handler ----------
 
-void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -1354,7 +1373,8 @@ void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
 
 // ---------- DELETE handler ----------
 
-void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_delete(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
@@ -1416,9 +1436,10 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
 
 // ---------- push notifications ----------
 
-void WsServer::on_kademlia_store(const crypto::Hash& key,
-                                  uint8_t data_type,
-                                  std::span<const uint8_t> value) {
+template<bool SSL>
+void WsServer<SSL>::on_kademlia_store(const crypto::Hash& key,
+                                      uint8_t data_type,
+                                      std::span<const uint8_t> value) {
     // Only push inbox messages (0x02) and contact requests (0x03)
     if (data_type != 0x02 && data_type != 0x03) return;
 
@@ -1500,7 +1521,8 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
 
 // ---------- STATUS ----------
 
-void WsServer::handle_status(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::handle_status(ws_t* ws, const Json::Value& msg) {
     int id = msg.get("id", 0).asInt();
     auto now = std::chrono::steady_clock::now();
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count();
@@ -1518,7 +1540,8 @@ void WsServer::handle_status(ws_t* ws, const Json::Value& msg) {
 
 // ---------- upload timeout ----------
 
-void WsServer::check_upload_timeouts() {
+template<bool SSL>
+void WsServer<SSL>::check_upload_timeouts() {
     static constexpr auto UPLOAD_TIMEOUT = std::chrono::seconds(30);
     auto now = std::chrono::steady_clock::now();
 
@@ -1534,14 +1557,16 @@ void WsServer::check_upload_timeouts() {
 
 // ---------- helpers ----------
 
-void WsServer::send_json(ws_t* ws, const Json::Value& msg) {
+template<bool SSL>
+void WsServer<SSL>::send_json(ws_t* ws, const Json::Value& msg) {
     Json::StreamWriterBuilder writer_builder;
     writer_builder["indentation"] = "";
     std::string json = Json::writeString(writer_builder, msg);
     ws->send(json, uWS::OpCode::TEXT);
 }
 
-void WsServer::send_error(ws_t* ws, int id, int code, const std::string& reason) {
+template<bool SSL>
+void WsServer<SSL>::send_error(ws_t* ws, int id, int code, const std::string& reason) {
     Json::Value err;
     err["type"] = "ERROR";
     err["id"] = id;
@@ -1549,5 +1574,9 @@ void WsServer::send_error(ws_t* ws, int id, int code, const std::string& reason)
     err["reason"] = reason;
     send_json(ws, err);
 }
+
+// Explicit template instantiations
+template class WsServer<false>;
+template class WsServer<true>;
 
 } // namespace chromatin::ws

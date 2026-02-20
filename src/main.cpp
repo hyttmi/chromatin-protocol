@@ -1,6 +1,7 @@
 #include <csignal>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -120,26 +121,36 @@ int main(int argc, char* argv[]) {
     }
 
     // --- 13. WebSocket server is the main event loop ---
-    chromatin::ws::WsServer ws(cfg, kademlia, storage, repl_log, keypair);
-    kademlia.set_on_store([&](const chromatin::crypto::Hash& key, uint8_t type,
-                              std::span<const uint8_t> value) {
-        ws.on_kademlia_store(key, type, value);
-    });
-
-    // Signal handler stops the WS event loop
-    static chromatin::ws::WsServer* g_ws = nullptr;
-    g_ws = &ws;
+    // Use TLS if cert/key paths are configured, otherwise plaintext.
+    // Both branches use a type-erased stop function for signal handling.
+    static std::function<void()> g_stop;
     struct sigaction sa{};
-    sa.sa_handler = [](int) {
-        if (g_ws) g_ws->stop();
-    };
+    sa.sa_handler = [](int) { if (g_stop) g_stop(); };
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    spdlog::info("node ready — WS on port {}, TCP on port {}", cfg.ws_port, cfg.tcp_port);
-    ws.run();  // blocks until signal
+    auto run_ws = [&](auto& ws) {
+        kademlia.set_on_store([&](const chromatin::crypto::Hash& key, uint8_t type,
+                                  std::span<const uint8_t> value) {
+            ws.on_kademlia_store(key, type, value);
+        });
+        g_stop = [&ws]() { ws.stop(); };
+
+        spdlog::info("node ready — WS{} on port {}, TCP on port {}",
+                     cfg.tls_cert_path.empty() ? "" : " (TLS)",
+                     cfg.ws_port, cfg.tcp_port);
+        ws.run();  // blocks until signal
+    };
+
+    if (!cfg.tls_cert_path.empty()) {
+        chromatin::ws::WsServer<true> ws(cfg, kademlia, storage, repl_log, keypair);
+        run_ws(ws);
+    } else {
+        chromatin::ws::WsServer<false> ws(cfg, kademlia, storage, repl_log, keypair);
+        run_ws(ws);
+    }
 
     // --- 14. Shutdown ---
     spdlog::info("shutting down...");

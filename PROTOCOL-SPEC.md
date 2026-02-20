@@ -359,6 +359,13 @@ Clients connect to a responsible node via WebSocket. Control messages are JSON
 text frames. Large blob transfers use binary WebSocket frames (see Section 4.6).
 Every client request includes an `id` field for response correlation.
 
+**TLS:** Nodes SHOULD enable TLS (WSS) to protect metadata (fingerprints,
+allowlist operations, message counts) from network observers. When configured
+with `tls_cert_path` and `tls_key_path`, the node listens with TLS on the same
+`ws_port`. Clients SHOULD prefer `wss://` connections. Message content is
+already encrypted with ML-KEM-1024, but TLS provides transport-level metadata
+protection.
+
 ### 4.1 Authentication
 
 ```json

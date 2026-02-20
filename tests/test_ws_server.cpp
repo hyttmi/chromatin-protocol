@@ -104,7 +104,7 @@ protected:
     std::unique_ptr<kademlia::RoutingTable> routing_table_;
     std::unique_ptr<kademlia::TcpTransport> transport_;
     std::unique_ptr<kademlia::Kademlia> kademlia_;
-    std::unique_ptr<ws::WsServer> server_;
+    std::unique_ptr<ws::WsServer<false>> server_;
     std::thread tcp_thread_;
     std::thread ws_thread_;
     crypto::KeyPair node_keypair_;
@@ -195,7 +195,7 @@ protected:
     }
 
     void start_ws_server() {
-        server_ = std::make_unique<ws::WsServer>(
+        server_ = std::make_unique<ws::WsServer<false>>(
             cfg_, *kademlia_, *storage_, *repl_log_, node_keypair_);
 
         kademlia_->set_on_store([this](const crypto::Hash& key, uint8_t type,
