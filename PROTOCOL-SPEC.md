@@ -386,7 +386,8 @@ The node verifies:
 1. This node is responsible for the fingerprint's inbox — if NOT responsible,
    respond with REDIRECT (see below) and close the connection
 2. `fingerprint == SHA3-256(pubkey)`
-3. ML-DSA-87 signature over the nonce is valid
+3. ML-DSA-87 signature over `"chromatin-auth:" || nonce` (47 bytes) is valid.
+   The domain prefix prevents cross-protocol signature replay attacks.
 
 ### 4.2 REDIRECT
 
@@ -531,6 +532,10 @@ Response:
 
 ### 4.4 Server Push (unsolicited, no id)
 
+Push notifications are delivered to **all connected devices** for a given
+fingerprint. When multiple devices are authenticated with the same identity,
+each receives the push notification independently.
+
 **NEW_MESSAGE (small, <=64 KB)** — Incoming message inlined:
 ```json
 {"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 1200, "blob": "<base64>", "timestamp": 1708000100}
@@ -562,6 +567,13 @@ Different commands consume different token costs:
 
 When a client exceeds the rate limit, the node responds with error code 429.
 
+### 4.5.1 Worker Pool Backpressure
+
+The node's worker pool has a bounded queue (max 1024 pending jobs). When the
+queue is full, new requests that require worker pool execution (HELLO redirect
+checks, SEND, CONTACT_REQUEST, ALLOW, REVOKE) receive error code 503. This
+prevents unbounded memory growth under high load.
+
 ### 4.6 Error Responses
 
 ```json
@@ -579,6 +591,7 @@ When a client exceeds the rate limit, the node responds with error code 429.
 | 413  | Attachment too large (>50 MiB)                |
 | 429  | Rate limited / upload already in progress     |
 | 500  | Internal error                                |
+| 503  | Service unavailable (worker pool at capacity) |
 
 ### 4.7 Binary WebSocket Frames — Chunked Transfer
 
@@ -625,11 +638,15 @@ On every incoming TCP message, a conforming node MUST:
 4. Verify sender node ID exists in membership table (exception: PING and NODES from unknown nodes during bootstrap)
 5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
 
-**Signature verification exceptions:** PING and NODES messages from nodes not
-yet in the routing table are accepted without signature verification. PING is
-how unknown nodes introduce themselves (pubkey not yet known). NODES is the
-response to FIND_NODE during bootstrap. Once a node is in the routing table
-(via received PONG or NODES), all subsequent messages from it MUST be verified.
+**Signature verification exceptions:** PING, PONG, FIND_NODE, and NODES
+messages are accepted without signature verification from nodes whose public
+key is not yet known. PING is how unknown nodes introduce themselves. PONG is
+the reply to our PING. FIND_NODE is needed during discovery. NODES is the
+response to FIND_NODE. Public keys are learned via NODES responses (which
+include each node's ML-DSA-87 public key). Once a node's public key is known,
+all trust-sensitive messages (STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP,
+STORE_ACK, SEQ_REQ, SEQ_RESP) from that node MUST have valid ML-DSA-87
+signatures — messages from nodes with unknown public keys are rejected.
 
 ### Profile STORE Validation
 
@@ -655,7 +672,10 @@ SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 
-1. Recipient's allowlist contains `sender_fingerprint` — reject if not allowed
+1. Check recipient's allowlist:
+   - If recipient has an allowlist AND sender is on it → allow
+   - If recipient has an allowlist AND sender is NOT on it → reject
+   - If recipient has NO allowlist entries → allow (open inbox, new user)
 2. `blob_length` <= 50 MiB
 3. `msg_id` is unique — reject duplicates (prevents replay attacks)
 
@@ -672,6 +692,13 @@ SYNC_REQ/SYNC_RESP instead.
    - If owner's profile is not stored yet (bootstrap), signature check is skipped
 3. `sequence` > currently stored sequence (enforced by WS server)
 
+### REVOKE Replication
+
+When a REVOKE (action=0x00) is processed, it is recorded in the replication
+log as `Op::DEL`. This ensures that when other responsible nodes sync via
+SYNC_REQ/SYNC_RESP, the allowlist entry is deleted on those nodes as well.
+ALLOW (action=0x01) is recorded as `Op::ADD`.
+
 ### Responsibility Check
 
 A node MUST only accept STORE requests for keys it is responsible for. A node
@@ -684,7 +711,30 @@ When the routing table changes (nodes join or leave), a node MUST check if
 data it holds is now closer to a newly discovered node. If so, the node
 pushes that data via STORE to all current responsible nodes. This check runs
 periodically (every 60 seconds) and only when the routing table size has
-changed.
+changed. Responsibility transfer covers all data types: profiles, names,
+inbox messages (INDEX + BLOB tables), contact requests, and allowlist entries.
+
+### Routing Table
+
+The routing table holds up to **256 nodes**. When full and a new node is
+discovered, the node with the oldest `last_seen` timestamp is evicted (LRU).
+`closest_to()` queries use partial sort for efficiency — only the top K
+results are sorted, not the entire table.
+
+### TCP Connection Pooling
+
+Nodes reuse TCP connections for node-to-node communication. After sending a
+message, the socket is returned to a per-destination connection pool. Idle
+connections are closed after 60 seconds. The pool is bounded at 64
+connections. Dead connections are detected via `poll()` + `recv(MSG_PEEK)`
+before reuse. Servers accept multiple messages per TCP connection.
+
+### Replication Log Compaction
+
+The replication log is compacted periodically (every 1 hour). For each key,
+only the most recent 100 entries are retained. Older entries are deleted.
+This bounds replication log storage growth while preserving enough history
+for sync catch-up.
 
 ### Cryptographic Random
 
@@ -721,6 +771,13 @@ cryptographic random source. Implementations using liboqs SHOULD use
 | Rate limit bucket size     | 50 tokens                              |
 | Rate limit refill rate     | 10 tokens/second                       |
 | Max TCP message            | 50 MiB (implementation limit)          |
+| Routing table max nodes    | 256                                    |
+| TCP conn pool max idle     | 60 seconds                             |
+| TCP conn pool max size     | 64 connections                         |
+| Worker pool max queue      | 1024 jobs                              |
+| Repl_log compact interval  | 1 hour                                 |
+| Repl_log compact keep      | 100 entries per key                    |
+| Auth nonce prefix          | `"chromatin-auth:"`                    |
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
 | Bootstrap nodes            | `0.bootstrap.cpunk.io`                 |
