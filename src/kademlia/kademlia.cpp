@@ -914,6 +914,68 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     return true;
 }
 
+// Extract sequence number from a profile binary, or nullopt if malformed.
+// Walks through all variable-length fields to locate the 8-byte BE sequence.
+static std::optional<uint64_t> extract_profile_sequence(std::span<const uint8_t> profile) {
+    if (profile.size() < 53) return std::nullopt;
+
+    size_t off = 32; // skip fingerprint
+
+    // pubkey_len(2) + pubkey
+    if (off + 2 > profile.size()) return std::nullopt;
+    uint16_t pk_len = (static_cast<uint16_t>(profile[off]) << 8) | profile[off + 1];
+    off += 2;
+    if (off + pk_len > profile.size()) return std::nullopt;
+    off += pk_len;
+
+    // kem_pubkey_len(2) + kem_pubkey
+    if (off + 2 > profile.size()) return std::nullopt;
+    uint16_t kem_len = (static_cast<uint16_t>(profile[off]) << 8) | profile[off + 1];
+    off += 2;
+    if (off + kem_len > profile.size()) return std::nullopt;
+    off += kem_len;
+
+    // bio_len(2) + bio
+    if (off + 2 > profile.size()) return std::nullopt;
+    uint16_t bio_len = (static_cast<uint16_t>(profile[off]) << 8) | profile[off + 1];
+    off += 2;
+    if (off + bio_len > profile.size()) return std::nullopt;
+    off += bio_len;
+
+    // avatar_len(4) + avatar
+    if (off + 4 > profile.size()) return std::nullopt;
+    uint32_t avatar_len = (static_cast<uint32_t>(profile[off]) << 24)
+                        | (static_cast<uint32_t>(profile[off + 1]) << 16)
+                        | (static_cast<uint32_t>(profile[off + 2]) << 8)
+                        | static_cast<uint32_t>(profile[off + 3]);
+    off += 4;
+    if (off + avatar_len > profile.size()) return std::nullopt;
+    off += avatar_len;
+
+    // social_count(1) + social links
+    if (off + 1 > profile.size()) return std::nullopt;
+    uint8_t social_count = profile[off];
+    off += 1;
+    for (uint8_t i = 0; i < social_count; ++i) {
+        if (off + 1 > profile.size()) return std::nullopt;
+        uint8_t platform_len = profile[off]; off += 1;
+        if (off + platform_len > profile.size()) return std::nullopt;
+        off += platform_len;
+        if (off + 1 > profile.size()) return std::nullopt;
+        uint8_t handle_len = profile[off]; off += 1;
+        if (off + handle_len > profile.size()) return std::nullopt;
+        off += handle_len;
+    }
+
+    // sequence(8 BE)
+    if (off + 8 > profile.size()) return std::nullopt;
+    uint64_t seq = 0;
+    for (int i = 0; i < 8; ++i) {
+        seq = (seq << 8) | profile[off + i];
+    }
+    return seq;
+}
+
 // ---------------------------------------------------------------------------
 // Profile validation (PROTOCOL-SPEC.md section 3)
 // ---------------------------------------------------------------------------
@@ -1025,13 +1087,14 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
         return false;
     }
 
-    // Sequence monotonicity: check existing stored profile
+    // Sequence monotonicity: reject if new sequence <= existing sequence
     auto existing = storage_.get(storage::TABLE_PROFILES, key);
-    if (existing && existing->size() > 53) {
-        // Parse existing sequence — need to walk through the same variable-length fields
-        // For simplicity, just check that new sequence > 0 if there's an existing entry.
-        // Full sequence comparison would require re-parsing the existing profile.
-        // This is sufficient since profiles are always stored with the key.
+    if (existing && !existing->empty()) {
+        auto existing_seq = extract_profile_sequence(*existing);
+        if (existing_seq && sequence <= *existing_seq) {
+            spdlog::debug("Profile rejected: sequence {} <= existing {}", sequence, *existing_seq);
+            return false;
+        }
     }
 
     return true;

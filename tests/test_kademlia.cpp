@@ -1402,3 +1402,72 @@ TEST_F(KademliaTest, FindValueSkipsStaleInboxTable) {
     auto inbox_found = n1.kad->find_value(inbox_routing_key);
     EXPECT_FALSE(inbox_found.has_value()) << "FIND_VALUE should not search inbox tables";
 }
+
+// ---------------------------------------------------------------------------
+// Test 30: ProfileSequenceMonotonicity — reject stale/equal sequence updates
+// ---------------------------------------------------------------------------
+
+// Helper: build a minimal valid profile binary with a given sequence number
+static std::vector<uint8_t> build_profile(const KeyPair& user_kp, uint64_t sequence) {
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::vector<uint8_t> profile;
+    // fingerprint(32)
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    // pubkey_len(2 BE) + pubkey
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_len = 0, bio_len = 0, avatar_len = 0, social_count = 0
+    profile.push_back(0x00); profile.push_back(0x00); // kem
+    profile.push_back(0x00); profile.push_back(0x00); // bio
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); // avatar
+    profile.push_back(0x00); // social_count
+    // sequence(8 BE)
+    for (int i = 7; i >= 0; --i) {
+        profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    }
+    // sign it
+    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+    return profile;
+}
+
+TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("dna:", user_fp);
+
+    // Store profile with sequence=1 — should succeed
+    auto profile_v1 = build_profile(user_kp, 1);
+    ASSERT_TRUE(n1.kad->store(key, 0x00, profile_v1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_TRUE(n1.storage->get(TABLE_PROFILES, key).has_value());
+
+    // Store profile with sequence=2 — should succeed (update)
+    auto profile_v2 = build_profile(user_kp, 2);
+    ASSERT_TRUE(n1.kad->store(key, 0x00, profile_v2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    auto stored = n1.storage->get(TABLE_PROFILES, key);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(*stored, profile_v2);
+
+    // Store profile with sequence=1 — should be rejected (stale)
+    auto profile_stale = build_profile(user_kp, 1);
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile_stale));
+
+    // Store profile with sequence=2 — should be rejected (equal)
+    auto profile_equal = build_profile(user_kp, 2);
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile_equal));
+
+    // Verify the stored profile is still v2
+    stored = n1.storage->get(TABLE_PROFILES, key);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(*stored, profile_v2);
+}
