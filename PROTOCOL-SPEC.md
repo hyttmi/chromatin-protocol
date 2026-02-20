@@ -321,22 +321,30 @@ independently without access to the routing key derivation.
 
 ### Allowlist Entry (data_type 0x04)
 
-Kademlia STORE value (includes allowed_fp for composite key construction):
+Kademlia STORE value (includes owner_fp and allowed_fp for signature
+verification and composite key construction):
 ```
+[32 bytes: owner_fingerprint]
 [32 bytes: allowed_fingerprint]
 [1 byte: action]                         // 0x01 = allow, 0x00 = revoke
 [8 bytes BE: sequence]
-[2 bytes BE: signature_length]
-[signature_length bytes: ML-DSA-87 signature over all preceding fields]
+[SIGNATURE_SIZE bytes: ML-DSA-87 signature]
 ```
+
+The signature covers `action(1) || allowed_fingerprint(32) || sequence(8 BE)`
+(41 bytes), signed by the owner's ML-DSA-87 key.
 
 Storage key (DHT routing): `SHA3-256("allowlist:" || owner_fingerprint)`
 
 Local mdbx storage uses composite key for O(1) lookup:
 ```
 Key:   SHA3-256("allowlist:" || owner_fp)(32) || allowed_fp(32)
-Value: action(1) || sequence(8 BE) || signature
+Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
 ```
+
+Receiving nodes verify the ML-DSA-87 signature against the owner's public key
+(looked up from TABLE_PROFILES). If the owner has no stored profile yet
+(bootstrap case), the entry is accepted without signature verification.
 
 Receiving nodes parse `allowed_fp` from the Kademlia value to build the
 composite storage key. REVOKE (action=0x00) deletes the entry rather than
@@ -651,8 +659,11 @@ SYNC_REQ/SYNC_RESP instead.
 
 ### Allowlist STORE Validation
 
-1. ML-DSA-87 signature valid — only the inbox owner can modify their allowlist
-2. `sequence` > currently stored sequence
+1. `action` byte must be 0x00 (revoke) or 0x01 (allow)
+2. ML-DSA-87 signature verified against owner's public key (from TABLE_PROFILES)
+   - Signed data: `action(1) || allowed_fingerprint(32) || sequence(8 BE)`
+   - If owner's profile is not stored yet (bootstrap), signature check is skipped
+3. `sequence` > currently stored sequence (enforced by WS server)
 
 ### Responsibility Check
 

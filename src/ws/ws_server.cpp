@@ -1064,11 +1064,11 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
     // Check sequence > currently stored sequence
     auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
     if (existing) {
-        // Existing entry format: action(1) || sequence(8 BE) || signature(SIGNATURE_SIZE)
-        if (existing->size() >= 9) {
+        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        if (existing->size() >= 73) {
             uint64_t stored_seq = 0;
             for (int i = 0; i < 8; ++i) {
-                stored_seq = (stored_seq << 8) | (*existing)[1 + i];
+                stored_seq = (stored_seq << 8) | (*existing)[65 + i];
             }
             if (sequence <= stored_seq) {
                 send_error(ws, id, 400, "sequence must be greater than current");
@@ -1077,9 +1077,11 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
         }
     }
 
-    // Build allowlist entry value: action(1) || sequence(8 BE) || signature
+    // Build full allowlist entry value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
     std::vector<uint8_t> entry_value;
-    entry_value.reserve(1 + 8 + sig_bytes->size());
+    entry_value.reserve(32 + 32 + 1 + 8 + sig_bytes->size());
+    entry_value.insert(entry_value.end(), session->fingerprint.begin(), session->fingerprint.end());
+    entry_value.insert(entry_value.end(), allowed_fp.begin(), allowed_fp.end());
     entry_value.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i) {
         entry_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
@@ -1093,12 +1095,8 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
         bool ok = storage_.put(storage::TABLE_ALLOWLISTS, storage_key, entry_value);
 
         if (ok) {
-            // Prepend allowed_fp so receiving nodes can build the composite storage key
-            std::vector<uint8_t> kad_value;
-            kad_value.reserve(32 + entry_value.size());
-            kad_value.insert(kad_value.end(), allowed_fp.begin(), allowed_fp.end());
-            kad_value.insert(kad_value.end(), entry_value.begin(), entry_value.end());
-            kad_.store(allowlist_key, 0x04, kad_value);
+            // entry_value already has the full format for Kademlia replication
+            kad_.store(allowlist_key, 0x04, entry_value);
         }
 
         loop_->defer([this, ws, id, ok]() {
@@ -1184,10 +1182,11 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
     // Check sequence > currently stored sequence
     auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
     if (existing) {
-        if (existing->size() >= 9) {
+        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        if (existing->size() >= 73) {
             uint64_t stored_seq = 0;
             for (int i = 0; i < 8; ++i) {
-                stored_seq = (stored_seq << 8) | (*existing)[1 + i];
+                stored_seq = (stored_seq << 8) | (*existing)[65 + i];
             }
             if (sequence <= stored_seq) {
                 send_error(ws, id, 400, "sequence must be greater than current");
@@ -1196,16 +1195,20 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
         }
     }
 
+    // Capture owner_fp for the worker lambda
+    crypto::Hash owner_fp = session->fingerprint;
+
     // Dispatch to worker pool — delete local entry, replicate revoke
-    workers_.post([this, ws, id, allowlist_key, allowed_fp,
+    workers_.post([this, ws, id, allowlist_key, allowed_fp, owner_fp,
                    storage_key = std::move(storage_key),
                    sig_bytes = std::move(*sig_bytes),
                    sequence]() {
         bool ok = storage_.del(storage::TABLE_ALLOWLISTS, storage_key);
 
-        // Build revoke entry for replication: allowed_fp(32) || action(0x00) || sequence(8 BE) || signature
+        // Build revoke entry for replication: owner_fp(32) || allowed_fp(32) || action(0x00) || sequence(8 BE) || signature
         std::vector<uint8_t> revoke_value;
-        revoke_value.reserve(32 + 1 + 8 + sig_bytes.size());
+        revoke_value.reserve(32 + 32 + 1 + 8 + sig_bytes.size());
+        revoke_value.insert(revoke_value.end(), owner_fp.begin(), owner_fp.end());
         revoke_value.insert(revoke_value.end(), allowed_fp.begin(), allowed_fp.end());
         revoke_value.push_back(0x00);  // action = revoke
         for (int i = 7; i >= 0; --i) {

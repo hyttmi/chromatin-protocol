@@ -642,13 +642,14 @@ TEST_F(WsServerTest, AllowAndRevoke) {
 
     auto stored = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
     ASSERT_TRUE(stored.has_value()) << "allowlist entry not found in storage";
-    ASSERT_GE(stored->size(), 9u);
-    EXPECT_EQ((*stored)[0], 0x01);  // action = allow
+    // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    ASSERT_GE(stored->size(), 73u);
+    EXPECT_EQ((*stored)[64], 0x01);  // action = allow at offset 64
 
-    // Extract stored sequence (bytes 1..8 big-endian)
+    // Extract stored sequence (bytes 65..72 big-endian)
     uint64_t stored_seq = 0;
     for (int i = 0; i < 8; ++i) {
-        stored_seq = (stored_seq << 8) | (*stored)[1 + i];
+        stored_seq = (stored_seq << 8) | (*stored)[65 + i];
     }
     EXPECT_EQ(stored_seq, 1u);
 

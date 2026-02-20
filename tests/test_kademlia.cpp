@@ -524,8 +524,9 @@ TEST_F(KademliaTest, StoreAckSent) {
     // Send a STORE message from n2 to n1 using allowlist entry (minimal validation)
     Hash key{};
     key.fill(0x55);
-    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
-    std::vector<uint8_t> value(32, 0xAA);  // allowed_fp
+    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
+    std::vector<uint8_t> value(32, 0xEE);  // owner_fp
+    value.resize(value.size() + 32, 0xAA);  // allowed_fp
     value.push_back(0x01);  // action = allow
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);  // sequence = 1
@@ -601,8 +602,9 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     // Store an allowlist entry via n1 — it will store locally and STORE to n2
     Hash key{};
     key.fill(0x77);
-    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
-    std::vector<uint8_t> value(32, 0xBB);  // allowed_fp
+    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
+    std::vector<uint8_t> value(32, 0xAA);  // owner_fp
+    value.resize(value.size() + 32, 0xBB);  // allowed_fp
     value.push_back(0x01);  // action = allow
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);  // sequence = 1
@@ -632,13 +634,14 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     EXPECT_TRUE(resolved) << "Pending store should be resolved after STORE_ACK";
 
     // Verify n2 actually stored the data (composite key: key||allowed_fp)
+    Hash allowed_fp_check{};
+    allowed_fp_check.fill(0xBB);
     std::vector<uint8_t> composite_key(key.begin(), key.end());
-    composite_key.insert(composite_key.end(), value.begin(), value.begin() + 32); // allowed_fp
+    composite_key.insert(composite_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
     auto n2_data = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
     ASSERT_TRUE(n2_data.has_value());
-    // Stored value is entry without allowed_fp prefix: action(1) || sequence(8 BE)
-    std::vector<uint8_t> expected_entry(value.begin() + 32, value.end());
-    EXPECT_EQ(*n2_data, expected_entry);
+    // Stored value is full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
+    EXPECT_EQ(*n2_data, value);
 }
 
 // ---------------------------------------------------------------------------
@@ -664,8 +667,9 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     // Store an allowlist entry via n1
     Hash key{};
     key.fill(0x88);
-    // Valid allowlist entry: allowed_fp(32) + action(1) + sequence(8 BE) = 41 bytes
-    std::vector<uint8_t> value(32, 0xCC);  // allowed_fp
+    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
+    std::vector<uint8_t> value(32, 0xDD);  // owner_fp
+    value.resize(value.size() + 32, 0xCC);  // allowed_fp
     value.push_back(0x01);  // action = allow
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);  // sequence = 1
@@ -697,8 +701,10 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     EXPECT_TRUE(quorum_met) << "Write quorum should be met (W=" << n1.kad->write_quorum() << ")";
 
     // Verify all 3 nodes have the data (composite key: key||allowed_fp)
+    Hash allowed_fp_check{};
+    allowed_fp_check.fill(0xCC);
     std::vector<uint8_t> comp_key(key.begin(), key.end());
-    comp_key.insert(comp_key.end(), value.begin(), value.begin() + 32);
+    comp_key.insert(comp_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
     EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
     EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
     EXPECT_TRUE(n3.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
@@ -1199,8 +1205,9 @@ TEST_F(KademliaTest, AllowlistValidation_InvalidAction) {
     start_all();
 
     // Build an allowlist entry with invalid action byte
-    // allowed_fp(32) || action(1) || sequence(8 BE) || signature
-    std::vector<uint8_t> entry(32, 0xDD);  // allowed_fp
+    // New format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    std::vector<uint8_t> entry(32, 0xCC);  // owner_fp
+    entry.resize(entry.size() + 32, 0xDD);  // allowed_fp
     entry.push_back(0x02);  // invalid action (only 0x00 and 0x01 are valid)
     // sequence (8 BE)
     for (int i = 0; i < 8; ++i) entry.push_back(0x00);
@@ -1212,8 +1219,10 @@ TEST_F(KademliaTest, AllowlistValidation_InvalidAction) {
 
     bool ok = n1.kad->store(key, 0x04, entry);
     // Composite storage key: key(32)||allowed_fp(32)
+    Hash allowed_fp{};
+    allowed_fp.fill(0xDD);
     std::vector<uint8_t> composite_key(key.begin(), key.end());
-    composite_key.insert(composite_key.end(), entry.begin(), entry.begin() + 32);
+    composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
     auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
     EXPECT_FALSE(result.has_value()) << "Allowlist entry with invalid action should not be stored";
 }
@@ -1281,11 +1290,15 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
     auto& n1 = create_node();
     start_all();
 
+    Hash owner_fp{};
+    owner_fp.fill(0x33);
+
     Hash allowed_fp{};
     allowed_fp.fill(0x44);
 
-    // Build allowlist STORE value: allowed_fp(32) || action(1) || sequence(8 BE)
-    std::vector<uint8_t> value(allowed_fp.begin(), allowed_fp.end());
+    // Build allowlist STORE value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE)
+    std::vector<uint8_t> value(owner_fp.begin(), owner_fp.end());
+    value.insert(value.end(), allowed_fp.begin(), allowed_fp.end());
     value.push_back(0x01);  // action = allow
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);  // sequence = 1
@@ -1302,10 +1315,9 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
     composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
     auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
     ASSERT_TRUE(result.has_value()) << "Allowlist entry should be stored with composite key";
-    // Stored value should be the entry without the allowed_fp prefix:
-    // action(1) || sequence(8 BE)
-    EXPECT_EQ(result->size(), 9u);
-    EXPECT_EQ((*result)[0], 0x01);  // action = allow
+    // Stored value is the full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
+    EXPECT_EQ(result->size(), 73u);
+    EXPECT_EQ((*result)[64], 0x01);  // action = allow at offset 64
 }
 
 // ---------------------------------------------------------------------------
@@ -1921,7 +1933,9 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     // Build an allowlist STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
     Hash key{};
     key.fill(0x55);
-    std::vector<uint8_t> value(32, 0xAA);  // allowed_fp
+    // New format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
+    std::vector<uint8_t> value(32, 0xEE);  // owner_fp
+    value.resize(value.size() + 32, 0xAA);  // allowed_fp
     value.push_back(0x01);                 // action = allow
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);                 // sequence = 1
@@ -1948,8 +1962,10 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // Allowlist uses composite key: routing_key(32) || allowed_fp(32)
+    Hash allowed_fp_check{};
+    allowed_fp_check.fill(0xAA);
     std::vector<uint8_t> composite_key(key.begin(), key.end());
-    composite_key.insert(composite_key.end(), value.begin(), value.begin() + 32);
+    composite_key.insert(composite_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
 
     // The STORE should have been rejected — n1's pubkey is empty in n2's table
     auto stored = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
@@ -2009,8 +2025,10 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     allow_storage_key.insert(allow_storage_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_storage_key.insert(allow_storage_key.end(), user_b_fp.begin(), user_b_fp.end());
 
-    // Allowlist entry value: action(1) || sequence(8 BE) = 9 bytes
+    // Allowlist entry value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
     std::vector<uint8_t> allow_value;
+    allow_value.insert(allow_value.end(), user_a_fp.begin(), user_a_fp.end());
+    allow_value.insert(allow_value.end(), user_b_fp.begin(), user_b_fp.end());
     allow_value.push_back(0x01);  // action = allow
     for (int i = 0; i < 7; ++i) allow_value.push_back(0x00);
     allow_value.push_back(0x01);  // sequence = 1
@@ -2096,4 +2114,121 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
         auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
         EXPECT_TRUE(result.has_value()) << "Inbox message to user with no allowlist should be stored";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Test 38: AllowlistSignatureEnforced — Kademlia verifies allowlist signature
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, AllowlistSignatureEnforced) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Create a user identity with a keypair and stored profile
+    auto owner_kp = generate_keypair();
+    auto owner_fp = sha3_256(owner_kp.public_key);
+
+    // Build and store a valid profile for the owner (so Kademlia can look up the pubkey)
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), owner_fp.begin(), owner_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
+    // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00);
+    // sequence = 1
+    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
+    // Sign profile
+    auto prof_sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), owner_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(prof_sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), prof_sig.begin(), prof_sig.end());
+
+    auto profile_key = sha3_256_prefixed("dna:", owner_fp);
+    n1.storage->put(TABLE_PROFILES, profile_key, profile);
+
+    // Create a contact fingerprint
+    Hash contact_fp{};
+    contact_fp.fill(0x42);
+
+    // Build signed data: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    uint64_t sequence = 1;
+    std::vector<uint8_t> signed_data;
+    signed_data.push_back(0x01);  // action = allow
+    signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+    for (int i = 7; i >= 0; --i)
+        signed_data.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+
+    auto allow_sig = sign(signed_data, owner_kp.secret_key);
+
+    // Build valid allowlist entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    std::vector<uint8_t> valid_entry;
+    valid_entry.insert(valid_entry.end(), owner_fp.begin(), owner_fp.end());
+    valid_entry.insert(valid_entry.end(), contact_fp.begin(), contact_fp.end());
+    valid_entry.push_back(0x01);  // action = allow
+    for (int i = 7; i >= 0; --i)
+        valid_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    valid_entry.insert(valid_entry.end(), allow_sig.begin(), allow_sig.end());
+
+    // Store with a valid signature — should succeed
+    auto allowlist_key = sha3_256_prefixed("allowlist:", owner_fp);
+    bool ok = n1.kad->store(allowlist_key, 0x04, valid_entry);
+    EXPECT_TRUE(ok) << "Allowlist entry with valid signature should be accepted";
+
+    std::vector<uint8_t> composite_key(allowlist_key.begin(), allowlist_key.end());
+    composite_key.insert(composite_key.end(), contact_fp.begin(), contact_fp.end());
+    auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
+    EXPECT_TRUE(result.has_value()) << "Valid allowlist entry should be stored";
+
+    // Build an entry with invalid signature (tampered)
+    Hash contact_fp2{};
+    contact_fp2.fill(0x43);
+
+    std::vector<uint8_t> bad_entry;
+    bad_entry.insert(bad_entry.end(), owner_fp.begin(), owner_fp.end());
+    bad_entry.insert(bad_entry.end(), contact_fp2.begin(), contact_fp2.end());
+    bad_entry.push_back(0x01);  // action = allow
+    for (int i = 7; i >= 0; --i)
+        bad_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    // Use the same signature (valid for contact_fp, not for contact_fp2)
+    bad_entry.insert(bad_entry.end(), allow_sig.begin(), allow_sig.end());
+
+    // Store with invalid signature — should be rejected
+    bool bad_ok = n1.kad->store(allowlist_key, 0x04, bad_entry);
+
+    std::vector<uint8_t> bad_composite_key(allowlist_key.begin(), allowlist_key.end());
+    bad_composite_key.insert(bad_composite_key.end(), contact_fp2.begin(), contact_fp2.end());
+    auto bad_result = n1.storage->get(TABLE_ALLOWLISTS, bad_composite_key);
+    EXPECT_FALSE(bad_result.has_value())
+        << "Allowlist entry with invalid signature should be rejected";
+
+    // Build entry for a user with no profile — should succeed (bootstrap case)
+    Hash unknown_owner{};
+    unknown_owner.fill(0x99);
+    Hash contact_fp3{};
+    contact_fp3.fill(0x44);
+
+    std::vector<uint8_t> no_profile_entry;
+    no_profile_entry.insert(no_profile_entry.end(), unknown_owner.begin(), unknown_owner.end());
+    no_profile_entry.insert(no_profile_entry.end(), contact_fp3.begin(), contact_fp3.end());
+    no_profile_entry.push_back(0x01);  // action = allow
+    for (int i = 7; i >= 0; --i)
+        no_profile_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    // dummy signature (not verified because no profile)
+    no_profile_entry.resize(no_profile_entry.size() + SIGNATURE_SIZE, 0xFF);
+
+    auto unknown_key = sha3_256_prefixed("allowlist:", unknown_owner);
+    bool np_ok = n1.kad->store(unknown_key, 0x04, no_profile_entry);
+    EXPECT_TRUE(np_ok) << "Allowlist entry for user with no profile should succeed (bootstrap case)";
+
+    std::vector<uint8_t> np_composite_key(unknown_key.begin(), unknown_key.end());
+    np_composite_key.insert(np_composite_key.end(), contact_fp3.begin(), contact_fp3.end());
+    auto np_result = n1.storage->get(TABLE_ALLOWLISTS, np_composite_key);
+    EXPECT_TRUE(np_result.has_value())
+        << "Allowlist entry for user without profile should be stored (bootstrap case)";
 }
