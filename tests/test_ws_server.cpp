@@ -165,12 +165,15 @@ protected:
         auto challenge = parse_json(*resp1);
         if (challenge["type"].asString() != "CHALLENGE") return false;
 
-        // Sign the nonce
+        // Sign domain-separated data: "chromatin-auth:" || nonce
         std::string nonce_hex = challenge["nonce"].asString();
         auto nonce_bytes = from_hex(nonce_hex);
         if (nonce_bytes.size() != 32) return false;
 
-        auto signature = crypto::sign(nonce_bytes, user_kp.secret_key);
+        const std::string auth_prefix = "chromatin-auth:";
+        std::vector<uint8_t> signed_data(auth_prefix.begin(), auth_prefix.end());
+        signed_data.insert(signed_data.end(), nonce_bytes.begin(), nonce_bytes.end());
+        auto signature = crypto::sign(signed_data, user_kp.secret_key);
 
         // AUTH
         Json::Value auth_msg;
@@ -300,12 +303,15 @@ TEST_F(WsServerTest, FullAuthFlow) {
     auto challenge = parse_json(*resp1);
     ASSERT_EQ(challenge["type"].asString(), "CHALLENGE");
 
-    // Step 2: Sign the nonce
+    // Step 2: Sign domain-separated data: "chromatin-auth:" || nonce
     std::string nonce_hex = challenge["nonce"].asString();
     auto nonce_bytes = from_hex(nonce_hex);
     ASSERT_EQ(nonce_bytes.size(), 32u);
 
-    auto signature = crypto::sign(nonce_bytes, user_kp.secret_key);
+    const std::string auth_prefix = "chromatin-auth:";
+    std::vector<uint8_t> signed_data(auth_prefix.begin(), auth_prefix.end());
+    signed_data.insert(signed_data.end(), nonce_bytes.begin(), nonce_bytes.end());
+    auto signature = crypto::sign(signed_data, user_kp.secret_key);
     ASSERT_EQ(signature.size(), crypto::SIGNATURE_SIZE);
 
     // Step 3: AUTH

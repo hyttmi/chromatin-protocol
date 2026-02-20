@@ -557,10 +557,13 @@ void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Verify signature over the nonce
-    std::span<const uint8_t> nonce_span(session->challenge_nonce.data(),
-                                         session->challenge_nonce.size());
-    if (!crypto::verify(nonce_span, *sig_bytes, *pk_bytes)) {
+    // Verify signature over domain-separated data: "chromatin-auth:" || nonce
+    const std::string prefix = "chromatin-auth:";
+    std::vector<uint8_t> signed_data(prefix.begin(), prefix.end());
+    signed_data.insert(signed_data.end(),
+                       session->challenge_nonce.begin(),
+                       session->challenge_nonce.end());
+    if (!crypto::verify(signed_data, *sig_bytes, *pk_bytes)) {
         send_error(ws, id, 401, "invalid signature");
         return;
     }
