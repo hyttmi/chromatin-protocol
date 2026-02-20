@@ -3,8 +3,9 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
-#include <random>
 #include <sstream>
+
+#include <oqs/oqs.h>
 
 namespace chromatin::ws {
 
@@ -347,8 +348,7 @@ void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 
         // Generate msg_id
         crypto::Hash msg_id{};
-        std::random_device rd2;
-        for (auto& b : msg_id) b = static_cast<uint8_t>(rd2());
+        OQS_randombytes(msg_id.data(), msg_id.size());
 
         auto now = std::chrono::system_clock::now();
         uint64_t timestamp = static_cast<uint64_t>(
@@ -486,12 +486,9 @@ void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Generate random 32-byte nonce for challenge
+    // Generate random 32-byte nonce for challenge (CSPRNG)
     crypto::Hash nonce{};
-    std::random_device rd;
-    for (auto& byte : nonce) {
-        byte = static_cast<uint8_t>(rd());
-    }
+    OQS_randombytes(nonce.data(), nonce.size());
 
     // Store in session
     auto* session = ws->getUserData();
@@ -871,10 +868,7 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
 
     // Generate random 32-byte msg_id
     crypto::Hash msg_id{};
-    std::random_device rd;
-    for (auto& byte : msg_id) {
-        byte = static_cast<uint8_t>(rd());
-    }
+    OQS_randombytes(msg_id.data(), msg_id.size());
 
     // Timestamp (seconds since epoch)
     auto now = std::chrono::system_clock::now();
