@@ -49,7 +49,13 @@ void WsServer::run() {
             connections_.erase(ws);
             auto* session = ws->getUserData();
             if (session->authenticated) {
-                authenticated_.erase(session->fingerprint);
+                auto it = authenticated_.find(session->fingerprint);
+                if (it != authenticated_.end()) {
+                    it->second.erase(ws);
+                    if (it->second.empty()) {
+                        authenticated_.erase(it);
+                    }
+                }
             }
             spdlog::info("WS: client disconnected");
         }
@@ -571,7 +577,7 @@ void WsServer::handle_auth(ws_t* ws, const Json::Value& msg) {
     // Auth succeeded
     session->authenticated = true;
     session->pubkey = std::move(*pk_bytes);
-    authenticated_[session->fingerprint] = ws;
+    authenticated_[session->fingerprint].insert(ws);
 
     // Count pending inbox messages
     int pending = 0;
@@ -1401,67 +1407,72 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
     auto key_copy = key;
 
     loop_->defer([this, key_copy, data_type, value_copy = std::move(value_copy)]() {
-        // Find which connected client this store belongs to
-        for (auto& [fp, ws] : authenticated_) {
-            auto inbox_key = crypto::sha3_256_prefixed("inbox:", fp);
-            auto request_key = crypto::sha3_256_prefixed("requests:", fp);
+        // Extract recipient fingerprint from value (first 32 bytes for both types)
+        if (value_copy.size() < 32) return;
+        crypto::Hash recipient_fp{};
+        std::copy(value_copy.begin(), value_copy.begin() + 32, recipient_fp.begin());
 
-            if ((data_type == 0x02 && key_copy == inbox_key) ||
-                (data_type == 0x03 && key_copy == request_key)) {
-                // Verify connection is still alive
-                if (connections_.count(ws) == 0) break;
+        auto it = authenticated_.find(recipient_fp);
+        if (it == authenticated_.end()) return;
 
-                if (data_type == 0x02) {
-                    // NEW_MESSAGE push
-                    // Value layout: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
-                    if (value_copy.size() < 108) break;
-                    auto msg_id = std::span<const uint8_t>(value_copy.data() + 32, 32);
-                    auto sender = std::span<const uint8_t>(value_copy.data() + 64, 32);
-                    uint64_t ts = 0;
-                    for (int i = 0; i < 8; ++i) {
-                        ts = (ts << 8) | value_copy[96 + i];
-                    }
-                    uint32_t blob_len = (static_cast<uint32_t>(value_copy[104]) << 24) |
-                                        (static_cast<uint32_t>(value_copy[105]) << 16) |
-                                        (static_cast<uint32_t>(value_copy[106]) << 8) |
-                                        static_cast<uint32_t>(value_copy[107]);
+        if (data_type == 0x02) {
+            // NEW_MESSAGE push
+            // Value layout: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+            if (value_copy.size() < 108) return;
+            auto msg_id = std::span<const uint8_t>(value_copy.data() + 32, 32);
+            auto sender = std::span<const uint8_t>(value_copy.data() + 64, 32);
+            uint64_t ts = 0;
+            for (int i = 0; i < 8; ++i) {
+                ts = (ts << 8) | value_copy[96 + i];
+            }
+            uint32_t blob_len = (static_cast<uint32_t>(value_copy[104]) << 24) |
+                                (static_cast<uint32_t>(value_copy[105]) << 16) |
+                                (static_cast<uint32_t>(value_copy[106]) << 8) |
+                                static_cast<uint32_t>(value_copy[107]);
 
-                    if (value_copy.size() < 108 + blob_len) break;
-                    auto blob = std::span<const uint8_t>(value_copy.data() + 108, blob_len);
+            if (value_copy.size() < 108 + blob_len) return;
+            auto blob = std::span<const uint8_t>(value_copy.data() + 108, blob_len);
 
-                    Json::Value push;
-                    push["type"] = "NEW_MESSAGE";
-                    push["msg_id"] = to_hex(msg_id);
-                    push["from"] = to_hex(sender);
-                    push["timestamp"] = Json::UInt64(ts);
-                    push["size"] = blob_len;
+            Json::Value push;
+            push["type"] = "NEW_MESSAGE";
+            push["msg_id"] = to_hex(msg_id);
+            push["from"] = to_hex(sender);
+            push["timestamp"] = Json::UInt64(ts);
+            push["size"] = blob_len;
 
-                    if (blob_len <= INLINE_THRESHOLD) {
-                        push["blob"] = to_base64(blob);
-                    } else {
-                        push["blob"] = Json::nullValue;
-                    }
-                    send_json(ws, push);
-                } else {
-                    // CONTACT_REQUEST push
-                    // Value layout: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-                    if (value_copy.size() < 76) break;
-                    auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
-                    uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
-                                           (static_cast<uint32_t>(value_copy[73]) << 16) |
-                                           (static_cast<uint32_t>(value_copy[74]) << 8) |
-                                           static_cast<uint32_t>(value_copy[75]);
-                    if (value_copy.size() < 76 + cr_blob_len) break;
-                    auto blob = std::span<const uint8_t>(
-                        value_copy.data() + 76, cr_blob_len);
+            if (blob_len <= INLINE_THRESHOLD) {
+                push["blob"] = to_base64(blob);
+            } else {
+                push["blob"] = Json::nullValue;
+            }
 
-                    Json::Value push;
-                    push["type"] = "CONTACT_REQUEST";
-                    push["from"] = to_hex(sender);
-                    push["blob"] = to_base64(blob);
-                    send_json(ws, push);
+            for (auto* client_ws : it->second) {
+                if (connections_.count(client_ws) > 0) {
+                    send_json(client_ws, push);
                 }
-                break;
+            }
+        } else {
+            // CONTACT_REQUEST push
+            // Value layout: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+            if (value_copy.size() < 76) return;
+            auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
+            uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
+                                   (static_cast<uint32_t>(value_copy[73]) << 16) |
+                                   (static_cast<uint32_t>(value_copy[74]) << 8) |
+                                   static_cast<uint32_t>(value_copy[75]);
+            if (value_copy.size() < 76 + cr_blob_len) return;
+            auto blob = std::span<const uint8_t>(
+                value_copy.data() + 76, cr_blob_len);
+
+            Json::Value push;
+            push["type"] = "CONTACT_REQUEST";
+            push["from"] = to_hex(sender);
+            push["blob"] = to_base64(blob);
+
+            for (auto* client_ws : it->second) {
+                if (connections_.count(client_ws) > 0) {
+                    send_json(client_ws, push);
+                }
             }
         }
     });

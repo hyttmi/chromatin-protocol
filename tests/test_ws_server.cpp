@@ -1577,3 +1577,98 @@ TEST_F(WsServerTest, StatusWithoutAuth) {
 
     client.close();
 }
+
+// ---------- Multi-device push notification test ----------
+
+TEST_F(WsServerTest, MultiDevicePush) {
+    start_ws_server();
+
+    // Single identity, two devices
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Connect and authenticate device 1
+    TestWsClient device1;
+    ASSERT_TRUE(device1.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(device1, user_kp));
+
+    // Connect and authenticate device 2 (same identity)
+    TestWsClient device2;
+    ASSERT_TRUE(device2.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(device2, user_kp));
+
+    // Build a fake inbox message binary (Kademlia STORE value):
+    // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    crypto::Hash msg_id{};
+    msg_id.fill(0xF1);
+    crypto::Hash sender_fp{};
+    sender_fp.fill(0xF2);
+    uint64_t timestamp = 1700000123;
+    std::vector<uint8_t> blob = {0xCA, 0xFE};
+
+    std::vector<uint8_t> msg_binary;
+    msg_binary.insert(msg_binary.end(), user_fp.begin(), user_fp.end());  // recipient_fp
+    msg_binary.insert(msg_binary.end(), msg_id.begin(), msg_id.end());
+    msg_binary.insert(msg_binary.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        msg_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
+
+    // Compute inbox_key = SHA3-256("inbox:" || user_fp)
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+
+    // Simulate a Kademlia STORE arriving for this user's inbox
+    server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
+
+    // Both devices should receive the NEW_MESSAGE push
+    auto resp1 = device1.recv_text(3000);
+    ASSERT_TRUE(resp1.has_value()) << "device 1 did not receive push notification";
+    auto root1 = parse_json(*resp1);
+    EXPECT_EQ(root1["type"].asString(), "NEW_MESSAGE");
+    EXPECT_EQ(root1["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(root1["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(root1["timestamp"].asUInt64(), timestamp);
+
+    auto resp2 = device2.recv_text(3000);
+    ASSERT_TRUE(resp2.has_value()) << "device 2 did not receive push notification";
+    auto root2 = parse_json(*resp2);
+    EXPECT_EQ(root2["type"].asString(), "NEW_MESSAGE");
+    EXPECT_EQ(root2["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(root2["from"].asString(), to_hex(sender_fp));
+    EXPECT_EQ(root2["timestamp"].asUInt64(), timestamp);
+
+    // Disconnect device 1 and verify device 2 still receives pushes
+    device1.close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    crypto::Hash msg_id2{};
+    msg_id2.fill(0xF3);
+    std::vector<uint8_t> msg_binary2;
+    msg_binary2.insert(msg_binary2.end(), user_fp.begin(), user_fp.end());
+    msg_binary2.insert(msg_binary2.end(), msg_id2.begin(), msg_id2.end());
+    msg_binary2.insert(msg_binary2.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        msg_binary2.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
+    msg_binary2.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    msg_binary2.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    msg_binary2.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    msg_binary2.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    msg_binary2.insert(msg_binary2.end(), blob.begin(), blob.end());
+
+    server_->on_kademlia_store(inbox_key, 0x02, msg_binary2);
+
+    auto resp3 = device2.recv_text(3000);
+    ASSERT_TRUE(resp3.has_value()) << "device 2 did not receive second push after device 1 disconnect";
+    auto root3 = parse_json(*resp3);
+    EXPECT_EQ(root3["type"].asString(), "NEW_MESSAGE");
+    EXPECT_EQ(root3["msg_id"].asString(), to_hex(msg_id2));
+
+    device2.close();
+}

@@ -105,8 +105,9 @@ private:
     // to verify a ws pointer is still valid before sending a reply.
     std::unordered_set<ws_t*> connections_;
 
-    // Authenticated sessions: fingerprint -> ws pointer (uWS thread only)
-    std::unordered_map<crypto::Hash, ws_t*, crypto::HashHash> authenticated_;
+    // Authenticated sessions: fingerprint -> set of ws pointers (uWS thread only).
+    // Multiple devices can be connected with the same identity simultaneously.
+    std::unordered_map<crypto::Hash, std::unordered_set<ws_t*>, crypto::HashHash> authenticated_;
 
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
