@@ -1027,7 +1027,7 @@ TEST_F(KademliaTest, ProfileStoreValidation_FingerprintMismatch) {
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("dna:", wrong_fp);
+    Hash key = sha3_256_prefixed("profile:", wrong_fp);
 
     bool ok = n1.kad->store(key, 0x00, profile);
     auto result = n1.storage->get(TABLE_PROFILES, key);
@@ -1360,7 +1360,7 @@ TEST_F(KademliaTest, SyncPreservesDataType) {
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("dna:", user_fp);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
 
     // Store directly on n1 with data_type 0x00 (profile)
     n1.storage->put(TABLE_PROFILES, key, profile);
@@ -1433,7 +1433,7 @@ TEST_F(KademliaTest, TamperedMessageRejected) {
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("dna:", user_fp);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
 
     // Build STORE message payload: data_type(1) + key(32) + value
     std::vector<uint8_t> store_payload;
@@ -1494,7 +1494,7 @@ TEST_F(KademliaTest, FindValueSkipsStaleInboxTable) {
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash profile_key = sha3_256_prefixed("dna:", user_fp);
+    Hash profile_key = sha3_256_prefixed("profile:", user_fp);
     n1.storage->put(TABLE_PROFILES, profile_key, profile);
 
     // find_value should return the profile
@@ -1559,7 +1559,7 @@ TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("dna:", user_fp);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
 
     // Store profile with sequence=1 — should succeed
     auto profile_v1 = build_profile(user_kp, 1);
@@ -2149,7 +2149,7 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), prof_sig.begin(), prof_sig.end());
 
-    auto profile_key = sha3_256_prefixed("dna:", owner_fp);
+    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
     n1.storage->put(TABLE_PROFILES, profile_key, profile);
 
     // Create a contact fingerprint

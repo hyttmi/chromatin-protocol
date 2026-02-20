@@ -58,13 +58,13 @@ so losing one doesn't lose your data.
 
 ---
 
-## DNA: Your Digital Identity
+## Your Digital Identity
 
-In Chromatin, your identity is called a **DNA**. It's a cryptographic identity
-that belongs to you — not to any company or server.
+In Chromatin, your identity is a cryptographic keypair that belongs to you —
+not to any company or server.
 
-When you create a DNA, your device generates a unique **fingerprint** (a
-string of characters that identifies you) and a pair of cryptographic keys:
+When you create your identity, your device generates a unique **fingerprint**
+(a string of characters that identifies you) and a pair of cryptographic keys:
 
 - **Public key** — shared with the world, used by others to encrypt messages
   to you
@@ -72,8 +72,8 @@ string of characters that identifies you) and a pair of cryptographic keys:
   prove your identity
 
 No one can impersonate you because no one has your secret key. No server
-can revoke your identity because no server issued it. Your DNA is permanent
-and self-sovereign.
+can revoke your identity because no server issued it. Your identity is
+permanent and self-sovereign.
 
 Every identity must register a **human-readable name** (like "alice" or
 "bob42") that maps to its fingerprint. Name registration is free — it just
@@ -181,7 +181,7 @@ spread across different countries, jurisdictions, and operators.
 | **Quantum safety** | ML-DSA-87 + ML-KEM-1024 — immune to quantum attacks |
 | **Decentralization** | No central server — independent nodes cooperate |
 | **Censorship resistance** | No single point of failure or control |
-| **Self-sovereign identity** | Your DNA is yours — no company can revoke it |
+| **Self-sovereign identity** | Your identity is yours — no company can revoke it |
 | **Spam prevention** | Allowlist model + proof-of-work for contact requests |
 | **Reliability** | 3-node replication — survive node failures |
 | **Multi-device** | 7-day message retention, per-device sync |

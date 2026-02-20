@@ -18,7 +18,7 @@ set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # Only build the algorithms we actually use (ML-DSA-87 for signing).
 # SHA3 is part of liboqs common code and always available.
-# Add ML-KEM here when encryption is implemented.
+# ML-KEM-1024 encryption is client-side only (libchromatin), not needed by the node.
 set(OQS_ENABLE_KEM_BIKE            OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_CLASSIC_MCELIECE OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_FRODOKEM        OFF CACHE BOOL "" FORCE)

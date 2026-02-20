@@ -16,9 +16,9 @@ That's Chromatin.
 
 ---
 
-## Step 1: Creating Your Identity (DNA)
+## Step 1: Creating Your Identity
 
-Before you can message anyone, you need a **DNA** — your digital identity.
+Before you can message anyone, you need a **Chromatin identity**.
 
 ```
   You

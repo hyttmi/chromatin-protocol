@@ -47,13 +47,13 @@ responsibility.
 
 ---
 
-## 3. Identity — DNA (Server Perspective)
+## 3. Identity (Server Perspective)
 
-The server stores and serves DNA profiles. It does not create them.
+The server stores and serves user profiles. It does not create them.
 
 ### 3.1 Profile Data
 
-A DNA profile is a signed, versioned document. The server stores and validates:
+A profile is a signed, versioned document. The server stores and validates:
 
 | Field            | Type                         | Notes                              |
 |------------------|------------------------------|------------------------------------|
@@ -72,7 +72,7 @@ inbox via XOR distance — users don't choose their relay.
 ### 3.2 Storage Key
 
 ```
-profile_key = SHA3-256("dna:" || fingerprint)
+profile_key = SHA3-256("profile:" || fingerprint)
 ```
 
 Stored on the R closest nodes to `profile_key`. Persistent (no expiry).
@@ -132,7 +132,7 @@ is assigned to nodes using the **same Kademlia XOR distance** mechanism and
 replicated using the **same sequence-based mdbx replication**.
 
 ```
-profile_key = SHA3-256("dna:" || fingerprint)     → R closest nodes store it
+profile_key = SHA3-256("profile:" || fingerprint)     → R closest nodes store it
 name_key    = SHA3-256("name:" || name)            → R closest nodes store it
 inbox_key   = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it
 request_key = SHA3-256("requests:" || fingerprint) → R closest nodes store it
@@ -158,7 +158,7 @@ replication strategy.
 │  ┌──────────────────▼───────────────────────────┐ │
 │  │           libmdbx (unified storage)           │ │
 │  │                                               │ │
-│  │  profiles/   — DNA profiles I'm responsible   │ │
+│  │  profiles/   — profiles I'm responsible   │ │
 │  │  names/      — Name records I'm responsible   │ │
 │  │  inboxes/    — Message inboxes I'm resp. for  │ │
 │  │  requests/   — Contact request inboxes        │ │
@@ -625,7 +625,7 @@ that data after confirming the new responsible node is synced.
 
 | Database         | Key Format                          | Value                     |
 |------------------|-------------------------------------|---------------------------|
-| profiles         | `SHA3-256("dna:" \|\| fp)`          | Signed profile document   |
+| profiles         | `SHA3-256("profile:" \|\| fp)`          | Signed profile document   |
 | names            | `SHA3-256("name:" \|\| name)`       | Signed name record        |
 | inbox_index      | `recipient_fp(32) \|\| msg_id(32)`  | sender_fp + timestamp + size (44 bytes) |
 | message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |

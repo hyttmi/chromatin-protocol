@@ -1293,7 +1293,7 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     // can be registered before profiles are widely replicated.
     //
     // Check if we have a profile for this fingerprint
-    crypto::Hash profile_key = crypto::sha3_256_prefixed("dna:", fingerprint);
+    crypto::Hash profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
     auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
     if (profile_data) {
         // Extract pubkey from profile: [32 bytes fingerprint][2 bytes BE pubkey_length][pubkey...]
@@ -1450,8 +1450,8 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
         return false;
     }
 
-    // Verify storage key == SHA3-256("dna:" || fingerprint)
-    auto expected_key = crypto::sha3_256_prefixed("dna:", fingerprint);
+    // Verify storage key == SHA3-256("profile:" || fingerprint)
+    auto expected_key = crypto::sha3_256_prefixed("profile:", fingerprint);
     if (expected_key != key) {
         spdlog::warn("Profile validation: storage key mismatch");
         return false;
@@ -1682,7 +1682,7 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
     // Signature verification: look up owner's public key from stored profile
     crypto::Hash ofp{};
     std::copy_n(owner_fp.data(), 32, ofp.begin());
-    auto profile_key = crypto::sha3_256_prefixed("dna:", ofp);
+    auto profile_key = crypto::sha3_256_prefixed("profile:", ofp);
     auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
     if (profile_data && !profile_data->empty()) {
         // Profile format: fingerprint(32) || pubkey_len(2 BE) || pubkey || ...

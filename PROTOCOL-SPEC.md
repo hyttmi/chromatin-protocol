@@ -247,7 +247,7 @@ These define the structure of values carried inside STORE and VALUE payloads.
 [signature_length bytes: ML-DSA-87 signature over all preceding fields]
 ```
 
-Storage key: `SHA3-256("dna:" || fingerprint)`
+Storage key: `SHA3-256("profile:" || fingerprint)`
 
 ### Name Record (data_type 0x01)
 
@@ -791,7 +791,7 @@ cryptographic random source. Implementations using liboqs SHOULD use
 All storage keys are derived using SHA3-256 with domain prefixes:
 
 ```
-profile_key  = SHA3-256("dna:"       || fingerprint)
+profile_key  = SHA3-256("profile:"       || fingerprint)
 name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
 request_key  = SHA3-256("requests:"  || fingerprint)
