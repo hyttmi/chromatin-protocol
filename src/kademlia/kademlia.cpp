@@ -528,13 +528,23 @@ void Kademlia::sync_with_peers() {
 // ---------------------------------------------------------------------------
 
 void Kademlia::handle_message(const Message& msg, const std::string& from_addr, uint16_t from_port) {
-    // Verify ML-DSA-87 signature for messages that modify state or carry data.
-    // Exempt: PING/PONG (identity establishment), FIND_NODE (bootstrap discovery),
-    // NODES (routing info — sender may not be in our routing table yet).
-    // All other message types (STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK,
-    // SEQ_REQ, SEQ_RESP, VALUE) require the sender to have a verified pubkey.
-    if (msg.type != MessageType::PING && msg.type != MessageType::PONG &&
-        msg.type != MessageType::FIND_NODE && msg.type != MessageType::NODES) {
+    // Signature verification policy:
+    // - PING, FIND_NODE: fully exempt (unsigned discovery messages)
+    // - PONG, NODES: verified when sender's pubkey is known, accepted otherwise
+    //   (needed for initial discovery before pubkey exchange)
+    // - All other types: mandatory verification, rejected if unknown/unverified
+    if (msg.type == MessageType::PONG || msg.type == MessageType::NODES) {
+        auto node_info = table_.find(msg.sender);
+        if (node_info && !node_info->pubkey.empty()) {
+            if (!verify_message(msg, node_info->pubkey)) {
+                spdlog::warn("Rejected {} with invalid signature from {}:{}",
+                             msg.type == MessageType::PONG ? "PONG" : "NODES",
+                             from_addr, from_port);
+                return;
+            }
+        }
+        // Unknown sender or no pubkey: accept for discovery
+    } else if (msg.type != MessageType::PING && msg.type != MessageType::FIND_NODE) {
         auto node_info = table_.find(msg.sender);
         if (!node_info || node_info->pubkey.empty()) {
             spdlog::warn("Rejected message type {} from unknown/unverified node {}:{}",
