@@ -1578,3 +1578,56 @@ TEST_F(KademliaTest, SyncHandlesDelete) {
     EXPECT_FALSE(n2.storage->get(TABLE_MESSAGE_BLOBS, msg_id).has_value())
         << "n2 should have deleted blob after sync DEL";
 }
+
+// ---------------------------------------------------------------------------
+// Test 32: DuplicateInboxMessageRejected — same msg_id is not stored twice
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, DuplicateInboxMessageRejected) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash inbox_key = sha3_256_prefixed("inbox:", user_fp);
+
+    Hash msg_id{};
+    msg_id[0] = 0xEE;
+    Hash sender_fp{};
+    sender_fp[0] = 0xFF;
+    uint64_t timestamp = 1700000000;
+
+    // Build inbox value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
+    auto build_inbox = [&](const std::string& blob_str) {
+        std::vector<uint8_t> val;
+        val.insert(val.end(), user_fp.begin(), user_fp.end());
+        val.insert(val.end(), msg_id.begin(), msg_id.end());
+        val.insert(val.end(), sender_fp.begin(), sender_fp.end());
+        for (int i = 7; i >= 0; --i)
+            val.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+        uint32_t blen = static_cast<uint32_t>(blob_str.size());
+        val.push_back(static_cast<uint8_t>((blen >> 24) & 0xFF));
+        val.push_back(static_cast<uint8_t>((blen >> 16) & 0xFF));
+        val.push_back(static_cast<uint8_t>((blen >> 8) & 0xFF));
+        val.push_back(static_cast<uint8_t>(blen & 0xFF));
+        for (char c : blob_str) val.push_back(static_cast<uint8_t>(c));
+        return val;
+    };
+
+    // First store — should succeed
+    auto val1 = build_inbox("Hello");
+    ASSERT_TRUE(n1.kad->store(inbox_key, 0x02, val1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_TRUE(n1.storage->get(TABLE_MESSAGE_BLOBS, msg_id).has_value());
+
+    // Store same msg_id again with different blob — should be silently rejected
+    auto val2 = build_inbox("Different payload");
+    n1.kad->store(inbox_key, 0x02, val2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Verify original blob is unchanged
+    auto stored = n1.storage->get(TABLE_MESSAGE_BLOBS, msg_id);
+    ASSERT_TRUE(stored.has_value());
+    std::string original(stored->begin(), stored->end());
+    EXPECT_EQ(original, "Hello") << "Original blob should be preserved, duplicate rejected";
+}

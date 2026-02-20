@@ -421,6 +421,14 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
                           | (static_cast<uint32_t>(value[106]) << 8)
                           | static_cast<uint32_t>(value[107]);
 
+        // Dedup: reject if msg_id already exists
+        crypto::Hash mid{};
+        std::copy_n(msg_id.data(), 32, mid.begin());
+        if (storage_.get(storage::TABLE_MESSAGE_BLOBS, mid)) {
+            spdlog::debug("STORE: duplicate inbox message rejected (msg_id already exists)");
+            return;
+        }
+
         // INDEX key: recipient_fp(32) || msg_id(32)
         std::vector<uint8_t> idx_key;
         idx_key.reserve(64);
@@ -610,6 +618,14 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
                               | (static_cast<uint32_t>(value[105]) << 16)
                               | (static_cast<uint32_t>(value[106]) << 8)
                               | static_cast<uint32_t>(value[107]);
+
+                // Dedup: reject if msg_id already exists
+                crypto::Hash mid_hash{};
+                std::copy_n(mid.data(), 32, mid_hash.begin());
+                if (storage_.get(storage::TABLE_MESSAGE_BLOBS, mid_hash)) {
+                    spdlog::debug("store(): duplicate inbox message rejected");
+                    continue;
+                }
 
                 std::vector<uint8_t> idx_key;
                 idx_key.reserve(64);
