@@ -12,6 +12,7 @@
 #include "storage/storage.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <sstream>
 #include <thread>
@@ -770,13 +771,20 @@ TEST_F(WsServerTest, ContactRequestWithPoW) {
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, sender_kp));
 
-    // Compute PoW nonce: preimage = "request:" || sender_fp || recipient_fp
+    // Compute PoW nonce: preimage = "chromatin:request:" || sender_fp || recipient_fp || timestamp(8 BE)
     // Need 16 leading zero bits (~65k attempts avg)
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     uint64_t pow_nonce = 0;
     for (uint64_t n = 0; n < 10'000'000; ++n) {
@@ -799,6 +807,7 @@ TEST_F(WsServerTest, ContactRequestWithPoW) {
     req["to"] = to_hex(recipient_fp);
     req["blob"] = blob_b64;
     req["pow_nonce"] = Json::UInt64(pow_nonce);
+    req["timestamp"] = Json::UInt64(timestamp);
 
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
@@ -827,12 +836,19 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, sender_kp));
 
-    // Compute PoW nonce
+    // Compute PoW nonce with timestamp
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     uint64_t pow_nonce = 0;
     for (uint64_t n = 0; n < 10'000'000; ++n) {
@@ -852,6 +868,7 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     req["to"] = to_hex(recipient_fp);
     req["blob"] = blob_b64;
     req["pow_nonce"] = Json::UInt64(pow_nonce);
+    req["timestamp"] = Json::UInt64(timestamp);
 
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
@@ -863,7 +880,8 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     auto root = parse_json(*resp);
     EXPECT_EQ(root["type"].asString(), "OK");
 
-    // Verify stored binary format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    // Verify stored binary format:
+    // recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || timestamp(8 BE) || blob_length(4 BE) || blob
     // Storage key is now composite: recipient_fp(32) || sender_fp(32)
     std::vector<uint8_t> storage_key;
     storage_key.insert(storage_key.end(), recipient_fp.begin(), recipient_fp.end());
@@ -871,8 +889,8 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     auto stored = storage_->get(storage::TABLE_REQUESTS, storage_key);
     ASSERT_TRUE(stored.has_value()) << "contact request should be stored";
 
-    // Minimum: 32 + 32 + 8 + 4 + 4 = 80 bytes (recipient_fp + sender_fp + nonce + blob_len + blob)
-    ASSERT_GE(stored->size(), 80u);
+    // Minimum: 32 + 32 + 8 + 8 + 4 + 4 = 88 bytes
+    ASSERT_GE(stored->size(), 88u);
 
     // Verify recipient_fp at offset 0
     EXPECT_TRUE(std::equal(recipient_fp.begin(), recipient_fp.end(), stored->begin()));
@@ -880,16 +898,23 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
     // Verify sender_fp at offset 32
     EXPECT_TRUE(std::equal(sender_fp.begin(), sender_fp.end(), stored->begin() + 32));
 
-    // Verify blob_length at offset 72 (4 bytes BE)
-    uint32_t stored_blob_len = (static_cast<uint32_t>((*stored)[72]) << 24)
-                             | (static_cast<uint32_t>((*stored)[73]) << 16)
-                             | (static_cast<uint32_t>((*stored)[74]) << 8)
-                             | static_cast<uint32_t>((*stored)[75]);
+    // Verify timestamp at offset 72 (8 bytes BE)
+    uint64_t stored_ts = 0;
+    for (int i = 0; i < 8; ++i) {
+        stored_ts = (stored_ts << 8) | (*stored)[72 + i];
+    }
+    EXPECT_EQ(stored_ts, timestamp);
+
+    // Verify blob_length at offset 80 (4 bytes BE)
+    uint32_t stored_blob_len = (static_cast<uint32_t>((*stored)[80]) << 24)
+                             | (static_cast<uint32_t>((*stored)[81]) << 16)
+                             | (static_cast<uint32_t>((*stored)[82]) << 8)
+                             | static_cast<uint32_t>((*stored)[83]);
     EXPECT_EQ(stored_blob_len, 4u) << "blob_length should be 4 (0xCAFEBABE)";
 
-    // Verify blob at offset 76
-    EXPECT_EQ(stored->size(), 80u); // 32 + 32 + 8 + 4 + 4
-    std::vector<uint8_t> stored_blob(stored->begin() + 76, stored->end());
+    // Verify blob at offset 84
+    EXPECT_EQ(stored->size(), 88u); // 32 + 32 + 8 + 8 + 4 + 4
+    std::vector<uint8_t> stored_blob(stored->begin() + 84, stored->end());
     EXPECT_EQ(stored_blob, blob_data);
 
     client.close();

@@ -1636,9 +1636,9 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
-    // Format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-    // Minimum: 32 + 32 + 8 + 4 = 76 bytes
-    if (value.size() < 76) {
+    // Format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || timestamp(8 BE) || blob_length(4 BE) || blob
+    // Minimum: 32 + 32 + 8 + 8 + 4 = 84 bytes
+    if (value.size() < 84) {
         spdlog::warn("Contact request validation: too short ({} bytes)", value.size());
         return false;
     }
@@ -1653,31 +1653,52 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
         pow_nonce = (pow_nonce << 8) | value[64 + i];
     }
 
-    // Verify PoW with domain separation: preimage = "chromatin:request:" || sender_fp || recipient_fp
+    // Extract timestamp (8 bytes BE at offset 72)
+    uint64_t timestamp = 0;
+    for (int i = 0; i < 8; ++i) {
+        timestamp = (timestamp << 8) | value[72 + i];
+    }
+
+    // Validate timestamp: must be within 1 hour of current time
+    auto now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    constexpr uint64_t MAX_TIMESTAMP_DRIFT = 3'600'000;  // 1 hour in ms
+    if (timestamp > now + MAX_TIMESTAMP_DRIFT || now > timestamp + MAX_TIMESTAMP_DRIFT) {
+        spdlog::debug("Contact request rejected: timestamp {} too far from now {}", timestamp, now);
+        return false;
+    }
+
+    // Verify PoW with domain separation:
+    // preimage = "chromatin:request:" || sender_fp || recipient_fp || timestamp(8 BE)
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
-    preimage.reserve(prefix.size() + 32 + 32);
+    preimage.reserve(prefix.size() + 32 + 32 + 8);
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(
+            static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     if (!crypto::verify_pow(preimage, pow_nonce, contact_pow_difficulty_)) {
         spdlog::debug("Contact request rejected: insufficient PoW (required {} bits)", contact_pow_difficulty_);
         return false;
     }
 
-    // Validate blob_length
-    uint32_t blob_len = (static_cast<uint32_t>(value[72]) << 24)
-                      | (static_cast<uint32_t>(value[73]) << 16)
-                      | (static_cast<uint32_t>(value[74]) << 8)
-                      | static_cast<uint32_t>(value[75]);
+    // Validate blob_length (at offset 80 now)
+    uint32_t blob_len = (static_cast<uint32_t>(value[80]) << 24)
+                      | (static_cast<uint32_t>(value[81]) << 16)
+                      | (static_cast<uint32_t>(value[82]) << 8)
+                      | static_cast<uint32_t>(value[83]);
 
     if (blob_len > max_request_blob_size_) {
         spdlog::warn("Contact request validation: blob_len {} exceeds {} bytes", blob_len, max_request_blob_size_);
         return false;
     }
 
-    if (76 + blob_len != value.size()) {
+    if (84 + blob_len != value.size()) {
         spdlog::warn("Contact request validation: blob_len {} doesn't match remaining data", blob_len);
         return false;
     }

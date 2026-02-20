@@ -1153,7 +1153,7 @@ TEST_F(KademliaTest, ContactRequestValidation_OversizedBlob) {
     start_all();
 
     // Build a contact request with new format but no valid PoW
-    // recipient_fp(32) + sender_fp(32) + pow_nonce(8) + blob_length(4) + blob
+    // recipient_fp(32) + sender_fp(32) + pow_nonce(8) + timestamp(8) + blob_length(4) + blob
     // This will be rejected at PoW verification (before blob size check)
     Hash recipient_fp{};
     recipient_fp.fill(0xAA);
@@ -1164,14 +1164,14 @@ TEST_F(KademliaTest, ContactRequestValidation_OversizedBlob) {
     std::vector<uint8_t> request;
     request.insert(request.end(), recipient_fp.begin(), recipient_fp.end());
     request.insert(request.end(), sender_fp.begin(), sender_fp.end());
-    request.resize(32 + 32 + 8, 0x00);  // pow_nonce = 0 (invalid)
+    request.resize(32 + 32 + 8 + 8, 0x00);  // pow_nonce = 0 (invalid), timestamp = 0
     // blob_length (4 BE)
     request.push_back(static_cast<uint8_t>((blob_size >> 24) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_size >> 16) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_size >> 8) & 0xFF));
     request.push_back(static_cast<uint8_t>(blob_size & 0xFF));
     // blob data
-    request.resize(32 + 32 + 8 + 4 + blob_size, 0x42);
+    request.resize(32 + 32 + 8 + 8 + 4 + blob_size, 0x42);
 
     Hash key{};
     key.fill(0xCD);
@@ -1198,12 +1198,19 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
     Hash sender_fp{};
     sender_fp.fill(0x22);
 
-    // Build PoW preimage: "request:" || sender_fp || recipient_fp
+    // Build PoW preimage: "chromatin:request:" || sender_fp || recipient_fp || timestamp(8 BE ms)
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     // Find a valid PoW nonce (16 leading zero bits, ~65k avg iterations)
     uint64_t pow_nonce = 0;
@@ -1227,6 +1234,9 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         // pow_nonce (8 bytes BE)
         for (int i = 7; i >= 0; --i)
             request.push_back(static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+        // timestamp (8 bytes BE)
+        for (int i = 7; i >= 0; --i)
+            request.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
         // blob_length (4 BE)
         request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
         request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
@@ -1245,7 +1255,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         auto result = n1.storage->get(TABLE_REQUESTS, composite_key);
         ASSERT_TRUE(result.has_value())
             << "Contact request with valid PoW should be stored";
-        EXPECT_EQ(result->size(), 32u + 32u + 8u + 4u + blob.size());
+        EXPECT_EQ(result->size(), 32u + 32u + 8u + 8u + 4u + blob.size());
     }
 
     // --- Test 2: Invalid PoW (nonce=0 with different sender) should be rejected ---
@@ -1259,6 +1269,9 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         // pow_nonce = 0 (won't be valid for these fingerprints)
         for (int i = 0; i < 8; ++i)
             request.push_back(0x00);
+        // timestamp (current, valid)
+        for (int i = 7; i >= 0; --i)
+            request.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
         // blob_length (4 BE)
         request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
         request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
@@ -2468,12 +2481,19 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     Hash sender_fp{};
     sender_fp.fill(0x22);
 
-    // Build PoW preimage: "request:" || sender_fp || recipient_fp
+    // Build PoW preimage: "chromatin:request:" || sender_fp || recipient_fp || timestamp(8 BE ms)
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     // Find valid PoW nonce
     uint64_t pow_nonce = 0;
@@ -2494,6 +2514,8 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     request.insert(request.end(), sender_fp.begin(), sender_fp.end());
     for (int i = 7; i >= 0; --i)
         request.push_back(static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+    for (int i = 7; i >= 0; --i)
+        request.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
     request.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));

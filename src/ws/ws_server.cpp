@@ -1350,24 +1350,47 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     }
     uint64_t pow_nonce = msg["pow_nonce"].asUInt64();
 
-    // Verify PoW with domain separation: preimage = "chromatin:request:" || sender_fp || recipient_fp
+    // Parse client-provided timestamp (milliseconds since epoch)
+    if (!msg.isMember("timestamp") || !msg["timestamp"].isUInt64()) {
+        send_error(ws, id, 400, "missing or invalid timestamp");
+        return;
+    }
+    uint64_t timestamp = msg["timestamp"].asUInt64();
+
+    // Validate timestamp: must be within 1 hour of current time
+    uint64_t now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    constexpr uint64_t MAX_TIMESTAMP_DRIFT = 3'600'000;  // 1 hour in ms
+    if (timestamp > now + MAX_TIMESTAMP_DRIFT || now > timestamp + MAX_TIMESTAMP_DRIFT) {
+        send_error(ws, id, 400, "timestamp too far from server time");
+        return;
+    }
+
+    // Verify PoW with domain separation:
+    // preimage = "chromatin:request:" || sender_fp || recipient_fp || timestamp(8 BE)
     std::vector<uint8_t> preimage;
     const std::string prefix = "chromatin:request:";
-    preimage.reserve(prefix.size() + 32 + 32);
+    preimage.reserve(prefix.size() + 32 + 32 + 8);
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(),
                     session->fingerprint.begin(), session->fingerprint.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+    for (int i = 7; i >= 0; --i) {
+        preimage.push_back(
+            static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    }
 
     if (!crypto::verify_pow(preimage, pow_nonce, cfg_.contact_pow_difficulty)) {
         send_error(ws, id, 400, "invalid PoW");
         return;
     }
 
-    // Build contact request binary: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
+    // Build contact request binary:
+    // recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || timestamp(8 BE) || blob_length(4 BE) || blob
     uint32_t blob_len = static_cast<uint32_t>(blob->size());
     std::vector<uint8_t> request_binary;
-    request_binary.reserve(32 + 32 + 8 + 4 + blob->size());
+    request_binary.reserve(32 + 32 + 8 + 8 + 4 + blob->size());
     request_binary.insert(request_binary.end(),
                           recipient_fp.begin(), recipient_fp.end());
     request_binary.insert(request_binary.end(),
@@ -1375,6 +1398,10 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     for (int i = 7; i >= 0; --i) {
         request_binary.push_back(
             static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+    }
+    for (int i = 7; i >= 0; --i) {
+        request_binary.push_back(
+            static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
     }
     request_binary.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
     request_binary.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
