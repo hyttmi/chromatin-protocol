@@ -58,6 +58,9 @@ struct Config {
     uint16_t sync_interval_seconds = 120;
     uint16_t sync_batch_size = 10;
 
+    // TCP transport
+    uint16_t max_tcp_clients = 256;
+
     // Connection pool
     uint16_t conn_pool_max = 64;
     uint16_t conn_pool_idle_seconds = 60;

@@ -8,7 +8,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -218,13 +217,14 @@ static std::optional<Message> read_framed_message(int fd) {
 TcpTransport::TcpTransport(const std::string& bind_addr, uint16_t port,
                            uint16_t connect_timeout, uint16_t read_timeout,
                            size_t max_pool_size, uint16_t conn_idle_seconds,
-                           uint64_t max_message_size)
+                           uint64_t max_message_size, size_t max_tcp_clients)
     : port_(port)
     , connect_timeout_(connect_timeout)
     , read_timeout_(read_timeout)
     , max_pool_size_(max_pool_size)
     , conn_max_idle_(conn_idle_seconds)
-    , max_message_size_(max_message_size) {
+    , max_message_size_(max_message_size)
+    , max_tcp_clients_(max_tcp_clients) {
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
         throw std::runtime_error("socket() failed: " + std::string(strerror(errno)));
@@ -441,87 +441,76 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
 void TcpTransport::run(Handler handler) {
     running_.store(true);
 
-    // Track accepted client connections alongside the listen socket.
-    struct ClientConn {
-        int fd;
-        struct sockaddr_in addr;
-    };
-    std::vector<ClientConn> clients;
+    // Track accepted client connections: pollfd + peer address.
+    // Index 0 is always the listen socket.
+    std::vector<struct pollfd> fds;
+    std::vector<struct sockaddr_in> client_addrs;  // parallel to fds (index 0 unused)
+
+    // Listen socket at index 0
+    fds.push_back({listen_fd_, POLLIN, 0});
+    client_addrs.push_back({});  // placeholder for listen socket
 
     while (running_.load()) {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(listen_fd_, &readfds);
-        int max_fd = listen_fd_;
-
-        for (const auto& c : clients) {
-            FD_SET(c.fd, &readfds);
-            if (c.fd > max_fd) max_fd = c.fd;
-        }
-
-        // 100ms timeout so stop() can break the loop
-        struct timeval tv{};
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000;
-
-        int ret = select(max_fd + 1, &readfds, nullptr, nullptr, &tv);
+        int ret = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), 100);
         if (ret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            spdlog::error("select() failed: {}", strerror(errno));
+            if (errno == EINTR) continue;
+            spdlog::error("poll() failed: {}", strerror(errno));
             break;
         }
-
-        if (ret == 0) {
-            // Timeout — check running_ and loop
-            continue;
-        }
+        if (ret == 0) continue;  // timeout
 
         // Accept new incoming connections
-        if (FD_ISSET(listen_fd_, &readfds)) {
+        if (fds[0].revents & POLLIN) {
             struct sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             int client_fd = accept(listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
             if (client_fd >= 0) {
-                // Set read timeout on accepted connection
-                struct timeval read_tv{};
-                read_tv.tv_sec = read_timeout_;
-                setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_tv, sizeof(read_tv));
+                // fds.size() - 1 because index 0 is the listen socket
+                if (fds.size() - 1 < max_tcp_clients_) {
+                    // Set read timeout on accepted connection
+                    struct timeval read_tv{};
+                    read_tv.tv_sec = read_timeout_;
+                    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_tv, sizeof(read_tv));
 
-                clients.push_back({client_fd, client_addr});
+                    fds.push_back({client_fd, POLLIN, 0});
+                    client_addrs.push_back(client_addr);
+                } else {
+                    close(client_fd);  // at capacity
+                    spdlog::warn("TCP client limit reached ({}), rejecting connection", max_tcp_clients_);
+                }
             } else if (errno != EINTR) {
                 spdlog::warn("accept() failed: {}", strerror(errno));
             }
         }
 
-        // Read from all ready client connections
-        for (auto it = clients.begin(); it != clients.end(); ) {
-            if (!FD_ISSET(it->fd, &readfds)) {
-                ++it;
+        // Read from ready client connections (skip index 0 = listen socket)
+        for (size_t i = 1; i < fds.size(); ) {
+            if (!(fds[i].revents & (POLLIN | POLLERR | POLLHUP))) {
+                ++i;
                 continue;
             }
 
-            auto msg = read_framed_message(it->fd);
+            auto msg = read_framed_message(fds[i].fd);
             if (!msg) {
                 // Connection closed or error — remove this client
-                close(it->fd);
-                it = clients.erase(it);
+                close(fds[i].fd);
+                fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
                 continue;
             }
 
             // from_addr = peer's IP, from_port = sender's listening port (from header)
             char addr_str[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &it->addr.sin_addr, addr_str, sizeof(addr_str));
+            inet_ntop(AF_INET, &client_addrs[i].sin_addr, addr_str, sizeof(addr_str));
 
             handler(*msg, std::string(addr_str), msg->sender_port);
-            ++it;
+            ++i;
         }
     }
 
     // Clean up any remaining client connections on shutdown
-    for (auto& c : clients) {
-        close(c.fd);
+    for (size_t i = 1; i < fds.size(); ++i) {
+        close(fds[i].fd);
     }
 }
 

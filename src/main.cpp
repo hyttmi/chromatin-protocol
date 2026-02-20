@@ -103,7 +103,8 @@ int main(int argc, char* argv[]) {
     // --- 9. Create TcpTransport ---
     chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port,
         cfg.tcp_connect_timeout, cfg.tcp_read_timeout,
-        cfg.conn_pool_max, cfg.conn_pool_idle_seconds, cfg.max_message_size);
+        cfg.conn_pool_max, cfg.conn_pool_idle_seconds, cfg.max_message_size,
+        cfg.max_tcp_clients);
 
     // --- 10. Create Kademlia engine ---
     chromatin::kademlia::Kademlia kademlia(cfg, self, transport, routing_table, storage, repl_log, keypair);

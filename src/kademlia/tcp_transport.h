@@ -72,7 +72,8 @@ public:
     TcpTransport(const std::string& bind_addr, uint16_t port,
                  uint16_t connect_timeout = 5, uint16_t read_timeout = 5,
                  size_t max_pool_size = 64, uint16_t conn_idle_seconds = 60,
-                 uint64_t max_message_size = 50ULL * 1024 * 1024);
+                 uint64_t max_message_size = 50ULL * 1024 * 1024,
+                 size_t max_tcp_clients = 256);
     ~TcpTransport();
 
     // Non-copyable
@@ -85,7 +86,7 @@ public:
     // Handler callback: called for each received message with sender address info.
     using Handler = std::function<void(const Message& msg, const std::string& from_addr, uint16_t from_port)>;
 
-    // Blocking accept loop using select() with 100ms timeout.
+    // Blocking accept loop using poll() with 100ms timeout.
     // Accepts connections, reads multiple framed messages per connection.
     void run(Handler handler);
 
@@ -107,6 +108,7 @@ private:
     size_t max_pool_size_;
     std::chrono::seconds conn_max_idle_;
     uint64_t max_message_size_;
+    size_t max_tcp_clients_;
     std::atomic<bool> running_{false};
 
     // Connection pool: keyed by "addr:port"

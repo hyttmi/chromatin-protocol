@@ -148,6 +148,11 @@ Config load_config(const std::filesystem::path& path) {
         cfg.sync_batch_size = static_cast<uint16_t>(root["sync_batch_size"].asUInt());
     }
 
+    // TCP transport
+    if (root.isMember("max_tcp_clients")) {
+        cfg.max_tcp_clients = static_cast<uint16_t>(root["max_tcp_clients"].asUInt());
+    }
+
     // Connection pool
     if (root.isMember("conn_pool_max")) {
         cfg.conn_pool_max = static_cast<uint16_t>(root["conn_pool_max"].asUInt());
@@ -256,6 +261,9 @@ void generate_default_config(const std::filesystem::path& path) {
     // Sync
     root["sync_interval_seconds"] = 120;
     root["sync_batch_size"] = 10;
+
+    // TCP transport
+    root["max_tcp_clients"] = 256;
 
     // Connection pool
     root["conn_pool_max"] = 64;
