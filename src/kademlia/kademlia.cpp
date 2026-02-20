@@ -322,7 +322,8 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
     // [2 bytes BE: node_count]
     // Per node:
     //   [32 bytes: node_id]
-    //   [4 bytes: IPv4 address]
+    //   [1 byte: address_family (0x04=IPv4, 0x06=IPv6)]
+    //   [4 or 16 bytes: address]
     //   [2 bytes BE: tcp_port]
     //   [2 bytes BE: ws_port]
     //   [2 bytes BE: pubkey_length]
@@ -337,14 +338,26 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         // node_id (32 bytes)
         payload.insert(payload.end(), node.id.id.begin(), node.id.id.end());
 
-        // IPv4 address (4 bytes)
-        struct in_addr addr_bin{};
-        if (inet_pton(AF_INET, node.address.c_str(), &addr_bin) != 1) {
-            // If address is not valid IPv4, use 0.0.0.0
-            addr_bin.s_addr = 0;
+        // Detect address family: contains ':' → IPv6, else IPv4
+        bool is_ipv6 = node.address.find(':') != std::string::npos;
+
+        if (is_ipv6) {
+            payload.push_back(0x06);  // address_family = IPv6
+            struct in6_addr addr6{};
+            if (inet_pton(AF_INET6, node.address.c_str(), &addr6) != 1) {
+                std::memset(&addr6, 0, sizeof(addr6));
+            }
+            auto* bytes = reinterpret_cast<const uint8_t*>(&addr6);
+            payload.insert(payload.end(), bytes, bytes + 16);
+        } else {
+            payload.push_back(0x04);  // address_family = IPv4
+            struct in_addr addr4{};
+            if (inet_pton(AF_INET, node.address.c_str(), &addr4) != 1) {
+                addr4.s_addr = 0;
+            }
+            auto* bytes = reinterpret_cast<const uint8_t*>(&addr4.s_addr);
+            payload.insert(payload.end(), bytes, bytes + 4);
         }
-        auto* bytes = reinterpret_cast<const uint8_t*>(&addr_bin.s_addr);
-        payload.insert(payload.end(), bytes, bytes + 4);
 
         // tcp_port (2 bytes BE)
         payload.push_back(static_cast<uint8_t>((node.tcp_port >> 8) & 0xFF));
@@ -382,8 +395,8 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
     spdlog::info("Received NODES with {} entries", node_count);
 
     for (uint16_t i = 0; i < node_count; ++i) {
-        // Minimum per-node: 32 + 4 + 2 + 2 + 2 = 42 bytes (with 0-length pubkey)
-        if (offset + 42 > data.size()) {
+        // Minimum per-node: 32 (id) + 1 (af) + 4 (addr) + 2+2+2 = 43 bytes
+        if (offset + 43 > data.size()) {
             spdlog::warn("NODES payload truncated at node {}", i);
             return;
         }
@@ -394,15 +407,41 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
         std::copy_n(data.data() + offset, 32, info.id.id.begin());
         offset += 32;
 
-        // IPv4 address (4 bytes)
-        struct in_addr addr_bin{};
-        std::memcpy(&addr_bin.s_addr, data.data() + offset, 4);
-        offset += 4;
-        char addr_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &addr_bin, addr_str, sizeof(addr_str));
-        info.address = addr_str;
+        // address_family (1 byte)
+        uint8_t af = data[offset];
+        offset += 1;
+
+        if (af == 0x06) {
+            // IPv6 (16 bytes)
+            if (offset + 16 > data.size()) {
+                spdlog::warn("NODES payload truncated at IPv6 for node {}", i);
+                return;
+            }
+            struct in6_addr addr6{};
+            std::memcpy(&addr6, data.data() + offset, 16);
+            offset += 16;
+            char addr_str[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &addr6, addr_str, sizeof(addr_str));
+            info.address = addr_str;
+        } else {
+            // IPv4 (4 bytes) — treat 0x04 and any unknown af as IPv4
+            if (offset + 4 > data.size()) {
+                spdlog::warn("NODES payload truncated at IPv4 for node {}", i);
+                return;
+            }
+            struct in_addr addr4{};
+            std::memcpy(&addr4.s_addr, data.data() + offset, 4);
+            offset += 4;
+            char addr_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &addr4, addr_str, sizeof(addr_str));
+            info.address = addr_str;
+        }
 
         // tcp_port (2 bytes BE)
+        if (offset + 6 > data.size()) {
+            spdlog::warn("NODES payload truncated at ports for node {}", i);
+            return;
+        }
         info.tcp_port = static_cast<uint16_t>(
             (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]);
         offset += 2;
