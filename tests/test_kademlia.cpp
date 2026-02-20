@@ -1751,3 +1751,40 @@ TEST_F(KademliaTest, PendingStoreTimeout) {
     // by checking tick() completes successfully
     SUCCEED();
 }
+
+// ---------------------------------------------------------------------------
+// Test 35: ResponsibilityTransfer — data pushed to new nodes on table change
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ResponsibilityTransfer) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Store a name record directly on n1 (single node, it's responsible for everything)
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "transfertest";
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+    auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
+    Hash key = name_key(name);
+
+    ASSERT_TRUE(n1.kad->store(key, 0x01, record));
+    ASSERT_TRUE(n1.storage->get(TABLE_NAMES, key).has_value());
+
+    // Now create n2 and bootstrap — this changes the routing table
+    auto& n2 = create_node(8);
+    n2.start_recv();
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n1.kad->bootstrap({{"127.0.0.1", n2.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // n1's routing table changed (n2 joined). tick() should trigger transfer.
+    n1.kad->tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // n2 should now have the name record (pushed via STORE from n1)
+    auto result = n2.storage->get(TABLE_NAMES, key);
+    EXPECT_TRUE(result.has_value())
+        << "n2 should have received the name record via responsibility transfer";
+}

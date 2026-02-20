@@ -103,9 +103,12 @@ private:
     std::chrono::steady_clock::time_point last_ping_sweep_{};
     std::chrono::steady_clock::time_point last_ttl_sweep_{};
 
-    // TTL expiry and pending store cleanup
+    // TTL expiry, pending store cleanup, and responsibility transfer
     void expire_ttl();
     void cleanup_pending_stores();
+    void transfer_responsibility();
+    size_t last_table_size_ = 0;
+    std::chrono::steady_clock::time_point last_transfer_check_{};
 
     // Pending STORE quorum tracking (key -> status)
     mutable std::mutex pending_mutex_;

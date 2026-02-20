@@ -64,6 +64,7 @@ static constexpr size_t SPARSE_TABLE_SIZE      = 3;
 static constexpr auto TTL_DURATION             = std::chrono::hours(7 * 24);  // 7 days
 static constexpr auto TTL_SWEEP_INTERVAL       = std::chrono::minutes(5);
 static constexpr auto PENDING_STORE_TIMEOUT    = std::chrono::seconds(30);
+static constexpr auto TRANSFER_CHECK_INTERVAL  = std::chrono::seconds(60);
 
 void Kademlia::tick() {
     auto now = std::chrono::steady_clock::now();
@@ -117,6 +118,15 @@ void Kademlia::tick() {
 
     // 4. Pending stores cleanup
     cleanup_pending_stores();
+
+    // 5. Responsibility transfer when routing table changes
+    size_t current_size = table_.size();
+    if (current_size != last_table_size_ &&
+        now - last_transfer_check_ >= TRANSFER_CHECK_INTERVAL) {
+        last_transfer_check_ = now;
+        last_table_size_ = current_size;
+        transfer_responsibility();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +199,75 @@ void Kademlia::cleanup_pending_stores() {
         } else {
             ++it;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Responsibility transfer — push data to newly-responsible nodes
+// ---------------------------------------------------------------------------
+
+void Kademlia::transfer_responsibility() {
+    // For each key-value table, scan all keys and check if any new node
+    // in the routing table is now among the R closest but doesn't have the data.
+    // If so, send a STORE to that node.
+
+    struct TableInfo {
+        const char* table;
+        uint8_t data_type;
+    };
+
+    static constexpr TableInfo tables[] = {
+        {storage::TABLE_PROFILES,   0x00},
+        {storage::TABLE_NAMES,      0x01},
+        {storage::TABLE_REQUESTS,   0x03},
+        {storage::TABLE_ALLOWLISTS, 0x04},
+    };
+
+    size_t pushed = 0;
+
+    for (const auto& ti : tables) {
+        storage_.foreach(ti.table,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+                if (key.size() < 32) return true;
+
+                // Use first 32 bytes as routing key
+                crypto::Hash routing_key{};
+                std::copy_n(key.data(), 32, routing_key.begin());
+
+                auto nodes = responsible_nodes(routing_key);
+                bool self_responsible = false;
+                for (const auto& n : nodes) {
+                    if (n.id == self_.id) {
+                        self_responsible = true;
+                        break;
+                    }
+                }
+
+                // Push to all responsible remote nodes (they'll dedup/validate)
+                for (const auto& node : nodes) {
+                    if (node.id == self_.id) continue;
+
+                    std::vector<uint8_t> payload;
+                    payload.insert(payload.end(), routing_key.begin(), routing_key.end());
+                    payload.push_back(ti.data_type);
+                    uint32_t vlen = static_cast<uint32_t>(value.size());
+                    payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+                    payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+                    payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+                    payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+                    payload.insert(payload.end(), value.begin(), value.end());
+
+                    Message msg = make_message(MessageType::STORE, payload);
+                    send_to_node(node, msg);
+                    ++pushed;
+                }
+
+                return true;
+            });
+    }
+
+    if (pushed > 0) {
+        spdlog::info("Responsibility transfer: pushed {} entries to responsible nodes", pushed);
     }
 }
 
