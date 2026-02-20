@@ -705,7 +705,13 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     }
 
     // Record mutation in the replication log
-    repl_log_.append(key, replication::Op::ADD, data_type, value);
+    // For allowlist REVOKE (data_type 0x04, action 0x00), record Op::DEL so
+    // that sync recipients correctly delete the entry instead of adding it.
+    auto op = replication::Op::ADD;
+    if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
+        op = replication::Op::DEL;
+    }
+    repl_log_.append(key, op, data_type, value);
 
     spdlog::info("Stored data_type=0x{:02X} for key from {}:{}", data_type, from, port);
 
@@ -906,7 +912,11 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
             }
 
             // Record mutation in the replication log
-            repl_log_.append(key, replication::Op::ADD, data_type, value);
+            auto op = replication::Op::ADD;
+            if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
+                op = replication::Op::DEL;
+            }
+            repl_log_.append(key, op, data_type, value);
 
             if (on_store_) {
                 on_store_(key, data_type, value);

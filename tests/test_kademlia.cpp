@@ -2232,3 +2232,75 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     EXPECT_TRUE(np_result.has_value())
         << "Allowlist entry for user without profile should be stored (bootstrap case)";
 }
+
+// ---------------------------------------------------------------------------
+// Test 39: RevokeReplicatesAsDelete — REVOKE records Op::DEL in repl_log
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Create an owner and a contact
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    KeyPair contact_kp = generate_keypair();
+    Hash contact_fp = sha3_256(contact_kp.public_key);
+
+    auto allowlist_key = sha3_256_prefixed("allowlist:", owner_fp);
+
+    // 1. Store ALLOW entry (action=0x01)
+    {
+        std::vector<uint8_t> signed_data;
+        signed_data.push_back(0x01); // action = ALLOW
+        signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((1ULL >> (i * 8)) & 0xFF)); // seq=1
+        auto sig = sign(signed_data, owner_kp.secret_key);
+
+        std::vector<uint8_t> value;
+        value.insert(value.end(), owner_fp.begin(), owner_fp.end());
+        value.insert(value.end(), contact_fp.begin(), contact_fp.end());
+        value.push_back(0x01); // action
+        for (int i = 7; i >= 0; --i)
+            value.push_back(static_cast<uint8_t>((1ULL >> (i * 8)) & 0xFF));
+        value.insert(value.end(), sig.begin(), sig.end());
+
+        ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, value));
+    }
+
+    uint64_t seq_after_allow = n1.repl_log->current_seq(allowlist_key);
+    ASSERT_GE(seq_after_allow, 1u);
+
+    // Check the ALLOW entry is Op::ADD
+    auto entries_allow = n1.repl_log->entries_after(allowlist_key, 0);
+    ASSERT_FALSE(entries_allow.empty());
+    EXPECT_EQ(entries_allow.back().op, Op::ADD)
+        << "ALLOW should record Op::ADD";
+
+    // 2. Store REVOKE entry (action=0x00)
+    {
+        std::vector<uint8_t> signed_data;
+        signed_data.push_back(0x00); // action = REVOKE
+        signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((2ULL >> (i * 8)) & 0xFF)); // seq=2
+        auto sig = sign(signed_data, owner_kp.secret_key);
+
+        std::vector<uint8_t> value;
+        value.insert(value.end(), owner_fp.begin(), owner_fp.end());
+        value.insert(value.end(), contact_fp.begin(), contact_fp.end());
+        value.push_back(0x00); // action = REVOKE
+        for (int i = 7; i >= 0; --i)
+            value.push_back(static_cast<uint8_t>((2ULL >> (i * 8)) & 0xFF));
+        value.insert(value.end(), sig.begin(), sig.end());
+
+        ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, value));
+    }
+
+    // Check the REVOKE entry is Op::DEL
+    auto entries_revoke = n1.repl_log->entries_after(allowlist_key, seq_after_allow);
+    ASSERT_FALSE(entries_revoke.empty());
+    EXPECT_EQ(entries_revoke.back().op, Op::DEL)
+        << "REVOKE should record Op::DEL, not Op::ADD";
+}
