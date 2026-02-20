@@ -95,6 +95,7 @@ private:
     const crypto::KeyPair& keypair_;
 
     WorkerPool workers_{4};
+    std::chrono::steady_clock::time_point start_time_ = std::chrono::steady_clock::now();
     uWS::Loop* loop_ = nullptr;
     us_listen_socket_t* listen_socket_ = nullptr;
     struct us_timer_t* tick_timer_ = nullptr;
@@ -125,6 +126,7 @@ private:
     void handle_revoke(ws_t* ws, const Json::Value& msg);
     void handle_contact_request(ws_t* ws, const Json::Value& msg);
     void handle_delete(ws_t* ws, const Json::Value& msg);
+    void handle_status(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);

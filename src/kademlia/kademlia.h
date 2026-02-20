@@ -56,6 +56,7 @@ public:
     void set_bootstrap_addrs(std::vector<std::pair<std::string, uint16_t>> addrs);
 
     const NodeInfo& self() const { return self_; }
+    size_t routing_table_size() const { return table_.size(); }
 
     // Callback invoked after every successful local store (both handle_store
     // and the local-storage path inside store()).  Used by the WebSocket

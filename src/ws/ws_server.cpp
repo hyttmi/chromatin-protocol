@@ -135,6 +135,7 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         {"REVOKE",          {&WsServer::handle_revoke,          true,  1.0}},
         {"CONTACT_REQUEST", {&WsServer::handle_contact_request, true,  3.0}},
         {"DELETE",          {&WsServer::handle_delete,          true,  1.0}},
+        {"STATUS",          {&WsServer::handle_status,          false, 0.0}},
     };
 
     auto it = commands.find(type);
@@ -1439,6 +1440,24 @@ void WsServer::on_kademlia_store(const crypto::Hash& key,
             }
         }
     });
+}
+
+// ---------- STATUS ----------
+
+void WsServer::handle_status(ws_t* ws, const Json::Value& msg) {
+    int id = msg.get("id", 0).asInt();
+    auto now = std::chrono::steady_clock::now();
+    auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count();
+
+    Json::Value resp;
+    resp["type"] = "STATUS_RESP";
+    resp["id"] = id;
+    resp["node_id"] = to_hex(kad_.self().id.id);
+    resp["uptime_seconds"] = static_cast<Json::Int64>(uptime);
+    resp["connected_clients"] = static_cast<Json::UInt64>(connections_.size());
+    resp["authenticated_clients"] = static_cast<Json::UInt64>(authenticated_.size());
+    resp["routing_table_size"] = static_cast<Json::UInt64>(kad_.routing_table_size());
+    send_json(ws, resp);
 }
 
 // ---------- upload timeout ----------

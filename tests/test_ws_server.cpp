@@ -1536,3 +1536,31 @@ TEST_F(WsServerTest, RateLimitExceeded) {
 
     client.close();
 }
+
+// ---------- STATUS (no auth required) ----------
+
+TEST_F(WsServerTest, StatusWithoutAuth) {
+    start_ws_server();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    // STATUS should work without authentication
+    ASSERT_TRUE(client.send_text(R"({"type":"STATUS","id":1})"));
+    auto resp = client.recv_text(2000);
+    ASSERT_TRUE(resp.has_value());
+
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "STATUS_RESP");
+    EXPECT_EQ(root["id"].asInt(), 1);
+    EXPECT_TRUE(root.isMember("node_id"));
+    EXPECT_TRUE(root.isMember("uptime_seconds"));
+    EXPECT_TRUE(root.isMember("connected_clients"));
+    EXPECT_TRUE(root.isMember("authenticated_clients"));
+    EXPECT_TRUE(root.isMember("routing_table_size"));
+    EXPECT_GE(root["uptime_seconds"].asInt64(), 0);
+    EXPECT_GE(root["connected_clients"].asUInt64(), 1u);  // at least this client
+    EXPECT_EQ(root["authenticated_clients"].asUInt64(), 0u);  // not authenticated
+
+    client.close();
+}
