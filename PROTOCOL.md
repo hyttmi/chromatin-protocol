@@ -216,19 +216,24 @@ accepting writes. Only the key owner can update their data (higher sequence
 
 ### 6.4 Kademlia Messages (TCP)
 
-| Message      | Purpose                                    |
-|--------------|--------------------------------------------|
-| PING         | Liveness check                             |
-| PONG         | Liveness response                          |
-| FIND_NODE    | Request membership list                    |
-| NODES        | Response with node list                    |
-| STORE        | Write a signed value to responsible node   |
-| FIND_VALUE   | Request a value by key                     |
-| VALUE        | Response with stored value                 |
-| SYNC_REQ     | Request replication log entries after seq N |
-| SYNC_RESP    | Response with replication log entries       |
+| Message      | Purpose                                      |
+|--------------|----------------------------------------------|
+| PING         | Liveness check                               |
+| PONG         | Liveness response                            |
+| FIND_NODE    | Request membership list                      |
+| NODES        | Response with node list (IPv4 and IPv6)      |
+| STORE        | Write a signed value to responsible node     |
+| FIND_VALUE   | Request a value by key                       |
+| VALUE        | Response with stored value                   |
+| SYNC_REQ     | Request replication log entries after seq N   |
+| SYNC_RESP    | Response with replication log entries         |
+| STORE_ACK    | Acknowledgment of a STORE request            |
+| SEQ_REQ      | Query replication log sequence for a key     |
+| SEQ_RESP     | Replication log sequence response            |
 
-All messages are ML-DSA signed by the sending node.
+All messages are ML-DSA signed by the sending node. Nodes verify signatures
+on incoming messages once the sender is in the routing table (PING and NODES
+from unknown nodes during bootstrap are accepted without verification).
 
 ### 6.5 Self-Healing & Periodic Maintenance
 
@@ -250,15 +255,33 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 - Every 10s, nodes not seen for > 120s are evicted from the routing table
 - This prevents stale entries from accumulating
 
+**TTL expiry:**
+- Every 5 minutes, scans inbox and contact request tables
+- Deletes entries older than 7 days (MESSAGE_TTL)
+- Removes from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS
+
+**Pending store cleanup:**
+- Pending STORE tracking entries (waiting for STORE_ACK) are cleaned up
+  after 30 seconds if ACKs never arrive
+
+**Responsibility transfer:**
+- Every 60 seconds (when routing table size has changed), scans all data tables
+- For each key, checks if there are new responsible nodes
+- Pushes data via STORE to responsible nodes that don't have it yet
+
 **Constants:**
 
-| Parameter              | Value | Purpose                           |
-|------------------------|-------|-----------------------------------|
-| REFRESH_INTERVAL       | 30s   | Normal re-bootstrap interval      |
-| REFRESH_INTERVAL_SPARSE| 5s    | When routing table has < 3 nodes  |
-| PING_SWEEP_INTERVAL    | 10s   | How often to check for stale nodes|
-| STALE_THRESHOLD        | 60s   | Ping nodes not seen for this long |
-| EVICT_THRESHOLD        | 120s  | Remove nodes not seen this long   |
+| Parameter              | Value  | Purpose                           |
+|------------------------|--------|-----------------------------------|
+| REFRESH_INTERVAL       | 30s    | Normal re-bootstrap interval      |
+| REFRESH_INTERVAL_SPARSE| 5s     | When routing table has < 3 nodes  |
+| PING_SWEEP_INTERVAL    | 10s    | How often to check for stale nodes|
+| STALE_THRESHOLD        | 60s    | Ping nodes not seen for this long |
+| EVICT_THRESHOLD        | 120s   | Remove nodes not seen this long   |
+| TTL_SWEEP_INTERVAL     | 5m     | How often to check for expired data|
+| MESSAGE_TTL            | 7 days | Inbox/contact request expiry      |
+| PENDING_STORE_TIMEOUT  | 30s    | Timeout for STORE_ACK tracking    |
+| TRANSFER_CHECK_INTERVAL| 60s    | Responsibility transfer check     |
 
 **Bootstrap node resilience:**
 - If a bootstrap node goes down and comes back at the same address, existing
@@ -342,10 +365,12 @@ devices can fetch messages independently within the 7-day window.
 
 Clients may optionally send `DELETE` for messages they no longer need:
 
-1. The node receiving the DELETE writes a `DEL` entry to the replication log
-2. Seq increments
-3. Other responsible nodes sync the DEL entry
-4. All R copies are deleted
+1. The node receiving the DELETE removes from TABLE_INBOX_INDEX and
+   TABLE_MESSAGE_BLOBS locally
+2. Writes a `DEL` entry to the replication log (seq increments)
+3. Replicates the deletion via Kademlia STORE to other responsible nodes
+4. Other responsible nodes sync the DEL entry via SYNC_REQ/SYNC_RESP
+5. All R copies are deleted
 
 Deletion is client-driven and optional. Each device tracks its own
 `last_fetch_timestamp` locally for efficient incremental fetches.
@@ -397,12 +422,13 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | Message           | Purpose                                      |
 |-------------------|----------------------------------------------|
 | SEND              | Push encrypted blob to recipient's inbox     |
-| LIST              | Retrieve message index (small blobs inlined) |
+| LIST              | Retrieve message index (paginated, small blobs inlined) |
 | GET               | Fetch a specific large blob by msg_id        |
-| DELETE            | Optionally delete messages (client-driven)   |
+| DELETE            | Optionally delete messages (client-driven, replicated) |
 | ALLOW             | Add fingerprint to allowlist (client-signed)  |
 | REVOKE            | Remove fingerprint from allowlist (client-signed)|
 | CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
+| STATUS            | Health check (no auth required)              |
 
 **Node → Client:**
 
@@ -412,10 +438,11 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | CONTACT_REQUEST   | Incoming contact request (PoW-verified)      |
 | SEND_ACK          | Confirmation that message was stored         |
 | SEND_READY        | Ready for chunked upload (large SEND)        |
-| LIST_RESULT       | Message index response                       |
+| LIST_RESULT       | Message index response (paginated)           |
 | GET_RESULT        | Blob response (inline or chunked)            |
+| STATUS_RESP       | Node health/status information               |
 | REDIRECT          | List of responsible nodes (sorted by seq)    |
-| ERROR             | Rejection with reason                        |
+| ERROR             | Rejection with reason and error code         |
 
 ### 8.4 Message Send Flow
 
@@ -455,6 +482,13 @@ Each user has an allowlist stored on their responsible nodes.
 - Replicated with the same seq-based mechanism
 - Race condition: server does best-effort enforcement; client maintains authoritative
   allowlist locally and discards messages from revoked contacts
+
+### 8.6 Rate Limiting
+
+Per-connection token bucket rate limiting prevents abuse. Each connection
+starts with 50 tokens and refills at 10 tokens/second. Commands consume
+tokens at different rates (SEND: 2, CONTACT_REQUEST: 3, most others: 1).
+Exceeding the rate limit returns error code 429.
 
 ---
 

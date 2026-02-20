@@ -84,6 +84,8 @@ Future versions may introduce dedicated storage nodes for large files.
 | 0x07  | SYNC_REQ   | Request           | Request replication log entries     |
 | 0x08  | SYNC_RESP  | Response          | Replication log entries response    |
 | 0x09  | STORE_ACK  | Response          | Acknowledgment of a STORE request   |
+| 0x0A  | SEQ_REQ    | Request           | Query replication log sequence       |
+| 0x0B  | SEQ_RESP   | Response          | Replication log sequence response    |
 
 ---
 
@@ -109,7 +111,8 @@ Response with the full node list.
 [2 bytes BE: node_count]
 For each node:
   [32 bytes: node_id]
-  [4 bytes: IPv4 address]
+  [1 byte: address_family]        // 0x04 = IPv4, 0x06 = IPv6
+  [4 or 16 bytes: address]        // 4 bytes for IPv4, 16 bytes for IPv6
   [2 bytes BE: tcp_port]
   [2 bytes BE: ws_port]
   [2 bytes BE: pubkey_length]
@@ -182,6 +185,24 @@ Sent by a node back to the requesting node after successfully processing a STORE
 ```
 [32 bytes: key]
 [1 byte: status]              // 0x00 = OK, 0x01 = rejected
+```
+
+### SEQ_REQ (0x0A)
+
+Query a remote node for its replication log sequence number for a given key.
+Used by REDIRECT to find the most up-to-date responsible node.
+
+```
+[32 bytes: key]
+```
+
+### SEQ_RESP (0x0B)
+
+Response with the current replication log sequence number for the requested key.
+
+```
+[32 bytes: key]
+[8 bytes BE: seq]
 ```
 
 **Replication model (two-tier ACK):**
@@ -390,22 +411,28 @@ Incomplete chunked uploads are discarded after 30 seconds.
 
 **LIST** — Retrieve message index with small blobs inlined:
 ```json
-{"type": "LIST", "id": 4}
+{"type": "LIST", "id": 4, "limit": 50, "after": "<msg_id hex>"}
 ```
+
+Optional fields:
+- `limit` — Maximum number of messages to return (default 50, max 200)
+- `after` — Cursor: start after this msg_id (for pagination). Omit for first page.
+
 Response:
 ```json
 {"type": "LIST_RESULT", "id": 4, "messages": [
   {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000100, "size": 1200, "blob": "<base64>"},
   {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000200, "size": 5242880, "blob": null}
-]}
+], "has_more": true}
 ```
 
 Messages with `size` <= 64 KB have their blob inlined (base64). Larger messages
 have `blob: null` — the client must fetch them separately with GET.
 
-LIST always returns all messages within the 7-day TTL window. Clients track
-known `msg_id`s locally and skip GET for messages they already have (client-side
-deduplication).
+`has_more` is `true` if there are more messages after the returned set.
+Clients paginate by passing the last `msg_id` as the `after` cursor in the
+next request. Clients track known `msg_id`s locally and skip GET for messages
+they already have (client-side deduplication).
 
 **GET** — Fetch a specific message blob by msg_id:
 ```json
@@ -431,6 +458,8 @@ Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 4.6).
 Deletion is client-driven and optional. Messages expire automatically after
 7 days via TTL. Multi-device users may choose not to delete until all devices
 have fetched. Deletes from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS.
+Deletes are replicated via the replication log (`Op::DEL`) and synced to
+other responsible nodes via SYNC_REQ/SYNC_RESP.
 Response: `{"type": "OK", "id": 6}`
 
 **ALLOW** — Add fingerprint to allowlist:
@@ -456,6 +485,22 @@ specified fingerprint. Response: `{"type": "OK", "id": 8}`
 ```
 Response: `{"type": "OK", "id": 9}`
 
+**STATUS** — Health check (no authentication required):
+```json
+{"type": "STATUS", "id": 10}
+```
+Response:
+```json
+{
+  "type": "STATUS_RESP", "id": 10,
+  "node_id": "<hex>",
+  "uptime_seconds": 12345,
+  "connected_clients": 3,
+  "authenticated_clients": 2,
+  "routing_table_size": 15
+}
+```
+
 ### 4.4 Server Push (unsolicited, no id)
 
 **NEW_MESSAGE (small, <=64 KB)** — Incoming message inlined:
@@ -473,7 +518,23 @@ Response: `{"type": "OK", "id": 9}`
 {"type": "CONTACT_REQUEST", "from": "<hex>", "blob": "<base64>"}
 ```
 
-### 4.5 Error Responses
+### 4.5 Rate Limiting
+
+Nodes enforce per-connection rate limiting using a token bucket algorithm.
+Each connection starts with 50 tokens and refills at 10 tokens/second.
+Different commands consume different token costs:
+
+| Command          | Cost |
+|------------------|------|
+| SEND             | 2    |
+| CONTACT_REQUEST  | 3    |
+| LIST / GET / DELETE / ALLOW / REVOKE | 1 |
+| HELLO / AUTH     | 1    |
+| STATUS           | 0    |
+
+When a client exceeds the rate limit, the node responds with error code 429.
+
+### 4.6 Error Responses
 
 ```json
 {"type": "ERROR", "id": 1, "code": 403, "reason": "signature verification failed"}
@@ -485,13 +546,13 @@ Response: `{"type": "OK", "id": 9}`
 | 401  | Not authenticated                             |
 | 403  | Forbidden (not on allowlist, bad signature)   |
 | 404  | Not found                                     |
-| 409  | Conflict (name already registered)            |
 | 408  | Upload timeout (incomplete chunked upload)    |
+| 409  | Conflict (name already registered)            |
 | 413  | Attachment too large (>50 MiB)                |
 | 429  | Rate limited / upload already in progress     |
 | 500  | Internal error                                |
 
-### 4.6 Binary WebSocket Frames — Chunked Transfer
+### 4.7 Binary WebSocket Frames — Chunked Transfer
 
 Large blob transfers (>64 KB) use binary WebSocket frames with fixed 1 MiB
 (1,048,576 byte) chunks. The last chunk may be smaller.
@@ -533,8 +594,14 @@ On every incoming TCP message, a conforming node MUST:
 1. Verify magic == `CHRM`
 2. Verify version == `0x01` (or a supported version)
 3. Verify ML-DSA-87 signature over `magic || version || type || sender_port || sender_id || payload_length || payload`
-4. Verify sender node ID exists in membership table (exception: FIND_NODE from unknown nodes during bootstrap)
+4. Verify sender node ID exists in membership table (exception: PING and NODES from unknown nodes during bootstrap)
 5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
+
+**Signature verification exceptions:** PING and NODES messages from nodes not
+yet in the routing table are accepted without signature verification. PING is
+how unknown nodes introduce themselves (pubkey not yet known). NODES is the
+response to FIND_NODE during bootstrap. Once a node is in the routing table
+(via received PONG or NODES), all subsequent messages from it MUST be verified.
 
 ### Profile STORE Validation
 
@@ -551,11 +618,18 @@ On every incoming TCP message, a conforming node MUST:
 4. If name already registered to a different fingerprint — reject (first claim wins)
 5. If same fingerprint — `sequence` must be higher than stored
 
+### FIND_VALUE Scope
+
+FIND_VALUE searches profiles, names, contact requests, and allowlists. It does
+**not** search inbox data. Inbox messages use a two-table storage model with
+composite keys that cannot be derived from the DHT routing key. Inbox
+replication uses SYNC_REQ/SYNC_RESP instead.
+
 ### Inbox Message STORE Validation
 
 1. Recipient's allowlist contains `sender_fingerprint` — reject if not allowed
 2. `blob_length` <= 50 MiB
-3. `msg_id` is unique — reject duplicates
+3. `msg_id` is unique — reject duplicates (prevents replay attacks)
 
 ### Contact Request STORE Validation
 
@@ -572,6 +646,20 @@ On every incoming TCP message, a conforming node MUST:
 A node MUST only accept STORE requests for keys it is responsible for. A node
 is responsible for a key if it is one of the R closest nodes to that key by
 XOR distance, where `R = min(3, network_size)`.
+
+### Responsibility Transfer
+
+When the routing table changes (nodes join or leave), a node MUST check if
+data it holds is now closer to a newly discovered node. If so, the node
+pushes that data via STORE to all current responsible nodes. This check runs
+periodically (every 60 seconds) and only when the routing table size has
+changed.
+
+### Cryptographic Random
+
+All random values (challenge nonces, msg_ids) MUST be generated using a
+cryptographic random source. Implementations using liboqs SHOULD use
+`OQS_randombytes()` which is backed by the OS CSPRNG.
 
 ---
 
@@ -596,6 +684,11 @@ XOR distance, where `R = min(3, network_size)`.
 | Chunked upload timeout     | 30 seconds                             |
 | Max contact request blob   | 64 KiB                                 |
 | Message TTL                | 7 days (604800 seconds)                |
+| TTL sweep interval         | 5 minutes                              |
+| Pending STORE timeout      | 30 seconds                             |
+| Responsibility transfer    | 60 seconds (on routing table change)   |
+| Rate limit bucket size     | 50 tokens                              |
+| Rate limit refill rate     | 10 tokens/second                       |
 | Max TCP message            | 50 MiB (implementation limit)          |
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
@@ -644,4 +737,4 @@ The protocol is designed for future extension:
 - **Protocol version:** The version byte in the TCP header allows breaking
   changes. Nodes reject unknown versions, and implementations can support
   multiple versions simultaneously.
-- **Message types:** Values 0x0A-0xFF are reserved for future TCP message types.
+- **Message types:** Values 0x0C-0xFF are reserved for future TCP message types.
