@@ -2449,3 +2449,76 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     EXPECT_FALSE(result_after.has_value())
         << "Contact request older than 7 days should have been expired";
 }
+
+// ---------------------------------------------------------------------------
+// Test 40: InboxResponsibilityTransfer — inbox data pushed to new nodes on table change
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, InboxResponsibilityTransfer) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Build an inbox message: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+    Hash recipient_fp{};
+    recipient_fp.fill(0x11);
+    Hash msg_id{};
+    msg_id.fill(0x22);
+    Hash sender_fp{};
+    sender_fp.fill(0x33);
+
+    // Use a recent timestamp so TTL expiry doesn't remove the message during tick()
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    std::vector<uint8_t> blob = {0xDE, 0xAD, 0xBE, 0xEF};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> inbox_value;
+    inbox_value.reserve(108 + blob.size());
+    inbox_value.insert(inbox_value.end(), recipient_fp.begin(), recipient_fp.end());
+    inbox_value.insert(inbox_value.end(), msg_id.begin(), msg_id.end());
+    inbox_value.insert(inbox_value.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        inbox_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    inbox_value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    inbox_value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    inbox_value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    inbox_value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    inbox_value.insert(inbox_value.end(), blob.begin(), blob.end());
+
+    auto inbox_key = sha3_256_prefixed("inbox:", recipient_fp);
+
+    // Store inbox message on n1 (single node, responsible for everything)
+    bool ok = n1.kad->store(inbox_key, 0x02, inbox_value);
+    ASSERT_TRUE(ok);
+
+    // Verify it was stored on n1
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    ASSERT_TRUE(n1.storage->get(TABLE_INBOX_INDEX, idx_key).has_value());
+    ASSERT_TRUE(n1.storage->get(TABLE_MESSAGE_BLOBS, msg_id).has_value());
+
+    // Now create n2 and bootstrap bidirectionally — this changes the routing table
+    auto& n2 = create_node(8);
+    n2.start_recv();
+    bootstrap_bidirectional(n2, n1);
+
+    // n1's routing table changed (n2 joined). tick() should trigger transfer.
+    n1.kad->tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // n2 should now have the inbox message (pushed via STORE from n1)
+    auto idx_result = n2.storage->get(TABLE_INBOX_INDEX, idx_key);
+    EXPECT_TRUE(idx_result.has_value())
+        << "n2 should have received the inbox INDEX entry via responsibility transfer";
+
+    auto blob_result = n2.storage->get(TABLE_MESSAGE_BLOBS, msg_id);
+    EXPECT_TRUE(blob_result.has_value())
+        << "n2 should have received the inbox BLOB entry via responsibility transfer";
+
+    if (blob_result.has_value()) {
+        EXPECT_EQ(*blob_result, blob)
+            << "Transferred blob content should match original";
+    }
+}

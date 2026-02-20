@@ -317,6 +317,74 @@ void Kademlia::transfer_responsibility() {
             });
     }
 
+    // Transfer inbox messages — requires reconstructing STORE value from two tables.
+    // Routing key: SHA3-256("inbox:" || recipient_fp), NOT the first 32 bytes of index key.
+    //
+    // We collect index entries first because MDBX doesn't support nested read
+    // transactions on the same thread (foreach holds a read txn, and get() would
+    // attempt a second one).
+    struct InboxEntry {
+        crypto::Hash recipient_fp;
+        crypto::Hash msg_id;
+        std::vector<uint8_t> index_value; // sender_fp(32) || timestamp(8) || blob_len(4)
+    };
+    std::vector<InboxEntry> inbox_entries;
+
+    storage_.foreach(storage::TABLE_INBOX_INDEX,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> index_value) -> bool {
+            if (key.size() < 64) return true;
+            if (index_value.size() < 44) return true;
+
+            InboxEntry entry;
+            std::copy_n(key.data(), 32, entry.recipient_fp.begin());
+            std::copy_n(key.data() + 32, 32, entry.msg_id.begin());
+            entry.index_value.assign(index_value.begin(), index_value.end());
+            inbox_entries.push_back(std::move(entry));
+            return true;
+        });
+
+    for (const auto& entry : inbox_entries) {
+        auto routing_key = crypto::sha3_256_prefixed("inbox:", entry.recipient_fp);
+        auto nodes = responsible_nodes(routing_key);
+
+        // Get blob from TABLE_MESSAGE_BLOBS (safe — no concurrent read txn)
+        auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, entry.msg_id);
+        if (!blob) continue;  // blob missing, skip
+
+        // Reconstruct STORE value:
+        // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+        std::vector<uint8_t> store_value;
+        store_value.reserve(108 + blob->size());
+        store_value.insert(store_value.end(), entry.recipient_fp.begin(), entry.recipient_fp.end());
+        store_value.insert(store_value.end(), entry.msg_id.begin(), entry.msg_id.end());
+        store_value.insert(store_value.end(), entry.index_value.begin(), entry.index_value.begin() + 40);
+        uint32_t blen = static_cast<uint32_t>(blob->size());
+        store_value.push_back(static_cast<uint8_t>((blen >> 24) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>((blen >> 16) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>((blen >> 8) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>(blen & 0xFF));
+        store_value.insert(store_value.end(), blob->begin(), blob->end());
+
+        // Send STORE to all responsible remote nodes
+        for (const auto& node : nodes) {
+            if (node.id == self_.id) continue;
+
+            std::vector<uint8_t> payload;
+            payload.insert(payload.end(), routing_key.begin(), routing_key.end());
+            payload.push_back(0x02);  // data_type = inbox
+            uint32_t vlen = static_cast<uint32_t>(store_value.size());
+            payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+            payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+            payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+            payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+            payload.insert(payload.end(), store_value.begin(), store_value.end());
+
+            Message msg = make_message(MessageType::STORE, payload);
+            send_to_node(node, msg);
+            ++pushed;
+        }
+    }
+
     if (pushed > 0) {
         spdlog::info("Responsibility transfer: pushed {} entries to responsible nodes", pushed);
     }
