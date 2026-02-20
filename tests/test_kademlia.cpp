@@ -1877,3 +1877,117 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     EXPECT_TRUE(stored.has_value())
         << "STORE from node with verified pubkey should succeed";
 }
+
+// ---------------------------------------------------------------------------
+// Test 37: InboxAllowlistEnforced — Kademlia enforces allowlist on inbox STORE
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, InboxAllowlistEnforced) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Create four identities: user A (recipient with allowlist), user B (allowed sender),
+    // user C (not allowed sender), user D (recipient with no allowlist)
+    Hash user_a_fp{};  user_a_fp.fill(0xAA);
+    Hash user_b_fp{};  user_b_fp.fill(0xBB);
+    Hash user_c_fp{};  user_c_fp.fill(0xCC);
+    Hash user_d_fp{};  user_d_fp.fill(0xDD);
+
+    // --- Set up allowlist for user A, allowing user B ---
+    // allowlist_key = SHA3-256("allowlist:" || user_a_fp)
+    auto allowlist_key = sha3_256_prefixed("allowlist:", user_a_fp);
+
+    // Composite storage key: allowlist_key(32) || user_b_fp(32) = 64 bytes
+    std::vector<uint8_t> allow_storage_key;
+    allow_storage_key.reserve(64);
+    allow_storage_key.insert(allow_storage_key.end(), allowlist_key.begin(), allowlist_key.end());
+    allow_storage_key.insert(allow_storage_key.end(), user_b_fp.begin(), user_b_fp.end());
+
+    // Allowlist entry value: action(1) || sequence(8 BE) = 9 bytes
+    std::vector<uint8_t> allow_value;
+    allow_value.push_back(0x01);  // action = allow
+    for (int i = 0; i < 7; ++i) allow_value.push_back(0x00);
+    allow_value.push_back(0x01);  // sequence = 1
+
+    bool put_ok = n1.storage->put(TABLE_ALLOWLISTS, allow_storage_key, allow_value);
+    ASSERT_TRUE(put_ok) << "Failed to store allowlist entry for user A -> user B";
+
+    // --- Helper: build an inbox message ---
+    auto build_inbox_msg = [](const Hash& recipient, const Hash& sender) -> std::vector<uint8_t> {
+        std::vector<uint8_t> msg;
+        msg.reserve(112);  // 108 header + 4 blob
+
+        // recipient_fp (32)
+        msg.insert(msg.end(), recipient.begin(), recipient.end());
+        // msg_id (32) — just use some unique value
+        Hash msg_id{};
+        msg_id.fill(static_cast<uint8_t>(sender[0] ^ recipient[0]));
+        msg.insert(msg.end(), msg_id.begin(), msg_id.end());
+        // sender_fp (32)
+        msg.insert(msg.end(), sender.begin(), sender.end());
+        // timestamp (8 BE)
+        uint64_t ts = 1700000000;
+        for (int i = 7; i >= 0; --i)
+            msg.push_back(static_cast<uint8_t>((ts >> (i * 8)) & 0xFF));
+        // blob_len (4 BE) = 4
+        msg.push_back(0x00); msg.push_back(0x00); msg.push_back(0x00); msg.push_back(0x04);
+        // blob (4 bytes)
+        msg.push_back(0xDE); msg.push_back(0xAD); msg.push_back(0xBE); msg.push_back(0xEF);
+
+        return msg;
+    };
+
+    // --- Test 1: User B sends to user A (B is on A's allowlist) — should SUCCEED ---
+    {
+        auto msg = build_inbox_msg(user_a_fp, user_b_fp);
+        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+
+        bool ok = n1.kad->store(inbox_key, 0x02, msg);
+        EXPECT_TRUE(ok) << "Allowed sender B should be able to store inbox message for A";
+
+        // Verify the message was actually stored in TABLE_INBOX_INDEX
+        std::vector<uint8_t> idx_key;
+        idx_key.insert(idx_key.end(), user_a_fp.begin(), user_a_fp.end());
+        Hash msg_id{};
+        msg_id.fill(static_cast<uint8_t>(user_b_fp[0] ^ user_a_fp[0]));
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+        auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
+        EXPECT_TRUE(result.has_value()) << "Inbox message from allowed sender should be stored";
+    }
+
+    // --- Test 2: User C sends to user A (C is NOT on A's allowlist) — should FAIL ---
+    {
+        auto msg = build_inbox_msg(user_a_fp, user_c_fp);
+        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+
+        bool ok = n1.kad->store(inbox_key, 0x02, msg);
+
+        // Verify the message was NOT stored
+        std::vector<uint8_t> idx_key;
+        idx_key.insert(idx_key.end(), user_a_fp.begin(), user_a_fp.end());
+        Hash msg_id{};
+        msg_id.fill(static_cast<uint8_t>(user_c_fp[0] ^ user_a_fp[0]));
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+        auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
+        EXPECT_FALSE(result.has_value())
+            << "Inbox message from non-allowed sender C should be rejected";
+    }
+
+    // --- Test 3: User B sends to user D (D has NO allowlist) — should SUCCEED ---
+    {
+        auto msg = build_inbox_msg(user_d_fp, user_b_fp);
+        auto inbox_key = sha3_256_prefixed("inbox:", user_d_fp);
+
+        bool ok = n1.kad->store(inbox_key, 0x02, msg);
+        EXPECT_TRUE(ok) << "Message to user with no allowlist should succeed (open inbox)";
+
+        // Verify the message was actually stored
+        std::vector<uint8_t> idx_key;
+        idx_key.insert(idx_key.end(), user_d_fp.begin(), user_d_fp.end());
+        Hash msg_id{};
+        msg_id.fill(static_cast<uint8_t>(user_b_fp[0] ^ user_d_fp[0]));
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+        auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
+        EXPECT_TRUE(result.has_value()) << "Inbox message to user with no allowlist should be stored";
+    }
+}

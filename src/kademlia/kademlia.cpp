@@ -1377,8 +1377,40 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
         return false;
     }
 
-    // Trust boundary: allowlist check requires recipient_fp (hashed in key),
-    // so Kademlia can't verify it. WS server validates before calling store().
+    // Allowlist enforcement: reject if recipient has an allowlist and sender is not on it.
+    // Extract recipient_fp (bytes 0-31) and sender_fp (bytes 64-95)
+    std::span<const uint8_t> recipient_fp = value.subspan(0, 32);
+    std::span<const uint8_t> sender_fp    = value.subspan(64, 32);
+
+    // Compute allowlist routing key: SHA3-256("allowlist:" || recipient_fp)
+    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+
+    // Build composite lookup key: allowlist_key(32) || sender_fp(32)
+    std::vector<uint8_t> composite_key;
+    composite_key.reserve(64);
+    composite_key.insert(composite_key.end(), allowlist_key.begin(), allowlist_key.end());
+    composite_key.insert(composite_key.end(), sender_fp.begin(), sender_fp.end());
+
+    // Point lookup: is sender explicitly on the allowlist?
+    auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, composite_key);
+    if (allowed) {
+        return true;  // Sender is on the allowlist
+    }
+
+    // Sender not found — check if ANY allowlist entries exist for this recipient.
+    // If no allowlist exists at all, this is a new user with no allowlist configured → allow.
+    bool has_any_entry = false;
+    storage_.scan(storage::TABLE_ALLOWLISTS, allowlist_key, [&](std::span<const uint8_t>, std::span<const uint8_t>) {
+        has_any_entry = true;
+        return false;  // Stop after first match — we only need to know if any entry exists
+    });
+
+    if (has_any_entry) {
+        spdlog::warn("Inbox validation: sender not on recipient's allowlist");
+        return false;  // Allowlist exists but sender is not on it → reject
+    }
+
+    // No allowlist configured for this recipient → allow (open inbox)
     return true;
 }
 
