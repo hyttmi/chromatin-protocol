@@ -191,44 +191,69 @@ Single binary. One process, two listeners (TCP + WebSocket), one storage engine.
 ### 6.1 Simplified Kademlia
 
 Chromatin targets dozens to hundreds of nodes. Every node maintains **full
-membership** — no k-buckets, no iterative lookups.
+membership** — no k-buckets, no iterative lookups. The routing table is
+capped at **256 nodes** with LRU eviction (oldest `last_seen` evicted when full).
 
 - 256-bit key space (SHA3-256 output)
 - Node ID: `SHA3-256(node_ml_dsa_pubkey)`
 - Distance: `XOR(id_a, id_b)` as unsigned 256-bit integer
 - XOR distance determines **responsibility**, not routing
 - All communication is **single-hop** (direct node-to-node TCP)
+- TCP connections are pooled per destination (max 64, 60s idle timeout)
 
 ### 6.2 Responsibility
 
 For a given key K, the R nodes with the smallest `XOR(node_id, K)` are
 responsible for storing data associated with K.
 
-- R = replication factor = `min(3, network_size - 1)`
+- R = replication factor = `min(3, network_size)`
 - Any node can compute responsibility (full membership knowledge)
 - Applies uniformly to profiles, names, AND inboxes
 
-### 6.3 Signed Values
+### 6.3 Trust Boundary
 
-All stored values are ML-DSA-87 signed. Nodes verify signatures before
-accepting writes. Only the key owner can update their data (higher sequence
-+ valid signature). Same security as OpenDHT's `putSigned`.
+Kademlia nodes enforce data integrity at the STORE level — not just the WS
+server. This is critical because any node in the network can send STORE
+messages directly via TCP:
+
+- **Inbox messages**: Kademlia validates the recipient's allowlist before
+  accepting. If the recipient has an allowlist and the sender is not on it,
+  the STORE is rejected. No allowlist = open inbox (new user).
+- **Contact requests**: Kademlia verifies the PoW (16 leading zero bits)
+  and that the routing key matches the recipient_fp in the value.
+- **Allowlist entries**: Kademlia verifies the ML-DSA-87 signature against
+  the owner's public key (from TABLE_PROFILES). Bootstrap case: if no
+  profile is stored yet, the entry is accepted without verification.
+- **Signature verification**: Messages requiring trust (STORE, FIND_VALUE,
+  SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP) are rejected from
+  nodes whose public key is not yet known. PING, PONG, FIND_NODE, and
+  NODES are exempt (needed for discovery). Public keys are learned via
+  NODES responses.
+
+This dual-layer validation (Kademlia + WS server) ensures a single malicious
+node cannot bypass protections by sending STORE messages directly.
 
 ### 6.4 Kademlia Messages (TCP)
 
-| Message      | Purpose                                    |
-|--------------|--------------------------------------------|
-| PING         | Liveness check                             |
-| PONG         | Liveness response                          |
-| FIND_NODE    | Request membership list                    |
-| NODES        | Response with node list                    |
-| STORE        | Write a signed value to responsible node   |
-| FIND_VALUE   | Request a value by key                     |
-| VALUE        | Response with stored value                 |
-| SYNC_REQ     | Request replication log entries after seq N |
-| SYNC_RESP    | Response with replication log entries       |
+| Message      | Purpose                                      |
+|--------------|----------------------------------------------|
+| PING         | Liveness check                               |
+| PONG         | Liveness response                            |
+| FIND_NODE    | Request membership list                      |
+| NODES        | Response with node list (IPv4 and IPv6)      |
+| STORE        | Write a signed value to responsible node     |
+| FIND_VALUE   | Request a value by key                       |
+| VALUE        | Response with stored value                   |
+| SYNC_REQ     | Request replication log entries after seq N   |
+| SYNC_RESP    | Response with replication log entries         |
+| STORE_ACK    | Acknowledgment of a STORE request            |
+| SEQ_REQ      | Query replication log sequence for a key     |
+| SEQ_RESP     | Replication log sequence response            |
 
-All messages are ML-DSA signed by the sending node.
+All messages are ML-DSA signed by the sending node. Trust-sensitive messages
+(STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP) are
+rejected from nodes whose public key is not yet known. PING, PONG, FIND_NODE,
+and NODES are accepted without verification during bootstrap/discovery.
 
 ### 6.5 Self-Healing & Periodic Maintenance
 
@@ -250,15 +275,45 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 - Every 10s, nodes not seen for > 120s are evicted from the routing table
 - This prevents stale entries from accumulating
 
+**TTL expiry:**
+- Every 5 minutes, scans inbox and contact request tables
+- Deletes inbox entries older than 7 days (MESSAGE_TTL)
+- Deletes contact requests older than 7 days
+- Removes inbox data from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS
+
+**Pending store cleanup:**
+- Pending STORE tracking entries (waiting for STORE_ACK) are cleaned up
+  after 30 seconds if ACKs never arrive
+
+**Responsibility transfer:**
+- Every 60 seconds (when routing table size has changed), scans all data tables
+  (profiles, names, contact requests, allowlists, AND inbox data)
+- For each key, checks if there are new responsible nodes
+- Pushes data via STORE to responsible nodes that don't have it yet
+
+**Replication log compaction:**
+- Every 1 hour, compacts the replication log
+- Retains the most recent 100 entries per key, deletes older ones
+- Bounds storage growth while preserving enough sync history
+
 **Constants:**
 
-| Parameter              | Value | Purpose                           |
-|------------------------|-------|-----------------------------------|
-| REFRESH_INTERVAL       | 30s   | Normal re-bootstrap interval      |
-| REFRESH_INTERVAL_SPARSE| 5s    | When routing table has < 3 nodes  |
-| PING_SWEEP_INTERVAL    | 10s   | How often to check for stale nodes|
-| STALE_THRESHOLD        | 60s   | Ping nodes not seen for this long |
-| EVICT_THRESHOLD        | 120s  | Remove nodes not seen this long   |
+| Parameter              | Value  | Purpose                           |
+|------------------------|--------|-----------------------------------|
+| REFRESH_INTERVAL       | 30s    | Normal re-bootstrap interval      |
+| REFRESH_INTERVAL_SPARSE| 5s     | When routing table has < 3 nodes  |
+| PING_SWEEP_INTERVAL    | 10s    | How often to check for stale nodes|
+| STALE_THRESHOLD        | 60s    | Ping nodes not seen for this long |
+| EVICT_THRESHOLD        | 120s   | Remove nodes not seen this long   |
+| TTL_SWEEP_INTERVAL     | 5m     | How often to check for expired data|
+| MESSAGE_TTL            | 7 days | Inbox/contact request expiry      |
+| PENDING_STORE_TIMEOUT  | 30s    | Timeout for STORE_ACK tracking    |
+| TRANSFER_CHECK_INTERVAL| 60s    | Responsibility transfer check     |
+| COMPACT_INTERVAL       | 1h     | Replication log compaction        |
+| COMPACT_KEEP_ENTRIES   | 100    | Max entries per key after compact  |
+| MAX_ROUTING_TABLE_SIZE | 256    | Maximum nodes in routing table    |
+| CONN_MAX_IDLE          | 60s    | TCP connection pool idle timeout  |
+| MAX_POOL_SIZE          | 64     | TCP connection pool max size      |
 
 **Bootstrap node resilience:**
 - If a bootstrap node goes down and comes back at the same address, existing
@@ -319,10 +374,11 @@ When a crashed node comes back, or a new node becomes responsible for a key
 
 The replication log grows over time. To bound storage:
 
-- Once **all R responsible nodes** have confirmed seq >= N, entries before N
-  can be pruned from the log
-- Compaction runs periodically in the background
-- For inboxes: 7-day TTL on unacknowledged messages provides a natural bound
+- Compaction runs every **1 hour** in the background
+- For each key, retains the most recent **100 entries**, deletes older ones
+- This is a simple, conservative policy that ensures sync catch-up works
+  while bounding storage growth
+- For inboxes: 7-day TTL on messages provides an additional natural bound
 - For profiles/names: log is small (infrequent updates), compaction less critical
 
 ### 7.5 Write Flow
@@ -342,10 +398,12 @@ devices can fetch messages independently within the 7-day window.
 
 Clients may optionally send `DELETE` for messages they no longer need:
 
-1. The node receiving the DELETE writes a `DEL` entry to the replication log
-2. Seq increments
-3. Other responsible nodes sync the DEL entry
-4. All R copies are deleted
+1. The node receiving the DELETE removes from TABLE_INBOX_INDEX and
+   TABLE_MESSAGE_BLOBS locally
+2. Writes a `DEL` entry to the replication log (seq increments)
+3. Replicates the deletion via Kademlia STORE to other responsible nodes
+4. Other responsible nodes sync the DEL entry via SYNC_REQ/SYNC_RESP
+5. All R copies are deleted
 
 Deletion is client-driven and optional. Each device tracks its own
 `last_fetch_timestamp` locally for efficient incremental fetches.
@@ -356,7 +414,15 @@ Deletion is client-driven and optional. Each device tracks its own
 
 ### 8.1 Connection Model
 
-A client connects to **any of the R nodes responsible for their inbox**:
+Nodes support optional **TLS** (WSS) to protect connection metadata from network
+observers. When `tls_cert_path` and `tls_key_path` are configured, the node
+serves WebSocket over TLS on the same port. Clients SHOULD prefer `wss://`
+connections.
+
+A client connects to **any of the R nodes responsible for their inbox**.
+**Multiple devices** can connect simultaneously with the same identity — push
+notifications (NEW_MESSAGE, CONTACT_REQUEST) are delivered to all connected
+devices for that fingerprint.
 
 ```
 inbox_key = SHA3-256("inbox:" || fingerprint)
@@ -381,11 +447,13 @@ up-to-date node.
    - If responsible: generate 32-byte random nonce, continue.
 
 2. Node   → Client: CHALLENGE { nonce }
-3. Client → Node:   AUTH { ML-DSA-sign(nonce), pubkey }
+3. Client → Node:   AUTH { ML-DSA-sign("chromatin-auth:" || nonce), pubkey }
 4. Node   → Client: OK { pending_message_count }
 ```
 
-Node verifies: `fingerprint == SHA3-256(pubkey)` and signature is valid.
+Node verifies: `fingerprint == SHA3-256(pubkey)` and signature over
+`"chromatin-auth:" || nonce` (47 bytes) is valid. The domain prefix prevents
+cross-protocol signature replay.
 
 ### 8.3 WebSocket Messages
 
@@ -397,12 +465,13 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | Message           | Purpose                                      |
 |-------------------|----------------------------------------------|
 | SEND              | Push encrypted blob to recipient's inbox     |
-| LIST              | Retrieve message index (small blobs inlined) |
+| LIST              | Retrieve message index (paginated, small blobs inlined) |
 | GET               | Fetch a specific large blob by msg_id        |
-| DELETE            | Optionally delete messages (client-driven)   |
+| DELETE            | Optionally delete messages (client-driven, replicated) |
 | ALLOW             | Add fingerprint to allowlist (client-signed)  |
 | REVOKE            | Remove fingerprint from allowlist (client-signed)|
 | CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
+| STATUS            | Health check (no auth required)              |
 
 **Node → Client:**
 
@@ -412,10 +481,11 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | CONTACT_REQUEST   | Incoming contact request (PoW-verified)      |
 | SEND_ACK          | Confirmation that message was stored         |
 | SEND_READY        | Ready for chunked upload (large SEND)        |
-| LIST_RESULT       | Message index response                       |
+| LIST_RESULT       | Message index response (paginated)           |
 | GET_RESULT        | Blob response (inline or chunked)            |
+| STATUS_RESP       | Node health/status information               |
 | REDIRECT          | List of responsible nodes (sorted by seq)    |
-| ERROR             | Rejection with reason                        |
+| ERROR             | Rejection with reason and error code         |
 
 ### 8.4 Message Send Flow
 
@@ -449,12 +519,21 @@ Each user has an allowlist stored on their responsible nodes.
 - Managed via `ALLOW` / `REVOKE` commands (signed by the client)
 - The client signs `action || allowed_fingerprint || sequence` with ML-DSA-87
 - The node verifies the signature — only the inbox owner can modify their allowlist
+- Kademlia STORE value includes `owner_fp` for signature verification at the DHT layer
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
 - Allowlist key: `SHA3-256("allowlist:" || fingerprint)`
 - Local mdbx key: `allowlist_key(32) || allowed_fp(32)` — O(1) lookup for SEND validation
+- REVOKE is replicated as `Op::DEL` in the replication log (not `Op::ADD`)
 - Replicated with the same seq-based mechanism
 - Race condition: server does best-effort enforcement; client maintains authoritative
   allowlist locally and discards messages from revoked contacts
+
+### 8.6 Rate Limiting
+
+Per-connection token bucket rate limiting prevents abuse. Each connection
+starts with 50 tokens and refills at 10 tokens/second. Commands consume
+tokens at different rates (SEND: 2, CONTACT_REQUEST: 3, most others: 1).
+Exceeding the rate limit returns error code 429.
 
 ---
 
@@ -550,8 +629,8 @@ that data after confirming the new responsible node is synced.
 | names            | `SHA3-256("name:" \|\| name)`       | Signed name record        |
 | inbox_index      | `recipient_fp(32) \|\| msg_id(32)`  | sender_fp + timestamp + size (44 bytes) |
 | message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |
-| requests         | `SHA3-256("requests:" \|\| fp)`     | Pending contact requests  |
-| allowlists       | `SHA3-256("allowlist:" \|\| fp)`    | Set of allowed fps        |
+| requests         | `recipient_fp(32) \|\| sender_fp(32)` | Contact request binary (composite key) |
+| allowlists       | `SHA3-256("allowlist:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (composite key, O(1) lookup) |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
 | reputation       | `node_id`                           | Trust score + metrics     |
