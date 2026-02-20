@@ -102,11 +102,13 @@ private:
     std::chrono::steady_clock::time_point last_refresh_{};
     std::chrono::steady_clock::time_point last_ping_sweep_{};
     std::chrono::steady_clock::time_point last_ttl_sweep_{};
+    std::chrono::steady_clock::time_point last_compact_{};
 
-    // TTL expiry, pending store cleanup, and responsibility transfer
+    // TTL expiry, pending store cleanup, responsibility transfer, and compaction
     void expire_ttl();
     void cleanup_pending_stores();
     void transfer_responsibility();
+    void compact_repl_log();
     size_t last_table_size_ = 0;
     std::chrono::steady_clock::time_point last_transfer_check_{};
 

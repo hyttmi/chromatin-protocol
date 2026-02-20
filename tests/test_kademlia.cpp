@@ -2304,3 +2304,148 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
     EXPECT_EQ(entries_revoke.back().op, Op::DEL)
         << "REVOKE should record Op::DEL, not Op::ADD";
 }
+
+// ---------------------------------------------------------------------------
+// Test: ReplLogCompaction — compact_repl_log() removes old entries
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ReplLogCompaction) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Create a routing key and store many entries into the repl_log
+    Hash key{};
+    key.fill(0xAA);
+    std::vector<uint8_t> dummy_data = {0x01, 0x02, 0x03};
+
+    // Append 150 entries to the repl_log for this key
+    for (int i = 0; i < 150; ++i) {
+        n1.repl_log->append(key, Op::ADD, 0x00, dummy_data);
+    }
+
+    // Verify we have 150 entries
+    auto entries_before = n1.repl_log->entries_after(key, 0);
+    ASSERT_EQ(entries_before.size(), 150u);
+
+    // The compact_repl_log keeps only the last 100 entries.
+    // It calls compact(key, max_seq - 100), which deletes entries with seq < (max_seq - 100).
+    // max_seq = 150, so before_seq = 50, meaning entries 1..49 are deleted.
+    // That leaves entries 50..150 = 101 entries.
+    // (compact deletes entries with seq < before_seq, not seq <= before_seq)
+
+    // Trigger tick() with an artificial compact interval exceeded.
+    // We can't easily manipulate last_compact_ directly, so instead call tick()
+    // which will trigger compaction since last_compact_ is default-initialized to epoch.
+    n1.kad->tick();
+
+    auto entries_after = n1.repl_log->entries_after(key, 0);
+    // After compaction: entries with seq < 50 are deleted, leaving seq 50..150 = 101 entries
+    EXPECT_LE(entries_after.size(), 101u)
+        << "After compaction, should have at most ~101 entries (keeping last 100)";
+    EXPECT_GE(entries_after.size(), 100u)
+        << "After compaction, should still have at least 100 entries";
+
+    // The lowest remaining seq should be >= 50
+    uint64_t min_seq = UINT64_MAX;
+    for (const auto& e : entries_after) {
+        if (e.seq < min_seq) min_seq = e.seq;
+    }
+    EXPECT_GE(min_seq, 50u)
+        << "Old entries (seq < 50) should have been compacted";
+}
+
+// ---------------------------------------------------------------------------
+// Test: ContactRequestExpiry — expired contact requests are removed
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ContactRequestExpiry) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Create a contact request with valid PoW
+    Hash recipient_fp{};
+    recipient_fp.fill(0x11);
+    Hash sender_fp{};
+    sender_fp.fill(0x22);
+
+    // Build PoW preimage: "request:" || sender_fp || recipient_fp
+    std::vector<uint8_t> preimage;
+    const std::string prefix = "request:";
+    preimage.insert(preimage.end(), prefix.begin(), prefix.end());
+    preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
+    preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
+
+    // Find valid PoW nonce
+    uint64_t pow_nonce = 0;
+    for (uint64_t n = 0; n < 10'000'000; ++n) {
+        if (verify_pow(preimage, n, 16)) {
+            pow_nonce = n;
+            break;
+        }
+    }
+    ASSERT_TRUE(verify_pow(preimage, pow_nonce, 16));
+
+    std::vector<uint8_t> blob = {0xDE, 0xAD};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    // Build contact request value
+    std::vector<uint8_t> request;
+    request.insert(request.end(), recipient_fp.begin(), recipient_fp.end());
+    request.insert(request.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        request.push_back(static_cast<uint8_t>((pow_nonce >> (i * 8)) & 0xFF));
+    request.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    request.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    request.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    request.insert(request.end(), blob.begin(), blob.end());
+
+    auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+
+    // Store the contact request
+    bool ok = n1.kad->store(requests_key, 0x03, request);
+    ASSERT_TRUE(ok);
+
+    // Verify it was stored
+    std::vector<uint8_t> composite_key(recipient_fp.begin(), recipient_fp.end());
+    composite_key.insert(composite_key.end(), sender_fp.begin(), sender_fp.end());
+    auto result = n1.storage->get(TABLE_REQUESTS, composite_key);
+    ASSERT_TRUE(result.has_value());
+
+    // Now tamper with the repl_log timestamp to make it appear old (>7 days ago).
+    // We do this by deleting the repl_log entry and re-inserting it with an old timestamp.
+    auto entries = n1.repl_log->entries_after(requests_key, 0);
+    ASSERT_FALSE(entries.empty());
+
+    // Compact all existing entries
+    uint64_t max_seq = n1.repl_log->current_seq(requests_key);
+    n1.repl_log->compact(requests_key, max_seq + 1);
+
+    // Re-insert with a timestamp from 8 days ago
+    auto eight_days_ago = std::chrono::system_clock::now() - std::chrono::hours(8 * 24);
+    uint64_t old_timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(eight_days_ago.time_since_epoch()).count());
+
+    // Manually create and store an old log entry
+    LogEntry old_entry;
+    old_entry.seq = 1;
+    old_entry.op = Op::ADD;
+    old_entry.timestamp = old_timestamp;
+    old_entry.data_type = 0x03;
+    old_entry.data = request;
+    n1.repl_log->apply(requests_key, {old_entry});
+
+    // Verify the old entry is in the repl_log
+    auto old_entries = n1.repl_log->entries_after(requests_key, 0);
+    ASSERT_FALSE(old_entries.empty());
+    EXPECT_EQ(old_entries[0].timestamp, old_timestamp);
+
+    // Now trigger tick() which should run expire_ttl() and remove the old contact request.
+    // expire_ttl() runs on TTL_SWEEP_INTERVAL (5 min), but last_ttl_sweep_ is epoch-initialized.
+    n1.kad->tick();
+
+    // Verify the contact request was removed
+    auto result_after = n1.storage->get(TABLE_REQUESTS, composite_key);
+    EXPECT_FALSE(result_after.has_value())
+        << "Contact request older than 7 days should have been expired";
+}

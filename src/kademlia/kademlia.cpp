@@ -65,6 +65,8 @@ static constexpr auto TTL_DURATION             = std::chrono::hours(7 * 24);  //
 static constexpr auto TTL_SWEEP_INTERVAL       = std::chrono::minutes(5);
 static constexpr auto PENDING_STORE_TIMEOUT    = std::chrono::seconds(30);
 static constexpr auto TRANSFER_CHECK_INTERVAL  = std::chrono::seconds(60);
+static constexpr auto COMPACT_INTERVAL         = std::chrono::hours(1);
+static constexpr size_t COMPACT_KEEP_ENTRIES   = 100;  // Keep last N entries per key
 
 void Kademlia::tick() {
     auto now = std::chrono::steady_clock::now();
@@ -127,6 +129,12 @@ void Kademlia::tick() {
         last_table_size_ = current_size;
         transfer_responsibility();
     }
+
+    // 6. Periodic repl_log compaction
+    if (now - last_compact_ > COMPACT_INTERVAL) {
+        last_compact_ = now;
+        compact_repl_log();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +186,53 @@ void Kademlia::expire_ttl() {
 
     // Expire contact requests: scan TABLE_REQUESTS
     // Contact request value: recipient_fp(32) || sender_fp(32) || pow_nonce(8) || blob_len(4) || blob
-    // No timestamp in the value itself — use repl_log timestamp instead.
-    // For simplicity, we skip contact request expiry here since the repl_log
-    // timestamp requires correlating with the repl_log entries. This can be
-    // added when contact requests include a timestamp field.
+    // No timestamp in the value itself — use repl_log timestamp for age check.
+    // For each request, compute its routing key and find the most recent repl_log
+    // entry. If that entry's timestamp is older than TTL, the request has expired.
+    //
+    // Two-pass approach: first collect all request keys and their recipient_fps
+    // (to avoid nested read transactions in mdbx), then check repl_log timestamps.
+
+    struct RequestInfo {
+        std::vector<uint8_t> storage_key;   // recipient_fp(32) || sender_fp(32)
+        crypto::Hash recipient_fp;
+    };
+    std::vector<RequestInfo> all_requests;
+
+    storage_.foreach(storage::TABLE_REQUESTS,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+            if (key.size() < 64 || value.size() < 76) return true;
+            RequestInfo ri;
+            ri.storage_key.assign(key.begin(), key.end());
+            std::copy_n(key.data(), 32, ri.recipient_fp.begin());
+            all_requests.push_back(std::move(ri));
+            return true;
+        });
+
+    // Now check repl_log timestamps outside of the foreach transaction
+    std::vector<std::vector<uint8_t>> expired_request_keys;
+    for (const auto& ri : all_requests) {
+        auto routing_key = crypto::sha3_256_prefixed("requests:", ri.recipient_fp);
+        auto entries = repl_log_.entries_after(routing_key, 0);
+        if (entries.empty()) continue;  // no repl_log entry — can't determine age, skip
+
+        // Find the latest entry's timestamp
+        uint64_t latest_ts = 0;
+        for (const auto& e : entries) {
+            if (e.timestamp > latest_ts) latest_ts = e.timestamp;
+        }
+
+        if (latest_ts > 0 && latest_ts < cutoff_sec) {
+            expired_request_keys.push_back(ri.storage_key);
+        }
+    }
+
+    for (const auto& k : expired_request_keys)
+        storage_.del(storage::TABLE_REQUESTS, k);
+
+    if (!expired_request_keys.empty()) {
+        spdlog::info("TTL expiry: removed {} expired contact requests", expired_request_keys.size());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +319,44 @@ void Kademlia::transfer_responsibility() {
 
     if (pushed > 0) {
         spdlog::info("Responsibility transfer: pushed {} entries to responsible nodes", pushed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Replication log compaction — keep only the last N entries per unique key
+// ---------------------------------------------------------------------------
+
+void Kademlia::compact_repl_log() {
+    // Collect unique 32-byte key prefixes from TABLE_REPL_LOG
+    std::vector<crypto::Hash> unique_keys;
+    crypto::Hash prev_key{};
+    prev_key.fill(0xFF);  // sentinel — won't match any real key
+
+    storage_.foreach(storage::TABLE_REPL_LOG,
+        [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
+            if (k.size() < 40) return true;
+            crypto::Hash key_prefix{};
+            std::copy_n(k.data(), 32, key_prefix.begin());
+            if (key_prefix != prev_key) {
+                unique_keys.push_back(key_prefix);
+                prev_key = key_prefix;
+            }
+            return true;
+        });
+
+    size_t total_compacted = 0;
+    for (const auto& key : unique_keys) {
+        uint64_t max_seq = repl_log_.current_seq(key);
+        if (max_seq > COMPACT_KEEP_ENTRIES) {
+            uint64_t before_seq = max_seq - COMPACT_KEEP_ENTRIES;
+            repl_log_.compact(key, before_seq);
+            ++total_compacted;
+        }
+    }
+
+    if (total_compacted > 0) {
+        spdlog::info("Repl log compaction: compacted {} keys (keeping last {} entries each)",
+                     total_compacted, COMPACT_KEEP_ENTRIES);
     }
 }
 
