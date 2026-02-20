@@ -1851,6 +1851,23 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
         }
 
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
+            // Validate before applying (trust boundary: SYNC_RESP comes from peers)
+            bool valid = false;
+            switch (entry.data_type) {
+            case 0x00: valid = validate_profile(entry.data, key); break;
+            case 0x01: valid = validate_name_record(entry.data, key); break;
+            case 0x02: valid = validate_inbox_message(entry.data); break;
+            case 0x03: valid = validate_contact_request(entry.data); break;
+            case 0x04: valid = validate_allowlist_entry(entry.data); break;
+            default:
+                spdlog::warn("SYNC_RESP entry rejected: unknown data_type 0x{:02X}", entry.data_type);
+                continue;
+            }
+            if (!valid) {
+                spdlog::warn("SYNC_RESP entry rejected by validation (type=0x{:02X})", entry.data_type);
+                continue;
+            }
+
             if (entry.data_type == 0x02) {
                 // Inbox: two-table write
                 // Data: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
