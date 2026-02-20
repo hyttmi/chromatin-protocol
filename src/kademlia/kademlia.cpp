@@ -712,6 +712,19 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
         // Skip ourselves
         if (info.id == self_.id) continue;
 
+        // Verify node_id == SHA3-256(pubkey) to prevent eclipse attacks.
+        // Nodes with empty pubkeys are accepted — they were learned from
+        // FIND_NODE requests which don't carry pubkeys. Their identity will
+        // be verified when we interact with them directly.
+        if (!info.pubkey.empty()) {
+            auto expected_id = crypto::sha3_256(info.pubkey);
+            if (info.id.id != expected_id) {
+                spdlog::warn("Rejected node from NODES: id != SHA3-256(pubkey) for {}:{}",
+                             info.address, info.tcp_port);
+                continue;
+            }
+        }
+
         spdlog::info("Discovered node {} at {}:{}", i, info.address, info.tcp_port);
         table_.add_or_update(info);
     }
