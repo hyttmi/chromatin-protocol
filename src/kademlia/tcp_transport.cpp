@@ -376,7 +376,8 @@ static bool send_all(int fd, const std::vector<uint8_t>& data) {
 
 void TcpTransport::send(const std::string& addr, uint16_t port, const Message& msg) {
     auto data = serialize_message(msg);
-    auto pool_key = addr + ":" + std::to_string(port);
+    // Use [addr]:port format for unambiguous IPv6 support
+    auto pool_key = "[" + addr + "]:" + std::to_string(port);
     int fd = -1;
     bool from_pool = false;
 
