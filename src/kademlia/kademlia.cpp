@@ -826,8 +826,11 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
         std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
         std::vector<uint8_t> blob_value(value.data() + 108, value.data() + 108 + blob_len);
 
-        storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
-        storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
+        // Atomic write: INDEX + BLOB in single transaction
+        storage_.batch_put({
+            {storage::TABLE_INBOX_INDEX, idx_key, idx_value},
+            {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value}
+        });
     } else if (data_type == 0x04) {
         // Allowlist: composite key storage
         // Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
@@ -1037,8 +1040,11 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
                 std::vector<uint8_t> blob_key(mid.begin(), mid.end());
                 std::vector<uint8_t> blob_val(value.data() + 108, value.data() + 108 + blen);
 
-                storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
-                storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_val);
+                // Atomic write: INDEX + BLOB in single transaction
+                storage_.batch_put({
+                    {storage::TABLE_INBOX_INDEX, idx_key, idx_value},
+                    {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_val}
+                });
             } else if (data_type == 0x04) {
                 // Allowlist: composite key storage
                 // Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
@@ -1910,8 +1916,11 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
                 std::vector<uint8_t> blob_value(d.data() + 108, d.data() + 108 + blob_len);
 
-                storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
-                storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value);
+                // Atomic write: INDEX + BLOB in single transaction
+                storage_.batch_put({
+                    {storage::TABLE_INBOX_INDEX, idx_key, idx_value},
+                    {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value}
+                });
             } else if (entry.data_type == 0x04) {
                 // Allowlist: composite key storage
                 // Data: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -51,6 +52,7 @@ public:
 
 private:
     storage::Storage& storage_;
+    std::mutex append_mutex_;
 
     // Build composite key: [32 bytes: data_key_hash][8 bytes BE: seq_number]
     static std::vector<uint8_t> make_composite_key(const crypto::Hash& key, uint64_t seq);

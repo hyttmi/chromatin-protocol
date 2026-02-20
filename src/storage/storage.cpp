@@ -76,6 +76,18 @@ std::optional<std::vector<uint8_t>> Storage::get(std::string_view table, std::sp
     return std::vector<uint8_t>(begin, begin + result.size());
 }
 
+bool Storage::batch_put(const std::vector<BatchOp>& ops) {
+    auto txn = env_.start_write();
+    for (const auto& op : ops) {
+        auto map = get_map(op.table);
+        txn.upsert(map,
+                    mdbx::slice(op.key.data(), op.key.size()),
+                    mdbx::slice(op.value.data(), op.value.size()));
+    }
+    txn.commit();
+    return true;
+}
+
 bool Storage::del(std::string_view table, std::span<const uint8_t> key) {
     auto map = get_map(table);
     auto txn = env_.start_write();

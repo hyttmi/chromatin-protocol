@@ -114,6 +114,7 @@ std::vector<uint8_t> ReplLog::make_composite_key(const crypto::Hash& key, uint64
 }
 
 uint64_t ReplLog::append(const crypto::Hash& key, Op op, uint8_t data_type, std::span<const uint8_t> data) {
+    std::lock_guard lock(append_mutex_);
     uint64_t seq = current_seq(key) + 1;
 
     auto now = std::chrono::system_clock::now();

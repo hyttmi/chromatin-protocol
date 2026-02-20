@@ -36,6 +36,14 @@ public:
     std::optional<std::vector<uint8_t>> get(std::string_view table, std::span<const uint8_t> key) const;
     bool del(std::string_view table, std::span<const uint8_t> key);
 
+    // Atomic multi-table write: all operations succeed or none do.
+    struct BatchOp {
+        std::string_view table;
+        std::vector<uint8_t> key;
+        std::vector<uint8_t> value;
+    };
+    bool batch_put(const std::vector<BatchOp>& ops);
+
     using Callback = std::function<bool(std::span<const uint8_t> key, std::span<const uint8_t> value)>;
     void foreach(std::string_view table, Callback cb) const;
     void scan(std::string_view table, std::span<const uint8_t> prefix, Callback cb) const;
