@@ -222,13 +222,20 @@ messages directly via TCP:
 - **Contact requests**: Kademlia verifies the PoW (16 leading zero bits)
   and that the routing key matches the recipient_fp in the value.
 - **Allowlist entries**: Kademlia verifies the ML-DSA-87 signature against
-  the owner's public key (from TABLE_PROFILES). Bootstrap case: if no
-  profile is stored yet, the entry is accepted without verification.
-- **Signature verification**: Messages requiring trust (STORE, FIND_VALUE,
-  SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP) are rejected from
-  nodes whose public key is not yet known. PING, PONG, FIND_NODE, and
-  NODES are exempt (needed for discovery). Public keys are learned via
-  NODES responses.
+  the owner's public key (from TABLE_PROFILES). If the owner's profile is
+  not stored yet, the entry is **rejected** — profile must propagate first.
+- **Name records**: Same as allowlist — rejected if owner profile is absent.
+- **SYNC_RESP validation**: All entries received via SYNC_RESP are validated
+  using the same rules as direct STORE before being applied to storage.
+- **Signature verification**: PING and FIND_NODE are accepted without
+  signature verification (discovery). All other messages — including PONG,
+  NODES, STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ,
+  SEQ_RESP — MUST have valid ML-DSA-87 signatures. Messages from nodes
+  whose public key is not yet known are rejected. Public keys are learned
+  via NODES responses.
+- **NODES node_id verification**: When processing NODES responses, the
+  receiver verifies `node_id == SHA3-256(pubkey)` for each entry. Entries
+  failing this check are silently dropped.
 
 This dual-layer validation (Kademlia + WS server) ensures a single malicious
 node cannot bypass protections by sending STORE messages directly.
@@ -250,10 +257,11 @@ node cannot bypass protections by sending STORE messages directly.
 | SEQ_REQ      | Query replication log sequence for a key     |
 | SEQ_RESP     | Replication log sequence response            |
 
-All messages are ML-DSA signed by the sending node. Trust-sensitive messages
-(STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP) are
-rejected from nodes whose public key is not yet known. PING, PONG, FIND_NODE,
-and NODES are accepted without verification during bootstrap/discovery.
+All messages are ML-DSA signed by the sending node. PING and FIND_NODE are
+accepted without signature verification (needed for initial discovery). All
+other types — including PONG, NODES, and all trust-sensitive messages — MUST
+have valid signatures. Messages from nodes whose public key is not yet known
+are rejected (except PING and FIND_NODE).
 
 ### 6.5 Self-Healing & Periodic Maintenance
 
@@ -291,9 +299,14 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 - For each key, checks if there are new responsible nodes
 - Pushes data via STORE to responsible nodes that don't have it yet
 
+**Active sync:**
+- Every 120 seconds, checks responsible keys against peer nodes
+- Sends SEQ_REQ to peers, pulls missing entries via SYNC_REQ if behind
+- Ensures eventual consistency when direct STORE delivery fails
+
 **Replication log compaction:**
 - Every 1 hour, compacts the replication log
-- Retains the most recent 100 entries per key, deletes older ones
+- Retains the most recent 10,000 entries per key, deletes older ones
 - Bounds storage growth while preserving enough sync history
 
 **Constants:**
@@ -309,8 +322,9 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 | MESSAGE_TTL            | 7 days | Inbox/contact request expiry      |
 | PENDING_STORE_TIMEOUT  | 30s    | Timeout for STORE_ACK tracking    |
 | TRANSFER_CHECK_INTERVAL| 60s    | Responsibility transfer check     |
+| SYNC_INTERVAL          | 120s   | Active sync with responsible peers |
 | COMPACT_INTERVAL       | 1h     | Replication log compaction        |
-| COMPACT_KEEP_ENTRIES   | 100    | Max entries per key after compact  |
+| COMPACT_KEEP_ENTRIES   | 10000  | Max entries per key after compact  |
 | MAX_ROUTING_TABLE_SIZE | 256    | Maximum nodes in routing table    |
 | CONN_MAX_IDLE          | 60s    | TCP connection pool idle timeout  |
 | MAX_POOL_SIZE          | 64     | TCP connection pool max size      |
@@ -470,7 +484,12 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | DELETE            | Optionally delete messages (client-driven, replicated) |
 | ALLOW             | Add fingerprint to allowlist (client-signed)  |
 | REVOKE            | Remove fingerprint from allowlist (client-signed)|
-| CONTACT_REQUEST   | Send request to non-contact (PoW required)   |
+| CONTACT_REQUEST   | Send request to non-contact (PoW + timestamp) |
+| RESOLVE_NAME      | Look up fingerprint by username              |
+| GET_PROFILE       | Fetch a user's profile by fingerprint        |
+| LIST_REQUESTS     | List pending contact requests                |
+| SET_PROFILE       | Publish/update signed profile via Kademlia   |
+| REGISTER_NAME     | Register a permanent name record via Kademlia |
 | STATUS            | Health check (no auth required)              |
 
 **Node → Client:**
@@ -483,6 +502,11 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
 | SEND_READY        | Ready for chunked upload (large SEND)        |
 | LIST_RESULT       | Message index response (paginated)           |
 | GET_RESULT        | Blob response (inline or chunked)            |
+| RESOLVE_NAME_RESULT | Name lookup response                       |
+| PROFILE_RESULT    | Profile lookup response                      |
+| LIST_REQUESTS_RESULT | Contact requests list response             |
+| SET_PROFILE_ACK   | Profile stored confirmation                  |
+| REGISTER_NAME_ACK | Name registered confirmation                 |
 | STATUS_RESP       | Node health/status information               |
 | REDIRECT          | List of responsible nodes (sorted by seq)    |
 | ERROR             | Rejection with reason and error code         |
@@ -517,7 +541,7 @@ Incomplete chunked uploads are discarded after 30 seconds.
 Each user has an allowlist stored on their responsible nodes.
 
 - Managed via `ALLOW` / `REVOKE` commands (signed by the client)
-- The client signs `action || allowed_fingerprint || sequence` with ML-DSA-87
+- The client signs `"chromatin:allowlist:" || owner_fingerprint || action || allowed_fingerprint || sequence` with ML-DSA-87
 - The node verifies the signature — only the inbox owner can modify their allowlist
 - Kademlia STORE value includes `owner_fp` for signature verification at the DHT layer
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
@@ -556,9 +580,9 @@ senders with proof-of-work.
 2. Alice computes Bob's responsible nodes: R closest to
    `SHA3-256("requests:" || bob_fp)`
 3. Alice computes PoW: find `nonce` such that
-   `SHA3-256("request:" || alice_fp || bob_fp || nonce)` has M leading zero bits
-4. Alice sends `CONTACT_REQUEST { to: bob_fp, blob, pow_nonce }` to a
-   responsible node
+   `SHA3-256("chromatin:request:" || alice_fp || bob_fp || timestamp_BE || nonce_BE)` has M leading zero bits
+4. Alice sends `CONTACT_REQUEST { to: bob_fp, blob, pow_nonce, timestamp }` to a
+   responsible node. Timestamp must be within 1 hour of server time.
 5. Node verifies PoW, stores in Bob's request inbox (replication log)
 6. Bob receives `CONTACT_REQUEST` when connected
 7. On accept: both sides send `ALLOW` to their responsible nodes
@@ -643,7 +667,7 @@ Each entry in `repl_log`:
 {
     seq:       uint64,       // monotonically increasing per key
     op:        ADD | DEL | UPD,
-    timestamp: uint64,       // unix timestamp
+    timestamp: uint64,       // milliseconds since Unix epoch
     data:      bytes         // the payload (blob, profile, etc.)
 }
 ```

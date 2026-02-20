@@ -1852,10 +1852,10 @@ TEST_F(KademliaTest, TTLExpiry) {
     Hash sender_fp{};
     sender_fp.fill(0xC3);
 
-    // 8 days ago in seconds
+    // 8 days ago in milliseconds
     auto eight_days_ago = std::chrono::system_clock::now() - std::chrono::hours(8 * 24);
     uint64_t old_ts = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             eight_days_ago.time_since_epoch()).count());
 
     // Build index key: recipient_fp(32) || msg_id(32)
@@ -1884,7 +1884,7 @@ TEST_F(KademliaTest, TTLExpiry) {
     Hash msg_id2{};
     msg_id2.fill(0xD4);
     uint64_t recent_ts = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
     std::vector<uint8_t> idx_key2;
@@ -2543,10 +2543,10 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     uint64_t max_seq = n1.repl_log->current_seq(requests_key);
     n1.repl_log->compact(requests_key, max_seq + 1);
 
-    // Re-insert with a timestamp from 8 days ago
+    // Re-insert with a timestamp from 8 days ago (milliseconds)
     auto eight_days_ago = std::chrono::system_clock::now() - std::chrono::hours(8 * 24);
     uint64_t old_timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(eight_days_ago.time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(eight_days_ago.time_since_epoch()).count());
 
     // Manually create and store an old log entry
     LogEntry old_entry;
@@ -2588,9 +2588,9 @@ TEST_F(KademliaTest, InboxResponsibilityTransfer) {
     Hash sender_fp{};
     sender_fp.fill(0x33);
 
-    // Use a recent timestamp so TTL expiry doesn't remove the message during tick()
+    // Use a recent timestamp (millis) so TTL expiry doesn't remove the message during tick()
     uint64_t timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
     std::vector<uint8_t> blob = {0xDE, 0xAD, 0xBE, 0xEF};
     uint32_t blob_len = static_cast<uint32_t>(blob.size());

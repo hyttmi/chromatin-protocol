@@ -386,7 +386,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 
         auto now = std::chrono::system_clock::now();
         uint64_t timestamp = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
                 now.time_since_epoch()).count());
 
         // Capture upload data before resetting
@@ -955,10 +955,10 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     crypto::Hash msg_id{};
     OQS_randombytes(msg_id.data(), msg_id.size());
 
-    // Timestamp (seconds since epoch)
+    // Timestamp (milliseconds since epoch)
     auto now = std::chrono::system_clock::now();
     uint64_t timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()).count());
 
     // Build inbox message binary:

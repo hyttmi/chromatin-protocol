@@ -119,7 +119,7 @@ uint64_t ReplLog::append(const crypto::Hash& key, Op op, uint8_t data_type, std:
 
     auto now = std::chrono::system_clock::now();
     uint64_t timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
 
     LogEntry entry;
     entry.seq = seq;

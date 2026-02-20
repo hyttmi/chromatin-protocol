@@ -1,6 +1,6 @@
 # Chromatin Wire Protocol Specification
 
-> Version 0x01 — 2026-02-17
+> Version 0x01 — 2026-02-20
 
 This document defines the exact wire format and validation rules for the Chromatin
 protocol. It is the implementor's reference — any conforming node MUST follow
@@ -101,11 +101,15 @@ Empty payload (0 bytes).
 
 ### FIND_NODE (0x02)
 
-Empty payload (0 bytes). Requests the full membership list from the recipient.
+```
+[32 bytes: target_id]    // The node ID to find closest nodes for
+```
+
+Requests the K closest nodes to `target_id` from the recipient.
 
 ### NODES (0x03)
 
-Response with the full node list.
+Response with the K closest nodes to the requested target (K=20).
 
 ```
 [2 bytes BE: node_count]
@@ -172,7 +176,7 @@ Values 0x05-0xFF are reserved for future use (groups, channels, etc.).
 For each entry:
   [8 bytes BE: seq]
   [1 byte: op]                // 0x00 = ADD, 0x01 = DEL, 0x02 = UPD
-  [8 bytes BE: timestamp]     // Unix timestamp
+  [8 bytes BE: timestamp]     // Milliseconds since Unix epoch
   [1 byte: data_type]         // 0x00=profile, 0x01=name, 0x02=inbox, 0x03=request, 0x04=allowlist
   [4 bytes BE: data_length]
   [data_length bytes: data]
@@ -204,6 +208,11 @@ Response with the current replication log sequence number for the requested key.
 [32 bytes: key]
 [8 bytes BE: seq]
 ```
+
+**SYNC_RESP validation:** Every ADD entry in a SYNC_RESP is validated
+using the same rules as a direct STORE (see Section 5) before being
+applied to local storage. This prevents malicious nodes from injecting
+forged data via the sync protocol.
 
 **Replication model (two-tier ACK):**
 
@@ -270,7 +279,7 @@ Kademlia STORE value (includes recipient_fp for two-table routing):
 [32 bytes: recipient_fingerprint]
 [32 bytes: msg_id]
 [32 bytes: sender_fingerprint]
-[8 bytes BE: timestamp]
+[8 bytes BE: timestamp]              // Milliseconds since Unix epoch
 [4 bytes BE: blob_length]
 [blob_length bytes: encrypted blob]
 ```
@@ -301,23 +310,30 @@ DELETE removes entries from both tables.
 [32 bytes: recipient_fingerprint]
 [32 bytes: sender_fingerprint]
 [8 bytes BE: pow_nonce]
+[8 bytes BE: timestamp]              // Milliseconds since Unix epoch (client-provided)
 [4 bytes BE: blob_length]
 [blob_length bytes: encrypted blob]
 ```
+
+Minimum size: 84 bytes (32 + 32 + 8 + 8 + 4 + 0).
 
 DHT routing key: `SHA3-256("requests:" || recipient_fingerprint)`
 
 Local mdbx storage uses composite key for multi-sender support:
 ```
 Key:   recipient_fp(32) || sender_fp(32)
-Value: full contact request binary (recipient_fp || sender_fp || pow_nonce || blob_len || blob)
+Value: full contact request binary (recipient_fp || sender_fp || pow_nonce || timestamp || blob_len || blob)
 ```
 
-PoW preimage: `"request:" || sender_fingerprint || recipient_fingerprint`
+PoW preimage: `"chromatin:request:" || sender_fingerprint || recipient_fingerprint || timestamp_BE`
 Required: 16 leading zero bits in `SHA3-256(preimage || nonce_BE)`.
 
-Including `recipient_fp` in the binary allows Kademlia nodes to verify PoW
-independently without access to the routing key derivation.
+The timestamp is provided by the client and must be within 1 hour of the
+server's current time (±3,600,000 ms). This prevents indefinite nonce reuse —
+a valid PoW is only accepted during its validity window.
+
+Including `recipient_fp` and `timestamp` in the binary allows Kademlia nodes
+to verify PoW independently without access to the routing key derivation.
 
 ### Allowlist Entry (data_type 0x04)
 
@@ -331,8 +347,9 @@ verification and composite key construction):
 [SIGNATURE_SIZE bytes: ML-DSA-87 signature]
 ```
 
-The signature covers `action(1) || allowed_fingerprint(32) || sequence(8 BE)`
-(41 bytes), signed by the owner's ML-DSA-87 key.
+The signature covers a domain-separated message:
+`"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
+signed by the owner's ML-DSA-87 key.
 
 Storage key (DHT routing): `SHA3-256("allowlist:" || owner_fingerprint)`
 
@@ -343,8 +360,9 @@ Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signatur
 ```
 
 Receiving nodes verify the ML-DSA-87 signature against the owner's public key
-(looked up from TABLE_PROFILES). If the owner has no stored profile yet
-(bootstrap case), the entry is accepted without signature verification.
+(looked up from TABLE_PROFILES). If the owner has no stored profile yet, the
+entry is **rejected** — the profile must propagate before allowlist entries.
+This prevents forged entries during the bootstrap propagation window.
 
 Receiving nodes parse `allowed_fp` from the Kademlia value to build the
 composite storage key. REVOKE (action=0x00) deletes the entry rather than
@@ -450,8 +468,8 @@ Optional fields:
 Response:
 ```json
 {"type": "LIST_RESULT", "id": 4, "messages": [
-  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000100, "size": 1200, "blob": "<base64>"},
-  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000200, "size": 5242880, "blob": null}
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000100000, "size": 1200, "blob": "<base64>"},
+  {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000200000, "size": 5242880, "blob": null}
 ], "has_more": true}
 ```
 
@@ -496,7 +514,7 @@ Response: `{"type": "OK", "id": 6}`
 {"type": "ALLOW", "id": 7, "fingerprint": "<hex>", "sequence": 1, "signature": "<hex>"}
 ```
 
-The client signs `action(0x01) || allowed_fingerprint || sequence` with its
+The client signs `"chromatin:allowlist:" || owner_fingerprint || action(0x01) || allowed_fingerprint || sequence` with its
 ML-DSA-87 key. The node verifies the signature and that sequence > currently
 stored sequence. Response: `{"type": "OK", "id": 7}`
 
@@ -510,9 +528,11 @@ specified fingerprint. Response: `{"type": "OK", "id": 8}`
 
 **CONTACT_REQUEST** — Send contact request with PoW:
 ```json
-{"type": "CONTACT_REQUEST", "id": 9, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345}
+{"type": "CONTACT_REQUEST", "id": 9, "to": "<hex>", "blob": "<base64>", "pow_nonce": 12345, "timestamp": 1708000100000}
 ```
-Response: `{"type": "OK", "id": 9}`
+The `timestamp` is milliseconds since Unix epoch, provided by the client. The
+node validates it is within 1 hour of server time and includes it in the PoW
+preimage. Response: `{"type": "OK", "id": 9}`
 
 **STATUS** — Health check (no authentication required):
 ```json
@@ -530,6 +550,64 @@ Response:
 }
 ```
 
+**RESOLVE_NAME** — Look up a fingerprint by username:
+```json
+{"type": "RESOLVE_NAME", "id": 11, "name": "alice"}
+```
+Response:
+```json
+{"type": "RESOLVE_NAME_RESULT", "id": 11, "found": true, "fingerprint": "<hex>"}
+```
+If not found: `{"type": "RESOLVE_NAME_RESULT", "id": 11, "found": false}`
+
+Only searches local storage (the node must be responsible for the name's
+routing key to have the data).
+
+**GET_PROFILE** — Fetch a user's profile by fingerprint:
+```json
+{"type": "GET_PROFILE", "id": 12, "fingerprint": "<hex>"}
+```
+Response:
+```json
+{
+  "type": "PROFILE_RESULT", "id": 12, "found": true,
+  "fingerprint": "<hex>", "pubkey": "<hex>", "kem_pubkey": "<hex>",
+  "bio": "Hello world", "avatar": "<base64 or null>",
+  "social_links": [{"platform": "x", "handle": "@alice"}],
+  "sequence": 1
+}
+```
+If not found: `{"type": "PROFILE_RESULT", "id": 12, "found": false}`
+
+**LIST_REQUESTS** — List pending contact requests:
+```json
+{"type": "LIST_REQUESTS", "id": 13}
+```
+Response:
+```json
+{"type": "LIST_REQUESTS_RESULT", "id": 13, "requests": [
+  {"from": "<fingerprint hex>", "timestamp": 1708000100000, "blob": "<base64>"}
+]}
+```
+
+**SET_PROFILE** — Publish or update a signed profile:
+```json
+{"type": "SET_PROFILE", "id": 14, "profile": "<base64 of signed profile binary>"}
+```
+The client constructs and signs the profile binary (see Section 3). The node
+validates the profile (fingerprint matches session, signature is valid) and
+stores/replicates it via Kademlia.
+Response: `{"type": "SET_PROFILE_ACK", "id": 14}`
+
+**REGISTER_NAME** — Register a permanent name record:
+```json
+{"type": "REGISTER_NAME", "id": 15, "name_record": "<base64 of signed name record binary>"}
+```
+Client builds and signs the name record binary, node validates (PoW, signature,
+name not already taken) and stores/replicates via Kademlia. Names are permanent
+and cannot be updated — first claim wins.
+Response: `{"type": "REGISTER_NAME_ACK", "id": 15}`
+
 ### 4.4 Server Push (unsolicited, no id)
 
 Push notifications are delivered to **all connected devices** for a given
@@ -538,12 +616,12 @@ each receives the push notification independently.
 
 **NEW_MESSAGE (small, <=64 KB)** — Incoming message inlined:
 ```json
-{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 1200, "blob": "<base64>", "timestamp": 1708000100}
+{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 1200, "blob": "<base64>", "timestamp": 1708000100000}
 ```
 
 **NEW_MESSAGE (large, >64 KB)** — Metadata only, client fetches with GET:
 ```json
-{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 5242880, "blob": null, "timestamp": 1708000200}
+{"type": "NEW_MESSAGE", "msg_id": "<hex>", "from": "<fingerprint hex>", "size": 5242880, "blob": null, "timestamp": 1708000200000}
 ```
 
 **CONTACT_REQUEST** — Incoming contact request (PoW already verified by node):
@@ -561,7 +639,9 @@ Different commands consume different token costs:
 |------------------|------|
 | SEND             | 2    |
 | CONTACT_REQUEST  | 3    |
+| SET_PROFILE / REGISTER_NAME | 2 |
 | LIST / GET / DELETE / ALLOW / REVOKE | 1 |
+| RESOLVE_NAME / GET_PROFILE / LIST_REQUESTS | 1 |
 | HELLO / AUTH     | 1    |
 | STATUS           | 0    |
 
@@ -638,15 +718,18 @@ On every incoming TCP message, a conforming node MUST:
 4. Verify sender node ID exists in membership table (exception: PING and NODES from unknown nodes during bootstrap)
 5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
 
-**Signature verification exceptions:** PING, PONG, FIND_NODE, and NODES
-messages are accepted without signature verification from nodes whose public
-key is not yet known. PING is how unknown nodes introduce themselves. PONG is
-the reply to our PING. FIND_NODE is needed during discovery. NODES is the
-response to FIND_NODE. Public keys are learned via NODES responses (which
-include each node's ML-DSA-87 public key). Once a node's public key is known,
-all trust-sensitive messages (STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP,
-STORE_ACK, SEQ_REQ, SEQ_RESP) from that node MUST have valid ML-DSA-87
-signatures — messages from nodes with unknown public keys are rejected.
+**Signature verification:** PING and FIND_NODE are accepted without signature
+verification (needed for initial discovery by unknown nodes). All other
+message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
+SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP — MUST have valid ML-DSA-87
+signatures. Messages from nodes whose public key is not yet known are
+rejected (except PING and FIND_NODE). Public keys are learned via NODES
+responses (which include each node's ML-DSA-87 public key).
+
+**NODES response node_id verification:** When processing a NODES response,
+the receiver MUST verify `node_id == SHA3-256(pubkey)` for each node entry.
+Entries that fail this check are silently dropped. This prevents eclipse
+attacks via forged node entries.
 
 ### Profile STORE Validation
 
@@ -660,8 +743,9 @@ signatures — messages from nodes with unknown public keys are rejected.
 1. Name matches `^[a-z0-9]{3,36}$`
 2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 28 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
-4. If name already registered to a different fingerprint — reject (first claim wins)
-5. If same fingerprint — `sequence` must be higher than stored
+4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
+5. If name already registered to a different fingerprint — reject (first claim wins)
+6. If same fingerprint — `sequence` must be higher than stored
 
 ### FIND_VALUE Scope
 
@@ -681,15 +765,17 @@ SYNC_REQ/SYNC_RESP instead.
 
 ### Contact Request STORE Validation
 
-1. `SHA3-256("request:" || sender_fp || recipient_fp || nonce)` has >= 16 leading zero bits
-2. `blob_length` <= 64 KiB
+1. Minimum size: 84 bytes
+2. `timestamp` (from binary) must be within 1 hour of server time (±3,600,000 ms)
+3. `SHA3-256("chromatin:request:" || sender_fp || recipient_fp || timestamp_BE || nonce_BE)` has >= 16 leading zero bits
+4. `blob_length` <= 64 KiB
 
 ### Allowlist STORE Validation
 
 1. `action` byte must be 0x00 (revoke) or 0x01 (allow)
 2. ML-DSA-87 signature verified against owner's public key (from TABLE_PROFILES)
-   - Signed data: `action(1) || allowed_fingerprint(32) || sequence(8 BE)`
-   - If owner's profile is not stored yet (bootstrap), signature check is skipped
+   - Signed data: `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
+   - If owner's profile is not stored yet, the entry is **rejected** (profile must propagate first)
 3. `sequence` > currently stored sequence (enforced by WS server)
 
 ### REVOKE Replication
@@ -732,9 +818,47 @@ before reuse. Servers accept multiple messages per TCP connection.
 ### Replication Log Compaction
 
 The replication log is compacted periodically (every 1 hour). For each key,
-only the most recent 100 entries are retained. Older entries are deleted.
+only the most recent 10,000 entries are retained. Older entries are deleted.
 This bounds replication log storage growth while preserving enough history
-for sync catch-up.
+for sync catch-up. The previous default of 100 was found to be dangerously
+low — a busy inbox can exhaust it in minutes, causing data loss for slow
+syncers.
+
+### Active Sync
+
+Nodes periodically sync with responsible peers (every 120 seconds by
+default). For each key the node is responsible for, it checks if peers have
+higher replication log sequences and pulls missing entries via SYNC_REQ.
+This ensures eventual consistency even when direct STORE delivery fails.
+
+### Data Ordering Requirement
+
+Certain data types have ordering dependencies:
+
+- **Profile must exist before allowlist entries** — Allowlist entries require
+  the owner's public key (from their profile) for signature verification.
+  Entries are rejected if the profile hasn't propagated yet.
+- **Profile must exist before name records** — Same reasoning: name records
+  reference a fingerprint whose public key must be verifiable.
+
+### Secret Key Handling
+
+Node secret keys MUST be zeroed from memory on destruction (e.g., using
+`OQS_MEM_cleanse()` or equivalent). The node key file (`node.key`) MUST
+be written with restrictive permissions (0600 — owner read/write only).
+
+### TCP Transport
+
+Node-to-node TCP uses `poll()` (not `select()`) to avoid the `FD_SETSIZE`
+limit. The maximum number of concurrent TCP client connections is
+configurable (default 256). Idle connections are tracked and evicted.
+Connection pool keys use `[addr]:port` format for IPv6 compatibility.
+
+### External Address
+
+Nodes MUST configure `external_address` in settings.json with a routable
+address when running behind NAT or binding to `0.0.0.0`. The default bind
+address is not routable and will cause peer discovery failures.
 
 ### Cryptographic Random
 
@@ -746,6 +870,9 @@ cryptographic random source. Implementations using liboqs SHOULD use
 
 ## 6. Protocol Constants
 
+All values below are **configurable** via `settings.json`. The table shows
+defaults. See `chromatin-node --generate-config` for a complete template.
+
 | Constant                   | Value                                  |
 |----------------------------|----------------------------------------|
 | Magic                      | `CHRM` (0x43 0x48 0x52 0x4D)          |
@@ -754,32 +881,43 @@ cryptographic random source. Implementations using liboqs SHOULD use
 | Signing algorithm          | ML-DSA-87 (FIPS 204, Level 5)         |
 | KEM algorithm              | ML-KEM-1024 (FIPS 203, client-side)   |
 | Key space                  | 256 bits (SHA3-256 output)             |
+| Timestamp format           | Milliseconds since Unix epoch (uint64) |
 | Replication factor (R)     | `min(3, network_size)`                 |
 | Name PoW difficulty        | 28 leading zero bits                   |
 | Contact request PoW        | 16 leading zero bits                   |
-| Name regex                 | `^[a-z0-9]{3,36}$`                 |
+| Contact request max drift  | 1 hour (3,600,000 ms)                  |
+| Name regex                 | `^[a-z0-9]{3,36}$`                     |
 | Max profile size           | 1 MiB                                  |
 | Max message blob           | 50 MiB                                 |
 | Inline threshold (WS)      | 64 KiB                                 |
 | Chunk size (WS binary)     | 1 MiB (1,048,576 bytes)                |
 | Chunked upload timeout     | 30 seconds                             |
 | Max contact request blob   | 64 KiB                                 |
-| Message TTL                | 7 days (604800 seconds)                |
+| Message TTL                | 7 days                                 |
 | TTL sweep interval         | 5 minutes                              |
 | Pending STORE timeout      | 30 seconds                             |
 | Responsibility transfer    | 60 seconds (on routing table change)   |
+| Active sync interval       | 120 seconds                            |
 | Rate limit bucket size     | 50 tokens                              |
 | Rate limit refill rate     | 10 tokens/second                       |
 | Max TCP message            | 50 MiB (implementation limit)          |
 | Routing table max nodes    | 256                                    |
+| TCP connect timeout        | 5 seconds                              |
+| TCP read timeout           | 5 seconds                              |
 | TCP conn pool max idle     | 60 seconds                             |
 | TCP conn pool max size     | 64 connections                         |
+| Max TCP clients            | 256                                    |
+| Worker pool threads        | 4                                      |
 | Worker pool max queue      | 1024 jobs                              |
 | Repl_log compact interval  | 1 hour                                 |
-| Repl_log compact keep      | 100 entries per key                    |
+| Repl_log compact keep      | 10,000 entries per key                 |
 | Auth nonce prefix          | `"chromatin-auth:"`                    |
+| Allowlist signature prefix | `"chromatin:allowlist:"`               |
+| Contact req PoW prefix     | `"chromatin:request:"`                 |
+| Name PoW prefix            | `"chromatin:name:"`                    |
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
+| MDBX max database size     | 1 GiB                                  |
 | Bootstrap nodes            | `0.bootstrap.cpunk.io`                 |
 |                            | `1.bootstrap.cpunk.io`                 |
 |                            | `2.bootstrap.cpunk.io`                 |

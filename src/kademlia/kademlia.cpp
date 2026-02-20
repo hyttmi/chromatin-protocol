@@ -156,10 +156,7 @@ void Kademlia::expire_ttl() {
             std::chrono::system_clock::now().time_since_epoch()).count());
     auto ttl_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(ttl_duration_).count());
-    uint64_t cutoff = (now_ms > ttl_ms) ? (now_ms - ttl_ms) : 0;
-
-    // Convert cutoff to seconds for comparison with stored timestamps
-    uint64_t cutoff_sec = cutoff / 1000;
+    uint64_t cutoff_ms = (now_ms > ttl_ms) ? (now_ms - ttl_ms) : 0;
 
     // Expire inbox messages: scan TABLE_INBOX_INDEX
     // Index value format: sender_fp(32) || timestamp(8 BE) || blob_len(4)
@@ -174,7 +171,7 @@ void Kademlia::expire_ttl() {
             for (int i = 0; i < 8; ++i)
                 ts = (ts << 8) | value[32 + i];
 
-            if (ts < cutoff_sec) {
+            if (ts < cutoff_ms) {
                 expired_idx_keys.emplace_back(key.begin(), key.end());
                 // msg_id is at offset 32 in the key (after recipient_fp)
                 if (key.size() >= 64) {
@@ -231,7 +228,7 @@ void Kademlia::expire_ttl() {
             if (e.timestamp > latest_ts) latest_ts = e.timestamp;
         }
 
-        if (latest_ts > 0 && latest_ts < cutoff_sec) {
+        if (latest_ts > 0 && latest_ts < cutoff_ms) {
             expired_request_keys.push_back(ri.storage_key);
         }
     }
