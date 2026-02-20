@@ -607,9 +607,20 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     // INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
     // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
 
+    // Pagination: limit (default 50, max 200), after (msg_id hex to skip past)
+    int limit = msg.get("limit", 50).asInt();
+    if (limit <= 0) limit = 50;
+    if (limit > 200) limit = 200;
 
+    std::vector<uint8_t> after_id;
+    std::string after_hex = msg.get("after", "").asString();
+    if (after_hex.size() == 64) {
+        auto parsed = from_hex(after_hex);
+        if (parsed) after_id = std::move(*parsed);
+    }
+    bool skip_until_after = !after_id.empty();
 
-    // Collect index entries first (scan holds a read txn, can't nest another).
+    // Collect index entries (scan holds a read txn, can't nest another).
     struct IndexEntry {
         std::vector<uint8_t> msg_id;
         std::string from_hex;
@@ -617,39 +628,44 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
         uint32_t size;
     };
     std::vector<IndexEntry> entries;
+    bool has_more = false;
 
     storage_.scan(storage::TABLE_INBOX_INDEX, session->fingerprint,
                   [&](std::span<const uint8_t> key,
                       std::span<const uint8_t> value) -> bool {
-        // Validate key length: 32 (fp) + 32 (msg_id) = 64
-        if (key.size() != 64) return true;  // skip malformed
+        if (key.size() != 64) return true;
+        if (value.size() != 44) return true;
 
-        // Validate value length: 32 (sender_fp) + 8 (timestamp) + 4 (size) = 44
-        if (value.size() != 44) return true;  // skip malformed
-
-        IndexEntry e;
-
-        // Extract msg_id from key (bytes 32..63)
         auto msg_id_span = key.subspan(32, 32);
-        e.msg_id.assign(msg_id_span.begin(), msg_id_span.end());
 
-        // Extract sender_fp from value
-        e.from_hex = to_hex(value.subspan(0, 32));
-
-        // timestamp (8 bytes big-endian at offset 32)
-        e.timestamp = 0;
-        for (int i = 0; i < 8; ++i) {
-            e.timestamp = (e.timestamp << 8) | value[32 + i];
+        // Skip entries until we pass the "after" cursor
+        if (skip_until_after) {
+            if (std::equal(msg_id_span.begin(), msg_id_span.end(), after_id.begin())) {
+                skip_until_after = false;
+            }
+            return true;
         }
 
-        // size (4 bytes big-endian at offset 40)
+        if (static_cast<int>(entries.size()) >= limit) {
+            has_more = true;
+            return false;  // stop scanning
+        }
+
+        IndexEntry e;
+        e.msg_id.assign(msg_id_span.begin(), msg_id_span.end());
+        e.from_hex = to_hex(value.subspan(0, 32));
+
+        e.timestamp = 0;
+        for (int i = 0; i < 8; ++i)
+            e.timestamp = (e.timestamp << 8) | value[32 + i];
+
         e.size = (static_cast<uint32_t>(value[40]) << 24) |
                  (static_cast<uint32_t>(value[41]) << 16) |
                  (static_cast<uint32_t>(value[42]) << 8) |
                  static_cast<uint32_t>(value[43]);
 
         entries.push_back(std::move(e));
-        return true;  // continue scanning
+        return true;
     });
 
     // Now build the JSON response, fetching blobs outside the scan transaction.
@@ -680,6 +696,7 @@ void WsServer::handle_list(ws_t* ws, const Json::Value& msg) {
     resp["type"] = "LIST_RESULT";
     resp["id"] = id;
     resp["messages"] = messages;
+    resp["has_more"] = has_more;
     send_json(ws, resp);
 }
 
