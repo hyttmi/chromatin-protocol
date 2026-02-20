@@ -458,24 +458,31 @@ void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
     auto inbox_key = crypto::sha3_256_prefixed("inbox:", fingerprint);
 
     if (!kad_.is_responsible(inbox_key)) {
-        // REDIRECT — tell client which nodes are responsible.
-        // TODO: query each node's repl_log seq via worker pool for proper ordering.
-        // For now, seq is 0 (placeholder) since remote seq queries need TCP round-trips.
+        // REDIRECT — query responsible nodes for their repl_log seq,
+        // then return sorted by highest seq so client connects to most up-to-date.
         auto nodes = kad_.responsible_nodes(inbox_key);
-        Json::Value resp;
-        resp["type"] = "REDIRECT";
-        resp["id"] = id;
-        Json::Value node_list(Json::arrayValue);
-        for (const auto& node : nodes) {
-            Json::Value n;
-            n["address"] = node.address;
-            n["ws_port"] = node.ws_port;
-            n["seq"] = 0;
-            node_list.append(n);
-        }
-        resp["nodes"] = node_list;
-        send_json(ws, resp);
-        ws->close();
+        workers_.post([this, ws, id, inbox_key, nodes]() {
+            auto node_seqs = kad_.query_remote_seqs(inbox_key, nodes);
+
+            loop_->defer([this, ws, id, node_seqs = std::move(node_seqs)]() {
+                if (connections_.count(ws) == 0) return;
+
+                Json::Value resp;
+                resp["type"] = "REDIRECT";
+                resp["id"] = id;
+                Json::Value node_list(Json::arrayValue);
+                for (const auto& ns : node_seqs) {
+                    Json::Value n;
+                    n["address"] = ns.node.address;
+                    n["ws_port"] = ns.node.ws_port;
+                    n["seq"] = static_cast<Json::UInt64>(ns.seq);
+                    node_list.append(n);
+                }
+                resp["nodes"] = node_list;
+                send_json(ws, resp);
+                ws->close();
+            });
+        });
         return;
     }
 

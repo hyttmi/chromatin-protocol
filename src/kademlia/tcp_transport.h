@@ -28,7 +28,9 @@ enum class MessageType : uint8_t {
     VALUE      = 0x06,
     SYNC_REQ   = 0x07,
     SYNC_RESP  = 0x08,
-    STORE_ACK  = 0x09
+    STORE_ACK  = 0x09,
+    SEQ_REQ    = 0x0A,
+    SEQ_RESP   = 0x0B
 };
 
 struct Message {

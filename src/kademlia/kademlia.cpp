@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 #include <regex>
+#include <thread>
 
 #include <arpa/inet.h>
 
@@ -154,6 +155,12 @@ void Kademlia::handle_message(const Message& msg, const std::string& from_addr, 
         break;
     case MessageType::STORE_ACK:
         handle_store_ack(msg, from_addr, from_port);
+        break;
+    case MessageType::SEQ_REQ:
+        handle_seq_req(msg, from_addr, from_port);
+        break;
+    case MessageType::SEQ_RESP:
+        handle_seq_resp(msg, from_addr, from_port);
         break;
     default:
         spdlog::warn("Unhandled message type: 0x{:02X}", static_cast<uint8_t>(msg.type));
@@ -1465,6 +1472,108 @@ void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uin
     if (it->second.acked >= it->second.expected) {
         pending_stores_.erase(it);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SEQ_REQ / SEQ_RESP — lightweight repl_log sequence query
+// ---------------------------------------------------------------------------
+
+void Kademlia::handle_seq_req(const Message& msg, const std::string& from, uint16_t port) {
+    if (msg.payload.size() < 32) {
+        spdlog::warn("SEQ_REQ payload too short from {}:{}", from, port);
+        return;
+    }
+
+    crypto::Hash key{};
+    std::copy_n(msg.payload.data(), 32, key.begin());
+
+    uint64_t seq = repl_log_.current_seq(key);
+
+    // SEQ_RESP payload: key(32) + seq(8 BE)
+    std::vector<uint8_t> payload;
+    payload.insert(payload.end(), key.begin(), key.end());
+    for (int i = 7; i >= 0; --i)
+        payload.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+
+    Message reply = make_message(MessageType::SEQ_RESP, payload);
+    transport_.send(from, port, reply);
+}
+
+void Kademlia::handle_seq_resp(const Message& msg, const std::string& from, uint16_t port) {
+    if (msg.payload.size() < 40) {
+        spdlog::warn("SEQ_RESP payload too short from {}:{}", from, port);
+        return;
+    }
+
+    crypto::Hash key{};
+    std::copy_n(msg.payload.data(), 32, key.begin());
+
+    uint64_t seq = 0;
+    for (int i = 0; i < 8; ++i)
+        seq = (seq << 8) | msg.payload[32 + i];
+
+    std::lock_guard lock(seq_query_mutex_);
+    auto it = pending_seq_queries_.find(key);
+    if (it != pending_seq_queries_.end()) {
+        it->second.responses[msg.sender] = seq;
+    }
+}
+
+std::vector<Kademlia::NodeSeq> Kademlia::query_remote_seqs(
+    const crypto::Hash& key,
+    const std::vector<NodeInfo>& nodes,
+    std::chrono::milliseconds timeout) {
+
+    // Register pending query
+    {
+        std::lock_guard lock(seq_query_mutex_);
+        PendingSeqQuery pq;
+        pq.key = key;
+        pq.expected = nodes.size();
+        pending_seq_queries_[key] = std::move(pq);
+    }
+
+    // Send SEQ_REQ to all nodes
+    std::vector<uint8_t> payload(key.begin(), key.end());
+    for (const auto& node : nodes) {
+        Message msg = make_message(MessageType::SEQ_REQ, payload);
+        send_to_node(node, msg);
+    }
+
+    // Poll for responses with timeout
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        {
+            std::lock_guard lock(seq_query_mutex_);
+            auto it = pending_seq_queries_.find(key);
+            if (it != pending_seq_queries_.end() &&
+                it->second.responses.size() >= it->second.expected) {
+                break; // All responses received
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // Collect results
+    std::vector<NodeSeq> result;
+    {
+        std::lock_guard lock(seq_query_mutex_);
+        auto it = pending_seq_queries_.find(key);
+        if (it != pending_seq_queries_.end()) {
+            for (const auto& node : nodes) {
+                auto resp_it = it->second.responses.find(node.id);
+                uint64_t seq = (resp_it != it->second.responses.end()) ? resp_it->second : 0;
+                result.push_back({node, seq});
+            }
+            pending_seq_queries_.erase(it);
+        }
+    }
+
+    // Sort by seq descending (highest first)
+    std::sort(result.begin(), result.end(),
+              [](const NodeSeq& a, const NodeSeq& b) { return a.seq > b.seq; });
+
+    return result;
 }
 
 // ---------------------------------------------------------------------------

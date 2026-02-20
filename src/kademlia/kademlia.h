@@ -77,6 +77,15 @@ public:
     // Query replication status for a key. Returns nullopt if no pending store.
     std::optional<PendingStore> pending_store_status(const crypto::Hash& key) const;
 
+    // Query remote nodes for their repl_log seq for a given key.
+    // Sends SEQ_REQ to each node, waits up to timeout for SEQ_RESP.
+    // Returns pairs of (node, seq) sorted by seq descending.
+    struct NodeSeq { NodeInfo node; uint64_t seq; };
+    std::vector<NodeSeq> query_remote_seqs(
+        const crypto::Hash& key,
+        const std::vector<NodeInfo>& nodes,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(2000));
+
 private:
     NodeInfo self_;
     TcpTransport& transport_;
@@ -96,6 +105,15 @@ private:
     mutable std::mutex pending_mutex_;
     std::unordered_map<crypto::Hash, PendingStore, crypto::HashHash> pending_stores_;
 
+    // Pending SEQ_RESP tracking for query_remote_seqs()
+    struct PendingSeqQuery {
+        crypto::Hash key;
+        std::unordered_map<NodeId, uint64_t, NodeIdHash> responses;
+        size_t expected = 0;
+    };
+    mutable std::mutex seq_query_mutex_;
+    std::unordered_map<crypto::Hash, PendingSeqQuery, crypto::HashHash> pending_seq_queries_;
+
     // Message handlers
     void handle_ping(const Message& msg, const std::string& from, uint16_t port);
     void handle_pong(const Message& msg, const std::string& from, uint16_t port);
@@ -107,6 +125,8 @@ private:
     void handle_sync_req(const Message& msg, const std::string& from, uint16_t port);
     void handle_sync_resp(const Message& msg, const std::string& from, uint16_t port);
     void handle_store_ack(const Message& msg, const std::string& from, uint16_t port);
+    void handle_seq_req(const Message& msg, const std::string& from, uint16_t port);
+    void handle_seq_resp(const Message& msg, const std::string& from, uint16_t port);
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     void send_to_node(const NodeInfo& node, const Message& msg);
