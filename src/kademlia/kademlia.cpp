@@ -686,6 +686,19 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 }
 
 // ---------------------------------------------------------------------------
+// High-level: delete_value() — replicates a deletion via repl_log
+// ---------------------------------------------------------------------------
+
+void Kademlia::delete_value(const crypto::Hash& key, uint8_t data_type,
+                             std::span<const uint8_t> delete_info) {
+    // Record DEL in repl_log so it propagates via SYNC
+    repl_log_.append(key, replication::Op::DEL, data_type,
+                     std::vector<uint8_t>(delete_info.begin(), delete_info.end()));
+
+    spdlog::debug("delete_value: recorded DEL for data_type 0x{:02X}", data_type);
+}
+
+// ---------------------------------------------------------------------------
 // High-level: find_value()
 // ---------------------------------------------------------------------------
 
@@ -1305,8 +1318,39 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     // Apply entries to replication log (idempotent)
     repl_log_.apply(key, entries);
 
-    // For ADD entries, route to the correct storage table using data_type.
+    // Route entries to the correct storage table using data_type and op.
     for (const auto& entry : entries) {
+        if (entry.op == replication::Op::DEL) {
+            if (entry.data_type == 0x02 && entry.data.size() >= 64) {
+                // Inbox delete: delete_info = recipient_fp(32) || msg_id(32)
+                std::span<const uint8_t> recipient_fp(entry.data.data(), 32);
+                std::span<const uint8_t> msg_id(entry.data.data() + 32, 32);
+
+                std::vector<uint8_t> idx_key;
+                idx_key.reserve(64);
+                idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+                idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+                storage_.del(storage::TABLE_INBOX_INDEX, idx_key);
+
+                std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+                storage_.del(storage::TABLE_MESSAGE_BLOBS, blob_key);
+
+                spdlog::debug("SYNC: applied DEL for inbox message");
+            } else {
+                // For other types, delete by key from the appropriate table
+                const char* table_name = nullptr;
+                switch (entry.data_type) {
+                case 0x00: table_name = storage::TABLE_PROFILES;   break;
+                case 0x01: table_name = storage::TABLE_NAMES;      break;
+                case 0x03: table_name = storage::TABLE_REQUESTS;   break;
+                default: continue;
+                }
+                storage_.del(table_name, key);
+                spdlog::debug("SYNC: applied DEL for data_type 0x{:02X}", entry.data_type);
+            }
+            continue;
+        }
+
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
             if (entry.data_type == 0x02) {
                 // Inbox: two-table write

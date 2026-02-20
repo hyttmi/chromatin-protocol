@@ -1471,3 +1471,110 @@ TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
     ASSERT_TRUE(stored.has_value());
     EXPECT_EQ(*stored, profile_v2);
 }
+
+// ---------------------------------------------------------------------------
+// Test 31: SyncHandlesDelete — DEL entries propagate via sync
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, SyncHandlesDelete) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    // Bootstrap all nodes
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n3.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // Create an inbox message on n1
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash inbox_key = sha3_256_prefixed("inbox:", user_fp);
+
+    Hash msg_id{};
+    msg_id[0] = 0xBB;
+    Hash sender_fp{};
+    sender_fp[0] = 0xCC;
+    uint64_t timestamp = 1700000000;
+
+    // Build inbox value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
+    std::vector<uint8_t> inbox_val;
+    inbox_val.insert(inbox_val.end(), user_fp.begin(), user_fp.end());
+    inbox_val.insert(inbox_val.end(), msg_id.begin(), msg_id.end());
+    inbox_val.insert(inbox_val.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        inbox_val.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    uint32_t blob_len = 5;
+    inbox_val.push_back(0x00); inbox_val.push_back(0x00);
+    inbox_val.push_back(0x00); inbox_val.push_back(0x05);
+    inbox_val.push_back('H'); inbox_val.push_back('e');
+    inbox_val.push_back('l'); inbox_val.push_back('l'); inbox_val.push_back('o');
+
+    // Store on n1 directly (index + blob + repl_log)
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), user_fp.begin(), user_fp.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    std::vector<uint8_t> idx_val;
+    idx_val.insert(idx_val.end(), sender_fp.begin(), sender_fp.end());
+    for (int i = 7; i >= 0; --i)
+        idx_val.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    idx_val.push_back(0x00); idx_val.push_back(0x00);
+    idx_val.push_back(0x00); idx_val.push_back(0x05);
+    n1.storage->put(TABLE_INBOX_INDEX, idx_key, idx_val);
+    std::vector<uint8_t> blob_data = {'H', 'e', 'l', 'l', 'o'};
+    n1.storage->put(TABLE_MESSAGE_BLOBS, msg_id, blob_data);
+    n1.repl_log->append(inbox_key, Op::ADD, 0x02, inbox_val);
+
+    // Sync n2 from n1 — n2 should get the message
+    std::vector<uint8_t> sync_payload;
+    sync_payload.insert(sync_payload.end(), inbox_key.begin(), inbox_key.end());
+    for (int i = 0; i < 8; ++i) sync_payload.push_back(0x00);
+
+    Message sync_msg;
+    sync_msg.type = MessageType::SYNC_REQ;
+    sync_msg.sender = n2.info.id;
+    sync_msg.sender_port = n2.info.tcp_port;
+    sync_msg.payload = sync_payload;
+    sign_message(sync_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, sync_msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    ASSERT_TRUE(n2.storage->get(TABLE_INBOX_INDEX, idx_key).has_value())
+        << "n2 should have inbox message after sync";
+
+    // Now delete on n1 via delete_value()
+    std::vector<uint8_t> delete_info;
+    delete_info.insert(delete_info.end(), user_fp.begin(), user_fp.end());
+    delete_info.insert(delete_info.end(), msg_id.begin(), msg_id.end());
+    n1.storage->del(TABLE_INBOX_INDEX, idx_key);
+    n1.storage->del(TABLE_MESSAGE_BLOBS, msg_id);
+    n1.kad->delete_value(inbox_key, 0x02, delete_info);
+
+    // Sync n2 again — should pick up the DEL entry
+    // n2 needs to sync from after the ADD entry (seq > 1)
+    uint64_t after_seq = n2.repl_log->current_seq(inbox_key);
+    std::vector<uint8_t> sync2_payload;
+    sync2_payload.insert(sync2_payload.end(), inbox_key.begin(), inbox_key.end());
+    for (int i = 7; i >= 0; --i)
+        sync2_payload.push_back(static_cast<uint8_t>((after_seq >> (i * 8)) & 0xFF));
+
+    Message sync2_msg;
+    sync2_msg.type = MessageType::SYNC_REQ;
+    sync2_msg.sender = n2.info.id;
+    sync2_msg.sender_port = n2.info.tcp_port;
+    sync2_msg.payload = sync2_payload;
+    sign_message(sync2_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, sync2_msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    // n2 should have deleted the inbox message
+    EXPECT_FALSE(n2.storage->get(TABLE_INBOX_INDEX, idx_key).has_value())
+        << "n2 should have deleted inbox message after sync DEL";
+    EXPECT_FALSE(n2.storage->get(TABLE_MESSAGE_BLOBS, msg_id).has_value())
+        << "n2 should have deleted blob after sync DEL";
+}

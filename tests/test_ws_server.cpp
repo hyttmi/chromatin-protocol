@@ -1436,3 +1436,68 @@ TEST_F(WsServerTest, UploadAlreadyInProgressRejects) {
 
     client.close();
 }
+
+// ---------- DELETE replication test ----------
+
+TEST_F(WsServerTest, DeleteReplicates) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Pre-seed an inbox message directly in storage
+    crypto::Hash msg_id{};
+    msg_id[0] = 0xDD;
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), user_fp.begin(), user_fp.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    std::vector<uint8_t> idx_val(44, 0x01);
+    storage_->put(storage::TABLE_INBOX_INDEX, idx_key, idx_val);
+    std::vector<uint8_t> blob_data = {0xDE, 0xAD};
+    storage_->put(storage::TABLE_MESSAGE_BLOBS, msg_id, blob_data);
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send DELETE command
+    Json::Value del_msg;
+    del_msg["type"] = "DELETE";
+    del_msg["id"] = 99;
+    del_msg["msg_ids"] = Json::Value(Json::arrayValue);
+    del_msg["msg_ids"].append(to_hex(msg_id));
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, del_msg)));
+
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value()) << "no DELETE response";
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "OK");
+    EXPECT_EQ(root["id"].asInt(), 99);
+
+    // Give worker pool time to complete
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    // Verify local storage is deleted
+    EXPECT_FALSE(storage_->get(storage::TABLE_INBOX_INDEX, idx_key).has_value())
+        << "inbox index should be deleted";
+    EXPECT_FALSE(storage_->get(storage::TABLE_MESSAGE_BLOBS, msg_id).has_value())
+        << "blob should be deleted";
+
+    // Verify repl_log has a DEL entry
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    auto entries = repl_log_->entries_after(inbox_key, 0);
+    bool found_del = false;
+    for (const auto& entry : entries) {
+        if (entry.op == replication::Op::DEL && entry.data_type == 0x02) {
+            found_del = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_del) << "repl_log should have DEL entry for inbox delete";
+
+    client.close();
+}

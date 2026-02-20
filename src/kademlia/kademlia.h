@@ -41,6 +41,7 @@ public:
 
     // High-level operations
     bool store(const crypto::Hash& key, uint8_t data_type, std::span<const uint8_t> value);
+    void delete_value(const crypto::Hash& key, uint8_t data_type, std::span<const uint8_t> delete_info);
     std::optional<std::vector<uint8_t>> find_value(const crypto::Hash& key);
 
     // Responsibility

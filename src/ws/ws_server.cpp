@@ -1320,8 +1320,11 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
 
     auto fp = session->fingerprint;
 
+    // Compute inbox routing key for repl_log
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", fp);
+
     // Dispatch storage ops to worker pool
-    workers_.post([this, ws, id, fp, parsed_ids = std::move(parsed_ids)]() {
+    workers_.post([this, ws, id, fp, inbox_key, parsed_ids = std::move(parsed_ids)]() {
         for (const auto& mid_bytes : parsed_ids) {
             // Delete from TABLE_INBOX_INDEX: key = fingerprint(32) || msg_id(32)
             std::vector<uint8_t> idx_key;
@@ -1332,6 +1335,13 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
 
             // Delete from TABLE_MESSAGE_BLOBS: key = msg_id(32)
             storage_.del(storage::TABLE_MESSAGE_BLOBS, mid_bytes);
+
+            // Replicate deletion: record DEL in repl_log and Kademlia sync
+            std::vector<uint8_t> delete_info;
+            delete_info.reserve(64);
+            delete_info.insert(delete_info.end(), fp.begin(), fp.end());
+            delete_info.insert(delete_info.end(), mid_bytes.begin(), mid_bytes.end());
+            kad_.delete_value(inbox_key, 0x02, delete_info);
         }
 
         loop_->defer([this, ws, id]() {
