@@ -856,17 +856,30 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
             return;
         }
 
-        // Check allowlist: sender must be allowed to write to recipient's inbox
-        auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
-        std::vector<uint8_t> allow_check;
-        allow_check.reserve(64);
-        allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
-        allow_check.insert(allow_check.end(),
-                           session->fingerprint.begin(), session->fingerprint.end());
-        auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
-        if (!allowed) {
-            send_error(ws, id, 403, "not on allowlist");
-            return;
+        // Check allowlist: sender must be allowed to write to recipient's inbox.
+        // If no allowlist exists for the recipient, inbox is open (anyone can send).
+        // This is a best-effort local check — real enforcement is at the Kademlia
+        // STORE validation on the recipient's responsible nodes.
+        {
+            auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+            std::vector<uint8_t> allow_check;
+            allow_check.reserve(64);
+            allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
+            allow_check.insert(allow_check.end(),
+                               session->fingerprint.begin(), session->fingerprint.end());
+            auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
+            if (!allowed) {
+                // Check if any allowlist exists for this recipient
+                bool has_allowlist = false;
+                storage_.scan(storage::TABLE_ALLOWLISTS,
+                              std::vector<uint8_t>(allowlist_key.begin(), allowlist_key.end()),
+                              [&](auto, auto) { has_allowlist = true; return false; });
+                if (has_allowlist) {
+                    send_error(ws, id, 403, "not on allowlist");
+                    return;
+                }
+                // No allowlist at all = open inbox, allow the message
+            }
         }
 
         if (session->pending_upload) {
@@ -909,7 +922,8 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Check allowlist: sender must be allowed to write to recipient's inbox
+    // Check allowlist: sender must be allowed to write to recipient's inbox.
+    // If no allowlist exists for the recipient, inbox is open (anyone can send).
     {
         auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
         std::vector<uint8_t> allow_check;
@@ -919,8 +933,16 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
                            session->fingerprint.begin(), session->fingerprint.end());
         auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
         if (!allowed) {
-            send_error(ws, id, 403, "not on allowlist");
-            return;
+            // Check if any allowlist exists for this recipient
+            bool has_allowlist = false;
+            storage_.scan(storage::TABLE_ALLOWLISTS,
+                          std::vector<uint8_t>(allowlist_key.begin(), allowlist_key.end()),
+                          [&](auto, auto) { has_allowlist = true; return false; });
+            if (has_allowlist) {
+                send_error(ws, id, 403, "not on allowlist");
+                return;
+            }
+            // No allowlist at all = open inbox, allow the message
         }
     }
 
