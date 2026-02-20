@@ -23,6 +23,8 @@ struct NodeInfo {
 
 class RoutingTable {
 public:
+    static constexpr size_t MAX_NODES = 256;
+
     void add_or_update(NodeInfo info);
     void remove(const NodeId& id);
     std::optional<NodeInfo> find(const NodeId& id) const;

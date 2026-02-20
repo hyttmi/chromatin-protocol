@@ -1159,7 +1159,7 @@ size_t Kademlia::replication_factor() const {
 }
 
 std::vector<NodeInfo> Kademlia::responsible_nodes(const crypto::Hash& key) const {
-    // Collect self + all nodes, sort by XOR distance to key, take top R
+    // Collect self + all nodes, partial-sort by XOR distance to key, take top R
     std::vector<NodeInfo> all;
     all.push_back(self_);
 
@@ -1173,15 +1173,14 @@ std::vector<NodeInfo> Kademlia::responsible_nodes(const crypto::Hash& key) const
     NodeId target;
     target.id = key;
 
-    std::sort(all.begin(), all.end(), [&target](const NodeInfo& a, const NodeInfo& b) {
-        return a.id.distance_to(target) < b.id.distance_to(target);
-    });
-
     size_t r = replication_factor();
-    if (all.size() > r) {
-        all.resize(r);
-    }
+    size_t count = std::min(r, all.size());
 
+    std::partial_sort(all.begin(), all.begin() + count, all.end(),
+        [&target](const NodeInfo& a, const NodeInfo& b) {
+            return a.id.distance_to(target) < b.id.distance_to(target);
+        });
+    all.resize(count);
     return all;
 }
 

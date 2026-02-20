@@ -22,7 +22,14 @@ void RoutingTable::add_or_update(NodeInfo info) {
             return;
         }
     }
-    nodes_.push_back(std::move(info));
+    // If full, evict the node with the oldest last_seen timestamp.
+    if (nodes_.size() >= MAX_NODES) {
+        auto oldest = std::min_element(nodes_.begin(), nodes_.end(),
+            [](const auto& a, const auto& b) { return a.last_seen < b.last_seen; });
+        *oldest = std::move(info);
+    } else {
+        nodes_.push_back(std::move(info));
+    }
 }
 
 void RoutingTable::remove(const NodeId& id) {
@@ -47,20 +54,18 @@ std::vector<NodeInfo> RoutingTable::all_nodes() const {
 
 std::vector<NodeInfo> RoutingTable::closest_to(const crypto::Hash& key, size_t count) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<NodeInfo> sorted = nodes_;
+    std::vector<NodeInfo> result = nodes_;
+    count = std::min(count, result.size());
 
     NodeId target;
     target.id = key;
 
-    std::sort(sorted.begin(), sorted.end(), [&target](const NodeInfo& a, const NodeInfo& b) {
-        return a.id.distance_to(target) < b.id.distance_to(target);
-    });
-
-    if (sorted.size() > count) {
-        sorted.resize(count);
-    }
-
-    return sorted;
+    std::partial_sort(result.begin(), result.begin() + count, result.end(),
+        [&target](const auto& a, const auto& b) {
+            return a.id.distance_to(target) < b.id.distance_to(target);
+        });
+    result.resize(count);
+    return result;
 }
 
 size_t RoutingTable::size() const {
