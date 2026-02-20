@@ -57,3 +57,37 @@ TEST(WorkerPool, GracefulShutdown) {
     }
     EXPECT_EQ(completed.load(), 10);
 }
+
+TEST(WorkerPool, BackpressureTest) {
+    // Use a single worker thread to maximize queue buildup
+    WorkerPool pool(1);
+
+    // Block the single worker so all subsequent posts go to the queue
+    std::atomic<bool> release{false};
+    pool.post([&] {
+        while (!release.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+
+    // Give the worker time to pick up the blocking job
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Fill the queue up to MAX_QUEUE_SIZE
+    int accepted = 0;
+    int rejected = 0;
+    for (size_t i = 0; i < WorkerPool::MAX_QUEUE_SIZE + 100; ++i) {
+        if (pool.post([] {})) {
+            ++accepted;
+        } else {
+            ++rejected;
+        }
+    }
+
+    // We should have accepted exactly MAX_QUEUE_SIZE jobs and rejected the rest
+    EXPECT_EQ(accepted, static_cast<int>(WorkerPool::MAX_QUEUE_SIZE));
+    EXPECT_EQ(rejected, 100);
+
+    // Release the worker so the pool can drain and shut down cleanly
+    release.store(true);
+}

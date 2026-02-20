@@ -38,13 +38,20 @@ public:
     WorkerPool(WorkerPool&&) = delete;
     WorkerPool& operator=(WorkerPool&&) = delete;
 
+    static constexpr size_t MAX_QUEUE_SIZE = 1024;
+
     /// Enqueue a job for execution on a worker thread.
-    void post(std::function<void()> job) {
+    /// Returns false if the queue is full (backpressure).
+    bool post(std::function<void()> job) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (jobs_.size() >= MAX_QUEUE_SIZE) {
+                return false;  // queue full, reject
+            }
             jobs_.push(std::move(job));
         }
         cv_.notify_one();
+        return true;
     }
 
 private:

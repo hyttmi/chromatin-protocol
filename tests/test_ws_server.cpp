@@ -1550,6 +1550,38 @@ TEST_F(WsServerTest, RateLimitExceeded) {
     client.close();
 }
 
+TEST_F(WsServerTest, HelloRateLimited) {
+    start_ws_server();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    // Generate a fingerprint for HELLO
+    auto user_kp = crypto::generate_keypair();
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+    std::string fp_hex = to_hex(fingerprint);
+
+    // Rapid-fire HELLO commands to exhaust the token bucket (50 tokens, 1 per HELLO)
+    int rate_limited_count = 0;
+
+    for (int i = 0; i < 60; ++i) {
+        std::string hello = R"({"type":"HELLO","id":)" + std::to_string(2000 + i) +
+                            R"(,"fingerprint":")" + fp_hex + R"("})";
+        ASSERT_TRUE(client.send_text(hello));
+
+        auto resp = client.recv_text(2000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        if (root["code"].asInt() == 429) {
+            rate_limited_count++;
+        }
+    }
+
+    EXPECT_GT(rate_limited_count, 0) << "HELLO should be rate limited after 50+ rapid commands";
+
+    client.close();
+}
+
 // ---------- STATUS (no auth required) ----------
 
 TEST_F(WsServerTest, StatusWithoutAuth) {

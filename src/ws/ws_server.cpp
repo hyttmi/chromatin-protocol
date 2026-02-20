@@ -132,8 +132,8 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
     };
 
     static const std::unordered_map<std::string, Command> commands = {
-        {"HELLO",           {&WsServer::handle_hello,           false, 0.0}},
-        {"AUTH",            {&WsServer::handle_auth,            false, 0.0}},
+        {"HELLO",           {&WsServer::handle_hello,           false, 1.0}},
+        {"AUTH",            {&WsServer::handle_auth,            false, 1.0}},
         {"LIST",            {&WsServer::handle_list,            true,  1.0}},
         {"GET",             {&WsServer::handle_get,             true,  1.0}},
         {"SEND",            {&WsServer::handle_send,            true,  2.0}},
@@ -418,7 +418,7 @@ void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
         auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
 
         // Dispatch to worker pool for storage
-        workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
+        if (!workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
                        idx_value = std::move(idx_value),
                        blob_key = std::move(blob_key),
                        blob_data = std::move(blob_data),
@@ -444,7 +444,10 @@ void WsServer::on_binary(ws_t* ws, std::span<const uint8_t> data) {
                     send_error(ws, send_id, 500, "store failed");
                 }
             });
-        });
+        })) {
+            send_error(ws, send_id, 503, "server overloaded");
+            return;
+        }
     }
 }
 
@@ -474,7 +477,7 @@ void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
         // REDIRECT — query responsible nodes for their repl_log seq,
         // then return sorted by highest seq so client connects to most up-to-date.
         auto nodes = kad_.responsible_nodes(inbox_key);
-        workers_.post([this, ws, id, inbox_key, nodes]() {
+        if (!workers_.post([this, ws, id, inbox_key, nodes]() {
             auto node_seqs = kad_.query_remote_seqs(inbox_key, nodes);
 
             loop_->defer([this, ws, id, node_seqs = std::move(node_seqs)]() {
@@ -495,7 +498,9 @@ void WsServer::handle_hello(ws_t* ws, const Json::Value& msg) {
                 send_json(ws, resp);
                 ws->close();
             });
-        });
+        })) {
+            send_error(ws, id, 503, "server overloaded");
+        }
         return;
     }
 
@@ -958,7 +963,7 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
     auto msg_id_copy = msg_id;
 
     // Dispatch to worker pool
-    workers_.post([this, ws, id, inbox_key,
+    if (!workers_.post([this, ws, id, inbox_key,
                    index_key = std::move(index_key),
                    index_value = std::move(index_value),
                    blob_key = std::move(blob_key),
@@ -1000,7 +1005,10 @@ void WsServer::handle_send(ws_t* ws, const Json::Value& msg) {
                 send_error(ws, id, 500, "store failed");
             }
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- allowlist handlers ----------
@@ -1098,7 +1106,7 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
     entry_value.insert(entry_value.end(), sig_bytes->begin(), sig_bytes->end());
 
     // Dispatch to worker pool
-    workers_.post([this, ws, id, allowlist_key, allowed_fp,
+    if (!workers_.post([this, ws, id, allowlist_key, allowed_fp,
                    storage_key = std::move(storage_key),
                    entry_value = std::move(entry_value)]() {
         bool ok = storage_.put(storage::TABLE_ALLOWLISTS, storage_key, entry_value);
@@ -1120,7 +1128,10 @@ void WsServer::handle_allow(ws_t* ws, const Json::Value& msg) {
                 send_error(ws, id, 500, "store failed");
             }
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
@@ -1208,7 +1219,7 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
     crypto::Hash owner_fp = session->fingerprint;
 
     // Dispatch to worker pool — delete local entry, replicate revoke
-    workers_.post([this, ws, id, allowlist_key, allowed_fp, owner_fp,
+    if (!workers_.post([this, ws, id, allowlist_key, allowed_fp, owner_fp,
                    storage_key = std::move(storage_key),
                    sig_bytes = std::move(*sig_bytes),
                    sequence]() {
@@ -1237,7 +1248,10 @@ void WsServer::handle_revoke(ws_t* ws, const Json::Value& msg) {
             resp["id"] = id;
             send_json(ws, resp);
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- CONTACT_REQUEST handler ----------
@@ -1320,7 +1334,7 @@ void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     auto requests_key = crypto::sha3_256_prefixed("requests:", recipient_fp);
 
     // Dispatch to worker pool
-    workers_.post([this, ws, id, requests_key,
+    if (!workers_.post([this, ws, id, requests_key,
                    request_binary = std::move(request_binary)]() {
         kad_.store(requests_key, 0x03, request_binary);
 
@@ -1332,7 +1346,10 @@ void WsServer::handle_contact_request(ws_t* ws, const Json::Value& msg) {
             resp["id"] = id;
             send_json(ws, resp);
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- DELETE handler ----------
@@ -1363,7 +1380,7 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
     auto inbox_key = crypto::sha3_256_prefixed("inbox:", fp);
 
     // Dispatch storage ops to worker pool
-    workers_.post([this, ws, id, fp, inbox_key, parsed_ids = std::move(parsed_ids)]() {
+    if (!workers_.post([this, ws, id, fp, inbox_key, parsed_ids = std::move(parsed_ids)]() {
         for (const auto& mid_bytes : parsed_ids) {
             // Delete from TABLE_INBOX_INDEX: key = fingerprint(32) || msg_id(32)
             std::vector<uint8_t> idx_key;
@@ -1391,7 +1408,10 @@ void WsServer::handle_delete(ws_t* ws, const Json::Value& msg) {
             resp["id"] = id;
             send_json(ws, resp);
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- push notifications ----------
