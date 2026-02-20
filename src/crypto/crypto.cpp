@@ -10,6 +10,32 @@
 namespace chromatin::crypto {
 
 // ---------------------------------------------------------------------------
+// KeyPair: secure zeroing + move semantics
+// ---------------------------------------------------------------------------
+
+KeyPair::~KeyPair() {
+    if (!secret_key.empty()) {
+        OQS_MEM_cleanse(secret_key.data(), secret_key.size());
+    }
+}
+
+KeyPair::KeyPair(KeyPair&& other) noexcept
+    : public_key(std::move(other.public_key))
+    , secret_key(std::move(other.secret_key)) {}
+
+KeyPair& KeyPair::operator=(KeyPair&& other) noexcept {
+    if (this != &other) {
+        // Zero our current secret key before overwriting
+        if (!secret_key.empty()) {
+            OQS_MEM_cleanse(secret_key.data(), secret_key.size());
+        }
+        public_key = std::move(other.public_key);
+        secret_key = std::move(other.secret_key);
+    }
+    return *this;
+}
+
+// ---------------------------------------------------------------------------
 // SHA3-256
 // ---------------------------------------------------------------------------
 

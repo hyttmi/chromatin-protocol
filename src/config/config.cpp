@@ -344,6 +344,11 @@ crypto::KeyPair load_or_generate_keypair(const std::filesystem::path& data_dir) 
     ofs.write(reinterpret_cast<const char*>(kp.public_key.data()), kp.public_key.size());
     ofs.write(reinterpret_cast<const char*>(kp.secret_key.data()), kp.secret_key.size());
 
+    // Restrict file permissions to owner-only (0600)
+    std::filesystem::permissions(key_path,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
+
     spdlog::info("generated new keypair at {}", key_path.string());
     return kp;
 }

@@ -106,7 +106,7 @@ private:
     RoutingTable& table_;
     storage::Storage& storage_;
     replication::ReplLog& repl_log_;
-    crypto::KeyPair keypair_;
+    const crypto::KeyPair& keypair_;
     int name_pow_difficulty_ = 28;
     int contact_pow_difficulty_ = 16;
     StoreCallback on_store_;

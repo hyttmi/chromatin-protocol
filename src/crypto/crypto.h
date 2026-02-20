@@ -34,6 +34,15 @@ inline constexpr size_t SIGNATURE_SIZE = 4627;
 struct KeyPair {
     std::vector<uint8_t> public_key;
     std::vector<uint8_t> secret_key;
+
+    KeyPair() = default;
+    ~KeyPair();
+
+    // Move-only: prevent accidental copies of secret key material
+    KeyPair(KeyPair&& other) noexcept;
+    KeyPair& operator=(KeyPair&& other) noexcept;
+    KeyPair(const KeyPair&) = delete;
+    KeyPair& operator=(const KeyPair&) = delete;
 };
 
 KeyPair generate_keypair();
