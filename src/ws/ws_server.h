@@ -132,6 +132,8 @@ private:
     void handle_resolve_name(ws_t* ws, const Json::Value& msg);
     void handle_get_profile(ws_t* ws, const Json::Value& msg);
     void handle_list_requests(ws_t* ws, const Json::Value& msg);
+    void handle_set_profile(ws_t* ws, const Json::Value& msg);
+    void handle_register_name(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);

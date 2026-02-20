@@ -160,6 +160,8 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"RESOLVE_NAME",   {&WsServer::handle_resolve_name,   true,  1.0}},
         {"GET_PROFILE",    {&WsServer::handle_get_profile,    true,  1.0}},
         {"LIST_REQUESTS",  {&WsServer::handle_list_requests,  true,  1.0}},
+        {"SET_PROFILE",    {&WsServer::handle_set_profile,    true,  2.0}},
+        {"REGISTER_NAME",  {&WsServer::handle_register_name,  true,  3.0}},
     };
 
     auto it = commands.find(type);
@@ -1813,6 +1815,129 @@ void WsServer<SSL>::handle_list_requests(ws_t* ws, const Json::Value& msg) {
 
     resp["requests"] = requests;
     send_json(ws, resp);
+}
+
+// ---------- SET_PROFILE handler ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    std::string profile_b64 = msg.get("profile", "").asString();
+    if (profile_b64.empty()) {
+        send_error(ws, id, 400, "missing profile");
+        return;
+    }
+    auto profile_data = from_base64(profile_b64);
+    if (!profile_data) {
+        send_error(ws, id, 400, "invalid base64 in profile");
+        return;
+    }
+    if (profile_data->size() > cfg_.max_profile_size) {
+        send_error(ws, id, 400, "profile exceeds max size");
+        return;
+    }
+
+    // Verify the profile's fingerprint matches the authenticated session
+    if (profile_data->size() < 32) {
+        send_error(ws, id, 400, "profile too short");
+        return;
+    }
+    crypto::Hash profile_fp{};
+    std::copy_n(profile_data->data(), 32, profile_fp.begin());
+    if (profile_fp != session->fingerprint) {
+        send_error(ws, id, 403, "profile fingerprint does not match authenticated identity");
+        return;
+    }
+
+    // Compute storage key: SHA3-256("profile:" || fingerprint)
+    auto profile_key = crypto::sha3_256_prefixed("profile:", session->fingerprint);
+
+    // Dispatch to worker: validate + store + replicate via Kademlia
+    auto value = std::make_shared<std::vector<uint8_t>>(std::move(*profile_data));
+    auto key = profile_key;
+    auto ws_ptr = ws;
+
+    workers_.post([this, ws_ptr, id, key, value]() {
+        bool ok = kad_.store(key, 0x00, *value);
+
+        loop_->defer([this, ws_ptr, id, ok]() {
+            if (connections_.count(ws_ptr) == 0) return;
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "SET_PROFILE_ACK";
+                resp["id"] = id;
+                send_json(ws_ptr, resp);
+            } else {
+                send_error(ws_ptr, id, 500, "failed to store profile");
+            }
+        });
+    });
+}
+
+// ---------- REGISTER_NAME handler ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    std::string record_b64 = msg.get("name_record", "").asString();
+    if (record_b64.empty()) {
+        send_error(ws, id, 400, "missing name_record");
+        return;
+    }
+    auto record_data = from_base64(record_b64);
+    if (!record_data) {
+        send_error(ws, id, 400, "invalid base64 in name_record");
+        return;
+    }
+
+    // Parse name_len and name from the record to compute the storage key
+    if (record_data->empty()) {
+        send_error(ws, id, 400, "name_record too short");
+        return;
+    }
+    uint8_t name_len = (*record_data)[0];
+    if (1 + name_len + 32 > record_data->size()) {
+        send_error(ws, id, 400, "name_record too short for name + fingerprint");
+        return;
+    }
+    std::string name(reinterpret_cast<const char*>(record_data->data() + 1), name_len);
+
+    // Verify the name record's fingerprint matches the authenticated session
+    crypto::Hash record_fp{};
+    std::copy_n(record_data->data() + 1 + name_len, 32, record_fp.begin());
+    if (record_fp != session->fingerprint) {
+        send_error(ws, id, 403, "name record fingerprint does not match authenticated identity");
+        return;
+    }
+
+    // Compute storage key: SHA3-256("name:" || name)
+    std::vector<uint8_t> name_bytes(name.begin(), name.end());
+    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+
+    // Dispatch to worker: validate + store + replicate via Kademlia
+    auto value = std::make_shared<std::vector<uint8_t>>(std::move(*record_data));
+    auto key = name_key;
+    auto ws_ptr = ws;
+
+    workers_.post([this, ws_ptr, id, key, value]() {
+        bool ok = kad_.store(key, 0x01, *value);
+
+        loop_->defer([this, ws_ptr, id, ok]() {
+            if (connections_.count(ws_ptr) == 0) return;
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "REGISTER_NAME_ACK";
+                resp["id"] = id;
+                send_json(ws_ptr, resp);
+            } else {
+                send_error(ws_ptr, id, 500, "failed to register name");
+            }
+        });
+    });
 }
 
 // ---------- upload timeout ----------

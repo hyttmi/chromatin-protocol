@@ -1962,3 +1962,125 @@ TEST_F(WsServerTest, ListRequestsWithData) {
 
     client.close();
 }
+
+TEST_F(WsServerTest, SetProfileStoresValidProfile) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    // Build a valid signed profile binary:
+    // fingerprint(32) || pubkey_len(2 BE) || pubkey || kem_pubkey_len(2 BE=0)
+    // || bio_len(2 BE) || bio || avatar_len(4 BE=0) || social_count(1=0)
+    // || sequence(8 BE) || sig_len(2 BE) || signature
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>(pk_len >> 8));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    // bio = "test bio"
+    std::string bio = "test bio";
+    uint16_t bio_len = static_cast<uint16_t>(bio.size());
+    profile.push_back(static_cast<uint8_t>(bio_len >> 8));
+    profile.push_back(static_cast<uint8_t>(bio_len & 0xFF));
+    profile.insert(profile.end(), bio.begin(), bio.end());
+    // avatar_len = 0
+    for (int i = 0; i < 4; ++i) profile.push_back(0x00);
+    // social_count = 0
+    profile.push_back(0x00);
+    // sequence = 1
+    for (int i = 0; i < 7; ++i) profile.push_back(0x00);
+    profile.push_back(0x01);
+
+    // Sign everything up to this point
+    auto signature = crypto::sign(profile, user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    profile.push_back(static_cast<uint8_t>(sig_len >> 8));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), signature.begin(), signature.end());
+
+    // Connect and authenticate
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Send SET_PROFILE
+    std::string msg = R"({"type":"SET_PROFILE","id":200,"profile":")" +
+                      to_base64(profile) + R"("})";
+    client.send_text(msg);
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value()) << "no response to SET_PROFILE";
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "SET_PROFILE_ACK");
+    EXPECT_EQ(root["id"].asInt(), 200);
+
+    // Verify stored
+    auto profile_key = crypto::sha3_256_prefixed("profile:", user_fp);
+    auto stored = storage_->get(storage::TABLE_PROFILES,
+        std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
+    EXPECT_TRUE(stored.has_value()) << "profile should be stored";
+
+    client.close();
+}
+
+TEST_F(WsServerTest, SetProfileRejectsMismatchedFingerprint) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto other_kp = crypto::generate_keypair();
+    auto other_fp = crypto::sha3_256(other_kp.public_key);
+
+    // Build a profile with other_fp (not the authenticated user's)
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), other_fp.begin(), other_fp.end());
+    profile.resize(53, 0x00);  // minimal padding
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    std::string msg = R"({"type":"SET_PROFILE","id":201,"profile":")" +
+                      to_base64(profile) + R"("})";
+    client.send_text(msg);
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["code"].asInt(), 403);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, RegisterNameRejectsMismatchedFingerprint) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto other_kp = crypto::generate_keypair();
+    auto other_fp = crypto::sha3_256(other_kp.public_key);
+
+    // Build a name record with other_fp
+    std::string name = "alice";
+    std::vector<uint8_t> record;
+    record.push_back(static_cast<uint8_t>(name.size()));
+    record.insert(record.end(), name.begin(), name.end());
+    record.insert(record.end(), other_fp.begin(), other_fp.end());
+    record.resize(record.size() + 20, 0x00);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    std::string msg = R"({"type":"REGISTER_NAME","id":202,"name_record":")" +
+                      to_base64(record) + R"("})";
+    client.send_text(msg);
+    auto resp = client.recv_text(5000);
+    ASSERT_TRUE(resp.has_value());
+    auto root = parse_json(*resp);
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["code"].asInt(), 403);
+
+    client.close();
+}
