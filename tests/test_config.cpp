@@ -95,6 +95,36 @@ TEST_F(ConfigTest, InvalidBootstrapEndpointThrows) {
     EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
 }
 
+TEST_F(ConfigTest, SamePortsThrows) {
+    auto path = tmp_dir_ / "config.json";
+    write_file(path, R"({"tcp_port": 5000, "ws_port": 5000})");
+    EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
+}
+
+TEST_F(ConfigTest, ZeroTcpPortThrows) {
+    auto path = tmp_dir_ / "config.json";
+    write_file(path, R"({"tcp_port": 0})");
+    EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
+}
+
+TEST_F(ConfigTest, ZeroWsPortThrows) {
+    auto path = tmp_dir_ / "config.json";
+    write_file(path, R"({"ws_port": 0})");
+    EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
+}
+
+TEST_F(ConfigTest, EmptyBindThrows) {
+    auto path = tmp_dir_ / "config.json";
+    write_file(path, R"({"bind": ""})");
+    EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
+}
+
+TEST_F(ConfigTest, EmptyDataDirThrows) {
+    auto path = tmp_dir_ / "config.json";
+    write_file(path, R"({"data_dir": ""})");
+    EXPECT_THROW(chromatin::config::load_config(path), std::runtime_error);
+}
+
 TEST_F(ConfigTest, KeypairRoundTrip) {
     auto kp1 = chromatin::config::load_or_generate_keypair(tmp_dir_);
     ASSERT_TRUE(fs::exists(tmp_dir_ / "node.key"));

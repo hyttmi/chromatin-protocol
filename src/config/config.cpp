@@ -60,7 +60,29 @@ Config load_config(const std::filesystem::path& path) {
         }
     }
 
+    validate_config(cfg);
     return cfg;
+}
+
+void validate_config(const Config& cfg) {
+    struct Rule {
+        bool (*failed)(const Config&);
+        const char* message;
+    };
+
+    static constexpr Rule rules[] = {
+        {[](const Config& c) { return c.tcp_port == 0;            }, "invalid tcp_port: must be 1-65535"},
+        {[](const Config& c) { return c.ws_port == 0;             }, "invalid ws_port: must be 1-65535"},
+        {[](const Config& c) { return c.tcp_port == c.ws_port;    }, "tcp_port and ws_port must be different"},
+        {[](const Config& c) { return c.bind.empty();             }, "bind address must not be empty"},
+        {[](const Config& c) { return c.data_dir.empty();         }, "data_dir must not be empty"},
+    };
+
+    for (const auto& rule : rules) {
+        if (rule.failed(cfg)) {
+            throw std::runtime_error(rule.message);
+        }
+    }
 }
 
 void generate_default_config(const std::filesystem::path& path) {

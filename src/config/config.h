@@ -17,9 +17,12 @@ struct Config {
     std::vector<std::pair<std::string, uint16_t>> bootstrap;
 };
 
-// Load config from JSON file. Throws std::runtime_error on parse failure.
-// Missing fields use defaults.
+// Load config from JSON file. Throws std::runtime_error on parse failure
+// or invalid values. Missing fields use defaults.
 Config load_config(const std::filesystem::path& path);
+
+// Validate config values. Throws std::runtime_error on invalid values.
+void validate_config(const Config& cfg);
 
 // Write a template config file with sensible defaults.
 void generate_default_config(const std::filesystem::path& path);
