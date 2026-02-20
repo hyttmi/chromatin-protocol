@@ -4,9 +4,11 @@
 #include "kademlia/node_id.h"
 #include "kademlia/tcp_transport.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -221,6 +223,129 @@ TEST(TcpTransport, SendRecvLoopback) {
     EXPECT_EQ(received_msg.signature, (std::vector<uint8_t>{0xAA, 0xBB}));
     EXPECT_EQ(received_addr, "127.0.0.1");
     EXPECT_EQ(received_port, port);
+}
+
+// ---------------------------------------------------------------------------
+// Connection pooling: multiple messages reuse the same connection
+// ---------------------------------------------------------------------------
+
+TEST(TcpTransport, ConnectionPooling) {
+    // Use two separate transports: sender and receiver
+    TcpTransport receiver("127.0.0.1", 0);
+    TcpTransport sender("127.0.0.1", 0);
+    uint16_t recv_port = receiver.local_port();
+    ASSERT_GT(recv_port, 0);
+
+    constexpr int NUM_MESSAGES = 5;
+    std::atomic<int> recv_count{0};
+    std::vector<Message> received_msgs;
+    std::mutex recv_mutex;
+
+    // Start receiver in a thread — it will read multiple messages per connection
+    std::thread recv_thread([&]() {
+        receiver.run([&](const Message& msg, const std::string& /*from_addr*/,
+                         uint16_t /*from_port*/) {
+            {
+                std::lock_guard lock(recv_mutex);
+                received_msgs.push_back(msg);
+            }
+            if (recv_count.fetch_add(1) + 1 >= NUM_MESSAGES) {
+                receiver.stop();
+            }
+        });
+    });
+
+    // Give the accept loop time to start
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Send multiple messages from sender to receiver
+    NodeId node_id;
+    node_id.id.fill(0x55);
+
+    for (int i = 0; i < NUM_MESSAGES; ++i) {
+        Message msg;
+        msg.type = MessageType::PING;
+        msg.sender = node_id;
+        msg.sender_port = sender.local_port();
+        msg.payload = {static_cast<uint8_t>(i)};
+        msg.signature = {0xCC};
+        sender.send("127.0.0.1", recv_port, msg);
+        // Small delay to ensure ordering
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Wait for recv thread (with timeout safety)
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (recv_count.load() < NUM_MESSAGES &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    receiver.stop();
+    if (recv_thread.joinable()) {
+        recv_thread.join();
+    }
+
+    ASSERT_EQ(recv_count.load(), NUM_MESSAGES)
+        << "Expected " << NUM_MESSAGES << " messages but received " << recv_count.load();
+
+    // Verify each message payload
+    std::lock_guard lock(recv_mutex);
+    for (int i = 0; i < NUM_MESSAGES; ++i) {
+        EXPECT_EQ(received_msgs[i].payload, (std::vector<uint8_t>{static_cast<uint8_t>(i)}))
+            << "Payload mismatch for message " << i;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup idle connections closes stale pooled fds
+// ---------------------------------------------------------------------------
+
+TEST(TcpTransport, CleanupIdleConnections) {
+    // Verify that cleanup_idle_connections() can be called without crashing,
+    // and that the public API is accessible.
+    TcpTransport transport("127.0.0.1", 0);
+
+    // Should be a no-op when pool is empty
+    transport.cleanup_idle_connections();
+
+    // Send a message to populate the pool, then cleanup
+    TcpTransport receiver("127.0.0.1", 0);
+    uint16_t recv_port = receiver.local_port();
+    std::atomic<bool> got_msg{false};
+
+    std::thread recv_thread([&]() {
+        receiver.run([&](const Message& /*msg*/, const std::string& /*addr*/,
+                         uint16_t /*port*/) {
+            got_msg.store(true);
+            receiver.stop();
+        });
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    NodeId node_id;
+    node_id.id.fill(0x66);
+    Message msg;
+    msg.type = MessageType::PONG;
+    msg.sender = node_id;
+    msg.sender_port = transport.local_port();
+    msg.payload = {};
+    msg.signature = {};
+    transport.send("127.0.0.1", recv_port, msg);
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!got_msg.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    receiver.stop();
+    if (recv_thread.joinable()) {
+        recv_thread.join();
+    }
+
+    ASSERT_TRUE(got_msg.load());
+
+    // Now there should be a pooled connection; cleanup should not crash
+    transport.cleanup_idle_connections();
 }
 
 // ---------------------------------------------------------------------------

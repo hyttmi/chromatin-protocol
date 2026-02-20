@@ -135,6 +135,9 @@ void Kademlia::tick() {
         last_compact_ = now;
         compact_repl_log();
     }
+
+    // 7. Cleanup idle pooled TCP connections
+    transport_.cleanup_idle_connections();
 }
 
 // ---------------------------------------------------------------------------

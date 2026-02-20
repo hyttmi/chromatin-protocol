@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "kademlia/node_id.h"
@@ -63,7 +66,7 @@ void sign_message(Message& msg, std::span<const uint8_t> secret_key);
 bool verify_message(const Message& msg, std::span<const uint8_t> public_key);
 
 // TCP transport for node-to-node communication.
-// Listens for incoming connections (run), sends via short-lived connections (send).
+// Reuses connections via an internal pool to avoid per-message TCP handshakes.
 class TcpTransport {
 public:
     TcpTransport(const std::string& bind_addr, uint16_t port);
@@ -73,14 +76,14 @@ public:
     TcpTransport(const TcpTransport&) = delete;
     TcpTransport& operator=(const TcpTransport&) = delete;
 
-    // Send a serialized message to a remote address via a new TCP connection.
+    // Send a serialized message to a remote address, reusing pooled connections.
     void send(const std::string& addr, uint16_t port, const Message& msg);
 
     // Handler callback: called for each received message with sender address info.
     using Handler = std::function<void(const Message& msg, const std::string& from_addr, uint16_t from_port)>;
 
     // Blocking accept loop using select() with 100ms timeout.
-    // Accepts connections, reads one framed message per connection, calls handler.
+    // Accepts connections, reads multiple framed messages per connection.
     void run(Handler handler);
 
     // Signal the accept loop to stop.
@@ -89,10 +92,26 @@ public:
     // Return the local port (useful when bound to port 0 for ephemeral port).
     uint16_t local_port() const;
 
+    // Close pooled connections that have been idle longer than CONN_MAX_IDLE.
+    // Safe to call periodically (e.g. from Kademlia::tick()).
+    void cleanup_idle_connections();
+
+    // Connection pool tuning constants
+    static constexpr auto CONN_MAX_IDLE = std::chrono::seconds(60);
+    static constexpr size_t MAX_POOL_SIZE = 64;
+
 private:
     int listen_fd_ = -1;
     uint16_t port_;
     std::atomic<bool> running_{false};
+
+    // Connection pool: keyed by "addr:port"
+    struct PooledConnection {
+        int fd = -1;
+        std::chrono::steady_clock::time_point last_used;
+    };
+    std::unordered_map<std::string, PooledConnection> conn_pool_;
+    std::mutex pool_mutex_;
 };
 
 } // namespace chromatin::kademlia

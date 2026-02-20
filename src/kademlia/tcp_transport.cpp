@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -266,15 +267,60 @@ TcpTransport::~TcpTransport() {
         close(listen_fd_);
         listen_fd_ = -1;
     }
+    // Close all pooled connections
+    std::lock_guard lock(pool_mutex_);
+    for (auto& [key, conn] : conn_pool_) {
+        close(conn.fd);
+    }
+    conn_pool_.clear();
 }
 
-void TcpTransport::send(const std::string& addr, uint16_t port, const Message& msg) {
-    auto data = serialize_message(msg);
+void TcpTransport::cleanup_idle_connections() {
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard lock(pool_mutex_);
+    for (auto it = conn_pool_.begin(); it != conn_pool_.end(); ) {
+        if (now - it->second.last_used > CONN_MAX_IDLE) {
+            close(it->second.fd);
+            it = conn_pool_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
+// Check if a socket is still connected (no pending RST/FIN).
+// Uses non-blocking recv with MSG_PEEK to detect if the remote end closed.
+static bool is_connection_alive(int fd) {
+    // First check for POLLERR/POLLHUP via poll
+    struct pollfd pfd{};
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    int ret = poll(&pfd, 1, 0);
+    if (ret < 0) return false;
+    if (ret == 0) return true;  // no events pending, connection is idle
+
+    // poll says there's something to read — peek to see if it's EOF
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return false;
+    if (pfd.revents & POLLIN) {
+        // There's data or EOF. Peek to distinguish.
+        char buf;
+        ssize_t r = recv(fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (r == 0) return false;   // EOF — remote closed
+        if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return false;
+        // r > 0 means unexpected data on the connection (shouldn't happen
+        // for our protocol where the server never sends on the same connection)
+        // or r < 0 with EAGAIN means no data available (spurious wakeup).
+        // In either case, treat as alive.
+    }
+    return true;
+}
+
+// Helper: create a new TCP connection to addr:port. Returns fd or -1 on failure.
+static int create_connection(const std::string& addr, uint16_t port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         spdlog::error("send socket() failed: {}", strerror(errno));
-        return;
+        return -1;
     }
 
     // Disable Nagle's algorithm for low latency
@@ -293,44 +339,122 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
     if (inet_pton(AF_INET, addr.c_str(), &dest.sin_addr) != 1) {
         close(sockfd);
         spdlog::error("Invalid destination address: {}", addr);
-        return;
+        return -1;
     }
 
     if (connect(sockfd, reinterpret_cast<struct sockaddr*>(&dest), sizeof(dest)) < 0) {
         close(sockfd);
         spdlog::warn("TCP connect to {}:{} failed: {}", addr, port, strerror(errno));
-        return;
+        return -1;
     }
 
-    // Send all data
+    return sockfd;
+}
+
+// Helper: try to send all data on fd. Returns true on success.
+static bool send_all(int fd, const std::vector<uint8_t>& data) {
     size_t total_sent = 0;
     while (total_sent < data.size()) {
-        ssize_t sent = ::send(sockfd, data.data() + total_sent, data.size() - total_sent, MSG_NOSIGNAL);
+        ssize_t sent = ::send(fd, data.data() + total_sent, data.size() - total_sent, MSG_NOSIGNAL);
         if (sent <= 0) {
-            close(sockfd);
-            spdlog::error("TCP send to {}:{} failed: {}", addr, port, strerror(errno));
-            return;
+            return false;
         }
         total_sent += static_cast<size_t>(sent);
     }
+    return true;
+}
 
-    close(sockfd);
+void TcpTransport::send(const std::string& addr, uint16_t port, const Message& msg) {
+    auto data = serialize_message(msg);
+    auto pool_key = addr + ":" + std::to_string(port);
+    int fd = -1;
+    bool from_pool = false;
+
+    // Try to get a pooled connection
+    {
+        std::lock_guard lock(pool_mutex_);
+        auto it = conn_pool_.find(pool_key);
+        if (it != conn_pool_.end()) {
+            fd = it->second.fd;
+            conn_pool_.erase(it);  // take ownership
+            from_pool = true;
+        }
+    }
+
+    // Verify pooled connection is still alive (remote may have closed it)
+    if (from_pool && !is_connection_alive(fd)) {
+        spdlog::debug("Pooled connection to {} is dead (fd={}), creating new", pool_key, fd);
+        close(fd);
+        fd = -1;
+        from_pool = false;
+    }
+
+    if (from_pool) {
+        spdlog::debug("Reusing pooled connection to {} (fd={})", pool_key, fd);
+    }
+
+    // If no pooled connection, create a new one
+    if (fd < 0) {
+        fd = create_connection(addr, port);
+        if (fd < 0) return;
+        spdlog::debug("Created new connection to {} (fd={})", pool_key, fd);
+    }
+
+    // Try to send
+    bool send_ok = send_all(fd, data);
+
+    // If send failed on a pooled connection, the remote side may have closed it.
+    // Retry with a fresh connection.
+    if (!send_ok && from_pool) {
+        spdlog::debug("Send on pooled fd={} failed, retrying with new connection", fd);
+        close(fd);
+        fd = create_connection(addr, port);
+        if (fd < 0) return;
+        send_ok = send_all(fd, data);
+    }
+
+    if (send_ok) {
+        // Return connection to pool
+        std::lock_guard lock(pool_mutex_);
+        if (conn_pool_.size() < MAX_POOL_SIZE) {
+            conn_pool_[pool_key] = {fd, std::chrono::steady_clock::now()};
+            spdlog::debug("Returned fd={} to pool for {}", fd, pool_key);
+        } else {
+            close(fd);
+        }
+    } else {
+        close(fd);
+        spdlog::error("TCP send to {}:{} failed: {}", addr, port, strerror(errno));
+    }
 }
 
 void TcpTransport::run(Handler handler) {
     running_.store(true);
 
+    // Track accepted client connections alongside the listen socket.
+    struct ClientConn {
+        int fd;
+        struct sockaddr_in addr;
+    };
+    std::vector<ClientConn> clients;
+
     while (running_.load()) {
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(listen_fd_, &readfds);
+        int max_fd = listen_fd_;
+
+        for (const auto& c : clients) {
+            FD_SET(c.fd, &readfds);
+            if (c.fd > max_fd) max_fd = c.fd;
+        }
 
         // 100ms timeout so stop() can break the loop
         struct timeval tv{};
         tv.tv_sec = 0;
         tv.tv_usec = 100000;
 
-        int ret = select(listen_fd_ + 1, &readfds, nullptr, nullptr, &tv);
+        int ret = select(max_fd + 1, &readfds, nullptr, nullptr, &tv);
         if (ret < 0) {
             if (errno == EINTR) {
                 continue;
@@ -344,36 +468,50 @@ void TcpTransport::run(Handler handler) {
             continue;
         }
 
-        // Accept incoming connection
-        struct sockaddr_in client_addr{};
-        socklen_t client_len = sizeof(client_addr);
-        int client_fd = accept(listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
-        if (client_fd < 0) {
-            if (errno != EINTR) {
+        // Accept new incoming connections
+        if (FD_ISSET(listen_fd_, &readfds)) {
+            struct sockaddr_in client_addr{};
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd = accept(listen_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
+            if (client_fd >= 0) {
+                // Set read timeout on accepted connection (5 seconds)
+                struct timeval read_tv{};
+                read_tv.tv_sec = 5;
+                setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_tv, sizeof(read_tv));
+
+                clients.push_back({client_fd, client_addr});
+            } else if (errno != EINTR) {
                 spdlog::warn("accept() failed: {}", strerror(errno));
             }
-            continue;
         }
 
-        // Set read timeout on accepted connection (5 seconds)
-        struct timeval read_tv{};
-        read_tv.tv_sec = 5;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_tv, sizeof(read_tv));
+        // Read from all ready client connections
+        for (auto it = clients.begin(); it != clients.end(); ) {
+            if (!FD_ISSET(it->fd, &readfds)) {
+                ++it;
+                continue;
+            }
 
-        // Read one framed message
-        auto msg = read_framed_message(client_fd);
-        close(client_fd);
+            auto msg = read_framed_message(it->fd);
+            if (!msg) {
+                // Connection closed or error — remove this client
+                close(it->fd);
+                it = clients.erase(it);
+                continue;
+            }
 
-        if (!msg) {
-            spdlog::warn("Failed to read TCP message from peer");
-            continue;
+            // from_addr = peer's IP, from_port = sender's listening port (from header)
+            char addr_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &it->addr.sin_addr, addr_str, sizeof(addr_str));
+
+            handler(*msg, std::string(addr_str), msg->sender_port);
+            ++it;
         }
+    }
 
-        // from_addr = peer's IP, from_port = sender's listening port (from header)
-        char addr_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, addr_str, sizeof(addr_str));
-
-        handler(*msg, std::string(addr_str), msg->sender_port);
+    // Clean up any remaining client connections on shutdown
+    for (auto& c : clients) {
+        close(c.fd);
     }
 }
 
