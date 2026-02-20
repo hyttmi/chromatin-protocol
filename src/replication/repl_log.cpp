@@ -1,6 +1,5 @@
 #include "replication/repl_log.h"
 
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -139,22 +138,10 @@ uint64_t ReplLog::append(const crypto::Hash& key, Op op, uint8_t data_type, std:
 
 std::vector<LogEntry> ReplLog::entries_after(const crypto::Hash& key, uint64_t after_seq) const {
     std::vector<LogEntry> result;
+    std::vector<uint8_t> prefix(key.begin(), key.end());
 
-    // Use foreach to iterate the repl_log table. Since keys are
-    // [32 bytes hash][8 bytes BE seq], entries for the same data_key
-    // are contiguous and sorted by seq in lexicographic order.
-    storage_.foreach(storage::TABLE_REPL_LOG, [&](std::span<const uint8_t> k, std::span<const uint8_t> v) -> bool {
-        // Check key prefix (32 bytes)
+    storage_.scan(storage::TABLE_REPL_LOG, prefix, [&](std::span<const uint8_t> k, std::span<const uint8_t> v) -> bool {
         if (k.size() < 40) return true; // skip malformed entries
-
-        bool prefix_match = std::equal(key.begin(), key.end(), k.begin());
-        if (!prefix_match) {
-            // If we've already seen matching entries, we're past the range (contiguous)
-            if (!result.empty()) {
-                return false; // stop iterating
-            }
-            return true; // keep looking
-        }
 
         // Extract seq from composite key (bytes 32..39, BE)
         uint64_t entry_seq = 0;
@@ -170,7 +157,7 @@ std::vector<LogEntry> ReplLog::entries_after(const crypto::Hash& key, uint64_t a
             }
         }
 
-        return true; // continue iterating within the same prefix
+        return true; // continue scanning within prefix
     });
 
     return result;
@@ -196,18 +183,10 @@ void ReplLog::apply(const crypto::Hash& key, const std::vector<LogEntry>& entrie
 
 uint64_t ReplLog::current_seq(const crypto::Hash& key) const {
     uint64_t max_seq = 0;
+    std::vector<uint8_t> prefix(key.begin(), key.end());
 
-    storage_.foreach(storage::TABLE_REPL_LOG, [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
+    storage_.scan(storage::TABLE_REPL_LOG, prefix, [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
         if (k.size() < 40) return true;
-
-        bool prefix_match = std::equal(key.begin(), key.end(), k.begin());
-        if (!prefix_match) {
-            // Past the contiguous range for this key
-            if (max_seq > 0) {
-                return false; // stop
-            }
-            return true;
-        }
 
         // Extract seq from composite key (bytes 32..39, BE)
         uint64_t entry_seq = 0;
@@ -228,17 +207,10 @@ uint64_t ReplLog::current_seq(const crypto::Hash& key) const {
 void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq) {
     // Collect keys to delete first, then delete them
     std::vector<std::vector<uint8_t>> to_delete;
+    std::vector<uint8_t> prefix(key.begin(), key.end());
 
-    storage_.foreach(storage::TABLE_REPL_LOG, [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
+    storage_.scan(storage::TABLE_REPL_LOG, prefix, [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
         if (k.size() < 40) return true;
-
-        bool prefix_match = std::equal(key.begin(), key.end(), k.begin());
-        if (!prefix_match) {
-            if (!to_delete.empty()) {
-                return false; // stop, past the range
-            }
-            return true;
-        }
 
         // Extract seq from composite key
         uint64_t entry_seq = 0;
