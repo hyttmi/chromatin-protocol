@@ -28,6 +28,15 @@ struct PendingStore {
     std::chrono::steady_clock::time_point created;
 };
 
+// Data types stored in the DHT (matches PROTOCOL-SPEC.md wire format).
+enum class DataType : uint8_t {
+    PROFILE         = 0x00,
+    NAME            = 0x01,
+    INBOX           = 0x02,
+    CONTACT_REQUEST = 0x03,
+    ALLOWLIST       = 0x04,
+};
+
 class Kademlia {
 public:
     Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& transport,
@@ -160,6 +169,14 @@ private:
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     void send_to_node(const NodeInfo& node, const Message& msg);
+
+    // Unified local storage: validates, dispatches to the correct table(s),
+    // optionally appends to repl_log and fires on_store_ callback.
+    // When log_and_notify is false (used by SYNC), repl_log append and
+    // on_store_ callback are skipped (SYNC handles repl_log via apply()).
+    bool store_locally(const crypto::Hash& key, uint8_t data_type,
+                       std::span<const uint8_t> value,
+                       bool validate = true, bool log_and_notify = true);
 
     // Data type validators (PROTOCOL-SPEC.md)
     bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key);

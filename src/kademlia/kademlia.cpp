@@ -731,71 +731,37 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
 }
 
 // ---------------------------------------------------------------------------
-// STORE (section 2 of PROTOCOL-SPEC.md)
+// Unified local storage helper — validates, dispatches to correct table(s),
+// appends to repl_log, and fires the on_store_ callback.
 // ---------------------------------------------------------------------------
 
-void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_t port) {
-    const auto& data = msg.payload;
-    // Minimum: 32 (key) + 1 (data_type) + 4 (value_length) = 37 bytes
-    if (data.size() < 37) {
-        spdlog::warn("STORE payload too short from {}:{}", from, port);
-        return;
+bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
+                             std::span<const uint8_t> value,
+                             bool validate, bool log_and_notify) {
+    // 1. Data-type-specific validation
+    if (validate) {
+        bool valid = true;
+        switch (data_type) {
+        case 0x00: valid = validate_profile(value, key);     break;
+        case 0x01: valid = validate_name_record(value, key); break;
+        case 0x02: valid = validate_inbox_message(value);    break;
+        case 0x03: valid = validate_contact_request(value);  break;
+        case 0x04: valid = validate_allowlist_entry(value);  break;
+        default: break;
+        }
+        if (!valid) {
+            spdlog::warn("store_locally: validation failed for data_type 0x{:02X}", data_type);
+            return false;
+        }
     }
 
-    size_t offset = 0;
-
-    // key (32 bytes)
-    crypto::Hash key{};
-    std::copy_n(data.data() + offset, 32, key.begin());
-    offset += 32;
-
-    // data_type (1 byte)
-    uint8_t data_type = data[offset];
-    offset += 1;
-
-    // value_length (4 bytes BE)
-    uint32_t value_length = (static_cast<uint32_t>(data[offset]) << 24)
-                          | (static_cast<uint32_t>(data[offset + 1]) << 16)
-                          | (static_cast<uint32_t>(data[offset + 2]) << 8)
-                          | static_cast<uint32_t>(data[offset + 3]);
-    offset += 4;
-
-    if (offset + value_length > data.size()) {
-        spdlog::warn("STORE value truncated from {}:{}", from, port);
-        return;
-    }
-
-    std::span<const uint8_t> value(data.data() + offset, value_length);
-
-    // 1. Responsibility check
-    if (!is_responsible(key)) {
-        spdlog::warn("STORE rejected: not responsible for key");
-        return;
-    }
-
-    // 2. Data-type-specific validation
-    bool valid = true;
-    switch (data_type) {
-    case 0x00: valid = validate_profile(value, key);     break;
-    case 0x01: valid = validate_name_record(value, key); break;
-    case 0x02: valid = validate_inbox_message(value);    break;
-    case 0x03: valid = validate_contact_request(value);  break;
-    case 0x04: valid = validate_allowlist_entry(value);  break;
-    default: break; // unknown types are rejected in the switch below
-    }
-    if (!valid) {
-        spdlog::warn("STORE rejected: validation failed for data_type 0x{:02X}", data_type);
-        return;
-    }
-
-    // 3. Store in appropriate table
+    // 2. Dispatch to the correct storage table(s)
     if (data_type == 0x02) {
         // Inbox: two-table write
         // Value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
         std::span<const uint8_t> recipient_fp(value.data(), 32);
         std::span<const uint8_t> msg_id(value.data() + 32, 32);
         std::span<const uint8_t> sender_fp(value.data() + 64, 32);
-        // timestamp at offset 96, blob_len at offset 104
         uint32_t blob_len = (static_cast<uint32_t>(value[104]) << 24)
                           | (static_cast<uint32_t>(value[105]) << 16)
                           | (static_cast<uint32_t>(value[106]) << 8)
@@ -805,8 +771,8 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
         crypto::Hash mid{};
         std::copy_n(msg_id.data(), 32, mid.begin());
         if (storage_.get(storage::TABLE_MESSAGE_BLOBS, mid)) {
-            spdlog::debug("STORE: duplicate inbox message rejected (msg_id already exists)");
-            return;
+            spdlog::debug("store_locally: duplicate inbox message rejected (msg_id already exists)");
+            return false;
         }
 
         // INDEX key: recipient_fp(32) || msg_id(32)
@@ -870,28 +836,81 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
         case 0x00: table_name = storage::TABLE_PROFILES;   break;
         case 0x01: table_name = storage::TABLE_NAMES;      break;
         default:
-            spdlog::warn("STORE rejected: unknown data_type 0x{:02X}", data_type);
-            return;
+            spdlog::warn("store_locally: unknown data_type 0x{:02X}", data_type);
+            return false;
         }
 
         std::vector<uint8_t> value_vec(value.begin(), value.end());
         storage_.put(table_name, key, value_vec);
     }
 
-    // Record mutation in the replication log
-    // For allowlist REVOKE (data_type 0x04, action 0x00), record Op::DEL so
-    // that sync recipients correctly delete the entry instead of adding it.
-    auto op = replication::Op::ADD;
-    if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
-        op = replication::Op::DEL;
+    // 3. Record mutation in the replication log + fire callback
+    if (log_and_notify) {
+        // For allowlist REVOKE (data_type 0x04, action 0x00), record Op::DEL so
+        // that sync recipients correctly delete the entry instead of adding it.
+        auto op = replication::Op::ADD;
+        if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
+            op = replication::Op::DEL;
+        }
+        repl_log_.append(key, op, data_type, value);
+
+        if (on_store_) {
+            on_store_(key, data_type, value);
+        }
     }
-    repl_log_.append(key, op, data_type, value);
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// STORE (section 2 of PROTOCOL-SPEC.md)
+// ---------------------------------------------------------------------------
+
+void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_t port) {
+    const auto& data = msg.payload;
+    // Minimum: 32 (key) + 1 (data_type) + 4 (value_length) = 37 bytes
+    if (data.size() < 37) {
+        spdlog::warn("STORE payload too short from {}:{}", from, port);
+        return;
+    }
+
+    size_t offset = 0;
+
+    // key (32 bytes)
+    crypto::Hash key{};
+    std::copy_n(data.data() + offset, 32, key.begin());
+    offset += 32;
+
+    // data_type (1 byte)
+    uint8_t data_type = data[offset];
+    offset += 1;
+
+    // value_length (4 bytes BE)
+    uint32_t value_length = (static_cast<uint32_t>(data[offset]) << 24)
+                          | (static_cast<uint32_t>(data[offset + 1]) << 16)
+                          | (static_cast<uint32_t>(data[offset + 2]) << 8)
+                          | static_cast<uint32_t>(data[offset + 3]);
+    offset += 4;
+
+    if (offset + value_length > data.size()) {
+        spdlog::warn("STORE value truncated from {}:{}", from, port);
+        return;
+    }
+
+    std::span<const uint8_t> value(data.data() + offset, value_length);
+
+    // 1. Responsibility check
+    if (!is_responsible(key)) {
+        spdlog::warn("STORE rejected: not responsible for key");
+        return;
+    }
+
+    // 2. Validate, store in table(s), append repl_log, fire on_store_
+    if (!store_locally(key, data_type, value)) {
+        return;
+    }
 
     spdlog::info("Stored data_type=0x{:02X} for key from {}:{}", data_type, from, port);
-
-    if (on_store_) {
-        on_store_(key, data_type, value);
-    }
 
     // Send STORE_ACK back: [32 bytes: key][1 byte: status=0x00 OK]
     std::vector<uint8_t> ack_payload;
@@ -992,113 +1011,10 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 
     for (const auto& node : nodes) {
         if (node.id == self_.id) {
-            // Store locally — perform same validation as handle_store
-            bool valid = true;
-            switch (data_type) {
-            case 0x00: valid = validate_profile(value, key);     break;
-            case 0x01: valid = validate_name_record(value, key); break;
-            case 0x02: valid = validate_inbox_message(value);    break;
-            case 0x03: valid = validate_contact_request(value);  break;
-            case 0x04: valid = validate_allowlist_entry(value);  break;
-            default: break;
-            }
-            if (!valid) {
-                spdlog::warn("Local store rejected: validation failed for data_type 0x{:02X}", data_type);
+            // Store locally — validate, dispatch, log, notify
+            if (!store_locally(key, data_type, value)) {
                 continue;
             }
-
-            if (data_type == 0x02) {
-                // Inbox: two-table write
-                // Value: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
-                std::span<const uint8_t> recip(value.data(), 32);
-                std::span<const uint8_t> mid(value.data() + 32, 32);
-                std::span<const uint8_t> sfp(value.data() + 64, 32);
-                uint32_t blen = (static_cast<uint32_t>(value[104]) << 24)
-                              | (static_cast<uint32_t>(value[105]) << 16)
-                              | (static_cast<uint32_t>(value[106]) << 8)
-                              | static_cast<uint32_t>(value[107]);
-
-                // Dedup: reject if msg_id already exists
-                crypto::Hash mid_hash{};
-                std::copy_n(mid.data(), 32, mid_hash.begin());
-                if (storage_.get(storage::TABLE_MESSAGE_BLOBS, mid_hash)) {
-                    spdlog::debug("store(): duplicate inbox message rejected");
-                    continue;
-                }
-
-                std::vector<uint8_t> idx_key;
-                idx_key.reserve(64);
-                idx_key.insert(idx_key.end(), recip.begin(), recip.end());
-                idx_key.insert(idx_key.end(), mid.begin(), mid.end());
-
-                std::vector<uint8_t> idx_value;
-                idx_value.reserve(44);
-                idx_value.insert(idx_value.end(), sfp.begin(), sfp.end());
-                idx_value.insert(idx_value.end(), value.data() + 96, value.data() + 104);
-                idx_value.insert(idx_value.end(), value.data() + 104, value.data() + 108);
-
-                std::vector<uint8_t> blob_key(mid.begin(), mid.end());
-                std::vector<uint8_t> blob_val(value.data() + 108, value.data() + 108 + blen);
-
-                // Atomic write: INDEX + BLOB in single transaction
-                storage_.batch_put({
-                    {storage::TABLE_INBOX_INDEX, idx_key, idx_value},
-                    {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_val}
-                });
-            } else if (data_type == 0x04) {
-                // Allowlist: composite key storage
-                // Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
-                std::span<const uint8_t> afp(value.data() + 32, 32);
-                uint8_t action = value[64];
-
-                std::vector<uint8_t> comp_key;
-                comp_key.reserve(64);
-                comp_key.insert(comp_key.end(), key.begin(), key.end());
-                comp_key.insert(comp_key.end(), afp.begin(), afp.end());
-
-                if (action == 0x01) {
-                    std::vector<uint8_t> eval(value.begin(), value.end());
-                    storage_.put(storage::TABLE_ALLOWLISTS, comp_key, eval);
-                } else {
-                    storage_.del(storage::TABLE_ALLOWLISTS, comp_key);
-                }
-            } else if (data_type == 0x03) {
-                // Contact request: composite key storage
-                // Value: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-                crypto::Hash rfp, sfp_cr;
-                std::copy_n(value.data(), 32, rfp.begin());
-                std::copy_n(value.data() + 32, 32, sfp_cr.begin());
-                std::vector<uint8_t> cr_key;
-                cr_key.reserve(64);
-                cr_key.insert(cr_key.end(), rfp.begin(), rfp.end());
-                cr_key.insert(cr_key.end(), sfp_cr.begin(), sfp_cr.end());
-                std::vector<uint8_t> val_vec(value.begin(), value.end());
-                storage_.put(storage::TABLE_REQUESTS, cr_key, val_vec);
-            } else {
-                const char* table_name = nullptr;
-                switch (data_type) {
-                case 0x00: table_name = storage::TABLE_PROFILES;   break;
-                case 0x01: table_name = storage::TABLE_NAMES;      break;
-                default:
-                    spdlog::warn("store(): unknown data_type 0x{:02X}", data_type);
-                    continue;
-                }
-
-                std::vector<uint8_t> val_vec(value.begin(), value.end());
-                storage_.put(table_name, key, val_vec);
-            }
-
-            // Record mutation in the replication log
-            auto op = replication::Op::ADD;
-            if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
-                op = replication::Op::DEL;
-            }
-            repl_log_.append(key, op, data_type, value);
-
-            if (on_store_) {
-                on_store_(key, data_type, value);
-            }
-
             stored_any = true;
             local_stored = true;
         } else {
@@ -1869,103 +1785,10 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
         }
 
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
-            // Validate before applying (trust boundary: SYNC_RESP comes from peers)
-            bool valid = false;
-            switch (entry.data_type) {
-            case 0x00: valid = validate_profile(entry.data, key); break;
-            case 0x01: valid = validate_name_record(entry.data, key); break;
-            case 0x02: valid = validate_inbox_message(entry.data); break;
-            case 0x03: valid = validate_contact_request(entry.data); break;
-            case 0x04: valid = validate_allowlist_entry(entry.data); break;
-            default:
-                spdlog::warn("SYNC_RESP entry rejected: unknown data_type 0x{:02X}", entry.data_type);
-                continue;
-            }
-            if (!valid) {
-                spdlog::warn("SYNC_RESP entry rejected by validation (type=0x{:02X})", entry.data_type);
-                continue;
-            }
-
-            if (entry.data_type == 0x02) {
-                // Inbox: two-table write
-                // Data: recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8) || blob_len(4) || blob
-                if (entry.data.size() < 108) {
-                    spdlog::warn("SYNC: inbox entry too short ({} bytes)", entry.data.size());
-                    continue;
-                }
-                std::span<const uint8_t> d(entry.data);
-                std::span<const uint8_t> recipient_fp(d.data(), 32);
-                std::span<const uint8_t> msg_id(d.data() + 32, 32);
-                std::span<const uint8_t> sender_fp(d.data() + 64, 32);
-                uint32_t blob_len = (static_cast<uint32_t>(d[104]) << 24)
-                                  | (static_cast<uint32_t>(d[105]) << 16)
-                                  | (static_cast<uint32_t>(d[106]) << 8)
-                                  | static_cast<uint32_t>(d[107]);
-
-                std::vector<uint8_t> idx_key;
-                idx_key.reserve(64);
-                idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
-                idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
-
-                std::vector<uint8_t> idx_value;
-                idx_value.reserve(44);
-                idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
-                idx_value.insert(idx_value.end(), d.data() + 96, d.data() + 104);
-                idx_value.insert(idx_value.end(), d.data() + 104, d.data() + 108);
-
-                std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
-                std::vector<uint8_t> blob_value(d.data() + 108, d.data() + 108 + blob_len);
-
-                // Atomic write: INDEX + BLOB in single transaction
-                storage_.batch_put({
-                    {storage::TABLE_INBOX_INDEX, idx_key, idx_value},
-                    {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value}
-                });
-            } else if (entry.data_type == 0x04) {
-                // Allowlist: composite key storage
-                // Data: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
-                if (entry.data.size() < 73) {
-                    spdlog::warn("SYNC: allowlist entry too short ({} bytes)", entry.data.size());
-                    continue;
-                }
-                std::span<const uint8_t> allowed_fp(entry.data.data() + 32, 32);
-                uint8_t action = entry.data[64];
-                std::vector<uint8_t> composite_key;
-                composite_key.reserve(64);
-                composite_key.insert(composite_key.end(), key.begin(), key.end());
-                composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
-                if (action == 0x01) {
-                    std::vector<uint8_t> entry_val(entry.data.begin(), entry.data.end());
-                    storage_.put(storage::TABLE_ALLOWLISTS, composite_key, entry_val);
-                } else {
-                    storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
-                }
-            } else if (entry.data_type == 0x03) {
-                // Contact request: composite key storage
-                // Data: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-                if (entry.data.size() < 76) {
-                    spdlog::warn("SYNC: contact request too short ({} bytes)", entry.data.size());
-                    continue;
-                }
-                crypto::Hash rfp, sfp_cr;
-                std::copy_n(entry.data.data(), 32, rfp.begin());
-                std::copy_n(entry.data.data() + 32, 32, sfp_cr.begin());
-                std::vector<uint8_t> cr_key;
-                cr_key.reserve(64);
-                cr_key.insert(cr_key.end(), rfp.begin(), rfp.end());
-                cr_key.insert(cr_key.end(), sfp_cr.begin(), sfp_cr.end());
-                storage_.put(storage::TABLE_REQUESTS, cr_key, entry.data);
-            } else {
-                const char* table_name = nullptr;
-                switch (entry.data_type) {
-                case 0x00: table_name = storage::TABLE_PROFILES;   break;
-                case 0x01: table_name = storage::TABLE_NAMES;      break;
-                default:
-                    spdlog::warn("SYNC: unknown data_type 0x{:02X}, skipping", entry.data_type);
-                    continue;
-                }
-                storage_.put(table_name, key, entry.data);
-            }
+            // Validate and store locally; skip repl_log append and on_store_
+            // callback since repl_log_.apply() already handled the log above.
+            store_locally(key, entry.data_type, entry.data,
+                          /*validate=*/true, /*log_and_notify=*/false);
         }
     }
 
