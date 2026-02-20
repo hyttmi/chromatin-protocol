@@ -267,9 +267,28 @@ void Kademlia::cleanup_pending_stores() {
 // ---------------------------------------------------------------------------
 
 void Kademlia::transfer_responsibility() {
-    // For each key-value table, scan all keys and check if any new node
-    // in the routing table is now among the R closest but doesn't have the data.
-    // If so, send a STORE to that node.
+    // Build the current set of routing node IDs for dedup.
+    // Only push data to nodes that are NEWLY in the routing table
+    // (not in prev_routing_nodes_), since existing nodes already have the
+    // data from normal replication.
+    auto current_nodes = table_.all_nodes();
+    std::unordered_set<NodeId, NodeIdHash> current_set;
+    std::unordered_set<NodeId, NodeIdHash> new_nodes;
+    for (const auto& n : current_nodes) {
+        current_set.insert(n.id);
+        if (prev_routing_nodes_.find(n.id) == prev_routing_nodes_.end()) {
+            new_nodes.insert(n.id);
+        }
+    }
+
+    // Update previous set for next call
+    prev_routing_nodes_ = current_set;
+
+    // No new nodes → nothing to transfer
+    if (new_nodes.empty()) {
+        spdlog::debug("Responsibility transfer: no new nodes, skipping");
+        return;
+    }
 
     struct TableInfo {
         const char* table;
@@ -290,22 +309,15 @@ void Kademlia::transfer_responsibility() {
             [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
                 if (key.size() < 32) return true;
 
-                // Use first 32 bytes as routing key
                 crypto::Hash routing_key{};
                 std::copy_n(key.data(), 32, routing_key.begin());
 
                 auto nodes = responsible_nodes(routing_key);
-                bool self_responsible = false;
-                for (const auto& n : nodes) {
-                    if (n.id == self_.id) {
-                        self_responsible = true;
-                        break;
-                    }
-                }
 
-                // Push to all responsible remote nodes (they'll dedup/validate)
+                // Only push to newly-added responsible nodes
                 for (const auto& node : nodes) {
                     if (node.id == self_.id) continue;
+                    if (new_nodes.find(node.id) == new_nodes.end()) continue;
 
                     std::vector<uint8_t> payload;
                     payload.insert(payload.end(), routing_key.begin(), routing_key.end());
@@ -326,16 +338,11 @@ void Kademlia::transfer_responsibility() {
             });
     }
 
-    // Transfer inbox messages — requires reconstructing STORE value from two tables.
-    // Routing key: SHA3-256("inbox:" || recipient_fp), NOT the first 32 bytes of index key.
-    //
-    // We collect index entries first because MDBX doesn't support nested read
-    // transactions on the same thread (foreach holds a read txn, and get() would
-    // attempt a second one).
+    // Transfer inbox messages to newly-responsible nodes.
     struct InboxEntry {
         crypto::Hash recipient_fp;
         crypto::Hash msg_id;
-        std::vector<uint8_t> index_value; // sender_fp(32) || timestamp(8) || blob_len(4)
+        std::vector<uint8_t> index_value;
     };
     std::vector<InboxEntry> inbox_entries;
 
@@ -356,12 +363,19 @@ void Kademlia::transfer_responsibility() {
         auto routing_key = crypto::sha3_256_prefixed("inbox:", entry.recipient_fp);
         auto nodes = responsible_nodes(routing_key);
 
-        // Get blob from TABLE_MESSAGE_BLOBS (safe — no concurrent read txn)
-        auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, entry.msg_id);
-        if (!blob) continue;  // blob missing, skip
+        // Check if any newly-added node is responsible before doing blob lookup
+        bool has_new_responsible = false;
+        for (const auto& node : nodes) {
+            if (node.id != self_.id && new_nodes.find(node.id) != new_nodes.end()) {
+                has_new_responsible = true;
+                break;
+            }
+        }
+        if (!has_new_responsible) continue;
 
-        // Reconstruct STORE value:
-        // recipient_fp(32) || msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+        auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, entry.msg_id);
+        if (!blob) continue;
+
         std::vector<uint8_t> store_value;
         store_value.reserve(108 + blob->size());
         store_value.insert(store_value.end(), entry.recipient_fp.begin(), entry.recipient_fp.end());
@@ -374,13 +388,13 @@ void Kademlia::transfer_responsibility() {
         store_value.push_back(static_cast<uint8_t>(blen & 0xFF));
         store_value.insert(store_value.end(), blob->begin(), blob->end());
 
-        // Send STORE to all responsible remote nodes
         for (const auto& node : nodes) {
             if (node.id == self_.id) continue;
+            if (new_nodes.find(node.id) == new_nodes.end()) continue;
 
             std::vector<uint8_t> payload;
             payload.insert(payload.end(), routing_key.begin(), routing_key.end());
-            payload.push_back(0x02);  // data_type = inbox
+            payload.push_back(0x02);
             uint32_t vlen = static_cast<uint32_t>(store_value.size());
             payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
             payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
@@ -395,7 +409,8 @@ void Kademlia::transfer_responsibility() {
     }
 
     if (pushed > 0) {
-        spdlog::info("Responsibility transfer: pushed {} entries to responsible nodes", pushed);
+        spdlog::info("Responsibility transfer: pushed {} entries to {} new node(s)",
+                     pushed, new_nodes.size());
     }
 }
 

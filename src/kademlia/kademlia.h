@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "config/config.h"
@@ -145,6 +146,7 @@ private:
     void sync_with_peers();
     size_t last_table_size_ = 0;
     std::chrono::steady_clock::time_point last_transfer_check_{};
+    std::unordered_set<NodeId, NodeIdHash> prev_routing_nodes_;  // for transfer dedup
 
     // Pending STORE quorum tracking (key -> status)
     mutable std::mutex pending_mutex_;
