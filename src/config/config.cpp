@@ -140,6 +140,14 @@ Config load_config(const std::filesystem::path& path) {
         cfg.name_pow_difficulty = static_cast<uint8_t>(root["name_pow_difficulty"].asUInt());
     }
 
+    // Sync
+    if (root.isMember("sync_interval_seconds")) {
+        cfg.sync_interval_seconds = static_cast<uint16_t>(root["sync_interval_seconds"].asUInt());
+    }
+    if (root.isMember("sync_batch_size")) {
+        cfg.sync_batch_size = static_cast<uint16_t>(root["sync_batch_size"].asUInt());
+    }
+
     // Connection pool
     if (root.isMember("conn_pool_max")) {
         cfg.conn_pool_max = static_cast<uint16_t>(root["conn_pool_max"].asUInt());
@@ -244,6 +252,10 @@ void generate_default_config(const std::filesystem::path& path) {
     // PoW
     root["contact_pow_difficulty"] = 16;
     root["name_pow_difficulty"] = 28;
+
+    // Sync
+    root["sync_interval_seconds"] = 120;
+    root["sync_batch_size"] = 10;
 
     // Connection pool
     root["conn_pool_max"] = 64;

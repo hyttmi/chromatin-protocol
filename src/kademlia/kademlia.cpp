@@ -33,7 +33,9 @@ Kademlia::Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& trans
     , compact_keep_entries_(cfg.compact_keep_entries)
     , replication_factor_(cfg.replication_factor)
     , max_profile_size_(cfg.max_profile_size)
-    , max_request_blob_size_(cfg.max_request_blob_size) {}
+    , max_request_blob_size_(cfg.max_request_blob_size)
+    , sync_interval_(std::chrono::seconds(cfg.sync_interval_seconds))
+    , sync_batch_size_(cfg.sync_batch_size) {}
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -136,6 +138,12 @@ void Kademlia::tick() {
 
     // 7. Cleanup idle pooled TCP connections
     transport_.cleanup_idle_connections();
+
+    // 8. Active sync: pull missing entries from peers
+    if (now - last_sync_ >= sync_interval_) {
+        last_sync_ = now;
+        sync_with_peers();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +434,77 @@ void Kademlia::compact_repl_log() {
     if (total_compacted > 0) {
         spdlog::info("Repl log compaction: compacted {} keys (keeping last {} entries each)",
                      total_compacted, compact_keep_entries_);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Active sync — pull missing replication entries from peers
+// ---------------------------------------------------------------------------
+
+void Kademlia::sync_with_peers() {
+    // Collect unique routing keys from the replication log.
+    // These are the 32-byte prefixes of composite keys in TABLE_REPL_LOG.
+    std::vector<crypto::Hash> all_keys;
+    crypto::Hash prev_key{};
+    prev_key.fill(0xFF);
+
+    storage_.foreach(storage::TABLE_REPL_LOG,
+        [&](std::span<const uint8_t> k, std::span<const uint8_t> /*v*/) -> bool {
+            if (k.size() < 40) return true;
+            crypto::Hash key_prefix{};
+            std::copy_n(k.data(), 32, key_prefix.begin());
+            if (key_prefix != prev_key) {
+                all_keys.push_back(key_prefix);
+                prev_key = key_prefix;
+            }
+            return true;
+        });
+
+    if (all_keys.empty()) return;
+
+    // Batch: process sync_batch_size_ keys per tick, cycling with offset
+    if (sync_key_offset_ >= all_keys.size()) {
+        sync_key_offset_ = 0;
+    }
+
+    size_t end = std::min(sync_key_offset_ + sync_batch_size_, all_keys.size());
+    size_t synced = 0;
+
+    for (size_t i = sync_key_offset_; i < end; ++i) {
+        const auto& key = all_keys[i];
+
+        // Only sync keys we're responsible for
+        if (!is_responsible(key)) continue;
+
+        // Get our local seq for this key
+        uint64_t local_seq = repl_log_.current_seq(key);
+
+        // Find other responsible nodes to sync from
+        auto nodes = responsible_nodes(key);
+
+        for (const auto& node : nodes) {
+            if (node.id == self_.id) continue;
+
+            // Send SYNC_REQ asking for entries after our local seq
+            std::vector<uint8_t> payload;
+            payload.reserve(40);
+            payload.insert(payload.end(), key.begin(), key.end());
+            // after_seq (8 bytes BE)
+            for (int b = 7; b >= 0; --b) {
+                payload.push_back(static_cast<uint8_t>((local_seq >> (b * 8)) & 0xFF));
+            }
+
+            Message msg = make_message(MessageType::SYNC_REQ, payload);
+            send_to_node(node, msg);
+            ++synced;
+        }
+    }
+
+    sync_key_offset_ = end;
+
+    if (synced > 0) {
+        spdlog::debug("Active sync: sent SYNC_REQ for {} keys (batch {}-{} of {})",
+                      synced, sync_key_offset_ - (end - sync_key_offset_), end, all_keys.size());
     }
 }
 

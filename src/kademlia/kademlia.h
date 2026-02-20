@@ -131,12 +131,17 @@ private:
     std::chrono::steady_clock::time_point last_ping_sweep_{};
     std::chrono::steady_clock::time_point last_ttl_sweep_{};
     std::chrono::steady_clock::time_point last_compact_{};
+    std::chrono::steady_clock::time_point last_sync_{};
+    std::chrono::seconds sync_interval_{120};
+    size_t sync_batch_size_ = 10;
+    size_t sync_key_offset_ = 0;  // round-robin offset for batching
 
-    // TTL expiry, pending store cleanup, responsibility transfer, and compaction
+    // TTL expiry, pending store cleanup, responsibility transfer, compaction, sync
     void expire_ttl();
     void cleanup_pending_stores();
     void transfer_responsibility();
     void compact_repl_log();
+    void sync_with_peers();
     size_t last_table_size_ = 0;
     std::chrono::steady_clock::time_point last_transfer_check_{};
 

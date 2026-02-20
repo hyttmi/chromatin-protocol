@@ -54,6 +54,10 @@ struct Config {
     uint8_t contact_pow_difficulty = 16;
     uint8_t name_pow_difficulty = 28;
 
+    // Sync
+    uint16_t sync_interval_seconds = 120;
+    uint16_t sync_batch_size = 10;
+
     // Connection pool
     uint16_t conn_pool_max = 64;
     uint16_t conn_pool_idle_seconds = 60;
