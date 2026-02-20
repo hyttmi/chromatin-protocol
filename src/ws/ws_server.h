@@ -22,11 +22,29 @@
 
 namespace chromatin::ws {
 
+struct RateLimiter {
+    double tokens = 50.0;
+    double max_tokens = 50.0;
+    double refill_rate = 10.0;  // tokens per second
+    std::chrono::steady_clock::time_point last_refill = std::chrono::steady_clock::now();
+
+    bool consume(double cost = 1.0) {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - last_refill).count();
+        last_refill = now;
+        tokens = std::min(max_tokens, tokens + elapsed * refill_rate);
+        if (tokens < cost) return false;
+        tokens -= cost;
+        return true;
+    }
+};
+
 struct Session {
     crypto::Hash fingerprint{};
     std::vector<uint8_t> pubkey;
     bool authenticated = false;
     crypto::Hash challenge_nonce{};
+    RateLimiter rate_limiter;
 
     struct PendingUpload {
         uint32_t request_id = 0;

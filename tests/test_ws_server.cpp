@@ -1501,3 +1501,38 @@ TEST_F(WsServerTest, DeleteReplicates) {
 
     client.close();
 }
+
+// ---------- Rate limiting test ----------
+
+TEST_F(WsServerTest, RateLimitExceeded) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Rapid-fire LIST commands to exhaust the token bucket (50 tokens, 1 per LIST)
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    int rate_limited_count = 0;
+
+    for (int i = 0; i < 60; ++i) {
+        Json::Value list_msg;
+        list_msg["type"] = "LIST";
+        list_msg["id"] = 1000 + i;
+        ASSERT_TRUE(client.send_text(Json::writeString(writer, list_msg)));
+
+        auto resp = client.recv_text(2000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        if (root["code"].asInt() == 429) {
+            rate_limited_count++;
+        }
+    }
+
+    EXPECT_GT(rate_limited_count, 0) << "Should have hit rate limit after 50+ rapid commands";
+
+    client.close();
+}

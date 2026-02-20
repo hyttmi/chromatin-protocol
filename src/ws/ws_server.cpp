@@ -118,35 +118,41 @@ void WsServer::on_message(ws_t* ws, std::string_view message) {
         return;
     }
 
-    // Command dispatch
-    if (type == "HELLO") {
-        handle_hello(ws, root);
-    } else if (type == "AUTH") {
-        handle_auth(ws, root);
-    } else if (type == "LIST") {
-        if (!require_auth(ws, id)) return;
-        handle_list(ws, root);
-    } else if (type == "GET") {
-        if (!require_auth(ws, id)) return;
-        handle_get(ws, root);
-    } else if (type == "SEND") {
-        if (!require_auth(ws, id)) return;
-        handle_send(ws, root);
-    } else if (type == "ALLOW") {
-        if (!require_auth(ws, id)) return;
-        handle_allow(ws, root);
-    } else if (type == "REVOKE") {
-        if (!require_auth(ws, id)) return;
-        handle_revoke(ws, root);
-    } else if (type == "CONTACT_REQUEST") {
-        if (!require_auth(ws, id)) return;
-        handle_contact_request(ws, root);
-    } else if (type == "DELETE") {
-        if (!require_auth(ws, id)) return;
-        handle_delete(ws, root);
-    } else {
+    // Command dispatch table: handler, requires_auth, rate_limit_cost
+    struct Command {
+        void (WsServer::*handler)(ws_t*, const Json::Value&);
+        bool requires_auth;
+        double rate_cost;  // 0 = exempt from rate limiting
+    };
+
+    static const std::unordered_map<std::string, Command> commands = {
+        {"HELLO",           {&WsServer::handle_hello,           false, 0.0}},
+        {"AUTH",            {&WsServer::handle_auth,            false, 0.0}},
+        {"LIST",            {&WsServer::handle_list,            true,  1.0}},
+        {"GET",             {&WsServer::handle_get,             true,  1.0}},
+        {"SEND",            {&WsServer::handle_send,            true,  2.0}},
+        {"ALLOW",           {&WsServer::handle_allow,           true,  1.0}},
+        {"REVOKE",          {&WsServer::handle_revoke,          true,  1.0}},
+        {"CONTACT_REQUEST", {&WsServer::handle_contact_request, true,  3.0}},
+        {"DELETE",          {&WsServer::handle_delete,          true,  1.0}},
+    };
+
+    auto it = commands.find(type);
+    if (it == commands.end()) {
         send_error(ws, id, 400, "unknown command: " + type);
+        return;
     }
+
+    const auto& cmd = it->second;
+    if (cmd.requires_auth && !require_auth(ws, id)) return;
+    if (cmd.rate_cost > 0.0) {
+        auto* session = ws->getUserData();
+        if (!session->rate_limiter.consume(cmd.rate_cost)) {
+            send_error(ws, id, 429, "rate limit exceeded");
+            return;
+        }
+    }
+    (this->*cmd.handler)(ws, root);
 }
 
 // ---------- hex helpers (local to this TU) ----------
