@@ -1653,10 +1653,10 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
         pow_nonce = (pow_nonce << 8) | value[64 + i];
     }
 
-    // Verify PoW: preimage = "request:" || sender_fp || recipient_fp
+    // Verify PoW with domain separation: preimage = "chromatin:request:" || sender_fp || recipient_fp
     std::vector<uint8_t> preimage;
-    preimage.reserve(8 + 32 + 32);
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
+    preimage.reserve(prefix.size() + 32 + 32);
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
@@ -1728,9 +1728,13 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
     }
     std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
 
-    // Signed data: action(1) || allowed_fp(32) || sequence(8 BE) = 41 bytes
+    // Signed data with domain separation:
+    // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
-    signed_data.reserve(1 + 32 + 8);
+    signed_data.reserve(domain.size() + 32 + 1 + 32 + 8);
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
     signed_data.push_back(action);
     signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
     signed_data.insert(signed_data.end(), value.data() + 65, value.data() + 73);

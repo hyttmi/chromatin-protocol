@@ -1097,9 +1097,13 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Build signed data: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    // Build signed data with domain separation:
+    // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
-    signed_data.reserve(1 + 32 + 8);
+    signed_data.reserve(domain.size() + 32 + 1 + 32 + 8);
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), session->fingerprint.begin(), session->fingerprint.end());
     signed_data.push_back(0x01);  // action = allow
     signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
     for (int i = 7; i >= 0; --i) {
@@ -1219,9 +1223,13 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Build signed data: action(0x00) || allowed_fp(32) || sequence(8 BE)
+    // Build signed data with domain separation:
+    // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
-    signed_data.reserve(1 + 32 + 8);
+    signed_data.reserve(domain.size() + 32 + 1 + 32 + 8);
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), session->fingerprint.begin(), session->fingerprint.end());
     signed_data.push_back(0x00);  // action = revoke
     signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
     for (int i = 7; i >= 0; --i) {
@@ -1342,10 +1350,10 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     }
     uint64_t pow_nonce = msg["pow_nonce"].asUInt64();
 
-    // Verify PoW: preimage = "request:" || sender_fp || recipient_fp
+    // Verify PoW with domain separation: preimage = "chromatin:request:" || sender_fp || recipient_fp
     std::vector<uint8_t> preimage;
-    preimage.reserve(8 + 32 + 32);  // "request:" is 8 bytes
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
+    preimage.reserve(prefix.size() + 32 + 32);
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(),
                     session->fingerprint.begin(), session->fingerprint.end());

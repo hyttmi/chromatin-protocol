@@ -620,8 +620,13 @@ TEST_F(WsServerTest, AllowAndRevoke) {
         GTEST_SKIP() << "Node not responsible";
     }
 
-    // Build signature for ALLOW: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    // Build signature for ALLOW with domain separation:
+    // "chromatin:allowlist:" || owner_fp(32) || action(0x01) || allowed_fp(32) || sequence(8 BE)
+    auto user_fp_for_sig = crypto::sha3_256(user_kp.public_key);
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), user_fp_for_sig.begin(), user_fp_for_sig.end());
     signed_data.push_back(0x01);  // action = allow
     signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
     uint64_t seq = 1;
@@ -661,7 +666,10 @@ TEST_F(WsServerTest, AllowAndRevoke) {
     EXPECT_EQ(stored_seq, 1u);
 
     // Now REVOKE the same contact with sequence=2
+    // "chromatin:allowlist:" || owner_fp(32) || action(0x00) || allowed_fp(32) || sequence(8 BE)
     std::vector<uint8_t> revoke_data;
+    revoke_data.insert(revoke_data.end(), domain.begin(), domain.end());
+    revoke_data.insert(revoke_data.end(), user_fp_for_sig.begin(), user_fp_for_sig.end());
     revoke_data.push_back(0x00);  // action = revoke
     revoke_data.insert(revoke_data.end(), contact_fp.begin(), contact_fp.end());
     uint64_t revoke_seq = 2;
@@ -700,8 +708,12 @@ TEST_F(WsServerTest, AllowRejectsStaleSequence) {
         GTEST_SKIP() << "Node not responsible";
     }
 
-    // First ALLOW with sequence=5
+    // First ALLOW with sequence=5 (domain separation)
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), user_fp.begin(), user_fp.end());
     signed_data.push_back(0x01);
     signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
     uint64_t seq = 5;
@@ -720,6 +732,8 @@ TEST_F(WsServerTest, AllowRejectsStaleSequence) {
 
     // Try ALLOW again with sequence=3 (stale) — should fail
     std::vector<uint8_t> stale_data;
+    stale_data.insert(stale_data.end(), domain.begin(), domain.end());
+    stale_data.insert(stale_data.end(), user_fp.begin(), user_fp.end());
     stale_data.push_back(0x01);
     stale_data.insert(stale_data.end(), contact_fp.begin(), contact_fp.end());
     uint64_t stale_seq = 3;
@@ -759,7 +773,7 @@ TEST_F(WsServerTest, ContactRequestWithPoW) {
     // Compute PoW nonce: preimage = "request:" || sender_fp || recipient_fp
     // Need 16 leading zero bits (~65k attempts avg)
     std::vector<uint8_t> preimage;
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
@@ -815,7 +829,7 @@ TEST_F(WsServerTest, ContactRequestBinaryIncludesBlobLength) {
 
     // Compute PoW nonce
     std::vector<uint8_t> preimage;
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());

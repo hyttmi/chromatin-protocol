@@ -246,8 +246,12 @@ protected:
     {
         Hash owner_fp = sha3_256(owner_kp.public_key);
 
-        // Signed data: action(1) || allowed_fp(32) || sequence(8 BE) = 41 bytes
+        // Signed data with domain separation:
+        // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
+        const std::string domain = "chromatin:allowlist:";
         std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
         signed_data.push_back(action);
         signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
         for (int i = 7; i >= 0; --i)
@@ -1196,7 +1200,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
 
     // Build PoW preimage: "request:" || sender_fp || recipient_fp
     std::vector<uint8_t> preimage;
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
@@ -2234,9 +2238,13 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     Hash contact_fp{};
     contact_fp.fill(0x42);
 
-    // Build signed data: action(0x01) || allowed_fp(32) || sequence(8 BE)
+    // Build signed data with domain separation:
+    // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
     uint64_t sequence = 1;
+    const std::string domain = "chromatin:allowlist:";
     std::vector<uint8_t> signed_data;
+    signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+    signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
     signed_data.push_back(0x01);  // action = allow
     signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
     for (int i = 7; i >= 0; --i)
@@ -2331,7 +2339,10 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
 
     // 1. Store ALLOW entry (action=0x01)
     {
+        const std::string domain = "chromatin:allowlist:";
         std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
         signed_data.push_back(0x01); // action = ALLOW
         signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
         for (int i = 7; i >= 0; --i)
@@ -2360,7 +2371,10 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
 
     // 2. Store REVOKE entry (action=0x00)
     {
+        const std::string domain = "chromatin:allowlist:";
         std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
         signed_data.push_back(0x00); // action = REVOKE
         signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
         for (int i = 7; i >= 0; --i)
@@ -2456,7 +2470,7 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
 
     // Build PoW preimage: "request:" || sender_fp || recipient_fp
     std::vector<uint8_t> preimage;
-    const std::string prefix = "request:";
+    const std::string prefix = "chromatin:request:";
     preimage.insert(preimage.end(), prefix.begin(), prefix.end());
     preimage.insert(preimage.end(), sender_fp.begin(), sender_fp.end());
     preimage.insert(preimage.end(), recipient_fp.begin(), recipient_fp.end());
