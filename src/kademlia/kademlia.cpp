@@ -1279,35 +1279,28 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     size_t pre_sig_len = 1 + name_length + 32 + 8 + 8;
     std::span<const uint8_t> signed_data(value.data(), pre_sig_len);
 
-    // We need the public key to verify. The fingerprint is SHA3-256 of the pubkey.
-    // But we don't have the pubkey in the name record — we need to look it up from
-    // stored profiles. For now, if we can't verify the signature (no pubkey available),
-    // we skip signature verification. In a full implementation, the STORE would need
-    // the pubkey or we'd look it up from the profile table.
-    //
-    // NOTE: For the initial prototype, we verify the signature if we can find
-    // the pubkey in the profiles table. If the profile isn't stored yet, we
-    // trust the PoW alone. This matches the bootstrap scenario where names
-    // can be registered before profiles are widely replicated.
-    //
-    // Check if we have a profile for this fingerprint
+    // Look up the owner's profile to get their public key for signature verification.
+    // Profile must be stored before name records — this is a security requirement to
+    // prevent forged name registrations during the propagation window.
     crypto::Hash profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
     auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
-    if (profile_data) {
-        // Extract pubkey from profile: [32 bytes fingerprint][2 bytes BE pubkey_length][pubkey...]
-        if (profile_data->size() >= 34) {
-            uint16_t pk_len = static_cast<uint16_t>(
-                (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
-            if (profile_data->size() >= 34u + pk_len) {
-                std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
-                if (!crypto::verify(signed_data, signature, pubkey)) {
-                    spdlog::warn("Name record validation: signature verification failed for '{}'", name);
-                    return false;
-                }
+    if (!profile_data || profile_data->empty()) {
+        spdlog::debug("Name record rejected: owner profile not found, cannot verify signature");
+        return false;
+    }
+
+    // Extract pubkey from profile: [32 bytes fingerprint][2 bytes BE pubkey_length][pubkey...]
+    if (profile_data->size() >= 34) {
+        uint16_t pk_len = static_cast<uint16_t>(
+            (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
+        if (profile_data->size() >= 34u + pk_len) {
+            std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
+            if (!crypto::verify(signed_data, signature, pubkey)) {
+                spdlog::warn("Name record validation: signature verification failed for '{}'", name);
+                return false;
             }
         }
     }
-    // If no profile found, skip signature verification (PoW is sufficient for initial registration)
 
     // 4. First-claim-wins: if name already registered to different fingerprint, reject
     // Storage key for the name: SHA3-256("name:" || name)
@@ -1676,31 +1669,37 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
     std::copy_n(owner_fp.data(), 32, ofp.begin());
     auto profile_key = crypto::sha3_256_prefixed("profile:", ofp);
     auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
-    if (profile_data && !profile_data->empty()) {
-        // Profile format: fingerprint(32) || pubkey_len(2 BE) || pubkey || ...
-        if (profile_data->size() >= 34) {
-            uint16_t pk_len = static_cast<uint16_t>(
-                (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
-            if (profile_data->size() >= 34u + pk_len) {
-                std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
-
-                // Signed data: action(1) || allowed_fp(32) || sequence(8 BE) = 41 bytes
-                std::vector<uint8_t> signed_data;
-                signed_data.reserve(1 + 32 + 8);
-                signed_data.push_back(action);
-                signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
-                signed_data.insert(signed_data.end(), value.data() + 65, value.data() + 73);
-
-                // Signature starts at offset 73
-                std::span<const uint8_t> signature = value.subspan(73);
-                if (!crypto::verify(signed_data, signature, pubkey)) {
-                    spdlog::warn("Allowlist validation: invalid signature");
-                    return false;
-                }
-            }
-        }
+    if (!profile_data || profile_data->empty()) {
+        spdlog::debug("Allowlist entry rejected: owner profile not found, cannot verify signature");
+        return false;
     }
-    // If no profile found, accept (bootstrap case — owner hasn't registered yet)
+
+    // Profile format: fingerprint(32) || pubkey_len(2 BE) || pubkey || ...
+    if (profile_data->size() < 34) {
+        spdlog::warn("Allowlist validation: stored profile too short");
+        return false;
+    }
+    uint16_t pk_len = static_cast<uint16_t>(
+        (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
+    if (profile_data->size() < 34u + pk_len) {
+        spdlog::warn("Allowlist validation: stored profile truncated");
+        return false;
+    }
+    std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
+
+    // Signed data: action(1) || allowed_fp(32) || sequence(8 BE) = 41 bytes
+    std::vector<uint8_t> signed_data;
+    signed_data.reserve(1 + 32 + 8);
+    signed_data.push_back(action);
+    signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
+    signed_data.insert(signed_data.end(), value.data() + 65, value.data() + 73);
+
+    // Signature starts at offset 73
+    std::span<const uint8_t> signature = value.subspan(73);
+    if (!crypto::verify(signed_data, signature, pubkey)) {
+        spdlog::warn("Allowlist validation: invalid signature");
+        return false;
+    }
 
     return true;
 }

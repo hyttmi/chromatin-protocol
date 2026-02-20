@@ -207,6 +207,64 @@ protected:
         std::vector<uint8_t> name_bytes(name.begin(), name.end());
         return sha3_256_prefixed("name:", name_bytes);
     }
+
+    // Store a user's profile directly into a node's storage (test setup helper).
+    // This is needed because name records and allowlist entries require the
+    // owner's profile to exist for signature verification.
+    static void store_user_profile(TestNode& node, const KeyPair& user_kp) {
+        Hash user_fp = sha3_256(user_kp.public_key);
+        std::vector<uint8_t> profile;
+        // fingerprint(32)
+        profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+        // pubkey_len(2 BE) + pubkey
+        uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+        profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+        // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
+        profile.push_back(0x00); profile.push_back(0x00);
+        profile.push_back(0x00); profile.push_back(0x00);
+        profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);
+        profile.push_back(0x00);
+        // sequence = 1
+        for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
+        // sign it
+        auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+        uint16_t sig_len = static_cast<uint16_t>(sig.size());
+        profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+        profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+        profile.insert(profile.end(), sig.begin(), sig.end());
+
+        Hash profile_key = sha3_256_prefixed("profile:", user_fp);
+        node.storage->put(TABLE_PROFILES, profile_key, profile);
+    }
+
+    // Build a signed allowlist entry with real crypto
+    static std::vector<uint8_t> build_signed_allowlist(
+        const KeyPair& owner_kp, const Hash& contact_fp,
+        uint8_t action, uint64_t sequence)
+    {
+        Hash owner_fp = sha3_256(owner_kp.public_key);
+
+        // Signed data: action(1) || allowed_fp(32) || sequence(8 BE) = 41 bytes
+        std::vector<uint8_t> signed_data;
+        signed_data.push_back(action);
+        signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+        auto sig = sign(signed_data, owner_kp.secret_key);
+
+        // Full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        std::vector<uint8_t> entry;
+        entry.insert(entry.end(), owner_fp.begin(), owner_fp.end());
+        entry.insert(entry.end(), contact_fp.begin(), contact_fp.end());
+        entry.push_back(action);
+        for (int i = 7; i >= 0; --i)
+            entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+        entry.insert(entry.end(), sig.begin(), sig.end());
+
+        return entry;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -404,6 +462,9 @@ TEST_F(KademliaTest, NameRegistrationValid) {
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
 
+    // Profile must exist before name record (required for signature verification)
+    store_user_profile(n1, user_kp);
+
     std::string name = "alice";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     uint64_t sequence = 1;
@@ -464,6 +525,8 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
     // First user registers the name
     KeyPair user1_kp = generate_keypair();
     Hash user1_fp = sha3_256(user1_kp.public_key);
+    store_user_profile(n1, user1_kp);
+
     std::string name = "claimed";
     uint64_t nonce1 = find_pow_nonce(name, user1_fp, 8);
 
@@ -479,6 +542,7 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
     // Second user tries to register the same name with a different fingerprint
     KeyPair user2_kp = generate_keypair();
     Hash user2_fp = sha3_256(user2_kp.public_key);
+    store_user_profile(n1, user2_kp);
     uint64_t nonce2 = find_pow_nonce(name, user2_fp, 8);
 
     auto record2 = build_name_record(name, user2_fp, nonce2, 1, user2_kp);
@@ -524,15 +588,16 @@ TEST_F(KademliaTest, StoreAckSent) {
     // Bootstrap bidirectionally so both nodes have each other's pubkeys
     bootstrap_bidirectional(n2, n1);
 
-    // Send a STORE message from n2 to n1 using allowlist entry (minimal validation)
-    Hash key{};
-    key.fill(0x55);
-    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
-    std::vector<uint8_t> value(32, 0xEE);  // owner_fp
-    value.resize(value.size() + 32, 0xAA);  // allowed_fp
-    value.push_back(0x01);  // action = allow
-    for (int i = 0; i < 7; ++i) value.push_back(0x00);
-    value.push_back(0x01);  // sequence = 1
+    // Use real keypair + signed allowlist entry (profile must exist for validation)
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n1, owner_kp);
+
+    Hash contact_fp{};
+    contact_fp.fill(0xAA);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
 
     // Build STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
     std::vector<uint8_t> store_payload;
@@ -602,15 +667,17 @@ TEST_F(KademliaTest, PendingStoreTracking) {
 
     ASSERT_EQ(n1.kad->replication_factor(), 2u);
 
-    // Store an allowlist entry via n1 — it will store locally and STORE to n2
-    Hash key{};
-    key.fill(0x77);
-    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
-    std::vector<uint8_t> value(32, 0xAA);  // owner_fp
-    value.resize(value.size() + 32, 0xBB);  // allowed_fp
-    value.push_back(0x01);  // action = allow
-    for (int i = 0; i < 7; ++i) value.push_back(0x00);
-    value.push_back(0x01);  // sequence = 1
+    // Use real keypair + signed allowlist entry (profile must exist for validation)
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n1, owner_kp);
+    store_user_profile(n2, owner_kp);  // n2 also needs the profile to validate
+
+    Hash contact_fp{};
+    contact_fp.fill(0xBB);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -637,13 +704,10 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     EXPECT_TRUE(resolved) << "Pending store should be resolved after STORE_ACK";
 
     // Verify n2 actually stored the data (composite key: key||allowed_fp)
-    Hash allowed_fp_check{};
-    allowed_fp_check.fill(0xBB);
     std::vector<uint8_t> composite_key(key.begin(), key.end());
-    composite_key.insert(composite_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
+    composite_key.insert(composite_key.end(), contact_fp.begin(), contact_fp.end());
     auto n2_data = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
     ASSERT_TRUE(n2_data.has_value());
-    // Stored value is full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
     EXPECT_EQ(*n2_data, value);
 }
 
@@ -667,15 +731,18 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     ASSERT_EQ(n1.kad->replication_factor(), 3u);
     ASSERT_EQ(n1.kad->write_quorum(), 2u); // W = min(2, 3) = 2
 
-    // Store an allowlist entry via n1
-    Hash key{};
-    key.fill(0x88);
-    // Valid allowlist entry: owner_fp(32) + allowed_fp(32) + action(1) + sequence(8 BE) = 73 bytes
-    std::vector<uint8_t> value(32, 0xDD);  // owner_fp
-    value.resize(value.size() + 32, 0xCC);  // allowed_fp
-    value.push_back(0x01);  // action = allow
-    for (int i = 0; i < 7; ++i) value.push_back(0x00);
-    value.push_back(0x01);  // sequence = 1
+    // Use real keypair + signed allowlist entry (profile must exist on all nodes)
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n1, owner_kp);
+    store_user_profile(n2, owner_kp);
+    store_user_profile(n3, owner_kp);
+
+    Hash contact_fp{};
+    contact_fp.fill(0xCC);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -704,10 +771,8 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     EXPECT_TRUE(quorum_met) << "Write quorum should be met (W=" << n1.kad->write_quorum() << ")";
 
     // Verify all 3 nodes have the data (composite key: key||allowed_fp)
-    Hash allowed_fp_check{};
-    allowed_fp_check.fill(0xCC);
     std::vector<uint8_t> comp_key(key.begin(), key.end());
-    comp_key.insert(comp_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
+    comp_key.insert(comp_key.end(), contact_fp.begin(), contact_fp.end());
     EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
     EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
     EXPECT_TRUE(n3.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
@@ -733,6 +798,12 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
     // Store a name record on node 1 directly (simulating a STORE)
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
+
+    // Profile must exist on all nodes for name record validation (including SYNC_RESP)
+    store_user_profile(n1, user_kp);
+    store_user_profile(n2, user_kp);
+    store_user_profile(n3, user_kp);
+
     std::string name = "synctest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
@@ -939,6 +1010,11 @@ TEST_F(KademliaTest, OnStoreCallback) {
     // Build a name record (same pattern as StoreNameRecord test)
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
+
+    // Profile must exist on both nodes for name record validation
+    store_user_profile(n1, user_kp);
+    store_user_profile(n2, user_kp);
+
     std::string name = "callbacktest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
@@ -1293,22 +1369,17 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
     auto& n1 = create_node();
     start_all();
 
-    Hash owner_fp{};
-    owner_fp.fill(0x33);
+    // Use real keypair + signed entry (profile must exist for validation)
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n1, owner_kp);
 
     Hash allowed_fp{};
     allowed_fp.fill(0x44);
 
-    // Build allowlist STORE value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE)
-    std::vector<uint8_t> value(owner_fp.begin(), owner_fp.end());
-    value.insert(value.end(), allowed_fp.begin(), allowed_fp.end());
-    value.push_back(0x01);  // action = allow
-    for (int i = 0; i < 7; ++i) value.push_back(0x00);
-    value.push_back(0x01);  // sequence = 1
+    auto value = build_signed_allowlist(owner_kp, allowed_fp, 0x01, 1);
 
-    // Use a routing key (normally SHA3-256("allowlist:"||owner_fp))
-    Hash routing_key{};
-    routing_key.fill(0x55);
+    Hash routing_key = sha3_256_prefixed("allowlist:", owner_fp);
 
     bool ok = n1.kad->store(routing_key, 0x04, value);
     EXPECT_TRUE(ok);
@@ -1318,8 +1389,7 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
     composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
     auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
     ASSERT_TRUE(result.has_value()) << "Allowlist entry should be stored with composite key";
-    // Stored value is the full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
-    EXPECT_EQ(result->size(), 73u);
+    EXPECT_EQ(*result, value);
     EXPECT_EQ((*result)[64], 0x01);  // action = allow at offset 64
 }
 
@@ -1880,6 +1950,10 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     // Store a name record directly on n1 (single node, it's responsible for everything)
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
+
+    // Profile must exist for name record validation
+    store_user_profile(n1, user_kp);
+
     std::string name = "transfertest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
@@ -1891,6 +1965,8 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     // Now create n2 and bootstrap bidirectionally — this changes the routing table
     // Both nodes need each other's pubkeys for STORE verification
     auto& n2 = create_node(8);
+    // n2 also needs the user's profile for name record validation during transfer
+    store_user_profile(n2, user_kp);
     n2.start_recv();
     bootstrap_bidirectional(n2, n1);
 
@@ -1933,15 +2009,16 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     EXPECT_TRUE(found->pubkey.empty()) << "n1's pubkey should be empty (added via PING)";
 
     // Step 2: n1 sends a STORE to n2 — should be rejected (empty pubkey).
-    // Build an allowlist STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
-    Hash key{};
-    key.fill(0x55);
-    // New format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) = 73 bytes
-    std::vector<uint8_t> value(32, 0xEE);  // owner_fp
-    value.resize(value.size() + 32, 0xAA);  // allowed_fp
-    value.push_back(0x01);                 // action = allow
-    for (int i = 0; i < 7; ++i) value.push_back(0x00);
-    value.push_back(0x01);                 // sequence = 1
+    // Use real keypair + signed allowlist entry (profile must exist on n2)
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n2, owner_kp);
+
+    Hash contact_fp{};
+    contact_fp.fill(0xAA);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
 
     std::vector<uint8_t> store_payload;
     store_payload.insert(store_payload.end(), key.begin(), key.end());
@@ -1965,10 +2042,8 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // Allowlist uses composite key: routing_key(32) || allowed_fp(32)
-    Hash allowed_fp_check{};
-    allowed_fp_check.fill(0xAA);
     std::vector<uint8_t> composite_key(key.begin(), key.end());
-    composite_key.insert(composite_key.end(), allowed_fp_check.begin(), allowed_fp_check.end());
+    composite_key.insert(composite_key.end(), contact_fp.begin(), contact_fp.end());
 
     // The STORE should have been rejected — n1's pubkey is empty in n2's table
     auto stored = n2.storage->get(TABLE_ALLOWLISTS, composite_key);
@@ -2210,7 +2285,7 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     EXPECT_FALSE(bad_result.has_value())
         << "Allowlist entry with invalid signature should be rejected";
 
-    // Build entry for a user with no profile — should succeed (bootstrap case)
+    // Build entry for a user with no profile — should be REJECTED (profile required)
     Hash unknown_owner{};
     unknown_owner.fill(0x99);
     Hash contact_fp3{};
@@ -2222,18 +2297,17 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     no_profile_entry.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i)
         no_profile_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
-    // dummy signature (not verified because no profile)
+    // dummy signature
     no_profile_entry.resize(no_profile_entry.size() + SIGNATURE_SIZE, 0xFF);
 
     auto unknown_key = sha3_256_prefixed("allowlist:", unknown_owner);
-    bool np_ok = n1.kad->store(unknown_key, 0x04, no_profile_entry);
-    EXPECT_TRUE(np_ok) << "Allowlist entry for user with no profile should succeed (bootstrap case)";
+    n1.kad->store(unknown_key, 0x04, no_profile_entry);
 
     std::vector<uint8_t> np_composite_key(unknown_key.begin(), unknown_key.end());
     np_composite_key.insert(np_composite_key.end(), contact_fp3.begin(), contact_fp3.end());
     auto np_result = n1.storage->get(TABLE_ALLOWLISTS, np_composite_key);
-    EXPECT_TRUE(np_result.has_value())
-        << "Allowlist entry for user without profile should be stored (bootstrap case)";
+    EXPECT_FALSE(np_result.has_value())
+        << "Allowlist entry for user without profile should be rejected";
 }
 
 // ---------------------------------------------------------------------------
@@ -2249,6 +2323,9 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
     Hash owner_fp = sha3_256(owner_kp.public_key);
     KeyPair contact_kp = generate_keypair();
     Hash contact_fp = sha3_256(contact_kp.public_key);
+
+    // Profile must exist for allowlist signature verification
+    store_user_profile(n1, owner_kp);
 
     auto allowlist_key = sha3_256_prefixed("allowlist:", owner_fp);
 
