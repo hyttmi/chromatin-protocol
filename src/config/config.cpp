@@ -76,6 +76,9 @@ Config load_config(const std::filesystem::path& path) {
     if (root.isMember("max_routing_table_size")) {
         cfg.max_routing_table_size = static_cast<uint16_t>(root["max_routing_table_size"].asUInt());
     }
+    if (root.isMember("max_nodes_per_subnet")) {
+        cfg.max_nodes_per_subnet = static_cast<uint16_t>(root["max_nodes_per_subnet"].asUInt());
+    }
 
     // Timeouts
     if (root.isMember("tcp_connect_timeout")) {
@@ -233,6 +236,7 @@ void generate_default_config(const std::filesystem::path& path) {
     root["external_address"] = "";
     root["replication_factor"] = 3;
     root["max_routing_table_size"] = 256;
+    root["max_nodes_per_subnet"] = 3;
 
     // Timeouts (seconds)
     root["tcp_connect_timeout"] = 5;

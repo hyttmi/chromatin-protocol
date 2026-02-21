@@ -24,6 +24,7 @@ struct Config {
     std::string external_address;     // routable address (empty = use bind)
     uint16_t replication_factor = 3;
     uint16_t max_routing_table_size = 256;
+    uint16_t max_nodes_per_subnet = 3;
 
     // Timeouts (seconds)
     uint16_t tcp_connect_timeout = 5;

@@ -23,7 +23,8 @@ struct NodeInfo {
 
 class RoutingTable {
 public:
-    explicit RoutingTable(size_t max_nodes = 256) : max_nodes_(max_nodes) {}
+    explicit RoutingTable(size_t max_nodes = 256, size_t max_per_subnet = 3)
+        : max_nodes_(max_nodes), max_per_subnet_(max_per_subnet) {}
 
     void add_or_update(NodeInfo info);
     void remove(const NodeId& id);
@@ -37,8 +38,12 @@ public:
 
 private:
     size_t max_nodes_;
+    size_t max_per_subnet_;
     mutable std::mutex mutex_;
     std::vector<NodeInfo> nodes_;
+
+    // Extract /24 subnet for IPv4 ("192.168.1") or /48 prefix for IPv6
+    static std::string extract_subnet(const std::string& address);
 };
 
 } // namespace chromatin::kademlia

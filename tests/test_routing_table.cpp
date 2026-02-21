@@ -89,7 +89,7 @@ TEST(RoutingTable, UpdateExisting) {
 }
 
 TEST(RoutingTable, ClosestToOrdering) {
-    RoutingTable rt;
+    RoutingTable rt(256, 0);  // disable subnet limit
 
     // Add several nodes
     auto n1 = make_node("alpha");
@@ -121,7 +121,7 @@ TEST(RoutingTable, ClosestToOrdering) {
 }
 
 TEST(RoutingTable, ClosestToLimitedCount) {
-    RoutingTable rt;
+    RoutingTable rt(256, 0);  // disable subnet limit
 
     rt.add_or_update(make_node("node-a"));
     rt.add_or_update(make_node("node-b"));
@@ -168,7 +168,7 @@ TEST(RoutingTable, EmptyTable) {
 }
 
 TEST(RoutingTable, SizeLimit) {
-    RoutingTable rt;
+    RoutingTable rt(256, 0);  // disable subnet limit for size-cap test
     auto base_time = std::chrono::steady_clock::now();
 
     // Add 300 nodes with increasing timestamps so the first nodes are the
@@ -201,7 +201,7 @@ TEST(RoutingTable, SizeLimit) {
 }
 
 TEST(RoutingTable, SizeLimitUpdateDoesNotEvict) {
-    RoutingTable rt;
+    RoutingTable rt(256, 0);  // disable subnet limit for size-cap test
 
     // Fill the table to capacity
     std::vector<NodeId> ids;
@@ -224,7 +224,7 @@ TEST(RoutingTable, SizeLimitUpdateDoesNotEvict) {
 
 TEST(RoutingTable, ClosestToCorrectness) {
     // Verify partial_sort gives the same result as a full sort would.
-    RoutingTable rt;
+    RoutingTable rt(256, 0);  // disable subnet limit
 
     // Add 100 nodes
     std::vector<NodeInfo> all_nodes;
@@ -261,4 +261,65 @@ TEST(RoutingTable, ClosestToCorrectness) {
         EXPECT_LE(closest[i - 1].id.distance_to(target_id),
                   closest[i].id.distance_to(target_id));
     }
+}
+
+TEST(RoutingTable, SubnetDiversity) {
+    // max_per_subnet = 2 for easier testing
+    RoutingTable rt(256, 2);
+
+    // Add 2 nodes from subnet 10.0.1.x — should succeed
+    auto n1 = make_node("subnet-a1", "10.0.1.1");
+    auto n2 = make_node("subnet-a2", "10.0.1.2");
+    rt.add_or_update(std::move(n1));
+    rt.add_or_update(std::move(n2));
+    EXPECT_EQ(rt.size(), 2u);
+
+    // 3rd node from same subnet — should be rejected
+    auto n3 = make_node("subnet-a3", "10.0.1.3");
+    rt.add_or_update(std::move(n3));
+    EXPECT_EQ(rt.size(), 2u);  // still 2
+
+    // Node from different subnet — should succeed
+    auto n4 = make_node("subnet-b1", "10.0.2.1");
+    rt.add_or_update(std::move(n4));
+    EXPECT_EQ(rt.size(), 3u);
+
+    // Updating existing node (same ID, new address) should always work
+    auto n1_updated = make_node("subnet-a1", "10.0.1.99");
+    rt.add_or_update(std::move(n1_updated));
+    EXPECT_EQ(rt.size(), 3u);
+    auto found = rt.find(NodeId::from_pubkey(std::vector<uint8_t>{'s','u','b','n','e','t','-','a','1'}));
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->address, "10.0.1.99");
+}
+
+TEST(RoutingTable, SubnetDiversityIPv6) {
+    RoutingTable rt(256, 2);
+
+    // Add 2 nodes from same /48 prefix
+    auto n1 = make_node("v6-a1", "2001:db8:1::1");
+    auto n2 = make_node("v6-a2", "2001:db8:1::2");
+    rt.add_or_update(std::move(n1));
+    rt.add_or_update(std::move(n2));
+    EXPECT_EQ(rt.size(), 2u);
+
+    // 3rd from same /48 — rejected
+    auto n3 = make_node("v6-a3", "2001:db8:1::3");
+    rt.add_or_update(std::move(n3));
+    EXPECT_EQ(rt.size(), 2u);
+
+    // Different /48 — accepted
+    auto n4 = make_node("v6-b1", "2001:db8:2::1");
+    rt.add_or_update(std::move(n4));
+    EXPECT_EQ(rt.size(), 3u);
+}
+
+TEST(RoutingTable, SubnetDiversityDisabled) {
+    // max_per_subnet = 0 disables the check
+    RoutingTable rt(256, 0);
+
+    for (int i = 0; i < 10; ++i) {
+        rt.add_or_update(make_node("same-subnet-" + std::to_string(i), "10.0.1." + std::to_string(i + 1)));
+    }
+    EXPECT_EQ(rt.size(), 10u);
 }

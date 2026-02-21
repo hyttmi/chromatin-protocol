@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
     chromatin::replication::ReplLog repl_log(storage);
 
     // --- 8. Create RoutingTable ---
-    chromatin::kademlia::RoutingTable routing_table(cfg.max_routing_table_size);
+    chromatin::kademlia::RoutingTable routing_table(cfg.max_routing_table_size, cfg.max_nodes_per_subnet);
 
     // --- 9. Create TcpTransport ---
     chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port,

@@ -4,6 +4,30 @@
 
 namespace chromatin::kademlia {
 
+std::string RoutingTable::extract_subnet(const std::string& address) {
+    // IPv6: contains ':' - extract first 3 groups (48-bit prefix)
+    if (address.find(':') != std::string::npos) {
+        size_t count = 0;
+        size_t pos = 0;
+        for (size_t i = 0; i < address.size() && count < 3; ++i) {
+            if (address[i] == ':') ++count;
+            if (count < 3) pos = i + 1;
+        }
+        return address.substr(0, pos);
+    }
+    // IPv4: extract first 3 octets (e.g., "192.168.1")
+    size_t count = 0;
+    for (size_t i = 0; i < address.size(); ++i) {
+        if (address[i] == '.') {
+            ++count;
+            if (count == 3) {
+                return address.substr(0, i);
+            }
+        }
+    }
+    return address;  // fallback: treat whole address as subnet
+}
+
 void RoutingTable::add_or_update(NodeInfo info) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& existing : nodes_) {
@@ -22,6 +46,22 @@ void RoutingTable::add_or_update(NodeInfo info) {
             return;
         }
     }
+
+    // Subnet diversity check: reject if too many nodes from same /24 (IPv4)
+    // or /48 (IPv6) subnet to prevent Sybil/eclipse attacks.
+    if (max_per_subnet_ > 0) {
+        std::string new_subnet = extract_subnet(info.address);
+        size_t same_subnet = 0;
+        for (const auto& node : nodes_) {
+            if (extract_subnet(node.address) == new_subnet) {
+                ++same_subnet;
+            }
+        }
+        if (same_subnet >= max_per_subnet_) {
+            return;  // silently reject
+        }
+    }
+
     // If full, evict the node with the oldest last_seen timestamp.
     if (nodes_.size() >= max_nodes_) {
         auto oldest = std::min_element(nodes_.begin(), nodes_.end(),
