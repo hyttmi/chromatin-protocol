@@ -1,6 +1,8 @@
 add_executable(chromatin-tests)
 target_sources(chromatin-tests PRIVATE
     test_crypto.cpp
+    test_kem.cpp
+    test_aead.cpp
     test_storage.cpp
     test_node_id.cpp
     test_routing_table.cpp

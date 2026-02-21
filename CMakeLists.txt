@@ -16,14 +16,13 @@ FetchContent_Declare(
 )
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-# Only build the algorithms we actually use (ML-DSA-87 for signing).
+# Build ML-DSA-87 (signing) and ML-KEM-1024 (TCP transport encryption).
 # SHA3 is part of liboqs common code and always available.
-# ML-KEM-1024 encryption is client-side only (libchromatin), not needed by the node.
 set(OQS_ENABLE_KEM_BIKE            OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_CLASSIC_MCELIECE OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_FRODOKEM        OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_HQC             OFF CACHE BOOL "" FORCE)
-set(OQS_ENABLE_KEM_ML_KEM          OFF CACHE BOOL "" FORCE)
+set(OQS_ENABLE_KEM_ML_KEM          ON  CACHE BOOL "" FORCE)
 set(OQS_ENABLE_KEM_NTRUPRIME       OFF CACHE BOOL "" FORCE)
 set(OQS_ENABLE_SIG_ML_DSA          ON  CACHE BOOL "" FORCE)
 set(OQS_ENABLE_SIG_FALCON          OFF CACHE BOOL "" FORCE)
@@ -115,6 +114,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(sodium REQUIRED IMPORTED_TARGET libsodium)
 
 add_subdirectory(src)
 enable_testing()

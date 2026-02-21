@@ -1,6 +1,8 @@
 add_library(chromatin-core STATIC)
 target_sources(chromatin-core PRIVATE
     crypto/crypto.cpp
+    crypto/kem.cpp
+    crypto/aead.cpp
     storage/storage.cpp
     kademlia/node_id.cpp
     kademlia/routing_table.cpp
@@ -19,6 +21,7 @@ target_link_libraries(chromatin-core PUBLIC
     jsoncpp_static
     spdlog::spdlog
     uWebSockets
+    PkgConfig::sodium
     Threads::Threads
 )
 
