@@ -38,12 +38,16 @@ messages as opaque encrypted blobs — it never sees plaintext.
 |----------------------|------------------------|------------------------------------------|
 | Node identity        | ML-DSA-87 (FIPS 204, Level 5) | Node signing, signature verification   |
 | Hashing              | SHA3-256               | Node IDs, data keys, PoW verification    |
-| Node-to-node         | TCP                    | Kademlia protocol + replication          |
+| TCP key exchange     | ML-KEM-1024 (FIPS 203) | Ephemeral per-connection key encapsulation |
+| TCP encryption       | ChaCha20-Poly1305 (libsodium) | AEAD symmetric encryption for TCP transport |
+| Node-to-node         | TCP                    | Kademlia protocol + replication (optionally encrypted) |
 | Client-to-node       | WebSocket              | Inbox delivery, auth, commands           |
 
 The server verifies ML-DSA signatures on profiles, name records, and client
 authentication. It does **not** encrypt/decrypt messages — that is the client's
-responsibility.
+responsibility. TCP connections between nodes support optional transport-layer
+encryption using ML-KEM-1024 key exchange and ChaCha20-Poly1305 AEAD
+(via libsodium).
 
 ---
 
@@ -183,6 +187,8 @@ replication strategy.
 ```
 
 Single binary. One process, two listeners (TCP + WebSocket), one storage engine.
+TCP connections support optional ML-KEM-1024 + ChaCha20-Poly1305 encryption
+(see Section 6.5).
 
 ---
 
@@ -270,7 +276,46 @@ future signed messages. All other types — including PONG, NODES, and all
 trust-sensitive messages — MUST have valid signatures. Messages from nodes
 whose public key is not yet known are rejected (except PING and FIND_NODE).
 
-### 6.5 Self-Healing & Periodic Maintenance
+### 6.5 TCP Transport Encryption
+
+TCP connections between nodes support optional encryption using ML-KEM-1024
+key exchange and ChaCha20-Poly1305 AEAD (via libsodium). This protects
+Kademlia messages from eavesdropping and tampering on the wire.
+
+**Handshake:** A 3-message handshake (HELLO, ACCEPT, CONFIRM) establishes
+an encrypted session:
+
+1. **HELLO**: Initiator sends a `0xCE` probe byte, an ephemeral ML-KEM-1024
+   public key, and a random nonce.
+2. **ACCEPT**: Responder encapsulates a shared secret using the ephemeral key,
+   signs the handshake transcript with ML-DSA-87, and returns a random nonce.
+3. **CONFIRM**: Initiator signs the handshake transcript with ML-DSA-87,
+   completing mutual authentication.
+
+**Key derivation:** Two directional session keys are derived from the shared
+secret using SHA3-256 with domain-separated prefixes:
+- `i2r_key = SHA3-256("chromatin:tcp:i2r:" || ss || hello_random || accept_random)`
+- `r2i_key = SHA3-256("chromatin:tcp:r2i:" || ss || hello_random || accept_random)`
+
+All subsequent CHRM messages are encrypted with ChaCha20-Poly1305 using
+per-direction nonce counters and length-header AAD.
+
+**Backward compatibility:** The `0xCE` probe byte distinguishes encrypted
+connections from plaintext (`0x43` = `'C'` from the CHRM magic). Nodes
+without encryption support reject the probe; the initiator falls back to
+plaintext and caches the failure per destination. This allows incremental
+deployment without coordinated upgrades.
+
+**Security properties:**
+- Mutual ML-DSA-87 authentication (both sides prove identity)
+- Forward secrecy via ephemeral ML-KEM-1024 keys (per-connection)
+- Post-quantum security (ML-KEM-1024 FIPS 203 + ML-DSA-87 FIPS 204)
+- Replay protection via random nonces and per-message counters
+- Direction separation prevents reflection attacks
+
+See PROTOCOL-SPEC.md Section 2 for the complete wire format specification.
+
+### 6.6 Self-Healing & Periodic Maintenance
 
 Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 
@@ -479,7 +524,7 @@ cross-protocol signature replay.
 ### 8.3 WebSocket Messages
 
 Control messages use JSON text frames. Large blob transfers (>64 KB) use binary
-WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 4.6).
+WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 5.7).
 
 **Client → Node:**
 
@@ -688,6 +733,7 @@ Each entry in `repl_log`:
 | Language           | C++                            |
 | WebSocket          | uWebSockets                    |
 | PQ crypto          | liboqs                         |
+| Symmetric crypto   | libsodium (ChaCha20-Poly1305)  |
 | Local storage      | libmdbx (C++ API)              |
 | JSON               | jsoncpp                        |
 | Logging            | spdlog                         |

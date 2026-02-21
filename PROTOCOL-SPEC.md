@@ -89,7 +89,163 @@ Future versions may introduce dedicated storage nodes for large files.
 
 ---
 
-## 2. TCP Payload Formats
+## 2. TCP Transport Encryption (ML-KEM-1024 + ChaCha20-Poly1305)
+
+TCP node-to-node connections support optional encryption using a 3-message
+handshake that provides mutual authentication and forward secrecy via
+ephemeral ML-KEM-1024 key encapsulation.
+
+### 2.1 Probe-Based Detection
+
+The first byte of a new TCP connection determines whether encryption is
+being negotiated:
+
+| First Byte | Meaning                                    |
+|------------|--------------------------------------------|
+| `0xCE`     | Encrypted handshake (HELLO message follows)|
+| `0x43`     | Plaintext CHRM message (`'C'` from magic)  |
+
+This allows nodes to accept both encrypted and plaintext connections on the
+same TCP port. Nodes that do not support encryption simply reject the `0xCE`
+probe byte and close the connection. The initiator then falls back to
+plaintext and caches the failure per destination to avoid repeated handshake
+attempts.
+
+### 2.2 Handshake Protocol
+
+The handshake consists of three messages: HELLO, ACCEPT, and CONFIRM.
+
+**HELLO** (Initiator -> Responder, ~1637 bytes):
+```
+[1 byte:  0xCE]                      // Encryption probe byte
+[1 byte:  version]                   // Protocol version (0x01)
+[1 byte:  cipher]                    // Cipher suite (0x01 = ChaCha20-Poly1305)
+[32 bytes: initiator_node_id]        // SHA3-256(initiator ML-DSA-87 pubkey)
+[2 bytes BE: kem_pk_len]             // ML-KEM-1024 public key length (1568)
+[kem_pk_len bytes: ephemeral_kem_pubkey]  // Ephemeral ML-KEM-1024 public key
+[32 bytes: hello_random]             // Cryptographic random nonce
+```
+
+**ACCEPT** (Responder -> Initiator, ~6265 bytes):
+```
+[1 byte:  version]                   // Protocol version (0x01)
+[1 byte:  cipher]                    // Cipher suite (0x01 = ChaCha20-Poly1305)
+[32 bytes: responder_node_id]        // SHA3-256(responder ML-DSA-87 pubkey)
+[2 bytes BE: ct_len]                 // KEM ciphertext length (1568)
+[ct_len bytes: kem_ciphertext]       // ML-KEM-1024 ciphertext (encapsulated shared secret)
+[32 bytes: accept_random]            // Cryptographic random nonce
+[2 bytes BE: sig_len]                // ML-DSA-87 signature length
+[sig_len bytes: signature]           // ML-DSA-87 signature (~4627 bytes)
+```
+
+**CONFIRM** (Initiator -> Responder, ~4629 bytes):
+```
+[2 bytes BE: sig_len]                // ML-DSA-87 signature length
+[sig_len bytes: signature]           // ML-DSA-87 signature (~4627 bytes)
+```
+
+### 2.3 Signature Coverage
+
+Both ACCEPT and CONFIRM signatures provide mutual authentication and bind
+the handshake to the specific participants and session.
+
+**ACCEPT signature** (Responder signs):
+```
+signed_data = hello_random || initiator_node_id || responder_node_id || accept_random || kem_ciphertext
+```
+
+**CONFIRM signature** (Initiator signs):
+```
+signed_data = hello_random || accept_random || kem_ciphertext || responder_node_id
+```
+
+Both signatures include the random nonces and KEM ciphertext, preventing
+replay attacks and binding the authentication to the key exchange.
+
+### 2.4 Key Derivation
+
+After the handshake, both sides derive directional session keys from the
+shared secret (`ss`) produced by ML-KEM-1024 decapsulation:
+
+```
+i2r_key = SHA3-256("chromatin:tcp:i2r:" || ss || hello_random || accept_random)
+r2i_key = SHA3-256("chromatin:tcp:r2i:" || ss || hello_random || accept_random)
+```
+
+- `i2r_key`: Used by the initiator to encrypt, responder to decrypt
+- `r2i_key`: Used by the responder to encrypt, initiator to decrypt
+
+Domain-separated prefixes (`"chromatin:tcp:i2r:"` and `"chromatin:tcp:r2i:"`)
+ensure the two directional keys are cryptographically independent. Both
+random nonces are included to bind the keys to this specific session.
+
+### 2.5 Encrypted Frame Format
+
+After handshake completion, all subsequent CHRM messages on the connection
+are encrypted. Each encrypted frame has the following format:
+
+```
+[4 bytes BE: ciphertext_length]      // Length of the encrypted payload
+[ciphertext_length bytes: ciphertext] // ChaCha20-Poly1305 encrypted CHRM message
+```
+
+**AEAD parameters:**
+- **Key**: `i2r_key` or `r2i_key` (depending on direction)
+- **Nonce**: 12 bytes — `[4 zero bytes][8 bytes BE: counter]`. The counter
+  starts at 0 and increments by 1 for each message sent in that direction.
+  Each direction maintains its own counter.
+- **AAD** (Additional Authenticated Data): The 4-byte big-endian length
+  header preceding the ciphertext. This binds the length to the ciphertext,
+  preventing length-manipulation attacks.
+- **Plaintext**: The complete CHRM message (including `CHRM` magic, header,
+  payload, and signature as defined in Section 1).
+
+### 2.6 Cipher Suites
+
+| Value | Cipher                    | KEM            | Key Size |
+|-------|---------------------------|----------------|----------|
+| 0x01  | ChaCha20-Poly1305         | ML-KEM-1024    | 256-bit  |
+
+Values 0x02-0xFF are reserved for future cipher suites. If a responder does
+not support the requested cipher suite, it closes the connection. The
+initiator SHOULD fall back to plaintext.
+
+### 2.7 Backward Compatibility
+
+Encryption is optional and backward compatible:
+
+1. **Initiator probes**: Sends `0xCE` as the first byte of the connection.
+2. **Responder without encryption**: Does not recognize `0xCE`, rejects the
+   connection (closes socket or sends an error).
+3. **Initiator fallback**: On handshake failure, the initiator falls back to
+   plaintext (standard CHRM messages starting with `0x43`).
+4. **Per-destination caching**: The initiator caches which destinations do
+   not support encryption to avoid repeated handshake attempts. The cache
+   is cleared periodically or when the destination's routing table entry
+   is refreshed.
+
+This ensures that nodes running older software without encryption support
+can still participate in the network. As the network upgrades, more
+connections will be encrypted without requiring coordinated deployment.
+
+### 2.8 Security Properties
+
+- **Mutual authentication**: Both sides prove their identity via ML-DSA-87
+  signatures over the handshake transcript.
+- **Forward secrecy**: Ephemeral ML-KEM-1024 keys are generated per
+  connection. Compromise of long-term signing keys does not reveal past
+  session keys.
+- **Replay protection**: Random nonces (`hello_random`, `accept_random`)
+  and per-message counters prevent replay attacks.
+- **Direction separation**: Separate `i2r_key` and `r2i_key` prevent
+  reflection attacks where a message sent in one direction is replayed
+  in the other.
+- **Post-quantum security**: ML-KEM-1024 (FIPS 203) and ML-DSA-87
+  (FIPS 204) provide security against quantum adversaries.
+
+---
+
+## 3. TCP Payload Formats
 
 ### PING (0x00)
 
@@ -222,7 +378,7 @@ Response with the current replication log sequence number for the requested key.
 ```
 
 **SYNC_RESP validation:** Every ADD entry in a SYNC_RESP is validated
-using the same rules as a direct STORE (see Section 5) before being
+using the same rules as a direct STORE (see Section 6) before being
 applied to local storage. This prevents malicious nodes from injecting
 forged data via the sync protocol.
 
@@ -241,7 +397,7 @@ node relies on SYNC_REQ/SYNC_RESP to reconcile later.
 
 ---
 
-## 3. Data Formats
+## 4. Data Formats
 
 These define the structure of values carried inside STORE and VALUE payloads.
 
@@ -383,10 +539,10 @@ separate blocklist.
 
 ---
 
-## 4. WebSocket Client-to-Node Protocol
+## 5. WebSocket Client-to-Node Protocol
 
 Clients connect to a responsible node via WebSocket. Control messages are JSON
-text frames. Large blob transfers use binary WebSocket frames (see Section 4.6).
+text frames. Large blob transfers use binary WebSocket frames (see Section 5.7).
 Every client request includes an `id` field for response correlation.
 
 **TLS:** Nodes SHOULD enable TLS (WSS) to protect metadata (fingerprints,
@@ -396,7 +552,7 @@ with `tls_cert_path` and `tls_key_path`, the node listens with TLS on the same
 already encrypted with ML-KEM-1024, but TLS provides transport-level metadata
 protection.
 
-### 4.1 Authentication
+### 5.1 Authentication
 
 ```json
 // 1. Client -> Node
@@ -419,7 +575,7 @@ The node verifies:
 3. ML-DSA-87 signature over `"chromatin-auth:" || nonce` (47 bytes) is valid.
    The domain prefix prevents cross-protocol signature replay attacks.
 
-### 4.2 REDIRECT
+### 5.2 REDIRECT
 
 If the node receiving HELLO is not responsible for the client's inbox, it
 queries the R responsible nodes for their replication log sequence number and
@@ -436,7 +592,7 @@ up-to-date node.
 
 The connection is closed after sending REDIRECT.
 
-### 4.3 Client Commands (after authentication)
+### 5.3 Client Commands (after authentication)
 
 **SEND (small, <=64 KB)** — Push encrypted blob inline to recipient's inbox:
 ```json
@@ -455,7 +611,7 @@ Response:
 // Response: ready for chunks
 {"type": "SEND_READY", "id": 3, "request_id": 42}
 
-// Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 4.6)
+// Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 5.7)
 
 // Step 3: After all chunks received
 {"type": "SEND_ACK", "id": 3, "msg_id": "<hex>"}
@@ -507,7 +663,7 @@ Large blob response (>64 KB): JSON header followed by binary chunks:
 ```json
 {"type": "GET_RESULT", "id": 5, "msg_id": "<hex>", "size": 5242880, "chunks": 5}
 ```
-Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 4.6).
+Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 5.7).
 
 **DELETE** — Optionally delete messages the client no longer needs:
 ```json
@@ -606,7 +762,7 @@ Response:
 ```json
 {"type": "SET_PROFILE", "id": 14, "profile": "<base64 of signed profile binary>"}
 ```
-The client constructs and signs the profile binary (see Section 3). The node
+The client constructs and signs the profile binary (see Section 4). The node
 validates the profile (fingerprint matches session, signature is valid) and
 stores/replicates it via Kademlia.
 Response: `{"type": "SET_PROFILE_ACK", "id": 14}`
@@ -620,7 +776,7 @@ name not already taken) and stores/replicates via Kademlia. Names are permanent
 and cannot be updated — first claim wins.
 Response: `{"type": "REGISTER_NAME_ACK", "id": 15}`
 
-### 4.4 Server Push (unsolicited, no id)
+### 5.4 Server Push (unsolicited, no id)
 
 Push notifications are delivered to **all connected devices** for a given
 fingerprint. When multiple devices are authenticated with the same identity,
@@ -641,7 +797,7 @@ each receives the push notification independently.
 {"type": "CONTACT_REQUEST", "from": "<hex>", "blob": "<base64>"}
 ```
 
-### 4.5 Rate Limiting
+### 5.5 Rate Limiting
 
 Nodes enforce per-connection rate limiting using a token bucket algorithm.
 Each connection starts with 50 tokens and refills at 10 tokens/second.
@@ -659,14 +815,14 @@ Different commands consume different token costs:
 
 When a client exceeds the rate limit, the node responds with error code 429.
 
-### 4.5.1 Worker Pool Backpressure
+### 5.5.1 Worker Pool Backpressure
 
 The node's worker pool has a bounded queue (max 1024 pending jobs). When the
 queue is full, new requests that require worker pool execution (HELLO redirect
 checks, SEND, CONTACT_REQUEST, ALLOW, REVOKE) receive error code 503. This
 prevents unbounded memory growth under high load.
 
-### 4.6 Error Responses
+### 5.6 Error Responses
 
 ```json
 {"type": "ERROR", "id": 1, "code": 403, "reason": "signature verification failed"}
@@ -685,7 +841,7 @@ prevents unbounded memory growth under high load.
 | 500  | Internal error                                |
 | 503  | Service unavailable (worker pool at capacity) |
 
-### 4.7 Binary WebSocket Frames — Chunked Transfer
+### 5.7 Binary WebSocket Frames — Chunked Transfer
 
 Large blob transfers (>64 KB) use binary WebSocket frames with fixed 1 MiB
 (1,048,576 byte) chunks. The last chunk may be smaller.
@@ -718,7 +874,7 @@ with `size` > 64 KB while an upload is in progress receives error 429.
 
 ---
 
-## 5. Validation Rules
+## 6. Validation Rules
 
 ### TCP Message Validation
 
@@ -895,7 +1051,7 @@ cryptographic random source. Implementations using liboqs SHOULD use
 
 ---
 
-## 6. Protocol Constants
+## 7. Protocol Constants
 
 All values below are **configurable** via `settings.json`. The table shows
 defaults. See `chromatin-node --generate-config` for a complete template.
@@ -906,7 +1062,7 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Protocol version           | `0x01`                                 |
 | Hash algorithm             | SHA3-256 (32-byte output)              |
 | Signing algorithm          | ML-DSA-87 (FIPS 204, Level 5)         |
-| KEM algorithm              | ML-KEM-1024 (FIPS 203, client-side)   |
+| KEM algorithm              | ML-KEM-1024 (FIPS 203)                |
 | Key space                  | 256 bits (SHA3-256 output)             |
 | Timestamp format           | Milliseconds since Unix epoch (uint64) |
 | Replication factor (R)     | `min(3, network_size)`                 |
@@ -934,6 +1090,10 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | TCP conn pool max idle     | 60 seconds                             |
 | TCP conn pool max size     | 64 connections                         |
 | Max TCP clients            | 256                                    |
+| TCP encryption probe byte  | `0xCE`                                 |
+| TCP encryption cipher 0x01 | ChaCha20-Poly1305 + ML-KEM-1024       |
+| TCP i2r key prefix         | `"chromatin:tcp:i2r:"`                 |
+| TCP r2i key prefix         | `"chromatin:tcp:r2i:"`                 |
 | Worker pool threads        | 4                                      |
 | Worker pool max queue      | 1024 jobs                              |
 | Repl_log compact interval  | 1 hour                                 |
@@ -951,7 +1111,7 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 
 ---
 
-## 7. Key Computation
+## 8. Key Computation
 
 All storage keys are derived using SHA3-256 with domain prefixes:
 
@@ -978,7 +1138,7 @@ responsible for storing data associated with that key.
 
 ---
 
-## 8. Extensibility
+## 9. Extensibility
 
 The protocol is designed for future extension:
 
