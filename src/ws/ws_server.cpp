@@ -67,6 +67,8 @@ void WsServer<SSL>::run() {
                     it->second.erase(ws);
                     if (it->second.empty()) {
                         authenticated_.erase(it);
+                        // Also clean up fingerprint rate limiter when no sessions remain
+                        fp_rate_limiters_.erase(session->fingerprint);
                     }
                 }
             }
@@ -174,9 +176,19 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
     if (cmd.requires_auth && !require_auth(ws, id)) return;
     if (cmd.rate_cost > 0.0) {
         auto* session = ws->getUserData();
-        if (!session->rate_limiter.consume(cmd.rate_cost)) {
-            send_error(ws, id, 429, "rate limit exceeded");
-            return;
+        if (session->authenticated) {
+            // Use shared per-fingerprint rate limiter
+            auto fp_it = fp_rate_limiters_.find(session->fingerprint);
+            if (fp_it != fp_rate_limiters_.end() && !fp_it->second.consume(cmd.rate_cost)) {
+                send_error(ws, id, 429, "rate limit exceeded");
+                return;
+            }
+        } else {
+            // Pre-auth: use per-session rate limiter
+            if (!session->rate_limiter.consume(cmd.rate_cost)) {
+                send_error(ws, id, 429, "rate limit exceeded");
+                return;
+            }
         }
     }
     (this->*cmd.handler)(ws, root);
@@ -606,6 +618,17 @@ void WsServer<SSL>::handle_auth(ws_t* ws, const Json::Value& msg) {
     session->authenticated = true;
     session->pubkey = std::move(*pk_bytes);
     authenticated_[session->fingerprint].insert(ws);
+
+    // Initialize per-fingerprint rate limiter if this is the first connection
+    // for this fingerprint. Uses try_emplace to avoid overwriting an existing
+    // limiter when a second device authenticates with the same identity.
+    auto [it_fp, inserted] = fp_rate_limiters_.try_emplace(session->fingerprint);
+    if (inserted) {
+        it_fp->second.tokens = cfg_.rate_limit_tokens;
+        it_fp->second.max_tokens = cfg_.rate_limit_max;
+        it_fp->second.refill_rate = cfg_.rate_limit_refill;
+        it_fp->second.last_refill = std::chrono::steady_clock::now();
+    }
 
     // Count pending inbox messages
     int pending = 0;

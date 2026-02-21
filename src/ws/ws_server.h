@@ -110,6 +110,10 @@ private:
     // Multiple devices can be connected with the same identity simultaneously.
     std::unordered_map<crypto::Hash, std::unordered_set<ws_t*>, crypto::HashHash> authenticated_;
 
+    // Per-fingerprint rate limiters (shared across connections with same identity).
+    // Prevents attackers from multiplying rate limits by opening multiple connections.
+    std::unordered_map<crypto::Hash, RateLimiter, crypto::HashHash> fp_rate_limiters_;
+
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
     void on_binary(ws_t* ws, std::span<const uint8_t> data);

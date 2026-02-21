@@ -1590,6 +1590,75 @@ TEST_F(WsServerTest, RateLimitExceeded) {
     client.close();
 }
 
+TEST_F(WsServerTest, RateLimitSharedAcrossConnections) {
+    // Use a small token bucket so we can easily exhaust it with two connections
+    cfg_.rate_limit_tokens = 10.0;
+    cfg_.rate_limit_max = 10.0;
+    cfg_.rate_limit_refill = 0.0;  // no refill — makes test deterministic
+    start_ws_server();
+
+    // Same identity for both connections
+    auto user_kp = crypto::generate_keypair();
+
+    // Connect and authenticate client 1
+    TestWsClient client1;
+    ASSERT_TRUE(client1.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client1, user_kp));
+
+    // Connect and authenticate client 2 (same identity)
+    TestWsClient client2;
+    ASSERT_TRUE(client2.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client2, user_kp));
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+
+    // Send 7 requests from client 1 — consumes 7 of 10 tokens from the shared pool
+    // (AUTH consumed 1 token from each connection, but those use the per-session
+    //  rate limiter for pre-auth, so the fingerprint pool is still at 10 tokens.
+    //  Actually AUTH consumes from the shared pool after successful auth added it.)
+    // After both auths: the fp limiter was initialized once at 10 tokens.
+    // AUTH itself costs 1.0 each, but AUTH runs before the session is marked
+    // authenticated, so the pre-auth per-session limiter handles it.
+    // Post-auth commands consume from the shared fp limiter.
+
+    for (int i = 0; i < 7; ++i) {
+        Json::Value list_msg;
+        list_msg["type"] = "LIST";
+        list_msg["id"] = 3000 + i;
+        ASSERT_TRUE(client1.send_text(Json::writeString(writer, list_msg)));
+
+        auto resp = client1.recv_text(2000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        // These should all succeed (7 of 10 tokens)
+        EXPECT_NE(root["code"].asInt(), 429) << "client1 request " << i << " should not be rate limited";
+    }
+
+    // Now send requests from client 2 — only 3 tokens remain in shared pool
+    int rate_limited_count = 0;
+    for (int i = 0; i < 6; ++i) {
+        Json::Value list_msg;
+        list_msg["type"] = "LIST";
+        list_msg["id"] = 4000 + i;
+        ASSERT_TRUE(client2.send_text(Json::writeString(writer, list_msg)));
+
+        auto resp = client2.recv_text(2000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        if (root["code"].asInt() == 429) {
+            rate_limited_count++;
+        }
+    }
+
+    // With only 3 tokens left, at least 3 of the 6 requests from client2 should be rejected
+    EXPECT_GE(rate_limited_count, 3)
+        << "Same-fingerprint connections should share the rate limit pool";
+
+    client1.close();
+    client2.close();
+}
+
 TEST_F(WsServerTest, HelloRateLimited) {
     start_ws_server();
 
