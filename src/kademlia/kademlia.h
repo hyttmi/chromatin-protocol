@@ -148,6 +148,9 @@ private:
     std::chrono::steady_clock::time_point last_transfer_check_{};
     std::unordered_set<NodeId, NodeIdHash> prev_routing_nodes_;  // for transfer dedup
 
+    // FIND_NODE rate limiting: "addr:port" -> last request time
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> find_node_rate_;
+
     // Pending STORE quorum tracking (key -> status)
     mutable std::mutex pending_mutex_;
     std::unordered_map<crypto::Hash, PendingStore, crypto::HashHash> pending_stores_;

@@ -148,6 +148,18 @@ void Kademlia::tick() {
         last_sync_ = now;
         sync_with_peers();
     }
+
+    // 9. Clean up stale FIND_NODE rate entries (older than 30 seconds)
+    {
+        auto cutoff = now - std::chrono::seconds(30);
+        for (auto it = find_node_rate_.begin(); it != find_node_rate_.end(); ) {
+            if (it->second < cutoff) {
+                it = find_node_rate_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -639,6 +651,18 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
 // ---------------------------------------------------------------------------
 
 void Kademlia::handle_find_node(const Message& msg, const std::string& from, uint16_t port) {
+    // Rate limit: max 1 FIND_NODE per second per sender
+    {
+        auto key = from + ":" + std::to_string(port);
+        auto now = std::chrono::steady_clock::now();
+        auto it = find_node_rate_.find(key);
+        if (it != find_node_rate_.end() && now - it->second < std::chrono::seconds(1)) {
+            spdlog::debug("FIND_NODE rate limited for {}:{}", from, port);
+            return;
+        }
+        find_node_rate_[key] = now;
+    }
+
     spdlog::debug("Received FIND_NODE from {}:{}", from, port);
 
     // Add the requesting node to our routing table.

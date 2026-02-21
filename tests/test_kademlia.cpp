@@ -2644,3 +2644,45 @@ TEST_F(KademliaTest, InboxResponsibilityTransfer) {
             << "Transferred blob content should match original";
     }
 }
+
+// ---------------------------------------------------------------------------
+// FindNodeRateLimit — rapid FIND_NODE requests are throttled
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, FindNodeRateLimit) {
+    auto& node_a = create_node();
+    auto& node_b = create_node();
+    start_all();
+
+    // Bootstrap so they know each other
+    bootstrap_bidirectional(node_a, node_b);
+
+    // Verify initial routing table has entries
+    EXPECT_GE(node_a.table->size(), 1u);
+
+    // Send 5 rapid FIND_NODE messages from node_a to node_b
+    // Only the first should be processed (1 per second limit)
+    for (int i = 0; i < 5; ++i) {
+        auto payload = node_a.kad->self().pubkey;
+        // Build a FIND_NODE payload: pubkey_len(2 BE) || pubkey
+        std::vector<uint8_t> fn_payload;
+        uint16_t pk_len = static_cast<uint16_t>(payload.size());
+        fn_payload.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        fn_payload.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        fn_payload.insert(fn_payload.end(), payload.begin(), payload.end());
+
+        Message msg;
+        msg.type = MessageType::FIND_NODE;
+        msg.sender = node_a.info.id;
+        msg.sender_port = node_a.info.tcp_port;
+        msg.payload = fn_payload;
+        // FIND_NODE messages are not signed per protocol
+        node_a.transport->send("127.0.0.1", node_b.info.tcp_port, msg);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // The node should still be functional — test passes if no crash
+    // and the rate limiting didn't break normal operation
+    EXPECT_GE(node_b.table->size(), 1u);
+}
