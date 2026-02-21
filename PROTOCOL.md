@@ -40,14 +40,13 @@ messages as opaque encrypted blobs — it never sees plaintext.
 | Hashing              | SHA3-256               | Node IDs, data keys, PoW verification    |
 | TCP key exchange     | ML-KEM-1024 (FIPS 203) | Ephemeral per-connection key encapsulation |
 | TCP encryption       | ChaCha20-Poly1305 (libsodium) | AEAD symmetric encryption for TCP transport |
-| Node-to-node         | TCP                    | Kademlia protocol + replication (optionally encrypted) |
+| Node-to-node         | TCP (encrypted)        | Kademlia protocol + replication            |
 | Client-to-node       | WebSocket              | Inbox delivery, auth, commands           |
 
 The server verifies ML-DSA signatures on profiles, name records, and client
 authentication. It does **not** encrypt/decrypt messages — that is the client's
-responsibility. TCP connections between nodes support optional transport-layer
-encryption using ML-KEM-1024 key exchange and ChaCha20-Poly1305 AEAD
-(via libsodium).
+responsibility. All TCP connections between nodes are encrypted using
+ML-KEM-1024 key exchange and ChaCha20-Poly1305 AEAD (via libsodium).
 
 ---
 
@@ -140,6 +139,7 @@ profile_key = SHA3-256("profile:" || fingerprint)     → R closest nodes store 
 name_key    = SHA3-256("name:" || name)            → R closest nodes store it
 inbox_key   = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it
 request_key = SHA3-256("requests:" || fingerprint) → R closest nodes store it
+group_key   = SHA3-256("group:" || group_id)       → R closest nodes store it
 ```
 
 No separate "DHT layer" vs "relay layer". One node, one storage engine, one
@@ -187,7 +187,7 @@ replication strategy.
 ```
 
 Single binary. One process, two listeners (TCP + WebSocket), one storage engine.
-TCP connections support optional ML-KEM-1024 + ChaCha20-Poly1305 encryption
+All TCP connections use ML-KEM-1024 + ChaCha20-Poly1305 encryption
 (see Section 6.5).
 
 ---
@@ -278,8 +278,8 @@ whose public key is not yet known are rejected (except PING and FIND_NODE).
 
 ### 6.5 TCP Transport Encryption
 
-TCP connections between nodes support optional encryption using ML-KEM-1024
-key exchange and ChaCha20-Poly1305 AEAD (via libsodium). This protects
+All TCP connections between nodes are encrypted using ML-KEM-1024 key
+exchange and ChaCha20-Poly1305 AEAD (via libsodium). This protects
 Kademlia messages from eavesdropping and tampering on the wire.
 
 **Handshake:** A 3-message handshake (HELLO, ACCEPT, CONFIRM) establishes
@@ -300,11 +300,9 @@ secret using SHA3-256 with domain-separated prefixes:
 All subsequent CHRM messages are encrypted with ChaCha20-Poly1305 using
 per-direction nonce counters and length-header AAD.
 
-**Backward compatibility:** The `0xCE` probe byte distinguishes encrypted
-connections from plaintext (`0x43` = `'C'` from the CHRM magic). Nodes
-without encryption support reject the probe; the initiator falls back to
-plaintext and caches the failure per destination. This allows incremental
-deployment without coordinated upgrades.
+**Encryption is mandatory.** The `0xCE` probe byte identifies encrypted
+connections. Plaintext connections (starting with `0x43`) are rejected.
+If the handshake fails, the connection is closed and the message is dropped.
 
 **Security properties:**
 - Mutual ML-DSA-87 authentication (both sides prove identity)
@@ -647,9 +645,87 @@ senders with proof-of-work.
 
 ---
 
-## 10. Node Identity & Lifecycle
+## 10. Group Messaging
 
-### 10.1 Node Identity
+### 10.1 Overview
+
+Chromatin supports group messaging for up to 512 members per group. The design
+follows a **fan-out model**: the sender encrypts the message once with a shared
+Group Encryption Key (GEK), then sends a copy to each member's inbox
+individually. The network treats group messages the same as regular inbox
+messages for routing and storage purposes.
+
+The server never sees plaintext — all group encryption and decryption is
+performed client-side.
+
+### 10.2 Group Encryption Key (GEK)
+
+Each group has a symmetric AES-256-GCM key called the GEK. The group owner
+generates the GEK and distributes it to each member by encrypting it with the
+member's ML-KEM-1024 public key (from their profile).
+
+- GEK is a 256-bit AES key used for AES-256-GCM encryption of message blobs
+- Each member receives the GEK encrypted with their ML-KEM-1024 public key
+- The encrypted GEK is stored in the GROUP_META record alongside the member list
+- Members decrypt the GEK using their ML-KEM-1024 secret key
+
+### 10.3 Fan-Out Model
+
+When a group member sends a message:
+
+1. Sender encrypts the message blob with the current GEK (AES-256-GCM)
+2. Sender creates a GROUP_MESSAGE (data_type 0x05) for **each** group member
+3. Each copy is routed to the recipient's inbox: `SHA3-256("inbox:" || recipient_fp)`
+4. Responsible nodes store the message in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS
+5. Connected recipients receive a NEW_MESSAGE push notification
+
+This means group messages use the same storage, routing, and replication
+infrastructure as 1:1 messages. No special server-side handling is needed
+beyond recognizing the data type.
+
+### 10.4 Group Metadata
+
+Group metadata (data_type 0x06) is stored at routing key
+`SHA3-256("group:" || group_id)` on the R closest nodes. It contains:
+
+- Group identity (`group_id` = SHA3-256 of group creation record)
+- Owner fingerprint (only the owner can modify the group)
+- Version number (monotonically increasing)
+- Member list with ML-KEM-1024 encrypted GEK per member
+- ML-DSA-87 signature by the group owner
+
+The group owner signs all metadata updates. Nodes verify the signature before
+accepting a GROUP_META STORE. Version must be higher than the currently stored
+version (replay prevention).
+
+Local storage uses TABLE_GROUP_META with `group_id` as the key.
+
+### 10.5 GEK Rotation
+
+GEK rotation is required whenever a member is removed from the group:
+
+1. Group owner generates a new GEK
+2. Owner increments the GROUP_META version
+3. Owner encrypts the new GEK with each remaining member's ML-KEM-1024 key
+4. Owner publishes the updated GROUP_META record
+5. Subsequent messages use the new `gek_version`
+
+Removed members cannot decrypt messages sent after the rotation because they
+do not have the new GEK. Messages sent before the rotation remain decryptable
+by the removed member (no backward secrecy for past messages).
+
+### 10.6 Constraints
+
+- Maximum 512 members per group
+- Group owner is the sole authority for membership changes
+- GROUP_META is immutable per version — new version replaces old
+- `group_id` is permanent (derived from creation record hash)
+
+---
+
+## 11. Node Identity & Lifecycle
+
+### 11.1 Node Identity
 
 Each node has:
 - Its own ML-DSA-87 keypair (generated on first run)
@@ -657,7 +733,7 @@ Each node has:
 - Publicly reachable address (IP:port for TCP, IP:port for WebSocket)
 - All node-to-node messages are ML-DSA signed
 
-### 10.2 Bootstrap
+### 11.2 Bootstrap
 
 - 3 hardcoded bootstrap nodes: `0.bootstrap.cpunk.io`, `1.bootstrap.cpunk.io`,
   `2.bootstrap.cpunk.io`
@@ -665,13 +741,13 @@ Each node has:
 - New node contacts any bootstrap → receives full membership list
 - Bootstrap nodes have elevated role: can **slash bad nodes**
 
-### 10.3 Node Joining
+### 11.3 Node Joining
 
 - **Open join** — any node can join by contacting a bootstrap
 - No PoW or payment required to run a node
 - New nodes start with low trust and earn reputation over time
 
-### 10.4 Responsibility Transfer
+### 11.4 Responsibility Transfer
 
 When a new node joins (or an existing node leaves), the responsibility map
 changes. Some keys may now have a new closest node.
@@ -684,7 +760,7 @@ changes. Some keys may now have a new closest node.
 Old responsible nodes that are no longer in the top R for a key can prune
 that data after confirming the new responsible node is synced.
 
-### 10.5 Trust & Reputation
+### 11.5 Trust & Reputation
 
 - Nodes track reputation: uptime, responsiveness, correct behavior
 - New nodes receive less responsibility until proven reliable
@@ -695,9 +771,9 @@ that data after confirming the new responsible node is synced.
 
 ---
 
-## 11. Local Storage (libmdbx)
+## 12. Local Storage (libmdbx)
 
-### 11.1 Database Layout
+### 12.1 Database Layout
 
 | Database         | Key Format                          | Value                     |
 |------------------|-------------------------------------|---------------------------|
@@ -709,9 +785,10 @@ that data after confirming the new responsible node is synced.
 | allowlists       | `SHA3-256("allowlist:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (composite key, O(1) lookup) |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
+| group_meta       | `group_id(32)`                      | Group metadata binary (signed) |
 | reputation       | `node_id`                           | Trust score + metrics     |
 
-### 11.2 Replication Log Format
+### 12.2 Replication Log Format
 
 Each entry in `repl_log`:
 
@@ -726,7 +803,7 @@ Each entry in `repl_log`:
 
 ---
 
-## 12. Tech Stack
+## 13. Tech Stack
 
 | Component          | Library                        |
 |--------------------|--------------------------------|

@@ -23,6 +23,7 @@ inline constexpr const char* TABLE_NODES          = "nodes";
 inline constexpr const char* TABLE_REPUTATION     = "reputation";
 inline constexpr const char* TABLE_INBOX_INDEX    = "inbox_index";
 inline constexpr const char* TABLE_MESSAGE_BLOBS  = "message_blobs";
+inline constexpr const char* TABLE_GROUP_META     = "group_meta";
 
 class Storage {
 public:

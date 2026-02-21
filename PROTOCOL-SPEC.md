@@ -207,26 +207,15 @@ are encrypted. Each encrypted frame has the following format:
 | 0x01  | ChaCha20-Poly1305         | ML-KEM-1024    | 256-bit  |
 
 Values 0x02-0xFF are reserved for future cipher suites. If a responder does
-not support the requested cipher suite, it closes the connection. The
-initiator SHOULD fall back to plaintext.
+not support the requested cipher suite, it closes the connection.
 
-### 2.7 Backward Compatibility
+### 2.7 Encryption Requirement
 
-Encryption is optional and backward compatible:
-
-1. **Initiator probes**: Sends `0xCE` as the first byte of the connection.
-2. **Responder without encryption**: Does not recognize `0xCE`, rejects the
-   connection (closes socket or sends an error).
-3. **Initiator fallback**: On handshake failure, the initiator falls back to
-   plaintext (standard CHRM messages starting with `0x43`).
-4. **Per-destination caching**: The initiator caches which destinations do
-   not support encryption to avoid repeated handshake attempts. The cache
-   is cleared periodically or when the destination's routing table entry
-   is refreshed.
-
-This ensures that nodes running older software without encryption support
-can still participate in the network. As the network upgrades, more
-connections will be encrypted without requiring coordinated deployment.
+TCP encryption is mandatory for all node-to-node connections. Nodes MUST
+perform the encryption handshake before exchanging CHRM messages. Plaintext
+connections are rejected. If the handshake fails (unsupported cipher,
+invalid signature, timeout), the connection is closed and the message is
+dropped.
 
 ### 2.8 Security Properties
 
@@ -311,8 +300,10 @@ Data types:
 | 0x02  | Inbox message   |
 | 0x03  | Contact request |
 | 0x04  | Allowlist entry |
+| 0x05  | Group message   |
+| 0x06  | Group metadata  |
 
-Values 0x05-0xFF are reserved for future use (groups, channels, etc.).
+Values 0x07-0xFF are reserved for future use (channels, etc.).
 
 ### FIND_VALUE (0x05)
 
@@ -345,7 +336,7 @@ For each entry:
   [8 bytes BE: seq]
   [1 byte: op]                // 0x00 = ADD, 0x01 = DEL, 0x02 = UPD
   [8 bytes BE: timestamp]     // Milliseconds since Unix epoch
-  [1 byte: data_type]         // 0x00=profile, 0x01=name, 0x02=inbox, 0x03=request, 0x04=allowlist
+  [1 byte: data_type]         // 0x00=profile, 0x01=name, 0x02=inbox, 0x03=request, 0x04=allowlist, 0x05=group_msg, 0x06=group_meta
   [4 bytes BE: data_length]
   [data_length bytes: data]
 ```
@@ -536,6 +527,77 @@ Receiving nodes parse `allowed_fp` from the Kademlia value to build the
 composite storage key. REVOKE (action=0x00) deletes the entry rather than
 storing it. To block a user, REVOKE them from the allowlist. There is no
 separate blocklist.
+
+### Group Message (data_type 0x05)
+
+Group messages are encrypted with a Group Encryption Key (GEK) and fanned out
+by the sender to each group member's inbox individually.
+
+```
+[32 bytes: group_id]                    // SHA3-256 of group creation record
+[32 bytes: recipient_fingerprint]       // Individual recipient (fan-out target)
+[32 bytes: sender_fingerprint]          // Message author
+[32 bytes: msg_id]                      // Random 32-byte message identifier
+[8 bytes BE: timestamp]                 // Milliseconds since Unix epoch
+[4 bytes BE: gek_version]              // Group Encryption Key version (increments on rotation)
+[4 bytes BE: blob_length]
+[blob_length bytes: encrypted blob]     // AES-256-GCM encrypted with GEK (client-side)
+```
+
+Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
+
+Group messages are stored per-recipient using the same two-table model as
+regular inbox messages (TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS). Routing is
+identical: each copy is stored on the R nodes closest to the recipient's inbox
+key. The sender fans out to each group member — the network does not perform
+any fan-out itself.
+
+The `group_id` and `gek_version` fields allow recipients to associate the
+message with a group and determine which key version to use for decryption.
+The blob is opaque to the server — encryption and decryption are entirely
+client-side using the GEK.
+
+### Group Metadata (data_type 0x06)
+
+Group metadata records describe the group's membership and distribute the
+Group Encryption Key (GEK) to each member via ML-KEM-1024 encapsulation.
+
+```
+[32 bytes: group_id]                    // SHA3-256 of group creation record
+[32 bytes: owner_fingerprint]           // Group owner's fingerprint
+[4 bytes BE: version]                   // Increments on member change or GEK rotation
+[2 bytes BE: member_count]              // Number of members (max 512)
+For each member:
+  [32 bytes: member_fingerprint]        // Recipient fingerprint
+  [1568 bytes: kem_ciphertext]          // ML-KEM-1024 encrypted GEK for this member
+[2 bytes BE: signature_length]
+[signature_length bytes: ML-DSA-87 signature]
+```
+
+The signature covers everything preceding `signature_length` (i.e., from
+`group_id` through the last member's `kem_ciphertext`).
+
+Storage key (DHT routing): `SHA3-256("group:" || group_id)`
+
+Local mdbx storage uses TABLE_GROUP_META:
+```
+Key:   group_id(32)
+Value: full group metadata binary
+```
+
+Fields:
+- `group_id`: SHA3-256 of the group creation record (unique group identifier)
+- `owner_fingerprint`: The group owner who controls membership and signs metadata
+- `version`: Monotonically increasing, incremented on any member change or GEK rotation
+- `member_count`: Maximum 512 members per group
+- Per-member block: each member receives the current GEK encrypted with their
+  ML-KEM-1024 public key (from their profile)
+- `signature`: ML-DSA-87 signature by the group owner, proving authenticity
+
+GEK rotation: When a member is removed, the group owner generates a new GEK,
+increments the version, re-encrypts the GEK for each remaining member, and
+publishes a new GROUP_META record. Messages sent after rotation use the new
+`gek_version`. Removed members cannot decrypt messages sent after their removal.
 
 ---
 
@@ -1102,6 +1164,8 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Allowlist signature prefix | `"chromatin:allowlist:"`               |
 | Contact req PoW prefix     | `"chromatin:request:"`                 |
 | Name PoW prefix            | `"chromatin:name:"`                    |
+| Group routing prefix       | `"group:"`                             |
+| Max group members          | 512                                    |
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
 | MDBX max database size     | 1 GiB                                  |
@@ -1121,6 +1185,7 @@ name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
 request_key  = SHA3-256("requests:"  || fingerprint)
 allow_key    = SHA3-256("allowlist:" || fingerprint)
+group_key    = SHA3-256("group:"     || group_id)
 ```
 
 Node ID:
@@ -1142,8 +1207,9 @@ responsible for storing data associated with that key.
 
 The protocol is designed for future extension:
 
-- **Data types:** Values 0x05-0xFF in the STORE `data_type` field are reserved
-  for future use (groups, channels, and any new data kind).
+- **Data types:** Values 0x07-0xFF in the STORE `data_type` field are reserved
+  for future use (channels, and any new data kind). Values 0x05 (GROUP_MESSAGE)
+  and 0x06 (GROUP_META) are defined for group messaging.
 - **Profile fields:** New fields can be appended to the profile format in future
   protocol versions. The `sequence` + signature mechanism handles versioned
   updates.
