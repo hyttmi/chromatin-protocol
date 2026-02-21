@@ -231,8 +231,14 @@ messages directly via TCP:
   signature verification (discovery). All other messages — including PONG,
   NODES, STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ,
   SEQ_RESP — MUST have valid ML-DSA-87 signatures. Messages from nodes
-  whose public key is not yet known are rejected. Public keys are learned
-  via NODES responses.
+  whose public key is not yet known are rejected.
+- **Pubkey propagation**: Public keys are learned via two mechanisms:
+  (1) FIND_NODE includes the sender's pubkey in its payload, verified via
+  `SHA3-256(pubkey) == sender_id`; (2) NODES responses include each node's
+  pubkey, verified via `node_id == SHA3-256(pubkey)`.
+- **Iterative discovery**: When a NODES response contains new nodes, the
+  receiver sends FIND_NODE to each new node. This propagates pubkeys
+  bidirectionally and is standard Kademlia iterative lookup behavior.
 - **NODES node_id verification**: When processing NODES responses, the
   receiver verifies `node_id == SHA3-256(pubkey)` for each entry. Entries
   failing this check are silently dropped.
@@ -246,7 +252,7 @@ node cannot bypass protections by sending STORE messages directly.
 |--------------|----------------------------------------------|
 | PING         | Liveness check                               |
 | PONG         | Liveness response                            |
-| FIND_NODE    | Request membership list                      |
+| FIND_NODE    | Request K closest nodes (carries sender pubkey) |
 | NODES        | Response with node list (IPv4 and IPv6)      |
 | STORE        | Write a signed value to responsible node     |
 | FIND_VALUE   | Request a value by key                       |
@@ -258,10 +264,11 @@ node cannot bypass protections by sending STORE messages directly.
 | SEQ_RESP     | Replication log sequence response            |
 
 All messages are ML-DSA signed by the sending node. PING and FIND_NODE are
-accepted without signature verification (needed for initial discovery). All
-other types — including PONG, NODES, and all trust-sensitive messages — MUST
-have valid signatures. Messages from nodes whose public key is not yet known
-are rejected (except PING and FIND_NODE).
+accepted without signature verification (needed for initial discovery).
+FIND_NODE carries the sender's pubkey so recipients can immediately verify
+future signed messages. All other types — including PONG, NODES, and all
+trust-sensitive messages — MUST have valid signatures. Messages from nodes
+whose public key is not yet known are rejected (except PING and FIND_NODE).
 
 ### 6.5 Self-Healing & Periodic Maintenance
 

@@ -42,8 +42,11 @@ Kademlia::Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& trans
 // ---------------------------------------------------------------------------
 
 void Kademlia::bootstrap(const std::vector<std::pair<std::string, uint16_t>>& addrs) {
-    // Send FIND_NODE (empty payload) to each bootstrap address
-    Message msg = make_message(MessageType::FIND_NODE, {});
+    // Build FIND_NODE payload with our pubkey so receivers can immediately
+    // verify our identity.  Format: pubkey_len(2 BE) || pubkey(N).
+    // Empty payload is still accepted for backwards compatibility.
+    auto payload = make_find_node_payload();
+    Message msg = make_message(MessageType::FIND_NODE, payload);
     for (const auto& [addr, port] : addrs) {
         spdlog::info("Bootstrap: sending FIND_NODE to {}:{}", addr, port);
         transport_.send(addr, port, msg);
@@ -86,8 +89,9 @@ void Kademlia::tick() {
 
         // Also query all known nodes (iterative discovery)
         auto known = table_.all_nodes();
+        auto fn_payload = make_find_node_payload();
         for (const auto& node : known) {
-            Message msg = make_message(MessageType::FIND_NODE, {});
+            Message msg = make_message(MessageType::FIND_NODE, fn_payload);
             send_to_node(node, msg);
         }
     }
@@ -637,9 +641,10 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
 void Kademlia::handle_find_node(const Message& msg, const std::string& from, uint16_t port) {
     spdlog::debug("Received FIND_NODE from {}:{}", from, port);
 
-    // Add the requesting node to our routing table if we can identify it.
-    // We know its node_id from the message header. We don't know its pubkey
-    // or ws_port yet, but we store what we have so it becomes reachable.
+    // Add the requesting node to our routing table.
+    // The payload may carry the sender's pubkey (pubkey_len(2 BE) || pubkey(N)).
+    // If present and SHA3-256(pubkey) == sender_id, store it so we can
+    // immediately verify signed messages from this node.
     {
         NodeInfo sender_info;
         sender_info.id = msg.sender;
@@ -647,6 +652,25 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         sender_info.tcp_port = port;
         sender_info.ws_port = 0;
         sender_info.last_seen = std::chrono::steady_clock::now();
+
+        // Parse optional pubkey from FIND_NODE payload
+        const auto& data = msg.payload;
+        if (data.size() >= 2) {
+            uint16_t pk_len = static_cast<uint16_t>(
+                (static_cast<uint16_t>(data[0]) << 8) | data[1]);
+            if (pk_len > 0 && data.size() >= 2 + pk_len) {
+                std::vector<uint8_t> sender_pk(data.begin() + 2, data.begin() + 2 + pk_len);
+                auto expected_id = crypto::sha3_256(sender_pk);
+                if (msg.sender.id == expected_id) {
+                    sender_info.pubkey = std::move(sender_pk);
+                    spdlog::debug("FIND_NODE from {}:{} included valid pubkey", from, port);
+                } else {
+                    spdlog::warn("FIND_NODE from {}:{}: pubkey doesn't match sender_id, ignoring",
+                                 from, port);
+                }
+            }
+        }
+
         table_.add_or_update(sender_info);
     }
 
@@ -740,6 +764,9 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
 
     spdlog::info("Received NODES with {} entries", node_count);
 
+    // Track newly discovered nodes for iterative FIND_NODE
+    std::vector<NodeInfo> new_nodes;
+
     for (uint16_t i = 0; i < node_count; ++i) {
         // Minimum per-node: 32 (id) + 1 (af) + 4 (addr) + 2+2+2 = 43 bytes
         if (offset + 43 > data.size()) {
@@ -829,7 +856,25 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
         }
 
         spdlog::info("Discovered node {} at {}:{}", i, info.address, info.tcp_port);
+
+        // Track whether this is a new node (not already in our routing table)
+        bool is_new = !table_.find(info.id).has_value();
         table_.add_or_update(info);
+        if (is_new) {
+            new_nodes.push_back(info);
+        }
+    }
+
+    // Iterative discovery: send FIND_NODE to newly discovered nodes.
+    // This is standard Kademlia behavior and also propagates our pubkey
+    // (included in the FIND_NODE payload) so they can verify our future
+    // signed messages (STORE, FIND_VALUE, etc.).
+    if (!new_nodes.empty()) {
+        auto fn_payload = make_find_node_payload();
+        for (const auto& node : new_nodes) {
+            Message find_msg = make_message(MessageType::FIND_NODE, fn_payload);
+            send_to_node(node, find_msg);
+        }
     }
 }
 
@@ -2088,6 +2133,18 @@ std::optional<PendingStore> Kademlia::pending_store_status(const crypto::Hash& k
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+std::vector<uint8_t> Kademlia::make_find_node_payload() const {
+    // FIND_NODE payload: pubkey_len(2 BE) || pubkey(N)
+    // Including our pubkey lets receivers immediately verify our identity
+    // via SHA3-256(pubkey) == sender_id, enabling signed message exchange.
+    std::vector<uint8_t> payload;
+    uint16_t pk_len = static_cast<uint16_t>(self_.pubkey.size());
+    payload.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    payload.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    payload.insert(payload.end(), self_.pubkey.begin(), self_.pubkey.end());
+    return payload;
+}
 
 Message Kademlia::make_message(MessageType type, const std::vector<uint8_t>& payload) {
     Message msg;

@@ -177,6 +177,7 @@ private:
     void handle_seq_resp(const Message& msg, const std::string& from, uint16_t port);
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
+    std::vector<uint8_t> make_find_node_payload() const;
     void send_to_node(const NodeInfo& node, const Message& msg);
 
     // Unified local storage: validates, dispatches to the correct table(s),

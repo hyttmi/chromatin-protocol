@@ -46,6 +46,59 @@ static crypto::Hash make_test_key(const std::string& label) {
     return crypto::sha3_256(data);
 }
 
+// Build a valid signed profile binary for the given keypair.
+// fingerprint(32) || pk_len(2 BE) || pubkey || kem_pk_len(2 BE=0) ||
+// bio_len(2 BE) || bio || avatar_len(4 BE=0) || social_count(1=0) ||
+// sequence(8 BE) || sig_len(2 BE) || signature
+static std::vector<uint8_t> build_test_profile(
+    const crypto::KeyPair& kp,
+    const crypto::Hash& fingerprint,
+    const std::string& bio,
+    uint64_t sequence)
+{
+    std::vector<uint8_t> buf;
+
+    // fingerprint (32)
+    buf.insert(buf.end(), fingerprint.begin(), fingerprint.end());
+
+    // pubkey_len (2 BE) + pubkey
+    uint16_t pk_len = static_cast<uint16_t>(kp.public_key.size());
+    buf.push_back(static_cast<uint8_t>(pk_len >> 8));
+    buf.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    buf.insert(buf.end(), kp.public_key.begin(), kp.public_key.end());
+
+    // kem_pubkey_len (2 BE = 0)
+    buf.push_back(0x00); buf.push_back(0x00);
+
+    // bio_len (2 BE) + bio
+    uint16_t bio_len = static_cast<uint16_t>(bio.size());
+    buf.push_back(static_cast<uint8_t>(bio_len >> 8));
+    buf.push_back(static_cast<uint8_t>(bio_len & 0xFF));
+    buf.insert(buf.end(), bio.begin(), bio.end());
+
+    // avatar_len (4 BE = 0)
+    buf.push_back(0x00); buf.push_back(0x00);
+    buf.push_back(0x00); buf.push_back(0x00);
+
+    // social_count (1 = 0)
+    buf.push_back(0x00);
+
+    // sequence (8 BE)
+    for (int i = 7; i >= 0; --i)
+        buf.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+
+    // Sign everything up to here
+    auto sig = crypto::sign(buf, kp.secret_key);
+
+    // sig_len (2 BE) + signature
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    buf.push_back(static_cast<uint8_t>(sig_len >> 8));
+    buf.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    buf.insert(buf.end(), sig.begin(), sig.end());
+
+    return buf;
+}
+
 // ---------------------------------------------------------------------------
 // Intercepting handler: captures VALUE and SYNC_RESP for test assertions
 // ---------------------------------------------------------------------------
@@ -271,7 +324,8 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(1s);
 
     // === TEST 1: Store ===
-    // Store 5 profile keys. data_type=0x00 (profile) to avoid PoW requirements.
+    // Store 5 valid signed profiles. Each uses a freshly-generated keypair
+    // so the fingerprint and storage key are correct.
     constexpr int NUM_KEYS = 5;
     std::vector<crypto::Hash> test_keys;
     std::vector<std::vector<uint8_t>> test_values;
@@ -282,9 +336,16 @@ int main(int argc, char* argv[]) {
         int stored = 0;
 
         for (int i = 0; i < NUM_KEYS; ++i) {
-            auto key = make_test_key("integration-test-key-" + std::to_string(i));
-            std::string val_str = "test-value-" + std::to_string(i);
-            std::vector<uint8_t> val(val_str.begin(), val_str.end());
+            // Generate a unique keypair for each test profile
+            crypto::KeyPair test_kp = crypto::generate_keypair();
+            auto fp = crypto::sha3_256(test_kp.public_key);
+
+            // Storage key = SHA3-256("profile:" || fingerprint)
+            auto key = crypto::sha3_256_prefixed("profile:", fp);
+
+            // Build a valid signed profile
+            std::string bio = "integration-test-" + std::to_string(i);
+            auto val = build_test_profile(test_kp, fp, bio, 1);
 
             test_keys.push_back(key);
             test_values.push_back(val);

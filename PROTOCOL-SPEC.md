@@ -76,7 +76,7 @@ Future versions may introduce dedicated storage nodes for large files.
 |-------|------------|-------------------|-------------------------------------|
 | 0x00  | PING       | Request           | Liveness check                      |
 | 0x01  | PONG       | Response          | Liveness response                   |
-| 0x02  | FIND_NODE  | Request           | Request full membership list        |
+| 0x02  | FIND_NODE  | Request           | Request K closest nodes              |
 | 0x03  | NODES      | Response          | Node list response                  |
 | 0x04  | STORE      | Request           | Store a signed value                |
 | 0x05  | FIND_VALUE | Request           | Request a value by key              |
@@ -102,10 +102,22 @@ Empty payload (0 bytes).
 ### FIND_NODE (0x02)
 
 ```
-[32 bytes: target_id]    // The node ID to find closest nodes for
+[2 bytes BE: pubkey_length]             // Sender's public key length (0 if omitted)
+[pubkey_length bytes: sender_pubkey]    // Sender's ML-DSA-87 public key (optional)
 ```
 
-Requests the K closest nodes to `target_id` from the recipient.
+Requests the K closest nodes to the sender's node ID from the recipient.
+The sender SHOULD include its public key so the receiver can immediately
+verify the sender's identity via `SHA3-256(pubkey) == sender_id`. This
+enables the receiver to accept signed messages (STORE, FIND_VALUE, etc.)
+from the sender without waiting for pubkey propagation via NODES responses.
+
+If `pubkey_length` is 0, or the payload is empty, the receiver adds the
+sender to its routing table without a public key (legacy behavior).
+
+**Iterative discovery:** When a node receives NODES and discovers new peers,
+it SHOULD send FIND_NODE to each newly discovered node. This implements
+standard Kademlia iterative lookup and ensures bidirectional pubkey exchange.
 
 ### NODES (0x03)
 
@@ -723,13 +735,28 @@ verification (needed for initial discovery by unknown nodes). All other
 message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
 SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP — MUST have valid ML-DSA-87
 signatures. Messages from nodes whose public key is not yet known are
-rejected (except PING and FIND_NODE). Public keys are learned via NODES
-responses (which include each node's ML-DSA-87 public key).
+rejected (except PING and FIND_NODE). Public keys are learned via two
+mechanisms:
+
+1. **FIND_NODE payload:** The sender includes its public key. The receiver
+   verifies `SHA3-256(pubkey) == sender_id` and stores the pubkey.
+2. **NODES responses:** Each node entry includes the node's ML-DSA-87 public
+   key. The receiver verifies `node_id == SHA3-256(pubkey)` for each entry.
+
+**FIND_NODE pubkey verification:** When a FIND_NODE message includes a
+sender pubkey, the receiver MUST verify `SHA3-256(pubkey) == sender_id`
+before storing it. Invalid pubkeys are silently ignored (the sender is
+still added to the routing table without a pubkey).
 
 **NODES response node_id verification:** When processing a NODES response,
 the receiver MUST verify `node_id == SHA3-256(pubkey)` for each node entry.
 Entries that fail this check are silently dropped. This prevents eclipse
 attacks via forged node entries.
+
+**Iterative discovery:** When a NODES response contains nodes not already
+in the routing table, the receiver SHOULD send FIND_NODE to each new node.
+This propagates the sender's pubkey to all discovered nodes, enabling
+immediate signed message exchange (STORE, FIND_VALUE, etc.).
 
 ### Profile STORE Validation
 
