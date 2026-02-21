@@ -7,6 +7,7 @@ target_sources(chromatin-tests PRIVATE
     test_node_id.cpp
     test_routing_table.cpp
     test_tcp_transport.cpp
+    test_tcp_encryption.cpp
     test_kademlia.cpp
     test_repl_log.cpp
     test_config.cpp

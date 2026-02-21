@@ -7,6 +7,7 @@ target_sources(chromatin-core PRIVATE
     kademlia/node_id.cpp
     kademlia/routing_table.cpp
     kademlia/tcp_transport.cpp
+    kademlia/tcp_encryption.cpp
     kademlia/kademlia.cpp
     replication/repl_log.cpp
     config/config.cpp
