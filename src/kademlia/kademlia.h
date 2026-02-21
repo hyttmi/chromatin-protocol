@@ -37,6 +37,8 @@ enum class DataType : uint8_t {
     INBOX           = 0x02,
     CONTACT_REQUEST = 0x03,
     ALLOWLIST       = 0x04,
+    GROUP_MESSAGE   = 0x05,  // GEK-encrypted group message (fan-out by sender)
+    GROUP_META      = 0x06,  // Group metadata (member list, GEK distribution)
 };
 
 class Kademlia {
@@ -123,6 +125,7 @@ private:
     std::chrono::seconds transfer_check_interval_{60};
     std::chrono::minutes compact_interval_{60};
     size_t compact_keep_entries_ = 10000;
+    uint32_t compact_min_age_hours_ = 168;
     size_t replication_factor_ = 3;
     uint32_t max_profile_size_ = 1024 * 1024;
     uint32_t max_request_blob_size_ = 64 * 1024;

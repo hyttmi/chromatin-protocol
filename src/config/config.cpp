@@ -134,6 +134,9 @@ Config load_config(const std::filesystem::path& path) {
     if (root.isMember("compact_keep_entries")) {
         cfg.compact_keep_entries = root["compact_keep_entries"].asUInt();
     }
+    if (root.isMember("compact_min_age_hours")) {
+        cfg.compact_min_age_hours = root["compact_min_age_hours"].asUInt();
+    }
 
     // PoW
     if (root.isMember("contact_pow_difficulty")) {
@@ -154,11 +157,6 @@ Config load_config(const std::filesystem::path& path) {
     // TCP transport
     if (root.isMember("max_tcp_clients")) {
         cfg.max_tcp_clients = static_cast<uint16_t>(root["max_tcp_clients"].asUInt());
-    }
-
-    // TCP encryption
-    if (root.isMember("tcp_encryption")) {
-        cfg.tcp_encryption = root["tcp_encryption"].asBool();
     }
 
     // Connection pool
@@ -262,6 +260,7 @@ void generate_default_config(const std::filesystem::path& path) {
     root["ttl_days"] = 7;
     root["compact_interval_minutes"] = 60;
     root["compact_keep_entries"] = 10000;
+    root["compact_min_age_hours"] = 168;  // 7 days
 
     // PoW
     root["contact_pow_difficulty"] = 16;
@@ -273,9 +272,6 @@ void generate_default_config(const std::filesystem::path& path) {
 
     // TCP transport
     root["max_tcp_clients"] = 256;
-
-    // TCP encryption
-    root["tcp_encryption"] = true;
 
     // Connection pool
     root["conn_pool_max"] = 64;

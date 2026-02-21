@@ -232,4 +232,41 @@ void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq) {
     spdlog::debug("ReplLog: compacted {} entries before seq {}", to_delete.size(), before_seq);
 }
 
+void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq, uint64_t before_timestamp_ms) {
+    std::vector<std::vector<uint8_t>> to_delete;
+    std::vector<uint8_t> prefix(key.begin(), key.end());
+
+    storage_.scan(storage::TABLE_REPL_LOG, prefix, [&](std::span<const uint8_t> k, std::span<const uint8_t> v) -> bool {
+        if (k.size() < 40) return true;
+
+        // Extract seq from composite key (bytes 32..39, BE)
+        uint64_t entry_seq = 0;
+        for (int i = 0; i < 8; ++i) {
+            entry_seq = (entry_seq << 8) | k[32 + i];
+        }
+
+        if (entry_seq < before_seq) {
+            // Also check timestamp: only delete if entry is old enough
+            try {
+                auto entry = deserialize_entry(v);
+                if (entry.timestamp < before_timestamp_ms) {
+                    to_delete.emplace_back(k.begin(), k.end());
+                }
+            } catch (...) {
+                // Malformed entry — safe to compact
+                to_delete.emplace_back(k.begin(), k.end());
+            }
+        }
+
+        return true;
+    });
+
+    for (const auto& ck : to_delete) {
+        storage_.del(storage::TABLE_REPL_LOG, ck);
+    }
+
+    spdlog::debug("ReplLog: compacted {} entries before seq {} and before timestamp {}",
+                  to_delete.size(), before_seq, before_timestamp_ms);
+}
+
 } // namespace chromatin::replication

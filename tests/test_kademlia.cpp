@@ -2420,6 +2420,8 @@ TEST_F(KademliaTest, ReplLogCompaction) {
     auto& n1 = create_node(8);
     // Override compact_keep_entries so that 150 entries triggers compaction
     n1.cfg.compact_keep_entries = 100;
+    // Disable time-based floor so count-based compaction works immediately
+    n1.cfg.compact_min_age_hours = 0;
     // Recreate Kademlia with updated config
     n1.kad = std::make_unique<Kademlia>(
         n1.cfg, n1.info, *n1.transport, *n1.table, *n1.storage,

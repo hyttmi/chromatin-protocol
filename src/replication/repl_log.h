@@ -50,6 +50,9 @@ public:
     // Delete entries before seq (compaction)
     void compact(const crypto::Hash& key, uint64_t before_seq);
 
+    // Delete entries where BOTH seq < before_seq AND timestamp < before_timestamp_ms
+    void compact(const crypto::Hash& key, uint64_t before_seq, uint64_t before_timestamp_ms);
+
 private:
     storage::Storage& storage_;
     std::mutex append_mutex_;

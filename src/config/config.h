@@ -50,6 +50,7 @@ struct Config {
     uint32_t ttl_days = 7;
     uint32_t compact_interval_minutes = 60;
     uint32_t compact_keep_entries = 10000;
+    uint32_t compact_min_age_hours = 168;  // 7 days
 
     // PoW
     uint8_t contact_pow_difficulty = 16;
@@ -61,9 +62,6 @@ struct Config {
 
     // TCP transport
     uint16_t max_tcp_clients = 256;
-
-    // TCP encryption
-    bool tcp_encryption = true;
 
     // Connection pool
     uint16_t conn_pool_max = 64;

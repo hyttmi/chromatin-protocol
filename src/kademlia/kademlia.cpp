@@ -31,6 +31,7 @@ Kademlia::Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& trans
     , ttl_duration_(std::chrono::hours(cfg.ttl_days * 24))
     , compact_interval_(std::chrono::minutes(cfg.compact_interval_minutes))
     , compact_keep_entries_(cfg.compact_keep_entries)
+    , compact_min_age_hours_(cfg.compact_min_age_hours)
     , replication_factor_(cfg.replication_factor)
     , max_profile_size_(cfg.max_profile_size)
     , max_request_blob_size_(cfg.max_request_blob_size)
@@ -432,6 +433,13 @@ void Kademlia::transfer_responsibility() {
 // ---------------------------------------------------------------------------
 
 void Kademlia::compact_repl_log() {
+    // Compute time floor: entries younger than this are preserved
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    uint64_t min_age_ms = static_cast<uint64_t>(compact_min_age_hours_) * 3'600'000ULL;
+    uint64_t before_timestamp_ms = (now_ms > min_age_ms) ? (now_ms - min_age_ms) : 0;
+
     // Collect unique 32-byte key prefixes from TABLE_REPL_LOG
     std::vector<crypto::Hash> unique_keys;
     crypto::Hash prev_key{};
@@ -454,14 +462,14 @@ void Kademlia::compact_repl_log() {
         uint64_t max_seq = repl_log_.current_seq(key);
         if (max_seq > compact_keep_entries_) {
             uint64_t before_seq = max_seq - compact_keep_entries_;
-            repl_log_.compact(key, before_seq);
+            repl_log_.compact(key, before_seq, before_timestamp_ms);
             ++total_compacted;
         }
     }
 
     if (total_compacted > 0) {
-        spdlog::info("Repl log compaction: compacted {} keys (keeping last {} entries each)",
-                     total_compacted, compact_keep_entries_);
+        spdlog::info("Repl log compaction: compacted {} keys (keeping last {} entries, min age {} hours)",
+                     total_compacted, compact_keep_entries_, compact_min_age_hours_);
     }
 }
 

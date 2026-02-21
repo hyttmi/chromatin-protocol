@@ -4,6 +4,7 @@
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -230,4 +231,136 @@ TEST_F(ReplLogTest, SerializeDeserializeEntry) {
     EXPECT_EQ(deserialized.timestamp, original.timestamp);
     EXPECT_EQ(deserialized.data_type, original.data_type);
     EXPECT_EQ(deserialized.data, original.data);
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: CompactWithTimeFloor -- time-based floor preserves recent entries
+// ---------------------------------------------------------------------------
+
+TEST_F(ReplLogTest, CompactWithTimeFloor) {
+    Hash key = make_key(0xCC);
+
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // Create 5 old entries (8 days ago) with seqs 1-5
+    std::vector<LogEntry> old_entries;
+    for (uint64_t i = 1; i <= 5; ++i) {
+        LogEntry e;
+        e.seq = i;
+        e.op = Op::ADD;
+        e.timestamp = now_ms - 8ULL * 24 * 3600 * 1000;  // 8 days ago
+        e.data_type = 0x02;
+        e.data = {0x01, 0x02};
+        old_entries.push_back(e);
+    }
+    repl_log_->apply(key, old_entries);
+
+    // Create 5 recent entries (1 hour ago) with seqs 6-10
+    std::vector<LogEntry> recent_entries;
+    for (uint64_t i = 6; i <= 10; ++i) {
+        LogEntry e;
+        e.seq = i;
+        e.op = Op::ADD;
+        e.timestamp = now_ms - 3600ULL * 1000;  // 1 hour ago
+        e.data_type = 0x02;
+        e.data = {0x03, 0x04};
+        recent_entries.push_back(e);
+    }
+    repl_log_->apply(key, recent_entries);
+
+    EXPECT_EQ(repl_log_->current_seq(key), 10u);
+
+    // Compact with time floor of 7 days:
+    // before_seq = 8 (would delete seqs 1-7 based on count alone)
+    // before_timestamp = 7 days ago
+    uint64_t before_seq = 8;
+    uint64_t before_timestamp = now_ms - 7ULL * 24 * 3600 * 1000;  // 7 days ago
+
+    repl_log_->compact(key, before_seq, before_timestamp);
+
+    // Entries 1-5 (old AND below seq threshold) -> DELETED
+    // Entries 6-7 (recent, below seq threshold) -> PRESERVED by time floor
+    // Entries 8-10 (above seq threshold) -> PRESERVED
+    auto remaining = repl_log_->entries_after(key, 0);
+
+    EXPECT_EQ(remaining.size(), 5u);  // seqs 6, 7, 8, 9, 10
+
+    for (const auto& e : remaining) {
+        EXPECT_GE(e.seq, 6u);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: CompactWithTimeFloorDeletesAll -- when all entries are old
+// ---------------------------------------------------------------------------
+
+TEST_F(ReplLogTest, CompactWithTimeFloorDeletesAll) {
+    Hash key = make_key(0xDD);
+
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // Create 5 old entries (10 days ago)
+    std::vector<LogEntry> entries;
+    for (uint64_t i = 1; i <= 5; ++i) {
+        LogEntry e;
+        e.seq = i;
+        e.op = Op::ADD;
+        e.timestamp = now_ms - 10ULL * 24 * 3600 * 1000;  // 10 days ago
+        e.data_type = 0x02;
+        e.data = {0xAA};
+        entries.push_back(e);
+    }
+    repl_log_->apply(key, entries);
+
+    // Compact: before_seq=4 (delete seqs 1-3), before_timestamp=7 days ago
+    uint64_t before_seq = 4;
+    uint64_t before_timestamp = now_ms - 7ULL * 24 * 3600 * 1000;
+
+    repl_log_->compact(key, before_seq, before_timestamp);
+
+    // Entries 1-3 are old AND below seq threshold -> DELETED
+    // Entries 4-5 are above seq threshold -> PRESERVED
+    auto remaining = repl_log_->entries_after(key, 0);
+    EXPECT_EQ(remaining.size(), 2u);
+    EXPECT_EQ(remaining[0].seq, 4u);
+    EXPECT_EQ(remaining[1].seq, 5u);
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: CompactWithTimeFloorPreservesAll -- when all entries are recent
+// ---------------------------------------------------------------------------
+
+TEST_F(ReplLogTest, CompactWithTimeFloorPreservesAll) {
+    Hash key = make_key(0xEE);
+
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // Create 5 recent entries (1 hour ago)
+    std::vector<LogEntry> entries;
+    for (uint64_t i = 1; i <= 5; ++i) {
+        LogEntry e;
+        e.seq = i;
+        e.op = Op::ADD;
+        e.timestamp = now_ms - 3600ULL * 1000;  // 1 hour ago
+        e.data_type = 0x02;
+        e.data = {0xBB};
+        entries.push_back(e);
+    }
+    repl_log_->apply(key, entries);
+
+    // Compact: before_seq=4 (would delete seqs 1-3), but time floor is 7 days ago
+    uint64_t before_seq = 4;
+    uint64_t before_timestamp = now_ms - 7ULL * 24 * 3600 * 1000;
+
+    repl_log_->compact(key, before_seq, before_timestamp);
+
+    // All entries are recent (1 hour ago > 7 days ago) -> ALL PRESERVED
+    auto remaining = repl_log_->entries_after(key, 0);
+    EXPECT_EQ(remaining.size(), 5u);
 }
