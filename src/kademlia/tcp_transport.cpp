@@ -313,10 +313,6 @@ TcpTransport::~TcpTransport() {
     conn_pool_.clear();
 }
 
-void TcpTransport::enable_encryption(bool enabled) {
-    encryption_enabled_ = enabled;
-}
-
 void TcpTransport::set_signing_keypair(const crypto::KeyPair& kp) {
     signing_keypair_ = &kp;
 }
@@ -562,35 +558,18 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         if (fd < 0) return;
         spdlog::debug("Created new connection to {} (fd={})", pool_key, fd);
 
-        // Attempt encryption handshake on new connections
-        bool should_encrypt = encryption_enabled_ && signing_keypair_ && pubkey_lookup_;
-        if (should_encrypt) {
-            // Check if we previously failed with this peer
-            bool failed_before = false;
-            {
-                std::lock_guard lock(failed_mutex_);
-                failed_before = encryption_failed_.count(pool_key) > 0;
-            }
-
-            if (!failed_before) {
-                if (perform_initiator_handshake(fd, pool_key)) {
-                    // Connection is now in pool with session keys
-                    std::lock_guard lock(pool_mutex_);
-                    session_ptr = &conn_pool_[pool_key].session;
-                    from_pool = true;
-                } else {
-                    // Handshake failed — mark this destination and fall back to plaintext
-                    spdlog::debug("Encryption handshake failed for {}, falling back to plaintext", pool_key);
-                    {
-                        std::lock_guard lock(failed_mutex_);
-                        encryption_failed_.insert(pool_key);
-                    }
-                    // The connection may be in a bad state after failed handshake,
-                    // create a fresh one for plaintext
-                    close(fd);
-                    fd = create_connection(addr, port, connect_timeout_);
-                    if (fd < 0) return;
-                }
+        // Perform encryption handshake on new connections
+        if (signing_keypair_ && pubkey_lookup_) {
+            if (perform_initiator_handshake(fd, pool_key)) {
+                // Connection is now in pool with session keys
+                std::lock_guard lock(pool_mutex_);
+                session_ptr = &conn_pool_[pool_key].session;
+                from_pool = true;
+            } else {
+                // Handshake failed — drop the message
+                spdlog::warn("Encryption handshake failed for {}, dropping message", pool_key);
+                close(fd);
+                return;
             }
         }
     }
@@ -603,7 +582,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         send_ok = send_all(fd, data);
     }
 
-    // If send failed on a pooled connection, retry with a fresh one
+    // If send failed on a pooled connection, retry with a fresh encrypted one
     if (!send_ok && from_pool) {
         spdlog::debug("Send on pooled fd={} failed, retrying with new connection", fd);
         {
@@ -613,7 +592,20 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         close(fd);
         fd = create_connection(addr, port, connect_timeout_);
         if (fd < 0) return;
-        send_ok = send_all(fd, data);  // fallback to plaintext on retry
+
+        if (signing_keypair_ && pubkey_lookup_) {
+            if (perform_initiator_handshake(fd, pool_key)) {
+                std::lock_guard lock(pool_mutex_);
+                session_ptr = &conn_pool_[pool_key].session;
+                send_ok = send_on_connection(fd, data, session_ptr);
+            } else {
+                spdlog::warn("Encryption handshake failed on retry for {}", pool_key);
+                close(fd);
+                return;
+            }
+        } else {
+            send_ok = send_all(fd, data);
+        }
     }
 
     if (send_ok) {
@@ -720,7 +712,7 @@ void TcpTransport::run(Handler handler) {
                 continue;
             }
 
-            if (first_byte == tcp_encryption::PROBE_BYTE && encryption_enabled_ && signing_keypair_) {
+            if (first_byte == tcp_encryption::PROBE_BYTE && signing_keypair_) {
                 // Encrypted handshake — read full HELLO
                 // HELLO: [1B probe][1B version][1B cipher][32B node_id][2B pk_len][pk][32B random]
                 // Read the fixed prefix first: 3 + 32 + 2 = 37
@@ -823,7 +815,16 @@ void TcpTransport::run(Handler handler) {
                 continue;
             }
 
-            // Plaintext CHRM message (first byte is 'C' = 0x43)
+            if (signing_keypair_) {
+                // Encryption configured — reject plaintext connections
+                spdlog::debug("Rejecting plaintext connection from fd={}", client_fd);
+                close(client_fd);
+                fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                continue;
+            }
+
+            // Plaintext CHRM message (only when encryption is not configured, e.g. tests)
             auto msg = read_framed_message(client_fd);
             if (!msg) {
                 close(client_fd);

@@ -425,7 +425,6 @@ TEST(TcpTransport, EncryptedSendRecv) {
 
     // Node B: receiver
     TcpTransport transport_b("127.0.0.1", 0);
-    transport_b.enable_encryption(true);
     transport_b.set_signing_keypair(kp_b);
     transport_b.set_node_id(id_b);
     // B needs to look up A's pubkey
@@ -452,7 +451,6 @@ TEST(TcpTransport, EncryptedSendRecv) {
 
     // Node A: sender
     TcpTransport transport_a("127.0.0.1", 0);
-    transport_a.enable_encryption(true);
     transport_a.set_signing_keypair(kp_a);
     transport_a.set_node_id(id_a);
     // A needs to look up B's pubkey
@@ -481,56 +479,47 @@ TEST(TcpTransport, EncryptedSendRecv) {
     EXPECT_EQ(received_payload, payload);
 }
 
-// Test that an encryption-enabled node can receive plaintext from a non-encrypted node
-TEST(TcpTransport, EncryptedReceiverAcceptsPlaintext) {
+// Test that an encrypted node rejects plaintext connections
+TEST(TcpTransport, EncryptedReceiverRejectsPlaintext) {
     auto kp_b = generate_keypair();
     NodeId id_b;
     id_b.id = sha3_256(kp_b.public_key);
 
     // Node B: encrypted receiver
     TcpTransport transport_b("127.0.0.1", 0);
-    transport_b.enable_encryption(true);
     transport_b.set_signing_keypair(kp_b);
     transport_b.set_node_id(id_b);
     transport_b.set_pubkey_lookup([](const NodeId&) { return std::nullopt; });
     uint16_t port_b = transport_b.local_port();
 
     std::atomic<bool> received{false};
-    std::vector<uint8_t> received_payload;
-    std::mutex rx_mutex;
 
     std::thread recv_thread([&]() {
-        transport_b.run([&](const Message& msg, const std::string&, uint16_t) {
-            std::lock_guard lock(rx_mutex);
-            received_payload = msg.payload;
+        transport_b.run([&](const Message&, const std::string&, uint16_t) {
             received.store(true);
         });
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    // Node A: plaintext sender (encryption disabled)
+    // Node A: plaintext sender (no encryption configured)
     auto kp_a = generate_keypair();
     NodeId id_a;
     id_a.id = sha3_256(kp_a.public_key);
 
     TcpTransport transport_a("127.0.0.1", 0);
-    // Encryption NOT enabled on A
+    // No signing keypair set on A — sends plaintext
 
     std::vector<uint8_t> payload = {0xCA, 0xFE};
     Message msg = make_test_message(MessageType::PING, id_a, payload, transport_a.local_port());
 
     transport_a.send("127.0.0.1", port_b, msg);
 
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!received.load() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
+    // Wait briefly — message should NOT be received
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     transport_b.stop();
     recv_thread.join();
 
-    ASSERT_TRUE(received.load()) << "plaintext message not received by encrypted node";
-    std::lock_guard lock(rx_mutex);
-    EXPECT_EQ(received_payload, payload);
+    EXPECT_FALSE(received.load()) << "plaintext message should be rejected by encrypted node";
 }

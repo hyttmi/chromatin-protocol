@@ -9,7 +9,6 @@
 #include <span>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "crypto/crypto.h"
@@ -70,7 +69,7 @@ bool verify_message(const Message& msg, std::span<const uint8_t> public_key);
 
 // TCP transport for node-to-node communication.
 // Reuses connections via an internal pool to avoid per-message TCP handshakes.
-// Supports optional ML-KEM-1024 + ChaCha20-Poly1305 encrypted connections.
+// All connections use ML-KEM-1024 + ChaCha20-Poly1305 encryption.
 class TcpTransport {
 public:
     TcpTransport(const std::string& bind_addr, uint16_t port,
@@ -83,9 +82,6 @@ public:
     // Non-copyable
     TcpTransport(const TcpTransport&) = delete;
     TcpTransport& operator=(const TcpTransport&) = delete;
-
-    // Enable TCP encryption. Must be called before run() and send().
-    void enable_encryption(bool enabled);
 
     // Set signing keypair for handshake authentication.
     void set_signing_keypair(const crypto::KeyPair& kp);
@@ -130,7 +126,6 @@ private:
     std::atomic<bool> running_{false};
 
     // Encryption state
-    bool encryption_enabled_ = false;
     NodeId local_node_id_{};
     const crypto::KeyPair* signing_keypair_ = nullptr;
     PubkeyLookup pubkey_lookup_;
@@ -143,10 +138,6 @@ private:
     };
     std::unordered_map<std::string, PooledConnection> conn_pool_;
     std::mutex pool_mutex_;
-
-    // Track destinations where encryption handshake failed (avoid retrying)
-    std::unordered_set<std::string> encryption_failed_;
-    std::mutex failed_mutex_;
 
     // Active encrypted client sessions on the accept side: fd → SessionKeys
     std::unordered_map<int, tcp_encryption::SessionKeys> client_sessions_;

@@ -107,28 +107,22 @@ int main(int argc, char* argv[]) {
         cfg.max_tcp_clients);
 
     // --- 9b. Configure TCP encryption ---
-    if (cfg.tcp_encryption) {
-        transport.enable_encryption(true);
-        transport.set_signing_keypair(keypair);
-        transport.set_node_id(self.id);
-        spdlog::info("TCP transport encryption enabled");
-    }
+    transport.set_signing_keypair(keypair);
+    transport.set_node_id(self.id);
 
     // --- 10. Create Kademlia engine ---
     chromatin::kademlia::Kademlia kademlia(cfg, self, transport, routing_table, storage, repl_log, keypair);
 
     // --- 10b. Wire pubkey lookup for TCP encryption ---
-    if (cfg.tcp_encryption) {
-        transport.set_pubkey_lookup([&routing_table](const chromatin::kademlia::NodeId& id)
-            -> std::optional<std::vector<uint8_t>> {
-            for (const auto& node : routing_table.all_nodes()) {
-                if (node.id == id && !node.pubkey.empty()) {
-                    return node.pubkey;
-                }
+    transport.set_pubkey_lookup([&routing_table](const chromatin::kademlia::NodeId& id)
+        -> std::optional<std::vector<uint8_t>> {
+        for (const auto& node : routing_table.all_nodes()) {
+            if (node.id == id && !node.pubkey.empty()) {
+                return node.pubkey;
             }
-            return std::nullopt;
-        });
-    }
+        }
+        return std::nullopt;
+    });
 
     // --- 11. Start TCP accept loop in background thread ---
     std::thread recv_thread([&]() {
