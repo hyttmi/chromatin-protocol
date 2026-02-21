@@ -9,9 +9,12 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+#include "crypto/crypto.h"
 #include "kademlia/node_id.h"
+#include "kademlia/tcp_encryption.h"
 
 namespace chromatin::kademlia {
 
@@ -67,6 +70,7 @@ bool verify_message(const Message& msg, std::span<const uint8_t> public_key);
 
 // TCP transport for node-to-node communication.
 // Reuses connections via an internal pool to avoid per-message TCP handshakes.
+// Supports optional ML-KEM-1024 + ChaCha20-Poly1305 encrypted connections.
 class TcpTransport {
 public:
     TcpTransport(const std::string& bind_addr, uint16_t port,
@@ -79,6 +83,20 @@ public:
     // Non-copyable
     TcpTransport(const TcpTransport&) = delete;
     TcpTransport& operator=(const TcpTransport&) = delete;
+
+    // Enable TCP encryption. Must be called before run() and send().
+    void enable_encryption(bool enabled);
+
+    // Set signing keypair for handshake authentication.
+    void set_signing_keypair(const crypto::KeyPair& kp);
+
+    // Set node ID for handshake.
+    void set_node_id(const NodeId& id);
+
+    // Callback to look up a node's ML-DSA-87 public key by node ID.
+    // Returns the pubkey if known, nullopt otherwise.
+    using PubkeyLookup = std::function<std::optional<std::vector<uint8_t>>(const NodeId&)>;
+    void set_pubkey_lookup(PubkeyLookup fn);
 
     // Send a serialized message to a remote address, reusing pooled connections.
     void send(const std::string& addr, uint16_t port, const Message& msg);
@@ -111,13 +129,38 @@ private:
     size_t max_tcp_clients_;
     std::atomic<bool> running_{false};
 
-    // Connection pool: keyed by "addr:port"
+    // Encryption state
+    bool encryption_enabled_ = false;
+    NodeId local_node_id_{};
+    const crypto::KeyPair* signing_keypair_ = nullptr;
+    PubkeyLookup pubkey_lookup_;
+
+    // Connection pool: keyed by "[addr]:port"
     struct PooledConnection {
         int fd = -1;
         std::chrono::steady_clock::time_point last_used;
+        std::optional<tcp_encryption::SessionKeys> session;  // nullopt = plaintext
     };
     std::unordered_map<std::string, PooledConnection> conn_pool_;
     std::mutex pool_mutex_;
+
+    // Track destinations where encryption handshake failed (avoid retrying)
+    std::unordered_set<std::string> encryption_failed_;
+    std::mutex failed_mutex_;
+
+    // Active encrypted client sessions on the accept side: fd → SessionKeys
+    std::unordered_map<int, tcp_encryption::SessionKeys> client_sessions_;
+
+    // Perform handshake as initiator on a new outgoing connection.
+    // Returns true if encryption was established, false on failure.
+    bool perform_initiator_handshake(int fd, const std::string& pool_key);
+
+    // Send data on connection, encrypting if session exists.
+    bool send_on_connection(int fd, const std::vector<uint8_t>& data,
+                           std::optional<tcp_encryption::SessionKeys>* session);
+
+    // Read one message from connection, decrypting if needed.
+    std::optional<Message> read_message(int fd, tcp_encryption::SessionKeys* session);
 };
 
 } // namespace chromatin::kademlia

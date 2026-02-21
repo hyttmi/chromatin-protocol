@@ -61,6 +61,9 @@ struct Config {
     // TCP transport
     uint16_t max_tcp_clients = 256;
 
+    // TCP encryption
+    bool tcp_encryption = true;
+
     // Connection pool
     uint16_t conn_pool_max = 64;
     uint16_t conn_pool_idle_seconds = 60;

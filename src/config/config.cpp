@@ -153,6 +153,11 @@ Config load_config(const std::filesystem::path& path) {
         cfg.max_tcp_clients = static_cast<uint16_t>(root["max_tcp_clients"].asUInt());
     }
 
+    // TCP encryption
+    if (root.isMember("tcp_encryption")) {
+        cfg.tcp_encryption = root["tcp_encryption"].asBool();
+    }
+
     // Connection pool
     if (root.isMember("conn_pool_max")) {
         cfg.conn_pool_max = static_cast<uint16_t>(root["conn_pool_max"].asUInt());
@@ -264,6 +269,9 @@ void generate_default_config(const std::filesystem::path& path) {
 
     // TCP transport
     root["max_tcp_clients"] = 256;
+
+    // TCP encryption
+    root["tcp_encryption"] = true;
 
     // Connection pool
     root["conn_pool_max"] = 64;
