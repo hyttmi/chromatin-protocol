@@ -30,28 +30,28 @@ TEST_F(TcpEncryptionTest, FullHandshakeRoundtrip) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    // Step 1: Initiator generates HELLO
-    auto hello = initiator.generate_hello();
+    // Step 1: Initiator generates HELLO (with embedded signing pubkey)
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     ASSERT_FALSE(hello.empty());
     EXPECT_EQ(hello[0], enc::PROBE_BYTE);
 
-    // Step 2: Responder processes HELLO
+    // Step 2: Responder processes HELLO (extracts + verifies initiator pubkey)
     auto got_initiator_id = responder.process_hello(hello);
     ASSERT_TRUE(got_initiator_id.has_value());
     EXPECT_EQ(got_initiator_id->id, initiator_id_.id);
 
-    // Step 3: Responder generates ACCEPT
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
+    // Step 3: Responder generates ACCEPT (with embedded signing pubkey)
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
+                                             responder_signing_kp_.public_key);
     ASSERT_TRUE(accept.has_value());
 
-    // Step 4: Initiator processes ACCEPT, generates CONFIRM
+    // Step 4: Initiator processes ACCEPT (extracts + verifies responder pubkey)
     auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
-                                             responder_signing_kp_.public_key);
+                                             initiator_signing_kp_.secret_key);
     ASSERT_TRUE(confirm.has_value());
 
-    // Step 5: Responder processes CONFIRM
-    bool ok = responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    // Step 5: Responder processes CONFIRM (uses stored initiator pubkey)
+    bool ok = responder.process_confirm(*confirm);
     EXPECT_TRUE(ok);
 
     // Both sides should have valid session keys
@@ -73,13 +73,13 @@ TEST_F(TcpEncryptionTest, EncryptedFrameRoundtrip) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
-    responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
+    responder.process_confirm(*confirm);
 
     auto i_keys = initiator.session_keys();
     auto r_keys = responder.session_keys();
@@ -108,13 +108,13 @@ TEST_F(TcpEncryptionTest, BidirectionalEncryption) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
-    responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
+    responder.process_confirm(*confirm);
 
     auto i_keys = initiator.session_keys();
     auto r_keys = responder.session_keys();
@@ -143,13 +143,13 @@ TEST_F(TcpEncryptionTest, NonceIncrements) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
-    responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
+    responder.process_confirm(*confirm);
 
     auto i_keys = initiator.session_keys();
     auto r_keys = responder.session_keys();
@@ -176,34 +176,39 @@ TEST_F(TcpEncryptionTest, TamperedAcceptSignatureFails) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
+                                             responder_signing_kp_.public_key);
     ASSERT_TRUE(accept.has_value());
 
-    // Tamper with the accept bytes
+    // Tamper with the accept bytes (node_id region)
     (*accept)[10] ^= 0xFF;
 
     // Initiator should reject tampered ACCEPT
     auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
-                                             responder_signing_kp_.public_key);
+                                             initiator_signing_kp_.secret_key);
     EXPECT_FALSE(confirm.has_value());
 }
 
-TEST_F(TcpEncryptionTest, WrongResponderPubkeyFails) {
+TEST_F(TcpEncryptionTest, WrongSigningPubkeyInAcceptFails) {
+    // Generate a third identity to use as a wrong pubkey
+    auto wrong_kp = crypto::generate_keypair();
+
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
 
-    // Use wrong pubkey to verify
-    auto wrong_kp = crypto::generate_keypair();
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    // Responder embeds wrong signing pubkey (doesn't match its node ID)
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              wrong_kp.public_key);
+    ASSERT_TRUE(accept.has_value());
+
+    // Initiator should reject: SHA3-256(wrong_pk) != responder_node_id
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
     EXPECT_FALSE(confirm.has_value());
 }
 
@@ -211,18 +216,18 @@ TEST_F(TcpEncryptionTest, TamperedConfirmFails) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
     ASSERT_TRUE(confirm.has_value());
 
     // Tamper with the confirm
     (*confirm)[5] ^= 0xFF;
 
-    bool ok = responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    bool ok = responder.process_confirm(*confirm);
     EXPECT_FALSE(ok);
 }
 
@@ -231,13 +236,13 @@ TEST_F(TcpEncryptionTest, TamperedEncryptedFrameFails) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
-    responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
+    responder.process_confirm(*confirm);
 
     auto i_keys = initiator.session_keys();
     auto r_keys = responder.session_keys();
@@ -260,13 +265,13 @@ TEST_F(TcpEncryptionTest, ReplayDetectionViaNonce) {
     enc::HandshakeInitiator initiator(initiator_id_);
     enc::HandshakeResponder responder(responder_id_);
 
-    auto hello = initiator.generate_hello();
+    auto hello = initiator.generate_hello(initiator_signing_kp_.public_key);
     responder.process_hello(hello);
-    auto accept = responder.generate_accept(responder_signing_kp_.secret_key);
-    auto confirm = initiator.process_accept(*accept,
-                                             initiator_signing_kp_.secret_key,
+    auto accept = responder.generate_accept(responder_signing_kp_.secret_key,
                                              responder_signing_kp_.public_key);
-    responder.process_confirm(*confirm, initiator_signing_kp_.public_key);
+    auto confirm = initiator.process_accept(*accept,
+                                             initiator_signing_kp_.secret_key);
+    responder.process_confirm(*confirm);
 
     auto i_keys = initiator.session_keys();
     auto r_keys = responder.session_keys();
@@ -284,4 +289,20 @@ TEST_F(TcpEncryptionTest, ReplayDetectionViaNonce) {
                                       std::span(frame.data() + 4, frame.size() - 4),
                                       std::span(frame.data(), 4));
     EXPECT_FALSE(replay.has_value());
+}
+
+TEST_F(TcpEncryptionTest, WrongSigningPubkeyInHelloFails) {
+    // Initiator embeds wrong signing pubkey (doesn't match its node ID)
+    auto wrong_kp = crypto::generate_keypair();
+
+    enc::HandshakeInitiator initiator(initiator_id_);
+    enc::HandshakeResponder responder(responder_id_);
+
+    // Embed wrong pubkey in HELLO — SHA3-256(wrong_pk) != initiator_node_id
+    auto hello = initiator.generate_hello(wrong_kp.public_key);
+    ASSERT_FALSE(hello.empty());
+
+    // Responder should reject: identity verification fails
+    auto got_id = responder.process_hello(hello);
+    EXPECT_FALSE(got_id.has_value());
 }

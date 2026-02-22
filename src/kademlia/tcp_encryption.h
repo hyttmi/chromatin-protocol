@@ -41,9 +41,9 @@ struct SessionKeys {
 //
 // Usage:
 //   HandshakeInitiator init(my_node_id);
-//   auto hello = init.generate_hello();
+//   auto hello = init.generate_hello(my_signing_pubkey);
 //   // send hello, receive accept_bytes
-//   auto confirm = init.process_accept(accept_bytes, my_signing_key, responder_pubkey);
+//   auto confirm = init.process_accept(accept_bytes, my_signing_key);
 //   // send confirm
 //   auto keys = init.session_keys();
 class HandshakeInitiator {
@@ -51,15 +51,18 @@ public:
     explicit HandshakeInitiator(const NodeId& local_id);
 
     // Generate HELLO message bytes to send to responder.
-    std::vector<uint8_t> generate_hello();
+    // signing_pubkey is embedded so the responder can verify our identity
+    // without prior knowledge (SHA3-256(signing_pubkey) == our node_id).
+    std::vector<uint8_t> generate_hello(
+        std::span<const uint8_t> signing_pubkey);
 
     // Process ACCEPT from responder. Returns CONFIRM bytes on success.
-    // responder_pubkey = ML-DSA-87 public key for signature verification.
+    // Responder's signing pubkey is extracted from ACCEPT and verified via
+    // SHA3-256(pubkey) == responder_node_id.
     // own_signing_key = our ML-DSA-87 secret key for signing CONFIRM.
     std::optional<std::vector<uint8_t>> process_accept(
         std::span<const uint8_t> accept_bytes,
-        std::span<const uint8_t> own_signing_key,
-        std::span<const uint8_t> responder_pubkey);
+        std::span<const uint8_t> own_signing_key);
 
     // Get derived session keys. Only valid after process_accept() succeeds.
     std::optional<SessionKeys> session_keys() const;
@@ -77,26 +80,29 @@ private:
 // Usage:
 //   HandshakeResponder resp(my_node_id);
 //   auto initiator_id = resp.process_hello(hello_bytes);
-//   auto accept = resp.generate_accept(my_signing_key);
+//   auto accept = resp.generate_accept(my_signing_key, my_signing_pubkey);
 //   // send accept, receive confirm_bytes
-//   bool ok = resp.process_confirm(confirm_bytes, initiator_pubkey);
+//   bool ok = resp.process_confirm(confirm_bytes);
 //   auto keys = resp.session_keys();
 class HandshakeResponder {
 public:
     explicit HandshakeResponder(const NodeId& local_id);
 
     // Process HELLO from initiator. Returns initiator's node ID on success.
+    // Extracts and verifies initiator's signing pubkey from HELLO via
+    // SHA3-256(pubkey) == initiator_node_id.
     std::optional<NodeId> process_hello(std::span<const uint8_t> hello_bytes);
 
     // Generate ACCEPT message bytes.
     // own_signing_key = ML-DSA-87 secret key for signing ACCEPT.
+    // signing_pubkey is embedded so the initiator can verify our identity.
     std::optional<std::vector<uint8_t>> generate_accept(
-        std::span<const uint8_t> own_signing_key);
+        std::span<const uint8_t> own_signing_key,
+        std::span<const uint8_t> signing_pubkey);
 
     // Process CONFIRM from initiator. Returns true on signature verification success.
-    // initiator_pubkey = ML-DSA-87 public key for CONFIRM signature verification.
-    bool process_confirm(std::span<const uint8_t> confirm_bytes,
-                         std::span<const uint8_t> initiator_pubkey);
+    // Uses the initiator's signing pubkey extracted from HELLO.
+    bool process_confirm(std::span<const uint8_t> confirm_bytes);
 
     // Get derived session keys. Only valid after successful handshake.
     std::optional<SessionKeys> session_keys() const;
@@ -110,6 +116,7 @@ private:
     std::array<uint8_t, 32> hello_random_{};
     std::array<uint8_t, 32> accept_random_{};
     std::vector<uint8_t> kem_ciphertext_;
+    std::vector<uint8_t> initiator_signing_pubkey_;  // extracted from HELLO
     bool hello_processed_ = false;
     std::optional<SessionKeys> keys_;
 };

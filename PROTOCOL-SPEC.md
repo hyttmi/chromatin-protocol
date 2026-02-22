@@ -115,7 +115,7 @@ attempts.
 
 The handshake consists of three messages: HELLO, ACCEPT, and CONFIRM.
 
-**HELLO** (Initiator -> Responder, ~1637 bytes):
+**HELLO** (Initiator -> Responder, ~4231 bytes):
 ```
 [1 byte:  0xCE]                      // Encryption probe byte
 [1 byte:  version]                   // Protocol version (0x01)
@@ -124,9 +124,14 @@ The handshake consists of three messages: HELLO, ACCEPT, and CONFIRM.
 [2 bytes BE: kem_pk_len]             // ML-KEM-1024 public key length (1568)
 [kem_pk_len bytes: ephemeral_kem_pubkey]  // Ephemeral ML-KEM-1024 public key
 [32 bytes: hello_random]             // Cryptographic random nonce
+[2 bytes BE: sig_pk_len]             // ML-DSA-87 signing pubkey length (2592)
+[sig_pk_len bytes: signing_pubkey]   // Initiator's ML-DSA-87 signing public key
 ```
 
-**ACCEPT** (Responder -> Initiator, ~6265 bytes):
+The embedded signing public key allows the responder to verify the initiator's
+identity without prior knowledge: `SHA3-256(signing_pubkey) == initiator_node_id`.
+
+**ACCEPT** (Responder -> Initiator, ~8859 bytes):
 ```
 [1 byte:  version]                   // Protocol version (0x01)
 [1 byte:  cipher]                    // Cipher suite (0x01 = ChaCha20-Poly1305)
@@ -134,9 +139,14 @@ The handshake consists of three messages: HELLO, ACCEPT, and CONFIRM.
 [2 bytes BE: ct_len]                 // KEM ciphertext length (1568)
 [ct_len bytes: kem_ciphertext]       // ML-KEM-1024 ciphertext (encapsulated shared secret)
 [32 bytes: accept_random]            // Cryptographic random nonce
+[2 bytes BE: sig_pk_len]             // ML-DSA-87 signing pubkey length (2592)
+[sig_pk_len bytes: signing_pubkey]   // Responder's ML-DSA-87 signing public key
 [2 bytes BE: sig_len]                // ML-DSA-87 signature length
 [sig_len bytes: signature]           // ML-DSA-87 signature (~4627 bytes)
 ```
+
+The embedded signing public key allows the initiator to verify the responder's
+identity without prior knowledge: `SHA3-256(signing_pubkey) == responder_node_id`.
 
 **CONFIRM** (Initiator -> Responder, ~4629 bytes):
 ```
@@ -161,6 +171,11 @@ signed_data = hello_random || accept_random || kem_ciphertext || responder_node_
 
 Both signatures include the random nonces and KEM ciphertext, preventing
 replay attacks and binding the authentication to the key exchange.
+
+**Identity verification**: Before verifying signatures, each side confirms
+`SHA3-256(embedded_signing_pubkey) == claimed_node_id`. This makes the
+handshake self-contained — nodes can authenticate peers they have never
+communicated with before (critical for bootstrap).
 
 ### 2.4 Key Derivation
 

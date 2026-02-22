@@ -120,7 +120,8 @@ std::vector<uint8_t> build_confirm_sig_data(
 HandshakeInitiator::HandshakeInitiator(const NodeId& local_id)
     : local_id_(local_id) {}
 
-std::vector<uint8_t> HandshakeInitiator::generate_hello() {
+std::vector<uint8_t> HandshakeInitiator::generate_hello(
+    std::span<const uint8_t> signing_pubkey) {
     // Generate ephemeral KEM keypair
     auto kem_kp = crypto::generate_kem_keypair();
     kem_public_key_ = std::move(kem_kp.public_key);
@@ -132,10 +133,12 @@ std::vector<uint8_t> HandshakeInitiator::generate_hello() {
     // HELLO format:
     // [1B probe] [1B version] [1B cipher]
     // [32B initiator_node_id] [2B BE kem_pk_len] [kem_pk] [32B hello_random]
+    // [2B BE sig_pk_len] [signing_pk]
     uint16_t pk_len = static_cast<uint16_t>(kem_public_key_.size());
+    uint16_t sig_pk_len = static_cast<uint16_t>(signing_pubkey.size());
 
     std::vector<uint8_t> hello;
-    hello.reserve(3 + 32 + 2 + kem_public_key_.size() + 32);
+    hello.reserve(3 + 32 + 2 + kem_public_key_.size() + 32 + 2 + signing_pubkey.size());
 
     hello.push_back(PROBE_BYTE);
     hello.push_back(HANDSHAKE_VERSION);
@@ -150,17 +153,21 @@ std::vector<uint8_t> HandshakeInitiator::generate_hello() {
 
     hello.insert(hello.end(), hello_random_.begin(), hello_random_.end());
 
+    hello.push_back(static_cast<uint8_t>((sig_pk_len >> 8) & 0xFF));
+    hello.push_back(static_cast<uint8_t>(sig_pk_len & 0xFF));
+    hello.insert(hello.end(), signing_pubkey.begin(), signing_pubkey.end());
+
     return hello;
 }
 
 std::optional<std::vector<uint8_t>> HandshakeInitiator::process_accept(
     std::span<const uint8_t> accept_bytes,
-    std::span<const uint8_t> own_signing_key,
-    std::span<const uint8_t> responder_pubkey) {
+    std::span<const uint8_t> own_signing_key) {
 
     // ACCEPT format:
     // [1B version] [1B cipher] [32B responder_node_id]
     // [2B BE ct_len] [ct] [32B accept_random]
+    // [2B BE sig_pk_len] [signing_pk]
     // [2B BE sig_len] [sig]
     size_t offset = 0;
 
@@ -187,6 +194,22 @@ std::optional<std::vector<uint8_t>> HandshakeInitiator::process_accept(
     std::array<uint8_t, 32> accept_random;
     std::copy_n(accept_bytes.data() + offset, 32, accept_random.begin());
     offset += 32;
+
+    // Extract responder's signing pubkey
+    if (accept_bytes.size() < offset + 2) return std::nullopt;
+    uint16_t sig_pk_len = (static_cast<uint16_t>(accept_bytes[offset]) << 8) |
+                           accept_bytes[offset + 1];
+    offset += 2;
+
+    if (accept_bytes.size() < offset + sig_pk_len + 2) return std::nullopt;
+    auto responder_pubkey = accept_bytes.subspan(offset, sig_pk_len);
+    offset += sig_pk_len;
+
+    // Verify identity: SHA3-256(signing_pubkey) must equal responder's node ID
+    auto expected_id = crypto::sha3_256(responder_pubkey);
+    if (expected_id != responder_id.id) {
+        return std::nullopt;
+    }
 
     if (accept_bytes.size() < offset + 2) return std::nullopt;
     uint16_t sig_len = (static_cast<uint16_t>(accept_bytes[offset]) << 8) |
@@ -290,6 +313,24 @@ std::optional<NodeId> HandshakeResponder::process_hello(std::span<const uint8_t>
     std::copy_n(hello_bytes.data() + offset, 32, hello_random_.begin());
     offset += 32;
 
+    // Extract initiator's signing pubkey
+    if (hello_bytes.size() < offset + 2) return std::nullopt;
+    uint16_t sig_pk_len = (static_cast<uint16_t>(hello_bytes[offset]) << 8) |
+                           hello_bytes[offset + 1];
+    offset += 2;
+
+    if (hello_bytes.size() < offset + sig_pk_len) return std::nullopt;
+    initiator_signing_pubkey_.assign(
+        hello_bytes.data() + offset, hello_bytes.data() + offset + sig_pk_len);
+    offset += sig_pk_len;
+
+    // Verify identity: SHA3-256(signing_pubkey) must equal initiator's node ID
+    auto expected_id = crypto::sha3_256(initiator_signing_pubkey_);
+    if (expected_id != initiator_id_.id) {
+        initiator_signing_pubkey_.clear();
+        return std::nullopt;
+    }
+
     // Encapsulate to get shared secret + ciphertext
     auto encap = crypto::kem_encapsulate(kem_pk);
     kem_ciphertext_ = std::move(encap.ciphertext);
@@ -318,7 +359,8 @@ std::optional<NodeId> HandshakeResponder::process_hello(std::span<const uint8_t>
 }
 
 std::optional<std::vector<uint8_t>> HandshakeResponder::generate_accept(
-    std::span<const uint8_t> own_signing_key) {
+    std::span<const uint8_t> own_signing_key,
+    std::span<const uint8_t> signing_pubkey) {
     if (!hello_processed_) return std::nullopt;
 
     // Sign: hello_random || initiator_id || responder_id || accept_random || kem_ciphertext
@@ -329,12 +371,15 @@ std::optional<std::vector<uint8_t>> HandshakeResponder::generate_accept(
     // ACCEPT format:
     // [1B version] [1B cipher] [32B responder_node_id]
     // [2B BE ct_len] [ct] [32B accept_random]
+    // [2B BE sig_pk_len] [signing_pk]
     // [2B BE sig_len] [sig]
     uint16_t ct_len = static_cast<uint16_t>(kem_ciphertext_.size());
+    uint16_t sig_pk_len = static_cast<uint16_t>(signing_pubkey.size());
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
 
     std::vector<uint8_t> accept;
-    accept.reserve(2 + 32 + 2 + kem_ciphertext_.size() + 32 + 2 + sig.size());
+    accept.reserve(2 + 32 + 2 + kem_ciphertext_.size() + 32 +
+                   2 + signing_pubkey.size() + 2 + sig.size());
 
     accept.push_back(HANDSHAKE_VERSION);
     accept.push_back(CIPHER_CHACHA20_POLY1305);
@@ -347,6 +392,10 @@ std::optional<std::vector<uint8_t>> HandshakeResponder::generate_accept(
 
     accept.insert(accept.end(), accept_random_.begin(), accept_random_.end());
 
+    accept.push_back(static_cast<uint8_t>((sig_pk_len >> 8) & 0xFF));
+    accept.push_back(static_cast<uint8_t>(sig_pk_len & 0xFF));
+    accept.insert(accept.end(), signing_pubkey.begin(), signing_pubkey.end());
+
     accept.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     accept.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     accept.insert(accept.end(), sig.begin(), sig.end());
@@ -354,8 +403,9 @@ std::optional<std::vector<uint8_t>> HandshakeResponder::generate_accept(
     return accept;
 }
 
-bool HandshakeResponder::process_confirm(std::span<const uint8_t> confirm_bytes,
-                                          std::span<const uint8_t> initiator_pubkey) {
+bool HandshakeResponder::process_confirm(std::span<const uint8_t> confirm_bytes) {
+    if (initiator_signing_pubkey_.empty()) return false;
+
     // CONFIRM format: [2B BE sig_len] [sig]
     if (confirm_bytes.size() < 2) return false;
 
@@ -368,7 +418,7 @@ bool HandshakeResponder::process_confirm(std::span<const uint8_t> confirm_bytes,
     // Verify: hello_random || accept_random || kem_ciphertext || responder_id
     auto sig_data = build_confirm_sig_data(hello_random_, accept_random_,
                                            kem_ciphertext_, local_id_);
-    return crypto::verify(sig_data, sig, initiator_pubkey);
+    return crypto::verify(sig_data, sig, initiator_signing_pubkey_);
 }
 
 std::optional<SessionKeys> HandshakeResponder::session_keys() const {

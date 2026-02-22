@@ -298,11 +298,16 @@ Kademlia messages from eavesdropping and tampering on the wire.
 an encrypted session:
 
 1. **HELLO**: Initiator sends a `0xCE` probe byte, an ephemeral ML-KEM-1024
-   public key, and a random nonce.
+   public key, a random nonce, and their ML-DSA-87 signing public key.
 2. **ACCEPT**: Responder encapsulates a shared secret using the ephemeral key,
-   signs the handshake transcript with ML-DSA-87, and returns a random nonce.
+   signs the handshake transcript with ML-DSA-87, embeds their own signing
+   public key, and returns a random nonce.
 3. **CONFIRM**: Initiator signs the handshake transcript with ML-DSA-87,
    completing mutual authentication.
+
+Each side verifies the peer's identity by confirming
+`SHA3-256(embedded_pubkey) == claimed_node_id`, making the handshake
+self-contained — no prior knowledge of the peer is required.
 
 **Key derivation:** Two directional session keys are derived from the shared
 secret using SHA3-256 with domain-separated prefixes:

@@ -411,12 +411,12 @@ static bool send_all(int fd, const std::vector<uint8_t>& data) {
 }
 
 bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_key) {
-    if (!signing_keypair_ || !pubkey_lookup_) return false;
+    if (!signing_keypair_) return false;
 
     tcp_encryption::HandshakeInitiator initiator(local_node_id_);
 
-    // Send HELLO
-    auto hello = initiator.generate_hello();
+    // Send HELLO (with embedded signing pubkey for identity verification)
+    auto hello = initiator.generate_hello(signing_keypair_->public_key);
     if (!send_all(fd, hello)) {
         spdlog::debug("Encryption handshake: HELLO send failed to {}", pool_key);
         return false;
@@ -427,9 +427,9 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
     tv.tv_sec = connect_timeout_;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    // Read ACCEPT — first determine the size
-    // ACCEPT: [1B version][1B cipher][32B node_id][2B ct_len][ct][32B random][2B sig_len][sig]
-    // We need to read progressively since we don't know total size upfront
+    // Read ACCEPT progressively — we don't know total size upfront.
+    // ACCEPT: [1B version][1B cipher][32B node_id][2B ct_len][ct][32B random]
+    //         [2B sig_pk_len][signing_pk][2B sig_len][sig]
 
     // Read version(1) + cipher(1) + node_id(32) + ct_len(2) = 36 bytes
     uint8_t accept_header[36];
@@ -440,15 +440,30 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
 
     uint16_t ct_len = (static_cast<uint16_t>(accept_header[34]) << 8) | accept_header[35];
 
-    // Read ct + accept_random(32) + sig_len(2)
-    std::vector<uint8_t> accept_rest(ct_len + 32 + 2);
-    if (!read_exact(fd, accept_rest.data(), accept_rest.size())) {
+    // Read ct + accept_random(32)
+    std::vector<uint8_t> ct_and_random(ct_len + 32);
+    if (!read_exact(fd, ct_and_random.data(), ct_and_random.size())) {
         spdlog::debug("Encryption handshake: ACCEPT body read failed from {}", pool_key);
         return false;
     }
 
-    uint16_t sig_len = (static_cast<uint16_t>(accept_rest[ct_len + 32]) << 8) |
-                        accept_rest[ct_len + 32 + 1];
+    // Read sig_pk_len(2)
+    uint8_t sig_pk_len_buf[2];
+    if (!read_exact(fd, sig_pk_len_buf, 2)) {
+        spdlog::debug("Encryption handshake: ACCEPT sig_pk_len read failed from {}", pool_key);
+        return false;
+    }
+    uint16_t sig_pk_len = (static_cast<uint16_t>(sig_pk_len_buf[0]) << 8) | sig_pk_len_buf[1];
+
+    // Read signing_pk + sig_len(2)
+    std::vector<uint8_t> sig_pk_and_sig_len(sig_pk_len + 2);
+    if (!read_exact(fd, sig_pk_and_sig_len.data(), sig_pk_and_sig_len.size())) {
+        spdlog::debug("Encryption handshake: ACCEPT signing_pk read failed from {}", pool_key);
+        return false;
+    }
+
+    uint16_t sig_len = (static_cast<uint16_t>(sig_pk_and_sig_len[sig_pk_len]) << 8) |
+                        sig_pk_and_sig_len[sig_pk_len + 1];
 
     // Read signature
     std::vector<uint8_t> sig(sig_len);
@@ -459,23 +474,16 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
 
     // Assemble full ACCEPT bytes
     std::vector<uint8_t> accept_bytes;
-    accept_bytes.reserve(36 + accept_rest.size() + sig.size());
+    accept_bytes.reserve(36 + ct_and_random.size() + 2 + sig_pk_and_sig_len.size() + sig.size());
     accept_bytes.insert(accept_bytes.end(), accept_header, accept_header + 36);
-    accept_bytes.insert(accept_bytes.end(), accept_rest.begin(), accept_rest.end());
+    accept_bytes.insert(accept_bytes.end(), ct_and_random.begin(), ct_and_random.end());
+    accept_bytes.push_back(sig_pk_len_buf[0]);
+    accept_bytes.push_back(sig_pk_len_buf[1]);
+    accept_bytes.insert(accept_bytes.end(), sig_pk_and_sig_len.begin(), sig_pk_and_sig_len.end());
     accept_bytes.insert(accept_bytes.end(), sig.begin(), sig.end());
 
-    // Extract responder node ID to look up pubkey
-    NodeId responder_id;
-    std::copy_n(accept_header + 2, 32, responder_id.id.begin());
-    auto responder_pk = pubkey_lookup_(responder_id);
-    if (!responder_pk) {
-        spdlog::debug("Encryption handshake: no pubkey for responder {}", pool_key);
-        return false;
-    }
-
-    // Process ACCEPT, generate CONFIRM
-    auto confirm = initiator.process_accept(accept_bytes, signing_keypair_->secret_key,
-                                             *responder_pk);
+    // Process ACCEPT — signing pubkey is extracted and verified internally
+    auto confirm = initiator.process_accept(accept_bytes, signing_keypair_->secret_key);
     if (!confirm) {
         spdlog::debug("Encryption handshake: ACCEPT verification failed from {}", pool_key);
         return false;
@@ -559,7 +567,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         spdlog::debug("Created new connection to {} (fd={})", pool_key, fd);
 
         // Perform encryption handshake on new connections
-        if (signing_keypair_ && pubkey_lookup_) {
+        if (signing_keypair_) {
             if (perform_initiator_handshake(fd, pool_key)) {
                 // Connection is now in pool with session keys
                 std::lock_guard lock(pool_mutex_);
@@ -593,7 +601,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         fd = create_connection(addr, port, connect_timeout_);
         if (fd < 0) return;
 
-        if (signing_keypair_ && pubkey_lookup_) {
+        if (signing_keypair_) {
             if (perform_initiator_handshake(fd, pool_key)) {
                 std::lock_guard lock(pool_mutex_);
                 session_ptr = &conn_pool_[pool_key].session;
@@ -714,7 +722,8 @@ void TcpTransport::run(Handler handler) {
 
             if (first_byte == tcp_encryption::PROBE_BYTE && signing_keypair_) {
                 // Encrypted handshake — read full HELLO
-                // HELLO: [1B probe][1B version][1B cipher][32B node_id][2B pk_len][pk][32B random]
+                // HELLO: [1B probe][1B version][1B cipher][32B node_id][2B pk_len][pk]
+                //        [32B random][2B sig_pk_len][signing_pk]
                 // Read the fixed prefix first: 3 + 32 + 2 = 37
                 uint8_t hello_prefix[37];
                 if (!read_exact(client_fd, hello_prefix, 37)) {
@@ -735,11 +744,34 @@ void TcpTransport::run(Handler handler) {
                     continue;
                 }
 
+                // Read sig_pk_len(2)
+                uint8_t sig_pk_len_buf[2];
+                if (!read_exact(client_fd, sig_pk_len_buf, 2)) {
+                    close(client_fd);
+                    fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                    client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
+                uint16_t sig_pk_len = (static_cast<uint16_t>(sig_pk_len_buf[0]) << 8) |
+                                       sig_pk_len_buf[1];
+
+                // Read signing_pk
+                std::vector<uint8_t> signing_pk(sig_pk_len);
+                if (sig_pk_len > 0 && !read_exact(client_fd, signing_pk.data(), sig_pk_len)) {
+                    close(client_fd);
+                    fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                    client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
+
                 // Assemble full HELLO
                 std::vector<uint8_t> hello_bytes;
-                hello_bytes.reserve(37 + hello_rest.size());
+                hello_bytes.reserve(37 + hello_rest.size() + 2 + signing_pk.size());
                 hello_bytes.insert(hello_bytes.end(), hello_prefix, hello_prefix + 37);
                 hello_bytes.insert(hello_bytes.end(), hello_rest.begin(), hello_rest.end());
+                hello_bytes.push_back(sig_pk_len_buf[0]);
+                hello_bytes.push_back(sig_pk_len_buf[1]);
+                hello_bytes.insert(hello_bytes.end(), signing_pk.begin(), signing_pk.end());
 
                 // Process handshake as responder
                 tcp_encryption::HandshakeResponder responder(local_node_id_);
@@ -752,8 +784,9 @@ void TcpTransport::run(Handler handler) {
                     continue;
                 }
 
-                // Generate and send ACCEPT
-                auto accept = responder.generate_accept(signing_keypair_->secret_key);
+                // Generate and send ACCEPT (with embedded signing pubkey)
+                auto accept = responder.generate_accept(signing_keypair_->secret_key,
+                                                         signing_keypair_->public_key);
                 if (!accept || !send_all(client_fd, *accept)) {
                     close(client_fd);
                     fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
@@ -780,16 +813,8 @@ void TcpTransport::run(Handler handler) {
                     continue;
                 }
 
-                // Verify CONFIRM — need initiator's pubkey
-                std::optional<std::vector<uint8_t>> init_pk;
-                if (pubkey_lookup_) {
-                    init_pk = pubkey_lookup_(*init_id);
-                }
-
-                bool confirm_ok = false;
-                if (init_pk) {
-                    confirm_ok = responder.process_confirm(confirm_bytes, *init_pk);
-                }
+                // Verify CONFIRM — initiator's pubkey was extracted from HELLO
+                bool confirm_ok = responder.process_confirm(confirm_bytes);
 
                 if (!confirm_ok) {
                     spdlog::debug("TCP encryption: CONFIRM verification failed from fd={}", client_fd);
