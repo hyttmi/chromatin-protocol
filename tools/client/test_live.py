@@ -861,9 +861,14 @@ async def run_tests():
 
         # Zara sends contact request to Yara (no allowlist needed for requests)
         yara_pushes.clear()
-        prefix = b"chromatin:contact:" + fp_y + fp_z
-        cr_nonce = mine_pow(prefix, 16)
         timestamp = int(time.time() * 1000)
+        prefix = (
+            b"chromatin:request:"
+            + fp_z
+            + fp_y
+            + timestamp.to_bytes(8, "big")
+        )
+        cr_nonce = mine_pow(prefix, 16)
         resp = await zara.cmd_contact_request(
             fp_y.hex(), b"Hi Yara, add me!", cr_nonce, timestamp
         )

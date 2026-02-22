@@ -1692,16 +1692,16 @@ void WsServer<SSL>::on_kademlia_store(const crypto::Hash& key,
             }
         } else {
             // CONTACT_REQUEST push
-            // Value layout: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
-            if (value_copy.size() < 76) return;
+            // Value layout: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || timestamp(8 BE) || blob_length(4 BE) || blob
+            if (value_copy.size() < 84) return;
             auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
-            uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[72]) << 24) |
-                                   (static_cast<uint32_t>(value_copy[73]) << 16) |
-                                   (static_cast<uint32_t>(value_copy[74]) << 8) |
-                                   static_cast<uint32_t>(value_copy[75]);
-            if (value_copy.size() < 76 + cr_blob_len) return;
+            uint32_t cr_blob_len = (static_cast<uint32_t>(value_copy[80]) << 24) |
+                                   (static_cast<uint32_t>(value_copy[81]) << 16) |
+                                   (static_cast<uint32_t>(value_copy[82]) << 8) |
+                                   static_cast<uint32_t>(value_copy[83]);
+            if (value_copy.size() < 84 + cr_blob_len) return;
             auto blob = std::span<const uint8_t>(
-                value_copy.data() + 76, cr_blob_len);
+                value_copy.data() + 84, cr_blob_len);
 
             Json::Value push;
             push["type"] = "CONTACT_REQUEST";
