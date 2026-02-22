@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <sstream>
+#include <cstring>
 
 #include <oqs/oqs.h>
 
@@ -1978,6 +1979,143 @@ void WsServer<SSL>::check_upload_timeouts() {
             session->pending_upload.reset();
         }
     }
+}
+
+
+// ---------- group meta cache & ACL helpers ----------
+
+template<bool SSL>
+std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t> data) {
+    // Binary format:
+    //   group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    //   per-member[fp(32) + role(1) + kem_ciphertext(1568)] × member_count ||
+    //   sig_len(2 BE) || signature
+
+    constexpr size_t HEADER_SIZE = 32 + 32 + 4 + 2;  // 70 bytes
+    constexpr size_t MEMBER_SIZE = 32 + 1 + 1568;     // 1601 bytes per member
+
+    if (data.size() < HEADER_SIZE) return std::nullopt;
+
+    GroupMeta meta;
+
+    // group_id (32 bytes)
+    std::memcpy(meta.group_id.data(), data.data(), 32);
+
+    // owner_fp (32 bytes)
+    std::memcpy(meta.owner_fingerprint.data(), data.data() + 32, 32);
+
+    // version (4 bytes BE)
+    meta.version = (static_cast<uint32_t>(data[64]) << 24) |
+                   (static_cast<uint32_t>(data[65]) << 16) |
+                   (static_cast<uint32_t>(data[66]) << 8) |
+                   static_cast<uint32_t>(data[67]);
+
+    // member_count (2 bytes BE)
+    uint16_t member_count = (static_cast<uint16_t>(data[68]) << 8) |
+                            static_cast<uint16_t>(data[69]);
+
+    // Validate total size: header + members + sig_len(2) + signature(variable)
+    size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_SIZE;
+    if (data.size() < members_end + 2) return std::nullopt;
+
+    // Parse members (extract fingerprint and role, skip kem_ciphertext)
+    meta.members.reserve(member_count);
+    for (uint16_t i = 0; i < member_count; ++i) {
+        size_t offset = HEADER_SIZE + static_cast<size_t>(i) * MEMBER_SIZE;
+        GroupMember member;
+        std::memcpy(member.fingerprint.data(), data.data() + offset, 32);
+        member.role = data[offset + 32];
+        meta.members.push_back(member);
+    }
+
+    // Validate signature length field exists (we don't verify the signature here)
+    uint16_t sig_len = (static_cast<uint16_t>(data[members_end]) << 8) |
+                       static_cast<uint16_t>(data[members_end + 1]);
+    if (data.size() < members_end + 2 + sig_len) return std::nullopt;
+
+    return meta;
+}
+
+template<bool SSL>
+const GroupMeta* WsServer<SSL>::get_group_meta(const crypto::Hash& group_id) {
+    // Check cache first
+    auto it = group_meta_cache_.find(group_id);
+    if (it != group_meta_cache_.end()) {
+        return &it->second;
+    }
+
+    // Load from storage
+    auto raw = storage_.get(storage::TABLE_GROUP_META,
+                            std::span<const uint8_t>(group_id.data(), group_id.size()));
+    if (!raw) return nullptr;
+
+    auto meta = parse_group_meta(*raw);
+    if (!meta) return nullptr;
+
+    auto [ins, _] = group_meta_cache_.emplace(group_id, std::move(*meta));
+    return &ins->second;
+}
+
+template<bool SSL>
+void WsServer<SSL>::invalidate_group_meta(const crypto::Hash& group_id) {
+    group_meta_cache_.erase(group_id);
+}
+
+template<bool SSL>
+bool WsServer<SSL>::check_group_role(const crypto::Hash& group_id,
+                                     const crypto::Hash& fingerprint,
+                                     uint8_t min_role) {
+    const auto* meta = get_group_meta(group_id);
+    if (!meta) return false;
+
+    for (const auto& member : meta->members) {
+        if (member.fingerprint == fingerprint && member.role >= min_role) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------- group command stubs ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_delete(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+}
+
+template<bool SSL>
+void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
+    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
 }
 
 // ---------- helpers ----------

@@ -59,6 +59,18 @@ struct Session {
     std::optional<PendingUpload> pending_upload;
 };
 
+struct GroupMember {
+    crypto::Hash fingerprint{};
+    uint8_t role = 0x00;  // 0x00=member, 0x01=admin, 0x02=owner
+};
+
+struct GroupMeta {
+    crypto::Hash group_id{};
+    crypto::Hash owner_fingerprint{};
+    uint32_t version = 0;
+    std::vector<GroupMember> members;
+};
+
 template<bool SSL = false>
 class WsServer {
 public:
@@ -114,6 +126,21 @@ private:
     // Prevents attackers from multiplying rate limits by opening multiple connections.
     std::unordered_map<crypto::Hash, RateLimiter, crypto::HashHash> fp_rate_limiters_;
 
+    // Group metadata cache for ACL checks (uWS thread only)
+    std::unordered_map<crypto::Hash, GroupMeta, crypto::HashHash> group_meta_cache_;
+
+    // Parse raw GROUP_META binary into GroupMeta struct.
+    std::optional<GroupMeta> parse_group_meta(std::span<const uint8_t> data);
+
+    // Get cached GROUP_META, loading from storage if not cached.
+    const GroupMeta* get_group_meta(const crypto::Hash& group_id);
+
+    // Invalidate cached GROUP_META (call after GROUP_UPDATE/CREATE/DESTROY).
+    void invalidate_group_meta(const crypto::Hash& group_id);
+
+    // Check if a fingerprint has a specific minimum role in a group.
+    bool check_group_role(const crypto::Hash& group_id, const crypto::Hash& fingerprint, uint8_t min_role = 0x00);
+
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
     void on_binary(ws_t* ws, std::span<const uint8_t> data);
@@ -138,6 +165,16 @@ private:
     void handle_list_requests(ws_t* ws, const Json::Value& msg);
     void handle_set_profile(ws_t* ws, const Json::Value& msg);
     void handle_register_name(ws_t* ws, const Json::Value& msg);
+
+    // Group command handlers
+    void handle_group_create(ws_t* ws, const Json::Value& msg);
+    void handle_group_info(ws_t* ws, const Json::Value& msg);
+    void handle_group_update(ws_t* ws, const Json::Value& msg);
+    void handle_group_send(ws_t* ws, const Json::Value& msg);
+    void handle_group_list(ws_t* ws, const Json::Value& msg);
+    void handle_group_get(ws_t* ws, const Json::Value& msg);
+    void handle_group_delete(ws_t* ws, const Json::Value& msg);
+    void handle_group_destroy(ws_t* ws, const Json::Value& msg);
 
     // Helpers
     void send_json(ws_t* ws, const Json::Value& msg);
