@@ -165,6 +165,8 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"LIST_REQUESTS",  {&WsServer::handle_list_requests,  true,  1.0}},
         {"SET_PROFILE",    {&WsServer::handle_set_profile,    true,  2.0}},
         {"REGISTER_NAME",  {&WsServer::handle_register_name,  true,  3.0}},
+        {"GROUP_CREATE",   {&WsServer::handle_group_create,   true,  3.0}},
+        {"GROUP_INFO",     {&WsServer::handle_group_info,     true,  1.0}},
     };
 
     auto it = commands.find(type);
@@ -2076,16 +2078,137 @@ bool WsServer<SSL>::check_group_role(const crypto::Hash& group_id,
     return false;
 }
 
-// ---------- group command stubs ----------
+// ---------- group commands ----------
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse group_meta hex string
+    std::string meta_hex = msg.get("group_meta", "").asString();
+    if (meta_hex.empty()) {
+        send_error(ws, id, 400, "missing group_meta");
+        return;
+    }
+    auto meta_bytes_opt = from_hex(meta_hex);
+    if (!meta_bytes_opt) {
+        send_error(ws, id, 400, "invalid hex in group_meta");
+        return;
+    }
+    auto& meta_bytes = *meta_bytes_opt;
+
+    // Parse and validate structure
+    auto parsed = parse_group_meta(meta_bytes);
+    if (!parsed) {
+        send_error(ws, id, 400, "invalid group_meta");
+        return;
+    }
+
+    // Version must be 1 for initial creation
+    if (parsed->version != 1) {
+        send_error(ws, id, 400, "initial version must be 1");
+        return;
+    }
+
+    // Authenticated client must be an owner (role=0x02) in the meta
+    bool is_owner = false;
+    for (const auto& member : parsed->members) {
+        if (member.fingerprint == session->fingerprint && member.role == 0x02) {
+            is_owner = true;
+            break;
+        }
+    }
+    if (!is_owner) {
+        send_error(ws, id, 403, "must be owner in group_meta");
+        return;
+    }
+
+    // Check if group already exists
+    auto group_id = parsed->group_id;
+    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto existing = storage_.get(storage::TABLE_GROUP_META, group_id_span);
+    if (existing) {
+        send_error(ws, id, 409, "group already exists");
+        return;
+    }
+
+    // Compute DHT routing key
+    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
+    // Dispatch store to worker pool
+    auto meta_bytes_copy = std::move(meta_bytes);
+    auto group_id_copy = group_id;
+    if (!workers_.post([this, ws, id, group_key, meta_bytes_copy = std::move(meta_bytes_copy),
+                        group_id_copy]() mutable {
+        bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
+
+        loop_->defer([this, ws, id, ok, group_id_copy]() {
+            if (connections_.count(ws) == 0) return;
+
+            if (ok) {
+                invalidate_group_meta(group_id_copy);
+                Json::Value resp;
+                resp["id"] = id;
+                resp["ok"] = true;
+                resp["group_id"] = to_hex(group_id_copy);
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 500, "store failed");
+            }
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse group_id hex string (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Check that group exists and client is a member
+    const auto* meta = get_group_meta(group_id);
+    if (!meta) {
+        send_error(ws, id, 404, "group not found");
+        return;
+    }
+
+    // Check membership (any role >= 0x00, i.e. any member)
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Load raw GROUP_META from storage
+    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto raw = storage_.get(storage::TABLE_GROUP_META, group_id_span);
+    if (!raw) {
+        send_error(ws, id, 404, "group not found");
+        return;
+    }
+
+    Json::Value resp;
+    resp["id"] = id;
+    resp["ok"] = true;
+    resp["group_meta"] = to_hex(*raw);
+    send_json(ws, resp);
 }
 
 template<bool SSL>

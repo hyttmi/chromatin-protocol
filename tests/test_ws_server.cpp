@@ -60,6 +60,57 @@ Json::Value parse_json(const std::string& s) {
     return root;
 }
 
+// Build a valid GROUP_META binary for testing.
+// members: vector of (fingerprint, role) pairs.
+// signer_kp: keypair that signs the meta (should be an owner in the list).
+std::vector<uint8_t> build_group_meta(
+    const chromatin::crypto::Hash& group_id,
+    uint32_t version,
+    const std::vector<std::pair<chromatin::crypto::Hash, uint8_t>>& members,
+    const chromatin::crypto::KeyPair& signer_kp)
+{
+    std::vector<uint8_t> meta;
+    // group_id(32)
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    // owner_fp(32) — first owner in the list
+    chromatin::crypto::Hash owner_fp{};
+    for (const auto& [fp, role] : members) {
+        if (role == 0x02) { owner_fp = fp; break; }
+    }
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    // version(4 BE)
+    meta.push_back((version >> 24) & 0xFF);
+    meta.push_back((version >> 16) & 0xFF);
+    meta.push_back((version >> 8) & 0xFF);
+    meta.push_back(version & 0xFF);
+    // member_count(2 BE)
+    uint16_t count = static_cast<uint16_t>(members.size());
+    meta.push_back((count >> 8) & 0xFF);
+    meta.push_back(count & 0xFF);
+    // per-member: fp(32) + role(1) + kem_ciphertext(1568)
+    for (const auto& [fp, role] : members) {
+        meta.insert(meta.end(), fp.begin(), fp.end());
+        meta.push_back(role);
+        meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
+    }
+    // Sign everything so far
+    auto signature = chromatin::crypto::sign(meta, signer_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    meta.push_back((sig_len >> 8) & 0xFF);
+    meta.push_back(sig_len & 0xFF);
+    meta.insert(meta.end(), signature.begin(), signature.end());
+    return meta;
+}
+
+std::string send_cmd(TestWsClient& client, const Json::Value& cmd, int timeout_ms = 3000) {
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string json = Json::writeString(writer, cmd);
+    client.send_text(json);
+    auto resp = client.recv_text(timeout_ms);
+    return resp.value_or("");
+}
+
 std::string to_base64(std::span<const uint8_t> data) {
     static constexpr char table[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -2150,6 +2201,173 @@ TEST_F(WsServerTest, RegisterNameRejectsMismatchedFingerprint) {
     auto root = parse_json(*resp);
     EXPECT_EQ(root["type"].asString(), "ERROR");
     EXPECT_EQ(root["code"].asInt(), 403);
+
+    client.close();
+}
+
+// ---------- GROUP_CREATE / GROUP_INFO tests ----------
+
+TEST_F(WsServerTest, GroupCreateAndInfo) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Build a random group_id
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Build GROUP_META with the client as owner
+    auto meta = build_group_meta(group_id, 1, {{user_fp, 0x02}}, user_kp);
+
+    // GROUP_CREATE
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 10;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto resp_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(resp_str.empty());
+    auto resp = parse_json(resp_str);
+    EXPECT_EQ(resp["id"].asInt(), 10);
+    EXPECT_TRUE(resp["ok"].asBool()) << "GROUP_CREATE failed: " << resp_str;
+    EXPECT_EQ(resp["group_id"].asString(), to_hex(group_id));
+
+    // GROUP_INFO — same client should be a member
+    Json::Value info_cmd;
+    info_cmd["type"] = "GROUP_INFO";
+    info_cmd["id"] = 11;
+    info_cmd["group_id"] = to_hex(group_id);
+
+    auto info_str = send_cmd(client, info_cmd, 5000);
+    ASSERT_FALSE(info_str.empty());
+    auto info = parse_json(info_str);
+    EXPECT_EQ(info["id"].asInt(), 11);
+    EXPECT_TRUE(info["ok"].asBool()) << "GROUP_INFO failed: " << info_str;
+    EXPECT_FALSE(info["group_meta"].asString().empty());
+    // Returned meta should match what we stored
+    EXPECT_EQ(info["group_meta"].asString(), to_hex(meta));
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupInfoNotMember) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto other_kp = crypto::generate_keypair();
+
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    // Build group with only the owner
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 20;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    EXPECT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    owner_client.close();
+
+    // Connect as non-member and try GROUP_INFO
+    TestWsClient other_client;
+    ASSERT_TRUE(other_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(other_client, other_kp));
+
+    Json::Value info_cmd;
+    info_cmd["type"] = "GROUP_INFO";
+    info_cmd["id"] = 21;
+    info_cmd["group_id"] = to_hex(group_id);
+
+    auto info_str = send_cmd(other_client, info_cmd, 5000);
+    ASSERT_FALSE(info_str.empty());
+    auto info = parse_json(info_str);
+    EXPECT_EQ(info["type"].asString(), "ERROR");
+    EXPECT_EQ(info["code"].asInt(), 403);
+
+    other_client.close();
+}
+
+TEST_F(WsServerTest, GroupCreateDuplicate) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{user_fp, 0x02}}, user_kp);
+
+    // First create should succeed
+    Json::Value cmd;
+    cmd["type"] = "GROUP_CREATE";
+    cmd["id"] = 30;
+    cmd["group_meta"] = to_hex(meta);
+
+    auto resp1_str = send_cmd(client, cmd, 5000);
+    auto resp1 = parse_json(resp1_str);
+    EXPECT_TRUE(resp1["ok"].asBool());
+
+    // Second create with same group_id should get 409
+    cmd["id"] = 31;
+    auto resp2_str = send_cmd(client, cmd, 5000);
+    auto resp2 = parse_json(resp2_str);
+    EXPECT_EQ(resp2["type"].asString(), "ERROR");
+    EXPECT_EQ(resp2["code"].asInt(), 409);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupCreateNotOwner) {
+    start_ws_server();
+
+    auto user_kp = crypto::generate_keypair();
+    auto user_fp = crypto::sha3_256(user_kp.public_key);
+
+    auto other_kp = crypto::generate_keypair();
+    auto other_fp = crypto::sha3_256(other_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Build meta where authenticated user is only a member, not owner
+    auto meta = build_group_meta(group_id, 1,
+                                 {{other_fp, 0x02}, {user_fp, 0x00}}, other_kp);
+
+    Json::Value cmd;
+    cmd["type"] = "GROUP_CREATE";
+    cmd["id"] = 40;
+    cmd["group_meta"] = to_hex(meta);
+
+    auto resp_str = send_cmd(client, cmd, 5000);
+    auto resp = parse_json(resp_str);
+    EXPECT_EQ(resp["type"].asString(), "ERROR");
+    EXPECT_EQ(resp["code"].asInt(), 403);
 
     client.close();
 }
