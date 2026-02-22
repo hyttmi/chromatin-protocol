@@ -12,6 +12,12 @@
 
 namespace chromatin::kademlia {
 
+// Capability bits advertised in PONG payload.
+enum class Capability : uint32_t {
+    GROUPS       = 1 << 0,   // supports group messaging (data_type 0x05, 0x06)
+    ENCRYPTED_TCP = 1 << 1,  // supports ML-KEM + ChaCha20 TCP encryption
+};
+
 struct NodeInfo {
     NodeId id;
     std::string address;
@@ -19,6 +25,10 @@ struct NodeInfo {
     uint16_t ws_port = 0;
     std::vector<uint8_t> pubkey;
     std::chrono::steady_clock::time_point last_seen;
+    // Version/capability negotiation (populated from PONG payload)
+    uint8_t proto_version_min = 0;
+    uint8_t proto_version_max = 0;
+    uint32_t capabilities = 0;
 };
 
 class RoutingTable {

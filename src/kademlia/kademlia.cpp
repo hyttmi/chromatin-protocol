@@ -637,7 +637,18 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
     sender_info.last_seen = std::chrono::steady_clock::now();
     table_.add_or_update(sender_info);
 
-    Message reply = make_message(MessageType::PONG, {});
+    // PONG payload: min_version(1) || max_version(1) || capabilities(4 BE)
+    std::vector<uint8_t> pong_payload(6);
+    pong_payload[0] = PROTOCOL_VERSION;  // min supported
+    pong_payload[1] = PROTOCOL_VERSION;  // max supported
+    uint32_t caps = static_cast<uint32_t>(Capability::GROUPS)
+                  | static_cast<uint32_t>(Capability::ENCRYPTED_TCP);
+    pong_payload[2] = static_cast<uint8_t>((caps >> 24) & 0xFF);
+    pong_payload[3] = static_cast<uint8_t>((caps >> 16) & 0xFF);
+    pong_payload[4] = static_cast<uint8_t>((caps >> 8) & 0xFF);
+    pong_payload[5] = static_cast<uint8_t>(caps & 0xFF);
+
+    Message reply = make_message(MessageType::PONG, pong_payload);
     transport_.send(from, port, reply);
 }
 
@@ -651,6 +662,25 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
     sender_info.tcp_port = port;
     sender_info.ws_port = 0;
     sender_info.last_seen = std::chrono::steady_clock::now();
+
+    // Parse version/capability payload if present (6 bytes)
+    if (msg.payload.size() >= 6) {
+        sender_info.proto_version_min = msg.payload[0];
+        sender_info.proto_version_max = msg.payload[1];
+        sender_info.capabilities = (static_cast<uint32_t>(msg.payload[2]) << 24)
+                                 | (static_cast<uint32_t>(msg.payload[3]) << 16)
+                                 | (static_cast<uint32_t>(msg.payload[4]) << 8)
+                                 | static_cast<uint32_t>(msg.payload[5]);
+
+        // Warn if peer's version range doesn't include our version
+        if (PROTOCOL_VERSION < sender_info.proto_version_min ||
+            PROTOCOL_VERSION > sender_info.proto_version_max) {
+            spdlog::warn("PONG from {}:{}: version mismatch (peer supports {}-{}, we are {})",
+                         from, port, sender_info.proto_version_min,
+                         sender_info.proto_version_max, PROTOCOL_VERSION);
+        }
+    }
+
     table_.add_or_update(sender_info);
 }
 

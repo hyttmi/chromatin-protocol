@@ -921,6 +921,41 @@ TEST_F(KademliaTest, PongUpdatesLastSeen) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 15b: PongCarriesVersionAndCapabilities
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PongCarriesVersionAndCapabilities) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    start_all();
+
+    // Bootstrap so they know each other
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    // n1 sends PING to n2, n2 replies with PONG containing version/caps
+    Message ping_msg;
+    ping_msg.type = MessageType::PING;
+    ping_msg.sender = n1.info.id;
+    ping_msg.sender_port = n1.info.tcp_port;
+    ping_msg.payload = {};
+    sign_message(ping_msg, n1.keypair.secret_key);
+    n1.transport->send("127.0.0.1", n2.info.tcp_port, ping_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // n1's routing table should now have n2's version/capabilities
+    auto info = n1.table->find(n2.info.id);
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->proto_version_min, 0x01);
+    EXPECT_EQ(info->proto_version_max, 0x01);
+    // Should have both GROUPS and ENCRYPTED_TCP capabilities
+    EXPECT_TRUE(info->capabilities & static_cast<uint32_t>(Capability::GROUPS));
+    EXPECT_TRUE(info->capabilities & static_cast<uint32_t>(Capability::ENCRYPTED_TCP));
+}
+
+// ---------------------------------------------------------------------------
 // Test 16: StaleNodeEviction — evict nodes not seen for > threshold
 // ---------------------------------------------------------------------------
 

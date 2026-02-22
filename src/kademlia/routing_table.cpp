@@ -43,6 +43,12 @@ void RoutingTable::add_or_update(NodeInfo info) {
                 existing.pubkey = std::move(info.pubkey);
             }
             existing.last_seen = info.last_seen;
+            // Only update version/capabilities if non-zero (from PONG payload)
+            if (info.proto_version_min != 0 || info.proto_version_max != 0) {
+                existing.proto_version_min = info.proto_version_min;
+                existing.proto_version_max = info.proto_version_max;
+                existing.capabilities = info.capabilities;
+            }
             return;
         }
     }
