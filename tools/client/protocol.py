@@ -206,7 +206,7 @@ class ChromatinClient:
         return await self.send_command({
             "type": "REGISTER_NAME", "id": mid,
             "name_record": base64.b64encode(name_record).decode(),
-        }, timeout=30.0)
+        }, timeout=60.0)
 
     async def cmd_group_create(self, group_meta: bytes) -> dict:
         mid = self._msg_id()

@@ -1995,7 +1995,7 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
     auto key = profile_key;
     auto ws_ptr = ws;
 
-    workers_.post([this, ws_ptr, id, key, value]() {
+    if (!workers_.post([this, ws_ptr, id, key, value]() {
         bool ok = kad_.store(key, 0x00, *value);
 
         loop_->defer([this, ws_ptr, id, ok]() {
@@ -2009,7 +2009,10 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
                 send_error(ws_ptr, id, 500, "failed to store profile");
             }
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- REGISTER_NAME handler ----------
@@ -2059,7 +2062,7 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
     auto key = name_key;
     auto ws_ptr = ws;
 
-    workers_.post([this, ws_ptr, id, key, value]() {
+    if (!workers_.post([this, ws_ptr, id, key, value]() {
         bool ok = kad_.store(key, 0x01, *value);
 
         loop_->defer([this, ws_ptr, id, ok]() {
@@ -2073,7 +2076,10 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
                 send_error(ws_ptr, id, 500, "failed to register name");
             }
         });
-    });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- upload timeout ----------

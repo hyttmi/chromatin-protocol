@@ -34,12 +34,17 @@ def test_build_name_record():
         seckey=seckey,
         name="alice",
         fingerprint=fp,
+        pubkey=pubkey,
         pow_nonce=0,
         sequence=1,
     )
     assert record[0] == 5
     assert record[1:6] == b"alice"
     assert record[6:38] == fp
+    # After fingerprint(32) + pow_nonce(8) + sequence(8) = offset 38+16=54
+    pk_len = struct.unpack(">H", record[54:56])[0]
+    assert pk_len == len(pubkey)
+    assert record[56 : 56 + pk_len] == pubkey
 
 
 def test_build_group_meta():

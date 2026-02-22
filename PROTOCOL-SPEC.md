@@ -468,9 +468,15 @@ Storage key: `SHA3-256("profile:" || fingerprint)`
 [32 bytes: fingerprint]
 [8 bytes BE: pow_nonce]
 [8 bytes BE: sequence]
+[2 bytes BE: pubkey_length]
+[pubkey_length bytes: ML-DSA-87 public key]
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature over all preceding fields]
 ```
+
+The record embeds the public key so that any node can verify the signature
+without needing the owner's profile. Validators verify that
+`fingerprint == SHA3-256(pubkey)` before checking the signature.
 
 Storage key: `SHA3-256("name:" || name)`
 
@@ -1349,8 +1355,8 @@ Certain data types have ordering dependencies:
 - **Profile must exist before allowlist entries** — Allowlist entries require
   the owner's public key (from their profile) for signature verification.
   Entries are rejected if the profile hasn't propagated yet.
-- **Profile must exist before name records** — Same reasoning: name records
-  reference a fingerprint whose public key must be verifiable.
+- **Name records are self-verifiable** — Name records embed the public key
+  directly, so they do not depend on the profile being stored first.
 
 ### Secret Key Handling
 

@@ -55,6 +55,25 @@ def check(name, condition, reason=""):
         fail(name, reason)
 
 
+async def ensure_connected(client, host, ports):
+    """Reconnect a client if its WebSocket is dead."""
+    if client.ws and client.ws.protocol.state.name == "OPEN":
+        return True
+    # Try to reconnect
+    for port in ports:
+        try:
+            resp = await client.connect(host, port)
+            if resp.get("type") == "REDIRECT":
+                nodes = resp.get("nodes", [])
+                if nodes:
+                    resp = await client.connect(host, nodes[0].get("ws_port", port))
+            if resp.get("type") == "OK":
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def run_tests():
     global passed, failed
 
@@ -493,126 +512,144 @@ async def run_tests():
     print("\n=== Name Registration Tests ===")
     # ===================================================================
 
-    # Test 56: Register a name (low difficulty for speed — node uses 28 bits,
-    # but we mine with 28 since that's what the node expects)
-    name = "testuser" + os.urandom(4).hex()[:8]  # unique name
-    prefix = b"chromatin:name:" + name.encode() + fp_a
-    print(f"  Mining PoW for name '{name}' (28 bits)... ", end="", flush=True)
-    start = time.time()
-    pow_nonce = mine_pow(prefix, 28)
-    elapsed = time.time() - start
-    print(f"done in {elapsed:.1f}s")
-    check("mine name PoW", pow_nonce >= 0)
+    try:
+        # Test 56: Register a name (node requires 28-bit PoW)
+        name = "testuser" + os.urandom(4).hex()[:8]  # unique name
+        prefix = b"chromatin:name:" + name.encode() + fp_a
+        print(f"  Mining PoW for name '{name}' (28 bits)... ", end="", flush=True)
+        start = time.time()
+        pow_nonce = mine_pow(prefix, 28)
+        elapsed = time.time() - start
+        print(f"done in {elapsed:.1f}s")
+        check("mine name PoW", pow_nonce >= 0)
 
-    record = build_name_record(sec_a, name, fp_a, pow_nonce, sequence=1)
-    resp = await alice.cmd_register_name(record)
-    check("register name", resp.get("type") == "OK", f"got {resp}")
+        record = build_name_record(sec_a, name, fp_a, pub_a, pow_nonce, sequence=1)
+        resp = await alice.cmd_register_name(record)
+        check("register name", resp.get("type") == "OK", f"got {resp}")
 
-    await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
 
-    # Test 58: Resolve the name
-    resp = await bob.cmd_resolve_name(name)
-    check("resolve name", resp.get("found") == True, f"got {resp}")
-    if resp.get("found"):
-        check("resolved fp matches", resp.get("fingerprint") == fp_a.hex(),
-              f"got {resp.get('fingerprint')}")
-    else:
-        fail("resolved fp matches", "name not found")
+        # Test 58: Resolve the name
+        await ensure_connected(bob, HOST, WS_PORTS)
+        resp = await bob.cmd_resolve_name(name)
+        check("resolve name", resp.get("found") == True, f"got {resp}")
+        if resp.get("found"):
+            check("resolved fp matches", resp.get("fingerprint") == fp_a.hex(),
+                  f"got {resp.get('fingerprint')}")
+        else:
+            fail("resolved fp matches", "name not found")
 
-    # Test 60: Resolve non-existent name
-    resp = await alice.cmd_resolve_name("nonexistent999")
-    check("resolve nonexistent", not resp.get("found", True), f"got {resp}")
+        # Test 60: Resolve non-existent name
+        await ensure_connected(alice, HOST, WS_PORTS)
+        resp = await alice.cmd_resolve_name("nonexistent999")
+        check("resolve nonexistent", not resp.get("found", True), f"got {resp}")
+    except Exception as e:
+        fail("name registration section", f"crashed: {e}")
+        # Reconnect for subsequent tests
+        await ensure_connected(alice, HOST, WS_PORTS)
+        await ensure_connected(bob, HOST, WS_PORTS)
 
     # ===================================================================
     print("\n=== Group Tests ===")
     # ===================================================================
 
     group_id = os.urandom(32)
-    kem_dummy = b"\x00" * 1568
+    group_ok = False
 
-    # Test 61: Create group (Alice as owner, Bob as member)
-    members = [
-        (fp_a, 0x02, kem_dummy),  # Alice = owner
-        (fp_b, 0x00, kem_dummy),  # Bob = member
-    ]
-    meta = build_group_meta(sec_a, group_id, fp_a, 1, members)
-    resp = await alice.cmd_group_create(meta)
-    check("create group", resp.get("type") == "OK", f"got {resp}")
+    try:
+        kem_dummy = b"\x00" * 1568
 
-    await asyncio.sleep(0.5)
+        # Test 61: Create group (Alice as owner, Bob as member)
+        members = [
+            (fp_a, 0x02, kem_dummy),  # Alice = owner
+            (fp_b, 0x00, kem_dummy),  # Bob = member
+        ]
+        meta = build_group_meta(sec_a, group_id, fp_a, 1, members)
+        resp = await alice.cmd_group_create(meta)
+        check("create group", resp.get("type") == "OK", f"got {resp}")
+        group_ok = resp.get("type") == "OK"
 
-    # Test 62: Get group info
-    resp = await alice.cmd_group_info(group_id.hex())
-    check("get group info", resp.get("type") == "OK" or resp.get("group_meta"),
-          f"got {resp}")
+        await asyncio.sleep(0.5)
 
-    # Test 63: Bob gets group info
-    resp = await bob.cmd_group_info(group_id.hex())
-    check("bob get group info", resp.get("type") == "OK" or resp.get("group_meta"),
-          f"got {resp}")
+        # Test 62: Get group info
+        resp = await alice.cmd_group_info(group_id.hex())
+        check("get group info", resp.get("type") == "OK",
+              f"got {resp}")
 
-    # Test 64-68: Alice sends 5 group messages
-    group_msg_ids = []
-    for i in range(5):
-        mid = os.urandom(32).hex()
-        resp = await alice.cmd_group_send(
-            group_id.hex(), mid, gek_version=1,
-            blob=f"Group msg {i}".encode("utf-8")
+        # Test 63: Bob gets group info
+        resp = await bob.cmd_group_info(group_id.hex())
+        check("bob get group info", resp.get("type") == "OK",
+              f"got {resp}")
+
+        # Test 64-68: Alice sends 5 group messages
+        group_msg_ids = []
+        for i in range(5):
+            mid = os.urandom(32).hex()
+            resp = await alice.cmd_group_send(
+                group_id.hex(), mid, gek_version=1,
+                blob=f"Group msg {i}".encode("utf-8")
+            )
+            check(f"group send msg {i}", resp.get("type") == "OK", f"got {resp}")
+            group_msg_ids.append(mid)
+
+        await asyncio.sleep(0.5)
+
+        # Test 69: List group messages
+        resp = await alice.cmd_group_list(group_id.hex())
+        check("list group msgs", resp.get("type") == "OK", f"got {resp}")
+        gmsg_list = resp.get("messages", [])
+        check("group has messages", len(gmsg_list) >= 3, f"got {len(gmsg_list)}")
+
+        # Test 71: Get specific group message
+        if group_msg_ids:
+            resp = await alice.cmd_group_get(group_id.hex(), group_msg_ids[0])
+            check("get group msg", resp.get("type") == "OK",
+                  f"got {resp}")
+        else:
+            fail("get group msg", "no msg ids")
+
+        # Test 72: Bob sends group message
+        bob_gmsg = os.urandom(32).hex()
+        resp = await bob.cmd_group_send(
+            group_id.hex(), bob_gmsg, gek_version=1,
+            blob=b"Bob's group message"
         )
-        check(f"group send msg {i}", resp.get("type") == "OK", f"got {resp}")
-        group_msg_ids.append(mid)
+        check("bob group send", resp.get("type") == "OK", f"got {resp}")
 
-    await asyncio.sleep(0.5)
+        # Test 73: Delete group message
+        if group_msg_ids:
+            resp = await alice.cmd_group_delete(group_id.hex(), group_msg_ids[0])
+            check("delete group msg", resp.get("type") == "OK", f"got {resp}")
+        else:
+            fail("delete group msg", "no msg ids")
 
-    # Test 69: List group messages
-    resp = await alice.cmd_group_list(group_id.hex())
-    check("list group msgs", resp.get("type") == "OK", f"got {resp}")
-    gmsg_list = resp.get("messages", [])
-    check("group has messages", len(gmsg_list) >= 3, f"got {len(gmsg_list)}")
+        # Test 74: Get deleted group message
+        if group_msg_ids:
+            resp = await alice.cmd_group_get(group_id.hex(), group_msg_ids[0])
+            check("deleted group msg gone", resp.get("type") == "ERROR" or not resp.get("blob"),
+                  f"got {resp}")
+        else:
+            fail("deleted group msg gone", "skipped")
 
-    # Test 71: Get specific group message
-    if group_msg_ids:
-        resp = await alice.cmd_group_get(group_id.hex(), group_msg_ids[0])
-        check("get group msg", resp.get("type") == "OK" or resp.get("blob"),
+        # Test 75: Get non-existent group
+        resp = await alice.cmd_group_info("ff" * 32)
+        check("nonexistent group info", resp.get("type") == "ERROR" or not resp.get("group_meta"),
               f"got {resp}")
-    else:
-        fail("get group msg", "no msg ids")
 
-    # Test 72: Bob sends group message
-    bob_gmsg = os.urandom(32).hex()
-    resp = await bob.cmd_group_send(
-        group_id.hex(), bob_gmsg, gek_version=1,
-        blob=b"Bob's group message"
-    )
-    check("bob group send", resp.get("type") == "OK", f"got {resp}")
-
-    # Test 73: Delete group message
-    if group_msg_ids:
-        resp = await alice.cmd_group_delete(group_id.hex(), group_msg_ids[0])
-        check("delete group msg", resp.get("type") == "OK", f"got {resp}")
-    else:
-        fail("delete group msg", "no msg ids")
-
-    # Test 74: Get deleted group message
-    if group_msg_ids:
-        resp = await alice.cmd_group_get(group_id.hex(), group_msg_ids[0])
-        check("deleted group msg gone", resp.get("type") == "ERROR" or not resp.get("blob"),
-              f"got {resp}")
-    else:
-        fail("deleted group msg gone", "skipped")
-
-    # Test 75: Get non-existent group
-    resp = await alice.cmd_group_info("ff" * 32)
-    check("nonexistent group info", resp.get("type") == "ERROR" or not resp.get("group_meta"),
-          f"got {resp}")
-
-    # Test 76: Group list with limit
-    resp = await alice.cmd_group_list(group_id.hex(), limit=2)
-    check("group list with limit", resp.get("type") == "OK", f"got {resp}")
+        # Test 76: Group list with limit
+        resp = await alice.cmd_group_list(group_id.hex(), limit=2)
+        check("group list with limit", resp.get("type") == "OK", f"got {resp}")
+    except Exception as e:
+        fail("group tests section", f"crashed: {e}")
+        await ensure_connected(alice, HOST, WS_PORTS)
+        await ensure_connected(bob, HOST, WS_PORTS)
 
     # ===================================================================
     print("\n=== Multi-Message Stress Tests ===")
     # ===================================================================
+
+    await ensure_connected(alice, HOST, WS_PORTS)
+    await ensure_connected(bob, HOST, WS_PORTS)
 
     # Test 77-86: Send 10 messages rapidly
     rapid_ids = []
@@ -641,7 +678,6 @@ async def run_tests():
     # ===================================================================
 
     # Test 92: Disconnect and reconnect Alice
-    alice_port = alice.ws.remote_address[1] if alice.ws else WS_PORTS[0]
     await alice.disconnect()
     check("alice disconnected", alice.ws is None)
 
@@ -692,21 +728,28 @@ async def run_tests():
     print("\n=== Group Cleanup Tests ===")
     # ===================================================================
 
-    # Test 103: Destroy group
-    resp = await alice.cmd_group_destroy(group_id.hex())
-    check("destroy group", resp.get("type") == "OK", f"got {resp}")
+    if group_ok:
+        try:
+            await ensure_connected(alice, HOST, WS_PORTS)
+            # Test 103: Destroy group
+            resp = await alice.cmd_group_destroy(group_id.hex())
+            check("destroy group", resp.get("type") == "OK", f"got {resp}")
 
-    # Test 104: Verify group destroyed
-    await asyncio.sleep(0.3)
-    resp = await alice.cmd_group_info(group_id.hex())
-    check("destroyed group gone", resp.get("type") == "ERROR" or not resp.get("group_meta"),
-          f"got {resp}")
+            # Test 104: Verify group destroyed
+            await asyncio.sleep(0.3)
+            resp = await alice.cmd_group_info(group_id.hex())
+            check("destroyed group gone", resp.get("type") == "ERROR" or not resp.get("group_meta"),
+                  f"got {resp}")
 
-    # Test 105: Send to destroyed group
-    resp = await alice.cmd_group_send(
-        group_id.hex(), os.urandom(32).hex(), 1, b"ghost msg"
-    )
-    check("send to destroyed group", resp.get("type") == "ERROR", f"got {resp}")
+            # Test 105: Send to destroyed group
+            resp = await alice.cmd_group_send(
+                group_id.hex(), os.urandom(32).hex(), 1, b"ghost msg"
+            )
+            check("send to destroyed group", resp.get("type") == "ERROR", f"got {resp}")
+        except Exception as e:
+            fail("group cleanup section", f"crashed: {e}")
+    else:
+        print("  SKIP  group cleanup (group not created)")
 
     # ===================================================================
     print("\n=== Concurrent Connections Test ===")

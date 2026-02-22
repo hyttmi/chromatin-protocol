@@ -1405,8 +1405,10 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     // [32 bytes: fingerprint]
     // [8 bytes BE: pow_nonce]
     // [8 bytes BE: sequence]
+    // [2 bytes BE: pubkey_length]
+    // [pubkey_length bytes: ML-DSA-87 public key]
     // [2 bytes BE: signature_length]
-    // [signature_length bytes: ML-DSA-87 signature]
+    // [signature_length bytes: ML-DSA-87 signature over all preceding fields]
 
     if (value.size() < 1) return false;
 
@@ -1429,7 +1431,7 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
         return false;
     }
 
-    // Need at least: 32 (fingerprint) + 8 (nonce) + 8 (sequence) + 2 (sig_length) = 50
+    // Need at least: 32 (fingerprint) + 8 (nonce) + 8 (sequence) + 2 (pubkey_len) = 50
     if (offset + 50 > value.size()) return false;
 
     // fingerprint (32 bytes)
@@ -1450,6 +1452,23 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
         sequence = (sequence << 8) | value[offset + i];
     }
     offset += 8;
+
+    // pubkey_length (2 bytes BE)
+    if (offset + 2 > value.size()) return false;
+    uint16_t pk_len = static_cast<uint16_t>(
+        (static_cast<uint16_t>(value[offset]) << 8) | value[offset + 1]);
+    offset += 2;
+
+    if (offset + pk_len > value.size()) return false;
+    std::span<const uint8_t> pubkey(value.data() + offset, pk_len);
+    offset += pk_len;
+
+    // Verify fingerprint == SHA3-256(pubkey)
+    auto computed_fp = crypto::sha3_256(pubkey);
+    if (computed_fp != fingerprint) {
+        spdlog::warn("Name record validation: fingerprint does not match SHA3-256(pubkey) for '{}'", name);
+        return false;
+    }
 
     // sig_length (2 bytes BE)
     if (offset + 2 > value.size()) return false;
@@ -1475,32 +1494,13 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     }
 
     // 3. ML-DSA signature over all fields preceding the signature
-    // signed_data = name_length + name + fingerprint + pow_nonce + sequence
-    // (everything before the sig_length field)
-    size_t pre_sig_len = 1 + name_length + 32 + 8 + 8;
+    // signed_data = everything before sig_length field
+    size_t pre_sig_len = 1 + name_length + 32 + 8 + 8 + 2 + pk_len;
     std::span<const uint8_t> signed_data(value.data(), pre_sig_len);
 
-    // Look up the owner's profile to get their public key for signature verification.
-    // Profile must be stored before name records — this is a security requirement to
-    // prevent forged name registrations during the propagation window.
-    crypto::Hash profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
-    auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
-    if (!profile_data || profile_data->empty()) {
-        spdlog::debug("Name record rejected: owner profile not found, cannot verify signature");
+    if (!crypto::verify(signed_data, signature, pubkey)) {
+        spdlog::warn("Name record validation: signature verification failed for '{}'", name);
         return false;
-    }
-
-    // Extract pubkey from profile: [32 bytes fingerprint][2 bytes BE pubkey_length][pubkey...]
-    if (profile_data->size() >= 34) {
-        uint16_t pk_len = static_cast<uint16_t>(
-            (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
-        if (profile_data->size() >= 34u + pk_len) {
-            std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
-            if (!crypto::verify(signed_data, signature, pubkey)) {
-                spdlog::warn("Name record validation: signature verification failed for '{}'", name);
-                return false;
-            }
-        }
     }
 
     // 4. First-claim-wins: if name already registered to different fingerprint, reject

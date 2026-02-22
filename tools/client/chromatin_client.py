@@ -274,7 +274,8 @@ async def repl(client: ChromatinClient):
                 nonce = mine_pow(prefix, NAME_POW_DIFFICULTY)
                 print(f"PoW found: nonce={nonce}")
                 record = build_name_record(
-                    client.seckey, name, client.fingerprint, nonce, sequence=1
+                    client.seckey, name, client.fingerprint, client.pubkey,
+                    nonce, sequence=1,
                 )
                 resp = await client.cmd_register_name(record)
                 if resp.get("type") == "ERROR":

@@ -59,6 +59,7 @@ def build_name_record(
     seckey: bytes,
     name: str,
     fingerprint: bytes,
+    pubkey: bytes,
     pow_nonce: int,
     sequence: int,
 ) -> bytes:
@@ -69,6 +70,7 @@ def build_name_record(
         fingerprint(32) ||
         pow_nonce(8 BE) ||
         sequence(8 BE) ||
+        pubkey_len(2 BE) || pubkey ||
         sig_len(2 BE) || signature
     """
     name_bytes = name.encode("utf-8")
@@ -78,6 +80,8 @@ def build_name_record(
     body += fingerprint
     body += struct.pack(">Q", pow_nonce)
     body += struct.pack(">Q", sequence)
+    body += struct.pack(">H", len(pubkey))
+    body += pubkey
 
     sig = sign(seckey, bytes(body))
     body += struct.pack(">H", len(sig))

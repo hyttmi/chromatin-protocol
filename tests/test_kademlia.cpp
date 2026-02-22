@@ -170,6 +170,14 @@ protected:
             record.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
         }
 
+        // pubkey_length (2 bytes BE) + pubkey
+        uint16_t pk_len = static_cast<uint16_t>(user_keypair.public_key.size());
+        record.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        record.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        record.insert(record.end(),
+                       user_keypair.public_key.begin(),
+                       user_keypair.public_key.end());
+
         // Sign everything so far
         auto sig = sign(record, user_keypair.secret_key);
 
@@ -466,9 +474,6 @@ TEST_F(KademliaTest, NameRegistrationValid) {
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
 
-    // Profile must exist before name record (required for signature verification)
-    store_user_profile(n1, user_kp);
-
     std::string name = "alice";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     uint64_t sequence = 1;
@@ -529,7 +534,6 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
     // First user registers the name
     KeyPair user1_kp = generate_keypair();
     Hash user1_fp = sha3_256(user1_kp.public_key);
-    store_user_profile(n1, user1_kp);
 
     std::string name = "claimed";
     uint64_t nonce1 = find_pow_nonce(name, user1_fp, 8);
@@ -546,7 +550,6 @@ TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
     // Second user tries to register the same name with a different fingerprint
     KeyPair user2_kp = generate_keypair();
     Hash user2_fp = sha3_256(user2_kp.public_key);
-    store_user_profile(n1, user2_kp);
     uint64_t nonce2 = find_pow_nonce(name, user2_fp, 8);
 
     auto record2 = build_name_record(name, user2_fp, nonce2, 1, user2_kp);
@@ -803,11 +806,6 @@ TEST_F(KademliaTest, SyncBetweenNodes) {
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
 
-    // Profile must exist on all nodes for name record validation (including SYNC_RESP)
-    store_user_profile(n1, user_kp);
-    store_user_profile(n2, user_kp);
-    store_user_profile(n3, user_kp);
-
     std::string name = "synctest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
@@ -1049,10 +1047,6 @@ TEST_F(KademliaTest, OnStoreCallback) {
     // Build a name record (same pattern as StoreNameRecord test)
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-
-    // Profile must exist on both nodes for name record validation
-    store_user_profile(n1, user_kp);
-    store_user_profile(n2, user_kp);
 
     std::string name = "callbacktest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
@@ -2003,9 +1997,6 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
 
-    // Profile must exist for name record validation
-    store_user_profile(n1, user_kp);
-
     std::string name = "transfertest";
     uint64_t nonce = find_pow_nonce(name, user_fp, 8);
     auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
@@ -2017,8 +2008,6 @@ TEST_F(KademliaTest, ResponsibilityTransfer) {
     // Now create n2 and bootstrap bidirectionally — this changes the routing table
     // Both nodes need each other's pubkeys for STORE verification
     auto& n2 = create_node(8);
-    // n2 also needs the user's profile for name record validation during transfer
-    store_user_profile(n2, user_kp);
     n2.start_recv();
     bootstrap_bidirectional(n2, n1);
 

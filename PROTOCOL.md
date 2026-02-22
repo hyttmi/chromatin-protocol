@@ -103,9 +103,13 @@ Human-readable names mapped to fingerprints, stored on the network.
     fingerprint: 32 bytes,
     pow_nonce:   uint64,
     sequence:    uint64,
+    pubkey:      bytes,        // ML-DSA-87 public key (self-verifiable)
     signature:   bytes         // ML-DSA over all above
 }
 ```
+
+The public key is embedded directly in the name record so that any node
+can verify the signature without needing to look up the owner's profile.
 
 Storage key: `SHA3-256("name:" || name)`
 
@@ -232,7 +236,9 @@ messages directly via TCP:
 - **Allowlist entries**: Kademlia verifies the ML-DSA-87 signature against
   the owner's public key (from TABLE_PROFILES). If the owner's profile is
   not stored yet, the entry is **rejected** — profile must propagate first.
-- **Name records**: Same as allowlist — rejected if owner profile is absent.
+- **Name records**: Self-verifiable — the embedded public key is checked
+  against the fingerprint (`SHA3-256(pubkey) == fingerprint`), then the
+  ML-DSA-87 signature is verified against the embedded key.
 - **SYNC_RESP validation**: All entries received via SYNC_RESP are validated
   using the same rules as direct STORE before being applied to storage.
 - **Signature verification**: PING and FIND_NODE are accepted without
