@@ -107,8 +107,22 @@ std::string send_cmd(TestWsClient& client, const Json::Value& cmd, int timeout_m
     writer["indentation"] = "";
     std::string json = Json::writeString(writer, cmd);
     client.send_text(json);
-    auto resp = client.recv_text(timeout_ms);
-    return resp.value_or("");
+
+    // Read responses, skipping unsolicited push notifications.  Push
+    // notifications lack an "id" field, while command responses always have one.
+    // This is needed because group members may receive NEW_GROUP_MESSAGE pushes
+    // before their command response arrives.
+    for (int i = 0; i < 5; ++i) {
+        auto resp = client.recv_text(timeout_ms);
+        if (!resp.has_value()) return "";
+
+        auto parsed = parse_json(*resp);
+        if (parsed.isMember("id")) {
+            return *resp;
+        }
+        // No "id" field → push notification, skip and read next
+    }
+    return "";
 }
 
 std::string to_base64(std::span<const uint8_t> data) {
@@ -3309,4 +3323,96 @@ TEST_F(WsServerTest, GroupDestroyNotOwner) {
     EXPECT_EQ(member_resp["type"].asString(), "ERROR");
     EXPECT_EQ(member_resp["code"].asInt(), 403);
     member_client.close();
+}
+
+// ---------- GROUP push notification tests ----------
+
+TEST_F(WsServerTest, GroupMessagePush) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    // Owner creates group with owner + member
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1,
+                                 {{owner_fp, 0x02}, {member_fp, 0x00}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 1000;
+    create_cmd["group_meta"] = to_hex(meta);
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    EXPECT_TRUE(create_resp["ok"].asBool());
+    owner_client.close();
+
+    // Member connects and sends a message (member is the sender)
+    TestWsClient member_client;
+    ASSERT_TRUE(member_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(member_client, member_kp));
+
+    // Owner reconnects to receive push notifications
+    TestWsClient owner_client2;
+    ASSERT_TRUE(owner_client2.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client2, owner_kp));
+
+    // Member sends a message to the group
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    std::vector<uint8_t> blob(16, 0xAB);
+
+    Json::Value send_cmd_val;
+    send_cmd_val["type"] = "GROUP_SEND";
+    send_cmd_val["id"] = 1001;
+    send_cmd_val["group_id"] = to_hex(group_id);
+    send_cmd_val["msg_id"] = to_hex(msg_id);
+    send_cmd_val["gek_version"] = 1;
+    send_cmd_val["blob"] = to_hex(blob);
+
+    // Member sends — they'll get both the response and potentially a push.
+    // Read from member until we find the ok response (may get push first).
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string send_json = Json::writeString(writer, send_cmd_val);
+    member_client.send_text(send_json);
+
+    // Drain member's responses until we get the ok
+    bool got_ok = false;
+    for (int i = 0; i < 3; ++i) {
+        auto r = member_client.recv_text(3000);
+        if (!r.has_value()) break;
+        auto parsed = parse_json(*r);
+        if (parsed.isMember("ok") && parsed["ok"].asBool()) {
+            got_ok = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(got_ok) << "GROUP_SEND did not return ok";
+
+    // Owner (who didn't send) should receive NEW_GROUP_MESSAGE push
+    auto push_str = owner_client2.recv_text(3000);
+    ASSERT_TRUE(push_str.has_value()) << "owner did not receive push notification";
+    auto push = parse_json(*push_str);
+
+    EXPECT_EQ(push["type"].asString(), "NEW_GROUP_MESSAGE");
+    EXPECT_EQ(push["group_id"].asString(), to_hex(group_id));
+    EXPECT_EQ(push["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(push["sender"].asString(), to_hex(member_fp));
+    EXPECT_EQ(push["size"].asUInt(), 16u);
+    EXPECT_EQ(push["gek_version"].asUInt(), 1u);
+
+    member_client.close();
+    owner_client2.close();
 }

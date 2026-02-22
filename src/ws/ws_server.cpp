@@ -1537,15 +1537,55 @@ template<bool SSL>
 void WsServer<SSL>::on_kademlia_store(const crypto::Hash& key,
                                       uint8_t data_type,
                                       std::span<const uint8_t> value) {
-    // Only push inbox messages (0x02) and contact requests (0x03)
-    if (data_type != 0x02 && data_type != 0x03) return;
+    // Push inbox messages (0x02), contact requests (0x03), group messages (0x05)
+    if (data_type != 0x02 && data_type != 0x03 && data_type != 0x05) return;
 
     // Copy value for the deferred lambda (span may be invalidated)
     std::vector<uint8_t> value_copy(value.begin(), value.end());
     auto key_copy = key;
 
     loop_->defer([this, key_copy, data_type, value_copy = std::move(value_copy)]() {
-        // Extract recipient fingerprint from value (first 32 bytes for both types)
+        if (data_type == 0x05) {
+            // NEW_GROUP_MESSAGE push
+            // Value: group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
+            if (value_copy.size() < 112) return;
+            crypto::Hash group_id{};
+            std::copy(value_copy.begin(), value_copy.begin() + 32, group_id.begin());
+            auto sender = std::span<const uint8_t>(value_copy.data() + 32, 32);
+            auto msg_id = std::span<const uint8_t>(value_copy.data() + 64, 32);
+            uint32_t gek_version = (static_cast<uint32_t>(value_copy[104]) << 24) |
+                                   (static_cast<uint32_t>(value_copy[105]) << 16) |
+                                   (static_cast<uint32_t>(value_copy[106]) << 8) |
+                                   static_cast<uint32_t>(value_copy[107]);
+            uint32_t blob_len = (static_cast<uint32_t>(value_copy[108]) << 24) |
+                                (static_cast<uint32_t>(value_copy[109]) << 16) |
+                                (static_cast<uint32_t>(value_copy[110]) << 8) |
+                                static_cast<uint32_t>(value_copy[111]);
+
+            const auto* meta = get_group_meta(group_id);
+            if (!meta) return;
+
+            Json::Value push;
+            push["type"] = "NEW_GROUP_MESSAGE";
+            push["group_id"] = to_hex(group_id);
+            push["msg_id"] = to_hex(msg_id);
+            push["sender"] = to_hex(sender);
+            push["size"] = blob_len;
+            push["gek_version"] = gek_version;
+
+            for (const auto& member : meta->members) {
+                auto it = authenticated_.find(member.fingerprint);
+                if (it == authenticated_.end()) continue;
+                for (auto* client_ws : it->second) {
+                    if (connections_.count(client_ws) > 0) {
+                        send_json(client_ws, push);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Extract recipient fingerprint from value (first 32 bytes for both 0x02 and 0x03)
         if (value_copy.size() < 32) return;
         crypto::Hash recipient_fp{};
         std::copy(value_copy.begin(), value_copy.begin() + 32, recipient_fp.begin());
