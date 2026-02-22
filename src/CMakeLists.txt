@@ -28,3 +28,7 @@ target_link_libraries(chromatin-core PUBLIC
 
 add_executable(chromatin-node main.cpp)
 target_link_libraries(chromatin-node PRIVATE chromatin-core)
+
+# --- Install rules ---
+include(GNUInstallDirs)
+install(TARGETS chromatin-node RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

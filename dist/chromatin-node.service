@@ -1,0 +1,29 @@
+[Unit]
+Description=Chromatin Node — Decentralized PQ Messenger
+Documentation=https://gitlab.cpunk.io/cpunk/chromatin-protocol
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/chromatin-node --config /etc/chromatin/config.json
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+User=chromatin
+Group=chromatin
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/chromatin
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

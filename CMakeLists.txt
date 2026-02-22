@@ -121,3 +121,12 @@ add_subdirectory(src)
 enable_testing()
 add_subdirectory(tests)
 add_subdirectory(tests/integration)
+
+# --- Install: config and systemd ---
+include(GNUInstallDirs)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/config.json
+        DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/chromatin
+        COMPONENT config)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/chromatin-node.service
+        DESTINATION lib/systemd/system
+        COMPONENT systemd)
