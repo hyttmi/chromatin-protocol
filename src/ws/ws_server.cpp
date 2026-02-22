@@ -169,6 +169,8 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"GROUP_INFO",     {&WsServer::handle_group_info,     true,  1.0}},
         {"GROUP_SEND",     {&WsServer::handle_group_send,     true,  2.0}},
         {"GROUP_LIST",     {&WsServer::handle_group_list,     true,  1.0}},
+        {"GROUP_GET",      {&WsServer::handle_group_get,      true,  1.0}},
+        {"GROUP_DELETE",   {&WsServer::handle_group_delete,   true,  1.0}},
     };
 
     auto it = commands.find(type);
@@ -2481,12 +2483,140 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse and validate group_id (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Parse and validate msg_id (64 hex chars = 32 bytes)
+    std::string msg_id_hex = msg.get("msg_id", "").asString();
+    if (msg_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+    auto msg_id_bytes = from_hex(msg_id_hex);
+    if (!msg_id_bytes) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+
+    // Verify sender is a member of the group
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Build key: group_id(32) || msg_id(32)
+    std::vector<uint8_t> key;
+    key.reserve(64);
+    key.insert(key.end(), group_id.begin(), group_id.end());
+    key.insert(key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
+    auto key_span = std::span<const uint8_t>(key.data(), key.size());
+
+    // Read blob from TABLE_GROUP_BLOBS
+    auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, key_span);
+    if (!blob) {
+        send_error(ws, id, 404, "message not found");
+        return;
+    }
+
+    // Return the blob (chunked download for large blobs will be added later)
+    Json::Value resp;
+    resp["id"] = id;
+    resp["ok"] = true;
+    resp["blob"] = to_hex(*blob);
+    send_json(ws, resp);
 }
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_delete(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse and validate group_id (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Parse and validate msg_id (64 hex chars = 32 bytes)
+    std::string msg_id_hex = msg.get("msg_id", "").asString();
+    if (msg_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+    auto msg_id_bytes = from_hex(msg_id_hex);
+    if (!msg_id_bytes) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+
+    // Verify sender is a member of the group
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Build key: group_id(32) || msg_id(32)
+    std::vector<uint8_t> key;
+    key.reserve(64);
+    key.insert(key.end(), group_id.begin(), group_id.end());
+    key.insert(key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
+    auto key_span = std::span<const uint8_t>(key.data(), key.size());
+
+    // Read GROUP_INDEX entry to get sender fingerprint
+    auto index_val = storage_.get(storage::TABLE_GROUP_INDEX, key_span);
+    if (!index_val) {
+        send_error(ws, id, 404, "message not found");
+        return;
+    }
+
+    // INDEX value format: sender_fp(32) || timestamp(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
+    if (index_val->size() != 48) {
+        send_error(ws, id, 500, "corrupt index entry");
+        return;
+    }
+
+    // Extract sender_fp from first 32 bytes
+    crypto::Hash sender_fp{};
+    std::copy(index_val->begin(), index_val->begin() + 32, sender_fp.begin());
+
+    // Permission check: requester is the sender, OR requester has role >= 0x01 (admin/owner)
+    bool is_sender = (session->fingerprint == sender_fp);
+    bool is_admin = check_group_role(group_id, session->fingerprint, 0x01);
+    if (!is_sender && !is_admin) {
+        send_error(ws, id, 403, "permission denied");
+        return;
+    }
+
+    // Delete from both tables
+    storage_.del(storage::TABLE_GROUP_INDEX, key_span);
+    storage_.del(storage::TABLE_GROUP_BLOBS, key_span);
+
+    Json::Value resp;
+    resp["id"] = id;
+    resp["ok"] = true;
+    send_json(ws, resp);
 }
 
 template<bool SSL>

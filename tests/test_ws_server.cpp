@@ -2588,3 +2588,305 @@ TEST_F(WsServerTest, GroupListPagination) {
 
     client.close();
 }
+
+TEST_F(WsServerTest, GroupGetMessage) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    // Create a group
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 400;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // Generate a random msg_id and a small blob
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16);
+    for (auto& b : blob) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // GROUP_SEND
+    Json::Value send_val;
+    send_val["type"] = "GROUP_SEND";
+    send_val["id"] = 401;
+    send_val["group_id"] = to_hex(group_id);
+    send_val["msg_id"] = to_hex(msg_id);
+    send_val["gek_version"] = 1;
+    send_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(client, send_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+
+    // GROUP_GET
+    Json::Value get_cmd;
+    get_cmd["type"] = "GROUP_GET";
+    get_cmd["id"] = 402;
+    get_cmd["group_id"] = to_hex(group_id);
+    get_cmd["msg_id"] = to_hex(msg_id);
+
+    auto get_str = send_cmd(client, get_cmd, 5000);
+    ASSERT_FALSE(get_str.empty());
+    auto get_resp = parse_json(get_str);
+    EXPECT_EQ(get_resp["id"].asInt(), 402);
+    EXPECT_TRUE(get_resp["ok"].asBool()) << "GROUP_GET failed: " << get_str;
+    EXPECT_EQ(get_resp["blob"].asString(), to_hex(blob));
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupDeleteOwnMessage) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    // Create group with owner + member
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1,
+        {{owner_fp, 0x02}, {member_fp, 0x00}}, owner_kp);
+
+    // Owner creates the group
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 500;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Authenticate as member and send a message
+    TestWsClient member_client;
+    ASSERT_TRUE(member_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(member_client, member_kp));
+
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16, 0xAB);
+
+    Json::Value send_val;
+    send_val["type"] = "GROUP_SEND";
+    send_val["id"] = 501;
+    send_val["group_id"] = to_hex(group_id);
+    send_val["msg_id"] = to_hex(msg_id);
+    send_val["gek_version"] = 1;
+    send_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(member_client, send_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+
+    // Member deletes their own message
+    Json::Value del_cmd;
+    del_cmd["type"] = "GROUP_DELETE";
+    del_cmd["id"] = 502;
+    del_cmd["group_id"] = to_hex(group_id);
+    del_cmd["msg_id"] = to_hex(msg_id);
+
+    auto del_str = send_cmd(member_client, del_cmd, 5000);
+    ASSERT_FALSE(del_str.empty());
+    auto del_resp = parse_json(del_str);
+    EXPECT_EQ(del_resp["id"].asInt(), 502);
+    EXPECT_TRUE(del_resp["ok"].asBool()) << "GROUP_DELETE failed: " << del_str;
+
+    // GROUP_GET for deleted message should return 404
+    Json::Value get_cmd;
+    get_cmd["type"] = "GROUP_GET";
+    get_cmd["id"] = 503;
+    get_cmd["group_id"] = to_hex(group_id);
+    get_cmd["msg_id"] = to_hex(msg_id);
+
+    auto get_str = send_cmd(member_client, get_cmd, 5000);
+    ASSERT_FALSE(get_str.empty());
+    auto get_resp = parse_json(get_str);
+    EXPECT_EQ(get_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(get_resp["code"].asInt(), 404);
+
+    member_client.close();
+}
+
+TEST_F(WsServerTest, GroupDeleteByAdmin) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto admin_kp = crypto::generate_keypair();
+    auto admin_fp = crypto::sha3_256(admin_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    // Create group with owner + admin + member
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1,
+        {{owner_fp, 0x02}, {admin_fp, 0x01}, {member_fp, 0x00}}, owner_kp);
+
+    // Owner creates the group
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 600;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Member sends a message
+    TestWsClient member_client;
+    ASSERT_TRUE(member_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(member_client, member_kp));
+
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16, 0xCD);
+
+    Json::Value send_val;
+    send_val["type"] = "GROUP_SEND";
+    send_val["id"] = 601;
+    send_val["group_id"] = to_hex(group_id);
+    send_val["msg_id"] = to_hex(msg_id);
+    send_val["gek_version"] = 1;
+    send_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(member_client, send_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    member_client.close();
+
+    // Admin deletes the member's message
+    TestWsClient admin_client;
+    ASSERT_TRUE(admin_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(admin_client, admin_kp));
+
+    Json::Value del_cmd;
+    del_cmd["type"] = "GROUP_DELETE";
+    del_cmd["id"] = 602;
+    del_cmd["group_id"] = to_hex(group_id);
+    del_cmd["msg_id"] = to_hex(msg_id);
+
+    auto del_str = send_cmd(admin_client, del_cmd, 5000);
+    ASSERT_FALSE(del_str.empty());
+    auto del_resp = parse_json(del_str);
+    EXPECT_EQ(del_resp["id"].asInt(), 602);
+    EXPECT_TRUE(del_resp["ok"].asBool()) << "GROUP_DELETE by admin failed: " << del_str;
+
+    admin_client.close();
+}
+
+TEST_F(WsServerTest, GroupDeleteForbidden) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto member1_kp = crypto::generate_keypair();
+    auto member1_fp = crypto::sha3_256(member1_kp.public_key);
+
+    auto member2_kp = crypto::generate_keypair();
+    auto member2_fp = crypto::sha3_256(member2_kp.public_key);
+
+    // Create group with owner + member1 + member2 (no admin)
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1,
+        {{owner_fp, 0x02}, {member1_fp, 0x00}, {member2_fp, 0x00}}, owner_kp);
+
+    // Owner creates the group
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 700;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Member1 sends a message
+    TestWsClient member1_client;
+    ASSERT_TRUE(member1_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(member1_client, member1_kp));
+
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16, 0xEF);
+
+    Json::Value send_val;
+    send_val["type"] = "GROUP_SEND";
+    send_val["id"] = 701;
+    send_val["group_id"] = to_hex(group_id);
+    send_val["msg_id"] = to_hex(msg_id);
+    send_val["gek_version"] = 1;
+    send_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(member1_client, send_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    member1_client.close();
+
+    // Member2 tries to delete member1's message — should be forbidden
+    TestWsClient member2_client;
+    ASSERT_TRUE(member2_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(member2_client, member2_kp));
+
+    Json::Value del_cmd;
+    del_cmd["type"] = "GROUP_DELETE";
+    del_cmd["id"] = 702;
+    del_cmd["group_id"] = to_hex(group_id);
+    del_cmd["msg_id"] = to_hex(msg_id);
+
+    auto del_str = send_cmd(member2_client, del_cmd, 5000);
+    ASSERT_FALSE(del_str.empty());
+    auto del_resp = parse_json(del_str);
+    EXPECT_EQ(del_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(del_resp["code"].asInt(), 403);
+
+    member2_client.close();
+}
