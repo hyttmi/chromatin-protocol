@@ -172,6 +172,7 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"GROUP_GET",      {&WsServer::handle_group_get,      true,  1.0}},
         {"GROUP_UPDATE",   {&WsServer::handle_group_update,   true,  2.0}},
         {"GROUP_DELETE",   {&WsServer::handle_group_delete,   true,  1.0}},
+        {"GROUP_DESTROY",  {&WsServer::handle_group_destroy,  true,  3.0}},
     };
 
     auto it = commands.find(type);
@@ -2800,7 +2801,63 @@ void WsServer<SSL>::handle_group_delete(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse and validate group_id (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Verify requester is an owner (role=0x02)
+    if (!check_group_role(group_id, session->fingerprint, 0x02)) {
+        send_error(ws, id, 403, "only owners can destroy");
+        return;
+    }
+
+    // Post cleanup to worker pool
+    auto group_id_copy = group_id;
+    if (!workers_.post([this, ws, id, group_id_copy]() {
+        auto group_id_span = std::span<const uint8_t>(group_id_copy.data(), group_id_copy.size());
+
+        // Delete GROUP_META
+        storage_.del(storage::TABLE_GROUP_META, group_id_span);
+
+        // Collect GROUP_INDEX keys with group_id prefix, then delete
+        std::vector<std::vector<uint8_t>> keys;
+        storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
+                keys.emplace_back(key.begin(), key.end());
+                return true;
+            });
+        for (const auto& k : keys) {
+            storage_.del(storage::TABLE_GROUP_INDEX, k);
+            storage_.del(storage::TABLE_GROUP_BLOBS, k);
+        }
+
+        loop_->defer([this, ws, id, group_id_copy]() {
+            if (connections_.count(ws) == 0) return;
+
+            invalidate_group_meta(group_id_copy);
+
+            Json::Value resp;
+            resp["id"] = id;
+            resp["ok"] = true;
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 // ---------- helpers ----------
