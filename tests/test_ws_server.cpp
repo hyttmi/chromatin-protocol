@@ -2890,3 +2890,276 @@ TEST_F(WsServerTest, GroupDeleteForbidden) {
 
     member2_client.close();
 }
+
+TEST_F(WsServerTest, GroupUpdateAddMember) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    // Generate random group_id
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Create group with version=1, owner only
+    auto meta_v1 = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 800;
+    create_cmd["group_meta"] = to_hex(meta_v1);
+
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // GROUP_UPDATE: version=2, owner + member
+    auto meta_v2 = build_group_meta(group_id, 2,
+        {{owner_fp, 0x02}, {member_fp, 0x00}}, owner_kp);
+
+    Json::Value update_cmd;
+    update_cmd["type"] = "GROUP_UPDATE";
+    update_cmd["id"] = 801;
+    update_cmd["group_meta"] = to_hex(meta_v2);
+
+    auto update_str = send_cmd(client, update_cmd, 5000);
+    ASSERT_FALSE(update_str.empty());
+    auto update_resp = parse_json(update_str);
+    EXPECT_TRUE(update_resp["ok"].asBool()) << "GROUP_UPDATE failed: " << update_str;
+
+    // GROUP_INFO: verify updated meta has 2 members
+    Json::Value info_cmd;
+    info_cmd["type"] = "GROUP_INFO";
+    info_cmd["id"] = 802;
+    info_cmd["group_id"] = to_hex(group_id);
+
+    auto info_str = send_cmd(client, info_cmd, 5000);
+    ASSERT_FALSE(info_str.empty());
+    auto info_resp = parse_json(info_str);
+    EXPECT_TRUE(info_resp["ok"].asBool()) << "GROUP_INFO failed: " << info_str;
+
+    // Parse the returned group_meta to verify 2 members
+    auto returned_hex = info_resp["group_meta"].asString();
+    auto returned_bytes = from_hex(returned_hex);
+    ASSERT_GE(returned_bytes.size(), 70u);
+    // member_count at offset 68-69 (BE)
+    uint16_t member_count = (static_cast<uint16_t>(returned_bytes[68]) << 8) |
+                             static_cast<uint16_t>(returned_bytes[69]);
+    EXPECT_EQ(member_count, 2u);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupUpdateVersionMustIncrease) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Create group with version=1
+    auto meta_v1 = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 810;
+    create_cmd["group_meta"] = to_hex(meta_v1);
+
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // GROUP_UPDATE with same version=1 — should fail 409
+    auto meta_same = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value update_cmd;
+    update_cmd["type"] = "GROUP_UPDATE";
+    update_cmd["id"] = 811;
+    update_cmd["group_meta"] = to_hex(meta_same);
+
+    auto update_str = send_cmd(client, update_cmd, 5000);
+    ASSERT_FALSE(update_str.empty());
+    auto update_resp = parse_json(update_str);
+    EXPECT_EQ(update_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(update_resp["code"].asInt(), 409);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupUpdateNonMemberRejected) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto outsider_kp = crypto::generate_keypair();
+    auto outsider_fp = crypto::sha3_256(outsider_kp.public_key);
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Create group as owner
+    auto meta_v1 = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 820;
+    create_cmd["group_meta"] = to_hex(meta_v1);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Outsider tries to update — should fail 403
+    TestWsClient outsider_client;
+    ASSERT_TRUE(outsider_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(outsider_client, outsider_kp));
+
+    auto meta_v2 = build_group_meta(group_id, 2,
+        {{owner_fp, 0x02}, {outsider_fp, 0x00}}, owner_kp);
+
+    Json::Value update_cmd;
+    update_cmd["type"] = "GROUP_UPDATE";
+    update_cmd["id"] = 821;
+    update_cmd["group_meta"] = to_hex(meta_v2);
+
+    auto update_str = send_cmd(outsider_client, update_cmd, 5000);
+    ASSERT_FALSE(update_str.empty());
+    auto update_resp = parse_json(update_str);
+    EXPECT_EQ(update_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(update_resp["code"].asInt(), 403);
+
+    outsider_client.close();
+}
+
+TEST_F(WsServerTest, GroupUpdateAdminCanAddMember) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto admin_kp = crypto::generate_keypair();
+    auto admin_fp = crypto::sha3_256(admin_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Create group with owner + admin
+    auto meta_v1 = build_group_meta(group_id, 1,
+        {{owner_fp, 0x02}, {admin_fp, 0x01}}, owner_kp);
+
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 830;
+    create_cmd["group_meta"] = to_hex(meta_v1);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Admin adds a new regular member
+    TestWsClient admin_client;
+    ASSERT_TRUE(admin_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(admin_client, admin_kp));
+
+    auto meta_v2 = build_group_meta(group_id, 2,
+        {{owner_fp, 0x02}, {admin_fp, 0x01}, {member_fp, 0x00}}, owner_kp);
+
+    Json::Value update_cmd;
+    update_cmd["type"] = "GROUP_UPDATE";
+    update_cmd["id"] = 831;
+    update_cmd["group_meta"] = to_hex(meta_v2);
+
+    auto update_str = send_cmd(admin_client, update_cmd, 5000);
+    ASSERT_FALSE(update_str.empty());
+    auto update_resp = parse_json(update_str);
+    EXPECT_TRUE(update_resp["ok"].asBool()) << "GROUP_UPDATE failed: " << update_str;
+
+    admin_client.close();
+}
+
+TEST_F(WsServerTest, GroupUpdateAdminCannotChangeRoles) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    auto admin_kp = crypto::generate_keypair();
+    auto admin_fp = crypto::sha3_256(admin_kp.public_key);
+
+    auto member_kp = crypto::generate_keypair();
+    auto member_fp = crypto::sha3_256(member_kp.public_key);
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Create group with owner + admin + member
+    auto meta_v1 = build_group_meta(group_id, 1,
+        {{owner_fp, 0x02}, {admin_fp, 0x01}, {member_fp, 0x00}}, owner_kp);
+
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 840;
+    create_cmd["group_meta"] = to_hex(meta_v1);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Admin tries to promote member to admin — should fail
+    TestWsClient admin_client;
+    ASSERT_TRUE(admin_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(admin_client, admin_kp));
+
+    auto meta_v2 = build_group_meta(group_id, 2,
+        {{owner_fp, 0x02}, {admin_fp, 0x01}, {member_fp, 0x01}}, owner_kp);
+
+    Json::Value update_cmd;
+    update_cmd["type"] = "GROUP_UPDATE";
+    update_cmd["id"] = 841;
+    update_cmd["group_meta"] = to_hex(meta_v2);
+
+    auto update_str = send_cmd(admin_client, update_cmd, 5000);
+    ASSERT_FALSE(update_str.empty());
+    auto update_resp = parse_json(update_str);
+    EXPECT_EQ(update_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(update_resp["code"].asInt(), 403);
+
+    admin_client.close();
+}

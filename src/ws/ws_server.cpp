@@ -170,6 +170,7 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"GROUP_SEND",     {&WsServer::handle_group_send,     true,  2.0}},
         {"GROUP_LIST",     {&WsServer::handle_group_list,     true,  1.0}},
         {"GROUP_GET",      {&WsServer::handle_group_get,      true,  1.0}},
+        {"GROUP_UPDATE",   {&WsServer::handle_group_update,   true,  2.0}},
         {"GROUP_DELETE",   {&WsServer::handle_group_delete,   true,  1.0}},
     };
 
@@ -2217,7 +2218,185 @@ void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // 1. Parse group_meta hex string
+    std::string meta_hex = msg.get("group_meta", "").asString();
+    if (meta_hex.empty()) {
+        send_error(ws, id, 400, "missing group_meta");
+        return;
+    }
+    auto meta_bytes_opt = from_hex(meta_hex);
+    if (!meta_bytes_opt) {
+        send_error(ws, id, 400, "invalid hex in group_meta");
+        return;
+    }
+    auto& meta_bytes = *meta_bytes_opt;
+
+    // 2. Parse and validate structure
+    auto parsed = parse_group_meta(meta_bytes);
+    if (!parsed) {
+        send_error(ws, id, 400, "invalid group_meta");
+        return;
+    }
+
+    auto group_id = parsed->group_id;
+
+    // 3. Load current GROUP_META from cache
+    const auto* current = get_group_meta(group_id);
+
+    // 4. Group must exist
+    if (!current) {
+        send_error(ws, id, 404, "group not found");
+        return;
+    }
+
+    // 5. Verify signer is owner or admin in the CURRENT stored meta
+    if (!check_group_role(group_id, session->fingerprint, 0x01)) {
+        send_error(ws, id, 403, "insufficient role");
+        return;
+    }
+
+    // 6. Verify new version > current version
+    if (parsed->version <= current->version) {
+        send_error(ws, id, 409, "version must be greater than current");
+        return;
+    }
+
+    // 7. Admin restriction: if signer is admin (not owner), enforce restrictions
+    uint8_t signer_role = 0x00;
+    for (const auto& m : current->members) {
+        if (m.fingerprint == session->fingerprint) {
+            signer_role = m.role;
+            break;
+        }
+    }
+
+    if (signer_role == 0x01) {
+        // Build lookup of current members: fingerprint -> role
+        std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> current_roles;
+        for (const auto& m : current->members) {
+            current_roles[m.fingerprint] = m.role;
+        }
+
+        // Build lookup of new members: fingerprint -> role
+        std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> new_roles;
+        for (const auto& m : parsed->members) {
+            new_roles[m.fingerprint] = m.role;
+        }
+
+        // Check existing members in the new list for role changes
+        for (const auto& m : parsed->members) {
+            auto it = current_roles.find(m.fingerprint);
+            if (it != current_roles.end()) {
+                // Existing member — role must not change
+                if (it->second != m.role) {
+                    send_error(ws, id, 403, "admin cannot change roles");
+                    return;
+                }
+            } else {
+                // New member — must have role 0x00
+                if (m.role != 0x00) {
+                    send_error(ws, id, 403, "admin can only add regular members");
+                    return;
+                }
+            }
+        }
+
+        // Check for removed members: existing members not in new list
+        for (const auto& m : current->members) {
+            if (new_roles.find(m.fingerprint) == new_roles.end()) {
+                // Member was removed — admin cannot remove admins or owners
+                if (m.role > 0x00) {
+                    send_error(ws, id, 403, "admin cannot remove admins or owners");
+                    return;
+                }
+            }
+        }
+    }
+
+    // 8. Must have at least one owner (role=0x02)
+    bool has_owner = false;
+    for (const auto& m : parsed->members) {
+        if (m.role == 0x02) {
+            has_owner = true;
+            break;
+        }
+    }
+    if (!has_owner && !parsed->members.empty()) {
+        send_error(ws, id, 400, "must have at least one owner");
+        return;
+    }
+
+    // 9. Auto-destroy if member count is 0
+    if (parsed->members.empty()) {
+        auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+
+        // Delete GROUP_META
+        storage_.del(storage::TABLE_GROUP_META, group_id_span);
+
+        // Delete all GROUP_INDEX entries with group_id prefix
+        std::vector<std::vector<uint8_t>> index_keys;
+        storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
+                index_keys.emplace_back(key.begin(), key.end());
+                return true;
+            });
+        for (const auto& k : index_keys) {
+            storage_.del(storage::TABLE_GROUP_INDEX, k);
+        }
+
+        // Delete all GROUP_BLOBS entries with group_id prefix
+        std::vector<std::vector<uint8_t>> blob_keys;
+        storage_.scan(storage::TABLE_GROUP_BLOBS, group_id_span,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
+                blob_keys.emplace_back(key.begin(), key.end());
+                return true;
+            });
+        for (const auto& k : blob_keys) {
+            storage_.del(storage::TABLE_GROUP_BLOBS, k);
+        }
+
+        invalidate_group_meta(group_id);
+
+        Json::Value resp;
+        resp["id"] = id;
+        resp["ok"] = true;
+        resp["destroyed"] = true;
+        send_json(ws, resp);
+        return;
+    }
+
+    // 10. Compute DHT routing key and store via worker
+    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
+    auto meta_bytes_copy = std::move(meta_bytes);
+    auto group_id_copy = group_id;
+    if (!workers_.post([this, ws, id, group_key, meta_bytes_copy = std::move(meta_bytes_copy),
+                        group_id_copy]() mutable {
+        bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
+
+        loop_->defer([this, ws, id, ok, group_id_copy]() {
+            if (connections_.count(ws) == 0) return;
+
+            if (ok) {
+                // 11. Invalidate cache after successful store
+                invalidate_group_meta(group_id_copy);
+                // 12. Respond success
+                Json::Value resp;
+                resp["id"] = id;
+                resp["ok"] = true;
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 500, "store failed");
+            }
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 template<bool SSL>
