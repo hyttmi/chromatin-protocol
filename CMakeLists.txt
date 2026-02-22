@@ -125,8 +125,12 @@ add_subdirectory(tests/integration)
 # --- Install: config and systemd ---
 include(GNUInstallDirs)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/config.json
-        DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/chromatin
+        DESTINATION /etc/chromatin
         COMPONENT config)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/chromatin-node.service
-        DESTINATION lib/systemd/system
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/dist/chromatin-node.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/chromatin-node.service
+    @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/chromatin-node.service
+        DESTINATION /usr/lib/systemd/system
         COMPONENT systemd)

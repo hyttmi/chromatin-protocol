@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/chromatin-node --config /etc/chromatin/config.json
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/chromatin-node --config /etc/chromatin/config.json
 Restart=on-failure
 RestartSec=5
 
