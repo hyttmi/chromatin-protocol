@@ -1220,7 +1220,7 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### Name Registration STORE Validation
 
 1. Name matches `^[a-z0-9]{3,36}$`
-2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 28 leading zero bits
+2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 20 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
 4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
 5. If name already registered to a different fingerprint — reject (first claim wins)
@@ -1401,7 +1401,7 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Key space                  | 256 bits (SHA3-256 output)             |
 | Timestamp format           | Milliseconds since Unix epoch (uint64) |
 | Replication factor (R)     | `min(3, network_size)`                 |
-| Name PoW difficulty        | 28 leading zero bits                   |
+| Name PoW difficulty        | 20 leading zero bits                   |
 | Contact request PoW        | 16 leading zero bits                   |
 | Contact request max drift  | 1 hour (3,600,000 ms)                  |
 | Name regex                 | `^[a-z0-9]{3,36}$`                     |

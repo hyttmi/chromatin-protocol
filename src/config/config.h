@@ -54,7 +54,7 @@ struct Config {
 
     // PoW
     uint8_t contact_pow_difficulty = 16;
-    uint8_t name_pow_difficulty = 28;
+    uint8_t name_pow_difficulty = 20;
 
     // Sync
     uint16_t sync_interval_seconds = 120;

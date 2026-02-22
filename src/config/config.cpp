@@ -264,7 +264,7 @@ void generate_default_config(const std::filesystem::path& path) {
 
     // PoW
     root["contact_pow_difficulty"] = 16;
-    root["name_pow_difficulty"] = 28;
+    root["name_pow_difficulty"] = 20;
 
     // Sync
     root["sync_interval_seconds"] = 120;

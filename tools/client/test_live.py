@@ -516,9 +516,9 @@ async def run_tests():
         # Test 56: Register a name (node requires 28-bit PoW)
         name = "testuser" + os.urandom(4).hex()[:8]  # unique name
         prefix = b"chromatin:name:" + name.encode() + fp_a
-        print(f"  Mining PoW for name '{name}' (28 bits)... ", end="", flush=True)
+        print(f"  Mining PoW for name '{name}' (20 bits)... ", end="", flush=True)
         start = time.time()
-        pow_nonce = mine_pow(prefix, 28)
+        pow_nonce = mine_pow(prefix, 20)
         elapsed = time.time() - start
         print(f"done in {elapsed:.1f}s")
         check("mine name PoW", pow_nonce >= 0)
@@ -752,10 +752,241 @@ async def run_tests():
         print("  SKIP  group cleanup (group not created)")
 
     # ===================================================================
+    print("\n=== Cross-Node Push Notification Tests ===")
+    # ===================================================================
+
+    # Create two fresh identities on DIFFERENT nodes to test cross-node push
+    try:
+        pub_x, sec_x = generate_keypair()
+        pub_y, sec_y = generate_keypair()
+        fp_x = fingerprint_of(pub_x)
+        fp_y = fingerprint_of(pub_y)
+
+        xander = ChromatinClient(pub_x, sec_x)
+        yara = ChromatinClient(pub_y, sec_y)
+
+        xander_pushes = []
+        yara_pushes = []
+
+        async def xander_push(msg):
+            xander_pushes.append(msg)
+
+        async def yara_push(msg):
+            yara_pushes.append(msg)
+
+        xander.set_push_callback(xander_push)
+        yara.set_push_callback(yara_push)
+
+        # Connect to different nodes deliberately
+        resp_x = await xander.connect(HOST, WS_PORTS[0])
+        if resp_x.get("type") == "REDIRECT":
+            nodes = resp_x.get("nodes", [])
+            if nodes:
+                resp_x = await xander.connect(HOST, nodes[0].get("ws_port", WS_PORTS[0]))
+        check("xander connected", resp_x.get("type") == "OK", f"got {resp_x}")
+        xander_port = xander.ws.remote_address[1] if xander.ws else "?"
+
+        resp_y = await yara.connect(HOST, WS_PORTS[1])
+        if resp_y.get("type") == "REDIRECT":
+            nodes = resp_y.get("nodes", [])
+            if nodes:
+                resp_y = await yara.connect(HOST, nodes[0].get("ws_port", WS_PORTS[1]))
+        check("yara connected", resp_y.get("type") == "OK", f"got {resp_y}")
+
+        # Status to see which nodes they're on
+        sx = await xander.cmd_status()
+        sy = await yara.cmd_status()
+        x_node = sx.get("node_id", "?")[:16]
+        y_node = sy.get("node_id", "?")[:16]
+        print(f"  Xander on node {x_node}..., Yara on node {y_node}...")
+
+        # Mutual allowlist
+        resp = await xander.cmd_allow(fp_y.hex())
+        check("xander allows yara", resp.get("type") == "OK", f"got {resp}")
+        resp = await yara.cmd_allow(fp_x.hex())
+        check("yara allows xander", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(1)  # Let allowlist propagate
+
+        # Clear push lists
+        xander_pushes.clear()
+        yara_pushes.clear()
+
+        # Xander sends to Yara — Yara should get a NEW_MESSAGE push
+        resp = await xander.cmd_send(fp_y.hex(), b"Cross-node push test!")
+        check("xander sends to yara", resp.get("type") == "OK", f"got {resp}")
+
+        # Wait for push notification to arrive
+        await asyncio.sleep(2)
+
+        # Check if Yara got the push
+        new_msg_pushes = [p for p in yara_pushes if p.get("type") == "NEW_MESSAGE"]
+        check("yara gets NEW_MESSAGE push", len(new_msg_pushes) >= 1,
+              f"got {len(new_msg_pushes)} pushes, all: {yara_pushes}")
+
+        if new_msg_pushes:
+            push = new_msg_pushes[0]
+            check("push has msg_id", "msg_id" in push, f"push: {push}")
+            check("push has from field", "from" in push, f"push: {push}")
+            check("push from is xander", push.get("from") == fp_x.hex(),
+                  f"from={push.get('from')}")
+            check("push has size", "size" in push, f"push: {push}")
+        else:
+            fail("push has msg_id", "no push received")
+            fail("push has from field", "no push received")
+            fail("push from is xander", "no push received")
+            fail("push has size", "no push received")
+
+        # Yara sends back to Xander — Xander should get a push
+        xander_pushes.clear()
+        resp = await yara.cmd_send(fp_x.hex(), b"Cross-node reply!")
+        check("yara sends to xander", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)
+
+        new_msg_pushes_x = [p for p in xander_pushes if p.get("type") == "NEW_MESSAGE"]
+        check("xander gets NEW_MESSAGE push", len(new_msg_pushes_x) >= 1,
+              f"got {len(new_msg_pushes_x)} pushes, all: {xander_pushes}")
+
+        # Contact request push test
+        pub_z, sec_z = generate_keypair()
+        fp_z = fingerprint_of(pub_z)
+        zara = ChromatinClient(pub_z, sec_z)
+        resp_z = await zara.connect(HOST, WS_PORTS[2])
+        if resp_z.get("type") == "REDIRECT":
+            nodes = resp_z.get("nodes", [])
+            if nodes:
+                resp_z = await zara.connect(HOST, nodes[0].get("ws_port", WS_PORTS[2]))
+        check("zara connected", resp_z.get("type") == "OK", f"got {resp_z}")
+
+        # Zara sends contact request to Yara (no allowlist needed for requests)
+        yara_pushes.clear()
+        prefix = b"chromatin:contact:" + fp_y + fp_z
+        cr_nonce = mine_pow(prefix, 16)
+        timestamp = int(time.time() * 1000)
+        resp = await zara.cmd_contact_request(
+            fp_y.hex(), b"Hi Yara, add me!", cr_nonce, timestamp
+        )
+        check("zara sends contact request", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)
+
+        cr_pushes = [p for p in yara_pushes if p.get("type") == "CONTACT_REQUEST"]
+        check("yara gets CONTACT_REQUEST push", len(cr_pushes) >= 1,
+              f"got {len(cr_pushes)} pushes, all: {yara_pushes}")
+
+        await zara.disconnect()
+        await xander.disconnect()
+        await yara.disconnect()
+
+    except Exception as e:
+        fail("cross-node push section", f"crashed: {e}")
+
+    # ===================================================================
+    print("\n=== Name Registration Race Test ===")
+    # ===================================================================
+
+    try:
+        # Two users try to register the same name from different nodes
+        pub_r1, sec_r1 = generate_keypair()
+        pub_r2, sec_r2 = generate_keypair()
+        fp_r1 = fingerprint_of(pub_r1)
+        fp_r2 = fingerprint_of(pub_r2)
+
+        racer1 = ChromatinClient(pub_r1, sec_r1)
+        racer2 = ChromatinClient(pub_r2, sec_r2)
+
+        # Connect to different nodes
+        resp = await racer1.connect(HOST, WS_PORTS[0])
+        if resp.get("type") == "REDIRECT":
+            nodes = resp.get("nodes", [])
+            if nodes:
+                resp = await racer1.connect(HOST, nodes[0].get("ws_port", WS_PORTS[0]))
+        check("racer1 connected", resp.get("type") == "OK", f"got {resp}")
+
+        resp = await racer2.connect(HOST, WS_PORTS[2])
+        if resp.get("type") == "REDIRECT":
+            nodes = resp.get("nodes", [])
+            if nodes:
+                resp = await racer2.connect(HOST, nodes[0].get("ws_port", WS_PORTS[2]))
+        check("racer2 connected", resp.get("type") == "OK", f"got {resp}")
+
+        # Both set profiles first (needed for the protocol)
+        profile1 = build_profile_record(
+            seckey=sec_r1, fingerprint=fp_r1, pubkey=pub_r1,
+            kem_pubkey=b"", bio="Racer 1", avatar=b"",
+            social_links=[], sequence=1,
+        )
+        resp = await racer1.cmd_set_profile(profile1)
+        check("racer1 set profile", resp.get("type") == "OK", f"got {resp}")
+
+        profile2 = build_profile_record(
+            seckey=sec_r2, fingerprint=fp_r2, pubkey=pub_r2,
+            kem_pubkey=b"", bio="Racer 2", avatar=b"",
+            social_links=[], sequence=1,
+        )
+        resp = await racer2.cmd_set_profile(profile2)
+        check("racer2 set profile", resp.get("type") == "OK", f"got {resp}")
+
+        # Mine PoW for the same name
+        race_name = "race" + os.urandom(4).hex()[:8]
+        print(f"  Racing for name '{race_name}'...")
+
+        prefix1 = b"chromatin:name:" + race_name.encode() + fp_r1
+        prefix2 = b"chromatin:name:" + race_name.encode() + fp_r2
+        print(f"  Mining PoW for racer1... ", end="", flush=True)
+        nonce1 = mine_pow(prefix1, 20)
+        print("done")
+        print(f"  Mining PoW for racer2... ", end="", flush=True)
+        nonce2 = mine_pow(prefix2, 20)
+        print("done")
+
+        record1 = build_name_record(sec_r1, race_name, fp_r1, pub_r1, nonce1, sequence=1)
+        record2 = build_name_record(sec_r2, race_name, fp_r2, pub_r2, nonce2, sequence=1)
+
+        # Send both registrations concurrently
+        resp1, resp2 = await asyncio.gather(
+            racer1.cmd_register_name(record1),
+            racer2.cmd_register_name(record2),
+        )
+        print(f"  Racer1 result: {resp1.get('type')}")
+        print(f"  Racer2 result: {resp2.get('type')}")
+
+        # At least one should succeed
+        either_ok = resp1.get("type") == "OK" or resp2.get("type") == "OK"
+        check("at least one registration succeeds", either_ok,
+              f"r1={resp1}, r2={resp2}")
+
+        # Wait for replication to settle
+        await asyncio.sleep(3)
+
+        # Resolve from a third node to verify convergence
+        await ensure_connected(alice, HOST, WS_PORTS)
+        resolved = await alice.cmd_resolve_name(race_name)
+        check("race name resolves", resolved.get("found") == True,
+              f"got {resolved}")
+
+        if resolved.get("found"):
+            winner_fp = resolved.get("fingerprint")
+            # Determine expected winner: lower fingerprint
+            expected = fp_r1.hex() if fp_r1 < fp_r2 else fp_r2.hex()
+            check("race winner is lower fingerprint", winner_fp == expected,
+                  f"winner={winner_fp[:16]}..., expected={expected[:16]}...")
+        else:
+            fail("race winner is lower fingerprint", "name not found")
+
+        await racer1.disconnect()
+        await racer2.disconnect()
+
+    except Exception as e:
+        fail("name race section", f"crashed: {e}")
+
+    # ===================================================================
     print("\n=== Concurrent Connections Test ===")
     # ===================================================================
 
-    # Test 106-108: Multiple clients same identity
+    # Test: Multiple clients same identity
+    await ensure_connected(alice, HOST, WS_PORTS)
     clients = []
     for i in range(3):
         c = ChromatinClient(pub_a, sec_a)

@@ -80,7 +80,7 @@ public:
                                              std::span<const uint8_t> value)>;
     void set_on_store(StoreCallback cb);
 
-    // Configurable PoW difficulty for name registration (default 28 per spec).
+    // Configurable PoW difficulty for name registration (default 20 per spec).
     // Lower values are useful for testing.
     void set_name_pow_difficulty(int bits) { name_pow_difficulty_ = bits; }
     int name_pow_difficulty() const { return name_pow_difficulty_; }
@@ -109,7 +109,7 @@ private:
     storage::Storage& storage_;
     replication::ReplLog& repl_log_;
     const crypto::KeyPair& keypair_;
-    int name_pow_difficulty_ = 28;
+    int name_pow_difficulty_ = 20;
     int contact_pow_difficulty_ = 16;
     StoreCallback on_store_;
 

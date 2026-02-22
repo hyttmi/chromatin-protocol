@@ -116,7 +116,7 @@ Storage key: `SHA3-256("name:" || name)`
 ### 4.2 Server Validation Rules
 
 1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce)`
-   has >= 28 leading zero bits
+   has >= 20 leading zero bits
 2. Verify `fingerprint == SHA3-256(pubkey)` (embedded pubkey authenticity)
 3. Verify ML-DSA signature over all preceding fields
 4. **Conflict resolution** — if name already registered to a different
