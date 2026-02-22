@@ -334,10 +334,13 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 - This prevents stale entries from accumulating
 
 **TTL expiry:**
-- Every 5 minutes, scans inbox and contact request tables
+- Every 5 minutes, scans inbox, contact request, and group message tables
 - Deletes inbox entries older than 7 days (MESSAGE_TTL)
 - Deletes contact requests older than 7 days
+- Deletes group messages older than 7 days
 - Removes inbox data from both TABLE_INBOX_INDEX and TABLE_MESSAGE_BLOBS
+- Removes group data from both TABLE_GROUP_INDEX and TABLE_GROUP_BLOBS
+- GROUP_META has no TTL — persists as long as the group exists
 
 **Pending store cleanup:**
 - Pending STORE tracking entries (waiting for STORE_ACK) are cleaned up
@@ -345,7 +348,8 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 
 **Responsibility transfer:**
 - Every 60 seconds (when routing table size has changed), scans all data tables
-  (profiles, names, contact requests, allowlists, AND inbox data)
+  (profiles, names, contact requests, allowlists, inbox data, group meta,
+  and group messages)
 - For each key, checks if there are new responsible nodes
 - Pushes data via STORE to responsible nodes that don't have it yet
 
@@ -540,26 +544,36 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 5.7).
 | LIST_REQUESTS     | List pending contact requests                |
 | SET_PROFILE       | Publish/update signed profile via Kademlia   |
 | REGISTER_NAME     | Register a permanent name record via Kademlia |
+| GROUP_CREATE      | Create a new group (signed GROUP_META)       |
+| GROUP_INFO        | Fetch group metadata                         |
+| GROUP_UPDATE      | Update group membership/roles/GEK            |
+| GROUP_SEND        | Send a message to a group                    |
+| GROUP_LIST        | List group messages (paginated)              |
+| GROUP_GET         | Fetch a specific group message blob          |
+| GROUP_DELETE      | Delete a group message                       |
+| GROUP_DESTROY     | Destroy a group and all its messages (owner-only) |
 | STATUS            | Health check (no auth required)              |
 
 **Node → Client:**
 
-| Message           | Purpose                                      |
-|-------------------|----------------------------------------------|
-| NEW_MESSAGE       | Incoming message (inline <=64KB, else metadata-only) |
-| CONTACT_REQUEST   | Incoming contact request (PoW-verified)      |
-| SEND_ACK          | Confirmation that message was stored         |
-| SEND_READY        | Ready for chunked upload (large SEND)        |
-| LIST_RESULT       | Message index response (paginated)           |
-| GET_RESULT        | Blob response (inline or chunked)            |
-| RESOLVE_NAME_RESULT | Name lookup response                       |
-| PROFILE_RESULT    | Profile lookup response                      |
-| LIST_REQUESTS_RESULT | Contact requests list response             |
-| SET_PROFILE_ACK   | Profile stored confirmation                  |
-| REGISTER_NAME_ACK | Name registered confirmation                 |
-| STATUS_RESP       | Node health/status information               |
-| REDIRECT          | List of responsible nodes (sorted by seq)    |
-| ERROR             | Rejection with reason and error code         |
+| Message              | Purpose                                      |
+|----------------------|----------------------------------------------|
+| NEW_MESSAGE          | Incoming message (inline <=64KB, else metadata-only) |
+| CONTACT_REQUEST      | Incoming contact request (PoW-verified)      |
+| NEW_GROUP_MESSAGE    | Incoming group message notification          |
+| GROUP_DESTROYED      | Group has been destroyed                     |
+| SEND_ACK             | Confirmation that message was stored         |
+| SEND_READY           | Ready for chunked upload (large SEND/GROUP_SEND) |
+| LIST_RESULT          | Message index response (paginated)           |
+| GET_RESULT           | Blob response (inline or chunked)            |
+| RESOLVE_NAME_RESULT  | Name lookup response                         |
+| PROFILE_RESULT       | Profile lookup response                      |
+| LIST_REQUESTS_RESULT | Contact requests list response               |
+| SET_PROFILE_ACK      | Profile stored confirmation                  |
+| REGISTER_NAME_ACK    | Name registered confirmation                 |
+| STATUS_RESP          | Node health/status information               |
+| REDIRECT             | List of responsible nodes (sorted by seq)    |
+| ERROR                | Rejection with reason and error code         |
 
 ### 8.4 Message Send Flow
 
@@ -650,76 +664,132 @@ senders with proof-of-work.
 ### 10.1 Overview
 
 Chromatin supports group messaging for up to 512 members per group. The design
-follows a **fan-out model**: the sender encrypts the message once with a shared
-Group Encryption Key (GEK), then sends a copy to each member's inbox
-individually. The network treats group messages the same as regular inbox
-messages for routing and storage purposes.
+follows a **shared inbox model**: the sender uploads one copy of each message
+to the group's DHT key. All members read from the same shared inbox after the
+node verifies their membership against the GROUP_META record.
 
-The server never sees plaintext — all group encryption and decryption is
-performed client-side.
+Server-enforced access control: the node checks the GROUP_META member list on
+every read, write, and delete operation. The server never sees plaintext — all
+group encryption and decryption is performed client-side.
 
 ### 10.2 Group Encryption Key (GEK)
 
-Each group has a symmetric AES-256-GCM key called the GEK. The group owner
-generates the GEK and distributes it to each member by encrypting it with the
-member's ML-KEM-1024 public key (from their profile).
+Each group has a 256-bit AES key called the GEK (Group Encryption Key), used
+for AES-256-GCM encryption of message blobs.
 
-- GEK is a 256-bit AES key used for AES-256-GCM encryption of message blobs
+- An Owner generates the GEK and distributes it to each member
 - Each member receives the GEK encrypted with their ML-KEM-1024 public key
-- The encrypted GEK is stored in the GROUP_META record alongside the member list
+  (from their profile) — stored as 1568-byte `kem_ciphertext` in GROUP_META
 - Members decrypt the GEK using their ML-KEM-1024 secret key
+- GEK version is tracked in GROUP_META version and each GROUP_MESSAGE
+- **Rotation required** when a member is removed (forward secrecy)
+- **Rotation optional** when a member is added (new member gets current GEK)
+- Messages use `gek_version` to identify which key decrypts them
 
-### 10.3 Fan-Out Model
+### 10.3 Shared Inbox Model
 
 When a group member sends a message:
 
 1. Sender encrypts the message blob with the current GEK (AES-256-GCM)
-2. Sender creates a GROUP_MESSAGE (data_type 0x05) for **each** group member
-3. Each copy is routed to the recipient's inbox: `SHA3-256("inbox:" || recipient_fp)`
-4. Responsible nodes store the message in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS
-5. Connected recipients receive a NEW_MESSAGE push notification
+2. Sender sends GROUP_SEND with the encrypted blob to the responsible node
+3. Node verifies sender is in GROUP_META member list
+4. Node stores the message in TABLE_GROUP_INDEX + TABLE_GROUP_BLOBS
+5. Node pushes NEW_GROUP_MESSAGE to all connected group members
+6. Members fetch messages via GROUP_LIST / GROUP_GET
 
-This means group messages use the same storage, routing, and replication
-infrastructure as 1:1 messages. No special server-side handling is needed
-beyond recognizing the data type.
+All group data (meta + messages) is stored at DHT key
+`SHA3-256("group:" || group_id)` on the R closest nodes. This means a single
+REDIRECT handles both metadata and message access.
 
-### 10.4 Group Metadata
+### 10.4 Roles & Access Control
+
+Groups use a 3-level role model with server-enforced access control:
+
+| Role   | Value | Permissions                                           |
+|--------|-------|-------------------------------------------------------|
+| Member | 0x00  | Send messages, read messages, leave group             |
+| Admin  | 0x01  | + Add/remove regular members, sign GROUP_META updates |
+| Owner  | 0x02  | + Add/remove anyone, change roles, GROUP_DESTROY      |
+
+**Multiple owners are allowed.** Any member with role=0x02 can sign GROUP_META
+updates with full authority. At least one Owner must exist at all times
+(server-enforced).
+
+**Admin restrictions:** Admins can only add or remove members with role=0x00.
+They cannot change roles, add/remove other admins, or add/remove owners. The
+node validates this by diffing the proposed GROUP_META against the stored
+version.
+
+**Per-operation access:**
+
+| Operation     | Who                    | Validation                          |
+|---------------|------------------------|-------------------------------------|
+| GROUP_CREATE  | Anyone authenticated   | Signer = authenticated client, version=1 |
+| GROUP_UPDATE  | Owner                  | Can change any roles, add/remove anyone |
+| GROUP_UPDATE  | Admin                  | Can only add/remove role=0x00 members |
+| GROUP_SEND    | Any member             | Sender in GROUP_META member list    |
+| GROUP_LIST    | Any member             | Requester in GROUP_META member list |
+| GROUP_GET     | Any member             | Requester in GROUP_META member list |
+| GROUP_DELETE  | Sender, Admin, Owner   | msg sender = requester, OR role >= 0x01 |
+| GROUP_INFO    | Any member             | Requester in GROUP_META member list |
+| GROUP_DESTROY | Owner                  | Requester has role=0x02             |
+
+### 10.5 Group Metadata
 
 Group metadata (data_type 0x06) is stored at routing key
 `SHA3-256("group:" || group_id)` on the R closest nodes. It contains:
 
 - Group identity (`group_id` = SHA3-256 of group creation record)
-- Owner fingerprint (only the owner can modify the group)
+- Owner fingerprint (original creator, informational after multi-owner)
 - Version number (monotonically increasing)
-- Member list with ML-KEM-1024 encrypted GEK per member
-- ML-DSA-87 signature by the group owner
+- Member list with role and ML-KEM-1024 encrypted GEK per member
+- ML-DSA-87 signature by an Owner (any member with role=0x02)
 
-The group owner signs all metadata updates. Nodes verify the signature before
-accepting a GROUP_META STORE. Version must be higher than the currently stored
-version (replay prevention).
+Nodes verify the signature before accepting a GROUP_META STORE. Version must
+be strictly greater than the currently stored version (replay prevention).
+Concurrent updates are resolved by version number — lower version is rejected
+and the client retries with the latest version.
 
-Local storage uses TABLE_GROUP_META with `group_id` as the key.
+Local storage uses TABLE_GROUP_META with `group_id` as the key. Responsible
+nodes cache GROUP_META in memory for fast ACL lookups, populated lazily on
+first access and invalidated on GROUP_UPDATE or GROUP_CREATE.
 
-### 10.5 GEK Rotation
+### 10.6 GEK Rotation
 
 GEK rotation is required whenever a member is removed from the group:
 
-1. Group owner generates a new GEK
+1. An Owner generates a new GEK
 2. Owner increments the GROUP_META version
 3. Owner encrypts the new GEK with each remaining member's ML-KEM-1024 key
-4. Owner publishes the updated GROUP_META record
+4. Owner publishes the updated GROUP_META record via GROUP_UPDATE
 5. Subsequent messages use the new `gek_version`
 
 Removed members cannot decrypt messages sent after the rotation because they
 do not have the new GEK. Messages sent before the rotation remain decryptable
 by the removed member (no backward secrecy for past messages).
 
-### 10.6 Constraints
+### 10.7 Group Destruction
+
+A group is destroyed in three scenarios:
+
+1. **GROUP_DESTROY command:** An Owner explicitly destroys the group
+2. **Last owner leaves:** A GROUP_UPDATE removes all owners (member_count > 0
+   but no role=0x02 members)
+3. **Member count reaches zero:** A GROUP_UPDATE removes all members
+
+Destruction wipes GROUP_META and all group messages (TABLE_GROUP_INDEX +
+TABLE_GROUP_BLOBS) immediately. Connected group members receive a
+GROUP_DESTROYED push notification.
+
+### 10.8 Constraints
 
 - Maximum 512 members per group
-- Group owner is the sole authority for membership changes
 - GROUP_META is immutable per version — new version replaces old
 - `group_id` is permanent (derived from creation record hash)
+- Group messages follow the same 7-day TTL as regular messages
+- GROUP_META has no TTL — persists as long as the group exists
+- Large group messages (>64 KB) use the same chunked binary frame protocol
+  as regular messages
 
 ---
 
@@ -783,9 +853,11 @@ that data after confirming the new responsible node is synced.
 | message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | requests         | `recipient_fp(32) \|\| sender_fp(32)` | Contact request binary (composite key) |
 | allowlists       | `SHA3-256("allowlist:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (composite key, O(1) lookup) |
+| group_meta       | `group_id(32)`                      | Group metadata binary (signed, no TTL) |
+| group_index      | `group_id(32) \|\| msg_id(32)`      | sender_fp + timestamp + size + gek_version (48 bytes) |
+| group_blobs      | `group_id(32) \|\| msg_id(32)`      | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
-| group_meta       | `group_id(32)`                      | Group metadata binary (signed) |
 | reputation       | `node_id`                           | Trust score + metrics     |
 
 ### 12.2 Replication Log Format

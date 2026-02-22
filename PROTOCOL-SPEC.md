@@ -530,12 +530,12 @@ separate blocklist.
 
 ### Group Message (data_type 0x05)
 
-Group messages are encrypted with a Group Encryption Key (GEK) and fanned out
-by the sender to each group member's inbox individually.
+Group messages use a **shared inbox model**: the sender uploads one copy to the
+group's DHT key. All members read from the same shared inbox after the node
+verifies their membership against the GROUP_META record.
 
 ```
 [32 bytes: group_id]                    // SHA3-256 of group creation record
-[32 bytes: recipient_fingerprint]       // Individual recipient (fan-out target)
 [32 bytes: sender_fingerprint]          // Message author
 [32 bytes: msg_id]                      // Random 32-byte message identifier
 [8 bytes BE: timestamp]                 // Milliseconds since Unix epoch
@@ -544,60 +544,91 @@ by the sender to each group member's inbox individually.
 [blob_length bytes: encrypted blob]     // AES-256-GCM encrypted with GEK (client-side)
 ```
 
-Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
+Minimum size: 112 bytes (32 + 32 + 32 + 8 + 4 + 4 + 0).
 
-Group messages are stored per-recipient using the same two-table model as
-regular inbox messages (TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS). Routing is
-identical: each copy is stored on the R nodes closest to the recipient's inbox
-key. The sender fans out to each group member — the network does not perform
-any fan-out itself.
+Storage key (DHT routing): `SHA3-256("group:" || group_id)`
 
-The `group_id` and `gek_version` fields allow recipients to associate the
-message with a group and determine which key version to use for decryption.
-The blob is opaque to the server — encryption and decryption are entirely
-client-side using the GEK.
+Local mdbx storage uses two dedicated tables (separate from 1:1 inbox tables):
+
+**TABLE_GROUP_INDEX** — Lightweight metadata for GROUP_LIST responses:
+```
+Key:   group_id(32) || msg_id(32)
+Value: sender_fp(32) || timestamp(8 BE) || size(4 BE) || gek_version(4 BE)
+```
+
+Value is 48 bytes per entry.
+
+**TABLE_GROUP_BLOBS** — Raw encrypted blob data:
+```
+Key:   group_id(32) || msg_id(32)
+Value: encrypted blob (up to 50 MiB)
+```
+
+Prefix scan on TABLE_GROUP_INDEX by `group_id` returns all message metadata
+for a group. DELETE removes entries from both tables. The `group_id` and
+`gek_version` fields allow recipients to associate the message with a group
+and determine which key version to use for decryption. The blob is opaque to
+the server — encryption and decryption are entirely client-side using the GEK.
 
 ### Group Metadata (data_type 0x06)
 
-Group metadata records describe the group's membership and distribute the
-Group Encryption Key (GEK) to each member via ML-KEM-1024 encapsulation.
+Group metadata records describe the group's membership, roles, and distribute
+the Group Encryption Key (GEK) to each member via ML-KEM-1024 encapsulation.
 
 ```
 [32 bytes: group_id]                    // SHA3-256 of group creation record
-[32 bytes: owner_fingerprint]           // Group owner's fingerprint
-[4 bytes BE: version]                   // Increments on member change or GEK rotation
-[2 bytes BE: member_count]              // Number of members (max 512)
+[32 bytes: owner_fingerprint]           // Original creator (informational after multi-owner)
+[4 bytes BE: version]                   // Monotonic, incremented on any change
+[2 bytes BE: member_count]              // Number of members (1-512)
 For each member:
-  [32 bytes: member_fingerprint]        // Recipient fingerprint
+  [32 bytes: member_fingerprint]
+  [1 byte: role]                        // 0x00=Member, 0x01=Admin, 0x02=Owner
   [1568 bytes: kem_ciphertext]          // ML-KEM-1024 encrypted GEK for this member
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature]
 ```
 
 The signature covers everything preceding `signature_length` (i.e., from
-`group_id` through the last member's `kem_ciphertext`).
+`group_id` through the last member's `kem_ciphertext`). Signed by any member
+with role=0x02 (Owner).
+
+**Member roles:**
+
+| Role   | Value | Permissions                                           |
+|--------|-------|-------------------------------------------------------|
+| Member | 0x00  | Send messages, read messages, leave group             |
+| Admin  | 0x01  | + Add/remove regular members, sign GROUP_META for member changes |
+| Owner  | 0x02  | + Add/remove anyone (including admins), change roles, GROUP_DESTROY |
+
+Multiple members can have role=0x02 (Owner). At least one Owner must exist at
+all times (server-enforced).
 
 Storage key (DHT routing): `SHA3-256("group:" || group_id)`
 
 Local mdbx storage uses TABLE_GROUP_META:
 ```
 Key:   group_id(32)
-Value: full group metadata binary
+Value: full group metadata binary (signed)
 ```
 
 Fields:
 - `group_id`: SHA3-256 of the group creation record (unique group identifier)
-- `owner_fingerprint`: The group owner who controls membership and signs metadata
+- `owner_fingerprint`: The original group creator. After multi-owner support,
+  this is informational — any Owner can sign metadata updates
 - `version`: Monotonically increasing, incremented on any member change or GEK rotation
-- `member_count`: Maximum 512 members per group
-- Per-member block: each member receives the current GEK encrypted with their
-  ML-KEM-1024 public key (from their profile)
-- `signature`: ML-DSA-87 signature by the group owner, proving authenticity
+- `member_count`: 1 to 512 members per group
+- Per-member block: fingerprint, role, and the current GEK encrypted with the
+  member's ML-KEM-1024 public key (from their profile)
+- `signature`: ML-DSA-87 signature by an Owner, proving authenticity
 
-GEK rotation: When a member is removed, the group owner generates a new GEK,
+GEK rotation: When a member is removed, an Owner generates a new GEK,
 increments the version, re-encrypts the GEK for each remaining member, and
 publishes a new GROUP_META record. Messages sent after rotation use the new
 `gek_version`. Removed members cannot decrypt messages sent after their removal.
+
+**Auto-destruction:** If a GROUP_UPDATE results in zero owners (all owners
+removed themselves) or zero members, the group is destroyed — GROUP_META and
+all group messages (INDEX + BLOBS) are wiped immediately.
 
 ---
 
@@ -838,6 +869,132 @@ name not already taken) and stores/replicates via Kademlia. Names are permanent
 and cannot be updated — first claim wins.
 Response: `{"type": "REGISTER_NAME_ACK", "id": 15}`
 
+**GROUP_CREATE** — Create a new group:
+```json
+{"type": "GROUP_CREATE", "id": 16, "group_meta": "<hex-encoded GROUP_META binary>"}
+```
+The client constructs and signs the GROUP_META binary (see Section 4,
+data_type 0x06). The node validates: signature is valid, signer matches the
+authenticated client, version=1, at least one Owner exists.
+Response:
+```json
+{"id": 16, "ok": true, "group_id": "<hex>"}
+```
+
+**GROUP_INFO** — Fetch group metadata:
+```json
+{"type": "GROUP_INFO", "id": 17, "group_id": "<hex>"}
+```
+The node verifies the requester's fingerprint is in the GROUP_META member list.
+Response:
+```json
+{"id": 17, "ok": true, "group_meta": "<hex-encoded GROUP_META binary>"}
+```
+
+**GROUP_UPDATE** — Update group metadata (membership, roles, GEK rotation):
+```json
+{"type": "GROUP_UPDATE", "id": 18, "group_meta": "<hex-encoded GROUP_META binary>"}
+```
+The node validates:
+1. ML-DSA-87 signature is valid
+2. Signer is an Owner or Admin in the **currently stored** GROUP_META
+3. Version is strictly greater than stored version
+4. If signer is Admin: changes are restricted to adding/removing role=0x00
+   members only (cannot change roles or modify admins/owners)
+5. New GROUP_META must contain at least one Owner (role=0x02)
+6. If new GROUP_META has zero owners or zero members, the group is destroyed
+   (GROUP_META and all messages wiped)
+
+Response: `{"id": 18, "ok": true}`
+
+**GROUP_SEND** — Send a message to a group:
+
+Small blob (<=64 KB), inline:
+```json
+{"type": "GROUP_SEND", "id": 19, "group_id": "<hex>", "msg_id": "<hex>",
+ "gek_version": 1, "blob": "<hex>"}
+```
+Response:
+```json
+{"id": 19, "ok": true, "msg_id": "<hex>"}
+```
+
+Large blob (>64 KB, up to 50 MiB), chunked:
+```json
+// Step 1: Announce
+{"type": "GROUP_SEND", "id": 20, "group_id": "<hex>", "msg_id": "<hex>",
+ "gek_version": 1, "size": 5242880}
+
+// Response: ready for chunks
+{"type": "SEND_READY", "id": 20, "request_id": 42}
+
+// Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 5.7)
+
+// Step 3: After all chunks received
+{"id": 20, "ok": true, "msg_id": "<hex>"}
+```
+
+The node verifies the sender's fingerprint is in the GROUP_META member list
+before accepting the message.
+
+**GROUP_LIST** — List group messages (paginated):
+```json
+{"type": "GROUP_LIST", "id": 21, "group_id": "<hex>", "after": "<msg_id hex, optional>", "limit": 50}
+```
+Optional fields:
+- `limit` — Maximum number of messages to return (default 50, max 200)
+- `after` — Cursor: start after this msg_id (for pagination). Omit for first page.
+
+The node verifies the requester's fingerprint is in the GROUP_META member list.
+Response:
+```json
+{"id": 21, "ok": true, "messages": [
+  {"msg_id": "<hex>", "sender": "<hex>", "timestamp": 1708000100000,
+   "size": 1200, "gek_version": 1, "blob": "<hex>"},
+  {"msg_id": "<hex>", "sender": "<hex>", "timestamp": 1708000200000,
+   "size": 5242880, "gek_version": 1, "blob": null}
+]}
+```
+
+Messages with `size` <= 64 KB have their blob inlined (hex). Larger messages
+have `blob: null` — the client must fetch them separately with GROUP_GET.
+
+**GROUP_GET** — Fetch a specific group message blob:
+```json
+{"type": "GROUP_GET", "id": 22, "group_id": "<hex>", "msg_id": "<hex>"}
+```
+
+Small blob response (<=64 KB):
+```json
+{"id": 22, "ok": true, "blob": "<hex>"}
+```
+
+Large blob response (>64 KB): JSON header followed by binary chunks:
+```json
+{"id": 22, "ok": true, "size": 5242880, "chunks": 5}
+```
+Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 5.7).
+
+The node verifies the requester's fingerprint is in the GROUP_META member list.
+
+**GROUP_DELETE** — Delete a group message:
+```json
+{"type": "GROUP_DELETE", "id": 23, "group_id": "<hex>", "msg_id": "<hex>"}
+```
+The node verifies the requester is either: the message sender, or has
+role >= 0x01 (Admin or Owner) in the GROUP_META. Deletes from both
+TABLE_GROUP_INDEX and TABLE_GROUP_BLOBS.
+Response: `{"id": 23, "ok": true}`
+
+**GROUP_DESTROY** — Destroy a group and all its messages:
+```json
+{"type": "GROUP_DESTROY", "id": 24, "group_id": "<hex>"}
+```
+Owner-only (role=0x02). Wipes GROUP_META, all TABLE_GROUP_INDEX entries, and
+all TABLE_GROUP_BLOBS entries for the group. Connected group members receive a
+GROUP_DESTROYED push notification.
+Response: `{"id": 24, "ok": true}`
+
 ### 5.4 Server Push (unsolicited, no id)
 
 Push notifications are delivered to **all connected devices** for a given
@@ -859,6 +1016,22 @@ each receives the push notification independently.
 {"type": "CONTACT_REQUEST", "from": "<hex>", "blob": "<base64>"}
 ```
 
+**NEW_GROUP_MESSAGE** — Incoming group message notification:
+```json
+{"type": "NEW_GROUP_MESSAGE", "group_id": "<hex>", "msg_id": "<hex>",
+ "sender": "<hex>", "size": 1200, "gek_version": 1}
+```
+Pushed to all connected members of the group when a new message is stored.
+Unlike NEW_MESSAGE, group message blobs are never inlined in the push — the
+client fetches them via GROUP_LIST or GROUP_GET.
+
+**GROUP_DESTROYED** — Group has been destroyed:
+```json
+{"type": "GROUP_DESTROYED", "group_id": "<hex>"}
+```
+Pushed to all connected members when GROUP_DESTROY is executed or the last
+owner leaves (auto-destruction).
+
 ### 5.5 Rate Limiting
 
 Nodes enforce per-connection rate limiting using a token bucket algorithm.
@@ -870,7 +1043,10 @@ Different commands consume different token costs:
 | SEND             | 2    |
 | CONTACT_REQUEST  | 3    |
 | SET_PROFILE / REGISTER_NAME | 2 |
+| GROUP_CREATE / GROUP_UPDATE / GROUP_DESTROY | 2 |
+| GROUP_SEND       | 2    |
 | LIST / GET / DELETE / ALLOW / REVOKE | 1 |
+| GROUP_LIST / GROUP_GET / GROUP_DELETE / GROUP_INFO | 1 |
 | RESOLVE_NAME / GET_PROFILE / LIST_REQUESTS | 1 |
 | HELLO / AUTH     | 1    |
 | STATUS           | 0    |
@@ -881,8 +1057,9 @@ When a client exceeds the rate limit, the node responds with error code 429.
 
 The node's worker pool has a bounded queue (max 1024 pending jobs). When the
 queue is full, new requests that require worker pool execution (HELLO redirect
-checks, SEND, CONTACT_REQUEST, ALLOW, REVOKE) receive error code 503. This
-prevents unbounded memory growth under high load.
+checks, SEND, CONTACT_REQUEST, ALLOW, REVOKE, GROUP_CREATE, GROUP_UPDATE,
+GROUP_SEND, GROUP_DELETE, GROUP_DESTROY) receive error code 503. This prevents
+unbounded memory growth under high load.
 
 ### 5.6 Error Responses
 
@@ -928,11 +1105,13 @@ Large blob transfers (>64 KB) use binary WebSocket frames with fixed 1 MiB
 Number of chunks = `ceil(blob_size / 1_048_576)`.
 
 **Server memory model:** Upload chunks are accumulated in memory. On
-completion, the assembled blob is stored in TABLE_INBOX_INDEX (metadata)
-and TABLE_MESSAGE_BLOBS (blob data), and replicated via Kademlia.
+completion, the assembled blob is stored in the appropriate tables — for 1:1
+messages: TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS; for group messages:
+TABLE_GROUP_INDEX + TABLE_GROUP_BLOBS — and replicated via Kademlia.
 
 **Limits:** Maximum 1 concurrent chunked upload per connection. A second SEND
-with `size` > 64 KB while an upload is in progress receives error 429.
+or GROUP_SEND with `size` > 64 KB while an upload is in progress receives
+error 429.
 
 ---
 
@@ -995,8 +1174,9 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### FIND_VALUE Scope
 
 FIND_VALUE searches profiles and names only. Inbox messages, contact requests,
-and allowlists use composite storage keys that cannot be derived from the DHT
-routing key alone. These data types are accessed via scan() or replicated via
+allowlists, and group data (GROUP_META, GROUP_INDEX, GROUP_BLOBS) use composite
+storage keys that cannot be derived from the DHT routing key alone. These data
+types are accessed via scan(), dedicated WebSocket commands, or replicated via
 SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
@@ -1030,6 +1210,32 @@ log as `Op::DEL`. This ensures that when other responsible nodes sync via
 SYNC_REQ/SYNC_RESP, the allowlist entry is deleted on those nodes as well.
 ALLOW (action=0x01) is recorded as `Op::ADD`.
 
+### Group Metadata STORE Validation
+
+1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
+2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin)
+3. `version` > currently stored version for this group_id — reject replays
+4. At least one member must have role=0x02 (Owner)
+5. `member_count` >= 1 and <= 512
+6. Role bytes must be 0x00, 0x01, or 0x02
+7. If signer is Admin (role=0x01): diff against stored GROUP_META must show
+   only additions/removals of role=0x00 members (no role changes, no
+   admin/owner modifications)
+
+### Group Message STORE Validation
+
+1. Sender fingerprint must be in the GROUP_META member list for the group_id
+2. `blob_length` <= 50 MiB
+3. `msg_id` is unique within the group — reject duplicates
+
+### Group Access Control
+
+All group WebSocket commands (GROUP_INFO, GROUP_LIST, GROUP_GET, GROUP_SEND,
+GROUP_DELETE) require the authenticated client's fingerprint to be in the
+GROUP_META member list. GROUP_DESTROY requires role=0x02 (Owner). GROUP_DELETE
+requires the client to be the message sender OR have role >= 0x01
+(Admin/Owner).
+
 ### Responsibility Check
 
 A node MUST only accept STORE requests for keys it is responsible for. A node
@@ -1043,7 +1249,8 @@ data it holds is now closer to a newly discovered node. If so, the node
 pushes that data via STORE to all current responsible nodes. This check runs
 periodically (every 60 seconds) and only when the routing table size has
 changed. Responsibility transfer covers all data types: profiles, names,
-inbox messages (INDEX + BLOB tables), contact requests, and allowlist entries.
+inbox messages (INDEX + BLOB tables), contact requests, allowlist entries,
+group metadata, and group messages (GROUP_INDEX + GROUP_BLOBS tables).
 
 ### Routing Table
 
@@ -1166,6 +1373,9 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Name PoW prefix            | `"chromatin:name:"`                    |
 | Group routing prefix       | `"group:"`                             |
 | Max group members          | 512                                    |
+| TABLE_GROUP_META           | `"group_meta"`                         |
+| TABLE_GROUP_INDEX          | `"group_index"`                        |
+| TABLE_GROUP_BLOBS          | `"group_blobs"`                        |
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
 | MDBX max database size     | 1 GiB                                  |
