@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -358,10 +359,23 @@ static bool is_connection_alive(int fd) {
 }
 
 // Helper: create a new TCP connection to addr:port. Returns fd or -1 on failure.
+// Supports both IP addresses and DNS hostnames via getaddrinfo.
 static int create_connection(const std::string& addr, uint16_t port, uint16_t connect_timeout = 5) {
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct addrinfo hints{}, *result = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    std::string port_str = std::to_string(port);
+    int gai_err = getaddrinfo(addr.c_str(), port_str.c_str(), &hints, &result);
+    if (gai_err != 0) {
+        spdlog::error("DNS resolution failed for {}: {}", addr, gai_strerror(gai_err));
+        return -1;
+    }
+
+    int sockfd = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (sockfd < 0) {
         spdlog::error("send socket() failed: {}", strerror(errno));
+        freeaddrinfo(result);
         return -1;
     }
 
@@ -374,22 +388,14 @@ static int create_connection(const std::string& addr, uint16_t port, uint16_t co
     tv.tv_sec = connect_timeout;
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    struct sockaddr_in dest{};
-    dest.sin_family = AF_INET;
-    dest.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, addr.c_str(), &dest.sin_addr) != 1) {
+    if (connect(sockfd, result->ai_addr, result->ai_addrlen) < 0) {
         close(sockfd);
-        spdlog::error("Invalid destination address: {}", addr);
-        return -1;
-    }
-
-    if (connect(sockfd, reinterpret_cast<struct sockaddr*>(&dest), sizeof(dest)) < 0) {
-        close(sockfd);
+        freeaddrinfo(result);
         spdlog::warn("TCP connect to {}:{} failed: {}", addr, port, strerror(errno));
         return -1;
     }
 
+    freeaddrinfo(result);
     return sockfd;
 }
 
