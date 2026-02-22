@@ -25,18 +25,7 @@ Kademlia::Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& trans
     , table_(table)
     , storage_(storage)
     , repl_log_(repl_log)
-    , keypair_(keypair)
-    , name_pow_difficulty_(cfg.name_pow_difficulty)
-    , contact_pow_difficulty_(cfg.contact_pow_difficulty)
-    , ttl_duration_(std::chrono::hours(cfg.ttl_days * 24))
-    , compact_interval_(std::chrono::minutes(cfg.compact_interval_minutes))
-    , compact_keep_entries_(cfg.compact_keep_entries)
-    , compact_min_age_hours_(cfg.compact_min_age_hours)
-    , replication_factor_(cfg.replication_factor)
-    , max_profile_size_(cfg.max_profile_size)
-    , max_request_blob_size_(cfg.max_request_blob_size)
-    , sync_interval_(std::chrono::seconds(cfg.sync_interval_seconds))
-    , sync_batch_size_(cfg.sync_batch_size) {}
+    , keypair_(keypair) {}
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -1743,7 +1732,7 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
         return false;
     }
 
-    if (value.size() > cfg_.max_message_size) {
+    if (value.size() > config::protocol::MAX_MESSAGE_SIZE) {
         spdlog::warn("Inbox validation: size {} exceeds 50 MiB limit", value.size());
         return false;
     }
@@ -1950,7 +1939,7 @@ bool Kademlia::validate_group_message(std::span<const uint8_t> value) {
         return false;
     }
 
-    if (value.size() > cfg_.max_message_size) {
+    if (value.size() > config::protocol::MAX_MESSAGE_SIZE) {
         spdlog::warn("Group message validation: size {} exceeds max message size", value.size());
         return false;
     }

@@ -90,21 +90,24 @@ int main(int argc, char* argv[]) {
     self.last_seen = std::chrono::steady_clock::now();
 
     // --- 6. Create Storage ---
+    namespace defaults = chromatin::config::defaults;
     auto db_path = cfg.data_dir / "chromatin.mdbx";
-    chromatin::storage::Storage storage(db_path, cfg.mdbx_max_size);
+    chromatin::storage::Storage storage(db_path, defaults::MDBX_MAX_SIZE);
     spdlog::info("storage opened at {}", db_path.string());
 
     // --- 7. Create ReplLog ---
     chromatin::replication::ReplLog repl_log(storage);
 
     // --- 8. Create RoutingTable ---
-    chromatin::kademlia::RoutingTable routing_table(cfg.max_routing_table_size, cfg.max_nodes_per_subnet);
+    chromatin::kademlia::RoutingTable routing_table(
+        defaults::MAX_ROUTING_TABLE_SIZE, defaults::MAX_NODES_PER_SUBNET);
 
     // --- 9. Create TcpTransport ---
     chromatin::kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port,
-        cfg.tcp_connect_timeout, cfg.tcp_read_timeout,
-        cfg.conn_pool_max, cfg.conn_pool_idle_seconds, cfg.max_message_size,
-        cfg.max_tcp_clients);
+        defaults::TCP_CONNECT_TIMEOUT, defaults::TCP_READ_TIMEOUT,
+        defaults::CONN_POOL_MAX, defaults::CONN_POOL_IDLE_SECONDS,
+        chromatin::config::protocol::MAX_MESSAGE_SIZE,
+        defaults::MAX_TCP_CLIENTS);
 
     // --- 9b. Configure TCP encryption ---
     transport.set_signing_keypair(keypair);
@@ -142,8 +145,6 @@ int main(int argc, char* argv[]) {
     }
 
     // --- 13. WebSocket server is the main event loop ---
-    // Use TLS if cert/key paths are configured, otherwise plaintext.
-    // Both branches use a type-erased stop function for signal handling.
     static std::function<void()> g_stop;
     struct sigaction sa{};
     sa.sa_handler = [](int) { if (g_stop) g_stop(); };
@@ -152,26 +153,15 @@ int main(int argc, char* argv[]) {
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    auto run_ws = [&](auto& ws) {
-        kademlia.set_on_store([&](const chromatin::crypto::Hash& key, uint8_t type,
-                                  std::span<const uint8_t> value) {
-            ws.on_kademlia_store(key, type, value);
-        });
-        g_stop = [&ws]() { ws.stop(); };
+    chromatin::ws::WsServer<false> ws(cfg, kademlia, storage, repl_log, keypair);
+    kademlia.set_on_store([&](const chromatin::crypto::Hash& key, uint8_t type,
+                              std::span<const uint8_t> value) {
+        ws.on_kademlia_store(key, type, value);
+    });
+    g_stop = [&ws]() { ws.stop(); };
 
-        spdlog::info("node ready — WS{} on port {}, TCP on port {}",
-                     cfg.tls_cert_path.empty() ? "" : " (TLS)",
-                     cfg.ws_port, cfg.tcp_port);
-        ws.run();  // blocks until signal
-    };
-
-    if (!cfg.tls_cert_path.empty()) {
-        chromatin::ws::WsServer<true> ws(cfg, kademlia, storage, repl_log, keypair);
-        run_ws(ws);
-    } else {
-        chromatin::ws::WsServer<false> ws(cfg, kademlia, storage, repl_log, keypair);
-        run_ws(ws);
-    }
+    spdlog::info("node ready — WS on port {}, TCP on port {}", cfg.ws_port, cfg.tcp_port);
+    ws.run();  // blocks until signal
 
     // --- 14. Shutdown ---
     spdlog::info("shutting down...");

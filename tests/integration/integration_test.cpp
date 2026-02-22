@@ -260,9 +260,9 @@ int main(int argc, char* argv[]) {
     kademlia::RoutingTable routing_table;
     kademlia::TcpTransport transport(cfg.bind, cfg.tcp_port);
 
-    cfg.name_pow_difficulty = 8;
-    cfg.contact_pow_difficulty = 8;
     kademlia::Kademlia kademlia(cfg, self, transport, routing_table, storage, repl_log, keypair);
+    kademlia.set_name_pow_difficulty(8);
+    kademlia.set_contact_pow_difficulty(8);
 
     // --- Setup intercepting handler ---
     TestContext ctx;

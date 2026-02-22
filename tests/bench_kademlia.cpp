@@ -82,10 +82,10 @@ static std::unique_ptr<BenchNode> make_node() {
 
     n->table = std::make_unique<kademlia::RoutingTable>();
     n->repl_log = std::make_unique<replication::ReplLog>(*n->storage);
-    n->cfg.name_pow_difficulty = 8;
-    n->cfg.contact_pow_difficulty = 8;
     n->kad = std::make_unique<kademlia::Kademlia>(
         n->cfg, n->info, *n->transport, *n->table, *n->storage, *n->repl_log, n->keypair);
+    n->kad->set_name_pow_difficulty(8);
+    n->kad->set_contact_pow_difficulty(8);
 
     return n;
 }

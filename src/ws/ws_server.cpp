@@ -21,15 +21,12 @@ WsServer<SSL>::WsServer(const config::Config& cfg,
     , storage_(storage)
     , repl_log_(repl_log)
     , keypair_(keypair)
-    , workers_(cfg.worker_pool_threads, cfg.worker_pool_queue_max) {}
+    , workers_(config::defaults::WORKER_POOL_THREADS,
+               config::defaults::WORKER_POOL_QUEUE_MAX) {}
 
 template<bool SSL>
 void WsServer<SSL>::run() {
     uWS::SocketContextOptions ssl_options = {};
-    if constexpr (SSL) {
-        ssl_options.key_file_name = cfg_.tls_key_path.c_str();
-        ssl_options.cert_file_name = cfg_.tls_cert_path.c_str();
-    }
     uWS::TemplatedApp<SSL> app(ssl_options);
     loop_ = uWS::Loop::get();
 
@@ -37,14 +34,14 @@ void WsServer<SSL>::run() {
         .compression = uWS::DISABLED,
         // 512 KiB: base64-encoded 256 KiB blobs (~341 KiB) + JSON overhead
         .maxPayloadLength = 1048576 + 64,  // 1 MiB chunk + header overhead
-        .idleTimeout = cfg_.ws_idle_timeout,
+        .idleTimeout = config::defaults::WS_IDLE_TIMEOUT,
 
         .open = [this](ws_t* ws) {
             connections_.insert(ws);
             auto* session = ws->getUserData();
-            session->rate_limiter.tokens = cfg_.rate_limit_tokens;
-            session->rate_limiter.max_tokens = cfg_.rate_limit_max;
-            session->rate_limiter.refill_rate = cfg_.rate_limit_refill;
+            session->rate_limiter.tokens = config::defaults::RATE_LIMIT_TOKENS;
+            session->rate_limiter.max_tokens = config::defaults::RATE_LIMIT_MAX;
+            session->rate_limiter.refill_rate = config::defaults::RATE_LIMIT_REFILL;
             session->rate_limiter.last_refill = std::chrono::steady_clock::now();
             spdlog::info("WS: client connected");
         },
@@ -697,9 +694,9 @@ void WsServer<SSL>::handle_auth(ws_t* ws, const Json::Value& msg) {
     // limiter when a second device authenticates with the same identity.
     auto [it_fp, inserted] = fp_rate_limiters_.try_emplace(session->fingerprint);
     if (inserted) {
-        it_fp->second.tokens = cfg_.rate_limit_tokens;
-        it_fp->second.max_tokens = cfg_.rate_limit_max;
-        it_fp->second.refill_rate = cfg_.rate_limit_refill;
+        it_fp->second.tokens = config::defaults::RATE_LIMIT_TOKENS;
+        it_fp->second.max_tokens = config::defaults::RATE_LIMIT_MAX;
+        it_fp->second.refill_rate = config::defaults::RATE_LIMIT_REFILL;
         it_fp->second.last_refill = std::chrono::steady_clock::now();
     }
 
@@ -952,7 +949,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
         // ---- Large chunked SEND path ----
         uint64_t declared_size = msg["size"].asUInt64();
 
-        if (declared_size > cfg_.max_message_size) {
+        if (declared_size > config::protocol::MAX_MESSAGE_SIZE) {
             send_error(ws, id, 413, "attachment too large");
             return;
         }
@@ -1439,7 +1436,7 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
         send_error(ws, id, 400, "invalid base64 in blob");
         return;
     }
-    if (blob->size() > cfg_.max_request_blob_size) {
+    if (blob->size() > config::protocol::MAX_REQUEST_BLOB_SIZE) {
         send_error(ws, id, 400, "blob exceeds max size");
         return;
     }
@@ -1482,7 +1479,7 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
             static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
     }
 
-    if (!crypto::verify_pow(preimage, pow_nonce, cfg_.contact_pow_difficulty)) {
+    if (!crypto::verify_pow(preimage, pow_nonce, config::protocol::CONTACT_POW_DIFFICULTY)) {
         send_error(ws, id, 400, "invalid PoW");
         return;
     }
@@ -1970,7 +1967,7 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
         send_error(ws, id, 400, "invalid base64 in profile");
         return;
     }
-    if (profile_data->size() > cfg_.max_profile_size) {
+    if (profile_data->size() > config::protocol::MAX_PROFILE_SIZE) {
         send_error(ws, id, 400, "profile exceeds max size");
         return;
     }
@@ -2086,7 +2083,7 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::check_upload_timeouts() {
-    auto upload_timeout = std::chrono::seconds(cfg_.upload_timeout);
+    auto upload_timeout = std::chrono::seconds(config::defaults::UPLOAD_TIMEOUT);
     auto now = std::chrono::steady_clock::now();
 
     for (auto* ws : connections_) {

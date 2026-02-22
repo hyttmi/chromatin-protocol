@@ -80,10 +80,14 @@ public:
                                              std::span<const uint8_t> value)>;
     void set_on_store(StoreCallback cb);
 
-    // Configurable PoW difficulty for name registration (default 20 per spec).
-    // Lower values are useful for testing.
+    // PoW difficulty overrides for testing (defaults from protocol constants).
     void set_name_pow_difficulty(int bits) { name_pow_difficulty_ = bits; }
+    void set_contact_pow_difficulty(int bits) { contact_pow_difficulty_ = bits; }
     int name_pow_difficulty() const { return name_pow_difficulty_; }
+
+    // Compact settings overrides for testing.
+    void set_compact_keep_entries(size_t n) { compact_keep_entries_ = n; }
+    void set_compact_min_age_hours(uint32_t h) { compact_min_age_hours_ = h; }
 
     // Write quorum: W = min(2, R). A store is "durably replicated" when W
     // nodes (including self if responsible) have confirmed.
@@ -109,8 +113,8 @@ private:
     storage::Storage& storage_;
     replication::ReplLog& repl_log_;
     const crypto::KeyPair& keypair_;
-    int name_pow_difficulty_ = 20;
-    int contact_pow_difficulty_ = 16;
+    int name_pow_difficulty_ = config::protocol::NAME_POW_DIFFICULTY;
+    int contact_pow_difficulty_ = config::protocol::CONTACT_POW_DIFFICULTY;
     StoreCallback on_store_;
 
     // Timing intervals (from config)
@@ -119,16 +123,16 @@ private:
     std::chrono::seconds ping_sweep_interval_{10};
     std::chrono::seconds stale_threshold_{60};
     std::chrono::seconds evict_threshold_{120};
-    std::chrono::hours ttl_duration_{7 * 24};
+    std::chrono::hours ttl_duration_{config::protocol::TTL_DAYS * 24};
     std::chrono::minutes ttl_sweep_interval_{5};
     std::chrono::seconds pending_store_timeout_{30};
     std::chrono::seconds transfer_check_interval_{60};
-    std::chrono::minutes compact_interval_{60};
-    size_t compact_keep_entries_ = 10000;
-    uint32_t compact_min_age_hours_ = 168;
-    size_t replication_factor_ = 3;
-    uint32_t max_profile_size_ = 1024 * 1024;
-    uint32_t max_request_blob_size_ = 64 * 1024;
+    std::chrono::minutes compact_interval_{config::defaults::COMPACT_INTERVAL_MINUTES};
+    size_t compact_keep_entries_ = config::defaults::COMPACT_KEEP_ENTRIES;
+    uint32_t compact_min_age_hours_ = config::defaults::COMPACT_MIN_AGE_HOURS;
+    size_t replication_factor_ = config::protocol::REPLICATION_FACTOR;
+    uint32_t max_profile_size_ = config::protocol::MAX_PROFILE_SIZE;
+    uint32_t max_request_blob_size_ = config::protocol::MAX_REQUEST_BLOB_SIZE;
 
     // Self-healing: saved bootstrap addresses and timer state
     std::vector<std::pair<std::string, uint16_t>> bootstrap_addrs_;
@@ -137,8 +141,8 @@ private:
     std::chrono::steady_clock::time_point last_ttl_sweep_{};
     std::chrono::steady_clock::time_point last_compact_{};
     std::chrono::steady_clock::time_point last_sync_{};
-    std::chrono::seconds sync_interval_{120};
-    size_t sync_batch_size_ = 10;
+    std::chrono::seconds sync_interval_{config::defaults::SYNC_INTERVAL_SECONDS};
+    size_t sync_batch_size_ = config::defaults::SYNC_BATCH_SIZE;
     size_t sync_key_offset_ = 0;  // round-robin offset for batching
 
     // TTL expiry, pending store cleanup, responsibility transfer, compaction, sync

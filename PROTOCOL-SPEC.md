@@ -687,12 +687,11 @@ Clients connect to a responsible node via WebSocket. Control messages are JSON
 text frames. Large blob transfers use binary WebSocket frames (see Section 5.7).
 Every client request includes an `id` field for response correlation.
 
-**TLS:** Nodes SHOULD enable TLS (WSS) to protect metadata (fingerprints,
-allowlist operations, message counts) from network observers. When configured
-with `tls_cert_path` and `tls_key_path`, the node listens with TLS on the same
-`ws_port`. Clients SHOULD prefer `wss://` connections. Message content is
-already encrypted with ML-KEM-1024, but TLS provides transport-level metadata
-protection.
+**TLS:** Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front
+of the WebSocket port if TLS is needed to protect metadata (fingerprints,
+allowlist operations, message counts) from network observers. Message content
+is already encrypted with ML-KEM-1024, but TLS provides transport-level
+metadata protection.
 
 ### 5.1 Authentication
 
@@ -1388,8 +1387,10 @@ cryptographic random source. Implementations using liboqs SHOULD use
 
 ## 7. Protocol Constants
 
-All values below are **configurable** via `settings.json`. The table shows
-defaults. See `chromatin-node --generate-config` for a complete template.
+Protocol constants are **hardcoded** and must be identical across all nodes.
+Operational defaults are compiled in — the config file only contains
+deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
+`data_dir`, `external_address`).
 
 | Constant                   | Value                                  |
 |----------------------------|----------------------------------------|

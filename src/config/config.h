@@ -9,66 +9,67 @@
 
 namespace chromatin::config {
 
+// Protocol constants — must be identical across all nodes.
+// Changing these is a breaking protocol change.
+namespace protocol {
+    constexpr uint16_t REPLICATION_FACTOR     = 3;
+    constexpr uint8_t  CONTACT_POW_DIFFICULTY = 16;
+    constexpr uint8_t  NAME_POW_DIFFICULTY    = 20;
+    constexpr uint64_t MAX_MESSAGE_SIZE       = 50ULL * 1024 * 1024;  // 50 MiB
+    constexpr uint32_t MAX_PROFILE_SIZE       = 1024 * 1024;           // 1 MiB
+    constexpr uint32_t MAX_REQUEST_BLOB_SIZE  = 64 * 1024;             // 64 KiB
+    constexpr uint32_t TTL_DAYS               = 7;
+}
+
+// Operational defaults — safe to differ per node, tuning only.
+namespace defaults {
+    // Routing
+    constexpr uint16_t MAX_ROUTING_TABLE_SIZE = 256;
+    constexpr uint16_t MAX_NODES_PER_SUBNET   = 3;
+
+    // Timeouts (seconds)
+    constexpr uint16_t TCP_CONNECT_TIMEOUT = 5;
+    constexpr uint16_t TCP_READ_TIMEOUT    = 5;
+    constexpr uint16_t WS_IDLE_TIMEOUT     = 120;
+    constexpr uint16_t UPLOAD_TIMEOUT      = 30;
+
+    // Worker pool
+    constexpr uint16_t WORKER_POOL_THREADS   = 4;
+    constexpr uint16_t WORKER_POOL_QUEUE_MAX = 1024;
+
+    // Rate limiter
+    constexpr double RATE_LIMIT_TOKENS = 50.0;
+    constexpr double RATE_LIMIT_MAX    = 50.0;
+    constexpr double RATE_LIMIT_REFILL = 10.0;
+
+    // Maintenance
+    constexpr uint32_t COMPACT_INTERVAL_MINUTES = 60;
+    constexpr uint32_t COMPACT_KEEP_ENTRIES     = 10000;
+    constexpr uint32_t COMPACT_MIN_AGE_HOURS    = 168;  // 7 days
+
+    // Sync
+    constexpr uint16_t SYNC_INTERVAL_SECONDS = 120;
+    constexpr uint16_t SYNC_BATCH_SIZE       = 10;
+
+    // TCP transport
+    constexpr uint16_t MAX_TCP_CLIENTS = 256;
+
+    // Connection pool
+    constexpr uint16_t CONN_POOL_MAX          = 64;
+    constexpr uint16_t CONN_POOL_IDLE_SECONDS = 60;
+
+    // Storage
+    constexpr uint64_t MDBX_MAX_SIZE = 1ULL << 30;  // 1 GB
+}
+
+// Minimal per-deployment config.  Everything else is hardcoded.
 struct Config {
     std::filesystem::path data_dir = ".";
     std::string bind = "0.0.0.0";
     uint16_t tcp_port = 4000;
     uint16_t ws_port = 4001;
     std::vector<std::pair<std::string, uint16_t>> bootstrap;
-
-    // TLS: both must be set, or both empty (empty = plaintext WS)
-    std::string tls_cert_path;  // PEM certificate file path
-    std::string tls_key_path;   // PEM private key file path
-
-    // Network
     std::string external_address;     // routable address (empty = use bind)
-    uint16_t replication_factor = 3;
-    uint16_t max_routing_table_size = 256;
-    uint16_t max_nodes_per_subnet = 3;
-
-    // Timeouts (seconds)
-    uint16_t tcp_connect_timeout = 5;
-    uint16_t tcp_read_timeout = 5;
-    uint16_t ws_idle_timeout = 120;
-    uint16_t upload_timeout = 30;
-
-    // Worker pool
-    uint16_t worker_pool_threads = 4;
-    uint16_t worker_pool_queue_max = 1024;
-
-    // Rate limiter
-    double rate_limit_tokens = 50.0;
-    double rate_limit_max = 50.0;
-    double rate_limit_refill = 10.0;
-
-    // Size limits
-    uint64_t max_message_size = 50ULL * 1024 * 1024;  // 50 MiB
-    uint32_t max_profile_size = 1024 * 1024;           // 1 MiB
-    uint32_t max_request_blob_size = 64 * 1024;        // 64 KiB
-
-    // TTL & maintenance
-    uint32_t ttl_days = 7;
-    uint32_t compact_interval_minutes = 60;
-    uint32_t compact_keep_entries = 10000;
-    uint32_t compact_min_age_hours = 168;  // 7 days
-
-    // PoW
-    uint8_t contact_pow_difficulty = 16;
-    uint8_t name_pow_difficulty = 20;
-
-    // Sync
-    uint16_t sync_interval_seconds = 120;
-    uint16_t sync_batch_size = 10;
-
-    // TCP transport
-    uint16_t max_tcp_clients = 256;
-
-    // Connection pool
-    uint16_t conn_pool_max = 64;
-    uint16_t conn_pool_idle_seconds = 60;
-
-    // Storage
-    uint64_t mdbx_max_size = 1ULL << 30;  // 1 GB
 };
 
 // Load config from JSON file. Throws std::runtime_error on parse failure
