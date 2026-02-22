@@ -10,6 +10,5 @@
 
 ## Implementation TODO
 
-- Group messaging (sender fan-out with GEK, max 512 members)
 - Push notification gap detection (client reconnection replay)
 - Node failover (client reconnect to next responsible node on disconnect)

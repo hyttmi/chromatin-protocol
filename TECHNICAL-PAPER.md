@@ -139,6 +139,46 @@ the quantum computers of the future.
 
 ---
 
+## Group Messaging
+
+Chromatin supports group conversations with up to 512 members using a
+**shared-inbox model**. Unlike traditional messengers that copy each message
+to every member's inbox (fan-out), Chromatin stores a single copy at a
+network location derived from the group ID. All members read from the same
+shared inbox, and the responsible nodes enforce access control using a
+signed membership list (GROUP_META).
+
+Messages are encrypted with a **Group Encryption Key (GEK)** — a symmetric
+key distributed to each member inside the GROUP_META, encrypted individually
+with their ML-KEM-1024 public key. When membership changes, a new GEK
+version is created so removed members cannot read future messages.
+
+Groups have three roles:
+- **Owner** — full control, including destroying the group
+- **Admin** — can add/remove regular members
+- **Member** — can send and read messages
+
+The shared-inbox approach is bandwidth-efficient (one store operation per
+message regardless of group size) and leverages the same Kademlia replication
+used for 1-to-1 messages. Connected members receive real-time push
+notifications when new group messages arrive.
+
+---
+
+## Node-to-Node Security
+
+Nodes communicate over TCP using **ML-KEM-1024 key encapsulation** to
+establish a shared secret, then encrypt all traffic with **ChaCha20-Poly1305**.
+This ensures that node-to-node traffic is confidential even if an adversary
+controls the network path between nodes.
+
+Nodes advertise their capabilities — including support for encrypted TCP —
+through a **version/capability negotiation** in the PONG response. This
+allows the network to evolve incrementally: nodes can discover what features
+their peers support before attempting to use them.
+
+---
+
 ## Multi-Device Support
 
 Messages in Chromatin are stored for **7 days** on the responsible nodes. During
@@ -183,8 +223,10 @@ spread across different countries, jurisdictions, and operators.
 | **Censorship resistance** | No single point of failure or control |
 | **Self-sovereign identity** | Your identity is yours — no company can revoke it |
 | **Spam prevention** | Allowlist model + proof-of-work for contact requests |
+| **Group messaging** | Shared-inbox model with GEK encryption, up to 512 members |
 | **Reliability** | 3-node replication — survive node failures |
 | **Multi-device** | 7-day message retention, per-device sync |
+| **Node security** | ML-KEM-1024 + ChaCha20-Poly1305 encrypted node-to-node traffic |
 | **Open protocol** | Anyone can build clients, run nodes, extend the network |
 
 ---
