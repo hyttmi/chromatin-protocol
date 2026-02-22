@@ -450,8 +450,8 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
                     if (connections_.count(ws) == 0) return;
                     if (ok) {
                         Json::Value resp;
+                        resp["type"] = "OK";
                         resp["id"] = send_id;
-                        resp["ok"] = true;
                         resp["msg_id"] = to_hex(msg_id_copy);
                         send_json(ws, resp);
                     } else {
@@ -541,7 +541,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
                     if (connections_.count(ws) == 0) return;
                     if (ok) {
                         Json::Value resp;
-                        resp["type"] = "SEND_ACK";
+                        resp["type"] = "OK";
                         resp["id"] = send_id;
                         resp["msg_id"] = to_hex(msg_id_copy);
                         send_json(ws, resp);
@@ -828,7 +828,7 @@ void WsServer<SSL>::handle_list(ws_t* ws, const Json::Value& msg) {
     }
 
     Json::Value resp;
-    resp["type"] = "LIST_RESULT";
+    resp["type"] = "OK";
     resp["id"] = id;
     resp["messages"] = messages;
     resp["has_more"] = has_more;
@@ -875,7 +875,7 @@ void WsServer<SSL>::handle_get(ws_t* ws, const Json::Value& msg) {
 
     if (blob->size() <= INLINE_THRESHOLD) {
         Json::Value resp;
-        resp["type"] = "GET_RESULT";
+        resp["type"] = "OK";
         resp["id"] = id;
         resp["msg_id"] = msg_id_hex;
         resp["blob"] = to_base64(*blob);
@@ -889,7 +889,7 @@ void WsServer<SSL>::handle_get(ws_t* ws, const Json::Value& msg) {
 
         // Send JSON header with size and chunk count
         Json::Value resp;
-        resp["type"] = "GET_RESULT";
+        resp["type"] = "OK";
         resp["id"] = id;
         resp["msg_id"] = msg_id_hex;
         resp["size"] = static_cast<Json::UInt>(blob->size());
@@ -1140,7 +1140,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
 
             if (ok) {
                 Json::Value resp;
-                resp["type"] = "SEND_ACK";
+                resp["type"] = "OK";
                 resp["id"] = id;
                 resp["msg_id"] = to_hex(msg_id_copy);
                 send_json(ws, resp);
@@ -1729,7 +1729,7 @@ void WsServer<SSL>::handle_status(ws_t* ws, const Json::Value& msg) {
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count();
 
     Json::Value resp;
-    resp["type"] = "STATUS_RESP";
+    resp["type"] = "OK";
     resp["id"] = id;
     resp["node_id"] = to_hex(kad_.self().id.id);
     resp["uptime_seconds"] = static_cast<Json::Int64>(uptime);
@@ -1759,7 +1759,7 @@ void WsServer<SSL>::handle_resolve_name(ws_t* ws, const Json::Value& msg) {
         std::vector<uint8_t>(name_key.begin(), name_key.end()));
 
     Json::Value resp;
-    resp["type"] = "RESOLVE_NAME_RESULT";
+    resp["type"] = "OK";
     resp["id"] = id;
 
     if (!record || record->empty()) {
@@ -1811,7 +1811,7 @@ void WsServer<SSL>::handle_get_profile(ws_t* ws, const Json::Value& msg) {
         std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
 
     Json::Value resp;
-    resp["type"] = "PROFILE_RESULT";
+    resp["type"] = "OK";
     resp["id"] = id;
 
     if (!profile || profile->empty()) {
@@ -1916,7 +1916,7 @@ void WsServer<SSL>::handle_list_requests(ws_t* ws, const Json::Value& msg) {
     std::vector<uint8_t> prefix(session->fingerprint.begin(), session->fingerprint.end());
 
     Json::Value resp;
-    resp["type"] = "LIST_REQUESTS_RESULT";
+    resp["type"] = "OK";
     resp["id"] = id;
     Json::Value requests(Json::arrayValue);
 
@@ -2002,7 +2002,7 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
             if (connections_.count(ws_ptr) == 0) return;
             if (ok) {
                 Json::Value resp;
-                resp["type"] = "SET_PROFILE_ACK";
+                resp["type"] = "OK";
                 resp["id"] = id;
                 send_json(ws_ptr, resp);
             } else {
@@ -2066,7 +2066,7 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
             if (connections_.count(ws_ptr) == 0) return;
             if (ok) {
                 Json::Value resp;
-                resp["type"] = "REGISTER_NAME_ACK";
+                resp["type"] = "OK";
                 resp["id"] = id;
                 send_json(ws_ptr, resp);
             } else {
@@ -2259,8 +2259,8 @@ void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
             if (ok) {
                 invalidate_group_meta(group_id_copy);
                 Json::Value resp;
+                resp["type"] = "OK";
                 resp["id"] = id;
-                resp["ok"] = true;
                 resp["group_id"] = to_hex(group_id_copy);
                 send_json(ws, resp);
             } else {
@@ -2315,8 +2315,8 @@ void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
     }
 
     Json::Value resp;
+    resp["type"] = "OK";
     resp["id"] = id;
-    resp["ok"] = true;
     resp["group_meta"] = to_hex(*raw);
     send_json(ws, resp);
 }
@@ -2466,8 +2466,8 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
         invalidate_group_meta(group_id);
 
         Json::Value resp;
+        resp["type"] = "OK";
         resp["id"] = id;
-        resp["ok"] = true;
         resp["destroyed"] = true;
         send_json(ws, resp);
         return;
@@ -2491,8 +2491,8 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
                 invalidate_group_meta(group_id_copy);
                 // 12. Respond success
                 Json::Value resp;
+                resp["type"] = "OK";
                 resp["id"] = id;
-                resp["ok"] = true;
                 send_json(ws, resp);
             } else {
                 send_error(ws, id, 500, "store failed");
@@ -2662,8 +2662,8 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
 
             if (ok) {
                 Json::Value resp;
+                resp["type"] = "OK";
                 resp["id"] = id;
-                resp["ok"] = true;
                 resp["msg_id"] = to_hex(msg_id_copy);
                 send_json(ws, resp);
             } else {
@@ -2807,8 +2807,8 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
     }
 
     Json::Value resp;
+    resp["type"] = "OK";
     resp["id"] = id;
-    resp["ok"] = true;
     resp["messages"] = messages;
     send_json(ws, resp);
 }
@@ -2867,8 +2867,8 @@ void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
     if (blob->size() <= INLINE_THRESHOLD) {
         // Small blob: return inline as hex
         Json::Value resp;
+        resp["type"] = "OK";
         resp["id"] = id;
-        resp["ok"] = true;
         resp["blob"] = to_hex(*blob);
         send_json(ws, resp);
     } else {
@@ -2880,8 +2880,8 @@ void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
 
         // Send JSON header with size and chunk count
         Json::Value resp;
+        resp["type"] = "OK";
         resp["id"] = id;
-        resp["ok"] = true;
         resp["size"] = static_cast<Json::UInt>(blob->size());
         resp["chunks"] = num_chunks;
         resp["chunked"] = true;
@@ -2988,8 +2988,8 @@ void WsServer<SSL>::handle_group_delete(ws_t* ws, const Json::Value& msg) {
     storage_.del(storage::TABLE_GROUP_BLOBS, key_span);
 
     Json::Value resp;
+    resp["type"] = "OK";
     resp["id"] = id;
-    resp["ok"] = true;
     send_json(ws, resp);
 }
 
@@ -3044,8 +3044,8 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
             invalidate_group_meta(group_id_copy);
 
             Json::Value resp;
+            resp["type"] = "OK";
             resp["id"] = id;
-            resp["ok"] = true;
             send_json(ws, resp);
         });
     })) {

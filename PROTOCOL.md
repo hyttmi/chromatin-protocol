@@ -578,20 +578,12 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 5.7).
 
 | Message              | Purpose                                      |
 |----------------------|----------------------------------------------|
+| OK                   | Success response (with command-specific data fields) |
 | NEW_MESSAGE          | Incoming message (inline <=64KB, else metadata-only) |
 | CONTACT_REQUEST      | Incoming contact request (PoW-verified)      |
 | NEW_GROUP_MESSAGE    | Incoming group message notification          |
 | GROUP_DESTROYED      | Group has been destroyed                     |
-| SEND_ACK             | Confirmation that message was stored         |
 | SEND_READY           | Ready for chunked upload (large SEND/GROUP_SEND) |
-| LIST_RESULT          | Message index response (paginated)           |
-| GET_RESULT           | Blob response (inline or chunked)            |
-| RESOLVE_NAME_RESULT  | Name lookup response                         |
-| PROFILE_RESULT       | Profile lookup response                      |
-| LIST_REQUESTS_RESULT | Contact requests list response               |
-| SET_PROFILE_ACK      | Profile stored confirmation                  |
-| REGISTER_NAME_ACK    | Name registered confirmation                 |
-| STATUS_RESP          | Node health/status information               |
 | REDIRECT             | List of responsible nodes (sorted by seq)    |
 | ERROR                | Rejection with reason and error code         |
 
@@ -607,7 +599,7 @@ When Alice sends a message to Bob:
 5. Alice's node forwards via TCP STORE to **all R responsible nodes**
 6. Responsible nodes check Bob's allowlist — reject if Alice not allowed
 7. If Bob is connected, push `NEW_MESSAGE` with blob inlined
-8. Alice receives `SEND_ACK`
+8. Alice receives `OK`
 
 **Large message (>64 KB, up to 50 MiB):**
 1. Alice sends `SEND { to: bob_fp, size }` (no blob, declares size)
@@ -615,7 +607,7 @@ When Alice sends a message to Bob:
 3. Alice uploads blob as binary 1 MiB chunks (UPLOAD_CHUNK frames)
 4. On completion, node stores in both tables and replicates via TCP STORE
 5. If Bob is connected, push `NEW_MESSAGE` with `blob: null` (metadata only)
-6. Alice receives `SEND_ACK`
+6. Alice receives `OK`
 7. Bob fetches the blob later with `GET { msg_id }`
 
 Incomplete chunked uploads are discarded after 30 seconds.

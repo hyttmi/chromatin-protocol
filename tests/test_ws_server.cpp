@@ -442,7 +442,7 @@ TEST_F(WsServerTest, ListEmptyInbox) {
     ASSERT_TRUE(resp.has_value()) << "no response to LIST";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 10);
     ASSERT_TRUE(root["messages"].isArray());
     EXPECT_EQ(root["messages"].size(), 0u);
@@ -511,7 +511,7 @@ TEST_F(WsServerTest, ListWithInlineMessage) {
     ASSERT_TRUE(resp.has_value()) << "no response to LIST";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 20);
     ASSERT_TRUE(root["messages"].isArray());
     ASSERT_EQ(root["messages"].size(), 1u);
@@ -576,7 +576,7 @@ TEST_F(WsServerTest, ListLargeMessageBlobNull) {
     ASSERT_TRUE(resp.has_value()) << "no response to LIST";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 30);
     ASSERT_TRUE(root["messages"].isArray());
     ASSERT_EQ(root["messages"].size(), 1u);
@@ -638,7 +638,7 @@ TEST_F(WsServerTest, SendAndList) {
     ASSERT_TRUE(send_resp.has_value()) << "no response to SEND";
 
     auto send_root = parse_json(*send_resp);
-    EXPECT_EQ(send_root["type"].asString(), "SEND_ACK");
+    EXPECT_EQ(send_root["type"].asString(), "OK");
     EXPECT_EQ(send_root["id"].asInt(), 100);
     EXPECT_FALSE(send_root["msg_id"].asString().empty());
     EXPECT_EQ(send_root["msg_id"].asString().size(), 64u);  // 32 bytes = 64 hex chars
@@ -656,7 +656,7 @@ TEST_F(WsServerTest, SendAndList) {
     ASSERT_TRUE(list_resp.has_value()) << "no response to LIST";
 
     auto list_root = parse_json(*list_resp);
-    EXPECT_EQ(list_root["type"].asString(), "LIST_RESULT");
+    EXPECT_EQ(list_root["type"].asString(), "OK");
     EXPECT_EQ(list_root["id"].asInt(), 200);
     ASSERT_TRUE(list_root["messages"].isArray());
     ASSERT_EQ(list_root["messages"].size(), 1u);
@@ -1043,7 +1043,7 @@ TEST_F(WsServerTest, GetSmallBlob) {
     ASSERT_TRUE(resp.has_value()) << "no response to GET";
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "GET_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 40);
     EXPECT_EQ(root["msg_id"].asString(), to_hex(msg_id));
     // blob "Hello" -> base64 "SGVsbG8="
@@ -1356,12 +1356,12 @@ TEST_F(WsServerTest, SendLargeChunked) {
     binary_frame.insert(binary_frame.end(), blob_data.begin(), blob_data.end());
     ASSERT_TRUE(client.send_binary(binary_frame));
 
-    // Expect SEND_ACK with msg_id
+    // Expect OK with msg_id
     auto ack_resp = client.recv_text(5000);
-    ASSERT_TRUE(ack_resp.has_value()) << "no SEND_ACK response";
+    ASSERT_TRUE(ack_resp.has_value()) << "no OK response";
 
     auto ack_root = parse_json(*ack_resp);
-    EXPECT_EQ(ack_root["type"].asString(), "SEND_ACK");
+    EXPECT_EQ(ack_root["type"].asString(), "OK");
     EXPECT_EQ(ack_root["id"].asInt(), 300);
     EXPECT_FALSE(ack_root["msg_id"].asString().empty());
     EXPECT_EQ(ack_root["msg_id"].asString().size(), 64u);  // 32 bytes = 64 hex chars
@@ -1432,7 +1432,7 @@ TEST_F(WsServerTest, GetLargeChunked) {
     ASSERT_TRUE(header_resp.has_value());
 
     auto header = parse_json(*header_resp);
-    EXPECT_EQ(header["type"].asString(), "GET_RESULT");
+    EXPECT_EQ(header["type"].asString(), "OK");
     EXPECT_EQ(header["id"].asInt(), 50);
     EXPECT_EQ(header["msg_id"].asString(), to_hex(msg_id));
     EXPECT_EQ(header["size"].asUInt(), blob.size());
@@ -1770,7 +1770,7 @@ TEST_F(WsServerTest, StatusWithoutAuth) {
     ASSERT_TRUE(resp.has_value());
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "STATUS_RESP");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 1);
     EXPECT_TRUE(root.isMember("node_id"));
     EXPECT_TRUE(root.isMember("uptime_seconds"));
@@ -1910,7 +1910,7 @@ TEST_F(WsServerTest, ResolveNameFound) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "RESOLVE_NAME_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 100);
     EXPECT_TRUE(root["found"].asBool());
     EXPECT_EQ(root["fingerprint"].asString(), to_hex(user_fp));
@@ -1930,7 +1930,7 @@ TEST_F(WsServerTest, ResolveNameNotFound) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "RESOLVE_NAME_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 101);
     EXPECT_FALSE(root["found"].asBool());
 
@@ -1989,7 +1989,7 @@ TEST_F(WsServerTest, GetProfileFound) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "PROFILE_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 102);
     EXPECT_TRUE(root["found"].asBool());
     EXPECT_EQ(root["fingerprint"].asString(), to_hex(user_fp));
@@ -2014,7 +2014,7 @@ TEST_F(WsServerTest, GetProfileNotFound) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "PROFILE_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 103);
     EXPECT_FALSE(root["found"].asBool());
 
@@ -2033,7 +2033,7 @@ TEST_F(WsServerTest, ListRequestsEmpty) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "LIST_REQUESTS_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 104);
     EXPECT_TRUE(root["requests"].isArray());
     EXPECT_EQ(root["requests"].size(), 0u);
@@ -2087,7 +2087,7 @@ TEST_F(WsServerTest, ListRequestsWithData) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value());
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "LIST_REQUESTS_RESULT");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 105);
     ASSERT_TRUE(root["requests"].isArray());
     ASSERT_EQ(root["requests"].size(), 1u);
@@ -2148,7 +2148,7 @@ TEST_F(WsServerTest, SetProfileStoresValidProfile) {
     auto resp = client.recv_text(5000);
     ASSERT_TRUE(resp.has_value()) << "no response to SET_PROFILE";
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "SET_PROFILE_ACK");
+    EXPECT_EQ(root["type"].asString(), "OK");
     EXPECT_EQ(root["id"].asInt(), 200);
 
     // Verify stored
@@ -2248,7 +2248,7 @@ TEST_F(WsServerTest, GroupCreateAndInfo) {
     ASSERT_FALSE(resp_str.empty());
     auto resp = parse_json(resp_str);
     EXPECT_EQ(resp["id"].asInt(), 10);
-    EXPECT_TRUE(resp["ok"].asBool()) << "GROUP_CREATE failed: " << resp_str;
+    EXPECT_EQ(resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << resp_str;
     EXPECT_EQ(resp["group_id"].asString(), to_hex(group_id));
 
     // GROUP_INFO — same client should be a member
@@ -2261,7 +2261,7 @@ TEST_F(WsServerTest, GroupCreateAndInfo) {
     ASSERT_FALSE(info_str.empty());
     auto info = parse_json(info_str);
     EXPECT_EQ(info["id"].asInt(), 11);
-    EXPECT_TRUE(info["ok"].asBool()) << "GROUP_INFO failed: " << info_str;
+    EXPECT_EQ(info["type"].asString(), "OK") << "GROUP_INFO failed: " << info_str;
     EXPECT_FALSE(info["group_meta"].asString().empty());
     // Returned meta should match what we stored
     EXPECT_EQ(info["group_meta"].asString(), to_hex(meta));
@@ -2295,7 +2295,7 @@ TEST_F(WsServerTest, GroupInfoNotMember) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    EXPECT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    EXPECT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     owner_client.close();
 
@@ -2341,7 +2341,7 @@ TEST_F(WsServerTest, GroupCreateDuplicate) {
 
     auto resp1_str = send_cmd(client, cmd, 5000);
     auto resp1 = parse_json(resp1_str);
-    EXPECT_TRUE(resp1["ok"].asBool());
+    EXPECT_EQ(resp1["type"].asString(), "OK");
 
     // Second create with same group_id should get 409
     cmd["id"] = 31;
@@ -2412,7 +2412,7 @@ TEST_F(WsServerTest, GroupSendAndList) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Generate a random msg_id and a small blob
     crypto::Hash msg_id{};
@@ -2433,7 +2433,7 @@ TEST_F(WsServerTest, GroupSendAndList) {
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
     EXPECT_EQ(send_resp["id"].asInt(), 101);
-    EXPECT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    EXPECT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
     EXPECT_EQ(send_resp["msg_id"].asString(), to_hex(msg_id));
 
     // GROUP_LIST
@@ -2446,7 +2446,7 @@ TEST_F(WsServerTest, GroupSendAndList) {
     ASSERT_FALSE(list_str.empty());
     auto list_resp = parse_json(list_str);
     EXPECT_EQ(list_resp["id"].asInt(), 102);
-    EXPECT_TRUE(list_resp["ok"].asBool()) << "GROUP_LIST failed: " << list_str;
+    EXPECT_EQ(list_resp["type"].asString(), "OK") << "GROUP_LIST failed: " << list_str;
 
     auto& messages = list_resp["messages"];
     ASSERT_EQ(messages.size(), 1u);
@@ -2483,7 +2483,7 @@ TEST_F(WsServerTest, GroupSendNotMember) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Authenticate as a non-member
@@ -2538,7 +2538,7 @@ TEST_F(WsServerTest, GroupListPagination) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Send 5 messages with deterministic msg_ids (sorted lexicographically)
     std::vector<crypto::Hash> msg_ids(5);
@@ -2563,7 +2563,7 @@ TEST_F(WsServerTest, GroupListPagination) {
         auto send_str = send_cmd(client, send_val, 5000);
         ASSERT_FALSE(send_str.empty());
         auto send_resp = parse_json(send_str);
-        ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND #" << i << " failed: " << send_str;
+        ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND #" << i << " failed: " << send_str;
     }
 
     // GROUP_LIST with limit=2 -> expect 2 messages
@@ -2576,7 +2576,7 @@ TEST_F(WsServerTest, GroupListPagination) {
     auto list1_str = send_cmd(client, list_cmd1, 5000);
     ASSERT_FALSE(list1_str.empty());
     auto list1 = parse_json(list1_str);
-    EXPECT_TRUE(list1["ok"].asBool()) << "GROUP_LIST page1 failed: " << list1_str;
+    EXPECT_EQ(list1["type"].asString(), "OK") << "GROUP_LIST page1 failed: " << list1_str;
     ASSERT_EQ(list1["messages"].size(), 2u);
 
     // Get the last msg_id from page 1
@@ -2593,7 +2593,7 @@ TEST_F(WsServerTest, GroupListPagination) {
     auto list2_str = send_cmd(client, list_cmd2, 5000);
     ASSERT_FALSE(list2_str.empty());
     auto list2 = parse_json(list2_str);
-    EXPECT_TRUE(list2["ok"].asBool()) << "GROUP_LIST page2 failed: " << list2_str;
+    EXPECT_EQ(list2["type"].asString(), "OK") << "GROUP_LIST page2 failed: " << list2_str;
     ASSERT_EQ(list2["messages"].size(), 2u);
 
     // Verify page 2 msg_ids are different from page 1
@@ -2627,7 +2627,7 @@ TEST_F(WsServerTest, GroupGetMessage) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Generate a random msg_id and a small blob
     crypto::Hash msg_id{};
@@ -2647,7 +2647,7 @@ TEST_F(WsServerTest, GroupGetMessage) {
     auto send_str = send_cmd(client, send_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
 
     // GROUP_GET
     Json::Value get_cmd;
@@ -2660,7 +2660,7 @@ TEST_F(WsServerTest, GroupGetMessage) {
     ASSERT_FALSE(get_str.empty());
     auto get_resp = parse_json(get_str);
     EXPECT_EQ(get_resp["id"].asInt(), 402);
-    EXPECT_TRUE(get_resp["ok"].asBool()) << "GROUP_GET failed: " << get_str;
+    EXPECT_EQ(get_resp["type"].asString(), "OK") << "GROUP_GET failed: " << get_str;
     EXPECT_EQ(get_resp["blob"].asString(), to_hex(blob));
 
     client.close();
@@ -2695,7 +2695,7 @@ TEST_F(WsServerTest, GroupDeleteOwnMessage) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Authenticate as member and send a message
@@ -2718,7 +2718,7 @@ TEST_F(WsServerTest, GroupDeleteOwnMessage) {
     auto send_str = send_cmd(member_client, send_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
 
     // Member deletes their own message
     Json::Value del_cmd;
@@ -2731,7 +2731,7 @@ TEST_F(WsServerTest, GroupDeleteOwnMessage) {
     ASSERT_FALSE(del_str.empty());
     auto del_resp = parse_json(del_str);
     EXPECT_EQ(del_resp["id"].asInt(), 502);
-    EXPECT_TRUE(del_resp["ok"].asBool()) << "GROUP_DELETE failed: " << del_str;
+    EXPECT_EQ(del_resp["type"].asString(), "OK") << "GROUP_DELETE failed: " << del_str;
 
     // GROUP_GET for deleted message should return 404
     Json::Value get_cmd;
@@ -2781,7 +2781,7 @@ TEST_F(WsServerTest, GroupDeleteByAdmin) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Member sends a message
@@ -2804,7 +2804,7 @@ TEST_F(WsServerTest, GroupDeleteByAdmin) {
     auto send_str = send_cmd(member_client, send_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
     member_client.close();
 
     // Admin deletes the member's message
@@ -2822,7 +2822,7 @@ TEST_F(WsServerTest, GroupDeleteByAdmin) {
     ASSERT_FALSE(del_str.empty());
     auto del_resp = parse_json(del_str);
     EXPECT_EQ(del_resp["id"].asInt(), 602);
-    EXPECT_TRUE(del_resp["ok"].asBool()) << "GROUP_DELETE by admin failed: " << del_str;
+    EXPECT_EQ(del_resp["type"].asString(), "OK") << "GROUP_DELETE by admin failed: " << del_str;
 
     admin_client.close();
 }
@@ -2859,7 +2859,7 @@ TEST_F(WsServerTest, GroupDeleteForbidden) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Member1 sends a message
@@ -2882,7 +2882,7 @@ TEST_F(WsServerTest, GroupDeleteForbidden) {
     auto send_str = send_cmd(member1_client, send_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
     member1_client.close();
 
     // Member2 tries to delete member1's message — should be forbidden
@@ -2933,7 +2933,7 @@ TEST_F(WsServerTest, GroupUpdateAddMember) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // GROUP_UPDATE: version=2, owner + member
     auto meta_v2 = build_group_meta(group_id, 2,
@@ -2947,7 +2947,7 @@ TEST_F(WsServerTest, GroupUpdateAddMember) {
     auto update_str = send_cmd(client, update_cmd, 5000);
     ASSERT_FALSE(update_str.empty());
     auto update_resp = parse_json(update_str);
-    EXPECT_TRUE(update_resp["ok"].asBool()) << "GROUP_UPDATE failed: " << update_str;
+    EXPECT_EQ(update_resp["type"].asString(), "OK") << "GROUP_UPDATE failed: " << update_str;
 
     // GROUP_INFO: verify updated meta has 2 members
     Json::Value info_cmd;
@@ -2958,7 +2958,7 @@ TEST_F(WsServerTest, GroupUpdateAddMember) {
     auto info_str = send_cmd(client, info_cmd, 5000);
     ASSERT_FALSE(info_str.empty());
     auto info_resp = parse_json(info_str);
-    EXPECT_TRUE(info_resp["ok"].asBool()) << "GROUP_INFO failed: " << info_str;
+    EXPECT_EQ(info_resp["type"].asString(), "OK") << "GROUP_INFO failed: " << info_str;
 
     // Parse the returned group_meta to verify 2 members
     auto returned_hex = info_resp["group_meta"].asString();
@@ -2996,7 +2996,7 @@ TEST_F(WsServerTest, GroupUpdateVersionMustIncrease) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // GROUP_UPDATE with same version=1 — should fail 409
     auto meta_same = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
@@ -3042,7 +3042,7 @@ TEST_F(WsServerTest, GroupUpdateNonMemberRejected) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Outsider tries to update — should fail 403
@@ -3098,7 +3098,7 @@ TEST_F(WsServerTest, GroupUpdateAdminCanAddMember) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Admin adds a new regular member
@@ -3117,7 +3117,7 @@ TEST_F(WsServerTest, GroupUpdateAdminCanAddMember) {
     auto update_str = send_cmd(admin_client, update_cmd, 5000);
     ASSERT_FALSE(update_str.empty());
     auto update_resp = parse_json(update_str);
-    EXPECT_TRUE(update_resp["ok"].asBool()) << "GROUP_UPDATE failed: " << update_str;
+    EXPECT_EQ(update_resp["type"].asString(), "OK") << "GROUP_UPDATE failed: " << update_str;
 
     admin_client.close();
 }
@@ -3153,7 +3153,7 @@ TEST_F(WsServerTest, GroupUpdateAdminCannotChangeRoles) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Admin tries to promote member to admin — should fail
@@ -3206,7 +3206,7 @@ TEST_F(WsServerTest, GroupDestroy) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Send a message to the group
     crypto::Hash msg_id{};
@@ -3225,7 +3225,7 @@ TEST_F(WsServerTest, GroupDestroy) {
     auto send_str = send_cmd(client, send_cmd_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    ASSERT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
 
     // GROUP_DESTROY as owner
     Json::Value destroy_cmd;
@@ -3237,7 +3237,7 @@ TEST_F(WsServerTest, GroupDestroy) {
     ASSERT_FALSE(destroy_str.empty());
     auto destroy_resp = parse_json(destroy_str);
     EXPECT_EQ(destroy_resp["id"].asInt(), 902);
-    EXPECT_TRUE(destroy_resp["ok"].asBool()) << "GROUP_DESTROY failed: " << destroy_str;
+    EXPECT_EQ(destroy_resp["type"].asString(), "OK") << "GROUP_DESTROY failed: " << destroy_str;
 
     // GROUP_INFO should fail now (group is gone)
     Json::Value info_cmd;
@@ -3287,7 +3287,7 @@ TEST_F(WsServerTest, GroupDestroyNotOwner) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
     owner_client.close();
 
     // Admin tries GROUP_DESTROY — should fail with 403
@@ -3354,7 +3354,7 @@ TEST_F(WsServerTest, GroupMessagePush) {
     auto create_str = send_cmd(owner_client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    EXPECT_TRUE(create_resp["ok"].asBool());
+    EXPECT_EQ(create_resp["type"].asString(), "OK");
     owner_client.close();
 
     // Member connects and sends a message (member is the sender)
@@ -3394,12 +3394,12 @@ TEST_F(WsServerTest, GroupMessagePush) {
         auto r = member_client.recv_text(3000);
         if (!r.has_value()) break;
         auto parsed = parse_json(*r);
-        if (parsed.isMember("ok") && parsed["ok"].asBool()) {
+        if (parsed["type"].asString() == "OK") {
             got_ok = true;
             break;
         }
     }
-    ASSERT_TRUE(got_ok) << "GROUP_SEND did not return ok";
+    ASSERT_TRUE(got_ok) << "GROUP_SEND did not return OK";
 
     // Owner (who didn't send) should receive NEW_GROUP_MESSAGE push
     auto push_str = owner_client2.recv_text(3000);
@@ -3440,7 +3440,7 @@ TEST_F(WsServerTest, GroupSendLargeBlob) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Prepare a 100 KB blob (> 64 KB inline threshold)
     const size_t blob_size = 100 * 1024;
@@ -3494,7 +3494,7 @@ TEST_F(WsServerTest, GroupSendLargeBlob) {
         auto resp = client.recv_text(5000);
         if (!resp.has_value()) break;
         auto parsed = parse_json(*resp);
-        if (parsed.isMember("ok") && parsed["ok"].asBool() && parsed.isMember("msg_id")) {
+        if (parsed["type"].asString() == "OK" && parsed.isMember("msg_id")) {
             got_ok = true;
             returned_msg_id = parsed["msg_id"].asString();
             EXPECT_EQ(parsed["id"].asInt(), 501);
@@ -3519,7 +3519,7 @@ TEST_F(WsServerTest, GroupSendLargeBlob) {
 
     auto header = parse_json(*header_resp);
     EXPECT_EQ(header["id"].asInt(), 502);
-    EXPECT_TRUE(header["ok"].asBool());
+    EXPECT_EQ(header["type"].asString(), "OK");
     EXPECT_TRUE(header["chunked"].asBool());
     EXPECT_EQ(header["size"].asUInt(), blob_size);
     uint32_t expected_chunks = static_cast<uint32_t>(
@@ -3573,7 +3573,7 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
     auto create_str = send_cmd(client, create_cmd, 5000);
     ASSERT_FALSE(create_str.empty());
     auto create_resp = parse_json(create_str);
-    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    ASSERT_EQ(create_resp["type"].asString(), "OK") << "GROUP_CREATE failed: " << create_str;
 
     // Send a small inline blob (< 64 KB)
     crypto::Hash msg_id{};
@@ -3591,7 +3591,7 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
     auto send_str = send_cmd(client, send_cmd_val, 5000);
     ASSERT_FALSE(send_str.empty());
     auto send_resp = parse_json(send_str);
-    EXPECT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    EXPECT_EQ(send_resp["type"].asString(), "OK") << "GROUP_SEND failed: " << send_str;
 
     // GROUP_GET should return the blob inline (no chunked)
     Json::Value get_cmd;
@@ -3604,7 +3604,7 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
     ASSERT_FALSE(get_str.empty());
     auto get_resp = parse_json(get_str);
     EXPECT_EQ(get_resp["id"].asInt(), 602);
-    EXPECT_TRUE(get_resp["ok"].asBool());
+    EXPECT_EQ(get_resp["type"].asString(), "OK");
     EXPECT_FALSE(get_resp.isMember("chunked")) << "small blob should not be chunked";
     EXPECT_EQ(get_resp["blob"].asString(), to_hex(blob));
 

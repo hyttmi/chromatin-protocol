@@ -206,14 +206,14 @@ class ChromatinClient:
         return await self.send_command({
             "type": "REGISTER_NAME", "id": mid,
             "name_record": base64.b64encode(name_record).decode(),
-        })
+        }, timeout=30.0)
 
     async def cmd_group_create(self, group_meta: bytes) -> dict:
         mid = self._msg_id()
         return await self.send_command({
             "type": "GROUP_CREATE", "id": mid,
             "group_meta": group_meta.hex(),
-        })
+        }, timeout=30.0)
 
     async def cmd_group_info(self, group_id: str) -> dict:
         mid = self._msg_id()

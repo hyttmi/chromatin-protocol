@@ -730,13 +730,16 @@ The connection is closed after sending REDIRECT.
 
 ### 5.3 Client Commands (after authentication)
 
+All successful responses use `"type": "OK"` with command-specific data fields.
+Error responses use `"type": "ERROR"` (see Section 5.6).
+
 **SEND (small, <=64 KB)** — Push encrypted blob inline to recipient's inbox:
 ```json
 {"type": "SEND", "id": 2, "to": "<fingerprint hex>", "blob": "<base64>"}
 ```
 Response:
 ```json
-{"type": "SEND_ACK", "id": 2, "msg_id": "<hex>"}
+{"type": "OK", "id": 2, "msg_id": "<hex>"}
 ```
 
 **SEND (large, >64 KB up to 50 MiB)** — Two-step: announce then chunked upload:
@@ -750,7 +753,7 @@ Response:
 // Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 5.7)
 
 // Step 3: After all chunks received
-{"type": "SEND_ACK", "id": 3, "msg_id": "<hex>"}
+{"type": "OK", "id": 3, "msg_id": "<hex>"}
 ```
 
 If `size` > 50 MiB:
@@ -771,7 +774,7 @@ Optional fields:
 
 Response:
 ```json
-{"type": "LIST_RESULT", "id": 4, "messages": [
+{"type": "OK", "id": 4, "messages": [
   {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000100000, "size": 1200, "blob": "<base64>"},
   {"msg_id": "<hex>", "from": "<fingerprint hex>", "timestamp": 1708000200000, "size": 5242880, "blob": null}
 ], "has_more": true}
@@ -792,12 +795,12 @@ they already have (client-side deduplication).
 
 Small blob response (<=64 KB):
 ```json
-{"type": "GET_RESULT", "id": 5, "msg_id": "<hex>", "blob": "<base64>"}
+{"type": "OK", "id": 5, "msg_id": "<hex>", "blob": "<base64>"}
 ```
 
 Large blob response (>64 KB): JSON header followed by binary chunks:
 ```json
-{"type": "GET_RESULT", "id": 5, "msg_id": "<hex>", "size": 5242880, "chunks": 5}
+{"type": "OK", "id": 5, "msg_id": "<hex>", "size": 5242880, "chunks": 5}
 ```
 Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 5.7).
 
@@ -845,7 +848,7 @@ preimage. Response: `{"type": "OK", "id": 9}`
 Response:
 ```json
 {
-  "type": "STATUS_RESP", "id": 10,
+  "type": "OK", "id": 10,
   "node_id": "<hex>",
   "uptime_seconds": 12345,
   "connected_clients": 3,
@@ -860,9 +863,9 @@ Response:
 ```
 Response:
 ```json
-{"type": "RESOLVE_NAME_RESULT", "id": 11, "found": true, "fingerprint": "<hex>"}
+{"type": "OK", "id": 11, "found": true, "fingerprint": "<hex>"}
 ```
-If not found: `{"type": "RESOLVE_NAME_RESULT", "id": 11, "found": false}`
+If not found: `{"type": "OK", "id": 11, "found": false}`
 
 Only searches local storage (the node must be responsible for the name's
 routing key to have the data).
@@ -874,14 +877,14 @@ routing key to have the data).
 Response:
 ```json
 {
-  "type": "PROFILE_RESULT", "id": 12, "found": true,
+  "type": "OK", "id": 12, "found": true,
   "fingerprint": "<hex>", "pubkey": "<hex>", "kem_pubkey": "<hex>",
   "bio": "Hello world", "avatar": "<base64 or null>",
   "social_links": [{"platform": "x", "handle": "@alice"}],
   "sequence": 1
 }
 ```
-If not found: `{"type": "PROFILE_RESULT", "id": 12, "found": false}`
+If not found: `{"type": "OK", "id": 12, "found": false}`
 
 **LIST_REQUESTS** — List pending contact requests:
 ```json
@@ -889,7 +892,7 @@ If not found: `{"type": "PROFILE_RESULT", "id": 12, "found": false}`
 ```
 Response:
 ```json
-{"type": "LIST_REQUESTS_RESULT", "id": 13, "requests": [
+{"type": "OK", "id": 13, "requests": [
   {"from": "<fingerprint hex>", "timestamp": 1708000100000, "blob": "<base64>"}
 ]}
 ```
@@ -901,7 +904,7 @@ Response:
 The client constructs and signs the profile binary (see Section 4). The node
 validates the profile (fingerprint matches session, signature is valid) and
 stores/replicates it via Kademlia.
-Response: `{"type": "SET_PROFILE_ACK", "id": 14}`
+Response: `{"type": "OK", "id": 14}`
 
 **REGISTER_NAME** — Register a permanent name record:
 ```json
@@ -910,7 +913,7 @@ Response: `{"type": "SET_PROFILE_ACK", "id": 14}`
 Client builds and signs the name record binary, node validates (PoW, signature,
 name not already taken) and stores/replicates via Kademlia. Names are permanent
 and cannot be updated — first claim wins.
-Response: `{"type": "REGISTER_NAME_ACK", "id": 15}`
+Response: `{"type": "OK", "id": 15}`
 
 **GROUP_CREATE** — Create a new group:
 ```json
@@ -921,7 +924,7 @@ data_type 0x06). The node validates: signature is valid, signer matches the
 authenticated client, version=1, at least one Owner exists.
 Response:
 ```json
-{"id": 16, "ok": true, "group_id": "<hex>"}
+{"type": "OK", "id": 16, "group_id": "<hex>"}
 ```
 
 **GROUP_INFO** — Fetch group metadata:
@@ -931,7 +934,7 @@ Response:
 The node verifies the requester's fingerprint is in the GROUP_META member list.
 Response:
 ```json
-{"id": 17, "ok": true, "group_meta": "<hex-encoded GROUP_META binary>"}
+{"type": "OK", "id": 17, "group_meta": "<hex-encoded GROUP_META binary>"}
 ```
 
 **GROUP_UPDATE** — Update group metadata (membership, roles, GEK rotation):
@@ -948,7 +951,7 @@ The node validates:
 6. If new GROUP_META has zero owners or zero members, the group is destroyed
    (GROUP_META and all messages wiped)
 
-Response: `{"id": 18, "ok": true}`
+Response: `{"type": "OK", "id": 18}`
 
 **GROUP_SEND** — Send a message to a group:
 
@@ -959,7 +962,7 @@ Small blob (<=64 KB), inline:
 ```
 Response:
 ```json
-{"id": 19, "ok": true, "msg_id": "<hex>"}
+{"type": "OK", "id": 19, "msg_id": "<hex>"}
 ```
 
 Large blob (>64 KB, up to 50 MiB), chunked:
@@ -974,7 +977,7 @@ Large blob (>64 KB, up to 50 MiB), chunked:
 // Step 2: Client sends binary UPLOAD_CHUNK frames (see Section 5.7)
 
 // Step 3: After all chunks received
-{"id": 20, "ok": true, "msg_id": "<hex>"}
+{"type": "OK", "id": 20, "msg_id": "<hex>"}
 ```
 
 The node verifies the sender's fingerprint is in the GROUP_META member list
@@ -991,7 +994,7 @@ Optional fields:
 The node verifies the requester's fingerprint is in the GROUP_META member list.
 Response:
 ```json
-{"id": 21, "ok": true, "messages": [
+{"type": "OK", "id": 21, "messages": [
   {"msg_id": "<hex>", "sender": "<hex>", "timestamp": 1708000100000,
    "size": 1200, "gek_version": 1, "blob": "<hex>"},
   {"msg_id": "<hex>", "sender": "<hex>", "timestamp": 1708000200000,
@@ -1009,12 +1012,12 @@ have `blob: null` — the client must fetch them separately with GROUP_GET.
 
 Small blob response (<=64 KB):
 ```json
-{"id": 22, "ok": true, "blob": "<hex>"}
+{"type": "OK", "id": 22, "blob": "<hex>"}
 ```
 
 Large blob response (>64 KB): JSON header followed by binary chunks:
 ```json
-{"id": 22, "ok": true, "size": 5242880, "chunks": 5}
+{"type": "OK", "id": 22, "size": 5242880, "chunks": 5}
 ```
 Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 5.7).
 
@@ -1027,7 +1030,7 @@ The node verifies the requester's fingerprint is in the GROUP_META member list.
 The node verifies the requester is either: the message sender, or has
 role >= 0x01 (Admin or Owner) in the GROUP_META. Deletes from both
 TABLE_GROUP_INDEX and TABLE_GROUP_BLOBS.
-Response: `{"id": 23, "ok": true}`
+Response: `{"type": "OK", "id": 23}`
 
 **GROUP_DESTROY** — Destroy a group and all its messages:
 ```json
@@ -1036,7 +1039,7 @@ Response: `{"id": 23, "ok": true}`
 Owner-only (role=0x02). Wipes GROUP_META, all TABLE_GROUP_INDEX entries, and
 all TABLE_GROUP_BLOBS entries for the group. Connected group members receive a
 GROUP_DESTROYED push notification.
-Response: `{"id": 24, "ok": true}`
+Response: `{"type": "OK", "id": 24}`
 
 ### 5.4 Server Push (unsolicited, no id)
 
