@@ -2688,3 +2688,235 @@ TEST_F(KademliaTest, FindNodeRateLimit) {
     // and the rate limiting didn't break normal operation
     EXPECT_GE(node_b.table->size(), 1u);
 }
+
+// ---------------------------------------------------------------------------
+// Group message validation
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, GroupMessageValidation) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Build valid GROUP_MESSAGE:
+    // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
+    Hash group_id{};
+    group_id.fill(0x11);
+    Hash sender_fp{};
+    sender_fp.fill(0x22);
+    Hash msg_id{};
+    msg_id.fill(0x33);
+
+    uint64_t timestamp = 1700000000;
+    uint32_t gek_version = 1;
+    std::vector<uint8_t> blob = {0xCA, 0xFE, 0xBA, 0xBE};
+    uint32_t blob_len = static_cast<uint32_t>(blob.size());
+
+    std::vector<uint8_t> value;
+    value.reserve(112 + blob.size());
+    value.insert(value.end(), group_id.begin(), group_id.end());      // 32
+    value.insert(value.end(), sender_fp.begin(), sender_fp.end());    // 32
+    value.insert(value.end(), msg_id.begin(), msg_id.end());          // 32
+    for (int i = 7; i >= 0; --i)                                      // 8 BE timestamp
+        value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    for (int i = 3; i >= 0; --i)                                      // 4 BE gek_version
+        value.push_back(static_cast<uint8_t>((gek_version >> (i * 8)) & 0xFF));
+    for (int i = 3; i >= 0; --i)                                      // 4 BE blob_len
+        value.push_back(static_cast<uint8_t>((blob_len >> (i * 8)) & 0xFF));
+    value.insert(value.end(), blob.begin(), blob.end());              // blob
+
+    auto group_key = sha3_256_prefixed("group:", group_id);
+    bool ok = n1.kad->store(group_key, 0x05, value);
+    EXPECT_TRUE(ok);
+
+    // Verify stored in GROUP_INDEX and GROUP_BLOBS
+    std::vector<uint8_t> idx_key;
+    idx_key.insert(idx_key.end(), group_id.begin(), group_id.end());
+    idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+    auto idx_result = n1.storage->get(TABLE_GROUP_INDEX, idx_key);
+    ASSERT_TRUE(idx_result.has_value());
+    EXPECT_EQ(idx_result->size(), 48u);  // sender_fp(32) + ts(8) + size(4) + gek_version(4)
+
+    auto blob_result = n1.storage->get(TABLE_GROUP_BLOBS, idx_key);
+    ASSERT_TRUE(blob_result.has_value());
+    EXPECT_EQ(*blob_result, blob);
+}
+
+TEST_F(KademliaTest, GroupMessageValidation_TooShort) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Truncated group message (< 112 bytes)
+    std::vector<uint8_t> value(80, 0x00);
+    Hash key{};
+    key.fill(0xAA);
+
+    bool ok = n1.kad->store(key, 0x05, value);
+    EXPECT_FALSE(ok);
+}
+
+TEST_F(KademliaTest, GroupMessageValidation_BlobLenMismatch) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Group message with blob_len=100 at offset [108..111] but no actual blob data
+    std::vector<uint8_t> value(112, 0x00);
+    value[108] = 0; value[109] = 0; value[110] = 0; value[111] = 100;
+
+    Hash key{};
+    key.fill(0xBB);
+
+    bool ok = n1.kad->store(key, 0x05, value);
+    EXPECT_FALSE(ok);
+}
+
+TEST_F(KademliaTest, GroupMetaValidation) {
+    auto& n1 = create_node();
+    start_all();
+
+    // Build valid GROUP_META:
+    // group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    // per-member[fp(32) + role(1) + kem_ciphertext(1568)] || sig_len(2 BE) || signature
+    auto owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+
+    Hash group_id{};
+    group_id.fill(0x44);
+
+    std::vector<uint8_t> meta;
+    meta.insert(meta.end(), group_id.begin(), group_id.end());       // group_id(32)
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // owner_fp(32)
+    // version = 1 (4 BE)
+    meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
+    // member_count = 1 (2 BE)
+    meta.push_back(0); meta.push_back(1);
+    // member: fp(32) + role(1) + kem_ciphertext(1568)
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // member fp
+    meta.push_back(0x02);                                             // role = owner
+    meta.resize(meta.size() + 1568, 0x00);                           // dummy kem_ciphertext
+
+    // Sign the data so far
+    auto signature = sign(meta, owner_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    meta.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    meta.insert(meta.end(), signature.begin(), signature.end());
+
+    auto group_key = sha3_256_prefixed("group:", group_id);
+    bool ok = n1.kad->store(group_key, 0x06, meta);
+    EXPECT_TRUE(ok);
+
+    // Verify stored in TABLE_GROUP_META
+    std::vector<uint8_t> gid_key(group_id.begin(), group_id.end());
+    auto result = n1.storage->get(TABLE_GROUP_META, gid_key);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->size(), meta.size());
+}
+
+TEST_F(KademliaTest, GroupMetaValidation_ZeroMembers) {
+    auto& n1 = create_node();
+    start_all();
+
+    Hash group_id{};
+    group_id.fill(0x55);
+    Hash owner_fp{};
+    owner_fp.fill(0x66);
+
+    std::vector<uint8_t> meta;
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);  // version
+    meta.push_back(0); meta.push_back(0);  // member_count = 0
+    // sig_len + dummy sig
+    meta.push_back(0); meta.push_back(4);
+    meta.push_back(0xDE); meta.push_back(0xAD); meta.push_back(0xBE); meta.push_back(0xEF);
+
+    auto group_key = sha3_256_prefixed("group:", group_id);
+    bool ok = n1.kad->store(group_key, 0x06, meta);
+    EXPECT_FALSE(ok);
+}
+
+TEST_F(KademliaTest, GroupMetaValidation_NoOwner) {
+    auto& n1 = create_node();
+    start_all();
+
+    Hash group_id{};
+    group_id.fill(0x77);
+    Hash member_fp{};
+    member_fp.fill(0x88);
+
+    std::vector<uint8_t> meta;
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    meta.insert(meta.end(), member_fp.begin(), member_fp.end());  // owner_fp field
+    meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
+    meta.push_back(0); meta.push_back(1);  // 1 member
+    meta.insert(meta.end(), member_fp.begin(), member_fp.end());
+    meta.push_back(0x00);  // role = member (NOT owner)
+    meta.resize(meta.size() + 1568, 0x00);
+    // sig_len + dummy sig
+    meta.push_back(0); meta.push_back(4);
+    meta.push_back(0xDE); meta.push_back(0xAD); meta.push_back(0xBE); meta.push_back(0xEF);
+
+    auto group_key = sha3_256_prefixed("group:", group_id);
+    bool ok = n1.kad->store(group_key, 0x06, meta);
+    EXPECT_FALSE(ok);
+}
+
+TEST_F(KademliaTest, GroupMetaValidation_WrongKey) {
+    auto& n1 = create_node();
+    start_all();
+
+    auto owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+
+    Hash group_id{};
+    group_id.fill(0x99);
+
+    std::vector<uint8_t> meta;
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
+    meta.push_back(0); meta.push_back(1);
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.push_back(0x02);
+    meta.resize(meta.size() + 1568, 0x00);
+    auto signature = sign(meta, owner_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    meta.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    meta.insert(meta.end(), signature.begin(), signature.end());
+
+    // Use wrong key (not SHA3-256("group:" || group_id))
+    Hash wrong_key{};
+    wrong_key.fill(0xFF);
+    bool ok = n1.kad->store(wrong_key, 0x06, meta);
+    EXPECT_FALSE(ok);
+}
+
+TEST_F(KademliaTest, DuplicateGroupMessageRejected) {
+    auto& n1 = create_node();
+    start_all();
+
+    Hash group_id{};
+    group_id.fill(0xAA);
+    Hash sender_fp{};
+    sender_fp.fill(0xBB);
+    Hash msg_id{};
+    msg_id.fill(0xCC);
+
+    std::vector<uint8_t> value;
+    value.insert(value.end(), group_id.begin(), group_id.end());
+    value.insert(value.end(), sender_fp.begin(), sender_fp.end());
+    value.insert(value.end(), msg_id.begin(), msg_id.end());
+    value.resize(108, 0x00);  // timestamp + gek_version + blob_len=0
+    value.resize(112, 0x00);  // ensure 112 bytes
+
+    auto group_key = sha3_256_prefixed("group:", group_id);
+
+    // First store should succeed
+    bool ok1 = n1.kad->store(group_key, 0x05, value);
+    EXPECT_TRUE(ok1);
+
+    // Second store with same msg_id should be rejected
+    bool ok2 = n1.kad->store(group_key, 0x05, value);
+    EXPECT_FALSE(ok2);
+}

@@ -927,6 +927,8 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         case 0x02: valid = validate_inbox_message(value);    break;
         case 0x03: valid = validate_contact_request(value);  break;
         case 0x04: valid = validate_allowlist_entry(value);  break;
+        case 0x05: valid = validate_group_message(value);    break;
+        case 0x06: valid = validate_group_meta(value, key);  break;
         default: break;
         }
         if (!valid) {
@@ -1010,6 +1012,60 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         storage_key.insert(storage_key.end(), sfp.begin(), sfp.end());
         std::vector<uint8_t> value_vec(value.begin(), value.end());
         storage_.put(storage::TABLE_REQUESTS, storage_key, value_vec);
+    } else if (data_type == 0x05) {
+        // GROUP_MESSAGE: two-table write (index + blob)
+        // Value: group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
+        std::span<const uint8_t> group_id(value.data(), 32);
+        std::span<const uint8_t> sender_fp(value.data() + 32, 32);
+        std::span<const uint8_t> msg_id(value.data() + 64, 32);
+
+        // gek_version at offset 104 (after timestamp[96..103])
+        uint32_t gek_version = (static_cast<uint32_t>(value[104]) << 24)
+                             | (static_cast<uint32_t>(value[105]) << 16)
+                             | (static_cast<uint32_t>(value[106]) << 8)
+                             | static_cast<uint32_t>(value[107]);
+        // blob_len at offset 108
+        uint32_t blob_len = (static_cast<uint32_t>(value[108]) << 24)
+                          | (static_cast<uint32_t>(value[109]) << 16)
+                          | (static_cast<uint32_t>(value[110]) << 8)
+                          | static_cast<uint32_t>(value[111]);
+
+        // Dedup: reject if this group message already exists
+        std::vector<uint8_t> idx_key;
+        idx_key.reserve(64);
+        idx_key.insert(idx_key.end(), group_id.begin(), group_id.end());
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+
+        if (storage_.get(storage::TABLE_GROUP_BLOBS, idx_key)) {
+            spdlog::debug("store_locally: duplicate group message rejected (msg_id already exists)");
+            return false;
+        }
+
+        // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
+        std::vector<uint8_t> idx_value;
+        idx_value.reserve(48);
+        idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+        idx_value.insert(idx_value.end(), value.data() + 96, value.data() + 104);  // timestamp
+        idx_value.insert(idx_value.end(), value.data() + 108, value.data() + 112); // blob_len (size)
+        // gek_version (4 BE)
+        idx_value.push_back(static_cast<uint8_t>((gek_version >> 24) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>((gek_version >> 16) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>((gek_version >> 8) & 0xFF));
+        idx_value.push_back(static_cast<uint8_t>(gek_version & 0xFF));
+
+        // BLOB value: raw encrypted blob (starts at offset 112)
+        std::vector<uint8_t> blob_value(value.data() + 112, value.data() + 112 + blob_len);
+
+        // Atomic write: INDEX + BLOB in single transaction
+        storage_.batch_put({
+            {storage::TABLE_GROUP_INDEX, idx_key, idx_value},
+            {storage::TABLE_GROUP_BLOBS, idx_key, blob_value}
+        });
+    } else if (data_type == 0x06) {
+        // GROUP_META: single-table write keyed by group_id
+        std::vector<uint8_t> group_id_key(value.data(), value.data() + 32);
+        std::vector<uint8_t> value_vec(value.begin(), value.end());
+        storage_.put(storage::TABLE_GROUP_META, group_id_key, value_vec);
     } else {
         const char* table_name = nullptr;
         switch (data_type) {
@@ -1845,6 +1901,115 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
 }
 
 // ---------------------------------------------------------------------------
+// Group message validation
+// ---------------------------------------------------------------------------
+
+bool Kademlia::validate_group_message(std::span<const uint8_t> value) {
+    // Format: group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE)
+    //         || gek_version(4 BE) || blob_len(4 BE) || blob
+    // Minimum: 32 + 32 + 32 + 8 + 4 + 4 = 112 bytes
+    if (value.size() < 112) {
+        spdlog::warn("Group message validation: too short ({} bytes)", value.size());
+        return false;
+    }
+
+    if (value.size() > cfg_.max_message_size) {
+        spdlog::warn("Group message validation: size {} exceeds max message size", value.size());
+        return false;
+    }
+
+    // Parse blob_len at offset 108 (after timestamp[96..103] + gek_version[104..107])
+    uint32_t blob_len = (static_cast<uint32_t>(value[108]) << 24)
+                      | (static_cast<uint32_t>(value[109]) << 16)
+                      | (static_cast<uint32_t>(value[110]) << 8)
+                      | static_cast<uint32_t>(value[111]);
+
+    if (112 + blob_len != value.size()) {
+        spdlog::warn("Group message validation: blob_len {} doesn't match remaining data {}", blob_len, value.size() - 112);
+        return false;
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Group meta validation
+// ---------------------------------------------------------------------------
+
+bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key) {
+    // Format: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    //         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
+    //         sig_len(2 BE) || ML-DSA-87 signature
+    // Minimum header: 32 + 32 + 4 + 2 = 70 bytes
+    if (value.size() < 70) {
+        spdlog::warn("Group meta validation: too short ({} bytes)", value.size());
+        return false;
+    }
+
+    // Parse member_count
+    uint16_t member_count = (static_cast<uint16_t>(value[68]) << 8)
+                          | static_cast<uint16_t>(value[69]);
+
+    if (member_count == 0 || member_count > 512) {
+        spdlog::warn("Group meta validation: invalid member_count {}", member_count);
+        return false;
+    }
+
+    // Per-member entry size: fingerprint(32) + role(1) + kem_ciphertext(1568) = 1601
+    constexpr size_t MEMBER_ENTRY_SIZE = 1601;
+    size_t members_end = 70 + static_cast<size_t>(member_count) * MEMBER_ENTRY_SIZE;
+
+    // Need at least members_end + sig_len(2)
+    if (value.size() < members_end + 2) {
+        spdlog::warn("Group meta validation: too short for {} members (need {}, have {})",
+                      member_count, members_end + 2, value.size());
+        return false;
+    }
+
+    // Parse sig_len
+    uint16_t sig_len = (static_cast<uint16_t>(value[members_end]) << 8)
+                     | static_cast<uint16_t>(value[members_end + 1]);
+
+    if (value.size() != members_end + 2 + sig_len) {
+        spdlog::warn("Group meta validation: sig_len {} doesn't match remaining data", sig_len);
+        return false;
+    }
+
+    // Verify at least one member has role=0x02 (owner)
+    bool has_owner = false;
+    for (uint16_t i = 0; i < member_count; ++i) {
+        size_t entry_offset = 70 + static_cast<size_t>(i) * MEMBER_ENTRY_SIZE;
+        uint8_t role = value[entry_offset + 32]; // role byte after fingerprint
+        if (role == 0x02) {
+            has_owner = true;
+            break;
+        }
+        if (role > 0x02) {
+            spdlog::warn("Group meta validation: invalid role 0x{:02X} for member {}", role, i);
+            return false;
+        }
+    }
+
+    if (!has_owner) {
+        spdlog::warn("Group meta validation: no owner in member list");
+        return false;
+    }
+
+    // Verify key derivation: key must equal SHA3-256("group:" || group_id)
+    std::span<const uint8_t> group_id(value.data(), 32);
+    auto expected_key = crypto::sha3_256_prefixed("group:", group_id);
+    if (key != expected_key) {
+        spdlog::warn("Group meta validation: key mismatch (expected SHA3-256('group:' || group_id))");
+        return false;
+    }
+
+    // Structural validation only — signature verification is done at WsServer level
+    // during GROUP_CREATE/UPDATE where the authenticated session provides the pubkey.
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // SYNC_REQ / SYNC_RESP (section 2 of PROTOCOL-SPEC.md)
 // ---------------------------------------------------------------------------
 
@@ -1975,6 +2140,17 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 std::vector<uint8_t> cr_key(entry.data.begin(), entry.data.begin() + 64);
                 storage_.del(storage::TABLE_REQUESTS, cr_key);
                 spdlog::debug("SYNC: applied DEL for contact request");
+            } else if (entry.data_type == 0x05 && entry.data.size() >= 64) {
+                // Group message delete: delete_info = group_id(32) || msg_id(32)
+                std::vector<uint8_t> gm_key(entry.data.begin(), entry.data.begin() + 64);
+                storage_.del(storage::TABLE_GROUP_INDEX, gm_key);
+                storage_.del(storage::TABLE_GROUP_BLOBS, gm_key);
+                spdlog::debug("SYNC: applied DEL for group message");
+            } else if (entry.data_type == 0x06 && entry.data.size() >= 32) {
+                // Group meta delete: delete_info = group_id(32)
+                std::vector<uint8_t> gm_key(entry.data.begin(), entry.data.begin() + 32);
+                storage_.del(storage::TABLE_GROUP_META, gm_key);
+                spdlog::debug("SYNC: applied DEL for group meta");
             } else {
                 // For other types, delete by key from the appropriate table
                 const char* table_name = nullptr;
