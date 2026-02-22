@@ -4,9 +4,9 @@
   "tcp_port" : 4000,
   "ws_port" : 4001,
   "bootstrap" : [
-    "195.181.202.122:62000",
-    "195.181.202.122:62001",
-    "195.181.202.122:62002"
+    "0.chromatin.cpunk.io:62000",
+    "1.chromatin.cpunk.io:62001",
+    "2.chromatin.cpunk.io:62002"
   ],
   "tls_cert_path" : "",
   "tls_key_path" : "",
