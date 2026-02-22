@@ -16,9 +16,9 @@ That's Chromatin.
 
 ---
 
-## Step 1: Creating Your Identity (DNA)
+## Step 1: Creating Your Identity
 
-Before you can message anyone, you need a **DNA** — your digital identity.
+Before you can message anyone, you need a **Chromatin identity**.
 
 ```
   You
@@ -211,6 +211,129 @@ But even if he doesn't, the 7-day cleanup keeps the network from filling up.
 
 ---
 
+## Step 8: Group Messaging
+
+Chromatin supports group conversations with up to 512 members. Groups use a
+**shared inbox** model — one copy of each message is stored on the network,
+and all members read from the same location.
+
+### Creating a Group
+
+```
+Alice creates a group and adds Bob and Charlie:
+
+  Alice
+    │
+    │  GROUP_CREATE
+    │  "Book Club"
+    │ ──────────────────────►  Responsible Nodes
+    │                            [N1]  [N2]  [N3]
+    │                              │     │     │
+    │  Group created ✓              Store GROUP_META:
+    │ ◄──────────────────────      • group_id (random)
+    │                              • owner: Alice
+    │                              • members: Alice, Bob, Charlie
+    │                              • roles: owner, member, member
+```
+
+The group has **three roles**:
+- **Owner** — can do everything, including destroying the group
+- **Admin** — can add/remove regular members
+- **Member** — can send messages and read the group inbox
+
+### Sending a Group Message
+
+```
+Alice sends a message to the Book Club:
+
+  Alice                       Responsible Nodes
+    │                           [N1]  [N2]  [N3]
+    │                             │     │     │
+    │  1. Alice encrypts         │     │     │
+    │     with the Group         │     │     │
+    │     Encryption Key (GEK)   │     │     │
+    │                             │     │     │
+    │  2. GROUP_SEND              │     │     │
+    │ ────────────────────────►   │     │     │
+    │                             │     │     │
+    │                        3. Node checks:
+    │                           Is Alice a member? ✓
+    │                           Store the message
+    │                             │     │     │
+    │  4. "Stored" ✓              │     │     │
+    │ ◄────────────────────────   │     │     │
+    │                             │     │     │
+    │                        5. Push notification
+    │                           to Bob and Charlie
+    │                           (if they're online)
+    │                             │     │     │
+    │                             ▼     ▼     ▼
+    │                           Bob   Charlie
+    │                           gets  gets
+    │                           push  push
+```
+
+Unlike 1-to-1 messages, group messages are stored **once** at a location
+derived from the group ID — not copied to each member's inbox. Every member
+reads from the same shared inbox. The node enforces access control: only
+members listed in the GROUP_META can read or write.
+
+### Group Encryption Key (GEK)
+
+Messages are encrypted with a **Group Encryption Key** shared among members.
+The GEK is distributed to each member inside the GROUP_META, encrypted with
+their individual public key (ML-KEM-1024). When membership changes, a new
+GEK version is generated — old members lose access to new messages.
+
+```
+GROUP_META contains per-member encrypted GEK:
+
+  ┌─────────────────────────────────────────────┐
+  │  group_id    │  owner_fp   │  version: 3    │
+  ├──────────────┼─────────────┼────────────────┤
+  │  Alice (owner)  │  GEK v3 encrypted for Alice  │
+  │  Bob (member)   │  GEK v3 encrypted for Bob    │
+  │  Charlie (admin) │  GEK v3 encrypted for Charlie│
+  └─────────────────┴─────────────────────────────┘
+```
+
+### Reading Group Messages
+
+```
+Bob checks the Book Club:
+
+  Bob                        Responsible Node [N1]
+    │                              │
+    │  GROUP_LIST                  │
+    │  (after: last_seen_key)      │
+    │ ──────────────────────────►  │
+    │                              │
+    │   Message index:             │
+    │   • Alice, 2 min ago         │
+    │   • Charlie, 1 min ago       │
+    │ ◄──────────────────────────  │
+    │                              │
+    │  GROUP_GET (specific msg)    │
+    │ ──────────────────────────►  │
+    │                              │
+    │   Encrypted message blob     │
+    │ ◄──────────────────────────  │
+    │                              │
+    │  Bob decrypts with GEK       │
+```
+
+### Managing Members
+
+Owners and admins can update the group by publishing a new GROUP_META with
+an incremented version number. The node enforces role restrictions:
+
+- **Admins** can add or remove regular members
+- **Admins** cannot change roles, remove other admins, or remove owners
+- **Owners** can do everything — add, remove, promote, demote
+- If all members are removed, the group is automatically destroyed
+
+---
+
 ## What Makes This Different
 
 | Traditional Messenger | Chromatin |
@@ -221,6 +344,7 @@ But even if he doesn't, the 7-day cleanup keeps the network from filling up.
 | Quantum computers will break it | Uses future-proof encryption |
 | Company controls your account | Your identity is yours forever |
 | One server = one point of failure | 3 copies on independent nodes |
+| Groups managed by company servers | Groups managed by the network with shared inboxes |
 
 ---
 

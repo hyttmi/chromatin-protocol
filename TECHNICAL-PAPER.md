@@ -58,13 +58,13 @@ so losing one doesn't lose your data.
 
 ---
 
-## DNA: Your Digital Identity
+## Your Digital Identity
 
-In Chromatin, your identity is called a **DNA**. It's a cryptographic identity
-that belongs to you — not to any company or server.
+In Chromatin, your identity is a cryptographic keypair that belongs to you —
+not to any company or server.
 
-When you create a DNA, your device generates a unique **fingerprint** (a
-string of characters that identifies you) and a pair of cryptographic keys:
+When you create your identity, your device generates a unique **fingerprint**
+(a string of characters that identifies you) and a pair of cryptographic keys:
 
 - **Public key** — shared with the world, used by others to encrypt messages
   to you
@@ -72,8 +72,8 @@ string of characters that identifies you) and a pair of cryptographic keys:
   prove your identity
 
 No one can impersonate you because no one has your secret key. No server
-can revoke your identity because no server issued it. Your DNA is permanent
-and self-sovereign.
+can revoke your identity because no server issued it. Your identity is
+permanent and self-sovereign.
 
 Every identity must register a **human-readable name** (like "alice" or
 "bob42") that maps to its fingerprint. Name registration is free — it just
@@ -139,6 +139,46 @@ the quantum computers of the future.
 
 ---
 
+## Group Messaging
+
+Chromatin supports group conversations with up to 512 members using a
+**shared-inbox model**. Unlike traditional messengers that copy each message
+to every member's inbox (fan-out), Chromatin stores a single copy at a
+network location derived from the group ID. All members read from the same
+shared inbox, and the responsible nodes enforce access control using a
+signed membership list (GROUP_META).
+
+Messages are encrypted with a **Group Encryption Key (GEK)** — a symmetric
+key distributed to each member inside the GROUP_META, encrypted individually
+with their ML-KEM-1024 public key. When membership changes, a new GEK
+version is created so removed members cannot read future messages.
+
+Groups have three roles:
+- **Owner** — full control, including destroying the group
+- **Admin** — can add/remove regular members
+- **Member** — can send and read messages
+
+The shared-inbox approach is bandwidth-efficient (one store operation per
+message regardless of group size) and leverages the same Kademlia replication
+used for 1-to-1 messages. Connected members receive real-time push
+notifications when new group messages arrive.
+
+---
+
+## Node-to-Node Security
+
+Nodes communicate over TCP using **ML-KEM-1024 key encapsulation** to
+establish a shared secret, then encrypt all traffic with **ChaCha20-Poly1305**.
+This ensures that node-to-node traffic is confidential even if an adversary
+controls the network path between nodes.
+
+Nodes advertise their capabilities — including support for encrypted TCP —
+through a **version/capability negotiation** in the PONG response. This
+allows the network to evolve incrementally: nodes can discover what features
+their peers support before attempting to use them.
+
+---
+
 ## Multi-Device Support
 
 Messages in Chromatin are stored for **7 days** on the responsible nodes. During
@@ -181,10 +221,12 @@ spread across different countries, jurisdictions, and operators.
 | **Quantum safety** | ML-DSA-87 + ML-KEM-1024 — immune to quantum attacks |
 | **Decentralization** | No central server — independent nodes cooperate |
 | **Censorship resistance** | No single point of failure or control |
-| **Self-sovereign identity** | Your DNA is yours — no company can revoke it |
+| **Self-sovereign identity** | Your identity is yours — no company can revoke it |
 | **Spam prevention** | Allowlist model + proof-of-work for contact requests |
+| **Group messaging** | Shared-inbox model with GEK encryption, up to 512 members |
 | **Reliability** | 3-node replication — survive node failures |
 | **Multi-device** | 7-day message retention, per-device sync |
+| **Node security** | ML-KEM-1024 + ChaCha20-Poly1305 encrypted node-to-node traffic |
 | **Open protocol** | Anyone can build clients, run nodes, extend the network |
 
 ---
