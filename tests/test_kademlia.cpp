@@ -523,44 +523,55 @@ TEST_F(KademliaTest, NameRegistrationInvalidPow) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: NameRegistrationFirstClaimWins — different fingerprint gets rejected
+// Test 8: NameRegistrationConflictResolution — lower fingerprint wins
 // ---------------------------------------------------------------------------
 
-TEST_F(KademliaTest, NameRegistrationFirstClaimWins) {
+TEST_F(KademliaTest, NameRegistrationConflictResolution) {
     auto& n1 = create_node(8);
 
     start_all();
 
-    // First user registers the name
+    // Generate two users and determine which has the lower fingerprint
     KeyPair user1_kp = generate_keypair();
     Hash user1_fp = sha3_256(user1_kp.public_key);
+    KeyPair user2_kp = generate_keypair();
+    Hash user2_fp = sha3_256(user2_kp.public_key);
+
+    // Ensure user1 has the higher fingerprint (the loser)
+    if (user1_fp < user2_fp) {
+        std::swap(user1_kp, user2_kp);
+        std::swap(user1_fp, user2_fp);
+    }
+    // Now user2_fp < user1_fp — user2 should win the tiebreaker
 
     std::string name = "claimed";
     uint64_t nonce1 = find_pow_nonce(name, user1_fp, 8);
-
     auto record1 = build_name_record(name, user1_fp, nonce1, 1, user1_kp);
     Hash key = name_key(name);
 
+    // User1 (higher fp) registers first
     bool ok1 = n1.kad->store(key, 0x01, record1);
     EXPECT_TRUE(ok1);
-
     auto result1 = n1.storage->get(TABLE_NAMES, key);
     ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(*result1, record1);
 
-    // Second user tries to register the same name with a different fingerprint
-    KeyPair user2_kp = generate_keypair();
-    Hash user2_fp = sha3_256(user2_kp.public_key);
+    // User2 (lower fp) registers same name — should win via tiebreaker
     uint64_t nonce2 = find_pow_nonce(name, user2_fp, 8);
-
     auto record2 = build_name_record(name, user2_fp, nonce2, 1, user2_kp);
 
-    // This should fail (first claim wins)
-    n1.kad->store(key, 0x01, record2);
+    bool ok2 = n1.kad->store(key, 0x01, record2);
+    EXPECT_TRUE(ok2);
 
-    // The stored value should still be the first user's record
     auto result2 = n1.storage->get(TABLE_NAMES, key);
     ASSERT_TRUE(result2.has_value());
-    EXPECT_EQ(*result2, record1) << "Name should still belong to first claimant";
+    EXPECT_EQ(*result2, record2) << "Lower fingerprint should win the conflict";
+
+    // Now try to register with user1 again — should be rejected (user2 has lower fp)
+    n1.kad->store(key, 0x01, record1);
+    auto result3 = n1.storage->get(TABLE_NAMES, key);
+    ASSERT_TRUE(result3.has_value());
+    EXPECT_EQ(*result3, record2) << "Lower fingerprint should still hold the name";
 }
 
 // ---------------------------------------------------------------------------

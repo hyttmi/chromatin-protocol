@@ -916,9 +916,10 @@ Response: `{"type": "OK", "id": 14}`
 ```json
 {"type": "REGISTER_NAME", "id": 15, "name_record": "<base64 of signed name record binary>"}
 ```
-Client builds and signs the name record binary, node validates (PoW, signature,
-name not already taken) and stores/replicates via Kademlia. Names are permanent
-and cannot be updated — first claim wins.
+Client builds and signs the name record binary, node validates (PoW, pubkey
+authenticity, signature, conflict resolution) and stores/replicates via
+Kademlia. If two users register the same name simultaneously, the **lower
+fingerprint wins** — a deterministic tiebreaker ensuring all nodes converge.
 Response: `{"type": "OK", "id": 15}`
 
 **GROUP_CREATE** — Create a new group:

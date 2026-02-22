@@ -1503,11 +1503,9 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
         return false;
     }
 
-    // 4. First-claim-wins: if name already registered to different fingerprint, reject
-    // Storage key for the name: SHA3-256("name:" || name)
+    // 4. Conflict resolution for existing name records
     auto existing = storage_.get(storage::TABLE_NAMES, key);
     if (existing) {
-        // Parse existing record to get its fingerprint and sequence
         if (existing->size() >= 1) {
             uint8_t existing_name_len = (*existing)[0];
             size_t fp_offset = 1 + existing_name_len;
@@ -1516,21 +1514,30 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
                 std::copy_n(existing->data() + fp_offset, 32, existing_fp.begin());
 
                 if (existing_fp != fingerprint) {
-                    spdlog::warn("Name record validation: '{}' already registered to different fingerprint", name);
-                    return false;
-                }
-
-                // 5. Same fingerprint: sequence must be higher
-                size_t existing_seq_offset = fp_offset + 32 + 8; // skip fingerprint + pow_nonce
-                if (existing->size() >= existing_seq_offset + 8) {
-                    uint64_t existing_seq = 0;
-                    for (int i = 0; i < 8; ++i) {
-                        existing_seq = (existing_seq << 8) | (*existing)[existing_seq_offset + i];
-                    }
-                    if (sequence <= existing_seq) {
-                        spdlog::warn("Name record validation: sequence {} <= existing {} for '{}'",
-                                     sequence, existing_seq, name);
+                    // Different fingerprint claiming the same name.
+                    // Deterministic tiebreaker: lower fingerprint wins.
+                    // This ensures all nodes converge to the same owner
+                    // even if STOREs arrive in different order during races.
+                    if (fingerprint < existing_fp) {
+                        spdlog::info("Name record conflict for '{}': incoming fp wins (lower)", name);
+                        // Accept — incoming record replaces existing
+                    } else {
+                        spdlog::info("Name record conflict for '{}': existing fp wins (lower)", name);
                         return false;
+                    }
+                } else {
+                    // 5. Same fingerprint: sequence must be higher (owner update)
+                    size_t existing_seq_offset = fp_offset + 32 + 8; // skip fingerprint + pow_nonce
+                    if (existing->size() >= existing_seq_offset + 8) {
+                        uint64_t existing_seq = 0;
+                        for (int i = 0; i < 8; ++i) {
+                            existing_seq = (existing_seq << 8) | (*existing)[existing_seq_offset + i];
+                        }
+                        if (sequence <= existing_seq) {
+                            spdlog::warn("Name record validation: sequence {} <= existing {} for '{}'",
+                                         sequence, existing_seq, name);
+                            return false;
+                        }
                     }
                 }
             }
