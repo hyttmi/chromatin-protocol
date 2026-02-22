@@ -124,9 +124,15 @@ add_subdirectory(tests/integration)
 
 # --- Install: config and systemd ---
 include(GNUInstallDirs)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/config.json
-        DESTINATION /etc/chromatin
-        COMPONENT config)
+# Only install config if it doesn't already exist (preserve user edits)
+install(CODE "
+    if(NOT EXISTS \"/etc/chromatin/config.json\")
+        file(INSTALL \"${CMAKE_CURRENT_SOURCE_DIR}/dist/config.json\"
+             DESTINATION \"/etc/chromatin\")
+    else()
+        message(STATUS \"Skipping /etc/chromatin/config.json (already exists)\")
+    endif()
+" COMPONENT config)
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/dist/chromatin-node.service.in
     ${CMAKE_CURRENT_BINARY_DIR}/chromatin-node.service
