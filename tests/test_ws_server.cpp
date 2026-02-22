@@ -2371,3 +2371,220 @@ TEST_F(WsServerTest, GroupCreateNotOwner) {
 
     client.close();
 }
+
+// ---------- GROUP_SEND / GROUP_LIST tests ----------
+
+TEST_F(WsServerTest, GroupSendAndList) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    // Create a group
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 100;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // Generate a random msg_id and a small blob
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16);
+    for (auto& b : blob) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // GROUP_SEND
+    Json::Value send_cmd_val;
+    send_cmd_val["type"] = "GROUP_SEND";
+    send_cmd_val["id"] = 101;
+    send_cmd_val["group_id"] = to_hex(group_id);
+    send_cmd_val["msg_id"] = to_hex(msg_id);
+    send_cmd_val["gek_version"] = 1;
+    send_cmd_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(client, send_cmd_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    EXPECT_EQ(send_resp["id"].asInt(), 101);
+    EXPECT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+    EXPECT_EQ(send_resp["msg_id"].asString(), to_hex(msg_id));
+
+    // GROUP_LIST
+    Json::Value list_cmd;
+    list_cmd["type"] = "GROUP_LIST";
+    list_cmd["id"] = 102;
+    list_cmd["group_id"] = to_hex(group_id);
+
+    auto list_str = send_cmd(client, list_cmd, 5000);
+    ASSERT_FALSE(list_str.empty());
+    auto list_resp = parse_json(list_str);
+    EXPECT_EQ(list_resp["id"].asInt(), 102);
+    EXPECT_TRUE(list_resp["ok"].asBool()) << "GROUP_LIST failed: " << list_str;
+
+    auto& messages = list_resp["messages"];
+    ASSERT_EQ(messages.size(), 1u);
+    EXPECT_EQ(messages[0]["msg_id"].asString(), to_hex(msg_id));
+    EXPECT_EQ(messages[0]["sender"].asString(), to_hex(owner_fp));
+    EXPECT_EQ(messages[0]["size"].asUInt(), blob.size());
+    EXPECT_EQ(messages[0]["gek_version"].asUInt(), 1u);
+    EXPECT_EQ(messages[0]["blob"].asString(), to_hex(blob));
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupSendNotMember) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    // Create group as owner
+    TestWsClient owner_client;
+    ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(owner_client, owner_kp));
+
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 200;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(owner_client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+    owner_client.close();
+
+    // Authenticate as a non-member
+    auto other_kp = crypto::generate_keypair();
+    TestWsClient other_client;
+    ASSERT_TRUE(other_client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(other_client, other_kp));
+
+    // Try GROUP_SEND as non-member
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(16, 0xAB);
+
+    Json::Value send_cmd_val;
+    send_cmd_val["type"] = "GROUP_SEND";
+    send_cmd_val["id"] = 201;
+    send_cmd_val["group_id"] = to_hex(group_id);
+    send_cmd_val["msg_id"] = to_hex(msg_id);
+    send_cmd_val["gek_version"] = 1;
+    send_cmd_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(other_client, send_cmd_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    EXPECT_EQ(send_resp["type"].asString(), "ERROR");
+    EXPECT_EQ(send_resp["code"].asInt(), 403);
+
+    other_client.close();
+}
+
+TEST_F(WsServerTest, GroupListPagination) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    // Create a group
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 300;
+    create_cmd["group_meta"] = to_hex(meta);
+
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // Send 5 messages with deterministic msg_ids (sorted lexicographically)
+    std::vector<crypto::Hash> msg_ids(5);
+    for (int i = 0; i < 5; ++i) {
+        // Use deterministic msg_ids that sort in known order:
+        // First byte determines sort order, rest are zeros
+        msg_ids[i] = {};
+        msg_ids[i][0] = static_cast<uint8_t>(i + 1);  // 0x01..0x05
+    }
+
+    for (int i = 0; i < 5; ++i) {
+        std::vector<uint8_t> blob(8, static_cast<uint8_t>(i + 0x10));
+
+        Json::Value send_val;
+        send_val["type"] = "GROUP_SEND";
+        send_val["id"] = 310 + i;
+        send_val["group_id"] = to_hex(group_id);
+        send_val["msg_id"] = to_hex(msg_ids[i]);
+        send_val["gek_version"] = 1;
+        send_val["blob"] = to_hex(blob);
+
+        auto send_str = send_cmd(client, send_val, 5000);
+        ASSERT_FALSE(send_str.empty());
+        auto send_resp = parse_json(send_str);
+        ASSERT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND #" << i << " failed: " << send_str;
+    }
+
+    // GROUP_LIST with limit=2 -> expect 2 messages
+    Json::Value list_cmd1;
+    list_cmd1["type"] = "GROUP_LIST";
+    list_cmd1["id"] = 320;
+    list_cmd1["group_id"] = to_hex(group_id);
+    list_cmd1["limit"] = 2;
+
+    auto list1_str = send_cmd(client, list_cmd1, 5000);
+    ASSERT_FALSE(list1_str.empty());
+    auto list1 = parse_json(list1_str);
+    EXPECT_TRUE(list1["ok"].asBool()) << "GROUP_LIST page1 failed: " << list1_str;
+    ASSERT_EQ(list1["messages"].size(), 2u);
+
+    // Get the last msg_id from page 1
+    std::string last_msg_id = list1["messages"][1u]["msg_id"].asString();
+
+    // GROUP_LIST with after=last_msg_id, limit=2 -> expect 2 more messages
+    Json::Value list_cmd2;
+    list_cmd2["type"] = "GROUP_LIST";
+    list_cmd2["id"] = 321;
+    list_cmd2["group_id"] = to_hex(group_id);
+    list_cmd2["after"] = last_msg_id;
+    list_cmd2["limit"] = 2;
+
+    auto list2_str = send_cmd(client, list_cmd2, 5000);
+    ASSERT_FALSE(list2_str.empty());
+    auto list2 = parse_json(list2_str);
+    EXPECT_TRUE(list2["ok"].asBool()) << "GROUP_LIST page2 failed: " << list2_str;
+    ASSERT_EQ(list2["messages"].size(), 2u);
+
+    // Verify page 2 msg_ids are different from page 1
+    EXPECT_NE(list2["messages"][0u]["msg_id"].asString(), list1["messages"][0u]["msg_id"].asString());
+    EXPECT_NE(list2["messages"][0u]["msg_id"].asString(), list1["messages"][1u]["msg_id"].asString());
+
+    client.close();
+}

@@ -167,6 +167,8 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"REGISTER_NAME",  {&WsServer::handle_register_name,  true,  3.0}},
         {"GROUP_CREATE",   {&WsServer::handle_group_create,   true,  3.0}},
         {"GROUP_INFO",     {&WsServer::handle_group_info,     true,  1.0}},
+        {"GROUP_SEND",     {&WsServer::handle_group_send,     true,  2.0}},
+        {"GROUP_LIST",     {&WsServer::handle_group_list,     true,  1.0}},
     };
 
     auto it = commands.find(type);
@@ -2218,12 +2220,263 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse and validate group_id (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Parse and validate msg_id (64 hex chars = 32 bytes)
+    std::string msg_id_hex = msg.get("msg_id", "").asString();
+    if (msg_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+    auto msg_id_bytes = from_hex(msg_id_hex);
+    if (!msg_id_bytes) {
+        send_error(ws, id, 400, "invalid msg_id");
+        return;
+    }
+
+    // Parse gek_version
+    if (!msg.isMember("gek_version") || !msg["gek_version"].isIntegral()) {
+        send_error(ws, id, 400, "missing gek_version");
+        return;
+    }
+    uint32_t gek_version = msg["gek_version"].asUInt();
+
+    // Parse blob (hex string)
+    std::string blob_hex = msg.get("blob", "").asString();
+    if (blob_hex.empty()) {
+        send_error(ws, id, 400, "missing blob");
+        return;
+    }
+    auto blob_bytes = from_hex(blob_hex);
+    if (!blob_bytes) {
+        send_error(ws, id, 400, "invalid hex in blob");
+        return;
+    }
+
+    // Max blob size check: 50 MiB
+    static constexpr size_t MAX_BLOB_SIZE = 50ULL * 1024 * 1024;
+    if (blob_bytes->size() > MAX_BLOB_SIZE) {
+        send_error(ws, id, 413, "attachment too large");
+        return;
+    }
+
+    // Verify sender is a member of the group
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Build GROUP_MESSAGE binary:
+    // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
+    auto now = std::chrono::system_clock::now();
+    uint64_t timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+    uint32_t blob_len = static_cast<uint32_t>(blob_bytes->size());
+
+    std::vector<uint8_t> msg_bytes;
+    msg_bytes.reserve(112 + blob_len);
+
+    // group_id(32)
+    msg_bytes.insert(msg_bytes.end(), group_id.begin(), group_id.end());
+    // sender_fp(32)
+    msg_bytes.insert(msg_bytes.end(), session->fingerprint.begin(), session->fingerprint.end());
+    // msg_id(32)
+    msg_bytes.insert(msg_bytes.end(), msg_id_bytes->begin(), msg_id_bytes->end());
+    // timestamp(8 BE)
+    for (int i = 7; i >= 0; --i)
+        msg_bytes.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+    // gek_version(4 BE)
+    msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 24) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 16) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 8) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>(gek_version & 0xFF));
+    // blob_len(4 BE)
+    msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+    msg_bytes.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+    // blob
+    msg_bytes.insert(msg_bytes.end(), blob_bytes->begin(), blob_bytes->end());
+
+    // Compute DHT routing key
+    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
+    // Dispatch store to worker pool
+    auto msg_id_copy = *msg_id_bytes;
+    if (!workers_.post([this, ws, id, group_key, msg_bytes = std::move(msg_bytes),
+                        msg_id_copy]() mutable {
+        bool ok = kad_.store(group_key, 0x05, msg_bytes);
+
+        loop_->defer([this, ws, id, ok, msg_id_copy]() {
+            if (connections_.count(ws) == 0) return;
+
+            if (ok) {
+                Json::Value resp;
+                resp["id"] = id;
+                resp["ok"] = true;
+                resp["msg_id"] = to_hex(msg_id_copy);
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 500, "store failed");
+            }
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+        return;
+    }
 }
 
 template<bool SSL>
 void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
-    send_error(ws, msg.get("id", 0).asInt(), 501, "not implemented");
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse and validate group_id (64 hex chars = 32 bytes)
+    std::string group_id_hex = msg.get("group_id", "").asString();
+    if (group_id_hex.size() != 64) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    auto group_id_bytes = from_hex(group_id_hex);
+    if (!group_id_bytes) {
+        send_error(ws, id, 400, "invalid group_id");
+        return;
+    }
+    crypto::Hash group_id{};
+    std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
+
+    // Verify membership
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Parse optional "after" (msg_id to paginate from, 64 hex chars = 32 bytes)
+    std::vector<uint8_t> after_id;
+    if (msg.isMember("after") && !msg["after"].asString().empty()) {
+        std::string after_hex = msg["after"].asString();
+        if (after_hex.size() != 64) {
+            send_error(ws, id, 400, "invalid after");
+            return;
+        }
+        auto after_bytes = from_hex(after_hex);
+        if (!after_bytes) {
+            send_error(ws, id, 400, "invalid after");
+            return;
+        }
+        after_id = std::move(*after_bytes);
+    }
+
+    // Parse optional "limit" (default 50, max 200)
+    int limit = msg.get("limit", 50).asInt();
+    if (limit < 1) limit = 1;
+    if (limit > 200) limit = 200;
+
+    // Prefix-scan TABLE_GROUP_INDEX with group_id as prefix (32 bytes).
+    // Collect index entries first, then read blobs separately to avoid
+    // nested MDBX read transactions on the same thread (MDBX_BAD_RSLOT).
+    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+
+    struct IndexEntry {
+        std::vector<uint8_t> blob_key;  // group_id(32) || msg_id(32)
+        std::string msg_id_hex;
+        std::string sender_hex;
+        uint64_t timestamp;
+        uint32_t size;
+        uint32_t gek_version;
+    };
+    std::vector<IndexEntry> entries;
+    int count = 0;
+    bool past_after = after_id.empty();
+
+    storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+            // key = group_id(32) || msg_id(32)
+            if (key.size() != 64) return true;  // skip malformed
+            // value = sender_fp(32) || ts(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
+            if (value.size() != 48) return true;  // skip malformed
+
+            auto msg_id_part = key.subspan(32, 32);
+
+            // If "after" is set, skip entries until we pass the after msg_id
+            if (!past_after) {
+                // Compare the 32-byte msg_id portion lexicographically
+                int cmp = std::memcmp(msg_id_part.data(), after_id.data(), 32);
+                if (cmp <= 0) return true;  // skip entries <= after
+                past_after = true;
+            }
+
+            if (count >= limit) return false;  // stop scanning
+
+            // Parse index value fields
+            auto sender_fp = value.subspan(0, 32);
+            uint64_t ts = 0;
+            for (int i = 0; i < 8; ++i)
+                ts = (ts << 8) | value[32 + i];
+            uint32_t size = (static_cast<uint32_t>(value[40]) << 24)
+                          | (static_cast<uint32_t>(value[41]) << 16)
+                          | (static_cast<uint32_t>(value[42]) << 8)
+                          | static_cast<uint32_t>(value[43]);
+            uint32_t gek_ver = (static_cast<uint32_t>(value[44]) << 24)
+                             | (static_cast<uint32_t>(value[45]) << 16)
+                             | (static_cast<uint32_t>(value[46]) << 8)
+                             | static_cast<uint32_t>(value[47]);
+
+            entries.push_back({
+                std::vector<uint8_t>(key.begin(), key.end()),
+                to_hex(msg_id_part),
+                to_hex(sender_fp),
+                ts, size, gek_ver
+            });
+            ++count;
+            return true;  // continue scanning
+        });
+
+    // Build JSON response, fetching inline blobs outside the scan transaction
+    Json::Value messages(Json::arrayValue);
+    for (const auto& e : entries) {
+        Json::Value entry;
+        entry["msg_id"] = e.msg_id_hex;
+        entry["sender"] = e.sender_hex;
+        entry["timestamp"] = Json::Value::UInt64(e.timestamp);
+        entry["size"] = e.size;
+        entry["gek_version"] = e.gek_version;
+
+        if (e.size <= INLINE_THRESHOLD) {
+            auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, e.blob_key);
+            if (blob) {
+                entry["blob"] = to_hex(*blob);
+            } else {
+                entry["blob"] = Json::nullValue;
+            }
+        } else {
+            entry["blob"] = Json::nullValue;
+        }
+
+        messages.append(entry);
+    }
+
+    Json::Value resp;
+    resp["id"] = id;
+    resp["ok"] = true;
+    resp["messages"] = messages;
+    send_json(ws, resp);
 }
 
 template<bool SSL>
