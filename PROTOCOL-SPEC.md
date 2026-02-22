@@ -242,7 +242,30 @@ Empty payload (0 bytes).
 
 ### PONG (0x01)
 
-Empty payload (0 bytes).
+Version and capability negotiation payload (6 bytes):
+
+```
+[1 byte: min_version]          // Minimum protocol version supported
+[1 byte: max_version]          // Maximum protocol version supported
+[4 bytes BE: capabilities]     // Capability bitmask
+```
+
+**Capability bits:**
+
+| Bit | Mask   | Name          | Description                                         |
+|-----|--------|---------------|-----------------------------------------------------|
+| 0   | 0x01   | GROUPS        | Supports group messaging (data_type 0x05, 0x06)     |
+| 1   | 0x02   | ENCRYPTED_TCP | Supports ML-KEM-1024 + ChaCha20-Poly1305 TCP encryption |
+
+Bits 2-31 are reserved for future capabilities.
+
+**Backward compatibility:** Old nodes that send an empty PONG payload (0 bytes)
+are accepted — the receiver assumes `min_version = max_version = 0x01` and
+`capabilities = 0x00`. Nodes log a warning if the peer's version range does
+not include the local protocol version.
+
+Received version and capability data is stored in NodeInfo
+(`proto_version_min`, `proto_version_max`, `capabilities`).
 
 ### FIND_NODE (0x02)
 
@@ -263,6 +286,11 @@ sender to its routing table without a public key (legacy behavior).
 **Iterative discovery:** When a node receives NODES and discovers new peers,
 it SHOULD send FIND_NODE to each newly discovered node. This implements
 standard Kademlia iterative lookup and ensures bidirectional pubkey exchange.
+
+**Rate limiting:** FIND_NODE responses are rate-limited to at most **1 per
+second per source** (identified by IP:port). Excessive FIND_NODE requests
+from the same source are silently dropped. This prevents routing table
+enumeration and amplification attacks.
 
 ### NODES (0x03)
 
@@ -1034,9 +1062,11 @@ owner leaves (auto-destruction).
 
 ### 5.5 Rate Limiting
 
-Nodes enforce per-connection rate limiting using a token bucket algorithm.
-Each connection starts with 50 tokens and refills at 10 tokens/second.
-Different commands consume different token costs:
+Nodes enforce **per-fingerprint** rate limiting using a token bucket algorithm.
+Each authenticated fingerprint starts with 50 tokens and refills at 10
+tokens/second. Multiple WebSocket connections sharing the same authenticated
+fingerprint share a single token bucket. This prevents rate limit bypass via
+connection multiplication. Different commands consume different token costs:
 
 | Command          | Cost |
 |------------------|------|
@@ -1259,6 +1289,12 @@ discovered, the node with the oldest `last_seen` timestamp is evicted (LRU).
 `closest_to()` queries use partial sort for efficiency — only the top K
 results are sorted, not the entire table.
 
+**IP subnet diversity:** The routing table enforces a maximum of **3 nodes
+per /24 IPv4 subnet** (or **/48 IPv6 prefix**) to mitigate Sybil and eclipse
+attacks. New nodes from over-represented subnets are silently rejected. This
+prevents an attacker from filling the routing table with nodes from a single
+network range.
+
 ### TCP Connection Pooling
 
 Nodes reuse TCP connections for node-to-node communication. After sending a
@@ -1275,6 +1311,11 @@ This bounds replication log storage growth while preserving enough history
 for sync catch-up. The previous default of 100 was found to be dangerously
 low — a busy inbox can exhaust it in minutes, causing data loss for slow
 syncers.
+
+**Time-based floor:** Entries younger than **168 hours (7 days)** are never
+compacted, regardless of the entry count. This prevents recent entries from
+being discarded even when the entry count exceeds the keep limit, ensuring
+that slow-syncing nodes can always catch up on recent data.
 
 ### Active Sync
 
@@ -1354,6 +1395,8 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Rate limit refill rate     | 10 tokens/second                       |
 | Max TCP message            | 50 MiB (implementation limit)          |
 | Routing table max nodes    | 256                                    |
+| Max nodes per subnet       | 3 (per /24 IPv4 or /48 IPv6)           |
+| FIND_NODE rate limit       | 1 response/second per source (IP:port) |
 | TCP connect timeout        | 5 seconds                              |
 | TCP read timeout           | 5 seconds                              |
 | TCP conn pool max idle     | 60 seconds                             |
@@ -1367,6 +1410,7 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Worker pool max queue      | 1024 jobs                              |
 | Repl_log compact interval  | 1 hour                                 |
 | Repl_log compact keep      | 10,000 entries per key                 |
+| Repl_log compact floor     | 168 hours (7 days) — never compact younger entries |
 | Auth nonce prefix          | `"chromatin-auth:"`                    |
 | Allowlist signature prefix | `"chromatin:allowlist:"`               |
 | Contact req PoW prefix     | `"chromatin:request:"`                 |

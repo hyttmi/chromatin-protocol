@@ -206,6 +206,8 @@ capped at **256 nodes** with LRU eviction (oldest `last_seen` evicted when full)
 - XOR distance determines **responsibility**, not routing
 - All communication is **single-hop** (direct node-to-node TCP)
 - TCP connections are pooled per destination (max 64, 60s idle timeout)
+- IP subnet diversity: max 3 nodes per /24 (IPv4) or /48 (IPv6) prefix
+  to mitigate Sybil/eclipse attacks
 
 ### 6.2 Responsibility
 
@@ -248,6 +250,9 @@ messages directly via TCP:
 - **NODES node_id verification**: When processing NODES responses, the
   receiver verifies `node_id == SHA3-256(pubkey)` for each entry. Entries
   failing this check are silently dropped.
+- **FIND_NODE rate limiting**: Responses to FIND_NODE are rate-limited to
+  1 per second per source (IP:port). Excessive requests are silently
+  dropped. This prevents routing table enumeration and amplification.
 
 This dual-layer validation (Kademlia + WS server) ensures a single malicious
 node cannot bypass protections by sending STORE messages directly.
@@ -257,7 +262,7 @@ node cannot bypass protections by sending STORE messages directly.
 | Message      | Purpose                                      |
 |--------------|----------------------------------------------|
 | PING         | Liveness check                               |
-| PONG         | Liveness response                            |
+| PONG         | Liveness response (version + capabilities)   |
 | FIND_NODE    | Request K closest nodes (carries sender pubkey) |
 | NODES        | Response with node list (IPv4 and IPv6)      |
 | STORE        | Write a signed value to responsible node     |
@@ -275,6 +280,13 @@ FIND_NODE carries the sender's pubkey so recipients can immediately verify
 future signed messages. All other types — including PONG, NODES, and all
 trust-sensitive messages — MUST have valid signatures. Messages from nodes
 whose public key is not yet known are rejected (except PING and FIND_NODE).
+
+**PONG version/capability negotiation:** PONG carries a 6-byte payload with
+the sender's supported protocol version range (`min_version`, `max_version`)
+and a capability bitmask. Capability bit 0 (GROUPS) indicates group messaging
+support; bit 1 (ENCRYPTED_TCP) indicates TCP encryption support. Old nodes
+that send an empty PONG are accepted (backward compatible). NodeInfo stores
+the peer's version range and capabilities for future use.
 
 ### 6.5 TCP Transport Encryption
 
@@ -379,7 +391,9 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
 | SYNC_INTERVAL          | 120s   | Active sync with responsible peers |
 | COMPACT_INTERVAL       | 1h     | Replication log compaction        |
 | COMPACT_KEEP_ENTRIES   | 10000  | Max entries per key after compact  |
+| COMPACT_AGE_FLOOR      | 168h   | Never compact entries younger than this |
 | MAX_ROUTING_TABLE_SIZE | 256    | Maximum nodes in routing table    |
+| MAX_NODES_PER_SUBNET  | 3      | Max nodes per /24 IPv4 or /48 IPv6|
 | CONN_MAX_IDLE          | 60s    | TCP connection pool idle timeout  |
 | MAX_POOL_SIZE          | 64     | TCP connection pool max size      |
 
@@ -443,9 +457,10 @@ When a crashed node comes back, or a new node becomes responsible for a key
 The replication log grows over time. To bound storage:
 
 - Compaction runs every **1 hour** in the background
-- For each key, retains the most recent **100 entries**, deletes older ones
-- This is a simple, conservative policy that ensures sync catch-up works
-  while bounding storage growth
+- For each key, retains the most recent **10,000 entries**, deletes older ones
+- **Time-based floor:** entries younger than **168 hours (7 days)** are never
+  compacted, regardless of entry count — this prevents recent data from being
+  discarded even when the entry count exceeds the keep limit
 - For inboxes: 7-day TTL on messages provides an additional natural bound
 - For profiles/names: log is small (infrequent updates), compaction less critical
 
@@ -618,10 +633,13 @@ Each user has an allowlist stored on their responsible nodes.
 
 ### 8.6 Rate Limiting
 
-Per-connection token bucket rate limiting prevents abuse. Each connection
-starts with 50 tokens and refills at 10 tokens/second. Commands consume
-tokens at different rates (SEND: 2, CONTACT_REQUEST: 3, most others: 1).
-Exceeding the rate limit returns error code 429.
+**Per-fingerprint** token bucket rate limiting prevents abuse. Each
+authenticated fingerprint has a token bucket with 50 tokens that refills at
+10 tokens/second. Multiple WebSocket connections sharing the same fingerprint
+share a single token bucket — this prevents rate limit bypass via connection
+multiplication. Commands consume tokens at different rates (SEND: 2,
+CONTACT_REQUEST: 3, most others: 1). Exceeding the rate limit returns error
+code 429.
 
 ---
 
