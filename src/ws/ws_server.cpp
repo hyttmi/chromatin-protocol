@@ -401,94 +401,158 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
         // Truncate to expected size (last chunk may have filled exactly)
         upload.data.resize(upload.expected_size);
 
-        // Generate msg_id
-        crypto::Hash msg_id{};
-        OQS_randombytes(msg_id.data(), msg_id.size());
+        if (upload.group_id.has_value()) {
+            // ---- Group upload completion ----
+            auto group_id = *upload.group_id;
+            auto upload_msg_id = upload.msg_id;
+            auto gek_version = upload.gek_version;
+            auto sender_fp = session->fingerprint;
+            int send_id = upload.id;
+            auto blob_data = std::move(upload.data);
+            session->pending_upload.reset();
 
-        auto now = std::chrono::system_clock::now();
-        uint64_t timestamp = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch()).count());
+            // Build GROUP_MESSAGE binary:
+            // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
+            auto now = std::chrono::system_clock::now();
+            uint64_t timestamp = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+            uint32_t blob_len = static_cast<uint32_t>(blob_data.size());
 
-        // Capture upload data before resetting
-        auto recipient_fp = upload.recipient_fp;
-        auto sender_fp = session->fingerprint;
-        int send_id = upload.id;
-        auto blob_data = std::move(upload.data);
-        session->pending_upload.reset();
+            std::vector<uint8_t> msg_bytes;
+            msg_bytes.reserve(112 + blob_len);
+            msg_bytes.insert(msg_bytes.end(), group_id.begin(), group_id.end());
+            msg_bytes.insert(msg_bytes.end(), sender_fp.begin(), sender_fp.end());
+            msg_bytes.insert(msg_bytes.end(), upload_msg_id.begin(), upload_msg_id.end());
+            for (int i = 7; i >= 0; --i)
+                msg_bytes.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 24) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 16) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 8) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>(gek_version & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
+            msg_bytes.push_back(static_cast<uint8_t>(blob_len & 0xFF));
+            msg_bytes.insert(msg_bytes.end(), blob_data.begin(), blob_data.end());
 
-        // Build index key/value (same format as small SEND)
-        std::vector<uint8_t> idx_key;
-        idx_key.reserve(64);
-        idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
-        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+            // Compute DHT routing key
+            auto group_key = crypto::sha3_256_prefixed("group:",
+                std::span<const uint8_t>(group_id.data(), group_id.size()));
 
-        std::vector<uint8_t> idx_value;
-        idx_value.reserve(44);
-        idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
-        for (int i = 7; i >= 0; --i)
-            idx_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-        uint32_t sz = static_cast<uint32_t>(blob_data.size());
-        idx_value.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
-        idx_value.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
-        idx_value.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
-        idx_value.push_back(static_cast<uint8_t>(sz & 0xFF));
+            auto msg_id_copy = upload_msg_id;
 
-        std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
-        auto msg_id_copy = msg_id;
+            if (!workers_.post([this, ws, send_id, group_key,
+                                msg_bytes = std::move(msg_bytes),
+                                msg_id_copy]() mutable {
+                bool ok = kad_.store(group_key, 0x05, msg_bytes);
 
-        // Build message_binary for Kademlia replication:
-        // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
-        std::vector<uint8_t> message_binary;
-        message_binary.reserve(32 + 32 + 8 + 4 + blob_data.size());
-        message_binary.insert(message_binary.end(), msg_id.begin(), msg_id.end());
-        message_binary.insert(message_binary.end(), sender_fp.begin(), sender_fp.end());
-        for (int i = 7; i >= 0; --i)
-            message_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-        message_binary.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
-        message_binary.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
-        message_binary.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
-        message_binary.push_back(static_cast<uint8_t>(sz & 0xFF));
-        message_binary.insert(message_binary.end(), blob_data.begin(), blob_data.end());
-
-        // Build kad_value: recipient_fp(32) || message_binary
-        std::vector<uint8_t> kad_value;
-        kad_value.reserve(32 + message_binary.size());
-        kad_value.insert(kad_value.end(), recipient_fp.begin(), recipient_fp.end());
-        kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
-
-        auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
-
-        // Dispatch to worker pool for storage
-        if (!workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
-                       idx_value = std::move(idx_value),
-                       blob_key = std::move(blob_key),
-                       blob_data = std::move(blob_data),
-                       kad_value = std::move(kad_value),
-                       inbox_key,
-                       msg_id_copy]() {
-            bool ok = storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
-            if (ok) storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_data);
-
-            if (ok) {
-                kad_.store(inbox_key, 0x02, kad_value);
+                loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
+                    if (connections_.count(ws) == 0) return;
+                    if (ok) {
+                        Json::Value resp;
+                        resp["id"] = send_id;
+                        resp["ok"] = true;
+                        resp["msg_id"] = to_hex(msg_id_copy);
+                        send_json(ws, resp);
+                    } else {
+                        send_error(ws, send_id, 500, "store failed");
+                    }
+                });
+            })) {
+                send_error(ws, send_id, 503, "server overloaded");
+                return;
             }
+        } else {
+            // ---- Regular inbox upload completion ----
+            // Generate msg_id
+            crypto::Hash msg_id{};
+            OQS_randombytes(msg_id.data(), msg_id.size());
 
-            loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
-                if (connections_.count(ws) == 0) return;
+            auto now = std::chrono::system_clock::now();
+            uint64_t timestamp = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now.time_since_epoch()).count());
+
+            // Capture upload data before resetting
+            auto recipient_fp = upload.recipient_fp;
+            auto sender_fp = session->fingerprint;
+            int send_id = upload.id;
+            auto blob_data = std::move(upload.data);
+            session->pending_upload.reset();
+
+            // Build index key/value (same format as small SEND)
+            std::vector<uint8_t> idx_key;
+            idx_key.reserve(64);
+            idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
+            idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+
+            std::vector<uint8_t> idx_value;
+            idx_value.reserve(44);
+            idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+            for (int i = 7; i >= 0; --i)
+                idx_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+            uint32_t sz = static_cast<uint32_t>(blob_data.size());
+            idx_value.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
+            idx_value.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
+            idx_value.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
+            idx_value.push_back(static_cast<uint8_t>(sz & 0xFF));
+
+            std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
+            auto msg_id_copy = msg_id;
+
+            // Build message_binary for Kademlia replication:
+            // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
+            std::vector<uint8_t> message_binary;
+            message_binary.reserve(32 + 32 + 8 + 4 + blob_data.size());
+            message_binary.insert(message_binary.end(), msg_id.begin(), msg_id.end());
+            message_binary.insert(message_binary.end(), sender_fp.begin(), sender_fp.end());
+            for (int i = 7; i >= 0; --i)
+                message_binary.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
+            message_binary.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
+            message_binary.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
+            message_binary.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
+            message_binary.push_back(static_cast<uint8_t>(sz & 0xFF));
+            message_binary.insert(message_binary.end(), blob_data.begin(), blob_data.end());
+
+            // Build kad_value: recipient_fp(32) || message_binary
+            std::vector<uint8_t> kad_value;
+            kad_value.reserve(32 + message_binary.size());
+            kad_value.insert(kad_value.end(), recipient_fp.begin(), recipient_fp.end());
+            kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
+
+            auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+
+            // Dispatch to worker pool for storage
+            if (!workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
+                           idx_value = std::move(idx_value),
+                           blob_key = std::move(blob_key),
+                           blob_data = std::move(blob_data),
+                           kad_value = std::move(kad_value),
+                           inbox_key,
+                           msg_id_copy]() {
+                bool ok = storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
+                if (ok) storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_data);
+
                 if (ok) {
-                    Json::Value resp;
-                    resp["type"] = "SEND_ACK";
-                    resp["id"] = send_id;
-                    resp["msg_id"] = to_hex(msg_id_copy);
-                    send_json(ws, resp);
-                } else {
-                    send_error(ws, send_id, 500, "store failed");
+                    kad_.store(inbox_key, 0x02, kad_value);
                 }
-            });
-        })) {
-            send_error(ws, send_id, 503, "server overloaded");
-            return;
+
+                loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
+                    if (connections_.count(ws) == 0) return;
+                    if (ok) {
+                        Json::Value resp;
+                        resp["type"] = "SEND_ACK";
+                        resp["id"] = send_id;
+                        resp["msg_id"] = to_hex(msg_id_copy);
+                        send_json(ws, resp);
+                    } else {
+                        send_error(ws, send_id, 500, "store failed");
+                    }
+                });
+            })) {
+                send_error(ws, send_id, 503, "server overloaded");
+                return;
+            }
         }
     }
 }
@@ -2478,8 +2542,57 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
     }
     uint32_t gek_version = msg["gek_version"].asUInt();
 
-    // Parse blob (hex string)
+    // Verify sender is a member of the group
+    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
+        send_error(ws, id, 403, "not a member");
+        return;
+    }
+
+    // Detect large vs small path:
+    // If "size" field is present and "blob" is empty/missing -> large chunked upload
+    // Otherwise -> small inline GROUP_SEND
     std::string blob_hex = msg.get("blob", "").asString();
+    bool has_size = msg.isMember("size") && msg["size"].isUInt64();
+
+    if (has_size && blob_hex.empty()) {
+        // ---- Large chunked GROUP_SEND path ----
+        uint64_t declared_size = msg["size"].asUInt64();
+
+        static constexpr size_t MAX_BLOB_SIZE = 50ULL * 1024 * 1024;
+        if (declared_size > MAX_BLOB_SIZE) {
+            send_error(ws, id, 413, "attachment too large");
+            return;
+        }
+
+        if (session->pending_upload) {
+            send_error(ws, id, 429, "upload already in progress");
+            return;
+        }
+
+        uint32_t request_id = next_request_id_.fetch_add(1);
+
+        Session::PendingUpload upload;
+        upload.request_id = request_id;
+        upload.id = id;
+        upload.expected_size = static_cast<uint32_t>(declared_size);
+        upload.received = 0;
+        upload.next_chunk = 0;
+        upload.started = std::chrono::steady_clock::now();
+        // Group-specific fields
+        upload.group_id = group_id;
+        std::copy(msg_id_bytes->begin(), msg_id_bytes->end(), upload.msg_id.begin());
+        upload.gek_version = gek_version;
+        session->pending_upload = std::move(upload);
+
+        Json::Value resp;
+        resp["type"] = "SEND_READY";
+        resp["id"] = id;
+        resp["request_id"] = request_id;
+        send_json(ws, resp);
+        return;
+    }
+
+    // ---- Small inline GROUP_SEND path ----
     if (blob_hex.empty()) {
         send_error(ws, id, 400, "missing blob");
         return;
@@ -2497,9 +2610,8 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Verify sender is a member of the group
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
+    if (blob_bytes->size() > INLINE_THRESHOLD) {
+        send_error(ws, id, 400, "blob exceeds inline threshold, use chunked upload");
         return;
     }
 
@@ -2752,12 +2864,54 @@ void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Return the blob (chunked download for large blobs will be added later)
-    Json::Value resp;
-    resp["id"] = id;
-    resp["ok"] = true;
-    resp["blob"] = to_hex(*blob);
-    send_json(ws, resp);
+    if (blob->size() <= INLINE_THRESHOLD) {
+        // Small blob: return inline as hex
+        Json::Value resp;
+        resp["id"] = id;
+        resp["ok"] = true;
+        resp["blob"] = to_hex(*blob);
+        send_json(ws, resp);
+    } else {
+        // Large blob: chunked binary download
+        static constexpr size_t CHUNK_SIZE = 1048576;  // 1 MiB
+        uint32_t num_chunks = static_cast<uint32_t>(
+            (blob->size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+        uint32_t request_id = next_request_id_.fetch_add(1);
+
+        // Send JSON header with size and chunk count
+        Json::Value resp;
+        resp["id"] = id;
+        resp["ok"] = true;
+        resp["size"] = static_cast<Json::UInt>(blob->size());
+        resp["chunks"] = num_chunks;
+        resp["chunked"] = true;
+        send_json(ws, resp);
+
+        // Send binary DOWNLOAD_CHUNK frames
+        // Frame format: [0x02][4B request_id BE][2B chunk_index BE][payload]
+        for (uint32_t i = 0; i < num_chunks; ++i) {
+            size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
+            size_t payload_size = std::min(CHUNK_SIZE, blob->size() - offset);
+
+            std::vector<uint8_t> frame;
+            frame.reserve(7 + payload_size);
+            frame.push_back(0x02);  // DOWNLOAD_CHUNK frame type
+            frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+            frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+            frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+            frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+            uint16_t chunk_index = static_cast<uint16_t>(i);
+            frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
+            frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
+            frame.insert(frame.end(),
+                         blob->data() + offset,
+                         blob->data() + offset + payload_size);
+
+            std::string_view sv(reinterpret_cast<const char*>(frame.data()),
+                                frame.size());
+            ws->send(sv, uWS::OpCode::BINARY);
+        }
+    }
 }
 
 template<bool SSL>

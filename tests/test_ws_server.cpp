@@ -3416,3 +3416,197 @@ TEST_F(WsServerTest, GroupMessagePush) {
     member_client.close();
     owner_client2.close();
 }
+
+TEST_F(WsServerTest, GroupSendLargeBlob) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    // Create a group with owner as the sole member
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 500;
+    create_cmd["group_meta"] = to_hex(meta);
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // Prepare a 100 KB blob (> 64 KB inline threshold)
+    const size_t blob_size = 100 * 1024;
+    std::vector<uint8_t> blob_data(blob_size, 0xBB);
+
+    // Generate a random msg_id
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    // Send GROUP_SEND with "size" field (no "blob") to initiate chunked upload
+    Json::Value send_cmd_val;
+    send_cmd_val["type"] = "GROUP_SEND";
+    send_cmd_val["id"] = 501;
+    send_cmd_val["group_id"] = to_hex(group_id);
+    send_cmd_val["msg_id"] = to_hex(msg_id);
+    send_cmd_val["gek_version"] = 2;
+    send_cmd_val["size"] = Json::UInt64(blob_size);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    std::string send_json_str = Json::writeString(writer, send_cmd_val);
+    ASSERT_TRUE(client.send_text(send_json_str));
+
+    // Expect SEND_READY with request_id
+    auto ready_resp = client.recv_text(5000);
+    ASSERT_TRUE(ready_resp.has_value()) << "no SEND_READY response";
+
+    auto ready_root = parse_json(*ready_resp);
+    EXPECT_EQ(ready_root["type"].asString(), "SEND_READY");
+    EXPECT_EQ(ready_root["id"].asInt(), 501);
+    ASSERT_TRUE(ready_root.isMember("request_id"));
+    uint32_t request_id = ready_root["request_id"].asUInt();
+
+    // Send the blob as a single UPLOAD_CHUNK binary frame (100 KB < 1 MiB)
+    std::vector<uint8_t> binary_frame;
+    binary_frame.reserve(7 + blob_size);
+    binary_frame.push_back(0x01);  // frame_type = UPLOAD_CHUNK
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+    binary_frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+    binary_frame.push_back(0x00);  // chunk_index high byte
+    binary_frame.push_back(0x00);  // chunk_index low byte
+    binary_frame.insert(binary_frame.end(), blob_data.begin(), blob_data.end());
+    ASSERT_TRUE(client.send_binary(binary_frame));
+
+    // Expect {ok:true, msg_id} response (may be preceded by push notifications)
+    bool got_ok = false;
+    std::string returned_msg_id;
+    for (int i = 0; i < 5; ++i) {
+        auto resp = client.recv_text(5000);
+        if (!resp.has_value()) break;
+        auto parsed = parse_json(*resp);
+        if (parsed.isMember("ok") && parsed["ok"].asBool() && parsed.isMember("msg_id")) {
+            got_ok = true;
+            returned_msg_id = parsed["msg_id"].asString();
+            EXPECT_EQ(parsed["id"].asInt(), 501);
+            break;
+        }
+    }
+    ASSERT_TRUE(got_ok) << "GROUP_SEND chunked did not return ok";
+    EXPECT_EQ(returned_msg_id, to_hex(msg_id));
+
+    // GROUP_GET for the message — should get chunked download (blob > 64 KB)
+    Json::Value get_cmd;
+    get_cmd["type"] = "GROUP_GET";
+    get_cmd["id"] = 502;
+    get_cmd["group_id"] = to_hex(group_id);
+    get_cmd["msg_id"] = to_hex(msg_id);
+
+    ASSERT_TRUE(client.send_text(Json::writeString(writer, get_cmd)));
+
+    // First: JSON header with chunked=true
+    auto header_resp = client.recv_text(5000);
+    ASSERT_TRUE(header_resp.has_value()) << "no GROUP_GET response";
+
+    auto header = parse_json(*header_resp);
+    EXPECT_EQ(header["id"].asInt(), 502);
+    EXPECT_TRUE(header["ok"].asBool());
+    EXPECT_TRUE(header["chunked"].asBool());
+    EXPECT_EQ(header["size"].asUInt(), blob_size);
+    uint32_t expected_chunks = static_cast<uint32_t>(
+        (blob_size + 1048575) / 1048576);
+    EXPECT_EQ(header["chunks"].asUInt(), expected_chunks);
+
+    // Then: binary DOWNLOAD_CHUNK frames
+    std::vector<uint8_t> received_data;
+    for (uint32_t i = 0; i < expected_chunks; ++i) {
+        auto frame = client.recv_frame(5000);
+        ASSERT_TRUE(frame.has_value()) << "missing chunk " << i;
+        ASSERT_EQ(frame->opcode, 0x02) << "chunk must be binary frame";
+
+        // Parse header: [1B type][4B request_id][2B chunk_index]
+        ASSERT_GE(frame->data.size(), 7u);
+        EXPECT_EQ(frame->data[0], 0x02);  // DOWNLOAD_CHUNK
+        uint16_t cidx = (static_cast<uint16_t>(frame->data[5]) << 8) | frame->data[6];
+        EXPECT_EQ(cidx, i);
+
+        auto payload_start = frame->data.data() + 7;
+        auto payload_size = frame->data.size() - 7;
+        received_data.insert(received_data.end(), payload_start, payload_start + payload_size);
+    }
+
+    EXPECT_EQ(received_data.size(), blob_size);
+    EXPECT_EQ(received_data, blob_data);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, GroupGetSmallBlobInline) {
+    start_ws_server();
+
+    auto owner_kp = crypto::generate_keypair();
+    auto owner_fp = crypto::sha3_256(owner_kp.public_key);
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, owner_kp));
+
+    // Create a group
+    crypto::Hash group_id{};
+    for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
+
+    auto meta = build_group_meta(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+
+    Json::Value create_cmd;
+    create_cmd["type"] = "GROUP_CREATE";
+    create_cmd["id"] = 600;
+    create_cmd["group_meta"] = to_hex(meta);
+    auto create_str = send_cmd(client, create_cmd, 5000);
+    ASSERT_FALSE(create_str.empty());
+    auto create_resp = parse_json(create_str);
+    ASSERT_TRUE(create_resp["ok"].asBool()) << "GROUP_CREATE failed: " << create_str;
+
+    // Send a small inline blob (< 64 KB)
+    crypto::Hash msg_id{};
+    for (auto& b : msg_id) b = static_cast<uint8_t>(rand() & 0xFF);
+    std::vector<uint8_t> blob(256, 0xCC);
+
+    Json::Value send_cmd_val;
+    send_cmd_val["type"] = "GROUP_SEND";
+    send_cmd_val["id"] = 601;
+    send_cmd_val["group_id"] = to_hex(group_id);
+    send_cmd_val["msg_id"] = to_hex(msg_id);
+    send_cmd_val["gek_version"] = 1;
+    send_cmd_val["blob"] = to_hex(blob);
+
+    auto send_str = send_cmd(client, send_cmd_val, 5000);
+    ASSERT_FALSE(send_str.empty());
+    auto send_resp = parse_json(send_str);
+    EXPECT_TRUE(send_resp["ok"].asBool()) << "GROUP_SEND failed: " << send_str;
+
+    // GROUP_GET should return the blob inline (no chunked)
+    Json::Value get_cmd;
+    get_cmd["type"] = "GROUP_GET";
+    get_cmd["id"] = 602;
+    get_cmd["group_id"] = to_hex(group_id);
+    get_cmd["msg_id"] = to_hex(msg_id);
+
+    auto get_str = send_cmd(client, get_cmd, 5000);
+    ASSERT_FALSE(get_str.empty());
+    auto get_resp = parse_json(get_str);
+    EXPECT_EQ(get_resp["id"].asInt(), 602);
+    EXPECT_TRUE(get_resp["ok"].asBool());
+    EXPECT_FALSE(get_resp.isMember("chunked")) << "small blob should not be chunked";
+    EXPECT_EQ(get_resp["blob"].asString(), to_hex(blob));
+
+    client.close();
+}

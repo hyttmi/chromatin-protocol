@@ -55,6 +55,10 @@ struct Session {
         uint16_t next_chunk = 0;
         std::vector<uint8_t> data; // accumulated blob data
         std::chrono::steady_clock::time_point started;
+        // Group upload context (set when this upload is for GROUP_SEND)
+        std::optional<crypto::Hash> group_id;
+        crypto::Hash msg_id{};          // client-provided msg_id for GROUP_SEND
+        uint32_t gek_version = 0;       // for GROUP_SEND
     };
     std::optional<PendingUpload> pending_upload;
 };
