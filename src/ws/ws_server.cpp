@@ -438,10 +438,34 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 
             auto msg_id_copy = upload_msg_id;
 
-            if (!workers_.post([this, ws, send_id, group_key,
+            if (!workers_.post([this, ws, send_id, group_key, group_id, sender_fp,
                                 msg_bytes = std::move(msg_bytes),
                                 msg_id_copy]() mutable {
                 bool ok = kad_.store(group_key, 0x05, msg_bytes);
+
+                // Ensure data is stored locally for GROUP_LIST/GET/DELETE
+                if (ok) {
+                    std::vector<uint8_t> idx_key;
+                    idx_key.reserve(64);
+                    idx_key.insert(idx_key.end(), group_id.begin(), group_id.end());
+                    idx_key.insert(idx_key.end(), msg_id_copy.begin(), msg_id_copy.end());
+
+                    if (!storage_.get(storage::TABLE_GROUP_BLOBS, idx_key)) {
+                        std::vector<uint8_t> idx_value;
+                        idx_value.reserve(48);
+                        idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
+                        idx_value.insert(idx_value.end(), msg_bytes.begin() + 96, msg_bytes.begin() + 104);
+                        idx_value.insert(idx_value.end(), msg_bytes.begin() + 108, msg_bytes.begin() + 112);
+                        idx_value.insert(idx_value.end(), msg_bytes.begin() + 104, msg_bytes.begin() + 108);
+
+                        std::vector<uint8_t> blob(msg_bytes.begin() + 112, msg_bytes.end());
+
+                        storage_.batch_put({
+                            {storage::TABLE_GROUP_INDEX, idx_key, idx_value},
+                            {storage::TABLE_GROUP_BLOBS, idx_key, blob},
+                        });
+                    }
+                }
 
                 loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
                     if (connections_.count(ws) == 0) return;
@@ -2820,6 +2844,32 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
 
         bool ok = kad_.store(group_key, 0x05, msg_bytes);
 
+        // Ensure data is stored locally for GROUP_LIST/GET/DELETE,
+        // even if this node isn't responsible for the group key.
+        // kad_.store() only stores locally on responsible nodes.
+        if (ok) {
+            std::vector<uint8_t> idx_key;
+            idx_key.reserve(64);
+            idx_key.insert(idx_key.end(), group_id.begin(), group_id.end());
+            idx_key.insert(idx_key.end(), msg_id_copy.begin(), msg_id_copy.end());
+
+            if (!storage_.get(storage::TABLE_GROUP_BLOBS, idx_key)) {
+                std::vector<uint8_t> idx_value;
+                idx_value.reserve(48);
+                idx_value.insert(idx_value.end(), fp_copy.begin(), fp_copy.end());
+                idx_value.insert(idx_value.end(), msg_bytes.begin() + 96, msg_bytes.begin() + 104);
+                idx_value.insert(idx_value.end(), msg_bytes.begin() + 108, msg_bytes.begin() + 112);
+                idx_value.insert(idx_value.end(), msg_bytes.begin() + 104, msg_bytes.begin() + 108);
+
+                std::vector<uint8_t> blob(msg_bytes.begin() + 112, msg_bytes.end());
+
+                storage_.batch_put({
+                    {storage::TABLE_GROUP_INDEX, idx_key, idx_value},
+                    {storage::TABLE_GROUP_BLOBS, idx_key, blob},
+                });
+            }
+        }
+
         loop_->defer([this, ws, id, ok, msg_id_copy]() {
             if (connections_.count(ws) == 0) return;
             if (ok) {
@@ -3270,6 +3320,10 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
         // Delete GROUP_META (stored by routing key)
         storage_.del(storage::TABLE_GROUP_META, routing_key);
 
+        // Propagate GROUP_META deletion via repl_log → SYNC
+        kad_.delete_value(routing_key, 0x06,
+            std::span<const uint8_t>(routing_key.data(), routing_key.size()));
+
         // Collect GROUP_INDEX keys with group_id prefix, then delete
         std::vector<std::vector<uint8_t>> keys;
         storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
@@ -3280,6 +3334,9 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
         for (const auto& k : keys) {
             storage_.del(storage::TABLE_GROUP_INDEX, k);
             storage_.del(storage::TABLE_GROUP_BLOBS, k);
+            // Propagate each group message deletion via repl_log → SYNC
+            kad_.delete_value(routing_key, 0x05,
+                std::span<const uint8_t>(k.data(), k.size()));
         }
 
         auto group_id_copy = group_id;

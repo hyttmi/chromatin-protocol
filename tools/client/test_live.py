@@ -49,6 +49,10 @@ def resolve_redirect(node, fallback_host="195.181.202.122", fallback_port=62010)
     """Map a REDIRECT node entry to a reachable (host, ws_port) pair."""
     addr = node.get("address", "")
     ws_port = node.get("ws_port", 0)
+    # Prefer ws_port from the redirect response — it's the most specific info.
+    # Only fall back to ADDR_TO_WS for LAN addresses that need remapping.
+    if ws_port > 0 and not addr.startswith("192.168."):
+        return (addr, ws_port)
     if addr in ADDR_TO_WS:
         return ADDR_TO_WS[addr]
     if ws_port > 0:
@@ -83,6 +87,20 @@ def check(name, condition, reason=""):
         fail(name, reason)
 
 
+async def connect_with_redirect(client, host, port, max_redirects=3):
+    """Connect a client, following up to max_redirects REDIRECT responses."""
+    resp = await client.connect(host, port)
+    for _ in range(max_redirects):
+        if resp.get("type") != "REDIRECT":
+            break
+        nodes = resp.get("nodes", [])
+        if not nodes:
+            break
+        rhost, rport = resolve_redirect(nodes[0])
+        resp = await client.connect(rhost, rport)
+    return resp
+
+
 async def ensure_connected(client, servers):
     """Reconnect a client if its WebSocket is dead."""
     if client.ws and client.ws.protocol.state.name == "OPEN":
@@ -90,12 +108,7 @@ async def ensure_connected(client, servers):
     # Try to reconnect
     for host, port in servers:
         try:
-            resp = await client.connect(host, port)
-            if resp.get("type") == "REDIRECT":
-                nodes = resp.get("nodes", [])
-                if nodes:
-                    rhost, rport = resolve_redirect(nodes[0])
-                    resp = await client.connect(rhost, rport)
+            resp = await connect_with_redirect(client, host, port)
             if resp.get("type") == "OK":
                 return True
         except Exception:
@@ -150,23 +163,12 @@ async def run_tests():
             fail(f"connect to {host}:{port}", str(e))
 
     # Test 4: Connect Alice to her responsible node
-    resp_a = await alice.connect(SERVERS[0][0], SERVERS[0][1])
-    if resp_a.get("type") == "REDIRECT":
-        # Follow redirect
-        nodes = resp_a.get("nodes", [])
-        if nodes:
-            rhost, rport = resolve_redirect(nodes[0])
-            resp_a = await alice.connect(rhost, rport)
+    resp_a = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1])
     check("alice connected", resp_a.get("type") == "OK",
           f"got {resp_a.get('type')}: {resp_a.get('reason', '')}")
 
     # Test 5: Connect Bob to his responsible node
-    resp_b = await bob.connect(SERVERS[0][0], SERVERS[0][1])
-    if resp_b.get("type") == "REDIRECT":
-        nodes = resp_b.get("nodes", [])
-        if nodes:
-            rhost, rport = resolve_redirect(nodes[0])
-            resp_b = await bob.connect(rhost, rport)
+    resp_b = await connect_with_redirect(bob, SERVERS[0][0], SERVERS[0][1])
     check("bob connected", resp_b.get("type") == "OK",
           f"got {resp_b.get('type')}: {resp_b.get('reason', '')}")
 
@@ -366,19 +368,11 @@ async def run_tests():
     pub_c, sec_c = generate_keypair()
     fp_c = fingerprint_of(pub_c)
     charlie = ChromatinClient(pub_c, sec_c)
-    resp_c = await charlie.connect(SERVERS[0][0], SERVERS[0][1])
-    if resp_c.get("type") == "REDIRECT":
-        nodes = resp_c.get("nodes", [])
-        if nodes:
-            rhost, rport = resolve_redirect(nodes[0])
-            resp_c = await charlie.connect(rhost, rport)
+    resp_c = await connect_with_redirect(charlie, SERVERS[0][0], SERVERS[0][1])
 
     # Test 41: Charlie status
-    if resp_c.get("type") == "OK":
-        status_c = await charlie.cmd_status()
-        check("charlie connected and status", status_c.get("type") == "OK")
-    else:
-        ok("charlie connected (redirect)")
+    check("charlie connected", resp_c.get("type") == "OK",
+          f"got {resp_c.get('type')}: {resp_c.get('reason', '')}")
 
     # Test 42: Charlie sends to Alice (not allowed)
     if charlie.ws:
@@ -407,12 +401,7 @@ async def run_tests():
     pub_d, sec_d = generate_keypair()
     fp_d = fingerprint_of(pub_d)
     dave = ChromatinClient(pub_d, sec_d)
-    resp_d = await dave.connect(SERVERS[0][0], SERVERS[0][1])
-    if resp_d.get("type") == "REDIRECT":
-        nodes = resp_d.get("nodes", [])
-        if nodes:
-            rhost, rport = resolve_redirect(nodes[0])
-            resp_d = await dave.connect(rhost, rport)
+    resp_d = await connect_with_redirect(dave, SERVERS[0][0], SERVERS[0][1])
 
     # Test 44: Dave sends contact request to Alice (with PoW)
     timestamp = int(time.time() * 1000)
@@ -434,7 +423,7 @@ async def run_tests():
         fail("dave contact request", "dave not connected")
 
     # Test 46: Alice lists contact requests
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(2)
     resp = await alice.cmd_list_requests()
     check("alice list requests", resp.get("type") == "OK", f"got {resp}")
     reqs = resp.get("requests", [])
@@ -713,12 +702,7 @@ async def run_tests():
     check("alice disconnected", alice.ws is None)
 
     # Reconnect
-    resp = await alice.connect(SERVERS[0][0], SERVERS[0][1])
-    if resp.get("type") == "REDIRECT":
-        nodes = resp.get("nodes", [])
-        if nodes:
-            rhost, rport = resolve_redirect(nodes[0])
-            resp = await alice.connect(rhost, rport)
+    resp = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1])
     check("alice reconnected", resp.get("type") == "OK", f"got {resp}")
 
     # Test 94: Alice can still send after reconnect
@@ -768,7 +752,7 @@ async def run_tests():
             check("destroy group", resp.get("type") == "OK", f"got {resp}")
 
             # Test 104: Verify group destroyed
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(2)
             resp = await alice.cmd_group_info(group_id.hex())
             check("destroyed group gone", resp.get("type") == "ERROR" or not resp.get("group_meta"),
                   f"got {resp}")
@@ -810,21 +794,10 @@ async def run_tests():
         yara.set_push_callback(yara_push)
 
         # Connect to different nodes deliberately
-        resp_x = await xander.connect(SERVERS[0][0], SERVERS[0][1])
-        if resp_x.get("type") == "REDIRECT":
-            nodes = resp_x.get("nodes", [])
-            if nodes:
-                rhost, rport = resolve_redirect(nodes[0])
-                resp_x = await xander.connect(rhost, rport)
+        resp_x = await connect_with_redirect(xander, SERVERS[0][0], SERVERS[0][1])
         check("xander connected", resp_x.get("type") == "OK", f"got {resp_x}")
-        xander_port = xander.ws.remote_address[1] if xander.ws else "?"
 
-        resp_y = await yara.connect(SERVERS[1][0], SERVERS[1][1])
-        if resp_y.get("type") == "REDIRECT":
-            nodes = resp_y.get("nodes", [])
-            if nodes:
-                rhost, rport = resolve_redirect(nodes[0])
-                resp_y = await yara.connect(rhost, rport)
+        resp_y = await connect_with_redirect(yara, SERVERS[1][0], SERVERS[1][1])
         check("yara connected", resp_y.get("type") == "OK", f"got {resp_y}")
 
         # Status to see which nodes they're on
@@ -886,12 +859,7 @@ async def run_tests():
         pub_z, sec_z = generate_keypair()
         fp_z = fingerprint_of(pub_z)
         zara = ChromatinClient(pub_z, sec_z)
-        resp_z = await zara.connect(SERVERS[2][0], SERVERS[2][1])
-        if resp_z.get("type") == "REDIRECT":
-            nodes = resp_z.get("nodes", [])
-            if nodes:
-                rhost, rport = resolve_redirect(nodes[0])
-                resp_z = await zara.connect(rhost, rport)
+        resp_z = await connect_with_redirect(zara, SERVERS[2][0], SERVERS[2][1])
         check("zara connected", resp_z.get("type") == "OK", f"got {resp_z}")
 
         # Zara sends contact request to Yara (no allowlist needed for requests)
@@ -937,20 +905,10 @@ async def run_tests():
         racer2 = ChromatinClient(pub_r2, sec_r2)
 
         # Connect to different nodes
-        resp = await racer1.connect(SERVERS[0][0], SERVERS[0][1])
-        if resp.get("type") == "REDIRECT":
-            nodes = resp.get("nodes", [])
-            if nodes:
-                rhost, rport = resolve_redirect(nodes[0])
-                resp = await racer1.connect(rhost, rport)
+        resp = await connect_with_redirect(racer1, SERVERS[0][0], SERVERS[0][1])
         check("racer1 connected", resp.get("type") == "OK", f"got {resp}")
 
-        resp = await racer2.connect(SERVERS[2][0], SERVERS[2][1])
-        if resp.get("type") == "REDIRECT":
-            nodes = resp.get("nodes", [])
-            if nodes:
-                rhost, rport = resolve_redirect(nodes[0])
-                resp = await racer2.connect(rhost, rport)
+        resp = await connect_with_redirect(racer2, SERVERS[2][0], SERVERS[2][1])
         check("racer2 connected", resp.get("type") == "OK", f"got {resp}")
 
         # Both set profiles first (needed for the protocol)
@@ -1063,12 +1021,7 @@ async def run_tests():
         connected = 0
         for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
             srv = SERVERS[i % len(SERVERS)]
-            resp = await client.connect(srv[0], srv[1])
-            if resp.get("type") == "REDIRECT":
-                nodes = resp.get("nodes", [])
-                if nodes:
-                    rhost, rport = resolve_redirect(nodes[0])
-                    resp = await client.connect(rhost, rport)
+            resp = await connect_with_redirect(client, srv[0], srv[1])
             if resp.get("type") == "OK":
                 connected += 1
             else:
@@ -1253,7 +1206,7 @@ async def run_tests():
             check("large group: owner destroys", resp.get("type") == "OK",
                   f"got {resp}")
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(3)
 
             # GROUP_INFO should fail after destroy
             resp = await owner_client.cmd_group_info(large_group_id.hex())
