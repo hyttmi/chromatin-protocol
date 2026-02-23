@@ -116,7 +116,7 @@ Storage key: `SHA3-256("name:" || name)`
 ### 4.2 Server Validation Rules
 
 1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce)`
-   has >= 28 leading zero bits
+   has >= 20 leading zero bits
 2. Verify `fingerprint == SHA3-256(pubkey)` (embedded pubkey authenticity)
 3. Verify ML-DSA signature over all preceding fields
 4. **Conflict resolution** — if name already registered to a different
@@ -235,9 +235,10 @@ messages directly via TCP:
   the STORE is rejected. No allowlist = open inbox (new user).
 - **Contact requests**: Kademlia verifies the PoW (16 leading zero bits)
   and that the routing key matches the recipient_fp in the value.
-- **Allowlist entries**: Kademlia verifies the ML-DSA-87 signature against
-  the owner's public key (from TABLE_PROFILES). If the owner's profile is
-  not stored yet, the entry is **rejected** — profile must propagate first.
+- **Allowlist entries**: Self-verifiable — the embedded public key is checked
+  against the owner fingerprint (`SHA3-256(pubkey) == owner_fp`), then the
+  ML-DSA-87 signature is verified against the embedded key. No profile
+  lookup needed.
 - **Name records**: Self-verifiable — the embedded public key is checked
   against the fingerprint (`SHA3-256(pubkey) == fingerprint`), then the
   ML-DSA-87 signature is verified against the embedded key.
@@ -510,10 +511,9 @@ Deletion is client-driven and optional. Each device tracks its own
 
 ### 8.1 Connection Model
 
-Nodes support optional **TLS** (WSS) to protect connection metadata from network
-observers. When `tls_cert_path` and `tls_key_path` are configured, the node
-serves WebSocket over TLS on the same port. Clients SHOULD prefer `wss://`
-connections.
+Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front of the
+WebSocket port to provide TLS (WSS) and protect connection metadata from
+network observers. Clients SHOULD prefer `wss://` connections.
 
 A client connects to **any of the R nodes responsible for their inbox**.
 **Multiple devices** can connect simultaneously with the same identity — push
@@ -622,14 +622,17 @@ Incomplete chunked uploads are discarded after 30 seconds.
 
 ### 8.5 Allowlist
 
-Each user has an allowlist stored on their responsible nodes.
+Each user has an allowlist co-located with their inbox on the same R
+responsible nodes (both route to `SHA3-256("inbox:" || fingerprint)`).
+This ensures allowlist checks during message delivery are always local lookups.
 
 - Managed via `ALLOW` / `REVOKE` commands (signed by the client)
 - The client signs `"chromatin:allowlist:" || owner_fingerprint || action || allowed_fingerprint || sequence` with ML-DSA-87
 - The node verifies the signature — only the inbox owner can modify their allowlist
-- Kademlia STORE value includes `owner_fp` for signature verification at the DHT layer
+- Kademlia STORE value includes `owner_fp` and the owner's public key for
+  self-contained signature verification at the DHT layer (no profile lookup needed)
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
-- Allowlist key: `SHA3-256("allowlist:" || fingerprint)`
+- Allowlist routing key: `SHA3-256("inbox:" || fingerprint)` (same as inbox)
 - Local mdbx key: `allowlist_key(32) || allowed_fp(32)` — O(1) lookup for SEND validation
 - REVOKE is replicated as `Op::DEL` in the replication log (not `Op::ADD`)
 - Replicated with the same seq-based mechanism
@@ -875,7 +878,7 @@ that data after confirming the new responsible node is synced.
 | inbox_index      | `recipient_fp(32) \|\| msg_id(32)`  | sender_fp + timestamp + size (44 bytes) |
 | message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | requests         | `recipient_fp(32) \|\| sender_fp(32)` | Contact request binary (composite key) |
-| allowlists       | `SHA3-256("allowlist:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (composite key, O(1) lookup) |
+| allowlists       | `SHA3-256("inbox:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (co-located with inbox, O(1) lookup) |
 | group_meta       | `group_id(32)`                      | Group metadata binary (signed, no TTL) |
 | group_index      | `group_id(32) \|\| msg_id(32)`      | sender_fp + timestamp + size + gek_version (48 bytes) |
 | group_blobs      | `group_id(32) \|\| msg_id(32)`      | Encrypted blob (up to 50 MiB, 7-day TTL) |

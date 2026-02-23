@@ -525,7 +525,9 @@ DELETE removes entries from both tables.
 
 Minimum size: 84 bytes (32 + 32 + 8 + 8 + 4 + 0).
 
-DHT routing key: `SHA3-256("requests:" || recipient_fingerprint)`
+DHT routing key: `SHA3-256("inbox:" || recipient_fingerprint)` — uses the same
+`"inbox:"` prefix as messages to co-locate contact requests with inbox data on
+the same responsible nodes, enabling push notifications to connected clients.
 
 Local mdbx storage uses composite key for multi-sender support:
 ```
@@ -545,37 +547,47 @@ to verify PoW independently without access to the routing key derivation.
 
 ### Allowlist Entry (data_type 0x04)
 
-Kademlia STORE value (includes owner_fp and allowed_fp for signature
-verification and composite key construction):
+Kademlia STORE value (includes owner_fp, allowed_fp, and owner's public key
+for self-contained signature verification and composite key construction):
 ```
 [32 bytes: owner_fingerprint]
 [32 bytes: allowed_fingerprint]
 [1 byte: action]                         // 0x01 = allow, 0x00 = revoke
 [8 bytes BE: sequence]
+[2 bytes BE: pubkey_length]
+[pubkey_length bytes: ML-DSA-87 public key]
 [SIGNATURE_SIZE bytes: ML-DSA-87 signature]
 ```
+
+The public key is embedded so that any node can verify the signature without
+needing the owner's profile. Validators verify that
+`owner_fingerprint == SHA3-256(pubkey)` before checking the signature.
 
 The signature covers a domain-separated message:
 `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
 signed by the owner's ML-DSA-87 key.
 
-Storage key (DHT routing): `SHA3-256("allowlist:" || owner_fingerprint)`
+Storage key (DHT routing): `SHA3-256("inbox:" || owner_fingerprint)`
+
+This co-locates allowlist data with inbox data on the same R responsible
+nodes, so allowlist checks during message delivery are always local lookups.
 
 Local mdbx storage uses composite key for O(1) lookup:
 ```
-Key:   SHA3-256("allowlist:" || owner_fp)(32) || allowed_fp(32)
-Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+Key:   SHA3-256("inbox:" || owner_fp)(32) || allowed_fp(32)
+Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
 ```
 
-Receiving nodes verify the ML-DSA-87 signature against the owner's public key
-(looked up from TABLE_PROFILES). If the owner has no stored profile yet, the
-entry is **rejected** — the profile must propagate before allowlist entries.
-This prevents forged entries during the bootstrap propagation window.
+Receiving nodes verify the ML-DSA-87 signature against the embedded public
+key after confirming `SHA3-256(pubkey) == owner_fingerprint`. Verification
+is self-contained — no profile lookup is needed.
 
 Receiving nodes parse `allowed_fp` from the Kademlia value to build the
-composite storage key. REVOKE (action=0x00) deletes the entry rather than
-storing it. To block a user, REVOKE them from the allowlist. There is no
-separate blocklist.
+composite storage key. Both ALLOW (action=0x01) and REVOKE (action=0x00)
+entries are stored — revoke entries are kept so that `scan()` still finds
+"allowlist exists" even after all contacts are revoked. Point lookups verify
+`action == 0x01` to confirm the sender is actively allowed. To block a user,
+REVOKE them from the allowlist. There is no separate blocklist.
 
 ### Group Message (data_type 0x05)
 
@@ -687,12 +699,11 @@ Clients connect to a responsible node via WebSocket. Control messages are JSON
 text frames. Large blob transfers use binary WebSocket frames (see Section 5.7).
 Every client request includes an `id` field for response correlation.
 
-**TLS:** Nodes SHOULD enable TLS (WSS) to protect metadata (fingerprints,
-allowlist operations, message counts) from network observers. When configured
-with `tls_cert_path` and `tls_key_path`, the node listens with TLS on the same
-`ws_port`. Clients SHOULD prefer `wss://` connections. Message content is
-already encrypted with ML-KEM-1024, but TLS provides transport-level metadata
-protection.
+**TLS:** Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front
+of the WebSocket port if TLS is needed to protect metadata (fingerprints,
+allowlist operations, message counts) from network observers. Message content
+is already encrypted with ML-KEM-1024, but TLS provides transport-level
+metadata protection.
 
 ### 5.1 Authentication
 
@@ -836,8 +847,8 @@ stored sequence. Response: `{"type": "OK", "id": 7}`
 {"type": "REVOKE", "id": 8, "fingerprint": "<hex>", "sequence": 2, "signature": "<hex>"}
 ```
 
-Same as ALLOW but with `action(0x00)`. Deletes the allowlist entry for the
-specified fingerprint. Response: `{"type": "OK", "id": 8}`
+Same as ALLOW but with `action(0x00)`. Stores the revoke entry (not deleted)
+so the allowlist remains non-empty. Response: `{"type": "OK", "id": 8}`
 
 **CONTACT_REQUEST** — Send contact request with PoW:
 ```json
@@ -873,8 +884,11 @@ Response:
 ```
 If not found: `{"type": "OK", "id": 11, "found": false}`
 
-Only searches local storage (the node must be responsible for the name's
-routing key to have the data).
+Performs a quorum read: queries all R responsible nodes via FIND_VALUE and
+collects name records. If multiple conflicting records exist (race condition
+during registration), the record with the lower fingerprint wins
+(deterministic tiebreaker). This ensures convergent name resolution even
+before SYNC propagates all records to all responsible nodes.
 
 **GET_PROFILE** — Fetch a user's profile by fingerprint:
 ```json
@@ -1220,7 +1234,7 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### Name Registration STORE Validation
 
 1. Name matches `^[a-z0-9]{3,36}$`
-2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 28 leading zero bits
+2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 20 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
 4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
 5. If name already registered to a different fingerprint — reject (first claim wins)
@@ -1228,18 +1242,19 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 
 ### FIND_VALUE Scope
 
-FIND_VALUE searches profiles and names only. Inbox messages, contact requests,
-allowlists, and group data (GROUP_META, GROUP_INDEX, GROUP_BLOBS) use composite
-storage keys that cannot be derived from the DHT routing key alone. These data
-types are accessed via scan(), dedicated WebSocket commands, or replicated via
-SYNC_REQ/SYNC_RESP instead.
+FIND_VALUE searches profiles, names, and group metadata. Inbox messages, contact
+requests, allowlists, and group message data (GROUP_INDEX, GROUP_BLOBS) use
+composite storage keys that cannot be derived from the DHT routing key alone.
+These data types are accessed via scan(), dedicated WebSocket commands, or
+replicated via SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 
 1. Check recipient's allowlist:
-   - If recipient has an allowlist AND sender is on it → allow
-   - If recipient has an allowlist AND sender is NOT on it → reject
-   - If recipient has NO allowlist entries → allow (open inbox, new user)
+   - Point lookup for sender's composite key: if found with `action == 0x01` → allow
+   - If not found or `action != 0x01` → scan for any allowlist entries for recipient
+   - If any entries exist (including revoke entries) → reject (sender not allowed)
+   - If no entries at all → allow (open inbox, new user)
 2. `blob_length` <= 50 MiB
 3. `msg_id` is unique — reject duplicates (prevents replay attacks)
 
@@ -1253,17 +1268,18 @@ SYNC_REQ/SYNC_RESP instead.
 ### Allowlist STORE Validation
 
 1. `action` byte must be 0x00 (revoke) or 0x01 (allow)
-2. ML-DSA-87 signature verified against owner's public key (from TABLE_PROFILES)
+2. `SHA3-256(pubkey) == owner_fingerprint` — embedded pubkey matches claimed owner
+3. ML-DSA-87 signature verified against the embedded public key
    - Signed data: `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
-   - If owner's profile is not stored yet, the entry is **rejected** (profile must propagate first)
-3. `sequence` > currently stored sequence (enforced by WS server)
+4. `sequence` > currently stored sequence (enforced by WS server)
 
 ### REVOKE Replication
 
-When a REVOKE (action=0x00) is processed, it is recorded in the replication
-log as `Op::DEL`. This ensures that when other responsible nodes sync via
-SYNC_REQ/SYNC_RESP, the allowlist entry is deleted on those nodes as well.
-ALLOW (action=0x01) is recorded as `Op::ADD`.
+Both ALLOW (action=0x01) and REVOKE (action=0x00) are stored as entries and
+recorded in the replication log as `Op::ADD`. Revoke entries are preserved
+(not deleted) so that `scan()` always detects "allowlist exists" even when
+all contacts have been revoked. Point lookups check the `action` byte to
+distinguish active allows from revokes.
 
 ### Group Metadata STORE Validation
 
@@ -1351,13 +1367,11 @@ This ensures eventual consistency even when direct STORE delivery fails.
 
 ### Data Ordering Requirement
 
-Certain data types have ordering dependencies:
-
-- **Profile must exist before allowlist entries** — Allowlist entries require
-  the owner's public key (from their profile) for signature verification.
-  Entries are rejected if the profile hasn't propagated yet.
 - **Name records are self-verifiable** — Name records embed the public key
   directly, so they do not depend on the profile being stored first.
+- **Allowlist entries are self-verifiable** — Allowlist entries embed the
+  owner's public key directly, so they do not depend on the profile being
+  stored first.
 
 ### Secret Key Handling
 
@@ -1388,8 +1402,10 @@ cryptographic random source. Implementations using liboqs SHOULD use
 
 ## 7. Protocol Constants
 
-All values below are **configurable** via `settings.json`. The table shows
-defaults. See `chromatin-node --generate-config` for a complete template.
+Protocol constants are **hardcoded** and must be identical across all nodes.
+Operational defaults are compiled in — the config file only contains
+deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
+`data_dir`, `external_address`).
 
 | Constant                   | Value                                  |
 |----------------------------|----------------------------------------|
@@ -1401,7 +1417,7 @@ defaults. See `chromatin-node --generate-config` for a complete template.
 | Key space                  | 256 bits (SHA3-256 output)             |
 | Timestamp format           | Milliseconds since Unix epoch (uint64) |
 | Replication factor (R)     | `min(3, network_size)`                 |
-| Name PoW difficulty        | 28 leading zero bits                   |
+| Name PoW difficulty        | 20 leading zero bits                   |
 | Contact request PoW        | 16 leading zero bits                   |
 | Contact request max drift  | 1 hour (3,600,000 ms)                  |
 | Name regex                 | `^[a-z0-9]{3,36}$`                     |
@@ -1463,7 +1479,7 @@ profile_key  = SHA3-256("profile:"       || fingerprint)
 name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
 request_key  = SHA3-256("requests:"  || fingerprint)
-allow_key    = SHA3-256("allowlist:" || fingerprint)
+allow_key    = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 group_key    = SHA3-256("group:"     || group_id)
 ```
 
