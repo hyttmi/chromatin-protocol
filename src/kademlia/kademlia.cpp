@@ -1194,7 +1194,34 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
         return;
     }
 
-    // 2. Validate, store in table(s), append repl_log, fire on_store_
+    // 2. Empty value = remote delete request
+    if (value_length == 0) {
+        // Delete from the appropriate table(s) based on data_type
+        if (data_type == 0x06) {
+            storage_.del(storage::TABLE_GROUP_META, key);
+        } else if (data_type == 0x05) {
+            // data field carries the composite key (group_id || msg_id)
+            // but for empty-value delete, we delete by routing key
+            storage_.del(storage::TABLE_GROUP_INDEX, key);
+            storage_.del(storage::TABLE_GROUP_BLOBS, key);
+        } else if (data_type == 0x03) {
+            storage_.del(storage::TABLE_PROFILES, key);
+        } else if (data_type == 0x07) {
+            storage_.del(storage::TABLE_NAMES, key);
+        }
+        repl_log_.append(key, replication::Op::DEL, data_type,
+                         std::vector<uint8_t>(key.begin(), key.end()));
+        spdlog::info("Remote delete data_type=0x{:02X} for key from {}:{}", data_type, from, port);
+
+        std::vector<uint8_t> ack_payload;
+        ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+        ack_payload.push_back(0x00);
+        Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+        transport_.send(from, port, ack);
+        return;
+    }
+
+    // 3. Validate, store in table(s), append repl_log, fire on_store_
     if (!store_locally(key, data_type, value)) {
         return;
     }
@@ -1369,6 +1396,30 @@ void Kademlia::delete_value(const crypto::Hash& key, uint8_t data_type,
                      std::vector<uint8_t>(delete_info.begin(), delete_info.end()));
 
     spdlog::debug("delete_value: recorded DEL for data_type 0x{:02X}", data_type);
+}
+
+void Kademlia::delete_remote(const crypto::Hash& key, uint8_t data_type) {
+    // Send STORE with empty value to responsible nodes — they interpret
+    // value_length=0 as a delete request for the given key + data_type.
+    auto nodes = responsible_nodes(key);
+
+    std::vector<uint8_t> payload;
+    payload.insert(payload.end(), key.begin(), key.end());
+    payload.push_back(data_type);
+    // value_length = 0 (4 bytes BE)
+    payload.push_back(0x00);
+    payload.push_back(0x00);
+    payload.push_back(0x00);
+    payload.push_back(0x00);
+
+    for (const auto& node : nodes) {
+        if (node.id == self_.id) continue;  // already deleted locally
+        Message msg = make_message(MessageType::STORE, payload);
+        send_to_node(node, msg);
+    }
+
+    spdlog::debug("delete_remote: sent delete to {} responsible nodes for data_type 0x{:02X}",
+                  nodes.size(), data_type);
 }
 
 // ---------------------------------------------------------------------------

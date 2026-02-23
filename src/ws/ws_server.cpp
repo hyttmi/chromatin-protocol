@@ -3320,7 +3320,10 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
         // Delete GROUP_META (stored by routing key)
         storage_.del(storage::TABLE_GROUP_META, routing_key);
 
-        // Propagate GROUP_META deletion via repl_log → SYNC
+        // Propagate GROUP_META deletion to responsible nodes immediately
+        kad_.delete_remote(routing_key, 0x06);
+
+        // Also record in repl_log for SYNC propagation
         kad_.delete_value(routing_key, 0x06,
             std::span<const uint8_t>(routing_key.data(), routing_key.size()));
 
