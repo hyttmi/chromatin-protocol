@@ -287,6 +287,9 @@ Received version and capability data is stored in NodeInfo
 ```
 [2 bytes BE: pubkey_length]             // Sender's public key length (0 if omitted)
 [pubkey_length bytes: sender_pubkey]    // Sender's ML-DSA-87 public key (optional)
+[1 byte: address_family]               // 0x04 = IPv4, 0x06 = IPv6 (optional)
+[4 or 16 bytes: sender_address]        // Sender's self-reported external address
+[2 bytes BE: ws_port]                  // Sender's WebSocket port
 ```
 
 Requests the K closest nodes to the sender's node ID from the recipient.
@@ -295,8 +298,15 @@ verify the sender's identity via `SHA3-256(pubkey) == sender_id`. This
 enables the receiver to accept signed messages (STORE, FIND_VALUE, etc.)
 from the sender without waiting for pubkey propagation via NODES responses.
 
+The sender SHOULD include its self-reported external address so the
+receiver stores the sender at its reachable address rather than the TCP
+source IP, which may be a LAN address when nodes share a network. The
+receiver MUST prefer the self-reported address over the TCP source IP
+when populating its routing table.
+
 If `pubkey_length` is 0, or the payload is empty, the receiver adds the
-sender to its routing table without a public key (legacy behavior).
+sender to its routing table without a public key and uses the TCP source
+IP as the address (legacy behavior).
 
 **Iterative discovery:** When a node receives NODES and discovers new peers,
 it SHOULD send FIND_NODE to each newly discovered node. This implements

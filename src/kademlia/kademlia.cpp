@@ -618,13 +618,17 @@ void Kademlia::handle_message(const Message& msg, const std::string& from_addr, 
 void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t port) {
     spdlog::debug("Received PING from {}:{}", from, port);
 
-    // Update routing table — the sender is alive
+    // Update routing table — the sender is alive.
+    // Preserve the stored address if the node already exists — the TCP
+    // source IP may be a LAN address when nodes share a network, while
+    // the stored address (from FIND_NODE) is the self-reported external.
     NodeInfo sender_info;
     sender_info.id = msg.sender;
-    sender_info.address = from;
     sender_info.tcp_port = port;
     sender_info.ws_port = 0;
     sender_info.last_seen = std::chrono::steady_clock::now();
+    auto existing = table_.find(msg.sender);
+    sender_info.address = existing ? existing->address : from;
     table_.add_or_update(sender_info);
 
     // PONG payload: min_version(1) || max_version(1) || capabilities(4 BE)
@@ -645,13 +649,15 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
 void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t port) {
     spdlog::debug("Received PONG from {}:{}", from, port);
 
-    // Update routing table — the sender is alive
+    // Update routing table — the sender is alive.
+    // Preserve the stored address (see handle_ping comment).
     NodeInfo sender_info;
     sender_info.id = msg.sender;
-    sender_info.address = from;
     sender_info.tcp_port = port;
     sender_info.ws_port = 0;
     sender_info.last_seen = std::chrono::steady_clock::now();
+    auto existing = table_.find(msg.sender);
+    sender_info.address = existing ? existing->address : from;
 
     // Parse version/capability payload if present (6 bytes)
     if (msg.payload.size() >= 6) {
@@ -694,9 +700,11 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
     spdlog::debug("Received FIND_NODE from {}:{}", from, port);
 
     // Add the requesting node to our routing table.
-    // The payload may carry the sender's pubkey (pubkey_len(2 BE) || pubkey(N)).
-    // If present and SHA3-256(pubkey) == sender_id, store it so we can
-    // immediately verify signed messages from this node.
+    // The payload carries:
+    //   pubkey_len(2 BE) || pubkey(N)
+    //   [optional: addr_family(1) || addr(4 or 16) || ws_port(2 BE)]
+    // The self-reported address is preferred over the TCP source IP,
+    // which may be a LAN address when nodes share a network.
     {
         NodeInfo sender_info;
         sender_info.id = msg.sender;
@@ -707,9 +715,11 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
 
         // Parse optional pubkey from FIND_NODE payload
         const auto& data = msg.payload;
+        size_t offset = 0;
         if (data.size() >= 2) {
             uint16_t pk_len = static_cast<uint16_t>(
                 (static_cast<uint16_t>(data[0]) << 8) | data[1]);
+            offset = 2;
             if (pk_len > 0 && data.size() >= 2 + pk_len) {
                 std::vector<uint8_t> sender_pk(data.begin() + 2, data.begin() + 2 + pk_len);
                 auto expected_id = crypto::sha3_256(sender_pk);
@@ -719,6 +729,36 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
                 } else {
                     spdlog::warn("FIND_NODE from {}:{}: pubkey doesn't match sender_id, ignoring",
                                  from, port);
+                }
+                offset = 2 + pk_len;
+            }
+
+            // Parse optional self-reported address:
+            // addr_family(1) || addr(4 or 16) || ws_port(2 BE)
+            if (offset < data.size()) {
+                uint8_t af = data[offset];
+                offset += 1;
+                size_t addr_len = (af == 0x06) ? 16 : 4;
+                if (offset + addr_len + 2 <= data.size()) {
+                    if (af == 0x06) {
+                        struct in6_addr addr6{};
+                        std::memcpy(&addr6, data.data() + offset, 16);
+                        char addr_str[INET6_ADDRSTRLEN];
+                        inet_ntop(AF_INET6, &addr6, addr_str, sizeof(addr_str));
+                        sender_info.address = addr_str;
+                    } else {
+                        struct in_addr addr4{};
+                        std::memcpy(&addr4.s_addr, data.data() + offset, 4);
+                        char addr_str[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &addr4, addr_str, sizeof(addr_str));
+                        sender_info.address = addr_str;
+                    }
+                    offset += addr_len;
+                    sender_info.ws_port = static_cast<uint16_t>(
+                        (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]);
+                    spdlog::debug("FIND_NODE from {}:{} advertises address {}:{} (ws:{})",
+                                  from, port, sender_info.address, sender_info.tcp_port,
+                                  sender_info.ws_port);
                 }
             }
         }
@@ -2461,14 +2501,41 @@ std::optional<PendingStore> Kademlia::pending_store_status(const crypto::Hash& k
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> Kademlia::make_find_node_payload() const {
-    // FIND_NODE payload: pubkey_len(2 BE) || pubkey(N)
+    // FIND_NODE payload:
+    //   pubkey_len(2 BE) || pubkey(N)
+    //   || addr_family(1) || addr(4 or 16) || ws_port(2 BE)
+    //
     // Including our pubkey lets receivers immediately verify our identity
     // via SHA3-256(pubkey) == sender_id, enabling signed message exchange.
+    // Including our self-reported address ensures receivers store us at
+    // our external address rather than the TCP source IP, which may be a
+    // LAN address when nodes share a network.
     std::vector<uint8_t> payload;
     uint16_t pk_len = static_cast<uint16_t>(self_.pubkey.size());
     payload.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
     payload.push_back(static_cast<uint8_t>(pk_len & 0xFF));
     payload.insert(payload.end(), self_.pubkey.begin(), self_.pubkey.end());
+
+    // Append self-reported address
+    bool is_ipv6 = self_.address.find(':') != std::string::npos;
+    if (is_ipv6) {
+        payload.push_back(0x06);
+        struct in6_addr addr6{};
+        inet_pton(AF_INET6, self_.address.c_str(), &addr6);
+        auto* bytes = reinterpret_cast<const uint8_t*>(&addr6);
+        payload.insert(payload.end(), bytes, bytes + 16);
+    } else {
+        payload.push_back(0x04);
+        struct in_addr addr4{};
+        inet_pton(AF_INET, self_.address.c_str(), &addr4);
+        auto* bytes = reinterpret_cast<const uint8_t*>(&addr4.s_addr);
+        payload.insert(payload.end(), bytes, bytes + 4);
+    }
+
+    // ws_port (2 bytes BE)
+    payload.push_back(static_cast<uint8_t>((self_.ws_port >> 8) & 0xFF));
+    payload.push_back(static_cast<uint8_t>(self_.ws_port & 0xFF));
+
     return payload;
 }
 
