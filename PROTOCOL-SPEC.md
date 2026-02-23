@@ -709,11 +709,12 @@ Clients connect to a responsible node via WebSocket. Control messages are JSON
 text frames. Large blob transfers use binary WebSocket frames (see Section 5.7).
 Every client request includes an `id` field for response correlation.
 
-**TLS:** Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front
-of the WebSocket port if TLS is needed to protect metadata (fingerprints,
+**TLS:** Operators SHOULD enable TLS to protect metadata (fingerprints,
 allowlist operations, message counts) from network observers. Message content
 is already encrypted with ML-KEM-1024, but TLS provides transport-level
-metadata protection.
+metadata protection. TLS can be enabled natively by setting `tls_cert` and
+`tls_key` in the node config (paths to PEM certificate and private key), or
+via a reverse proxy (e.g. nginx, caddy) in front of the WebSocket port.
 
 ### 5.1 Authentication
 

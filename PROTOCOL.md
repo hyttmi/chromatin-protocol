@@ -511,9 +511,10 @@ Deletion is client-driven and optional. Each device tracks its own
 
 ### 8.1 Connection Model
 
-Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front of the
-WebSocket port to provide TLS (WSS) and protect connection metadata from
-network observers. Clients SHOULD prefer `wss://` connections.
+Operators SHOULD enable TLS to protect connection metadata from network
+observers. Clients SHOULD prefer `wss://` connections. TLS can be provided
+either natively by setting `tls_cert` and `tls_key` in the node config, or
+via a reverse proxy (e.g. nginx, caddy) in front of the WebSocket port.
 
 A client connects to **any of the R nodes responsible for their inbox**.
 **Multiple devices** can connect simultaneously with the same identity — push

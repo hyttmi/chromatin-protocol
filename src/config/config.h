@@ -74,6 +74,8 @@ struct Config {
     uint16_t ws_port = 4001;
     std::vector<std::pair<std::string, uint16_t>> bootstrap;
     std::string external_address;     // routable address (empty = use bind)
+    std::string tls_cert;             // path to PEM certificate (empty = no TLS)
+    std::string tls_key;              // path to PEM private key (empty = no TLS)
 };
 
 // Load config from JSON file. Throws std::runtime_error on parse failure

@@ -62,6 +62,12 @@ Config load_config(const std::filesystem::path& path) {
     if (root.isMember("external_address")) {
         cfg.external_address = root["external_address"].asString();
     }
+    if (root.isMember("tls_cert")) {
+        cfg.tls_cert = root["tls_cert"].asString();
+    }
+    if (root.isMember("tls_key")) {
+        cfg.tls_key = root["tls_key"].asString();
+    }
 
     validate_config(cfg);
     return cfg;
@@ -83,6 +89,20 @@ void validate_config(const Config& cfg) {
     if (cfg.data_dir.empty()) {
         throw std::runtime_error("data_dir must not be empty");
     }
+
+    bool has_cert = !cfg.tls_cert.empty();
+    bool has_key = !cfg.tls_key.empty();
+    if (has_cert != has_key) {
+        throw std::runtime_error("tls_cert and tls_key must both be set or both empty");
+    }
+    if (has_cert) {
+        if (!std::filesystem::exists(cfg.tls_cert)) {
+            throw std::runtime_error("tls_cert file not found: " + cfg.tls_cert);
+        }
+        if (!std::filesystem::exists(cfg.tls_key)) {
+            throw std::runtime_error("tls_key file not found: " + cfg.tls_key);
+        }
+    }
 }
 
 void generate_default_config(const std::filesystem::path& path) {
@@ -99,6 +119,8 @@ void generate_default_config(const std::filesystem::path& path) {
     root["bootstrap"] = bootstrap;
 
     root["external_address"] = "";
+    root["tls_cert"] = "";
+    root["tls_key"] = "";
 
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "  ";

@@ -67,7 +67,7 @@ set(JSONCPP_WITH_TESTS OFF CACHE BOOL "" FORCE)
 set(JSONCPP_WITH_POST_BUILD_UNITTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(jsoncpp)
 
-# --- uSockets (networking, no SSL) ---
+# --- uSockets (networking, with OpenSSL for optional TLS) ---
 FetchContent_Declare(
     usockets
     GIT_REPOSITORY https://github.com/uNetworking/uSockets.git
@@ -77,17 +77,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(usockets)
 
+find_package(OpenSSL REQUIRED)
+
 file(GLOB USOCKETS_SRC
     ${usockets_SOURCE_DIR}/src/*.c
     ${usockets_SOURCE_DIR}/src/eventing/*.c
     ${usockets_SOURCE_DIR}/src/crypto/*.c
+    ${usockets_SOURCE_DIR}/src/crypto/*.cpp
 )
 add_library(uSockets STATIC ${USOCKETS_SRC})
 target_include_directories(uSockets PUBLIC ${usockets_SOURCE_DIR}/src)
 target_compile_definitions(uSockets
-    PUBLIC LIBUS_NO_SSL
+    PUBLIC LIBUS_USE_OPENSSL
     PRIVATE LIBUS_USE_EPOLL
 )
+target_link_libraries(uSockets PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
 # --- uWebSockets (header-only WebSocket) ---
 FetchContent_Declare(

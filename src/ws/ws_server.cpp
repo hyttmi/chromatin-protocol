@@ -27,6 +27,10 @@ WsServer<SSL>::WsServer(const config::Config& cfg,
 template<bool SSL>
 void WsServer<SSL>::run() {
     uWS::SocketContextOptions ssl_options = {};
+    if constexpr (SSL) {
+        ssl_options.key_file_name = cfg_.tls_key.c_str();
+        ssl_options.cert_file_name = cfg_.tls_cert.c_str();
+    }
     uWS::TemplatedApp<SSL> app(ssl_options);
     loop_ = uWS::Loop::get();
 
