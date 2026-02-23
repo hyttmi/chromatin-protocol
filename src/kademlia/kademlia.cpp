@@ -315,6 +315,9 @@ void Kademlia::transfer_responsibility() {
     size_t pushed = 0;
 
     for (const auto& ti : tables) {
+        // Collect corrupt keys to purge after foreach (can't delete inside read txn)
+        std::vector<std::vector<uint8_t>> corrupt_keys;
+
         storage_.foreach(ti.table,
             [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
                 if (key.size() < 32) return true;
@@ -322,10 +325,9 @@ void Kademlia::transfer_responsibility() {
                 crypto::Hash routing_key{};
                 std::copy_n(key.data(), 32, routing_key.begin());
 
-                // Re-validate before sending — purge if corrupt
+                // Re-validate before sending — collect corrupt keys for later purge
                 if (!validate_readonly(routing_key, ti.data_type, value)) {
-                    spdlog::warn("transfer: purging corrupt {} entry", ti.table);
-                    storage_.del(ti.table, key);
+                    corrupt_keys.emplace_back(key.begin(), key.end());
                     return true;
                 }
 
@@ -353,6 +355,12 @@ void Kademlia::transfer_responsibility() {
 
                 return true;
             });
+
+        // Purge corrupt entries outside the read transaction
+        for (const auto& key : corrupt_keys) {
+            spdlog::warn("transfer: purging corrupt {} entry", ti.table);
+            storage_.del(ti.table, key);
+        }
     }
 
     // Transfer inbox messages to newly-responsible nodes.
