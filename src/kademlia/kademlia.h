@@ -90,6 +90,14 @@ public:
     void set_compact_keep_entries(size_t n) { compact_keep_entries_ = n; }
     void set_compact_min_age_hours(uint32_t h) { compact_min_age_hours_ = h; }
 
+    // Re-validate stored data without sequence/timestamp checks.
+    // Used by handle_find_value(), transfer_responsibility(), integrity sweep.
+    bool validate_readonly(const crypto::Hash& key, uint8_t data_type,
+                           std::span<const uint8_t> value);
+
+    // Override sweep interval for testing.
+    void set_integrity_sweep_interval(std::chrono::hours h) { integrity_sweep_interval_ = h; }
+
     // Write quorum: W = min(2, R). A store is "durably replicated" when W
     // nodes (including self if responsible) have confirmed.
     size_t write_quorum() const;
@@ -155,12 +163,18 @@ private:
     size_t sync_batch_size_ = config::defaults::SYNC_BATCH_SIZE;
     size_t sync_key_offset_ = 0;  // round-robin offset for batching
 
-    // TTL expiry, pending store cleanup, responsibility transfer, compaction, sync
+    // Integrity sweep state
+    std::chrono::steady_clock::time_point last_integrity_sweep_{};
+    std::chrono::hours integrity_sweep_interval_{config::defaults::INTEGRITY_SWEEP_INTERVAL_HOURS};
+    size_t integrity_sweep_table_idx_ = 0;  // round-robin through tables
+
+    // TTL expiry, pending store cleanup, responsibility transfer, compaction, sync, integrity
     void expire_ttl();
     void cleanup_pending_stores();
     void transfer_responsibility();
     void compact_repl_log();
     void sync_with_peers();
+    void integrity_sweep();
     size_t last_table_size_ = 0;
     std::chrono::steady_clock::time_point last_transfer_check_{};
     std::unordered_set<NodeId, NodeIdHash> prev_routing_nodes_;  // for transfer dedup
@@ -219,10 +233,13 @@ private:
                        bool validate = true, bool log_and_notify = true);
 
     // Data type validators (PROTOCOL-SPEC.md)
-    bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key);
-    bool validate_profile(std::span<const uint8_t> value, const crypto::Hash& key);
+    bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key,
+                              bool skip_sequence_check = false);
+    bool validate_profile(std::span<const uint8_t> value, const crypto::Hash& key,
+                          bool skip_sequence_check = false);
     bool validate_inbox_message(std::span<const uint8_t> value);
-    bool validate_contact_request(std::span<const uint8_t> value);
+    bool validate_contact_request(std::span<const uint8_t> value,
+                                  bool skip_timestamp_check = false);
     bool validate_allowlist_entry(std::span<const uint8_t> value);
     bool validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key);
     bool validate_group_message(std::span<const uint8_t> value);

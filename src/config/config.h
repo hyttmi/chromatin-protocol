@@ -58,6 +58,10 @@ namespace defaults {
     constexpr uint16_t CONN_POOL_MAX          = 64;
     constexpr uint16_t CONN_POOL_IDLE_SECONDS = 60;
 
+    // Integrity sweep
+    constexpr uint32_t INTEGRITY_SWEEP_INTERVAL_HOURS = 6;
+    constexpr size_t   INTEGRITY_SWEEP_BATCH_SIZE     = 100;
+
     // Storage
     constexpr uint64_t MDBX_MAX_SIZE = 1ULL << 30;  // 1 GB
 }

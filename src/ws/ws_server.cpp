@@ -2283,6 +2283,9 @@ std::optional<GroupMeta> WsServer<SSL>::fetch_group_meta(const crypto::Hash& gro
         auto parsed = parse_group_meta(*nv.value);
         if (!parsed) continue;
 
+        // Validate structure + key derivation before caching
+        if (!kad_.validate_readonly(routing_key, 0x06, *nv.value)) continue;
+
         // Cache in local storage for future use (keyed by routing key)
         storage_.put(storage::TABLE_GROUP_META,
                      std::span<const uint8_t>(routing_key.data(), routing_key.size()),

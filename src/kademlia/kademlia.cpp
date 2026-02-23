@@ -150,6 +150,12 @@ void Kademlia::tick() {
             }
         }
     }
+
+    // 10. Periodic integrity sweep
+    if (now - last_integrity_sweep_ >= integrity_sweep_interval_) {
+        last_integrity_sweep_ = now;
+        integrity_sweep();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +322,13 @@ void Kademlia::transfer_responsibility() {
                 crypto::Hash routing_key{};
                 std::copy_n(key.data(), 32, routing_key.begin());
 
+                // Re-validate before sending — purge if corrupt
+                if (!validate_readonly(routing_key, ti.data_type, value)) {
+                    spdlog::warn("transfer: purging corrupt {} entry", ti.table);
+                    storage_.del(ti.table, key);
+                    return true;
+                }
+
                 auto nodes = responsible_nodes(routing_key);
 
                 // Only push to newly-added responsible nodes
@@ -391,6 +404,18 @@ void Kademlia::transfer_responsibility() {
         store_value.push_back(static_cast<uint8_t>((blen >> 8) & 0xFF));
         store_value.push_back(static_cast<uint8_t>(blen & 0xFF));
         store_value.insert(store_value.end(), blob->begin(), blob->end());
+
+        // Structural validation of reassembled inbox message
+        if (!validate_inbox_message(store_value)) {
+            spdlog::warn("transfer: purging corrupt inbox entry");
+            std::vector<uint8_t> idx_key;
+            idx_key.reserve(64);
+            idx_key.insert(idx_key.end(), entry.recipient_fp.begin(), entry.recipient_fp.end());
+            idx_key.insert(idx_key.end(), entry.msg_id.begin(), entry.msg_id.end());
+            storage_.del(storage::TABLE_INBOX_INDEX, idx_key);
+            storage_.del(storage::TABLE_MESSAGE_BLOBS, entry.msg_id);
+            continue;
+        }
 
         for (const auto& node : nodes) {
             if (node.id == self_.id) continue;
@@ -531,6 +556,66 @@ void Kademlia::sync_with_peers() {
     if (synced > 0) {
         spdlog::debug("Active sync: sent SYNC_REQ for {} keys (batch {}-{} of {})",
                       synced, sync_key_offset_ - (end - sync_key_offset_), end, all_keys.size());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Integrity sweep — validate stored data, purge corrupt entries
+// ---------------------------------------------------------------------------
+
+void Kademlia::integrity_sweep() {
+    struct SweepTable {
+        const char* table;
+        uint8_t data_type;
+    };
+
+    static constexpr SweepTable sweep_tables[] = {
+        {storage::TABLE_NAMES,      0x01},
+        {storage::TABLE_PROFILES,   0x00},
+        {storage::TABLE_GROUP_META, 0x06},
+        {storage::TABLE_ALLOWLISTS, 0x04},
+        {storage::TABLE_REQUESTS,   0x03},
+    };
+    static constexpr size_t NUM_SWEEP_TABLES = sizeof(sweep_tables) / sizeof(sweep_tables[0]);
+
+    if (integrity_sweep_table_idx_ >= NUM_SWEEP_TABLES) {
+        integrity_sweep_table_idx_ = 0;
+    }
+
+    const auto& st = sweep_tables[integrity_sweep_table_idx_];
+    integrity_sweep_table_idx_ = (integrity_sweep_table_idx_ + 1) % NUM_SWEEP_TABLES;
+
+    // Collect keys to delete (can't delete inside foreach)
+    struct PurgeEntry {
+        std::vector<uint8_t> key;
+    };
+    std::vector<PurgeEntry> to_purge;
+    size_t checked = 0;
+
+    storage_.foreach(st.table,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+            if (checked >= config::defaults::INTEGRITY_SWEEP_BATCH_SIZE) return false;
+            ++checked;
+
+            if (key.size() < 32) return true;
+
+            crypto::Hash routing_key{};
+            std::copy_n(key.data(), 32, routing_key.begin());
+
+            if (!validate_readonly(routing_key, st.data_type, value)) {
+                to_purge.push_back({std::vector<uint8_t>(key.begin(), key.end())});
+            }
+
+            return true;
+        });
+
+    for (const auto& entry : to_purge) {
+        storage_.del(st.table, entry.key);
+    }
+
+    if (!to_purge.empty()) {
+        spdlog::warn("Integrity sweep: purged {}/{} corrupt entries from {}",
+                     to_purge.size(), checked, st.table);
     }
 }
 
@@ -1252,18 +1337,27 @@ void Kademlia::handle_find_value(const Message& msg, const std::string& from, ui
     // Try relevant tables for the key. Inbox, contact requests, and allowlists
     // use composite keys and can't be looked up by routing key alone — they use
     // SYNC or scan() instead of FIND_VALUE.
-    const char* tables[] = {
-        storage::TABLE_PROFILES, storage::TABLE_NAMES,
-        storage::TABLE_GROUP_META,
+    struct TableLookup { const char* table; uint8_t data_type; };
+    static constexpr TableLookup lookups[] = {
+        {storage::TABLE_PROFILES,   0x00},
+        {storage::TABLE_NAMES,      0x01},
+        {storage::TABLE_GROUP_META, 0x06},
     };
 
     std::vector<uint8_t> payload;
     // key (32 bytes)
     payload.insert(payload.end(), key.begin(), key.end());
 
-    for (const char* table : tables) {
-        auto result = storage_.get(table, key);
+    for (const auto& tl : lookups) {
+        auto result = storage_.get(tl.table, key);
         if (result) {
+            // Re-validate before serving — purge if corrupt
+            if (!validate_readonly(key, tl.data_type, *result)) {
+                spdlog::warn("handle_find_value: purging corrupt {} entry", tl.table);
+                storage_.del(tl.table, key);
+                continue;
+            }
+
             // found = 0x01
             payload.push_back(0x01);
             // value_length (4 bytes BE)
@@ -1499,10 +1593,29 @@ bool Kademlia::is_responsible(const crypto::Hash& key) const {
 }
 
 // ---------------------------------------------------------------------------
+// Read-only validation (re-validate stored data without sequence/timestamp checks)
+// ---------------------------------------------------------------------------
+
+bool Kademlia::validate_readonly(const crypto::Hash& key, uint8_t data_type,
+                                  std::span<const uint8_t> value) {
+    switch (data_type) {
+    case 0x00: return validate_profile(value, key, /*skip_sequence_check=*/true);
+    case 0x01: return validate_name_record(value, key, /*skip_sequence_check=*/true);
+    case 0x02: return validate_inbox_message(value);
+    case 0x03: return validate_contact_request(value, /*skip_timestamp_check=*/true);
+    case 0x04: return validate_allowlist_entry(value);
+    case 0x05: return validate_group_message(value);
+    case 0x06: return validate_group_meta(value, key);
+    default:   return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Name record validation (PROTOCOL-SPEC.md section 5)
 // ---------------------------------------------------------------------------
 
-bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key) {
+bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key,
+                                     bool skip_sequence_check) {
     // Parse name record:
     // [1 byte: name_length]
     // [name_length bytes: name (ASCII, lowercase)]
@@ -1608,39 +1721,41 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
     }
 
     // 4. Conflict resolution for existing name records
-    auto existing = storage_.get(storage::TABLE_NAMES, key);
-    if (existing) {
-        if (existing->size() >= 1) {
-            uint8_t existing_name_len = (*existing)[0];
-            size_t fp_offset = 1 + existing_name_len;
-            if (existing->size() >= fp_offset + 32) {
-                crypto::Hash existing_fp{};
-                std::copy_n(existing->data() + fp_offset, 32, existing_fp.begin());
+    if (!skip_sequence_check) {
+        auto existing = storage_.get(storage::TABLE_NAMES, key);
+        if (existing) {
+            if (existing->size() >= 1) {
+                uint8_t existing_name_len = (*existing)[0];
+                size_t fp_offset = 1 + existing_name_len;
+                if (existing->size() >= fp_offset + 32) {
+                    crypto::Hash existing_fp{};
+                    std::copy_n(existing->data() + fp_offset, 32, existing_fp.begin());
 
-                if (existing_fp != fingerprint) {
-                    // Different fingerprint claiming the same name.
-                    // Deterministic tiebreaker: lower fingerprint wins.
-                    // This ensures all nodes converge to the same owner
-                    // even if STOREs arrive in different order during races.
-                    if (fingerprint < existing_fp) {
-                        spdlog::info("Name record conflict for '{}': incoming fp wins (lower)", name);
-                        // Accept — incoming record replaces existing
-                    } else {
-                        spdlog::info("Name record conflict for '{}': existing fp wins (lower)", name);
-                        return false;
-                    }
-                } else {
-                    // 5. Same fingerprint: sequence must be higher (owner update)
-                    size_t existing_seq_offset = fp_offset + 32 + 8; // skip fingerprint + pow_nonce
-                    if (existing->size() >= existing_seq_offset + 8) {
-                        uint64_t existing_seq = 0;
-                        for (int i = 0; i < 8; ++i) {
-                            existing_seq = (existing_seq << 8) | (*existing)[existing_seq_offset + i];
-                        }
-                        if (sequence <= existing_seq) {
-                            spdlog::warn("Name record validation: sequence {} <= existing {} for '{}'",
-                                         sequence, existing_seq, name);
+                    if (existing_fp != fingerprint) {
+                        // Different fingerprint claiming the same name.
+                        // Deterministic tiebreaker: lower fingerprint wins.
+                        // This ensures all nodes converge to the same owner
+                        // even if STOREs arrive in different order during races.
+                        if (fingerprint < existing_fp) {
+                            spdlog::info("Name record conflict for '{}': incoming fp wins (lower)", name);
+                            // Accept — incoming record replaces existing
+                        } else {
+                            spdlog::info("Name record conflict for '{}': existing fp wins (lower)", name);
                             return false;
+                        }
+                    } else {
+                        // 5. Same fingerprint: sequence must be higher (owner update)
+                        size_t existing_seq_offset = fp_offset + 32 + 8; // skip fingerprint + pow_nonce
+                        if (existing->size() >= existing_seq_offset + 8) {
+                            uint64_t existing_seq = 0;
+                            for (int i = 0; i < 8; ++i) {
+                                existing_seq = (existing_seq << 8) | (*existing)[existing_seq_offset + i];
+                            }
+                            if (sequence <= existing_seq) {
+                                spdlog::warn("Name record validation: sequence {} <= existing {} for '{}'",
+                                             sequence, existing_seq, name);
+                                return false;
+                            }
                         }
                     }
                 }
@@ -1717,7 +1832,8 @@ static std::optional<uint64_t> extract_profile_sequence(std::span<const uint8_t>
 // Profile validation (PROTOCOL-SPEC.md section 3)
 // ---------------------------------------------------------------------------
 
-bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Hash& key) {
+bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Hash& key,
+                                 bool skip_sequence_check) {
     if (value.size() > max_profile_size_) {
         spdlog::warn("Profile validation: size {} exceeds {} byte limit", value.size(), max_profile_size_);
         return false;
@@ -1823,12 +1939,14 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
     }
 
     // Sequence monotonicity: reject if new sequence <= existing sequence
-    auto existing = storage_.get(storage::TABLE_PROFILES, key);
-    if (existing && !existing->empty()) {
-        auto existing_seq = extract_profile_sequence(*existing);
-        if (existing_seq && sequence <= *existing_seq) {
-            spdlog::debug("Profile rejected: sequence {} <= existing {}", sequence, *existing_seq);
-            return false;
+    if (!skip_sequence_check) {
+        auto existing = storage_.get(storage::TABLE_PROFILES, key);
+        if (existing && !existing->empty()) {
+            auto existing_seq = extract_profile_sequence(*existing);
+            if (existing_seq && sequence <= *existing_seq) {
+                spdlog::debug("Profile rejected: sequence {} <= existing {}", sequence, *existing_seq);
+                return false;
+            }
         }
     }
 
@@ -1906,7 +2024,8 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
 // Contact request validation
 // ---------------------------------------------------------------------------
 
-bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
+bool Kademlia::validate_contact_request(std::span<const uint8_t> value,
+                                         bool skip_timestamp_check) {
     // Format: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || timestamp(8 BE) || blob_length(4 BE) || blob
     // Minimum: 32 + 32 + 8 + 8 + 4 = 84 bytes
     if (value.size() < 84) {
@@ -1931,13 +2050,15 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
     }
 
     // Validate timestamp: must be within 1 hour of current time
-    auto now = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-    constexpr uint64_t MAX_TIMESTAMP_DRIFT = 3'600'000;  // 1 hour in ms
-    if (timestamp > now + MAX_TIMESTAMP_DRIFT || now > timestamp + MAX_TIMESTAMP_DRIFT) {
-        spdlog::debug("Contact request rejected: timestamp {} too far from now {}", timestamp, now);
-        return false;
+    if (!skip_timestamp_check) {
+        auto now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        constexpr uint64_t MAX_TIMESTAMP_DRIFT = 3'600'000;  // 1 hour in ms
+        if (timestamp > now + MAX_TIMESTAMP_DRIFT || now > timestamp + MAX_TIMESTAMP_DRIFT) {
+            spdlog::debug("Contact request rejected: timestamp {} too far from now {}", timestamp, now);
+            return false;
+        }
     }
 
     // Verify PoW with domain separation:
@@ -2510,10 +2631,15 @@ std::vector<Kademlia::NodeValue> Kademlia::query_remote_values(
     // Collect results
     std::vector<NodeValue> result;
 
-    // Add local result
+    // Add local result (check all single-key tables, not just names)
     for (const auto& node : nodes) {
         if (node.id == self_.id) {
-            auto local = storage_.get(storage::TABLE_NAMES, key);
+            std::optional<std::vector<uint8_t>> local;
+            for (const char* table : {storage::TABLE_PROFILES, storage::TABLE_NAMES,
+                                       storage::TABLE_GROUP_META}) {
+                local = storage_.get(table, key);
+                if (local) break;
+            }
             result.push_back({node, local});
             break;
         }

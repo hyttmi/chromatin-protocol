@@ -367,10 +367,33 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     // Bootstrap bidirectionally so both nodes have each other's pubkeys
     bootstrap_bidirectional(n2, n1);
 
-    // Store a profile value via n1 (using data_type 0x00 = profile)
-    Hash key{};
-    key.fill(0x42);
-    std::vector<uint8_t> value = {0xDE, 0xAD, 0xBE, 0xEF};
+    // Build a valid profile to store (must pass validate_readonly)
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::vector<uint8_t> value;
+    // fingerprint(32)
+    value.insert(value.end(), user_fp.begin(), user_fp.end());
+    // pubkey_len(2 BE) + pubkey
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    value.insert(value.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_len = 0, bio_len = 0, avatar_len = 0, social_count = 0
+    value.push_back(0x00); value.push_back(0x00); // kem
+    value.push_back(0x00); value.push_back(0x00); // bio
+    value.push_back(0x00); value.push_back(0x00); value.push_back(0x00); value.push_back(0x00); // avatar
+    value.push_back(0x00); // social_count
+    // sequence(8 BE) = 1
+    for (int i = 0; i < 7; ++i) value.push_back(0x00);
+    value.push_back(0x01);
+    // sign everything so far
+    auto sig = sign(std::span<const uint8_t>(value.data(), value.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    value.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    value.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    value.insert(value.end(), sig.begin(), sig.end());
 
     // Store directly into storage on n1 (bypassing responsibility check for this test)
     n1.storage->put(TABLE_PROFILES, key, value);
@@ -2979,4 +3002,295 @@ TEST_F(KademliaTest, DuplicateGroupMessageRejected) {
     // Second store with same msg_id should be rejected
     bool ok2 = n1.kad->store(group_key, 0x05, value);
     EXPECT_FALSE(ok2);
+}
+
+// ---------------------------------------------------------------------------
+// validate_readonly tests
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ValidateReadonlyAcceptsValidName) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "alice";
+    Hash key = name_key(name);
+
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+    auto record = build_name_record(name, user_fp, nonce, 1, user_kp);
+
+    EXPECT_TRUE(n1.kad->validate_readonly(key, 0x01, record));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyRejectsCorruptName) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    Hash key{};
+    key.fill(0x42);
+    // Garbage data that doesn't parse as a valid name record
+    std::vector<uint8_t> corrupt = {0xDE, 0xAD, 0xBE, 0xEF};
+
+    EXPECT_FALSE(n1.kad->validate_readonly(key, 0x01, corrupt));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyAcceptsValidProfile) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    auto profile = build_profile(user_kp, 1);
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    EXPECT_TRUE(n1.kad->validate_readonly(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyRejectsCorruptProfile) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    Hash key{};
+    key.fill(0x42);
+    std::vector<uint8_t> corrupt = {0x00, 0x01, 0x02, 0x03};
+
+    EXPECT_FALSE(n1.kad->validate_readonly(key, 0x00, corrupt));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyAcceptsValidAllowlist) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair owner_kp = generate_keypair();
+    Hash contact_fp{};
+    contact_fp.fill(0xBB);
+
+    auto entry = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    // Allowlist doesn't use the routing key for validation, any key is fine
+    Hash key{};
+    key.fill(0x00);
+
+    EXPECT_TRUE(n1.kad->validate_readonly(key, 0x04, entry));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyRejectsCorruptAllowlist) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    Hash key{};
+    key.fill(0x00);
+    std::vector<uint8_t> corrupt(100, 0xFF);
+
+    EXPECT_FALSE(n1.kad->validate_readonly(key, 0x04, corrupt));
+}
+
+TEST_F(KademliaTest, ValidateReadonlySkipsSequenceCheck) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Store a name record with sequence=2
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "bob";
+    Hash key = name_key(name);
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+
+    auto record_v2 = build_name_record(name, user_fp, nonce, 2, user_kp);
+    ASSERT_TRUE(n1.kad->store(key, 0x01, record_v2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Build a record with sequence=1 (lower than stored)
+    auto record_v1 = build_name_record(name, user_fp, nonce, 1, user_kp);
+
+    // validate_readonly should still accept it (skips sequence check)
+    EXPECT_TRUE(n1.kad->validate_readonly(key, 0x01, record_v1));
+}
+
+TEST_F(KademliaTest, ValidateReadonlyRejectsUnknownDataType) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    Hash key{};
+    key.fill(0x42);
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+
+    // Unknown data type 0xFF should be rejected
+    EXPECT_FALSE(n1.kad->validate_readonly(key, 0xFF, data));
+}
+
+// ---------------------------------------------------------------------------
+// handle_find_value corruption test
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, FindValuePurgesCorruptData) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+    bootstrap_bidirectional(n2, n1);
+
+    // Store corrupt data directly into n1's profile storage
+    Hash key{};
+    key.fill(0x42);
+    std::vector<uint8_t> corrupt = {0xDE, 0xAD, 0xBE, 0xEF};
+    n1.storage->put(TABLE_PROFILES, key, corrupt);
+
+    // Verify it's there
+    ASSERT_TRUE(n1.storage->get(TABLE_PROFILES, key).has_value());
+
+    // Send FIND_VALUE from n2 to n1
+    std::vector<uint8_t> fv_payload(key.begin(), key.end());
+    Message fv_msg;
+    fv_msg.type = MessageType::FIND_VALUE;
+    fv_msg.sender = n2.info.id;
+    fv_msg.sender_port = n2.info.tcp_port;
+    fv_msg.payload = fv_payload;
+    sign_message(fv_msg, n2.keypair.secret_key);
+
+    // Track response
+    std::atomic<bool> got_response{false};
+    std::atomic<bool> value_found{false};
+
+    n2.stop();
+    n2.recv_thread = std::thread([&]() {
+        n2.transport->run([&](const Message& msg, const std::string& from_addr, uint16_t from_port) {
+            if (msg.type == MessageType::VALUE) {
+                got_response.store(true);
+                if (msg.payload.size() >= 37) {
+                    value_found.store(msg.payload[32] == 0x01);
+                }
+                n2.transport->stop();
+            } else {
+                n2.kad->handle_message(msg, from_addr, from_port);
+            }
+        });
+    });
+    n2.running.store(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, fv_msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    n2.transport->stop();
+    if (n2.recv_thread.joinable()) n2.recv_thread.join();
+    n2.running.store(false);
+
+    // Should have received a response with found=0x00 (not found)
+    EXPECT_TRUE(got_response.load());
+    EXPECT_FALSE(value_found.load()) << "Corrupt data should not be served via FIND_VALUE";
+
+    // Corrupt entry should have been purged from storage
+    EXPECT_FALSE(n1.storage->get(TABLE_PROFILES, key).has_value())
+        << "Corrupt entry should be purged from storage";
+}
+
+// ---------------------------------------------------------------------------
+// integrity_sweep test
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, IntegritySweepPurgesCorruptEntries) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Store a valid name record
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::string name = "carol";
+    Hash name_k = name_key(name);
+    uint64_t nonce = find_pow_nonce(name, user_fp, 8);
+    auto valid_record = build_name_record(name, user_fp, nonce, 1, user_kp);
+    n1.storage->put(TABLE_NAMES, name_k, valid_record);
+
+    // Store a corrupt name record
+    Hash corrupt_key{};
+    corrupt_key.fill(0xEE);
+    std::vector<uint8_t> corrupt_data = {0xBA, 0xAD, 0xF0, 0x0D};
+    n1.storage->put(TABLE_NAMES, corrupt_key, corrupt_data);
+
+    // Verify both exist
+    ASSERT_TRUE(n1.storage->get(TABLE_NAMES, name_k).has_value());
+    ASSERT_TRUE(n1.storage->get(TABLE_NAMES, corrupt_key).has_value());
+
+    // Set sweep interval very low and run tick to trigger sweep
+    n1.kad->set_integrity_sweep_interval(std::chrono::hours(0));
+    n1.kad->tick();
+
+    // Valid record should survive
+    EXPECT_TRUE(n1.storage->get(TABLE_NAMES, name_k).has_value())
+        << "Valid name record should survive integrity sweep";
+
+    // Corrupt record should be purged
+    EXPECT_FALSE(n1.storage->get(TABLE_NAMES, corrupt_key).has_value())
+        << "Corrupt name record should be purged by integrity sweep";
+}
+
+// ---------------------------------------------------------------------------
+// query_remote_values local lookup test
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, QueryRemoteValuesFindsProfiles) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Store a valid profile
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+    auto profile = build_profile(user_kp, 1);
+    n1.storage->put(TABLE_PROFILES, key, profile);
+
+    // query_remote_values with self should find it locally
+    std::vector<NodeInfo> nodes = {n1.info};
+    auto results = n1.kad->query_remote_values(key, nodes);
+
+    ASSERT_EQ(results.size(), 1u);
+    ASSERT_TRUE(results[0].value.has_value());
+    EXPECT_EQ(*results[0].value, profile);
+}
+
+TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Build minimal valid group_meta and store directly
+    // We'll use raw storage since group_meta validation is structural
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    Hash group_id{};
+    group_id.fill(0xAA);
+    Hash routing_key = sha3_256_prefixed("group:", group_id);
+
+    // Build group meta: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE)
+    //   || member: fp(32) + role(1) + kem_ciphertext(1568)
+    //   || sig_len(2 BE) || signature
+    std::vector<uint8_t> meta;
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    // version = 1
+    meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x01);
+    // member_count = 1
+    meta.push_back(0x00); meta.push_back(0x01);
+    // member: owner_fp(32) + role=0x02 + kem_ciphertext(1568 zeros)
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.push_back(0x02); // owner role
+    meta.resize(meta.size() + 1568, 0x00); // kem_ciphertext placeholder
+
+    // Sign it
+    auto signature = sign(std::span<const uint8_t>(meta.data(), meta.size()), owner_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    meta.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    meta.insert(meta.end(), signature.begin(), signature.end());
+
+    n1.storage->put(TABLE_GROUP_META, routing_key, meta);
+
+    // query_remote_values with self should find it locally
+    std::vector<NodeInfo> nodes = {n1.info};
+    auto results = n1.kad->query_remote_values(routing_key, nodes);
+
+    ASSERT_EQ(results.size(), 1u);
+    ASSERT_TRUE(results[0].value.has_value());
+    EXPECT_EQ(*results[0].value, meta);
 }
