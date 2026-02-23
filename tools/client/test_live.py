@@ -27,11 +27,15 @@ from crypto_utils import (
 from protocol import ChromatinClient, build_hello, build_auth, build_allowlist_signature_payload
 from builders import build_profile_record, build_name_record, build_group_meta
 
-# Test nodes: (host, ws_port) tuples
+# PoW difficulties (must match node config)
+CONTACT_POW_DIFFICULTY = 16
+NAME_POW_DIFFICULTY = 26
+
+# Test nodes: (host, ws_port, tls) tuples
 SERVERS = [
-    ("195.181.202.122", 62010),
-    ("195.181.202.122", 62011),
-    ("37.187.78.91", 62012),
+    ("195.181.202.122", 62010, False),
+    ("195.181.202.122", 62011, False),
+    ("2.chromatin.cpunk.io", 62012, True),
 ]
 
 # Map TCP addresses (from REDIRECT) to WS (host, port).
@@ -87,9 +91,9 @@ def check(name, condition, reason=""):
         fail(name, reason)
 
 
-async def connect_with_redirect(client, host, port, max_redirects=3):
+async def connect_with_redirect(client, host, port, tls=False, max_redirects=3):
     """Connect a client, following up to max_redirects REDIRECT responses."""
-    resp = await client.connect(host, port)
+    resp = await client.connect(host, port, tls=tls)
     for _ in range(max_redirects):
         if resp.get("type") != "REDIRECT":
             break
@@ -97,7 +101,9 @@ async def connect_with_redirect(client, host, port, max_redirects=3):
         if not nodes:
             break
         rhost, rport = resolve_redirect(nodes[0])
-        resp = await client.connect(rhost, rport)
+        # Look up TLS setting for the redirect target
+        rtls = any(s[2] for s in SERVERS if s[0] == rhost and s[1] == rport)
+        resp = await client.connect(rhost, rport, tls=rtls)
     return resp
 
 
@@ -106,9 +112,9 @@ async def ensure_connected(client, servers):
     if client.ws and client.ws.protocol.state.name == "OPEN":
         return True
     # Try to reconnect
-    for host, port in servers:
+    for host, port, tls in servers:
         try:
-            resp = await connect_with_redirect(client, host, port)
+            resp = await connect_with_redirect(client, host, port, tls=tls)
             if resp.get("type") == "OK":
                 return True
         except Exception:
@@ -149,10 +155,10 @@ async def run_tests():
     # ===================================================================
 
     # Test 1-3: Connect to each server
-    for i, (host, port) in enumerate(SERVERS):
+    for i, (host, port, tls) in enumerate(SERVERS):
         client = ChromatinClient(pub_a, sec_a)
         try:
-            resp = await client.connect(host, port)
+            resp = await client.connect(host, port, tls=tls)
             rtype = resp.get("type", "")
             if rtype == "OK" or rtype == "REDIRECT":
                 ok(f"connect to {host}:{port} ({rtype})")
@@ -163,12 +169,12 @@ async def run_tests():
             fail(f"connect to {host}:{port}", str(e))
 
     # Test 4: Connect Alice to her responsible node
-    resp_a = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1])
+    resp_a = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
     check("alice connected", resp_a.get("type") == "OK",
           f"got {resp_a.get('type')}: {resp_a.get('reason', '')}")
 
     # Test 5: Connect Bob to his responsible node
-    resp_b = await connect_with_redirect(bob, SERVERS[0][0], SERVERS[0][1])
+    resp_b = await connect_with_redirect(bob, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
     check("bob connected", resp_b.get("type") == "OK",
           f"got {resp_b.get('type')}: {resp_b.get('reason', '')}")
 
@@ -335,6 +341,51 @@ async def run_tests():
           f"got {resp}")
 
     # ===================================================================
+    print("\n=== Large Chunked Transfer Tests (Photos) ===")
+    # ===================================================================
+
+    photos = [
+        ("vacation.jpg", 2.5),
+        ("portrait.png", 3.2),
+        ("landscape.jpg", 4.1),
+        ("selfie.jpg", 1.8),
+    ]
+
+    large_msg_ids = []
+    for name, size_mb in photos:
+        size = int(size_mb * 1024 * 1024)
+        photo_data = os.urandom(size)
+        print(f"  Uploading {name} ({size_mb} MB)...")
+        try:
+            resp = await alice.cmd_send_large(fp_b.hex(), photo_data, timeout=60.0)
+            if resp.get("type") == "OK" and resp.get("msg_id"):
+                large_msg_ids.append((resp["msg_id"], photo_data, name))
+                ok(f"chunked upload {name} ({size_mb} MB)")
+            else:
+                fail(f"chunked upload {name}", str(resp))
+        except Exception as e:
+            fail(f"chunked upload {name}", str(e))
+
+    await asyncio.sleep(1)
+
+    for msg_id, original_data, name in large_msg_ids:
+        try:
+            resp = await bob.cmd_get_large(msg_id, timeout=60.0)
+            downloaded = resp.get("blob_bytes", b"")
+            if downloaded == original_data:
+                ok(f"chunked download + verify {name} ({len(downloaded)} bytes)")
+            else:
+                fail(f"chunked download {name}",
+                     f"size mismatch: got {len(downloaded)}, expected {len(original_data)}")
+        except Exception as e:
+            fail(f"chunked download {name}", str(e))
+
+    # Clean up
+    for msg_id, _, name in large_msg_ids:
+        resp = await bob.cmd_delete([msg_id])
+        check(f"delete {name}", resp.get("type") == "OK", str(resp))
+
+    # ===================================================================
     print("\n=== Revoke/Deny Tests ===")
     # ===================================================================
 
@@ -368,7 +419,7 @@ async def run_tests():
     pub_c, sec_c = generate_keypair()
     fp_c = fingerprint_of(pub_c)
     charlie = ChromatinClient(pub_c, sec_c)
-    resp_c = await connect_with_redirect(charlie, SERVERS[0][0], SERVERS[0][1])
+    resp_c = await connect_with_redirect(charlie, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
 
     # Test 41: Charlie status
     check("charlie connected", resp_c.get("type") == "OK",
@@ -401,7 +452,7 @@ async def run_tests():
     pub_d, sec_d = generate_keypair()
     fp_d = fingerprint_of(pub_d)
     dave = ChromatinClient(pub_d, sec_d)
-    resp_d = await connect_with_redirect(dave, SERVERS[0][0], SERVERS[0][1])
+    resp_d = await connect_with_redirect(dave, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
 
     # Test 44: Dave sends contact request to Alice (with PoW)
     timestamp = int(time.time() * 1000)
@@ -536,9 +587,9 @@ async def run_tests():
         # Test 56: Register a name (node requires 28-bit PoW)
         name = "testuser" + os.urandom(4).hex()[:8]  # unique name
         prefix = b"chromatin:name:" + name.encode() + fp_a
-        print(f"  Mining PoW for name '{name}' (20 bits)... ", end="", flush=True)
+        print(f"  Mining PoW for name '{name}' ({NAME_POW_DIFFICULTY} bits)... ", end="", flush=True)
         start = time.time()
-        pow_nonce = mine_pow(prefix, 20)
+        pow_nonce = mine_pow(prefix, NAME_POW_DIFFICULTY)
         elapsed = time.time() - start
         print(f"done in {elapsed:.1f}s")
         check("mine name PoW", pow_nonce >= 0)
@@ -547,7 +598,7 @@ async def run_tests():
         resp = await alice.cmd_register_name(record)
         check("register name", resp.get("type") == "OK", f"got {resp}")
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)  # Allow time for replication
 
         # Test 58: Resolve the name
         await ensure_connected(bob, SERVERS)
@@ -702,7 +753,7 @@ async def run_tests():
     check("alice disconnected", alice.ws is None)
 
     # Reconnect
-    resp = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1])
+    resp = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
     check("alice reconnected", resp.get("type") == "OK", f"got {resp}")
 
     # Test 94: Alice can still send after reconnect
@@ -794,10 +845,10 @@ async def run_tests():
         yara.set_push_callback(yara_push)
 
         # Connect to different nodes deliberately
-        resp_x = await connect_with_redirect(xander, SERVERS[0][0], SERVERS[0][1])
+        resp_x = await connect_with_redirect(xander, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
         check("xander connected", resp_x.get("type") == "OK", f"got {resp_x}")
 
-        resp_y = await connect_with_redirect(yara, SERVERS[1][0], SERVERS[1][1])
+        resp_y = await connect_with_redirect(yara, SERVERS[1][0], SERVERS[1][1], tls=SERVERS[1][2])
         check("yara connected", resp_y.get("type") == "OK", f"got {resp_y}")
 
         # Status to see which nodes they're on
@@ -859,7 +910,7 @@ async def run_tests():
         pub_z, sec_z = generate_keypair()
         fp_z = fingerprint_of(pub_z)
         zara = ChromatinClient(pub_z, sec_z)
-        resp_z = await connect_with_redirect(zara, SERVERS[2][0], SERVERS[2][1])
+        resp_z = await connect_with_redirect(zara, SERVERS[2][0], SERVERS[2][1], tls=SERVERS[2][2])
         check("zara connected", resp_z.get("type") == "OK", f"got {resp_z}")
 
         # Zara sends contact request to Yara (no allowlist needed for requests)
@@ -905,10 +956,10 @@ async def run_tests():
         racer2 = ChromatinClient(pub_r2, sec_r2)
 
         # Connect to different nodes
-        resp = await connect_with_redirect(racer1, SERVERS[0][0], SERVERS[0][1])
+        resp = await connect_with_redirect(racer1, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
         check("racer1 connected", resp.get("type") == "OK", f"got {resp}")
 
-        resp = await connect_with_redirect(racer2, SERVERS[2][0], SERVERS[2][1])
+        resp = await connect_with_redirect(racer2, SERVERS[2][0], SERVERS[2][1], tls=SERVERS[2][2])
         check("racer2 connected", resp.get("type") == "OK", f"got {resp}")
 
         # Both set profiles first (needed for the protocol)
@@ -935,10 +986,10 @@ async def run_tests():
         prefix1 = b"chromatin:name:" + race_name.encode() + fp_r1
         prefix2 = b"chromatin:name:" + race_name.encode() + fp_r2
         print(f"  Mining PoW for racer1... ", end="", flush=True)
-        nonce1 = mine_pow(prefix1, 20)
+        nonce1 = mine_pow(prefix1, NAME_POW_DIFFICULTY)
         print("done")
         print(f"  Mining PoW for racer2... ", end="", flush=True)
-        nonce2 = mine_pow(prefix2, 20)
+        nonce2 = mine_pow(prefix2, NAME_POW_DIFFICULTY)
         print("done")
 
         record1 = build_name_record(sec_r1, race_name, fp_r1, pub_r1, nonce1, sequence=1)
@@ -990,7 +1041,7 @@ async def run_tests():
     clients = []
     for i in range(3):
         c = ChromatinClient(pub_a, sec_a)
-        resp = await c.connect(SERVERS[i][0], SERVERS[i][1])
+        resp = await c.connect(SERVERS[i][0], SERVERS[i][1], tls=SERVERS[i][2])
         rtype = resp.get("type", "")
         check(f"concurrent client {i}", rtype in ("OK", "REDIRECT"),
               f"got {rtype}: {resp.get('reason', '')}")
@@ -1021,7 +1072,7 @@ async def run_tests():
         connected = 0
         for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
             srv = SERVERS[i % len(SERVERS)]
-            resp = await connect_with_redirect(client, srv[0], srv[1])
+            resp = await connect_with_redirect(client, srv[0], srv[1], tls=srv[2])
             if resp.get("type") == "OK":
                 connected += 1
             else:

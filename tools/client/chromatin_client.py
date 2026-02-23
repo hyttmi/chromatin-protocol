@@ -23,7 +23,7 @@ IDENTITY_PATH = os.path.join(IDENTITY_DIR, "identity.key")
 
 # PoW difficulty defaults (must match node config)
 CONTACT_POW_DIFFICULTY = 16
-NAME_POW_DIFFICULTY = 20
+NAME_POW_DIFFICULTY = 26
 
 
 def load_or_create_identity() -> tuple[bytes, bytes]:
@@ -63,7 +63,7 @@ async def push_handler(msg: dict):
 
 HELP_TEXT = """
 Commands:
-  connect <host> <port>         Connect and authenticate
+  connect <host> <port> [--tls] Connect and authenticate
   disconnect                    Close connection
   status                        Node status
   identity                      Show own fingerprint
@@ -130,11 +130,12 @@ async def repl(client: ChromatinClient):
 
             elif cmd == "connect":
                 if len(parts) < 3:
-                    print("Usage: connect <host> <port>")
+                    print("Usage: connect <host> <port> [--tls]")
                     continue
                 host, port = parts[1], int(parts[2])
-                print(f"Connecting to {host}:{port}...")
-                resp = await client.connect(host, port)
+                tls = "--tls" in parts[3:]
+                print(f"Connecting to {host}:{port} ({'WSS' if tls else 'WS'})...")
+                resp = await client.connect(host, port, tls=tls)
                 resp_type = resp.get("type", "")
                 if resp_type == "REDIRECT":
                     nodes = resp.get("nodes", [])
@@ -440,8 +441,9 @@ async def main():
     # Auto-connect if args provided
     if len(sys.argv) >= 3:
         host, port = sys.argv[1], int(sys.argv[2])
-        print(f"Connecting to {host}:{port}...")
-        resp = await client.connect(host, port)
+        tls = "--tls" in sys.argv[3:]
+        print(f"Connecting to {host}:{port} ({'WSS' if tls else 'WS'})...")
+        resp = await client.connect(host, port, tls=tls)
         resp_type = resp.get("type", "")
         if resp_type == "REDIRECT":
             nodes = resp.get("nodes", [])

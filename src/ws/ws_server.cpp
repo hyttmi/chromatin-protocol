@@ -36,9 +36,10 @@ void WsServer<SSL>::run() {
 
     app.template ws<Session>("/*", {
         .compression = uWS::DISABLED,
-        // 512 KiB: base64-encoded 256 KiB blobs (~341 KiB) + JSON overhead
         .maxPayloadLength = 1048576 + 64,  // 1 MiB chunk + header overhead
         .idleTimeout = config::defaults::WS_IDLE_TIMEOUT,
+        // Must hold full chunked transfer (up to 50 MiB) to prevent silent drops
+        .maxBackpressure = 64 * 1024 * 1024,
 
         .open = [this](ws_t* ws) {
             connections_.insert(ws);

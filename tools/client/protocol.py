@@ -24,15 +24,18 @@ class ChromatinClient:
         self._push_callback: Optional[Callable[[dict], Awaitable[None]]] = None
         self._listener_task: Optional[asyncio.Task] = None
         self._allowlist_seq = 0
+        self._binary_frames: list[bytes] = []
+        self._debug = False
 
     def _msg_id(self) -> int:
         mid = self._next_id
         self._next_id += 1
         return mid
 
-    async def connect(self, host: str, port: int) -> dict:
+    async def connect(self, host: str, port: int, tls: bool = False) -> dict:
         """Connect, perform HELLO + AUTH handshake. Returns OK response."""
-        uri = f"ws://{host}:{port}/ws"
+        scheme = "wss" if tls else "ws"
+        uri = f"{scheme}://{host}:{port}/ws"
         self.ws = await websockets.connect(uri, max_size=2**22)
 
         # HELLO
@@ -90,6 +93,12 @@ class ChromatinClient:
         try:
             async for raw in self.ws:
                 if isinstance(raw, bytes):
+                    self._binary_frames.append(raw)
+                    if self._debug:
+                        ft = raw[0] if len(raw) > 0 else -1
+                        ci = struct.unpack(">H", raw[5:7])[0] if len(raw) >= 7 else -1
+                        print(f"    [listen] binary frame: type=0x{ft:02x} "
+                              f"chunk_idx={ci} len={len(raw)}")
                     continue
                 msg = json.loads(raw)
                 msg_id = msg.get("id")
@@ -98,6 +107,8 @@ class ChromatinClient:
                 elif self._push_callback:
                     await self._push_callback(msg)
         except websockets.ConnectionClosed:
+            if self._debug:
+                print("    [listen] connection closed")
             pass
         except asyncio.CancelledError:
             raise
@@ -206,7 +217,7 @@ class ChromatinClient:
         return await self.send_command({
             "type": "REGISTER_NAME", "id": mid,
             "name_record": base64.b64encode(name_record).decode(),
-        }, timeout=60.0)
+        }, timeout=300.0)
 
     async def cmd_group_create(self, group_meta: bytes) -> dict:
         mid = self._msg_id()
@@ -256,6 +267,98 @@ class ChromatinClient:
             "group_id": group_id,
             "msg_id": msg_id,
         })
+
+    async def cmd_send_large(self, to_fp: str, blob: bytes,
+                              timeout: float = 60.0) -> dict:
+        """Send a large message via chunked upload."""
+        CHUNK_SIZE = 1048576  # 1 MiB
+        mid = self._msg_id()
+        cmd = {"type": "SEND", "id": mid, "to": to_fp, "size": len(blob)}
+
+        future = asyncio.get_event_loop().create_future()
+        self._pending[mid] = future
+        await self.ws.send(json.dumps(cmd))
+
+        resp = await asyncio.wait_for(future, timeout)
+        if resp.get("type") != "SEND_READY":
+            return resp
+
+        request_id = resp["request_id"]
+
+        num_chunks = (len(blob) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        for i in range(num_chunks):
+            offset = i * CHUNK_SIZE
+            payload = blob[offset:offset + CHUNK_SIZE]
+            frame = bytearray()
+            frame.append(0x01)  # UPLOAD_CHUNK
+            frame += struct.pack(">I", request_id)
+            frame += struct.pack(">H", i)
+            frame += payload
+            await self.ws.send(bytes(frame))
+
+        ok_future = asyncio.get_event_loop().create_future()
+        self._pending[mid] = ok_future
+        return await asyncio.wait_for(ok_future, timeout)
+
+    async def cmd_get_large(self, msg_id: str, timeout: float = 60.0) -> dict:
+        """Get a message, collecting chunked download frames if needed.
+
+        Returns dict with 'blob_bytes' key containing the raw bytes for
+        chunked downloads, or standard response for inline."""
+        # Clear any stale binary frames
+        self._binary_frames.clear()
+
+        mid = self._msg_id()
+        resp = await self.send_command(
+            {"type": "GET", "id": mid, "msg_id": msg_id}, timeout=timeout)
+
+        if resp.get("type") != "OK":
+            return resp
+
+        if resp.get("blob"):
+            resp["blob_bytes"] = base64.b64decode(resp["blob"])
+            return resp
+
+        num_chunks = resp.get("chunks", 0)
+        expected_size = resp.get("size", 0)
+        chunks = {}
+
+        if self._debug:
+            print(f"    [get_large] expecting {num_chunks} chunks, "
+                  f"size={expected_size}, buffered={len(self._binary_frames)}")
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        poll_count = 0
+        while len(chunks) < num_chunks:
+            # Process any buffered binary frames
+            while self._binary_frames:
+                raw = self._binary_frames.pop(0)
+                if len(raw) >= 7 and raw[0] == 0x02:
+                    chunk_index = struct.unpack(">H", raw[5:7])[0]
+                    chunks[chunk_index] = raw[7:]
+                    if self._debug:
+                        print(f"    [get_large] processed chunk {chunk_index}, "
+                              f"have {len(chunks)}/{num_chunks}")
+
+            if len(chunks) >= num_chunks:
+                break
+
+            # Poll: yield control so the listener can receive more frames
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                if self._debug:
+                    print(f"    [get_large] TIMEOUT after {poll_count} polls, "
+                          f"have chunks: {sorted(chunks.keys())}")
+                raise asyncio.TimeoutError(
+                    f"chunked download timeout: got {len(chunks)}/{num_chunks} chunks")
+            poll_count += 1
+            await asyncio.sleep(0.05)
+
+        result = bytearray()
+        for i in range(num_chunks):
+            result += chunks[i]
+        resp["blob_bytes"] = bytes(result[:expected_size])
+        return resp
 
     async def cmd_group_destroy(self, group_id: str) -> dict:
         mid = self._msg_id()
