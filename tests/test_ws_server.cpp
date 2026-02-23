@@ -604,13 +604,17 @@ TEST_F(WsServerTest, SendAndList) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Manually add sender to recipient's allowlist.
-    // Allowlist key: SHA3-256("allowlist:" || recipient_fp) || sender_fp = 64 bytes
+    // Allowlist key: SHA3-256("inbox:" || recipient_fp) || sender_fp = 64 bytes
     auto allowlist_prefix = crypto::sha3_256_prefixed("inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.reserve(64);
     allow_key.insert(allow_key.end(), allowlist_prefix.begin(), allowlist_prefix.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
-    std::vector<uint8_t> allow_value = {0x01};  // non-empty = allowed
+    // Minimal allowlist entry: owner_fp(32) || allowed_fp(32) || action(1)
+    std::vector<uint8_t> allow_value;
+    allow_value.insert(allow_value.end(), recipient_fp.begin(), recipient_fp.end());
+    allow_value.insert(allow_value.end(), sender_fp.begin(), sender_fp.end());
+    allow_value.push_back(0x01);  // action = allow
     storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
 
     // Connect and authenticate as sender
@@ -754,11 +758,93 @@ TEST_F(WsServerTest, AllowAndRevoke) {
     EXPECT_EQ(root2["type"].asString(), "OK");
     EXPECT_EQ(root2["id"].asInt(), 5);
 
-    // Verify the entry was deleted from storage
-    auto deleted = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
-    EXPECT_FALSE(deleted.has_value()) << "allowlist entry should be deleted after REVOKE";
+    // Verify the entry is stored with action=0x00 (revoke entry kept for scan)
+    auto revoked = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
+    ASSERT_TRUE(revoked.has_value()) << "revoke entry should be stored";
+    ASSERT_GE(revoked->size(), 65u);
+    EXPECT_EQ((*revoked)[64], 0x00) << "action should be 0x00 (revoke)";
 
     client.close();
+}
+
+TEST_F(WsServerTest, RevokeLastContactBlocksSend) {
+    start_ws_server();
+
+    // Alice and Bob: Alice allows Bob, then revokes Bob. Bob tries to SEND → 403.
+    auto alice_kp = crypto::generate_keypair();
+    auto bob_kp = crypto::generate_keypair();
+    auto alice_fp = crypto::sha3_256(alice_kp.public_key);
+    auto bob_fp = crypto::sha3_256(bob_kp.public_key);
+
+    // Connect Alice and set up allowlist
+    TestWsClient alice_client;
+    ASSERT_TRUE(alice_client.connect("127.0.0.1", ws_port_));
+    if (!authenticate(alice_client, alice_kp)) {
+        GTEST_SKIP() << "Node not responsible for Alice";
+    }
+
+    // Alice ALLOWs Bob
+    const std::string domain = "chromatin:allowlist:";
+    {
+        std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), alice_fp.begin(), alice_fp.end());
+        signed_data.push_back(0x01);
+        signed_data.insert(signed_data.end(), bob_fp.begin(), bob_fp.end());
+        uint64_t seq = 1;
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+
+        auto sig = crypto::sign(signed_data, alice_kp.secret_key);
+        std::string allow_msg = R"({"type":"ALLOW","id":10,"fingerprint":")" + to_hex(bob_fp) +
+                                R"(","sequence":1,"signature":")" + to_hex(sig) + R"("})";
+        alice_client.send_text(allow_msg);
+        auto resp = alice_client.recv_text(5000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        EXPECT_EQ(root["type"].asString(), "OK");
+    }
+
+    // Alice REVOKEs Bob
+    {
+        std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), alice_fp.begin(), alice_fp.end());
+        signed_data.push_back(0x00);
+        signed_data.insert(signed_data.end(), bob_fp.begin(), bob_fp.end());
+        uint64_t seq = 2;
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+
+        auto sig = crypto::sign(signed_data, alice_kp.secret_key);
+        std::string revoke_msg = R"({"type":"REVOKE","id":11,"fingerprint":")" + to_hex(bob_fp) +
+                                 R"(","sequence":2,"signature":")" + to_hex(sig) + R"("})";
+        alice_client.send_text(revoke_msg);
+        auto resp = alice_client.recv_text(5000);
+        ASSERT_TRUE(resp.has_value());
+        auto root = parse_json(*resp);
+        EXPECT_EQ(root["type"].asString(), "OK");
+    }
+    alice_client.close();
+
+    // Bob connects and tries to SEND to Alice → should get 403
+    TestWsClient bob_client;
+    ASSERT_TRUE(bob_client.connect("127.0.0.1", ws_port_));
+    if (!authenticate(bob_client, bob_kp)) {
+        GTEST_SKIP() << "Node not responsible for Bob";
+    }
+
+    // Bob sends to Alice
+    std::string send_msg = R"({"type":"SEND","id":12,"to":")" + to_hex(alice_fp) +
+                           R"(","blob":")" + to_hex(std::vector<uint8_t>{0xDE, 0xAD}) + R"("})";
+    bob_client.send_text(send_msg);
+    auto send_resp = bob_client.recv_text(5000);
+    ASSERT_TRUE(send_resp.has_value()) << "no response to SEND";
+    auto send_root = parse_json(*send_resp);
+    EXPECT_EQ(send_root["type"].asString(), "ERROR");
+    EXPECT_EQ(send_root["code"].asInt(), 403);
+
+    bob_client.close();
 }
 
 TEST_F(WsServerTest, AllowRejectsStaleSequence) {
@@ -1300,12 +1386,16 @@ TEST_F(WsServerTest, SendLargeChunked) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Manually add sender to recipient's allowlist
-    // Key format: SHA3-256("allowlist:" || recipient_fp) || sender_fp
+    // Key format: SHA3-256("inbox:" || recipient_fp) || sender_fp
     auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
-    std::vector<uint8_t> allow_value = {0x01};
+    // Minimal allowlist entry: owner_fp(32) || allowed_fp(32) || action(1)
+    std::vector<uint8_t> allow_value;
+    allow_value.insert(allow_value.end(), recipient_fp.begin(), recipient_fp.end());
+    allow_value.insert(allow_value.end(), sender_fp.begin(), sender_fp.end());
+    allow_value.push_back(0x01);  // action = allow
     storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
 
     // Connect and authenticate as sender
@@ -1511,7 +1601,11 @@ TEST_F(WsServerTest, UploadAlreadyInProgressRejects) {
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
-    std::vector<uint8_t> allow_value = {0x01};
+    // Minimal allowlist entry: owner_fp(32) || allowed_fp(32) || action(1)
+    std::vector<uint8_t> allow_value;
+    allow_value.insert(allow_value.end(), recipient_fp.begin(), recipient_fp.end());
+    allow_value.insert(allow_value.end(), sender_fp.begin(), sender_fp.end());
+    allow_value.push_back(0x01);  // action = allow
     storage_->put(storage::TABLE_ALLOWLISTS, allow_key, allow_value);
 
     // Connect and authenticate

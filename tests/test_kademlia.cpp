@@ -2248,6 +2248,40 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
         auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
         EXPECT_TRUE(result.has_value()) << "Inbox message to user with no allowlist should be stored";
     }
+
+    // --- Test 4: Revoke user B from A's allowlist, then B tries to send — should FAIL ---
+    {
+        // Store revoke entry (action=0x00) for user B on user A's allowlist
+        std::vector<uint8_t> revoke_value;
+        revoke_value.insert(revoke_value.end(), user_a_fp.begin(), user_a_fp.end());
+        revoke_value.insert(revoke_value.end(), user_b_fp.begin(), user_b_fp.end());
+        revoke_value.push_back(0x00);  // action = revoke
+        for (int i = 0; i < 7; ++i) revoke_value.push_back(0x00);
+        revoke_value.push_back(0x02);  // sequence = 2
+
+        bool revoke_ok = n1.storage->put(TABLE_ALLOWLISTS, allow_storage_key, revoke_value);
+        ASSERT_TRUE(revoke_ok) << "Failed to store revoke entry";
+
+        // User B tries to send — should be rejected since action is 0x00
+        auto msg = build_inbox_msg(user_a_fp, user_b_fp);
+        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+
+        // Use a different msg_id so we don't hit dedup
+        Hash msg_id{};
+        msg_id.fill(0xEE);
+        // Overwrite msg_id bytes in the message (offset 32..63)
+        std::copy(msg_id.begin(), msg_id.end(), msg.begin() + 32);
+
+        bool ok = n1.kad->store(inbox_key, 0x02, msg);
+
+        // Verify the message was NOT stored
+        std::vector<uint8_t> idx_key;
+        idx_key.insert(idx_key.end(), user_a_fp.begin(), user_a_fp.end());
+        idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
+        auto result = n1.storage->get(TABLE_INBOX_INDEX, idx_key);
+        EXPECT_FALSE(result.has_value())
+            << "Inbox message from revoked sender B should be rejected";
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2435,11 +2469,11 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
         ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, value));
     }
 
-    // Check the REVOKE entry is Op::DEL
+    // Check the REVOKE entry is Op::ADD (revoke entries are stored, not deleted)
     auto entries_revoke = n1.repl_log->entries_after(allowlist_key, seq_after_allow);
     ASSERT_FALSE(entries_revoke.empty());
-    EXPECT_EQ(entries_revoke.back().op, Op::DEL)
-        << "REVOKE should record Op::DEL, not Op::ADD";
+    EXPECT_EQ(entries_revoke.back().op, Op::ADD)
+        << "REVOKE should record Op::ADD (entry stored, not deleted)";
 }
 
 // ---------------------------------------------------------------------------

@@ -105,6 +105,15 @@ public:
         const std::vector<NodeInfo>& nodes,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(2000));
 
+    // Query remote nodes for their stored value for a given key.
+    // Sends FIND_VALUE to each node, waits up to timeout for VALUE responses.
+    // Also includes local lookup. Returns all collected values.
+    struct NodeValue { NodeInfo node; std::optional<std::vector<uint8_t>> value; };
+    std::vector<NodeValue> query_remote_values(
+        const crypto::Hash& key,
+        const std::vector<NodeInfo>& nodes,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(2000));
+
 private:
     const config::Config& cfg_;
     NodeInfo self_;
@@ -171,6 +180,16 @@ private:
     mutable std::mutex seq_query_mutex_;
     std::condition_variable seq_query_cv_;
     std::unordered_map<crypto::Hash, PendingSeqQuery, crypto::HashHash> pending_seq_queries_;
+
+    // Pending VALUE response tracking for query_remote_values()
+    struct PendingValueQuery {
+        crypto::Hash key;
+        std::unordered_map<NodeId, std::optional<std::vector<uint8_t>>, NodeIdHash> responses;
+        size_t expected = 0;
+    };
+    mutable std::mutex value_query_mutex_;
+    std::condition_variable value_query_cv_;
+    std::unordered_map<crypto::Hash, PendingValueQuery, crypto::HashHash> pending_value_queries_;
 
     // Message handlers
     void handle_ping(const Message& msg, const std::string& from, uint16_t port);

@@ -966,7 +966,8 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
             allow_check.insert(allow_check.end(),
                                session->fingerprint.begin(), session->fingerprint.end());
             auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
-            if (!allowed) {
+            bool sender_allowed = allowed && allowed->size() > 64 && (*allowed)[64] == 0x01;
+            if (!sender_allowed) {
                 // Check if any allowlist exists for this recipient
                 bool has_allowlist = false;
                 storage_.scan(storage::TABLE_ALLOWLISTS,
@@ -1030,7 +1031,8 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
         allow_check.insert(allow_check.end(),
                            session->fingerprint.begin(), session->fingerprint.end());
         auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
-        if (!allowed) {
+        bool sender_allowed = allowed && allowed->size() > 64 && (*allowed)[64] == 0x01;
+        if (!sender_allowed) {
             // Check if any allowlist exists for this recipient
             bool has_allowlist = false;
             storage_.scan(storage::TABLE_ALLOWLISTS,
@@ -1373,14 +1375,11 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
     crypto::Hash owner_fp = session->fingerprint;
     std::vector<uint8_t> owner_pubkey(session->pubkey.begin(), session->pubkey.end());
 
-    // Dispatch to worker pool — delete local entry, replicate revoke
+    // Dispatch to worker pool — store revoke entry and replicate
     if (!workers_.post([this, ws, id, allowlist_key, allowed_fp, owner_fp,
-                   storage_key = std::move(storage_key),
                    sig_bytes = std::move(*sig_bytes),
                    owner_pubkey = std::move(owner_pubkey),
                    sequence]() {
-        bool ok = storage_.del(storage::TABLE_ALLOWLISTS, storage_key);
-
         // Build revoke entry for replication: owner_fp(32) || allowed_fp(32) || action(0x00) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
         uint16_t pk_len = static_cast<uint16_t>(owner_pubkey.size());
         std::vector<uint8_t> revoke_value;
@@ -1398,11 +1397,9 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
 
         kad_.store(allowlist_key, 0x04, revoke_value);
 
-        loop_->defer([this, ws, id, ok]() {
+        loop_->defer([this, ws, id]() {
             if (connections_.count(ws) == 0) return;
 
-            // Even if del returns false (key didn't exist), the revoke is still valid
-            (void)ok;
             Json::Value resp;
             resp["type"] = "OK";
             resp["id"] = id;
@@ -1762,34 +1759,59 @@ void WsServer<SSL>::handle_resolve_name(ws_t* ws, const Json::Value& msg) {
     std::vector<uint8_t> name_bytes(name.begin(), name.end());
     auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
 
-    auto record = storage_.get(storage::TABLE_NAMES,
-        std::vector<uint8_t>(name_key.begin(), name_key.end()));
+    // Quorum read: query all R responsible nodes for the name record,
+    // then apply lower-fingerprint tiebreaker for conflict resolution.
+    auto nodes = kad_.responsible_nodes(name_key);
 
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
+    if (!workers_.post([this, ws, id, name_key, nodes]() {
+        auto results = kad_.query_remote_values(name_key, nodes);
 
-    if (!record || record->empty()) {
-        resp["found"] = false;
-        send_json(ws, resp);
-        return;
+        // Helper: extract fingerprint from a name record
+        // Format: name_len(1) || name(N) || fingerprint(32) || ...
+        auto extract_fp = [](const std::vector<uint8_t>& record) -> std::optional<crypto::Hash> {
+            if (record.empty()) return std::nullopt;
+            uint8_t name_len = record[0];
+            size_t fp_offset = 1 + name_len;
+            if (record.size() < fp_offset + 32) return std::nullopt;
+            crypto::Hash fp{};
+            std::copy_n(record.data() + fp_offset, 32, fp.begin());
+            return fp;
+        };
+
+        // Collect all valid name records with their fingerprints
+        std::optional<crypto::Hash> winner_fp;
+        std::optional<std::vector<uint8_t>> winner_record;
+
+        for (const auto& nv : results) {
+            if (!nv.value || nv.value->empty()) continue;
+            auto fp = extract_fp(*nv.value);
+            if (!fp) continue;
+
+            // Lower fingerprint wins (deterministic tiebreaker)
+            if (!winner_fp || *fp < *winner_fp) {
+                winner_fp = *fp;
+                winner_record = nv.value;
+            }
+        }
+
+        loop_->defer([this, ws, id, winner_fp, winner_record]() {
+            if (connections_.count(ws) == 0) return;
+
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+
+            if (!winner_fp) {
+                resp["found"] = false;
+            } else {
+                resp["found"] = true;
+                resp["fingerprint"] = to_hex(*winner_fp);
+            }
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
-
-    // Parse name record: name_len(1) || name(N) || fingerprint(32) || ...
-    uint8_t name_len = (*record)[0];
-    size_t fp_offset = 1 + name_len;
-    if (record->size() < fp_offset + 32) {
-        resp["found"] = false;
-        send_json(ws, resp);
-        return;
-    }
-
-    crypto::Hash fingerprint{};
-    std::copy_n(record->data() + fp_offset, 32, fingerprint.begin());
-
-    resp["found"] = true;
-    resp["fingerprint"] = to_hex(fingerprint);
-    send_json(ws, resp);
 }
 
 // ---------- GET_PROFILE handler ----------

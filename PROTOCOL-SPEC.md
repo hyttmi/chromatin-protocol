@@ -581,9 +581,11 @@ key after confirming `SHA3-256(pubkey) == owner_fingerprint`. Verification
 is self-contained — no profile lookup is needed.
 
 Receiving nodes parse `allowed_fp` from the Kademlia value to build the
-composite storage key. REVOKE (action=0x00) deletes the entry rather than
-storing it. To block a user, REVOKE them from the allowlist. There is no
-separate blocklist.
+composite storage key. Both ALLOW (action=0x01) and REVOKE (action=0x00)
+entries are stored — revoke entries are kept so that `scan()` still finds
+"allowlist exists" even after all contacts are revoked. Point lookups verify
+`action == 0x01` to confirm the sender is actively allowed. To block a user,
+REVOKE them from the allowlist. There is no separate blocklist.
 
 ### Group Message (data_type 0x05)
 
@@ -843,8 +845,8 @@ stored sequence. Response: `{"type": "OK", "id": 7}`
 {"type": "REVOKE", "id": 8, "fingerprint": "<hex>", "sequence": 2, "signature": "<hex>"}
 ```
 
-Same as ALLOW but with `action(0x00)`. Deletes the allowlist entry for the
-specified fingerprint. Response: `{"type": "OK", "id": 8}`
+Same as ALLOW but with `action(0x00)`. Stores the revoke entry (not deleted)
+so the allowlist remains non-empty. Response: `{"type": "OK", "id": 8}`
 
 **CONTACT_REQUEST** — Send contact request with PoW:
 ```json
@@ -880,8 +882,11 @@ Response:
 ```
 If not found: `{"type": "OK", "id": 11, "found": false}`
 
-Only searches local storage (the node must be responsible for the name's
-routing key to have the data).
+Performs a quorum read: queries all R responsible nodes via FIND_VALUE and
+collects name records. If multiple conflicting records exist (race condition
+during registration), the record with the lower fingerprint wins
+(deterministic tiebreaker). This ensures convergent name resolution even
+before SYNC propagates all records to all responsible nodes.
 
 **GET_PROFILE** — Fetch a user's profile by fingerprint:
 ```json
@@ -1244,9 +1249,10 @@ SYNC_REQ/SYNC_RESP instead.
 ### Inbox Message STORE Validation
 
 1. Check recipient's allowlist:
-   - If recipient has an allowlist AND sender is on it → allow
-   - If recipient has an allowlist AND sender is NOT on it → reject
-   - If recipient has NO allowlist entries → allow (open inbox, new user)
+   - Point lookup for sender's composite key: if found with `action == 0x01` → allow
+   - If not found or `action != 0x01` → scan for any allowlist entries for recipient
+   - If any entries exist (including revoke entries) → reject (sender not allowed)
+   - If no entries at all → allow (open inbox, new user)
 2. `blob_length` <= 50 MiB
 3. `msg_id` is unique — reject duplicates (prevents replay attacks)
 
@@ -1267,10 +1273,11 @@ SYNC_REQ/SYNC_RESP instead.
 
 ### REVOKE Replication
 
-When a REVOKE (action=0x00) is processed, it is recorded in the replication
-log as `Op::DEL`. This ensures that when other responsible nodes sync via
-SYNC_REQ/SYNC_RESP, the allowlist entry is deleted on those nodes as well.
-ALLOW (action=0x01) is recorded as `Op::ADD`.
+Both ALLOW (action=0x01) and REVOKE (action=0x00) are stored as entries and
+recorded in the replication log as `Op::ADD`. Revoke entries are preserved
+(not deleted) so that `scan()` always detects "allowlist exists" even when
+all contacts have been revoked. Point lookups check the `action` byte to
+distinguish active allows from revokes.
 
 ### Group Metadata STORE Validation
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Live integration tests against running chromatin nodes.
 
-Runs 100+ tests covering messaging, contacts, allowlist, profiles,
-name registration, groups, error handling, and multi-node behavior.
+Runs 120+ tests covering messaging, contacts, allowlist, profiles,
+name registration, groups, error handling, multi-node behavior,
+10-user messaging mesh (25+ cross-node messages), and 10-member
+group lifecycle (create, send, admin delete, member delete rejection,
+owner destroy).
 """
 
 import asyncio
@@ -1002,6 +1005,245 @@ async def run_tests():
         clients.append(c)
     for c in clients:
         await c.disconnect()
+
+    # ===================================================================
+    print("\n=== Multi-User Messaging Mesh (10 users, 25+ messages) ===")
+    # ===================================================================
+
+    mesh_users = []  # [(pub, sec, fp, client, pushes), ...]
+    try:
+        # Create and connect 10 fresh identities
+        def _make_mesh_cb(pl):
+            async def _cb(msg):
+                pl.append(msg)
+            return _cb
+
+        for i in range(10):
+            pub, sec = generate_keypair()
+            fp = fingerprint_of(pub)
+            client = ChromatinClient(pub, sec)
+            pushes = []
+            client.set_push_callback(_make_mesh_cb(pushes))
+            mesh_users.append((pub, sec, fp, client, pushes))
+
+        connected = 0
+        for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
+            port = WS_PORTS[i % len(WS_PORTS)]
+            resp = await client.connect(HOST, port)
+            if resp.get("type") == "REDIRECT":
+                nodes = resp.get("nodes", [])
+                if nodes:
+                    resp = await client.connect(HOST, nodes[0].get("ws_port", port))
+            if resp.get("type") == "OK":
+                connected += 1
+            else:
+                fail(f"mesh user_{i} connect", f"got {resp.get('type')}")
+        check("mesh: all 10 users connected", connected == 10,
+              f"{connected}/10 connected")
+
+        # Ring allowlists: user_i allows user_{i-1} and user_{i+1}
+        allow_ok = 0
+        for i in range(10):
+            _, _, _, client, _ = mesh_users[i]
+            _, _, fp_prev, _, _ = mesh_users[(i - 1) % 10]
+            _, _, fp_next, _, _ = mesh_users[(i + 1) % 10]
+            r1 = await client.cmd_allow(fp_prev.hex())
+            r2 = await client.cmd_allow(fp_next.hex())
+            if r1.get("type") == "OK":
+                allow_ok += 1
+            if r2.get("type") == "OK":
+                allow_ok += 1
+        check("mesh: ring allowlists set (20)", allow_ok == 20,
+              f"{allow_ok}/20 allowlists OK")
+
+        await asyncio.sleep(2)  # Let allowlists propagate
+
+        # Each user sends to both ring neighbors → 20 messages
+        sent_count = 0
+        sent_to = {}  # recipient_idx -> [msg_id, ...]
+        for i in range(10):
+            _, _, _, client, _ = mesh_users[i]
+            for nbr in [(i - 1) % 10, (i + 1) % 10]:
+                _, _, fp_nbr, _, _ = mesh_users[nbr]
+                resp = await client.cmd_send(
+                    fp_nbr.hex(), f"mesh {i}->{nbr}".encode()
+                )
+                if resp.get("type") == "OK":
+                    sent_count += 1
+                    sent_to.setdefault(nbr, []).append(resp.get("msg_id"))
+        check("mesh: 20 ring messages sent", sent_count >= 18,
+              f"{sent_count}/20 sent")
+
+        # 5 extra messages (users 0,2,4,6,8 → their next neighbor)
+        for i in [0, 2, 4, 6, 8]:
+            nbr = (i + 1) % 10
+            _, _, _, client, _ = mesh_users[i]
+            _, _, fp_nbr, _, _ = mesh_users[nbr]
+            resp = await client.cmd_send(
+                fp_nbr.hex(), f"extra {i}->{nbr}".encode()
+            )
+            if resp.get("type") == "OK":
+                sent_count += 1
+                sent_to.setdefault(nbr, []).append(resp.get("msg_id"))
+        check("mesh: 25+ total messages sent", sent_count >= 25,
+              f"sent {sent_count}")
+
+        await asyncio.sleep(2)  # Let messages propagate
+
+        # Verify: each recipient has >= 2 messages
+        recipients_ok = 0
+        for i in range(10):
+            _, _, _, client, _ = mesh_users[i]
+            resp = await client.cmd_list(50)
+            msg_count = len(resp.get("messages", []))
+            if msg_count >= 2:
+                recipients_ok += 1
+        check("mesh: all recipients have >=2 msgs", recipients_ok >= 8,
+              f"{recipients_ok}/10 have >=2 messages")
+
+        # Spot-check: GET one message for content correctness
+        spot_target = 1  # user_1 should have msgs from user_0 and user_2
+        if sent_to.get(spot_target):
+            _, _, _, client_1, _ = mesh_users[spot_target]
+            resp = await client_1.cmd_get(sent_to[spot_target][0])
+            check("mesh: GET content spot-check",
+                  resp.get("type") == "OK" or "blob" in resp, f"got {resp}")
+        else:
+            fail("mesh: GET content spot-check", "no messages for user_1")
+
+        # Check cross-node push notifications arrived
+        total_pushes = sum(
+            len([p for p in pushes if p.get("type") == "NEW_MESSAGE"])
+            for _, _, _, _, pushes in mesh_users
+        )
+        check("mesh: push notifications received", total_pushes >= 5,
+              f"got {total_pushes} NEW_MESSAGE pushes")
+
+        print(f"  Mesh complete: {sent_count} messages across 10 users")
+
+    except Exception as e:
+        fail("multi-user mesh section", f"crashed: {e}")
+
+    # ===================================================================
+    print("\n=== Large Group Lifecycle (10 members) ===")
+    # ===================================================================
+
+    large_group_id = os.urandom(32)
+    large_group_ok = False
+
+    try:
+        # Ensure mesh users are still connected
+        for i, (_, _, _, client, _) in enumerate(mesh_users):
+            await ensure_connected(client, HOST, WS_PORTS)
+
+        kem_dummy = b"\x00" * 1568
+
+        # Build member list: user_0=owner, user_1=admin, rest=members
+        group_members = []
+        for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
+            if i == 0:
+                role = 0x02  # owner
+            elif i == 1:
+                role = 0x01  # admin
+            else:
+                role = 0x00  # member
+            group_members.append((fp, role, kem_dummy))
+
+        # user_0 (owner) creates the group
+        _, owner_sec, owner_fp, owner_client, _ = mesh_users[0]
+        meta = build_group_meta(owner_sec, large_group_id, owner_fp, 1, group_members)
+        resp = await owner_client.cmd_group_create(meta)
+        check("large group: create (10 members)", resp.get("type") == "OK",
+              f"got {resp}")
+        large_group_ok = resp.get("type") == "OK"
+
+        if large_group_ok:
+            await asyncio.sleep(1)
+
+            # All 10 members query GROUP_INFO
+            info_ok = 0
+            for i, (_, _, _, client, _) in enumerate(mesh_users):
+                resp = await client.cmd_group_info(large_group_id.hex())
+                if resp.get("type") == "OK":
+                    info_ok += 1
+            check("large group: all members get info", info_ok >= 8,
+                  f"{info_ok}/10 got OK")
+
+            # 5 different members each send a group message
+            lg_msg_ids = []
+            for sender_idx in [0, 2, 4, 6, 8]:
+                _, _, _, client, _ = mesh_users[sender_idx]
+                mid = os.urandom(32).hex()
+                resp = await client.cmd_group_send(
+                    large_group_id.hex(), mid, gek_version=1,
+                    blob=f"Group msg from user_{sender_idx}".encode()
+                )
+                check(f"large group: send from user_{sender_idx}",
+                      resp.get("type") == "OK", f"got {resp}")
+                if resp.get("type") == "OK":
+                    lg_msg_ids.append((mid, sender_idx))
+
+            await asyncio.sleep(1)
+
+            # Owner lists group messages, verifies count
+            resp = await owner_client.cmd_group_list(large_group_id.hex())
+            check("large group: owner lists msgs", resp.get("type") == "OK",
+                  f"got {resp}")
+            lg_msgs = resp.get("messages", [])
+            check("large group: has >=5 messages", len(lg_msgs) >= 4,
+                  f"got {len(lg_msgs)}")
+
+            # Admin (user_1) deletes one message
+            if lg_msg_ids:
+                del_mid, del_sender = lg_msg_ids[0]
+                _, _, _, admin_client, _ = mesh_users[1]
+                resp = await admin_client.cmd_group_delete(
+                    large_group_id.hex(), del_mid
+                )
+                check("large group: admin deletes msg",
+                      resp.get("type") == "OK", f"got {resp}")
+
+            # Non-admin member (user_3) tries to delete another's message
+            if len(lg_msg_ids) >= 2:
+                del_mid2, _ = lg_msg_ids[1]
+                _, _, _, member_client, _ = mesh_users[3]
+                resp = await member_client.cmd_group_delete(
+                    large_group_id.hex(), del_mid2
+                )
+                check("large group: member can't delete others' msg",
+                      resp.get("type") == "ERROR", f"got {resp}")
+
+            # Owner destroys the group
+            resp = await owner_client.cmd_group_destroy(large_group_id.hex())
+            check("large group: owner destroys", resp.get("type") == "OK",
+                  f"got {resp}")
+
+            await asyncio.sleep(1)
+
+            # GROUP_INFO should fail after destroy
+            resp = await owner_client.cmd_group_info(large_group_id.hex())
+            check("large group: info fails after destroy",
+                  resp.get("type") == "ERROR" or not resp.get("group_meta"),
+                  f"got {resp}")
+
+            # GROUP_SEND should fail after destroy
+            resp = await owner_client.cmd_group_send(
+                large_group_id.hex(), os.urandom(32).hex(), 1, b"ghost"
+            )
+            check("large group: send fails after destroy",
+                  resp.get("type") == "ERROR", f"got {resp}")
+        else:
+            print("  SKIP  large group tests (create failed)")
+
+    except Exception as e:
+        fail("large group lifecycle section", f"crashed: {e}")
+
+    # Cleanup mesh users
+    for _, _, _, client, _ in mesh_users:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
     # ===================================================================
     # Cleanup

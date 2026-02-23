@@ -1010,14 +1010,11 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         composite_key.insert(composite_key.end(), key.begin(), key.end());
         composite_key.insert(composite_key.end(), allowed_fp.begin(), allowed_fp.end());
 
-        if (action == 0x01) {
-            // ALLOW: store full entry value
-            std::vector<uint8_t> entry_vec(value.begin(), value.end());
-            storage_.put(storage::TABLE_ALLOWLISTS, composite_key, entry_vec);
-        } else {
-            // REVOKE: delete entry
-            storage_.del(storage::TABLE_ALLOWLISTS, composite_key);
-        }
+        // Both ALLOW (0x01) and REVOKE (0x00): store the full entry.
+        // Revoke entries are kept so scan() still finds "allowlist exists"
+        // even after all contacts are revoked.
+        std::vector<uint8_t> entry_vec(value.begin(), value.end());
+        storage_.put(storage::TABLE_ALLOWLISTS, composite_key, entry_vec);
     } else if (data_type == 0x03) {
         // Contact request: composite key storage
         // Value: recipient_fp(32) || sender_fp(32) || pow_nonce(8 BE) || blob_length(4 BE) || blob
@@ -1101,12 +1098,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
 
     // 3. Record mutation in the replication log + fire callback
     if (log_and_notify) {
-        // For allowlist REVOKE (data_type 0x04, action 0x00), record Op::DEL so
-        // that sync recipients correctly delete the entry instead of adding it.
         auto op = replication::Op::ADD;
-        if (data_type == 0x04 && value.size() > 64 && value[64] == 0x00) {
-            op = replication::Op::DEL;
-        }
         repl_log_.append(key, op, data_type, value);
 
         if (on_store_) {
@@ -1232,9 +1224,37 @@ void Kademlia::handle_find_value(const Message& msg, const std::string& from, ui
 }
 
 void Kademlia::handle_value(const Message& msg, const std::string& from, uint16_t port) {
-    // VALUE responses are handled by find_value() via a callback mechanism.
-    // For now, just log.
-    spdlog::debug("Received VALUE from {}:{} ({} bytes payload)", from, port, msg.payload.size());
+    // VALUE response format: key(32) || found(1) || value_length(4 BE) || value
+    const auto& data = msg.payload;
+    if (data.size() < 37) {
+        spdlog::debug("VALUE payload too short from {}:{}", from, port);
+        return;
+    }
+
+    crypto::Hash key{};
+    std::copy_n(data.data(), 32, key.begin());
+    uint8_t found = data[32];
+    uint32_t vlen = (static_cast<uint32_t>(data[33]) << 24) |
+                    (static_cast<uint32_t>(data[34]) << 16) |
+                    (static_cast<uint32_t>(data[35]) << 8) |
+                    static_cast<uint32_t>(data[36]);
+
+    std::optional<std::vector<uint8_t>> value;
+    if (found == 0x01 && data.size() >= 37 + vlen) {
+        value = std::vector<uint8_t>(data.begin() + 37, data.begin() + 37 + vlen);
+    }
+
+    // Populate pending value query using sender NodeId from message header
+    {
+        std::lock_guard lock(value_query_mutex_);
+        auto it = pending_value_queries_.find(key);
+        if (it != pending_value_queries_.end()) {
+            it->second.responses[msg.sender] = value;
+            value_query_cv_.notify_all();
+        }
+    }
+
+    spdlog::debug("Received VALUE from {}:{} found={} vlen={}", from, port, found, vlen);
 }
 
 // ---------------------------------------------------------------------------
@@ -1764,10 +1784,10 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
     composite_key.insert(composite_key.end(), allowlist_key.begin(), allowlist_key.end());
     composite_key.insert(composite_key.end(), sender_fp.begin(), sender_fp.end());
 
-    // Point lookup: is sender explicitly on the allowlist?
+    // Point lookup: is sender explicitly on the allowlist with active ALLOW?
     auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, composite_key);
-    if (allowed) {
-        return true;  // Sender is on the allowlist
+    if (allowed && allowed->size() > 64 && (*allowed)[64] == 0x01) {
+        return true;  // Sender has active ALLOW entry
     }
 
     // Sender not found — check if ANY allowlist entries exist for this recipient.
@@ -2166,15 +2186,10 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 storage_.del(storage::TABLE_GROUP_BLOBS, gm_key);
                 spdlog::debug("SYNC: applied DEL for group message");
             } else if (entry.data_type == 0x04 && entry.data.size() >= 64) {
-                // Allowlist REVOKE: entry.data is the full revoke value
-                // (owner_fp(32) || allowed_fp(32) || ...). Build composite storage
-                // key: routing_key(32) || allowed_fp(32) where routing_key = `key`.
-                std::vector<uint8_t> al_key;
-                al_key.reserve(64);
-                al_key.insert(al_key.end(), key.begin(), key.end());
-                al_key.insert(al_key.end(), entry.data.begin() + 32, entry.data.begin() + 64);
-                storage_.del(storage::TABLE_ALLOWLISTS, al_key);
-                spdlog::debug("SYNC: applied DEL for allowlist entry");
+                // Allowlist REVOKE via legacy DEL: store entry instead of deleting
+                store_locally(key, entry.data_type, entry.data,
+                              /*validate=*/true, /*log_and_notify=*/false);
+                spdlog::debug("SYNC: applied DEL->store for allowlist revoke entry");
             } else if (entry.data_type == 0x06 && entry.data.size() >= 32) {
                 // Group meta delete: delete_info = group_id(32)
                 std::vector<uint8_t> gm_key(entry.data.begin(), entry.data.begin() + 32);
@@ -2358,6 +2373,77 @@ std::vector<Kademlia::NodeSeq> Kademlia::query_remote_seqs(
 
 size_t Kademlia::write_quorum() const {
     return std::min(static_cast<size_t>(2), replication_factor());
+}
+
+std::vector<Kademlia::NodeValue> Kademlia::query_remote_values(
+    const crypto::Hash& key,
+    const std::vector<NodeInfo>& nodes,
+    std::chrono::milliseconds timeout) {
+
+    // Count remote nodes (exclude self — we'll do a local lookup)
+    size_t remote_count = 0;
+    for (const auto& node : nodes) {
+        if (node.id != self_.id) ++remote_count;
+    }
+
+    // Register pending query for remote nodes
+    if (remote_count > 0) {
+        std::lock_guard lock(value_query_mutex_);
+        PendingValueQuery pq;
+        pq.key = key;
+        pq.expected = remote_count;
+        pending_value_queries_[key] = std::move(pq);
+    }
+
+    // Send FIND_VALUE to remote nodes
+    std::vector<uint8_t> payload(key.begin(), key.end());
+    for (const auto& node : nodes) {
+        if (node.id == self_.id) continue;
+        Message msg = make_message(MessageType::FIND_VALUE, payload);
+        send_to_node(node, msg);
+    }
+
+    // Wait for responses
+    if (remote_count > 0) {
+        std::unique_lock lock(value_query_mutex_);
+        value_query_cv_.wait_for(lock, timeout, [&] {
+            auto it = pending_value_queries_.find(key);
+            return it != pending_value_queries_.end() &&
+                   it->second.responses.size() >= it->second.expected;
+        });
+    }
+
+    // Collect results
+    std::vector<NodeValue> result;
+
+    // Add local result
+    for (const auto& node : nodes) {
+        if (node.id == self_.id) {
+            auto local = storage_.get(storage::TABLE_NAMES, key);
+            result.push_back({node, local});
+            break;
+        }
+    }
+
+    // Add remote results
+    if (remote_count > 0) {
+        std::lock_guard lock(value_query_mutex_);
+        auto it = pending_value_queries_.find(key);
+        if (it != pending_value_queries_.end()) {
+            for (const auto& node : nodes) {
+                if (node.id == self_.id) continue;
+                auto resp_it = it->second.responses.find(node.id);
+                if (resp_it != it->second.responses.end()) {
+                    result.push_back({node, resp_it->second});
+                } else {
+                    result.push_back({node, std::nullopt});
+                }
+            }
+            pending_value_queries_.erase(it);
+        }
+    }
+
+    return result;
 }
 
 std::optional<PendingStore> Kademlia::pending_store_status(const crypto::Hash& key) const {
