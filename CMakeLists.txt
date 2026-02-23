@@ -108,23 +108,29 @@ target_include_directories(uWebSockets INTERFACE ${uwebsockets_SOURCE_DIR}/src)
 target_compile_definitions(uWebSockets INTERFACE UWS_NO_ZLIB)
 target_link_libraries(uWebSockets INTERFACE uSockets)
 
-# --- GoogleTest ---
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG        v1.15.2
-    GIT_SHALLOW    ON
-)
-FetchContent_MakeAvailable(googletest)
+option(CHROMATIN_BUILD_TESTS "Build tests" ON)
+
+if(CHROMATIN_BUILD_TESTS)
+    # --- GoogleTest ---
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG        v1.15.2
+        GIT_SHALLOW    ON
+    )
+    FetchContent_MakeAvailable(googletest)
+endif()
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(sodium REQUIRED IMPORTED_TARGET libsodium)
 
 add_subdirectory(src)
-enable_testing()
-add_subdirectory(tests)
-add_subdirectory(tests/integration)
+if(CHROMATIN_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+    add_subdirectory(tests/integration)
+endif()
 
 # --- Install: config and systemd ---
 include(GNUInstallDirs)
