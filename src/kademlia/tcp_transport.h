@@ -123,7 +123,7 @@ private:
     std::chrono::seconds conn_max_idle_;
     uint64_t max_message_size_;
     size_t max_tcp_clients_;
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_{true};
 
     // Encryption state
     NodeId local_node_id_{};

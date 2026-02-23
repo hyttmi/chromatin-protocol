@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -360,7 +361,10 @@ static bool is_connection_alive(int fd) {
 
 // Helper: create a new TCP connection to addr:port. Returns fd or -1 on failure.
 // Supports both IP addresses and DNS hostnames via getaddrinfo.
-static int create_connection(const std::string& addr, uint16_t port, uint16_t connect_timeout = 5) {
+// Uses non-blocking connect with poll() so the caller can be interrupted
+// by setting running to false (e.g. on SIGINT).
+static int create_connection(const std::string& addr, uint16_t port,
+                             uint16_t connect_timeout, const std::atomic<bool>& running) {
     struct addrinfo hints{}, *result = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -383,20 +387,63 @@ static int create_connection(const std::string& addr, uint16_t port, uint16_t co
     int flag = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-    // Connect timeout via SO_SNDTIMEO
-    struct timeval tv{};
-    tv.tv_sec = connect_timeout;
-    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    // Set non-blocking for connect
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
-    if (connect(sockfd, result->ai_addr, result->ai_addrlen) < 0) {
+    int ret = connect(sockfd, result->ai_addr, result->ai_addrlen);
+    freeaddrinfo(result);
+
+    if (ret == 0) {
+        // Connected immediately — restore blocking mode
+        fcntl(sockfd, F_SETFL, flags);
+        return sockfd;
+    }
+
+    if (errno != EINPROGRESS) {
         close(sockfd);
-        freeaddrinfo(result);
         spdlog::warn("TCP connect to {}:{} failed: {}", addr, port, strerror(errno));
         return -1;
     }
 
-    freeaddrinfo(result);
-    return sockfd;
+    // Wait for connect with poll(), checking running flag every 100ms
+    int remaining_ms = connect_timeout * 1000;
+    while (remaining_ms > 0 && running.load()) {
+        struct pollfd pfd{};
+        pfd.fd = sockfd;
+        pfd.events = POLLOUT;
+        int poll_timeout = std::min(remaining_ms, 100);
+        int pr = poll(&pfd, 1, poll_timeout);
+
+        if (pr > 0 && (pfd.revents & POLLOUT)) {
+            // Check if connect succeeded
+            int err = 0;
+            socklen_t errlen = sizeof(err);
+            getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+            if (err == 0) {
+                // Success — restore blocking mode
+                fcntl(sockfd, F_SETFL, flags);
+                return sockfd;
+            }
+            close(sockfd);
+            spdlog::warn("TCP connect to {}:{} failed: {}", addr, port, strerror(err));
+            return -1;
+        }
+        if (pr < 0 && errno != EINTR) {
+            close(sockfd);
+            spdlog::warn("TCP connect poll to {}:{} failed: {}", addr, port, strerror(errno));
+            return -1;
+        }
+        remaining_ms -= poll_timeout;
+    }
+
+    close(sockfd);
+    if (!running.load()) {
+        spdlog::debug("TCP connect to {}:{} aborted (shutdown)", addr, port);
+    } else {
+        spdlog::warn("TCP connect to {}:{} timed out", addr, port);
+    }
+    return -1;
 }
 
 // Helper: try to send all data on fd. Returns true on success.
@@ -568,7 +615,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
 
     // If no pooled connection, create a new one
     if (fd < 0) {
-        fd = create_connection(addr, port, connect_timeout_);
+        fd = create_connection(addr, port, connect_timeout_, running_);
         if (fd < 0) return;
         spdlog::debug("Created new connection to {} (fd={})", pool_key, fd);
 
@@ -604,7 +651,7 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
             conn_pool_.erase(pool_key);
         }
         close(fd);
-        fd = create_connection(addr, port, connect_timeout_);
+        fd = create_connection(addr, port, connect_timeout_, running_);
         if (fd < 0) return;
 
         if (signing_keypair_) {

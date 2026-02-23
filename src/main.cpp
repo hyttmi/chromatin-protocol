@@ -158,7 +158,10 @@ int main(int argc, char* argv[]) {
                               std::span<const uint8_t> value) {
         ws.on_kademlia_store(key, type, value);
     });
-    g_stop = [&ws]() { ws.stop(); };
+    g_stop = [&ws, &transport]() {
+        transport.stop();  // abort any in-progress TCP connects
+        ws.stop();
+    };
 
     spdlog::info("node ready — WS on port {}, TCP on port {}", cfg.ws_port, cfg.tcp_port);
     ws.run();  // blocks until signal
