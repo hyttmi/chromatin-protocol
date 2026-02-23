@@ -145,6 +145,9 @@ private:
     // Check if a fingerprint has a specific minimum role in a group.
     bool check_group_role(const crypto::Hash& group_id, const crypto::Hash& fingerprint, uint8_t min_role = 0x00);
 
+    // Blocking: local lookup + remote quorum read. Call from worker pool only.
+    std::optional<GroupMeta> fetch_group_meta(const crypto::Hash& group_id);
+
     // Command dispatch
     void on_message(ws_t* ws, std::string_view message);
     void on_binary(ws_t* ws, std::span<const uint8_t> data);

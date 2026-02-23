@@ -224,7 +224,7 @@ void Kademlia::expire_ttl() {
     // Now check repl_log timestamps outside of the foreach transaction
     std::vector<std::vector<uint8_t>> expired_request_keys;
     for (const auto& ri : all_requests) {
-        auto routing_key = crypto::sha3_256_prefixed("requests:", ri.recipient_fp);
+        auto routing_key = crypto::sha3_256_prefixed("inbox:", ri.recipient_fp);
         auto entries = repl_log_.entries_after(routing_key, 0);
         if (entries.empty()) continue;  // no repl_log entry — can't determine age, skip
 
@@ -303,6 +303,7 @@ void Kademlia::transfer_responsibility() {
         {storage::TABLE_NAMES,      0x01},
         {storage::TABLE_REQUESTS,   0x03},
         {storage::TABLE_ALLOWLISTS, 0x04},
+        {storage::TABLE_GROUP_META, 0x06},
     };
 
     size_t pushed = 0;
@@ -1078,10 +1079,11 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
             {storage::TABLE_GROUP_BLOBS, idx_key, blob_value}
         });
     } else if (data_type == 0x06) {
-        // GROUP_META: single-table write keyed by group_id
-        std::vector<uint8_t> group_id_key(value.data(), value.data() + 32);
+        // GROUP_META: single-table write keyed by routing key (= SHA3-256("group:" || group_id)).
+        // This matches profiles/names which also use the routing key as storage key,
+        // allowing FIND_VALUE to look up group meta on remote nodes.
         std::vector<uint8_t> value_vec(value.begin(), value.end());
-        storage_.put(storage::TABLE_GROUP_META, group_id_key, value_vec);
+        storage_.put(storage::TABLE_GROUP_META, key, value_vec);
     } else {
         const char* table_name = nullptr;
         switch (data_type) {
@@ -1185,6 +1187,7 @@ void Kademlia::handle_find_value(const Message& msg, const std::string& from, ui
     // SYNC or scan() instead of FIND_VALUE.
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
+        storage::TABLE_GROUP_META,
     };
 
     std::vector<uint8_t> payload;
@@ -1337,6 +1340,7 @@ std::optional<std::vector<uint8_t>> Kademlia::find_value(const crypto::Hash& key
     // composite keys — they're accessed via scan(), not find_value().
     const char* tables[] = {
         storage::TABLE_PROFILES, storage::TABLE_NAMES,
+        storage::TABLE_GROUP_META,
     };
 
     for (const char* table : tables) {
@@ -2190,10 +2194,9 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 store_locally(key, entry.data_type, entry.data,
                               /*validate=*/true, /*log_and_notify=*/false);
                 spdlog::debug("SYNC: applied DEL->store for allowlist revoke entry");
-            } else if (entry.data_type == 0x06 && entry.data.size() >= 32) {
-                // Group meta delete: delete_info = group_id(32)
-                std::vector<uint8_t> gm_key(entry.data.begin(), entry.data.begin() + 32);
-                storage_.del(storage::TABLE_GROUP_META, gm_key);
+            } else if (entry.data_type == 0x06) {
+                // Group meta delete: stored by routing key (= SYNC key)
+                storage_.del(storage::TABLE_GROUP_META, key);
                 spdlog::debug("SYNC: applied DEL for group meta");
             } else {
                 // For other types, delete by key from the appropriate table

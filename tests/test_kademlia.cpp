@@ -1288,7 +1288,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
         request.insert(request.end(), blob.begin(), blob.end());
 
-        auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+        auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
 
         bool ok = n1.kad->store(requests_key, 0x03, request);
         EXPECT_TRUE(ok) << "Contact request with valid PoW should succeed";
@@ -1323,7 +1323,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
         request.insert(request.end(), blob.begin(), blob.end());
 
-        auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+        auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
 
         bool ok = n1.kad->store(requests_key, 0x03, request);
 
@@ -2584,7 +2584,7 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     request.insert(request.end(), blob.begin(), blob.end());
 
-    auto requests_key = sha3_256_prefixed("requests:", recipient_fp);
+    auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
 
     // Store the contact request
     bool ok = n1.kad->store(requests_key, 0x03, request);
@@ -2865,9 +2865,9 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     bool ok = n1.kad->store(group_key, 0x06, meta);
     EXPECT_TRUE(ok);
 
-    // Verify stored in TABLE_GROUP_META
-    std::vector<uint8_t> gid_key(group_id.begin(), group_id.end());
-    auto result = n1.storage->get(TABLE_GROUP_META, gid_key);
+    // Verify stored in TABLE_GROUP_META (keyed by routing key, not group_id)
+    std::vector<uint8_t> routing_key(group_key.begin(), group_key.end());
+    auto result = n1.storage->get(TABLE_GROUP_META, routing_key);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->size(), meta.size());
 }

@@ -532,6 +532,12 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 
                 if (ok) {
                     kad_.store(inbox_key, 0x02, kad_value);
+
+                    // Fire push notification directly — store_locally()
+                    // will hit dedup (we pre-stored above) and skip
+                    // on_store_, so we trigger the push explicitly.
+                    on_kademlia_store(inbox_key, 0x02,
+                                      std::span<const uint8_t>(kad_value));
                 }
 
                 loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
@@ -1130,6 +1136,12 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
             kad_value.insert(kad_value.end(), index_key.begin(), index_key.begin() + 32);
             kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
             kad_.store(inbox_key_local, 0x02, kad_value);
+
+            // Fire push notification directly — store_locally() will
+            // hit dedup (we pre-stored above) and skip on_store_,
+            // so we trigger the push explicitly.
+            on_kademlia_store(inbox_key_local, 0x02,
+                              std::span<const uint8_t>(kad_value));
         }
 
         // Defer response back to the uWS event loop thread
@@ -1514,8 +1526,9 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     request_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     request_binary.insert(request_binary.end(), blob->begin(), blob->end());
 
-    // Compute requests_key = SHA3-256("requests:" || recipient_fp)
-    auto requests_key = crypto::sha3_256_prefixed("requests:", recipient_fp);
+    // Compute requests_key = SHA3-256("inbox:" || recipient_fp)
+    // Uses "inbox:" prefix to co-locate with inbox data on the same responsible nodes.
+    auto requests_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
 
     // Dispatch to worker pool
     if (!workers_.post([this, ws, id, requests_key,
@@ -2191,9 +2204,10 @@ const GroupMeta* WsServer<SSL>::get_group_meta(const crypto::Hash& group_id) {
         return &it->second;
     }
 
-    // Load from storage
-    auto raw = storage_.get(storage::TABLE_GROUP_META,
-                            std::span<const uint8_t>(group_id.data(), group_id.size()));
+    // Load from storage (keyed by routing key = SHA3-256("group:" || group_id))
+    auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+    auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
     if (!raw) return nullptr;
 
     auto meta = parse_group_meta(*raw);
@@ -2221,6 +2235,44 @@ bool WsServer<SSL>::check_group_role(const crypto::Hash& group_id,
         }
     }
     return false;
+}
+
+// ---------- fetch_group_meta (blocking, worker pool only) ----------
+
+template<bool SSL>
+std::optional<GroupMeta> WsServer<SSL>::fetch_group_meta(const crypto::Hash& group_id) {
+    // Try local storage first (keyed by routing key)
+    auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+    auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
+    if (raw) {
+        auto parsed = parse_group_meta(*raw);
+        if (parsed) return parsed;
+    }
+
+    // Not found locally — remote quorum read via FIND_VALUE
+    auto nodes = kad_.responsible_nodes(routing_key);
+    auto results = kad_.query_remote_values(routing_key, nodes);
+
+    for (const auto& nv : results) {
+        if (!nv.value) continue;
+        auto parsed = parse_group_meta(*nv.value);
+        if (!parsed) continue;
+
+        // Cache in local storage for future use (keyed by routing key)
+        storage_.put(storage::TABLE_GROUP_META,
+                     std::span<const uint8_t>(routing_key.data(), routing_key.size()),
+                     *nv.value);
+
+        // Invalidate in-memory cache on uWS thread so next get_group_meta() re-reads
+        auto group_id_copy = group_id;
+        loop_->defer([this, group_id_copy]() {
+            invalidate_group_meta(group_id_copy);
+        });
+
+        return parsed;
+    }
+    return std::nullopt;
 }
 
 // ---------- group commands ----------
@@ -2269,25 +2321,29 @@ void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Check if group already exists
     auto group_id = parsed->group_id;
-    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto existing = storage_.get(storage::TABLE_GROUP_META, group_id_span);
-    if (existing) {
-        send_error(ws, id, 409, "group already exists");
-        return;
-    }
 
-    // Compute DHT routing key
-    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
-
-    // Dispatch store to worker pool
+    // Dispatch existence check + store to worker pool
     auto meta_bytes_copy = std::move(meta_bytes);
-    auto group_id_copy = group_id;
-    if (!workers_.post([this, ws, id, group_key, meta_bytes_copy = std::move(meta_bytes_copy),
-                        group_id_copy]() mutable {
+    if (!workers_.post([this, ws, id, group_id,
+                        meta_bytes_copy = std::move(meta_bytes_copy)]() mutable {
+        // Check if group already exists (local + remote quorum read)
+        auto existing = fetch_group_meta(group_id);
+        if (existing) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 409, "group already exists");
+            });
+            return;
+        }
+
+        // Compute DHT routing key and store
+        auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+        auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
         bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
 
+        auto group_id_copy = group_id;
         loop_->defer([this, ws, id, ok, group_id_copy]() {
             if (connections_.count(ws) == 0) return;
 
@@ -2328,32 +2384,52 @@ void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
     crypto::Hash group_id{};
     std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
 
-    // Check that group exists and client is a member
-    const auto* meta = get_group_meta(group_id);
-    if (!meta) {
-        send_error(ws, id, 404, "group not found");
-        return;
-    }
+    auto fp_copy = session->fingerprint;
 
-    // Check membership (any role >= 0x00, i.e. any member)
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
-        return;
-    }
+    if (!workers_.post([this, ws, id, group_id, fp_copy]() {
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
+        }
 
-    // Load raw GROUP_META from storage
-    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto raw = storage_.get(storage::TABLE_GROUP_META, group_id_span);
-    if (!raw) {
-        send_error(ws, id, 404, "group not found");
-        return;
-    }
+        // Check membership
+        bool is_member = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy) { is_member = true; break; }
+        }
+        if (!is_member) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "not a member");
+            });
+            return;
+        }
 
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    resp["group_meta"] = to_hex(*raw);
-    send_json(ws, resp);
+        // Load raw GROUP_META from storage (keyed by routing key)
+        auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+        auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+        auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
+        auto raw_copy = raw ? std::move(*raw) : std::vector<uint8_t>{};
+
+        loop_->defer([this, ws, id, raw_copy = std::move(raw_copy)]() {
+            if (connections_.count(ws) == 0) return;
+            if (raw_copy.empty()) {
+                send_error(ws, id, 404, "group not found");
+                return;
+            }
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            resp["group_meta"] = to_hex(raw_copy);
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+    }
 }
 
 template<bool SSL>
@@ -2361,7 +2437,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
-    // 1. Parse group_meta hex string
+    // 1. Parse group_meta hex string (lightweight, on uWS thread)
     std::string meta_hex = msg.get("group_meta", "").asString();
     if (meta_hex.empty()) {
         send_error(ws, id, 400, "missing group_meta");
@@ -2372,7 +2448,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
         send_error(ws, id, 400, "invalid hex in group_meta");
         return;
     }
-    auto& meta_bytes = *meta_bytes_opt;
+    auto meta_bytes = std::move(*meta_bytes_opt);
 
     // 2. Parse and validate structure
     auto parsed = parse_group_meta(meta_bytes);
@@ -2381,150 +2457,157 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    auto group_id = parsed->group_id;
-
-    // 3. Load current GROUP_META from cache
-    const auto* current = get_group_meta(group_id);
-
-    // 4. Group must exist
-    if (!current) {
-        send_error(ws, id, 404, "group not found");
-        return;
-    }
-
-    // 5. Verify signer is owner or admin in the CURRENT stored meta
-    if (!check_group_role(group_id, session->fingerprint, 0x01)) {
-        send_error(ws, id, 403, "insufficient role");
-        return;
-    }
-
-    // 6. Verify new version > current version
-    if (parsed->version <= current->version) {
-        send_error(ws, id, 409, "version must be greater than current");
-        return;
-    }
-
-    // 7. Admin restriction: if signer is admin (not owner), enforce restrictions
-    uint8_t signer_role = 0x00;
-    for (const auto& m : current->members) {
-        if (m.fingerprint == session->fingerprint) {
-            signer_role = m.role;
-            break;
-        }
-    }
-
-    if (signer_role == 0x01) {
-        // Build lookup of current members: fingerprint -> role
-        std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> current_roles;
-        for (const auto& m : current->members) {
-            current_roles[m.fingerprint] = m.role;
-        }
-
-        // Build lookup of new members: fingerprint -> role
-        std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> new_roles;
-        for (const auto& m : parsed->members) {
-            new_roles[m.fingerprint] = m.role;
-        }
-
-        // Check existing members in the new list for role changes
-        for (const auto& m : parsed->members) {
-            auto it = current_roles.find(m.fingerprint);
-            if (it != current_roles.end()) {
-                // Existing member — role must not change
-                if (it->second != m.role) {
-                    send_error(ws, id, 403, "admin cannot change roles");
-                    return;
-                }
-            } else {
-                // New member — must have role 0x00
-                if (m.role != 0x00) {
-                    send_error(ws, id, 403, "admin can only add regular members");
-                    return;
-                }
-            }
-        }
-
-        // Check for removed members: existing members not in new list
-        for (const auto& m : current->members) {
-            if (new_roles.find(m.fingerprint) == new_roles.end()) {
-                // Member was removed — admin cannot remove admins or owners
-                if (m.role > 0x00) {
-                    send_error(ws, id, 403, "admin cannot remove admins or owners");
-                    return;
-                }
-            }
-        }
-    }
-
-    // 8. Must have at least one owner (role=0x02)
+    // 8. Must have at least one owner (role=0x02) — can check before dispatch
     bool has_owner = false;
     for (const auto& m : parsed->members) {
-        if (m.role == 0x02) {
-            has_owner = true;
-            break;
-        }
+        if (m.role == 0x02) { has_owner = true; break; }
     }
     if (!has_owner && !parsed->members.empty()) {
         send_error(ws, id, 400, "must have at least one owner");
         return;
     }
 
-    // 9. Auto-destroy if member count is 0
-    if (parsed->members.empty()) {
+    auto group_id = parsed->group_id;
+    auto new_version = parsed->version;
+    auto new_members = parsed->members;
+    auto fp_copy = session->fingerprint;
+
+    if (!workers_.post([this, ws, id, group_id, fp_copy, new_version,
+                        new_members = std::move(new_members),
+                        meta_bytes = std::move(meta_bytes)]() mutable {
+        // 3. Load current GROUP_META (local + remote quorum read)
+        auto current = fetch_group_meta(group_id);
+
+        // 4. Group must exist
+        if (!current) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
+        }
+
+        // 5. Verify signer is owner or admin in the CURRENT stored meta
+        uint8_t signer_role = 0x00;
+        bool is_admin_or_owner = false;
+        for (const auto& m : current->members) {
+            if (m.fingerprint == fp_copy) {
+                signer_role = m.role;
+                if (m.role >= 0x01) is_admin_or_owner = true;
+                break;
+            }
+        }
+        if (!is_admin_or_owner) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "insufficient role");
+            });
+            return;
+        }
+
+        // 6. Verify new version > current version
+        if (new_version <= current->version) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 409, "version must be greater than current");
+            });
+            return;
+        }
+
+        // 7. Admin restriction: if signer is admin (not owner), enforce restrictions
+        if (signer_role == 0x01) {
+            std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> current_roles;
+            for (const auto& m : current->members)
+                current_roles[m.fingerprint] = m.role;
+
+            std::unordered_map<crypto::Hash, uint8_t, crypto::HashHash> new_roles_map;
+            for (const auto& m : new_members)
+                new_roles_map[m.fingerprint] = m.role;
+
+            for (const auto& m : new_members) {
+                auto it = current_roles.find(m.fingerprint);
+                if (it != current_roles.end()) {
+                    if (it->second != m.role) {
+                        loop_->defer([this, ws, id]() {
+                            if (connections_.count(ws) == 0) return;
+                            send_error(ws, id, 403, "admin cannot change roles");
+                        });
+                        return;
+                    }
+                } else {
+                    if (m.role != 0x00) {
+                        loop_->defer([this, ws, id]() {
+                            if (connections_.count(ws) == 0) return;
+                            send_error(ws, id, 403, "admin can only add regular members");
+                        });
+                        return;
+                    }
+                }
+            }
+
+            for (const auto& m : current->members) {
+                if (new_roles_map.find(m.fingerprint) == new_roles_map.end()) {
+                    if (m.role > 0x00) {
+                        loop_->defer([this, ws, id]() {
+                            if (connections_.count(ws) == 0) return;
+                            send_error(ws, id, 403, "admin cannot remove admins or owners");
+                        });
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 9. Auto-destroy if member count is 0
+        if (new_members.empty()) {
+            auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+            auto routing_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
+            storage_.del(storage::TABLE_GROUP_META, routing_key);
+
+            std::vector<std::vector<uint8_t>> index_keys;
+            storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
+                [&](std::span<const uint8_t> key, std::span<const uint8_t>) -> bool {
+                    index_keys.emplace_back(key.begin(), key.end());
+                    return true;
+                });
+            for (const auto& k : index_keys)
+                storage_.del(storage::TABLE_GROUP_INDEX, k);
+
+            std::vector<std::vector<uint8_t>> blob_keys;
+            storage_.scan(storage::TABLE_GROUP_BLOBS, group_id_span,
+                [&](std::span<const uint8_t> key, std::span<const uint8_t>) -> bool {
+                    blob_keys.emplace_back(key.begin(), key.end());
+                    return true;
+                });
+            for (const auto& k : blob_keys)
+                storage_.del(storage::TABLE_GROUP_BLOBS, k);
+
+            auto group_id_copy = group_id;
+            loop_->defer([this, ws, id, group_id_copy]() {
+                if (connections_.count(ws) == 0) return;
+                invalidate_group_meta(group_id_copy);
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                resp["destroyed"] = true;
+                send_json(ws, resp);
+            });
+            return;
+        }
+
+        // 10. Compute DHT routing key and store
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+        auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
 
-        // Delete GROUP_META
-        storage_.del(storage::TABLE_GROUP_META, group_id_span);
+        bool ok = kad_.store(group_key, 0x06, meta_bytes);
 
-        // Delete all GROUP_INDEX entries with group_id prefix
-        std::vector<std::vector<uint8_t>> index_keys;
-        storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
-            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
-                index_keys.emplace_back(key.begin(), key.end());
-                return true;
-            });
-        for (const auto& k : index_keys) {
-            storage_.del(storage::TABLE_GROUP_INDEX, k);
-        }
-
-        // Delete all GROUP_BLOBS entries with group_id prefix
-        std::vector<std::vector<uint8_t>> blob_keys;
-        storage_.scan(storage::TABLE_GROUP_BLOBS, group_id_span,
-            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
-                blob_keys.emplace_back(key.begin(), key.end());
-                return true;
-            });
-        for (const auto& k : blob_keys) {
-            storage_.del(storage::TABLE_GROUP_BLOBS, k);
-        }
-
-        invalidate_group_meta(group_id);
-
-        Json::Value resp;
-        resp["type"] = "OK";
-        resp["id"] = id;
-        resp["destroyed"] = true;
-        send_json(ws, resp);
-        return;
-    }
-
-    // 10. Compute DHT routing key and store via worker
-    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
-
-    auto meta_bytes_copy = std::move(meta_bytes);
-    auto group_id_copy = group_id;
-    if (!workers_.post([this, ws, id, group_key, meta_bytes_copy = std::move(meta_bytes_copy),
-                        group_id_copy]() mutable {
-        bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
-
+        auto group_id_copy = group_id;
         loop_->defer([this, ws, id, ok, group_id_copy]() {
             if (connections_.count(ws) == 0) return;
 
             if (ok) {
-                // 11. Invalidate cache after successful store
                 invalidate_group_meta(group_id_copy);
-                // 12. Respond success
                 Json::Value resp;
                 resp["type"] = "OK";
                 resp["id"] = id;
@@ -2577,12 +2660,6 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
     }
     uint32_t gek_version = msg["gek_version"].asUInt();
 
-    // Verify sender is a member of the group
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
-        return;
-    }
-
     // Detect large vs small path:
     // If "size" field is present and "blob" is empty/missing -> large chunked upload
     // Otherwise -> small inline GROUP_SEND
@@ -2604,26 +2681,64 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
             return;
         }
 
-        uint32_t request_id = next_request_id_.fetch_add(1);
+        auto fp_copy = session->fingerprint;
+        crypto::Hash msg_id_hash{};
+        std::copy(msg_id_bytes->begin(), msg_id_bytes->end(), msg_id_hash.begin());
 
-        Session::PendingUpload upload;
-        upload.request_id = request_id;
-        upload.id = id;
-        upload.expected_size = static_cast<uint32_t>(declared_size);
-        upload.received = 0;
-        upload.next_chunk = 0;
-        upload.started = std::chrono::steady_clock::now();
-        // Group-specific fields
-        upload.group_id = group_id;
-        std::copy(msg_id_bytes->begin(), msg_id_bytes->end(), upload.msg_id.begin());
-        upload.gek_version = gek_version;
-        session->pending_upload = std::move(upload);
+        // Dispatch membership check to worker, then defer upload setup back to uWS
+        if (!workers_.post([this, ws, id, group_id, fp_copy, declared_size,
+                            msg_id_hash, gek_version]() {
+            auto meta = fetch_group_meta(group_id);
+            if (!meta) {
+                loop_->defer([this, ws, id]() {
+                    if (connections_.count(ws) == 0) return;
+                    send_error(ws, id, 404, "group not found");
+                });
+                return;
+            }
+            bool is_member = false;
+            for (const auto& m : meta->members) {
+                if (m.fingerprint == fp_copy) { is_member = true; break; }
+            }
+            if (!is_member) {
+                loop_->defer([this, ws, id]() {
+                    if (connections_.count(ws) == 0) return;
+                    send_error(ws, id, 403, "not a member");
+                });
+                return;
+            }
 
-        Json::Value resp;
-        resp["type"] = "SEND_READY";
-        resp["id"] = id;
-        resp["request_id"] = request_id;
-        send_json(ws, resp);
+            loop_->defer([this, ws, id, group_id, declared_size, msg_id_hash, gek_version]() {
+                if (connections_.count(ws) == 0) return;
+                auto* s = ws->getUserData();
+                if (s->pending_upload) {
+                    send_error(ws, id, 429, "upload already in progress");
+                    return;
+                }
+
+                uint32_t request_id = next_request_id_.fetch_add(1);
+
+                Session::PendingUpload upload;
+                upload.request_id = request_id;
+                upload.id = id;
+                upload.expected_size = static_cast<uint32_t>(declared_size);
+                upload.received = 0;
+                upload.next_chunk = 0;
+                upload.started = std::chrono::steady_clock::now();
+                upload.group_id = group_id;
+                upload.msg_id = msg_id_hash;
+                upload.gek_version = gek_version;
+                s->pending_upload = std::move(upload);
+
+                Json::Value resp;
+                resp["type"] = "SEND_READY";
+                resp["id"] = id;
+                resp["request_id"] = request_id;
+                send_json(ws, resp);
+            });
+        })) {
+            send_error(ws, id, 503, "server overloaded");
+        }
         return;
     }
 
@@ -2659,42 +2774,54 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
 
     std::vector<uint8_t> msg_bytes;
     msg_bytes.reserve(112 + blob_len);
-
-    // group_id(32)
     msg_bytes.insert(msg_bytes.end(), group_id.begin(), group_id.end());
-    // sender_fp(32)
     msg_bytes.insert(msg_bytes.end(), session->fingerprint.begin(), session->fingerprint.end());
-    // msg_id(32)
     msg_bytes.insert(msg_bytes.end(), msg_id_bytes->begin(), msg_id_bytes->end());
-    // timestamp(8 BE)
     for (int i = 7; i >= 0; --i)
         msg_bytes.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-    // gek_version(4 BE)
     msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 24) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 16) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>((gek_version >> 8) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>(gek_version & 0xFF));
-    // blob_len(4 BE)
     msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
     msg_bytes.push_back(static_cast<uint8_t>(blob_len & 0xFF));
-    // blob
     msg_bytes.insert(msg_bytes.end(), blob_bytes->begin(), blob_bytes->end());
 
-    // Compute DHT routing key
     auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
     auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+    auto fp_copy = session->fingerprint;
 
-    // Dispatch store to worker pool
+    // Dispatch membership check + store to worker pool
     auto msg_id_copy = *msg_id_bytes;
-    if (!workers_.post([this, ws, id, group_key, msg_bytes = std::move(msg_bytes),
+    if (!workers_.post([this, ws, id, group_id, group_key, fp_copy,
+                        msg_bytes = std::move(msg_bytes),
                         msg_id_copy]() mutable {
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
+        }
+        bool is_member = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy) { is_member = true; break; }
+        }
+        if (!is_member) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "not a member");
+            });
+            return;
+        }
+
         bool ok = kad_.store(group_key, 0x05, msg_bytes);
 
         loop_->defer([this, ws, id, ok, msg_id_copy]() {
             if (connections_.count(ws) == 0) return;
-
             if (ok) {
                 Json::Value resp;
                 resp["type"] = "OK";
@@ -2730,12 +2857,6 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
     crypto::Hash group_id{};
     std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
 
-    // Verify membership
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
-        return;
-    }
-
     // Parse optional "after" (msg_id to paginate from, 64 hex chars = 32 bytes)
     std::vector<uint8_t> after_id;
     if (msg.isMember("after") && !msg["after"].asString().empty()) {
@@ -2757,95 +2878,106 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
     if (limit < 1) limit = 1;
     if (limit > 200) limit = 200;
 
-    // Prefix-scan TABLE_GROUP_INDEX with group_id as prefix (32 bytes).
-    // Collect index entries first, then read blobs separately to avoid
-    // nested MDBX read transactions on the same thread (MDBX_BAD_RSLOT).
-    auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+    auto fp_copy = session->fingerprint;
 
-    struct IndexEntry {
-        std::vector<uint8_t> blob_key;  // group_id(32) || msg_id(32)
-        std::string msg_id_hex;
-        std::string sender_hex;
-        uint64_t timestamp;
-        uint32_t size;
-        uint32_t gek_version;
-    };
-    std::vector<IndexEntry> entries;
-    int count = 0;
-    bool past_after = after_id.empty();
-
-    storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
-        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
-            // key = group_id(32) || msg_id(32)
-            if (key.size() != 64) return true;  // skip malformed
-            // value = sender_fp(32) || ts(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
-            if (value.size() != 48) return true;  // skip malformed
-
-            auto msg_id_part = key.subspan(32, 32);
-
-            // If "after" is set, skip entries until we pass the after msg_id
-            if (!past_after) {
-                // Compare the 32-byte msg_id portion lexicographically
-                int cmp = std::memcmp(msg_id_part.data(), after_id.data(), 32);
-                if (cmp <= 0) return true;  // skip entries <= after
-                past_after = true;
-            }
-
-            if (count >= limit) return false;  // stop scanning
-
-            // Parse index value fields
-            auto sender_fp = value.subspan(0, 32);
-            uint64_t ts = 0;
-            for (int i = 0; i < 8; ++i)
-                ts = (ts << 8) | value[32 + i];
-            uint32_t size = (static_cast<uint32_t>(value[40]) << 24)
-                          | (static_cast<uint32_t>(value[41]) << 16)
-                          | (static_cast<uint32_t>(value[42]) << 8)
-                          | static_cast<uint32_t>(value[43]);
-            uint32_t gek_ver = (static_cast<uint32_t>(value[44]) << 24)
-                             | (static_cast<uint32_t>(value[45]) << 16)
-                             | (static_cast<uint32_t>(value[46]) << 8)
-                             | static_cast<uint32_t>(value[47]);
-
-            entries.push_back({
-                std::vector<uint8_t>(key.begin(), key.end()),
-                to_hex(msg_id_part),
-                to_hex(sender_fp),
-                ts, size, gek_ver
+    if (!workers_.post([this, ws, id, group_id, fp_copy,
+                        after_id = std::move(after_id), limit]() {
+        // Verify membership via quorum read
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
             });
-            ++count;
-            return true;  // continue scanning
-        });
+            return;
+        }
+        bool is_member = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy) { is_member = true; break; }
+        }
+        if (!is_member) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "not a member");
+            });
+            return;
+        }
 
-    // Build JSON response, fetching inline blobs outside the scan transaction
-    Json::Value messages(Json::arrayValue);
-    for (const auto& e : entries) {
-        Json::Value entry;
-        entry["msg_id"] = e.msg_id_hex;
-        entry["sender"] = e.sender_hex;
-        entry["timestamp"] = Json::Value::UInt64(e.timestamp);
-        entry["size"] = e.size;
-        entry["gek_version"] = e.gek_version;
+        // Prefix-scan TABLE_GROUP_INDEX
+        auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
 
-        if (e.size <= INLINE_THRESHOLD) {
-            auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, e.blob_key);
-            if (blob) {
-                entry["blob"] = to_hex(*blob);
+        struct IndexEntry {
+            std::vector<uint8_t> blob_key;
+            std::string msg_id_hex;
+            std::string sender_hex;
+            uint64_t timestamp;
+            uint32_t size;
+            uint32_t gek_version;
+        };
+        std::vector<IndexEntry> entries;
+        int count = 0;
+        bool past_after = after_id.empty();
+
+        storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> value) -> bool {
+                if (key.size() != 64) return true;
+                if (value.size() != 48) return true;
+                auto msg_id_part = key.subspan(32, 32);
+                if (!past_after) {
+                    int cmp = std::memcmp(msg_id_part.data(), after_id.data(), 32);
+                    if (cmp <= 0) return true;
+                    past_after = true;
+                }
+                if (count >= limit) return false;
+                auto sender_fp = value.subspan(0, 32);
+                uint64_t ts = 0;
+                for (int i = 0; i < 8; ++i) ts = (ts << 8) | value[32 + i];
+                uint32_t sz = (static_cast<uint32_t>(value[40]) << 24)
+                            | (static_cast<uint32_t>(value[41]) << 16)
+                            | (static_cast<uint32_t>(value[42]) << 8)
+                            | static_cast<uint32_t>(value[43]);
+                uint32_t gek_ver = (static_cast<uint32_t>(value[44]) << 24)
+                                 | (static_cast<uint32_t>(value[45]) << 16)
+                                 | (static_cast<uint32_t>(value[46]) << 8)
+                                 | static_cast<uint32_t>(value[47]);
+                entries.push_back({
+                    std::vector<uint8_t>(key.begin(), key.end()),
+                    to_hex(msg_id_part), to_hex(sender_fp),
+                    ts, sz, gek_ver
+                });
+                ++count;
+                return true;
+            });
+
+        // Build JSON, fetching inline blobs outside the scan transaction
+        Json::Value messages(Json::arrayValue);
+        for (const auto& e : entries) {
+            Json::Value entry;
+            entry["msg_id"] = e.msg_id_hex;
+            entry["sender"] = e.sender_hex;
+            entry["timestamp"] = Json::Value::UInt64(e.timestamp);
+            entry["size"] = e.size;
+            entry["gek_version"] = e.gek_version;
+            if (e.size <= INLINE_THRESHOLD) {
+                auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, e.blob_key);
+                entry["blob"] = blob ? Json::Value(to_hex(*blob)) : Json::nullValue;
             } else {
                 entry["blob"] = Json::nullValue;
             }
-        } else {
-            entry["blob"] = Json::nullValue;
+            messages.append(entry);
         }
 
-        messages.append(entry);
+        loop_->defer([this, ws, id, messages = std::move(messages)]() {
+            if (connections_.count(ws) == 0) return;
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            resp["messages"] = messages;
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
-
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    resp["messages"] = messages;
-    send_json(ws, resp);
 }
 
 template<bool SSL>
@@ -2879,73 +3011,98 @@ void WsServer<SSL>::handle_group_get(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Verify sender is a member of the group
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
-        return;
-    }
+    auto fp_copy = session->fingerprint;
 
-    // Build key: group_id(32) || msg_id(32)
-    std::vector<uint8_t> key;
-    key.reserve(64);
-    key.insert(key.end(), group_id.begin(), group_id.end());
-    key.insert(key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
-    auto key_span = std::span<const uint8_t>(key.data(), key.size());
+    // Build composite key: group_id(32) || msg_id(32)
+    std::vector<uint8_t> blob_key;
+    blob_key.reserve(64);
+    blob_key.insert(blob_key.end(), group_id.begin(), group_id.end());
+    blob_key.insert(blob_key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
 
-    // Read blob from TABLE_GROUP_BLOBS
-    auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, key_span);
-    if (!blob) {
-        send_error(ws, id, 404, "message not found");
-        return;
-    }
-
-    if (blob->size() <= INLINE_THRESHOLD) {
-        // Small blob: return inline as hex
-        Json::Value resp;
-        resp["type"] = "OK";
-        resp["id"] = id;
-        resp["blob"] = to_hex(*blob);
-        send_json(ws, resp);
-    } else {
-        // Large blob: chunked binary download
-        static constexpr size_t CHUNK_SIZE = 1048576;  // 1 MiB
-        uint32_t num_chunks = static_cast<uint32_t>(
-            (blob->size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
-        uint32_t request_id = next_request_id_.fetch_add(1);
-
-        // Send JSON header with size and chunk count
-        Json::Value resp;
-        resp["type"] = "OK";
-        resp["id"] = id;
-        resp["size"] = static_cast<Json::UInt>(blob->size());
-        resp["chunks"] = num_chunks;
-        resp["chunked"] = true;
-        send_json(ws, resp);
-
-        // Send binary DOWNLOAD_CHUNK frames
-        // Frame format: [0x02][4B request_id BE][2B chunk_index BE][payload]
-        for (uint32_t i = 0; i < num_chunks; ++i) {
-            size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
-            size_t payload_size = std::min(CHUNK_SIZE, blob->size() - offset);
-
-            std::vector<uint8_t> frame;
-            frame.reserve(7 + payload_size);
-            frame.push_back(0x02);  // DOWNLOAD_CHUNK frame type
-            frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
-            frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
-            frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
-            frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
-            uint16_t chunk_index = static_cast<uint16_t>(i);
-            frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
-            frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
-            frame.insert(frame.end(),
-                         blob->data() + offset,
-                         blob->data() + offset + payload_size);
-
-            std::string_view sv(reinterpret_cast<const char*>(frame.data()),
-                                frame.size());
-            ws->send(sv, uWS::OpCode::BINARY);
+    if (!workers_.post([this, ws, id, group_id, fp_copy,
+                        blob_key = std::move(blob_key)]() {
+        // Verify membership via quorum read
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
         }
+        bool is_member = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy) { is_member = true; break; }
+        }
+        if (!is_member) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "not a member");
+            });
+            return;
+        }
+
+        // Read blob from storage
+        auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, blob_key);
+        if (!blob) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "message not found");
+            });
+            return;
+        }
+
+        auto blob_copy = std::move(*blob);
+
+        loop_->defer([this, ws, id, blob_copy = std::move(blob_copy)]() {
+            if (connections_.count(ws) == 0) return;
+
+            if (blob_copy.size() <= INLINE_THRESHOLD) {
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                resp["blob"] = to_hex(blob_copy);
+                send_json(ws, resp);
+            } else {
+                static constexpr size_t CHUNK_SIZE = 1048576;
+                uint32_t num_chunks = static_cast<uint32_t>(
+                    (blob_copy.size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+                uint32_t request_id = next_request_id_.fetch_add(1);
+
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                resp["size"] = static_cast<Json::UInt>(blob_copy.size());
+                resp["chunks"] = num_chunks;
+                resp["chunked"] = true;
+                send_json(ws, resp);
+
+                for (uint32_t i = 0; i < num_chunks; ++i) {
+                    size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
+                    size_t payload_size = std::min(CHUNK_SIZE, blob_copy.size() - offset);
+
+                    std::vector<uint8_t> frame;
+                    frame.reserve(7 + payload_size);
+                    frame.push_back(0x02);
+                    frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+                    uint16_t chunk_index = static_cast<uint16_t>(i);
+                    frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
+                    frame.insert(frame.end(),
+                                 blob_copy.data() + offset,
+                                 blob_copy.data() + offset + payload_size);
+
+                    std::string_view sv(reinterpret_cast<const char*>(frame.data()),
+                                        frame.size());
+                    ws->send(sv, uWS::OpCode::BINARY);
+                }
+            }
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
 }
 
@@ -2980,52 +3137,87 @@ void WsServer<SSL>::handle_group_delete(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Verify sender is a member of the group
-    if (!check_group_role(group_id, session->fingerprint, 0x00)) {
-        send_error(ws, id, 403, "not a member");
-        return;
+    auto fp_copy = session->fingerprint;
+
+    // Build composite key: group_id(32) || msg_id(32)
+    std::vector<uint8_t> composite_key;
+    composite_key.reserve(64);
+    composite_key.insert(composite_key.end(), group_id.begin(), group_id.end());
+    composite_key.insert(composite_key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
+
+    if (!workers_.post([this, ws, id, group_id, fp_copy,
+                        composite_key = std::move(composite_key)]() {
+        // Verify membership via quorum read
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
+        }
+        bool is_member = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy) { is_member = true; break; }
+        }
+        if (!is_member) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "not a member");
+            });
+            return;
+        }
+
+        // Read GROUP_INDEX entry to get sender fingerprint
+        auto index_val = storage_.get(storage::TABLE_GROUP_INDEX, composite_key);
+        if (!index_val) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "message not found");
+            });
+            return;
+        }
+
+        if (index_val->size() != 48) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 500, "corrupt index entry");
+            });
+            return;
+        }
+
+        // Extract sender_fp
+        crypto::Hash sender_fp{};
+        std::copy(index_val->begin(), index_val->begin() + 32, sender_fp.begin());
+
+        // Permission: requester is the sender, OR has role >= 0x01 (admin/owner)
+        bool is_sender = (fp_copy == sender_fp);
+        bool is_admin = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy && m.role >= 0x01) { is_admin = true; break; }
+        }
+        if (!is_sender && !is_admin) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "permission denied");
+            });
+            return;
+        }
+
+        // Delete from both tables
+        storage_.del(storage::TABLE_GROUP_INDEX, composite_key);
+        storage_.del(storage::TABLE_GROUP_BLOBS, composite_key);
+
+        loop_->defer([this, ws, id]() {
+            if (connections_.count(ws) == 0) return;
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
-
-    // Build key: group_id(32) || msg_id(32)
-    std::vector<uint8_t> key;
-    key.reserve(64);
-    key.insert(key.end(), group_id.begin(), group_id.end());
-    key.insert(key.end(), msg_id_bytes->begin(), msg_id_bytes->end());
-    auto key_span = std::span<const uint8_t>(key.data(), key.size());
-
-    // Read GROUP_INDEX entry to get sender fingerprint
-    auto index_val = storage_.get(storage::TABLE_GROUP_INDEX, key_span);
-    if (!index_val) {
-        send_error(ws, id, 404, "message not found");
-        return;
-    }
-
-    // INDEX value format: sender_fp(32) || timestamp(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
-    if (index_val->size() != 48) {
-        send_error(ws, id, 500, "corrupt index entry");
-        return;
-    }
-
-    // Extract sender_fp from first 32 bytes
-    crypto::Hash sender_fp{};
-    std::copy(index_val->begin(), index_val->begin() + 32, sender_fp.begin());
-
-    // Permission check: requester is the sender, OR requester has role >= 0x01 (admin/owner)
-    bool is_sender = (session->fingerprint == sender_fp);
-    bool is_admin = check_group_role(group_id, session->fingerprint, 0x01);
-    if (!is_sender && !is_admin) {
-        send_error(ws, id, 403, "permission denied");
-        return;
-    }
-
-    // Delete from both tables
-    storage_.del(storage::TABLE_GROUP_INDEX, key_span);
-    storage_.del(storage::TABLE_GROUP_BLOBS, key_span);
-
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    send_json(ws, resp);
 }
 
 template<bool SSL>
@@ -3047,24 +3239,41 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
     crypto::Hash group_id{};
     std::copy(group_id_bytes->begin(), group_id_bytes->end(), group_id.begin());
 
-    // Verify requester is an owner (role=0x02)
-    if (!check_group_role(group_id, session->fingerprint, 0x02)) {
-        send_error(ws, id, 403, "only owners can destroy");
-        return;
-    }
+    auto fp_copy = session->fingerprint;
 
-    // Post cleanup to worker pool
-    auto group_id_copy = group_id;
-    if (!workers_.post([this, ws, id, group_id_copy]() {
-        auto group_id_span = std::span<const uint8_t>(group_id_copy.data(), group_id_copy.size());
+    // Dispatch ownership check + cleanup to worker pool
+    if (!workers_.post([this, ws, id, group_id, fp_copy]() {
+        // Verify requester is an owner (role=0x02) via quorum read
+        auto meta = fetch_group_meta(group_id);
+        if (!meta) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "group not found");
+            });
+            return;
+        }
+        bool is_owner = false;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint == fp_copy && m.role == 0x02) { is_owner = true; break; }
+        }
+        if (!is_owner) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 403, "only owners can destroy");
+            });
+            return;
+        }
 
-        // Delete GROUP_META
-        storage_.del(storage::TABLE_GROUP_META, group_id_span);
+        auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
+        auto routing_key = crypto::sha3_256_prefixed("group:", group_id_span);
+
+        // Delete GROUP_META (stored by routing key)
+        storage_.del(storage::TABLE_GROUP_META, routing_key);
 
         // Collect GROUP_INDEX keys with group_id prefix, then delete
         std::vector<std::vector<uint8_t>> keys;
         storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
-            [&](std::span<const uint8_t> key, std::span<const uint8_t> /*value*/) -> bool {
+            [&](std::span<const uint8_t> key, std::span<const uint8_t>) -> bool {
                 keys.emplace_back(key.begin(), key.end());
                 return true;
             });
@@ -3073,11 +3282,10 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
             storage_.del(storage::TABLE_GROUP_BLOBS, k);
         }
 
+        auto group_id_copy = group_id;
         loop_->defer([this, ws, id, group_id_copy]() {
             if (connections_.count(ws) == 0) return;
-
             invalidate_group_meta(group_id_copy);
-
             Json::Value resp;
             resp["type"] = "OK";
             resp["id"] = id;

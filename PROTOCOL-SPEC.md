@@ -525,7 +525,9 @@ DELETE removes entries from both tables.
 
 Minimum size: 84 bytes (32 + 32 + 8 + 8 + 4 + 0).
 
-DHT routing key: `SHA3-256("requests:" || recipient_fingerprint)`
+DHT routing key: `SHA3-256("inbox:" || recipient_fingerprint)` — uses the same
+`"inbox:"` prefix as messages to co-locate contact requests with inbox data on
+the same responsible nodes, enabling push notifications to connected clients.
 
 Local mdbx storage uses composite key for multi-sender support:
 ```
@@ -1240,11 +1242,11 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 
 ### FIND_VALUE Scope
 
-FIND_VALUE searches profiles and names only. Inbox messages, contact requests,
-allowlists, and group data (GROUP_META, GROUP_INDEX, GROUP_BLOBS) use composite
-storage keys that cannot be derived from the DHT routing key alone. These data
-types are accessed via scan(), dedicated WebSocket commands, or replicated via
-SYNC_REQ/SYNC_RESP instead.
+FIND_VALUE searches profiles, names, and group metadata. Inbox messages, contact
+requests, allowlists, and group message data (GROUP_INDEX, GROUP_BLOBS) use
+composite storage keys that cannot be derived from the DHT routing key alone.
+These data types are accessed via scan(), dedicated WebSocket commands, or
+replicated via SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 
