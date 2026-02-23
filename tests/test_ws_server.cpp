@@ -605,7 +605,7 @@ TEST_F(WsServerTest, SendAndList) {
 
     // Manually add sender to recipient's allowlist.
     // Allowlist key: SHA3-256("allowlist:" || recipient_fp) || sender_fp = 64 bytes
-    auto allowlist_prefix = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    auto allowlist_prefix = crypto::sha3_256_prefixed("inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.reserve(64);
     allow_key.insert(allow_key.end(), allowlist_prefix.begin(), allowlist_prefix.end());
@@ -713,15 +713,15 @@ TEST_F(WsServerTest, AllowAndRevoke) {
 
     // Verify the entry was stored in TABLE_ALLOWLISTS
     auto user_fp = crypto::sha3_256(user_kp.public_key);
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", user_fp);
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", user_fp);
     std::vector<uint8_t> storage_key;
     storage_key.insert(storage_key.end(), allowlist_key.begin(), allowlist_key.end());
     storage_key.insert(storage_key.end(), contact_fp.begin(), contact_fp.end());
 
     auto stored = storage_->get(storage::TABLE_ALLOWLISTS, storage_key);
     ASSERT_TRUE(stored.has_value()) << "allowlist entry not found in storage";
-    // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
-    ASSERT_GE(stored->size(), 73u);
+    // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+    ASSERT_GE(stored->size(), 75u);
     EXPECT_EQ((*stored)[64], 0x01);  // action = allow at offset 64
 
     // Extract stored sequence (bytes 65..72 big-endian)
@@ -1301,7 +1301,7 @@ TEST_F(WsServerTest, SendLargeChunked) {
 
     // Manually add sender to recipient's allowlist
     // Key format: SHA3-256("allowlist:" || recipient_fp) || sender_fp
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
@@ -1507,7 +1507,7 @@ TEST_F(WsServerTest, UploadAlreadyInProgressRejects) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Add sender to recipient's allowlist
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());

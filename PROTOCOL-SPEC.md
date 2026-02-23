@@ -545,32 +545,40 @@ to verify PoW independently without access to the routing key derivation.
 
 ### Allowlist Entry (data_type 0x04)
 
-Kademlia STORE value (includes owner_fp and allowed_fp for signature
-verification and composite key construction):
+Kademlia STORE value (includes owner_fp, allowed_fp, and owner's public key
+for self-contained signature verification and composite key construction):
 ```
 [32 bytes: owner_fingerprint]
 [32 bytes: allowed_fingerprint]
 [1 byte: action]                         // 0x01 = allow, 0x00 = revoke
 [8 bytes BE: sequence]
+[2 bytes BE: pubkey_length]
+[pubkey_length bytes: ML-DSA-87 public key]
 [SIGNATURE_SIZE bytes: ML-DSA-87 signature]
 ```
+
+The public key is embedded so that any node can verify the signature without
+needing the owner's profile. Validators verify that
+`owner_fingerprint == SHA3-256(pubkey)` before checking the signature.
 
 The signature covers a domain-separated message:
 `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
 signed by the owner's ML-DSA-87 key.
 
-Storage key (DHT routing): `SHA3-256("allowlist:" || owner_fingerprint)`
+Storage key (DHT routing): `SHA3-256("inbox:" || owner_fingerprint)`
+
+This co-locates allowlist data with inbox data on the same R responsible
+nodes, so allowlist checks during message delivery are always local lookups.
 
 Local mdbx storage uses composite key for O(1) lookup:
 ```
-Key:   SHA3-256("allowlist:" || owner_fp)(32) || allowed_fp(32)
-Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+Key:   SHA3-256("inbox:" || owner_fp)(32) || allowed_fp(32)
+Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
 ```
 
-Receiving nodes verify the ML-DSA-87 signature against the owner's public key
-(looked up from TABLE_PROFILES). If the owner has no stored profile yet, the
-entry is **rejected** — the profile must propagate before allowlist entries.
-This prevents forged entries during the bootstrap propagation window.
+Receiving nodes verify the ML-DSA-87 signature against the embedded public
+key after confirming `SHA3-256(pubkey) == owner_fingerprint`. Verification
+is self-contained — no profile lookup is needed.
 
 Receiving nodes parse `allowed_fp` from the Kademlia value to build the
 composite storage key. REVOKE (action=0x00) deletes the entry rather than
@@ -1252,10 +1260,10 @@ SYNC_REQ/SYNC_RESP instead.
 ### Allowlist STORE Validation
 
 1. `action` byte must be 0x00 (revoke) or 0x01 (allow)
-2. ML-DSA-87 signature verified against owner's public key (from TABLE_PROFILES)
+2. `SHA3-256(pubkey) == owner_fingerprint` — embedded pubkey matches claimed owner
+3. ML-DSA-87 signature verified against the embedded public key
    - Signed data: `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
-   - If owner's profile is not stored yet, the entry is **rejected** (profile must propagate first)
-3. `sequence` > currently stored sequence (enforced by WS server)
+4. `sequence` > currently stored sequence (enforced by WS server)
 
 ### REVOKE Replication
 
@@ -1350,13 +1358,11 @@ This ensures eventual consistency even when direct STORE delivery fails.
 
 ### Data Ordering Requirement
 
-Certain data types have ordering dependencies:
-
-- **Profile must exist before allowlist entries** — Allowlist entries require
-  the owner's public key (from their profile) for signature verification.
-  Entries are rejected if the profile hasn't propagated yet.
 - **Name records are self-verifiable** — Name records embed the public key
   directly, so they do not depend on the profile being stored first.
+- **Allowlist entries are self-verifiable** — Allowlist entries embed the
+  owner's public key directly, so they do not depend on the profile being
+  stored first.
 
 ### Secret Key Handling
 
@@ -1464,7 +1470,7 @@ profile_key  = SHA3-256("profile:"       || fingerprint)
 name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
 request_key  = SHA3-256("requests:"  || fingerprint)
-allow_key    = SHA3-256("allowlist:" || fingerprint)
+allow_key    = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 group_key    = SHA3-256("group:"     || group_id)
 ```
 

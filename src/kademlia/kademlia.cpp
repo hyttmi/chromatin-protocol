@@ -999,8 +999,8 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
             {storage::TABLE_MESSAGE_BLOBS, blob_key, blob_value}
         });
     } else if (data_type == 0x04) {
-        // Allowlist: composite key storage
-        // Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        // Allowlist: composite key storage (co-located with inbox)
+        // Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
         std::span<const uint8_t> allowed_fp(value.data() + 32, 32);
         uint8_t action = value[64];
 
@@ -1755,8 +1755,8 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
     std::span<const uint8_t> recipient_fp = value.subspan(0, 32);
     std::span<const uint8_t> sender_fp    = value.subspan(64, 32);
 
-    // Compute allowlist routing key: SHA3-256("allowlist:" || recipient_fp)
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+    // Compute allowlist routing key: co-located with inbox on SHA3-256("inbox:" || recipient_fp)
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
 
     // Build composite lookup key: allowlist_key(32) || sender_fp(32)
     std::vector<uint8_t> composite_key;
@@ -1867,9 +1867,9 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value) {
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
-    // Format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
-    // Minimum: 32 + 32 + 1 + 8 = 73 bytes + signature
-    if (value.size() < 73) {
+    // Format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+    // Minimum: 32 + 32 + 1 + 8 + 2 = 75 bytes + pubkey + signature
+    if (value.size() < 75) {
         spdlog::warn("Allowlist validation: too short ({} bytes)", value.size());
         return false;
     }
@@ -1882,28 +1882,21 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
         return false;
     }
 
-    // Signature verification: look up owner's public key from stored profile
-    crypto::Hash ofp{};
-    std::copy_n(owner_fp.data(), 32, ofp.begin());
-    auto profile_key = crypto::sha3_256_prefixed("profile:", ofp);
-    auto profile_data = storage_.get(storage::TABLE_PROFILES, profile_key);
-    if (!profile_data || profile_data->empty()) {
-        spdlog::debug("Allowlist entry rejected: owner profile not found, cannot verify signature");
-        return false;
-    }
-
-    // Profile format: fingerprint(32) || pubkey_len(2 BE) || pubkey || ...
-    if (profile_data->size() < 34) {
-        spdlog::warn("Allowlist validation: stored profile too short");
-        return false;
-    }
+    // Extract pubkey from the entry itself (self-contained, no profile lookup needed)
     uint16_t pk_len = static_cast<uint16_t>(
-        (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33]);
-    if (profile_data->size() < 34u + pk_len) {
-        spdlog::warn("Allowlist validation: stored profile truncated");
+        (static_cast<uint16_t>(value[73]) << 8) | value[74]);
+    if (value.size() < 75u + pk_len) {
+        spdlog::warn("Allowlist validation: truncated pubkey (pk_len={}, remaining={})", pk_len, value.size() - 75);
         return false;
     }
-    std::span<const uint8_t> pubkey(profile_data->data() + 34, pk_len);
+    std::span<const uint8_t> pubkey = value.subspan(75, pk_len);
+
+    // Verify that pubkey hashes to owner_fp
+    auto computed_fp = crypto::sha3_256(pubkey);
+    if (!std::equal(computed_fp.begin(), computed_fp.end(), owner_fp.begin())) {
+        spdlog::warn("Allowlist validation: embedded pubkey does not match owner fingerprint");
+        return false;
+    }
 
     // Signed data with domain separation:
     // "chromatin:allowlist:" || owner_fp(32) || action(1) || allowed_fp(32) || sequence(8 BE)
@@ -1916,8 +1909,8 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
     signed_data.insert(signed_data.end(), allowed_fp.begin(), allowed_fp.end());
     signed_data.insert(signed_data.end(), value.data() + 65, value.data() + 73);
 
-    // Signature starts at offset 73
-    std::span<const uint8_t> signature = value.subspan(73);
+    // Signature starts after pubkey
+    std::span<const uint8_t> signature = value.subspan(75 + pk_len);
     if (!crypto::verify(signed_data, signature, pubkey)) {
         spdlog::warn("Allowlist validation: invalid signature");
         return false;
@@ -2172,6 +2165,16 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
                 storage_.del(storage::TABLE_GROUP_INDEX, gm_key);
                 storage_.del(storage::TABLE_GROUP_BLOBS, gm_key);
                 spdlog::debug("SYNC: applied DEL for group message");
+            } else if (entry.data_type == 0x04 && entry.data.size() >= 64) {
+                // Allowlist REVOKE: entry.data is the full revoke value
+                // (owner_fp(32) || allowed_fp(32) || ...). Build composite storage
+                // key: routing_key(32) || allowed_fp(32) where routing_key = `key`.
+                std::vector<uint8_t> al_key;
+                al_key.reserve(64);
+                al_key.insert(al_key.end(), key.begin(), key.end());
+                al_key.insert(al_key.end(), entry.data.begin() + 32, entry.data.begin() + 64);
+                storage_.del(storage::TABLE_ALLOWLISTS, al_key);
+                spdlog::debug("SYNC: applied DEL for allowlist entry");
             } else if (entry.data_type == 0x06 && entry.data.size() >= 32) {
                 // Group meta delete: delete_info = group_id(32)
                 std::vector<uint8_t> gm_key(entry.data.begin(), entry.data.begin() + 32);

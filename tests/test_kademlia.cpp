@@ -266,13 +266,17 @@ protected:
             signed_data.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
         auto sig = sign(signed_data, owner_kp.secret_key);
 
-        // Full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        // Full entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+        uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
         std::vector<uint8_t> entry;
         entry.insert(entry.end(), owner_fp.begin(), owner_fp.end());
         entry.insert(entry.end(), contact_fp.begin(), contact_fp.end());
         entry.push_back(action);
         for (int i = 7; i >= 0; --i)
             entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+        entry.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        entry.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        entry.insert(entry.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
         entry.insert(entry.end(), sig.begin(), sig.end());
 
         return entry;
@@ -615,7 +619,7 @@ TEST_F(KademliaTest, StoreAckSent) {
     contact_fp.fill(0xAA);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
+    Hash key = sha3_256_prefixed("inbox:", owner_fp);
 
     // Build STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
     std::vector<uint8_t> store_payload;
@@ -695,7 +699,7 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     contact_fp.fill(0xBB);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
+    Hash key = sha3_256_prefixed("inbox:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -760,7 +764,7 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     contact_fp.fill(0xCC);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
+    Hash key = sha3_256_prefixed("inbox:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -1436,7 +1440,7 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
 
     auto value = build_signed_allowlist(owner_kp, allowed_fp, 0x01, 1);
 
-    Hash routing_key = sha3_256_prefixed("allowlist:", owner_fp);
+    Hash routing_key = sha3_256_prefixed("inbox:", owner_fp);
 
     bool ok = n1.kad->store(routing_key, 0x04, value);
     EXPECT_TRUE(ok);
@@ -2070,7 +2074,7 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     contact_fp.fill(0xAA);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("allowlist:", owner_fp);
+    Hash key = sha3_256_prefixed("inbox:", owner_fp);
 
     std::vector<uint8_t> store_payload;
     store_payload.insert(store_payload.end(), key.begin(), key.end());
@@ -2146,8 +2150,8 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     Hash user_d_fp{};  user_d_fp.fill(0xDD);
 
     // --- Set up allowlist for user A, allowing user B ---
-    // allowlist_key = SHA3-256("allowlist:" || user_a_fp)
-    auto allowlist_key = sha3_256_prefixed("allowlist:", user_a_fp);
+    // allowlist_key = SHA3-256("inbox:" || user_a_fp) — co-located with inbox
+    auto allowlist_key = sha3_256_prefixed("inbox:", user_a_fp);
 
     // Composite storage key: allowlist_key(32) || user_b_fp(32) = 64 bytes
     std::vector<uint8_t> allow_storage_key;
@@ -2254,33 +2258,9 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     auto& n1 = create_node();
     start_all();
 
-    // Create a user identity with a keypair and stored profile
+    // Create a user identity with a keypair
     auto owner_kp = generate_keypair();
     auto owner_fp = sha3_256(owner_kp.public_key);
-
-    // Build and store a valid profile for the owner (so Kademlia can look up the pubkey)
-    std::vector<uint8_t> profile;
-    profile.insert(profile.end(), owner_fp.begin(), owner_fp.end());
-    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
-    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
-    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
-    profile.insert(profile.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
-    // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
-    profile.push_back(0x00); profile.push_back(0x00);
-    profile.push_back(0x00); profile.push_back(0x00);
-    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);
-    profile.push_back(0x00);
-    // sequence = 1
-    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
-    // Sign profile
-    auto prof_sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), owner_kp.secret_key);
-    uint16_t sig_len = static_cast<uint16_t>(prof_sig.size());
-    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
-    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
-    profile.insert(profile.end(), prof_sig.begin(), prof_sig.end());
-
-    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
-    n1.storage->put(TABLE_PROFILES, profile_key, profile);
 
     // Create a contact fingerprint
     Hash contact_fp{};
@@ -2300,17 +2280,21 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
 
     auto allow_sig = sign(signed_data, owner_kp.secret_key);
 
-    // Build valid allowlist entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    // Build valid allowlist entry: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
     std::vector<uint8_t> valid_entry;
     valid_entry.insert(valid_entry.end(), owner_fp.begin(), owner_fp.end());
     valid_entry.insert(valid_entry.end(), contact_fp.begin(), contact_fp.end());
     valid_entry.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i)
         valid_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    valid_entry.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    valid_entry.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    valid_entry.insert(valid_entry.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
     valid_entry.insert(valid_entry.end(), allow_sig.begin(), allow_sig.end());
 
     // Store with a valid signature — should succeed
-    auto allowlist_key = sha3_256_prefixed("allowlist:", owner_fp);
+    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
     bool ok = n1.kad->store(allowlist_key, 0x04, valid_entry);
     EXPECT_TRUE(ok) << "Allowlist entry with valid signature should be accepted";
 
@@ -2319,7 +2303,7 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     auto result = n1.storage->get(TABLE_ALLOWLISTS, composite_key);
     EXPECT_TRUE(result.has_value()) << "Valid allowlist entry should be stored";
 
-    // Build an entry with invalid signature (tampered)
+    // Build an entry with invalid signature (tampered contact_fp but same sig)
     Hash contact_fp2{};
     contact_fp2.fill(0x43);
 
@@ -2329,6 +2313,9 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     bad_entry.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i)
         bad_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    bad_entry.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    bad_entry.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    bad_entry.insert(bad_entry.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
     // Use the same signature (valid for contact_fp, not for contact_fp2)
     bad_entry.insert(bad_entry.end(), allow_sig.begin(), allow_sig.end());
 
@@ -2341,29 +2328,33 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     EXPECT_FALSE(bad_result.has_value())
         << "Allowlist entry with invalid signature should be rejected";
 
-    // Build entry for a user with no profile — should be REJECTED (profile required)
+    // Build entry with mismatched pubkey (pubkey doesn't hash to owner_fp) — should be rejected
     Hash unknown_owner{};
     unknown_owner.fill(0x99);
     Hash contact_fp3{};
     contact_fp3.fill(0x44);
 
-    std::vector<uint8_t> no_profile_entry;
-    no_profile_entry.insert(no_profile_entry.end(), unknown_owner.begin(), unknown_owner.end());
-    no_profile_entry.insert(no_profile_entry.end(), contact_fp3.begin(), contact_fp3.end());
-    no_profile_entry.push_back(0x01);  // action = allow
+    std::vector<uint8_t> no_match_entry;
+    no_match_entry.insert(no_match_entry.end(), unknown_owner.begin(), unknown_owner.end());
+    no_match_entry.insert(no_match_entry.end(), contact_fp3.begin(), contact_fp3.end());
+    no_match_entry.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i)
-        no_profile_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+        no_match_entry.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    // Embed a real pubkey that doesn't match unknown_owner fingerprint
+    no_match_entry.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    no_match_entry.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    no_match_entry.insert(no_match_entry.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
     // dummy signature
-    no_profile_entry.resize(no_profile_entry.size() + SIGNATURE_SIZE, 0xFF);
+    no_match_entry.resize(no_match_entry.size() + SIGNATURE_SIZE, 0xFF);
 
-    auto unknown_key = sha3_256_prefixed("allowlist:", unknown_owner);
-    n1.kad->store(unknown_key, 0x04, no_profile_entry);
+    auto unknown_key = sha3_256_prefixed("inbox:", unknown_owner);
+    n1.kad->store(unknown_key, 0x04, no_match_entry);
 
     std::vector<uint8_t> np_composite_key(unknown_key.begin(), unknown_key.end());
     np_composite_key.insert(np_composite_key.end(), contact_fp3.begin(), contact_fp3.end());
     auto np_result = n1.storage->get(TABLE_ALLOWLISTS, np_composite_key);
     EXPECT_FALSE(np_result.has_value())
-        << "Allowlist entry for user without profile should be rejected";
+        << "Allowlist entry with mismatched pubkey should be rejected";
 }
 
 // ---------------------------------------------------------------------------
@@ -2380,10 +2371,8 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
     KeyPair contact_kp = generate_keypair();
     Hash contact_fp = sha3_256(contact_kp.public_key);
 
-    // Profile must exist for allowlist signature verification
-    store_user_profile(n1, owner_kp);
-
-    auto allowlist_key = sha3_256_prefixed("allowlist:", owner_fp);
+    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
+    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
 
     // 1. Store ALLOW entry (action=0x01)
     {
@@ -2403,6 +2392,9 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
         value.push_back(0x01); // action
         for (int i = 7; i >= 0; --i)
             value.push_back(static_cast<uint8_t>((1ULL >> (i * 8)) & 0xFF));
+        value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        value.insert(value.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
         value.insert(value.end(), sig.begin(), sig.end());
 
         ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, value));
@@ -2435,6 +2427,9 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
         value.push_back(0x00); // action = REVOKE
         for (int i = 7; i >= 0; --i)
             value.push_back(static_cast<uint8_t>((2ULL >> (i * 8)) & 0xFF));
+        value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        value.insert(value.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
         value.insert(value.end(), sig.begin(), sig.end());
 
         ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, value));

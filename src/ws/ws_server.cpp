@@ -959,7 +959,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
         // This is a best-effort local check — real enforcement is at the Kademlia
         // STORE validation on the recipient's responsible nodes.
         {
-            auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+            auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
             std::vector<uint8_t> allow_check;
             allow_check.reserve(64);
             allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
@@ -1023,7 +1023,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     // Check allowlist: sender must be allowed to write to recipient's inbox.
     // If no allowlist exists for the recipient, inbox is open (anyone can send).
     {
-        auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", recipient_fp);
+        auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
         std::vector<uint8_t> allow_check;
         allow_check.reserve(64);
         allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
@@ -1214,8 +1214,8 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute allowlist_key = SHA3-256("allowlist:" || owner_fp)
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", session->fingerprint);
+    // Compute allowlist_key = SHA3-256("inbox:" || owner_fp) — co-located with inbox
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", session->fingerprint);
 
     // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
     std::vector<uint8_t> storage_key;
@@ -1226,7 +1226,7 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
     // Check sequence > currently stored sequence
     auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
     if (existing) {
-        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
         if (existing->size() >= 73) {
             uint64_t stored_seq = 0;
             for (int i = 0; i < 8; ++i) {
@@ -1239,15 +1239,19 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
         }
     }
 
-    // Build full allowlist entry value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+    // Build full allowlist entry value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+    uint16_t pk_len = static_cast<uint16_t>(session->pubkey.size());
     std::vector<uint8_t> entry_value;
-    entry_value.reserve(32 + 32 + 1 + 8 + sig_bytes->size());
+    entry_value.reserve(32 + 32 + 1 + 8 + 2 + pk_len + sig_bytes->size());
     entry_value.insert(entry_value.end(), session->fingerprint.begin(), session->fingerprint.end());
     entry_value.insert(entry_value.end(), allowed_fp.begin(), allowed_fp.end());
     entry_value.push_back(0x01);  // action = allow
     for (int i = 7; i >= 0; --i) {
         entry_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
     }
+    entry_value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    entry_value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    entry_value.insert(entry_value.end(), session->pubkey.begin(), session->pubkey.end());
     entry_value.insert(entry_value.end(), sig_bytes->begin(), sig_bytes->end());
 
     // Dispatch to worker pool
@@ -1340,8 +1344,8 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute allowlist_key = SHA3-256("allowlist:" || owner_fp)
-    auto allowlist_key = crypto::sha3_256_prefixed("allowlist:", session->fingerprint);
+    // Compute allowlist_key = SHA3-256("inbox:" || owner_fp) — co-located with inbox
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", session->fingerprint);
 
     // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
     std::vector<uint8_t> storage_key;
@@ -1352,7 +1356,7 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
     // Check sequence > currently stored sequence
     auto existing = storage_.get(storage::TABLE_ALLOWLISTS, storage_key);
     if (existing) {
-        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || signature
+        // Stored format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
         if (existing->size() >= 73) {
             uint64_t stored_seq = 0;
             for (int i = 0; i < 8; ++i) {
@@ -1365,25 +1369,31 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
         }
     }
 
-    // Capture owner_fp for the worker lambda
+    // Capture owner_fp and pubkey for the worker lambda
     crypto::Hash owner_fp = session->fingerprint;
+    std::vector<uint8_t> owner_pubkey(session->pubkey.begin(), session->pubkey.end());
 
     // Dispatch to worker pool — delete local entry, replicate revoke
     if (!workers_.post([this, ws, id, allowlist_key, allowed_fp, owner_fp,
                    storage_key = std::move(storage_key),
                    sig_bytes = std::move(*sig_bytes),
+                   owner_pubkey = std::move(owner_pubkey),
                    sequence]() {
         bool ok = storage_.del(storage::TABLE_ALLOWLISTS, storage_key);
 
-        // Build revoke entry for replication: owner_fp(32) || allowed_fp(32) || action(0x00) || sequence(8 BE) || signature
+        // Build revoke entry for replication: owner_fp(32) || allowed_fp(32) || action(0x00) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
+        uint16_t pk_len = static_cast<uint16_t>(owner_pubkey.size());
         std::vector<uint8_t> revoke_value;
-        revoke_value.reserve(32 + 32 + 1 + 8 + sig_bytes.size());
+        revoke_value.reserve(32 + 32 + 1 + 8 + 2 + pk_len + sig_bytes.size());
         revoke_value.insert(revoke_value.end(), owner_fp.begin(), owner_fp.end());
         revoke_value.insert(revoke_value.end(), allowed_fp.begin(), allowed_fp.end());
         revoke_value.push_back(0x00);  // action = revoke
         for (int i = 7; i >= 0; --i) {
             revoke_value.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
         }
+        revoke_value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        revoke_value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        revoke_value.insert(revoke_value.end(), owner_pubkey.begin(), owner_pubkey.end());
         revoke_value.insert(revoke_value.end(), sig_bytes.begin(), sig_bytes.end());
 
         kad_.store(allowlist_key, 0x04, revoke_value);
