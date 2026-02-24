@@ -86,12 +86,13 @@ Future versions may introduce dedicated storage nodes for large files.
 | 0x09  | STORE_ACK  | Response          | Acknowledgment of a STORE request   |
 | 0x0A  | SEQ_REQ    | Request           | Query replication log sequence       |
 | 0x0B  | SEQ_RESP   | Response          | Replication log sequence response    |
+| 0x0C  | RELAY      | Request           | Ephemeral event relay (fire-and-forget) |
 
 ---
 
 ## 2. TCP Transport Encryption (ML-KEM-1024 + ChaCha20-Poly1305)
 
-TCP node-to-node connections support optional encryption using a 3-message
+TCP node-to-node connections support **mandatory** encryption using a 3-message
 handshake that provides mutual authentication and forward secrecy via
 ephemeral ML-KEM-1024 key encapsulation.
 
@@ -105,11 +106,11 @@ being negotiated:
 | `0xCE`     | Encrypted handshake (HELLO message follows)|
 | `0x43`     | Plaintext CHRM message (`'C'` from magic)  |
 
-This allows nodes to accept both encrypted and plaintext connections on the
-same TCP port. Nodes that do not support encryption simply reject the `0xCE`
-probe byte and close the connection. The initiator then falls back to
-plaintext and caches the failure per destination to avoid repeated handshake
-attempts.
+This allows nodes to distinguish encrypted connections from legacy plaintext
+connections during protocol migration. As of protocol version 0x01,
+encryption is mandatory (see Section 2.7) — nodes MUST reject plaintext
+connections. The probe byte is retained for forward compatibility with
+future cipher suite negotiation.
 
 ### 2.2 Handshake Protocol
 
@@ -194,6 +195,14 @@ Domain-separated prefixes (`"chromatin:tcp:i2r:"` and `"chromatin:tcp:r2i:"`)
 ensure the two directional keys are cryptographically independent. Both
 random nonces are included to bind the keys to this specific session.
 
+**Rationale:** Direct SHA3-256 is used instead of HKDF because the ML-KEM-1024
+shared secret already provides 256 bits of entropy (NIST Level 5). HKDF's
+extract step (designed to concentrate entropy from non-uniform sources) adds
+no security benefit when the input is already a uniformly random 256-bit
+secret. The expand step is unnecessary because exactly one 256-bit key is
+derived per direction. This simplifies the implementation without reducing
+security.
+
 ### 2.5 Encrypted Frame Format
 
 After handshake completion, all subsequent CHRM messages on the connection
@@ -208,7 +217,9 @@ are encrypted. Each encrypted frame has the following format:
 - **Key**: `i2r_key` or `r2i_key` (depending on direction)
 - **Nonce**: 12 bytes — `[4 zero bytes][8 bytes BE: counter]`. The counter
   starts at 0 and increments by 1 for each message sent in that direction.
-  Each direction maintains its own counter.
+  Each direction maintains its own counter. If the counter reaches 2^64 - 1,
+  the node MUST close the connection and initiate a new handshake. In
+  practice this is unreachable (~585 billion years at 1 billion msg/sec).
 - **AAD** (Additional Authenticated Data): The 4-byte big-endian length
   header preceding the ciphertext. This binds the length to the ciphertext,
   preventing length-manipulation attacks.
@@ -286,7 +297,18 @@ Received version and capability data is stored in NodeInfo
 
 ```
 [2 bytes BE: pubkey_length]             // Sender's public key length (0 if omitted)
-[pubkey_length bytes: sender_pubkey]    // Sender's ML-DSA-87 public key (optional)
+[pubkey_length bytes: sender_pubkey]    // Sender's ML-DSA-87 public key
+[1 byte: address_family]               // 0x04 = IPv4, 0x06 = IPv6
+[4 or 16 bytes: sender_address]        // Sender's self-reported external address
+[2 bytes BE: ws_port]                  // Sender's WebSocket port
+
+**Presence rules:** Field presence is determined by remaining payload length:
+- Empty payload: legacy mode — use TCP source IP, no pubkey (backwards compatible).
+- 2 bytes with pubkey_length=0: explicit no-pubkey, no address fields.
+- 2 + pubkey_length bytes: pubkey present, no address fields — use TCP source IP.
+- 2 + pubkey_length + 1 + (4|16) + 2 bytes: pubkey + address + ws_port present.
+Partial address fields (e.g., address_family present but address truncated) MUST
+be ignored — the receiver MUST ignore all address fields and fall back to TCP source IP.
 ```
 
 Requests the K closest nodes to the sender's node ID from the recipient.
@@ -295,8 +317,15 @@ verify the sender's identity via `SHA3-256(pubkey) == sender_id`. This
 enables the receiver to accept signed messages (STORE, FIND_VALUE, etc.)
 from the sender without waiting for pubkey propagation via NODES responses.
 
+The sender SHOULD include its self-reported external address so the
+receiver stores the sender at its reachable address rather than the TCP
+source IP, which may be a LAN address when nodes share a network. The
+receiver MUST prefer the self-reported address over the TCP source IP
+when populating its routing table.
+
 If `pubkey_length` is 0, or the payload is empty, the receiver adds the
-sender to its routing table without a public key (legacy behavior).
+sender to its routing table without a public key and uses the TCP source
+IP as the address (legacy behavior).
 
 **Iterative discovery:** When a node receives NODES and discovers new peers,
 it SHOULD send FIND_NODE to each newly discovered node. This implements
@@ -386,12 +415,23 @@ For each entry:
 
 ### STORE_ACK (0x09)
 
-Sent by a node back to the requesting node after successfully processing a STORE.
+Sent by a node back to the requesting node after processing a STORE.
 
 ```
 [32 bytes: key]
 [1 byte: status]              // 0x00 = OK, 0x01 = rejected
+[1 byte: reason]              // Only present when status = 0x01
 ```
+
+Reason codes (when status = 0x01):
+| Code | Meaning                        |
+|------|--------------------------------|
+| 0x00 | Unspecified                    |
+| 0x01 | Not responsible for key        |
+| 0x02 | Validation failed              |
+
+Codes 0x03-0xFF are reserved for future use (e.g., duplicate msg_id,
+allowlist rejection, insufficient PoW, stale sequence).
 
 ### SEQ_REQ (0x0A)
 
@@ -428,6 +468,35 @@ Write quorum `W = min(2, R)` where `R = min(3, network_size)`. A store is
 considered "durably replicated" when `W` nodes (including the originator) have
 confirmed. If a peer does not ACK within a reasonable window, the originating
 node relies on SYNC_REQ/SYNC_RESP to reconcile later.
+
+### RELAY (0x0C)
+
+Ephemeral event relay. Fire-and-forget — never stored in mdbx, never replicated,
+never enters the replication log. Used for real-time events like typing indicators.
+
+```
+[32 bytes: target_fingerprint]
+[32 bytes: sender_fingerprint]
+[1 byte:  event_type_len]
+[event_type_len bytes: event_type]
+```
+
+**Optional payload data:** Implementations MAY append additional data after
+the event_type field:
+```
+[4 bytes BE: payload_length]    // 0 if no payload data
+[payload_length bytes: payload] // Opaque data passed to the client
+```
+If `payload_length` is absent (total payload matches the base format size),
+receivers MUST treat it as payload_length=0. This provides forward-compatible
+extensibility for future event types without changing the wire format.
+
+The receiving node checks its local `authenticated_` session map for the target
+fingerprint. If found, it performs an allowlist check and delivers the event as a
+WebSocket push. If not found, the event is silently dropped.
+
+Signature policy: mandatory verification (same as STORE — must come from a known,
+verified node).
 
 ---
 
@@ -493,6 +562,15 @@ Kademlia STORE value (includes recipient_fp for two-table routing):
 ```
 
 Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
+
+**Security model:** The `sender_fingerprint` field is an *unverified routing
+hint*. The Kademlia STORE handler uses it solely for allowlist lookup — it
+does NOT verify that the sender actually owns the claimed fingerprint. Any
+node sending a STORE can set an arbitrary sender_fingerprint. Message
+authenticity and sender identity are guaranteed by the client-side E2E
+encryption layer (see client protocol specification).
+The server treats message blobs as opaque ciphertext and never inspects their
+contents.
 
 Receiving nodes parse `recipient_fp` from the value to build the two-table
 storage model. Local mdbx storage uses two tables:
@@ -651,7 +729,8 @@ For each member:
 
 The signature covers everything preceding `signature_length` (i.e., from
 `group_id` through the last member's `kem_ciphertext`). Signed by any member
-with role=0x02 (Owner).
+with role >= 0x01 (Admin or Owner). Admins may sign GROUP_META updates for
+member additions/removals of regular members. Owners may sign any update.
 
 **Member roles:**
 
@@ -676,7 +755,12 @@ Fields:
 - `group_id`: SHA3-256 of the group creation record (unique group identifier)
 - `owner_fingerprint`: The original group creator. After multi-owner support,
   this is informational — any Owner can sign metadata updates
-- `version`: Monotonically increasing, incremented on any member change or GEK rotation
+- `version`: Monotonically increasing, incremented on any member change or GEK rotation.
+  **Known limitation:** If multiple owners publish GROUP_META updates with the
+  same version concurrently, last-write-wins semantics apply — one update is
+  silently lost. There is no CRDT merge. In practice, group administration is
+  typically performed by a single owner; concurrent edits are rare and can be
+  retried by incrementing the version.
 - `member_count`: 1 to 512 members per group
 - Per-member block: fingerprint, role, and the current GEK encrypted with the
   member's ML-KEM-1024 public key (from their profile)
@@ -699,11 +783,12 @@ Clients connect to a responsible node via WebSocket. Control messages are JSON
 text frames. Large blob transfers use binary WebSocket frames (see Section 5.7).
 Every client request includes an `id` field for response correlation.
 
-**TLS:** Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front
-of the WebSocket port if TLS is needed to protect metadata (fingerprints,
+**TLS:** Operators SHOULD enable TLS to protect metadata (fingerprints,
 allowlist operations, message counts) from network observers. Message content
 is already encrypted with ML-KEM-1024, but TLS provides transport-level
-metadata protection.
+metadata protection. TLS can be enabled natively by setting `tls_cert` and
+`tls_key` in the node config (paths to PEM certificate and private key), or
+via a reverse proxy (e.g. nginx, caddy) in front of the WebSocket port.
 
 ### 5.1 Authentication
 
@@ -743,7 +828,34 @@ up-to-date node.
 ]}
 ```
 
+The `address` field is the node's self-reported external address — an IPv4 or
+IPv6 address string (e.g., `"10.0.0.7"` or `"::1"`). Hostnames are NOT used;
+addresses are always numeric IP strings as stored in the routing table from
+FIND_NODE payloads. Clients MUST parse the address as an IP literal.
+
 The connection is closed after sending REDIRECT.
+
+### 5.2.1 Client Node Discovery
+
+Note: discovery happens *before* the HELLO flow described in Section 5.1.
+Once the client has an address to connect to, it proceeds with HELLO; the
+REDIRECT mechanism (Section 5.2) then handles the final hop to the responsible
+node.
+
+Clients discover their first node through one of the following mechanisms:
+
+1. **Hardcoded bootstrap list:** The client ships with a list of well-known
+   bootstrap node addresses (e.g., `bootstrap_node:4001`). Bootstrap addresses
+   are listed in the protocol constants table (Section 7). The client connects
+   to any bootstrap node and sends HELLO with its fingerprint.
+2. **REDIRECT chain:** If the bootstrap node is not responsible for the
+   client's inbox, it responds with REDIRECT containing the addresses of
+   responsible nodes. The client reconnects to the most up-to-date node.
+3. **Manual configuration:** The user can configure a specific node address
+   (e.g., a self-hosted node).
+
+The bootstrap WebSocket port defaults to 4001. Clients SHOULD try multiple
+bootstrap nodes in parallel for faster discovery and resilience.
 
 ### 5.3 Client Commands (after authentication)
 
@@ -936,6 +1048,22 @@ Kademlia. If two users register the same name simultaneously, the **lower
 fingerprint wins** — a deterministic tiebreaker ensuring all nodes converge.
 Response: `{"type": "OK", "id": 15}`
 
+**EVENT** — Send an ephemeral event (fire-and-forget, never stored):
+```json
+{"type": "EVENT", "id": 12, "to": "<fingerprint hex>", "event": "TYPING"}
+```
+The node validates the event type against a whitelist, responds OK immediately,
+then attempts delivery. If the target is connected locally, the event is delivered
+directly (after allowlist check). Otherwise, it is relayed via TCP RELAY (0x0C) to
+the responsible nodes for the target's inbox key.
+Response: `{"type": "OK", "id": 12}`
+
+Defined event types:
+
+| Event   | Description        | Behavior                                                    |
+|---------|--------------------|-------------------------------------------------------------|
+| TYPING  | Sender is typing   | Client sends every ~3s; receiver shows indicator, removes after 5s without renewal |
+
 **GROUP_CREATE** — Create a new group:
 ```json
 {"type": "GROUP_CREATE", "id": 16, "group_meta": "<hex-encoded GROUP_META binary>"}
@@ -1026,6 +1154,13 @@ Response:
 Messages with `size` <= 64 KB have their blob inlined (hex). Larger messages
 have `blob: null` — the client must fetch them separately with GROUP_GET.
 
+**Encoding note:** Group commands (GROUP_SEND, GROUP_LIST, GROUP_GET) use hex
+encoding for all binary fields (group_id, msg_id, blob, group_meta). 1:1
+messaging commands (SEND, LIST, GET) use base64 for blob data. This difference
+is intentional — the group API was designed as a unified hex-based API surface,
+while 1:1 commands use base64 for historical reasons. Implementations MUST use
+the correct encoding per command.
+
 **GROUP_GET** — Fetch a specific group message blob:
 ```json
 {"type": "GROUP_GET", "id": 22, "group_id": "<hex>", "msg_id": "<hex>"}
@@ -1058,8 +1193,13 @@ Response: `{"type": "OK", "id": 23}`
 {"type": "GROUP_DESTROY", "id": 24, "group_id": "<hex>"}
 ```
 Owner-only (role=0x02). Wipes GROUP_META, all TABLE_GROUP_INDEX entries, and
-all TABLE_GROUP_BLOBS entries for the group. Connected group members receive a
-GROUP_DESTROYED push notification.
+all TABLE_GROUP_BLOBS entries for the group locally, then propagates the
+GROUP_META deletion to other responsible nodes via a STORE with empty value
+(data_type=0x06, value_length=0). Receiving nodes delete their local copy of
+GROUP_META. Group message data (TABLE_GROUP_INDEX, TABLE_GROUP_BLOBS) on
+other responsible nodes is cleaned up by the 7-day TTL sweep — no explicit
+tombstone mechanism is used. Connected group members receive a GROUP_DESTROYED
+push notification.
 Response: `{"type": "OK", "id": 24}`
 
 ### 5.4 Server Push (unsolicited, no id)
@@ -1099,6 +1239,14 @@ client fetches them via GROUP_LIST or GROUP_GET.
 Pushed to all connected members when GROUP_DESTROY is executed or the last
 owner leaves (auto-destruction).
 
+**EVENT** — Ephemeral event from another user (typing indicator, etc.):
+```json
+{"type": "EVENT", "from": "<fingerprint hex>", "event": "TYPING"}
+```
+Delivered only if the target is currently connected. Never stored. Allowlist
+is enforced on the delivering node — if the sender is not on the target's
+allowlist (and the target has one), the event is silently dropped.
+
 ### 5.5 Rate Limiting
 
 Nodes enforce **per-fingerprint** rate limiting using a token bucket algorithm.
@@ -1117,6 +1265,7 @@ connection multiplication. Different commands consume different token costs:
 | LIST / GET / DELETE / ALLOW / REVOKE | 1 |
 | GROUP_LIST / GROUP_GET / GROUP_DELETE / GROUP_INFO | 1 |
 | RESOLVE_NAME / GET_PROFILE / LIST_REQUESTS | 1 |
+| EVENT            | 0.5  |
 | HELLO / AUTH     | 1    |
 | STATUS           | 0    |
 
@@ -1199,9 +1348,21 @@ On every incoming TCP message, a conforming node MUST:
 **Signature verification:** PING and FIND_NODE are accepted without signature
 verification (needed for initial discovery by unknown nodes). All other
 message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
-SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP — MUST have valid ML-DSA-87
+SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
 signatures. Messages from nodes whose public key is not yet known are
-rejected (except PING and FIND_NODE). Public keys are learned via two
+rejected (except PING and FIND_NODE).
+
+**Known risk — routing table poisoning:** Because PING and FIND_NODE are
+accepted without authentication, an attacker can inject entries into a node's
+routing table. This is mitigated by: (1) IP subnet diversity limits (max 3
+nodes per /24 IPv4 or /48 IPv6), (2) PONG signature verification (the node
+must prove identity via signed PONG before it can participate in signed
+operations), (3) eviction of unresponsive nodes, and (4) FIND_NODE rate
+limiting (1 per second per source). These mitigations make large-scale
+eclipse attacks impractical for the target network size (dozens to hundreds
+of nodes).
+
+Public keys are learned via two
 mechanisms:
 
 1. **FIND_NODE payload:** The sender includes its public key. The receiver
@@ -1234,10 +1395,12 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### Name Registration STORE Validation
 
 1. Name matches `^[a-z0-9]{3,36}$`
-2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 20 leading zero bits
+2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 26 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
 4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
-5. If name already registered to a different fingerprint — reject (first claim wins)
+5. If name already registered to a different fingerprint — **lower fingerprint wins**
+   (deterministic tiebreaker ensuring all nodes converge to the same owner regardless
+   of STORE arrival order during registration races)
 6. If same fingerprint — `sequence` must be higher than stored
 
 ### FIND_VALUE Scope
@@ -1250,13 +1413,18 @@ replicated via SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 
-1. Check recipient's allowlist:
+1. **Allowlist enforcement** (uses unverified `sender_fingerprint` — see Security Model note in Section 4):
    - Point lookup for sender's composite key: if found with `action == 0x01` → allow
    - If not found or `action != 0x01` → scan for any allowlist entries for recipient
    - If any entries exist (including revoke entries) → reject (sender not allowed)
    - If no entries at all → allow (open inbox, new user)
 2. `blob_length` <= 50 MiB
-3. `msg_id` is unique — reject duplicates (prevents replay attacks)
+3. `msg_id` is unique within the 7-day TTL window — reject duplicates.
+   After TTL expiry, msg_ids are purged from the database and are no longer
+   checked. The server-side dedup window is therefore equal to the TTL (7
+   days). Post-TTL replay protection is the client's responsibility via E2E
+   encryption (the encrypted payload should contain its own sequence numbers
+   or nonces that the client validates after decryption).
 
 ### Contact Request STORE Validation
 
@@ -1283,6 +1451,15 @@ distinguish active allows from revokes.
 
 ### Group Metadata STORE Validation
 
+**Deletion carve-out:** If `value_length == 0` (empty value), the STORE is
+interpreted as a remote delete request and bypasses all validation rules
+below. The receiving node deletes the GROUP_META record for the given key and
+appends a DEL entry to its replication log. This is the mechanism used by
+`GROUP_DESTROY` to propagate deletion to other responsible nodes via
+`delete_remote()`.
+
+For non-empty STOREs (`value_length > 0`), all of the following must hold:
+
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
 2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin)
 3. `version` > currently stored version for this group_id — reject replays
@@ -1297,7 +1474,8 @@ distinguish active allows from revokes.
 
 1. Sender fingerprint must be in the GROUP_META member list for the group_id
 2. `blob_length` <= 50 MiB
-3. `msg_id` is unique within the group — reject duplicates
+3. `msg_id` is unique within the group's 7-day TTL window — reject duplicates.
+   Same dedup window semantics as 1:1 messages (see above).
 
 ### Group Access Control
 
@@ -1417,7 +1595,7 @@ deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
 | Key space                  | 256 bits (SHA3-256 output)             |
 | Timestamp format           | Milliseconds since Unix epoch (uint64) |
 | Replication factor (R)     | `min(3, network_size)`                 |
-| Name PoW difficulty        | 20 leading zero bits                   |
+| Name PoW difficulty        | 26 leading zero bits                   |
 | Contact request PoW        | 16 leading zero bits                   |
 | Contact request max drift  | 1 hour (3,600,000 ms)                  |
 | Name regex                 | `^[a-z0-9]{3,36}$`                     |
@@ -1478,7 +1656,7 @@ All storage keys are derived using SHA3-256 with domain prefixes:
 profile_key  = SHA3-256("profile:"       || fingerprint)
 name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
-request_key  = SHA3-256("requests:"  || fingerprint)
+request_key  = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 allow_key    = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 group_key    = SHA3-256("group:"     || group_id)
 ```

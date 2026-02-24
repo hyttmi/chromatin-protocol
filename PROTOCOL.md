@@ -116,7 +116,7 @@ Storage key: `SHA3-256("name:" || name)`
 ### 4.2 Server Validation Rules
 
 1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce)`
-   has >= 20 leading zero bits
+   has >= 26 leading zero bits
 2. Verify `fingerprint == SHA3-256(pubkey)` (embedded pubkey authenticity)
 3. Verify ML-DSA signature over all preceding fields
 4. **Conflict resolution** — if name already registered to a different
@@ -144,7 +144,7 @@ replicated using the **same sequence-based mdbx replication**.
 profile_key = SHA3-256("profile:" || fingerprint)     → R closest nodes store it
 name_key    = SHA3-256("name:" || name)            → R closest nodes store it
 inbox_key   = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it
-request_key = SHA3-256("requests:" || fingerprint) → R closest nodes store it
+request_key = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it (co-located with inbox)
 group_key   = SHA3-256("group:" || group_id)       → R closest nodes store it
 ```
 
@@ -233,6 +233,10 @@ messages directly via TCP:
 - **Inbox messages**: Kademlia validates the recipient's allowlist before
   accepting. If the recipient has an allowlist and the sender is not on it,
   the STORE is rejected. No allowlist = open inbox (new user).
+  **Note:** The `sender_fingerprint` field is an *unverified routing hint*
+  used only for allowlist lookup. The server does not verify the sender's
+  identity — message authenticity is guaranteed by the client's E2E encryption
+  layer. The server treats all message blobs as opaque ciphertext.
 - **Contact requests**: Kademlia verifies the PoW (16 leading zero bits)
   and that the routing key matches the recipient_fp in the value.
 - **Allowlist entries**: Self-verifiable — the embedded public key is checked
@@ -511,9 +515,10 @@ Deletion is client-driven and optional. Each device tracks its own
 
 ### 8.1 Connection Model
 
-Operators SHOULD place a reverse proxy (e.g. nginx, caddy) in front of the
-WebSocket port to provide TLS (WSS) and protect connection metadata from
-network observers. Clients SHOULD prefer `wss://` connections.
+Operators SHOULD enable TLS to protect connection metadata from network
+observers. Clients SHOULD prefer `wss://` connections. TLS can be provided
+either natively by setting `tls_cert` and `tls_key` in the node config, or
+via a reverse proxy (e.g. nginx, caddy) in front of the WebSocket port.
 
 A client connects to **any of the R nodes responsible for their inbox**.
 **Multiple devices** can connect simultaneously with the same identity — push
@@ -658,7 +663,7 @@ code 429.
 Separate from the main inbox. Stored under:
 
 ```
-request_key = SHA3-256("requests:" || fingerprint)
+request_key = SHA3-256("inbox:" || fingerprint)   // co-located with inbox
 ```
 
 Same R-node responsibility, same replication. Accepts messages from unknown
@@ -668,9 +673,10 @@ senders with proof-of-work.
 
 1. Alice looks up Bob's profile on network → gets Bob's fingerprint
 2. Alice computes Bob's responsible nodes: R closest to
-   `SHA3-256("requests:" || bob_fp)`
+   `SHA3-256("inbox:" || bob_fp)` (co-located with Bob's inbox)
 3. Alice computes PoW: find `nonce` such that
-   `SHA3-256("chromatin:request:" || alice_fp || bob_fp || timestamp_BE || nonce_BE)` has M leading zero bits
+   `SHA3-256(preimage || nonce_BE)` has >= 16 leading zero bits, where
+   `preimage = "chromatin:request:" || alice_fp || bob_fp || timestamp_BE`
 4. Alice sends `CONTACT_REQUEST { to: bob_fp, blob, pow_nonce, timestamp }` to a
    responsible node. Timestamp must be within 1 hour of server time.
 5. Node verifies PoW, stores in Bob's request inbox (replication log)
@@ -819,9 +825,45 @@ GROUP_DESTROYED push notification.
 
 ---
 
-## 11. Node Identity & Lifecycle
+## 11. Ephemeral Events
 
-### 11.1 Node Identity
+Ephemeral events are fire-and-forget real-time notifications — they are never
+stored in mdbx, never replicated, and never enter the replication log. If the
+recipient is online, the event is delivered instantly. If offline, it is silently
+dropped. This is the correct behavior for transient signals like typing indicators.
+
+### 11.1 Delivery Flow
+
+1. Client sends `EVENT` to its connected node with target fingerprint and event type
+2. Node validates: authenticated, rate limit, event type whitelist
+3. **Same-node (fast path):** If the target is connected to the same node, the
+   event is delivered directly after an allowlist check
+4. **Cross-node:** The node dispatches to the worker pool, computes the target's
+   inbox key (`SHA3-256("inbox:" || target_fp)`), and sends a TCP RELAY (0x0C) to
+   each responsible node. Receiving nodes check for the target locally and deliver
+   if connected
+5. Response: `OK` is sent immediately (before relay, if cross-node)
+
+### 11.2 Allowlist Enforcement
+
+Allowlist checks are performed on the **delivering** node (which has the
+authoritative allowlist data for locally-connected users). If the target has an
+allowlist and the sender is not on it, the event is silently dropped — the sender
+still receives `OK` (no information leak about the target's online status).
+
+### 11.3 Event Types
+
+| Event  | Description        | Client behavior                                                    |
+|--------|--------------------|--------------------------------------------------------------------|
+| TYPING | Sender is typing   | Send every ~3s while typing; receiver shows indicator, removes after 5s without renewal |
+
+New event types can be added by extending the whitelist without protocol changes.
+
+---
+
+## 12. Node Identity & Lifecycle
+
+### 12.1 Node Identity
 
 Each node has:
 - Its own ML-DSA-87 keypair (generated on first run)
@@ -829,7 +871,7 @@ Each node has:
 - Publicly reachable address (IP:port for TCP, IP:port for WebSocket)
 - All node-to-node messages are ML-DSA signed
 
-### 11.2 Bootstrap
+### 12.2 Bootstrap
 
 - 3 hardcoded bootstrap nodes: `0.bootstrap.cpunk.io`, `1.bootstrap.cpunk.io`,
   `2.bootstrap.cpunk.io`
@@ -837,13 +879,13 @@ Each node has:
 - New node contacts any bootstrap → receives full membership list
 - Bootstrap nodes have elevated role: can **slash bad nodes**
 
-### 11.3 Node Joining
+### 12.3 Node Joining
 
 - **Open join** — any node can join by contacting a bootstrap
 - No PoW or payment required to run a node
 - New nodes start with low trust and earn reputation over time
 
-### 11.4 Responsibility Transfer
+### 12.4 Responsibility Transfer
 
 When a new node joins (or an existing node leaves), the responsibility map
 changes. Some keys may now have a new closest node.
@@ -856,7 +898,12 @@ changes. Some keys may now have a new closest node.
 Old responsible nodes that are no longer in the top R for a key can prune
 that data after confirming the new responsible node is synced.
 
-### 11.5 Trust & Reputation
+### 12.5 Trust & Reputation (post-MVP)
+
+> **Status: deferred.** The reputation system is not implemented in protocol
+> version 0x01. The `TABLE_REPUTATION` storage table is reserved but unused.
+> Reputation criteria, wire format, and enforcement thresholds will be defined
+> in a future protocol version.
 
 - Nodes track reputation: uptime, responsiveness, correct behavior
 - New nodes receive less responsibility until proven reliable
@@ -867,9 +914,9 @@ that data after confirming the new responsible node is synced.
 
 ---
 
-## 12. Local Storage (libmdbx)
+## 13. Local Storage (libmdbx)
 
-### 12.1 Database Layout
+### 13.1 Database Layout
 
 | Database         | Key Format                          | Value                     |
 |------------------|-------------------------------------|---------------------------|
@@ -884,9 +931,9 @@ that data after confirming the new responsible node is synced.
 | group_blobs      | `group_id(32) \|\| msg_id(32)`      | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
-| reputation       | `node_id`                           | Trust score + metrics     |
+| reputation       | `node_id`                           | Trust score + metrics (reserved, post-MVP — not used in v0x01) |
 
-### 12.2 Replication Log Format
+### 13.2 Replication Log Format
 
 Each entry in `repl_log`:
 
@@ -901,7 +948,7 @@ Each entry in `repl_log`:
 
 ---
 
-## 13. Tech Stack
+## 14. Tech Stack
 
 | Component          | Library                        |
 |--------------------|--------------------------------|
