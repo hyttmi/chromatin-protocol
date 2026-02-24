@@ -3691,3 +3691,25 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
 
     client.close();
 }
+
+TEST_F(WsServerTest, HelloRejectedAfterAuth) {
+    start_ws_server();
+    auto user_kp = crypto::generate_keypair();
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+    ASSERT_TRUE(authenticate(client, user_kp));
+
+    // Try re-sending HELLO after auth — should be rejected
+    auto fp = crypto::sha3_256(user_kp.public_key);
+    Json::Value hello;
+    hello["type"] = "HELLO";
+    hello["id"] = 99;
+    hello["fingerprint"] = to_hex(fp);
+    auto resp_str = send_cmd(client, hello);
+    ASSERT_FALSE(resp_str.empty());
+    auto resp = parse_json(resp_str);
+    EXPECT_EQ(resp["type"].asString(), "ERROR");
+    EXPECT_EQ(resp["code"].asInt(), 400);
+
+    client.close();
+}

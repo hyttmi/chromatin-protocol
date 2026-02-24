@@ -598,6 +598,11 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
 template<bool SSL>
 void WsServer<SSL>::handle_hello(ws_t* ws, const Json::Value& msg) {
     int id = msg.get("id", 0).asInt();
+    auto* session = ws->getUserData();
+    if (session->authenticated) {
+        send_error(ws, id, 400, "already authenticated");
+        return;
+    }
     std::string fp_hex = msg.get("fingerprint", "").asString();
     if (fp_hex.size() != 64) {
         send_error(ws, id, 400, "fingerprint must be 64 hex chars");
@@ -652,7 +657,6 @@ void WsServer<SSL>::handle_hello(ws_t* ws, const Json::Value& msg) {
     OQS_randombytes(nonce.data(), nonce.size());
 
     // Store in session
-    auto* session = ws->getUserData();
     session->fingerprint = fingerprint;
     session->challenge_nonce = nonce;
 
