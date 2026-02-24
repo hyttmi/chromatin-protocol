@@ -195,6 +195,14 @@ Domain-separated prefixes (`"chromatin:tcp:i2r:"` and `"chromatin:tcp:r2i:"`)
 ensure the two directional keys are cryptographically independent. Both
 random nonces are included to bind the keys to this specific session.
 
+**Rationale:** Direct SHA3-256 is used instead of HKDF because the ML-KEM-1024
+shared secret already provides 256 bits of entropy (NIST Level 5). HKDF's
+extract step (designed to concentrate entropy from non-uniform sources) adds
+no security benefit when the input is already a uniformly random 256-bit
+secret. The expand step is unnecessary because exactly one 256-bit key is
+derived per direction. This simplifies the implementation without reducing
+security.
+
 ### 2.5 Encrypted Frame Format
 
 After handshake completion, all subsequent CHRM messages on the connection
