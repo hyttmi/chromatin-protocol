@@ -826,6 +826,11 @@ up-to-date node.
 ]}
 ```
 
+The `address` field is the node's self-reported external address — an IPv4 or
+IPv6 address string (e.g., `"10.0.0.7"` or `"::1"`). Hostnames are NOT used;
+addresses are always numeric IP strings as stored in the routing table from
+FIND_NODE payloads. Clients MUST parse the address as an IP literal.
+
 The connection is closed after sending REDIRECT.
 
 ### 5.2.1 Client Node Discovery
