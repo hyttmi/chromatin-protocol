@@ -75,11 +75,16 @@ void RoutingTable::add_or_update(NodeInfo info) {
         }
     }
 
-    // If full, evict the node with the oldest last_seen timestamp.
+    // If full, only evict a stale node (not seen recently).
+    // This prevents attackers from gradually replacing healthy nodes.
     if (nodes_.size() >= max_nodes_) {
+        auto stale_cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(60);
         auto oldest = std::min_element(nodes_.begin(), nodes_.end(),
             [](const auto& a, const auto& b) { return a.last_seen < b.last_seen; });
-        *oldest = std::move(info);
+        if (oldest != nodes_.end() && oldest->last_seen < stale_cutoff) {
+            *oldest = std::move(info);
+        }
+        // else: all nodes are fresh, reject new node (prefer established nodes)
     } else {
         nodes_.push_back(std::move(info));
     }

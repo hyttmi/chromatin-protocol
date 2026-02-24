@@ -169,7 +169,9 @@ TEST(RoutingTable, EmptyTable) {
 
 TEST(RoutingTable, SizeLimit) {
     RoutingTable rt(256, 0);  // disable subnet limit for size-cap test
-    auto base_time = std::chrono::steady_clock::now();
+    // Place base_time far enough in the past so that the oldest nodes are
+    // stale (last_seen > 60s ago) and eligible for eviction.
+    auto base_time = std::chrono::steady_clock::now() - std::chrono::seconds(300);
 
     // Add 300 nodes with increasing timestamps so the first nodes are the
     // oldest.
@@ -368,6 +370,50 @@ TEST(RoutingTable, SubnetDiversityFallsBackToAddress) {
     auto n3 = make_node("fallback-a3", "10.0.1.3");
     rt.add_or_update(std::move(n3));
     EXPECT_EQ(rt.size(), 2u);
+}
+
+TEST(RoutingTable, EvictionOnlyEvictsStaleNodes) {
+    RoutingTable table(3, 0);  // max 3 nodes, no subnet limit
+
+    auto now = std::chrono::steady_clock::now();
+
+    // Fill table with 3 fresh nodes
+    for (int i = 0; i < 3; ++i) {
+        NodeInfo info;
+        info.id.id.fill(static_cast<uint8_t>(i + 1));
+        info.address = "10.0.0." + std::to_string(i + 1);
+        info.tcp_port = 4000;
+        info.last_seen = now;  // all fresh
+        table.add_or_update(info);
+    }
+    ASSERT_EQ(table.size(), 3u);
+
+    // Try to insert a 4th node — should be rejected (all nodes are fresh)
+    NodeInfo new_node;
+    new_node.id.id.fill(0x10);
+    new_node.address = "10.0.0.10";
+    new_node.tcp_port = 4000;
+    new_node.last_seen = now;
+    table.add_or_update(new_node);
+    EXPECT_EQ(table.size(), 3u);
+    EXPECT_FALSE(table.find(new_node.id).has_value())
+        << "New node should be rejected when all existing nodes are fresh";
+
+    // Now make one node stale (last_seen > 60 seconds ago)
+    NodeInfo stale_update;
+    stale_update.id.id.fill(0x01);  // same ID as first node
+    stale_update.address = "10.0.0.1";
+    stale_update.tcp_port = 4000;
+    stale_update.last_seen = now - std::chrono::seconds(120);  // 2 minutes ago = stale
+    table.add_or_update(stale_update);
+
+    // Now try inserting the 4th node again — should succeed (evicts stale node)
+    table.add_or_update(new_node);
+    EXPECT_EQ(table.size(), 3u);
+    EXPECT_TRUE(table.find(new_node.id).has_value())
+        << "New node should replace stale node";
+    EXPECT_FALSE(table.find(stale_update.id).has_value())
+        << "Stale node should have been evicted";
 }
 
 TEST(RoutingTable, SubnetDiversityTcpSourceIpPreservedOnUpdate) {
