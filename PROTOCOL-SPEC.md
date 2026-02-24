@@ -794,6 +794,22 @@ up-to-date node.
 
 The connection is closed after sending REDIRECT.
 
+### 5.2.1 Client Node Discovery
+
+Clients discover their first node through one of the following mechanisms:
+
+1. **Hardcoded bootstrap list:** The client ships with a list of well-known
+   bootstrap node addresses (e.g., `0.bootstrap.cpunk.io:4001`). The client
+   connects to any bootstrap node and sends HELLO with its fingerprint.
+2. **REDIRECT chain:** If the bootstrap node is not responsible for the
+   client's inbox, it responds with REDIRECT containing the addresses of
+   responsible nodes. The client reconnects to the most up-to-date node.
+3. **Manual configuration:** The user can configure a specific node address
+   (e.g., a self-hosted node).
+
+The bootstrap WebSocket port defaults to 4001. Clients SHOULD try multiple
+bootstrap nodes in parallel for faster discovery and resilience.
+
 ### 5.3 Client Commands (after authentication)
 
 All successful responses use `"type": "OK"` with command-specific data fields.
