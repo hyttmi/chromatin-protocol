@@ -1313,7 +1313,19 @@ verification (needed for initial discovery by unknown nodes). All other
 message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
 SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
 signatures. Messages from nodes whose public key is not yet known are
-rejected (except PING and FIND_NODE). Public keys are learned via two
+rejected (except PING and FIND_NODE).
+
+**Known risk — routing table poisoning:** Because PING and FIND_NODE are
+accepted without authentication, an attacker can inject entries into a node's
+routing table. This is mitigated by: (1) IP subnet diversity limits (max 3
+nodes per /24 IPv4 or /48 IPv6), (2) PONG signature verification (the node
+must prove identity via signed PONG before it can participate in signed
+operations), (3) eviction of unresponsive nodes, and (4) FIND_NODE rate
+limiting (1 per second per source). These mitigations make large-scale
+eclipse attacks impractical for the target network size (dozens to hundreds
+of nodes).
+
+Public keys are learned via two
 mechanisms:
 
 1. **FIND_NODE payload:** The sender includes its public key. The receiver
