@@ -415,12 +415,26 @@ For each entry:
 
 ### STORE_ACK (0x09)
 
-Sent by a node back to the requesting node after successfully processing a STORE.
+Sent by a node back to the requesting node after processing a STORE.
 
 ```
 [32 bytes: key]
 [1 byte: status]              // 0x00 = OK, 0x01 = rejected
+[1 byte: reason]              // Only present when status = 0x01
 ```
+
+Reason codes (when status = 0x01):
+| Code | Meaning                        |
+|------|--------------------------------|
+| 0x00 | Unspecified                    |
+| 0x01 | Not responsible for key        |
+| 0x02 | Validation failed              |
+| 0x03 | Duplicate msg_id               |
+| 0x04 | Allowlist rejected             |
+| 0x05 | PoW insufficient               |
+| 0x06 | Stale sequence                 |
+
+Codes 0x07-0xFF are reserved for future use.
 
 ### SEQ_REQ (0x0A)
 
@@ -469,6 +483,16 @@ never enters the replication log. Used for real-time events like typing indicato
 [1 byte:  event_type_len]
 [event_type_len bytes: event_type]
 ```
+
+**Optional payload data:** Implementations MAY append additional data after
+the event_type field:
+```
+[4 bytes BE: payload_length]    // 0 if no payload data
+[payload_length bytes: payload] // Opaque data passed to the client
+```
+If `payload_length` is absent (total payload matches the base format size),
+receivers MUST treat it as payload_length=0. This provides forward-compatible
+extensibility for future event types without changing the wire format.
 
 The receiving node checks its local `authenticated_` session map for the target
 fingerprint. If found, it performs an allowlist check and delivers the event as a
