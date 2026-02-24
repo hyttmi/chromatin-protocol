@@ -1420,6 +1420,15 @@ distinguish active allows from revokes.
 
 ### Group Metadata STORE Validation
 
+**Deletion carve-out:** If `value_length == 0` (empty value), the STORE is
+interpreted as a remote delete request and bypasses all validation rules
+below. The receiving node deletes the GROUP_META record for the given key and
+appends a DEL entry to its replication log. This is the mechanism used by
+`GROUP_DESTROY` to propagate deletion to other responsible nodes via
+`delete_remote()`.
+
+For non-empty STOREs (`value_length > 0`), all of the following must hold:
+
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
 2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin)
 3. `version` > currently stored version for this group_id — reject replays
