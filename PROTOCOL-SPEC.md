@@ -298,7 +298,7 @@ Received version and capability data is stored in NodeInfo
 - 2 + pubkey_length bytes: pubkey present, no address fields — use TCP source IP.
 - 2 + pubkey_length + 1 + (4|16) + 2 bytes: pubkey + address + ws_port present.
 Partial address fields (e.g., address_family present but address truncated) MUST
-be rejected — the receiver ignores all address fields and falls back to TCP source IP.
+be ignored — the receiver MUST ignore all address fields and fall back to TCP source IP.
 ```
 
 Requests the K closest nodes to the sender's node ID from the recipient.
