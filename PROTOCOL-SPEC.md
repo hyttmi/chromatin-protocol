@@ -92,7 +92,7 @@ Future versions may introduce dedicated storage nodes for large files.
 
 ## 2. TCP Transport Encryption (ML-KEM-1024 + ChaCha20-Poly1305)
 
-TCP node-to-node connections support optional encryption using a 3-message
+TCP node-to-node connections support **mandatory** encryption using a 3-message
 handshake that provides mutual authentication and forward secrecy via
 ephemeral ML-KEM-1024 key encapsulation.
 
