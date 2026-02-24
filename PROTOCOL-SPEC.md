@@ -1146,8 +1146,13 @@ Response: `{"type": "OK", "id": 23}`
 {"type": "GROUP_DESTROY", "id": 24, "group_id": "<hex>"}
 ```
 Owner-only (role=0x02). Wipes GROUP_META, all TABLE_GROUP_INDEX entries, and
-all TABLE_GROUP_BLOBS entries for the group. Connected group members receive a
-GROUP_DESTROYED push notification.
+all TABLE_GROUP_BLOBS entries for the group locally, then propagates the
+GROUP_META deletion to other responsible nodes via a STORE with empty value
+(data_type=0x06, value_length=0). Receiving nodes delete their local copy of
+GROUP_META. Group message data (TABLE_GROUP_INDEX, TABLE_GROUP_BLOBS) on
+other responsible nodes is cleaned up by the 7-day TTL sweep — no explicit
+tombstone mechanism is used. Connected group members receive a GROUP_DESTROYED
+push notification.
 Response: `{"type": "OK", "id": 24}`
 
 ### 5.4 Server Push (unsolicited, no id)
