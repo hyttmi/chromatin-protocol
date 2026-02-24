@@ -99,6 +99,10 @@ public:
                            uint8_t data_type,
                            std::span<const uint8_t> value);
 
+    // Called from TCP thread when a RELAY arrives via Kademlia.
+    // Delivers ephemeral events to connected clients via defer().
+    void on_kademlia_relay(std::span<const uint8_t> payload);
+
     // Get the listening port (0 if not yet listening).
     uint16_t listening_port() const { return listening_port_.load(); }
 
@@ -173,6 +177,9 @@ private:
     void handle_set_profile(ws_t* ws, const Json::Value& msg);
     void handle_register_name(ws_t* ws, const Json::Value& msg);
 
+    // Ephemeral event handler
+    void handle_event(ws_t* ws, const Json::Value& msg);
+
     // Group command handlers
     void handle_group_create(ws_t* ws, const Json::Value& msg);
     void handle_group_info(ws_t* ws, const Json::Value& msg);
@@ -187,6 +194,11 @@ private:
     void send_json(ws_t* ws, const Json::Value& msg);
     void send_error(ws_t* ws, int id, int code, const std::string& reason);
     void check_upload_timeouts();
+
+    // Deliver ephemeral event to target's connected devices (uWS thread only).
+    void deliver_event(const crypto::Hash& target_fp,
+                       const crypto::Hash& sender_fp,
+                       const std::string& event_type);
 };
 
 } // namespace chromatin::ws

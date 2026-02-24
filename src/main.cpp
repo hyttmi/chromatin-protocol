@@ -158,6 +158,9 @@ int main(int argc, char* argv[]) {
                                   std::span<const uint8_t> value) {
             ws.on_kademlia_store(key, type, value);
         });
+        kademlia.set_on_relay([&](std::span<const uint8_t> payload) {
+            ws.on_kademlia_relay(payload);
+        });
         g_stop = [&ws, &transport]() {
             transport.stop();  // abort any in-progress TCP connects
             ws.stop();

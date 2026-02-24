@@ -170,6 +170,7 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"LIST_REQUESTS",  {&WsServer::handle_list_requests,  true,  1.0}},
         {"SET_PROFILE",    {&WsServer::handle_set_profile,    true,  2.0}},
         {"REGISTER_NAME",  {&WsServer::handle_register_name,  true,  3.0}},
+        {"EVENT",          {&WsServer::handle_event,          true,  0.5}},
         {"GROUP_CREATE",   {&WsServer::handle_group_create,   true,  3.0}},
         {"GROUP_INFO",     {&WsServer::handle_group_info,     true,  1.0}},
         {"GROUP_SEND",     {&WsServer::handle_group_send,     true,  2.0}},
@@ -1766,6 +1767,139 @@ void WsServer<SSL>::on_kademlia_store(const crypto::Hash& key,
                 }
             }
         }
+    });
+}
+
+// ---------- EVENT (ephemeral) ----------
+
+template<bool SSL>
+void WsServer<SSL>::handle_event(ws_t* ws, const Json::Value& msg) {
+    auto* session = ws->getUserData();
+    int id = msg.get("id", 0).asInt();
+
+    // Parse target fingerprint
+    std::string to_hex_str = msg.get("to", "").asString();
+    if (to_hex_str.size() != 64) {
+        send_error(ws, id, 400, "to must be 64 hex chars");
+        return;
+    }
+    auto to_bytes = from_hex(to_hex_str);
+    if (!to_bytes) {
+        send_error(ws, id, 400, "invalid hex in to");
+        return;
+    }
+    crypto::Hash target_fp{};
+    std::copy(to_bytes->begin(), to_bytes->end(), target_fp.begin());
+
+    // Parse event type
+    std::string event_type = msg.get("event", "").asString();
+    if (event_type.empty() || event_type.size() > 32) {
+        send_error(ws, id, 400, "invalid event type");
+        return;
+    }
+
+    // Validate event type is in whitelist
+    static const std::unordered_set<std::string> allowed_events = {"TYPING"};
+    if (allowed_events.find(event_type) == allowed_events.end()) {
+        send_error(ws, id, 400, "unknown event type: " + event_type);
+        return;
+    }
+
+    // Build relay payload: target_fp(32) || sender_fp(32) || event_type_len(1) || event_type
+    std::vector<uint8_t> relay_payload;
+    relay_payload.reserve(65 + event_type.size());
+    relay_payload.insert(relay_payload.end(), target_fp.begin(), target_fp.end());
+    relay_payload.insert(relay_payload.end(),
+                         session->fingerprint.begin(), session->fingerprint.end());
+    relay_payload.push_back(static_cast<uint8_t>(event_type.size()));
+    relay_payload.insert(relay_payload.end(), event_type.begin(), event_type.end());
+
+    // Try local delivery first
+    auto it = authenticated_.find(target_fp);
+    if (it != authenticated_.end()) {
+        deliver_event(target_fp, session->fingerprint, event_type);
+    }
+
+    // Respond OK immediately (fire-and-forget)
+    Json::Value resp;
+    resp["type"] = "OK";
+    resp["id"] = id;
+    send_json(ws, resp);
+
+    // If not found locally, relay to responsible nodes
+    if (it == authenticated_.end()) {
+        auto payload_copy = relay_payload;
+        if (!workers_.post([this, target_fp, payload_copy = std::move(payload_copy)]() {
+            auto inbox_key = crypto::sha3_256_prefixed("inbox:", target_fp);
+            kad_.relay(inbox_key, payload_copy);
+        })) {
+            // Worker pool full — silently drop (ephemeral, best-effort)
+        }
+    }
+}
+
+template<bool SSL>
+void WsServer<SSL>::deliver_event(const crypto::Hash& target_fp,
+                                  const crypto::Hash& sender_fp,
+                                  const std::string& event_type) {
+    // Allowlist check: if target has an allowlist, sender must be on it
+    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", target_fp);
+    std::vector<uint8_t> allow_check;
+    allow_check.reserve(64);
+    allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
+    allow_check.insert(allow_check.end(), sender_fp.begin(), sender_fp.end());
+    auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
+    bool sender_allowed = allowed && allowed->size() > 64 && (*allowed)[64] == 0x01;
+    if (!sender_allowed) {
+        // Check if any allowlist exists for this recipient
+        bool has_allowlist = false;
+        storage_.scan(storage::TABLE_ALLOWLISTS,
+                      std::vector<uint8_t>(allowlist_key.begin(), allowlist_key.end()),
+                      [&](auto, auto) { has_allowlist = true; return false; });
+        if (has_allowlist) {
+            return;  // Sender not allowed — drop silently
+        }
+        // No allowlist at all = open inbox, deliver
+    }
+
+    // Build push JSON
+    Json::Value push;
+    push["type"] = "EVENT";
+    push["from"] = to_hex(sender_fp);
+    push["event"] = event_type;
+
+    auto it = authenticated_.find(target_fp);
+    if (it == authenticated_.end()) return;
+
+    for (auto* client_ws : it->second) {
+        if (connections_.count(client_ws) > 0) {
+            send_json(client_ws, push);
+        }
+    }
+}
+
+template<bool SSL>
+void WsServer<SSL>::on_kademlia_relay(std::span<const uint8_t> payload) {
+    // Copy payload (span may be invalidated by caller)
+    std::vector<uint8_t> payload_copy(payload.begin(), payload.end());
+
+    loop_->defer([this, payload_copy = std::move(payload_copy)]() {
+        // Parse relay payload: target_fp(32) || sender_fp(32) || event_type_len(1) || event_type
+        if (payload_copy.size() < 65) return;
+
+        crypto::Hash target_fp{};
+        std::copy(payload_copy.begin(), payload_copy.begin() + 32, target_fp.begin());
+
+        crypto::Hash sender_fp{};
+        std::copy(payload_copy.begin() + 32, payload_copy.begin() + 64, sender_fp.begin());
+
+        uint8_t event_type_len = payload_copy[64];
+        if (payload_copy.size() < 65 + event_type_len) return;
+
+        std::string event_type(payload_copy.begin() + 65,
+                               payload_copy.begin() + 65 + event_type_len);
+
+        deliver_event(target_fp, sender_fp, event_type);
     });
 }
 

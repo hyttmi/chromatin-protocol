@@ -820,9 +820,45 @@ GROUP_DESTROYED push notification.
 
 ---
 
-## 11. Node Identity & Lifecycle
+## 11. Ephemeral Events
 
-### 11.1 Node Identity
+Ephemeral events are fire-and-forget real-time notifications — they are never
+stored in mdbx, never replicated, and never enter the replication log. If the
+recipient is online, the event is delivered instantly. If offline, it is silently
+dropped. This is the correct behavior for transient signals like typing indicators.
+
+### 11.1 Delivery Flow
+
+1. Client sends `EVENT` to its connected node with target fingerprint and event type
+2. Node validates: authenticated, rate limit, event type whitelist
+3. **Same-node (fast path):** If the target is connected to the same node, the
+   event is delivered directly after an allowlist check
+4. **Cross-node:** The node dispatches to the worker pool, computes the target's
+   inbox key (`SHA3-256("inbox:" || target_fp)`), and sends a TCP RELAY (0x0C) to
+   each responsible node. Receiving nodes check for the target locally and deliver
+   if connected
+5. Response: `OK` is sent immediately (before relay, if cross-node)
+
+### 11.2 Allowlist Enforcement
+
+Allowlist checks are performed on the **delivering** node (which has the
+authoritative allowlist data for locally-connected users). If the target has an
+allowlist and the sender is not on it, the event is silently dropped — the sender
+still receives `OK` (no information leak about the target's online status).
+
+### 11.3 Event Types
+
+| Event  | Description        | Client behavior                                                    |
+|--------|--------------------|--------------------------------------------------------------------|
+| TYPING | Sender is typing   | Send every ~3s while typing; receiver shows indicator, removes after 5s without renewal |
+
+New event types can be added by extending the whitelist without protocol changes.
+
+---
+
+## 12. Node Identity & Lifecycle
+
+### 12.1 Node Identity
 
 Each node has:
 - Its own ML-DSA-87 keypair (generated on first run)
@@ -830,7 +866,7 @@ Each node has:
 - Publicly reachable address (IP:port for TCP, IP:port for WebSocket)
 - All node-to-node messages are ML-DSA signed
 
-### 11.2 Bootstrap
+### 12.2 Bootstrap
 
 - 3 hardcoded bootstrap nodes: `0.bootstrap.cpunk.io`, `1.bootstrap.cpunk.io`,
   `2.bootstrap.cpunk.io`
@@ -838,13 +874,13 @@ Each node has:
 - New node contacts any bootstrap → receives full membership list
 - Bootstrap nodes have elevated role: can **slash bad nodes**
 
-### 11.3 Node Joining
+### 12.3 Node Joining
 
 - **Open join** — any node can join by contacting a bootstrap
 - No PoW or payment required to run a node
 - New nodes start with low trust and earn reputation over time
 
-### 11.4 Responsibility Transfer
+### 12.4 Responsibility Transfer
 
 When a new node joins (or an existing node leaves), the responsibility map
 changes. Some keys may now have a new closest node.
@@ -857,7 +893,7 @@ changes. Some keys may now have a new closest node.
 Old responsible nodes that are no longer in the top R for a key can prune
 that data after confirming the new responsible node is synced.
 
-### 11.5 Trust & Reputation
+### 12.5 Trust & Reputation
 
 - Nodes track reputation: uptime, responsiveness, correct behavior
 - New nodes receive less responsibility until proven reliable
@@ -868,9 +904,9 @@ that data after confirming the new responsible node is synced.
 
 ---
 
-## 12. Local Storage (libmdbx)
+## 13. Local Storage (libmdbx)
 
-### 12.1 Database Layout
+### 13.1 Database Layout
 
 | Database         | Key Format                          | Value                     |
 |------------------|-------------------------------------|---------------------------|
@@ -887,7 +923,7 @@ that data after confirming the new responsible node is synced.
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
 | reputation       | `node_id`                           | Trust score + metrics     |
 
-### 12.2 Replication Log Format
+### 13.2 Replication Log Format
 
 Each entry in `repl_log`:
 
@@ -902,7 +938,7 @@ Each entry in `repl_log`:
 
 ---
 
-## 13. Tech Stack
+## 14. Tech Stack
 
 | Component          | Library                        |
 |--------------------|--------------------------------|

@@ -55,6 +55,27 @@ void Kademlia::set_on_store(StoreCallback cb) {
     on_store_ = std::move(cb);
 }
 
+void Kademlia::set_on_relay(RelayCallback cb) {
+    on_relay_ = std::move(cb);
+}
+
+void Kademlia::relay(const crypto::Hash& key, std::span<const uint8_t> payload) {
+    auto nodes = responsible_nodes(key);
+    Message msg = make_message(MessageType::RELAY,
+                               std::vector<uint8_t>(payload.begin(), payload.end()));
+    for (const auto& node : nodes) {
+        if (node.id != self_.id) {
+            send_to_node(node, msg);
+        }
+    }
+}
+
+void Kademlia::handle_relay(const Message& msg, const std::string& from, uint16_t port) {
+    if (on_relay_) {
+        on_relay_(msg.payload);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Periodic maintenance (self-healing)
 // ---------------------------------------------------------------------------
@@ -697,6 +718,9 @@ void Kademlia::handle_message(const Message& msg, const std::string& from_addr, 
         break;
     case MessageType::SEQ_RESP:
         handle_seq_resp(msg, from_addr, from_port);
+        break;
+    case MessageType::RELAY:
+        handle_relay(msg, from_addr, from_port);
         break;
     default:
         spdlog::warn("Unhandled message type: 0x{:02X}", static_cast<uint8_t>(msg.type));

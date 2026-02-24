@@ -86,6 +86,7 @@ Future versions may introduce dedicated storage nodes for large files.
 | 0x09  | STORE_ACK  | Response          | Acknowledgment of a STORE request   |
 | 0x0A  | SEQ_REQ    | Request           | Query replication log sequence       |
 | 0x0B  | SEQ_RESP   | Response          | Replication log sequence response    |
+| 0x0C  | RELAY      | Request           | Ephemeral event relay (fire-and-forget) |
 
 ---
 
@@ -438,6 +439,25 @@ Write quorum `W = min(2, R)` where `R = min(3, network_size)`. A store is
 considered "durably replicated" when `W` nodes (including the originator) have
 confirmed. If a peer does not ACK within a reasonable window, the originating
 node relies on SYNC_REQ/SYNC_RESP to reconcile later.
+
+### RELAY (0x0C)
+
+Ephemeral event relay. Fire-and-forget — never stored in mdbx, never replicated,
+never enters the replication log. Used for real-time events like typing indicators.
+
+```
+[32 bytes: target_fingerprint]
+[32 bytes: sender_fingerprint]
+[1 byte:  event_type_len]
+[event_type_len bytes: event_type]
+```
+
+The receiving node checks its local `authenticated_` session map for the target
+fingerprint. If found, it performs an allowlist check and delivers the event as a
+WebSocket push. If not found, the event is silently dropped.
+
+Signature policy: mandatory verification (same as STORE — must come from a known,
+verified node).
 
 ---
 
@@ -947,6 +967,22 @@ Kademlia. If two users register the same name simultaneously, the **lower
 fingerprint wins** — a deterministic tiebreaker ensuring all nodes converge.
 Response: `{"type": "OK", "id": 15}`
 
+**EVENT** — Send an ephemeral event (fire-and-forget, never stored):
+```json
+{"type": "EVENT", "id": 12, "to": "<fingerprint hex>", "event": "TYPING"}
+```
+The node validates the event type against a whitelist, responds OK immediately,
+then attempts delivery. If the target is connected locally, the event is delivered
+directly (after allowlist check). Otherwise, it is relayed via TCP RELAY (0x0C) to
+the responsible nodes for the target's inbox key.
+Response: `{"type": "OK", "id": 12}`
+
+Defined event types:
+
+| Event   | Description        | Behavior                                                    |
+|---------|--------------------|-------------------------------------------------------------|
+| TYPING  | Sender is typing   | Client sends every ~3s; receiver shows indicator, removes after 5s without renewal |
+
 **GROUP_CREATE** — Create a new group:
 ```json
 {"type": "GROUP_CREATE", "id": 16, "group_meta": "<hex-encoded GROUP_META binary>"}
@@ -1110,6 +1146,14 @@ client fetches them via GROUP_LIST or GROUP_GET.
 Pushed to all connected members when GROUP_DESTROY is executed or the last
 owner leaves (auto-destruction).
 
+**EVENT** — Ephemeral event from another user (typing indicator, etc.):
+```json
+{"type": "EVENT", "from": "<fingerprint hex>", "event": "TYPING"}
+```
+Delivered only if the target is currently connected. Never stored. Allowlist
+is enforced on the delivering node — if the sender is not on the target's
+allowlist (and the target has one), the event is silently dropped.
+
 ### 5.5 Rate Limiting
 
 Nodes enforce **per-fingerprint** rate limiting using a token bucket algorithm.
@@ -1128,6 +1172,7 @@ connection multiplication. Different commands consume different token costs:
 | LIST / GET / DELETE / ALLOW / REVOKE | 1 |
 | GROUP_LIST / GROUP_GET / GROUP_DELETE / GROUP_INFO | 1 |
 | RESOLVE_NAME / GET_PROFILE / LIST_REQUESTS | 1 |
+| EVENT            | 0.5  |
 | HELLO / AUTH     | 1    |
 | STATUS           | 0    |
 
@@ -1210,7 +1255,7 @@ On every incoming TCP message, a conforming node MUST:
 **Signature verification:** PING and FIND_NODE are accepted without signature
 verification (needed for initial discovery by unknown nodes). All other
 message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
-SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP — MUST have valid ML-DSA-87
+SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
 signatures. Messages from nodes whose public key is not yet known are
 rejected (except PING and FIND_NODE). Public keys are learned via two
 mechanisms:

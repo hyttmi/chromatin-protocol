@@ -367,6 +367,13 @@ class ChromatinClient:
             "group_id": group_id,
         })
 
+    async def cmd_event(self, to_fp: str, event: str) -> dict:
+        mid = self._msg_id()
+        return await self.send_command({
+            "type": "EVENT", "id": mid,
+            "to": to_fp, "event": event,
+        })
+
 
 # --- Standalone message builders ---
 

@@ -81,6 +81,13 @@ public:
                                              std::span<const uint8_t> value)>;
     void set_on_store(StoreCallback cb);
 
+    // Fire-and-forget relay to responsible nodes for a key (skips self).
+    void relay(const crypto::Hash& key, std::span<const uint8_t> payload);
+
+    // Callback for received RELAY messages.
+    using RelayCallback = std::function<void(std::span<const uint8_t> payload)>;
+    void set_on_relay(RelayCallback cb);
+
     // PoW difficulty overrides for testing (defaults from protocol constants).
     void set_name_pow_difficulty(int bits) { name_pow_difficulty_ = bits; }
     void set_contact_pow_difficulty(int bits) { contact_pow_difficulty_ = bits; }
@@ -134,6 +141,7 @@ private:
     int name_pow_difficulty_ = config::protocol::NAME_POW_DIFFICULTY;
     int contact_pow_difficulty_ = config::protocol::CONTACT_POW_DIFFICULTY;
     StoreCallback on_store_;
+    RelayCallback on_relay_;
 
     // Timing intervals (from config)
     std::chrono::seconds refresh_interval_{30};
@@ -219,6 +227,7 @@ private:
     void handle_store_ack(const Message& msg, const std::string& from, uint16_t port);
     void handle_seq_req(const Message& msg, const std::string& from, uint16_t port);
     void handle_seq_resp(const Message& msg, const std::string& from, uint16_t port);
+    void handle_relay(const Message& msg, const std::string& from, uint16_t port);
 
     Message make_message(MessageType type, const std::vector<uint8_t>& payload);
     std::vector<uint8_t> make_find_node_payload() const;

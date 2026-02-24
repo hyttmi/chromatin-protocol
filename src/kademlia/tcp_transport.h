@@ -35,7 +35,8 @@ enum class MessageType : uint8_t {
     SYNC_RESP  = 0x08,
     STORE_ACK  = 0x09,
     SEQ_REQ    = 0x0A,
-    SEQ_RESP   = 0x0B
+    SEQ_RESP   = 0x0B,
+    RELAY      = 0x0C   // Ephemeral relay (fire-and-forget, no storage)
 };
 
 struct Message {

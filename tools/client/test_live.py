@@ -1285,6 +1285,85 @@ async def run_tests():
             pass
 
     # ===================================================================
+    print("\n=== Ephemeral Event Tests (Typing Indicators) ===")
+    # ===================================================================
+
+    # Reconnect Alice and Bob for ephemeral event tests
+    # (they may still be connected, but let's ensure fresh connections)
+    try:
+        await alice.disconnect()
+    except Exception:
+        pass
+    try:
+        await bob.disconnect()
+    except Exception:
+        pass
+
+    alice = ChromatinClient(pub_a, sec_a)
+    bob = ChromatinClient(pub_b, sec_b)
+
+    alice_pushes.clear()
+    bob_pushes.clear()
+    alice.set_push_callback(alice_push)
+    bob.set_push_callback(bob_push)
+
+    resp_a = await connect_with_redirect(alice, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+    check("alice reconnected for events", resp_a.get("type") == "OK",
+          f"got {resp_a.get('type')}: {resp_a.get('reason', '')}")
+
+    resp_b = await connect_with_redirect(bob, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+    check("bob reconnected for events", resp_b.get("type") == "OK",
+          f"got {resp_b.get('type')}: {resp_b.get('reason', '')}")
+
+    # Ensure mutual allowlist (should still be in place from earlier tests)
+    await alice.cmd_allow(fp_b.hex())
+    await bob.cmd_allow(fp_a.hex())
+    await asyncio.sleep(1)
+
+    # Test: Alice sends TYPING event to Bob
+    bob_pushes.clear()
+    resp = await alice.cmd_event(fp_b.hex(), "TYPING")
+    check("event typing OK", resp.get("type") == "OK",
+          f"got {resp}")
+
+    # Wait for push delivery (cross-node relay may take a moment)
+    await asyncio.sleep(2)
+
+    # Check Bob received the EVENT push
+    typing_events = [p for p in bob_pushes if p.get("type") == "EVENT"]
+    check("bob received typing event", len(typing_events) >= 1,
+          f"got {len(typing_events)} events, pushes: {bob_pushes}")
+
+    if typing_events:
+        ev = typing_events[0]
+        check("typing event has correct from", ev.get("from") == fp_a.hex(),
+              f"got from={ev.get('from')}")
+        check("typing event has correct type", ev.get("event") == "TYPING",
+              f"got event={ev.get('event')}")
+
+    # Test: Bob sends TYPING event to Alice
+    alice_pushes.clear()
+    resp = await bob.cmd_event(fp_a.hex(), "TYPING")
+    check("bob event typing OK", resp.get("type") == "OK",
+          f"got {resp}")
+
+    await asyncio.sleep(2)
+
+    typing_events_a = [p for p in alice_pushes if p.get("type") == "EVENT"]
+    check("alice received typing event", len(typing_events_a) >= 1,
+          f"got {len(typing_events_a)} events, pushes: {alice_pushes}")
+
+    if typing_events_a:
+        ev = typing_events_a[0]
+        check("alice typing event from bob", ev.get("from") == fp_b.hex(),
+              f"got from={ev.get('from')}")
+
+    # Test: Unknown event type rejected
+    resp = await alice.cmd_event(fp_b.hex(), "INVALID_EVENT")
+    check("unknown event type rejected", resp.get("type") == "ERROR",
+          f"got {resp}")
+
+    # ===================================================================
     # Cleanup
     # ===================================================================
     print("\n=== Cleanup ===")
