@@ -144,7 +144,7 @@ replicated using the **same sequence-based mdbx replication**.
 profile_key = SHA3-256("profile:" || fingerprint)     → R closest nodes store it
 name_key    = SHA3-256("name:" || name)            → R closest nodes store it
 inbox_key   = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it
-request_key = SHA3-256("requests:" || fingerprint) → R closest nodes store it
+request_key = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it (co-located with inbox)
 group_key   = SHA3-256("group:" || group_id)       → R closest nodes store it
 ```
 
@@ -663,7 +663,7 @@ code 429.
 Separate from the main inbox. Stored under:
 
 ```
-request_key = SHA3-256("requests:" || fingerprint)
+request_key = SHA3-256("inbox:" || fingerprint)   // co-located with inbox
 ```
 
 Same R-node responsibility, same replication. Accepts messages from unknown
@@ -673,7 +673,7 @@ senders with proof-of-work.
 
 1. Alice looks up Bob's profile on network → gets Bob's fingerprint
 2. Alice computes Bob's responsible nodes: R closest to
-   `SHA3-256("requests:" || bob_fp)`
+   `SHA3-256("inbox:" || bob_fp)` (co-located with Bob's inbox)
 3. Alice computes PoW: find `nonce` such that
    `SHA3-256("chromatin:request:" || alice_fp || bob_fp || timestamp_BE || nonce_BE)` has M leading zero bits
 4. Alice sends `CONTACT_REQUEST { to: bob_fp, blob, pow_nonce, timestamp }` to a

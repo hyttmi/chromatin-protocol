@@ -1543,7 +1543,7 @@ All storage keys are derived using SHA3-256 with domain prefixes:
 profile_key  = SHA3-256("profile:"       || fingerprint)
 name_key     = SHA3-256("name:"      || name)
 inbox_key    = SHA3-256("inbox:"     || fingerprint)
-request_key  = SHA3-256("requests:"  || fingerprint)
+request_key  = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 allow_key    = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
 group_key    = SHA3-256("group:"     || group_id)
 ```
