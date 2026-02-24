@@ -524,6 +524,15 @@ Kademlia STORE value (includes recipient_fp for two-table routing):
 
 Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
 
+**Security model:** The `sender_fingerprint` field is an *unverified routing
+hint*. The Kademlia STORE handler uses it solely for allowlist lookup — it
+does NOT verify that the sender actually owns the claimed fingerprint. Any
+node forwarding a STORE can set an arbitrary sender_fingerprint. Message
+authenticity and sender identity are guaranteed by the client-side E2E
+encryption layer (ML-KEM-1024 encapsulated per-recipient key + AES-256-GCM).
+The server treats message blobs as opaque ciphertext and never inspects their
+contents.
+
 Receiving nodes parse `recipient_fp` from the value to build the two-table
 storage model. Local mdbx storage uses two tables:
 
@@ -1306,7 +1315,7 @@ replicated via SYNC_REQ/SYNC_RESP instead.
 
 ### Inbox Message STORE Validation
 
-1. Check recipient's allowlist:
+1. **Allowlist enforcement** (uses unverified `sender_fingerprint` — see Security Model note in Section 4):
    - Point lookup for sender's composite key: if found with `action == 0x01` → allow
    - If not found or `action != 0x01` → scan for any allowlist entries for recipient
    - If any entries exist (including revoke entries) → reject (sender not allowed)

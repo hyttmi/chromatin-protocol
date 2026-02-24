@@ -233,6 +233,10 @@ messages directly via TCP:
 - **Inbox messages**: Kademlia validates the recipient's allowlist before
   accepting. If the recipient has an allowlist and the sender is not on it,
   the STORE is rejected. No allowlist = open inbox (new user).
+  **Note:** The `sender_fingerprint` field is an *unverified routing hint*
+  used only for allowlist lookup. The server does not verify the sender's
+  identity — message authenticity is guaranteed by the client's E2E encryption
+  layer. The server treats all message blobs as opaque ciphertext.
 - **Contact requests**: Kademlia verifies the PoW (16 leading zero bits)
   and that the routing key matches the recipient_fp in the value.
 - **Allowlist entries**: Self-verifiable — the embedded public key is checked
