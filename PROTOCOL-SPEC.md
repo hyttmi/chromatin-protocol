@@ -429,12 +429,9 @@ Reason codes (when status = 0x01):
 | 0x00 | Unspecified                    |
 | 0x01 | Not responsible for key        |
 | 0x02 | Validation failed              |
-| 0x03 | Duplicate msg_id               |
-| 0x04 | Allowlist rejected             |
-| 0x05 | PoW insufficient               |
-| 0x06 | Stale sequence                 |
 
-Codes 0x07-0xFF are reserved for future use.
+Codes 0x03-0xFF are reserved for future use (e.g., duplicate msg_id,
+allowlist rejection, insufficient PoW, stale sequence).
 
 ### SEQ_REQ (0x0A)
 
