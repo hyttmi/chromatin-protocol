@@ -217,7 +217,9 @@ are encrypted. Each encrypted frame has the following format:
 - **Key**: `i2r_key` or `r2i_key` (depending on direction)
 - **Nonce**: 12 bytes — `[4 zero bytes][8 bytes BE: counter]`. The counter
   starts at 0 and increments by 1 for each message sent in that direction.
-  Each direction maintains its own counter.
+  Each direction maintains its own counter. If the counter reaches 2^64 - 1,
+  the node MUST close the connection and initiate a new handshake. In
+  practice this is unreachable (~585 billion years at 1 billion msg/sec).
 - **AAD** (Additional Authenticated Data): The 4-byte big-endian length
   header preceding the ciphertext. This binds the length to the ciphertext,
   preventing length-manipulation attacks.
