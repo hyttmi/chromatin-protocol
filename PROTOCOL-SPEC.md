@@ -1541,7 +1541,11 @@ per /24 IPv4 subnet** (or **/48 IPv6 prefix**) to mitigate Sybil and eclipse
 attacks. New nodes from over-represented subnets are silently rejected. This
 prevents an attacker from filling the routing table with nodes from a single
 network range. Subnet diversity checks MUST use the actual TCP connection
-source IP, not the self-reported external address.
+source IP, not the self-reported external address. This prevents attackers
+from faking different subnets to bypass the limit. **NAT caveat:** multiple
+legitimate nodes behind the same NAT gateway share a TCP source IP and are
+therefore limited to 3 nodes per NAT. This is an acceptable tradeoff — the
+alternative (trusting self-reported addresses) would allow trivial bypass.
 
 ### TCP Connection Pooling
 

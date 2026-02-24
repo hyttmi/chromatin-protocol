@@ -987,7 +987,9 @@ The following security properties are enforced by conforming implementations:
 - **Subnet diversity uses actual TCP source IP:** Routing table subnet
   diversity checks use the actual TCP connection source IP rather than the
   self-reported external address, preventing an attacker from bypassing
-  subnet limits by claiming addresses in different subnets.
+  subnet limits by claiming addresses in different subnets. Nodes behind
+  the same NAT are limited to 3 per gateway (acceptable tradeoff vs.
+  trusting self-reported addresses).
 - **Empty-value STORE restricted to GROUP_META:** Empty-value STORE
   (deletion mechanism) is only accepted for data_type 0x06 (GROUP_META).
   All other data types reject empty-value STORE, preventing unauthorized
