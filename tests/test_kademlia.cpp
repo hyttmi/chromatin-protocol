@@ -3573,3 +3573,34 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     ASSERT_TRUE(results[0].value.has_value());
     EXPECT_EQ(*results[0].value, meta);
 }
+
+// ---------------------------------------------------------------------------
+// Test: EmptyValueStoreRejectsNonGroupMeta — empty-value STORE only allowed
+// for GROUP_META (0x06); all other data types must be rejected.
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, EmptyValueStoreRejectsNonGroupMeta) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Store a valid profile first
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    auto profile_key = sha3_256_prefixed("profile:", user_fp);
+    auto profile = build_profile(user_kp, 1);
+    ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
+
+    // Verify profile exists
+    auto stored = n1.storage->get(TABLE_PROFILES, profile_key);
+    ASSERT_TRUE(stored.has_value());
+
+    // Try empty-value STORE with data_type 0x00 (PROFILE) — should be rejected
+    // This also catches the old bug where data_type 0x03 would delete from TABLE_PROFILES
+    EXPECT_FALSE(n1.kad->store(profile_key, 0x00, std::span<const uint8_t>{}))
+        << "Empty-value STORE for PROFILE should be rejected";
+
+    // Verify profile still exists (was not deleted)
+    stored = n1.storage->get(TABLE_PROFILES, profile_key);
+    EXPECT_TRUE(stored.has_value())
+        << "Profile should not have been deleted by empty-value STORE";
+}

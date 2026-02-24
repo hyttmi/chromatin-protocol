@@ -1319,28 +1319,28 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
 
     // 2. Empty value = remote delete request
     if (value_length == 0) {
-        // Delete from the appropriate table(s) based on data_type
+        // Only GROUP_META (0x06) supports empty-value delete (GROUP_DESTROY).
+        // All other data types must use the replication/sync path for deletes.
         if (data_type == 0x06) {
             storage_.del(storage::TABLE_GROUP_META, key);
-        } else if (data_type == 0x05) {
-            // data field carries the composite key (group_id || msg_id)
-            // but for empty-value delete, we delete by routing key
-            storage_.del(storage::TABLE_GROUP_INDEX, key);
-            storage_.del(storage::TABLE_GROUP_BLOBS, key);
-        } else if (data_type == 0x03) {
-            storage_.del(storage::TABLE_PROFILES, key);
-        } else if (data_type == 0x07) {
-            storage_.del(storage::TABLE_NAMES, key);
-        }
-        repl_log_.append(key, replication::Op::DEL, data_type,
-                         std::vector<uint8_t>(key.begin(), key.end()));
-        spdlog::info("Remote delete data_type=0x{:02X} for key from {}:{}", data_type, from, port);
+            repl_log_.append(key, replication::Op::DEL, data_type,
+                             std::vector<uint8_t>(key.begin(), key.end()));
+            spdlog::info("Remote GROUP_META delete for key from {}:{}", from, port);
 
-        std::vector<uint8_t> ack_payload;
-        ack_payload.insert(ack_payload.end(), key.begin(), key.end());
-        ack_payload.push_back(0x00);
-        Message ack = make_message(MessageType::STORE_ACK, ack_payload);
-        transport_.send(from, port, ack);
+            std::vector<uint8_t> ack_payload;
+            ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+            ack_payload.push_back(0x00); // OK
+            Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+            transport_.send(from, port, ack);
+        } else {
+            spdlog::warn("STORE rejected: empty-value delete not supported for data_type 0x{:02X}", data_type);
+            std::vector<uint8_t> ack_payload;
+            ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+            ack_payload.push_back(0x01); // rejected
+            ack_payload.push_back(0x03); // reason: unauthorized/unsupported delete
+            Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+            transport_.send(from, port, ack);
+        }
         return;
     }
 
