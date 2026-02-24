@@ -1310,7 +1310,9 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 26 leading zero bits
 3. ML-DSA-87 signature valid over all fields preceding the signature
 4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
-5. If name already registered to a different fingerprint — reject (first claim wins)
+5. If name already registered to a different fingerprint — **lower fingerprint wins**
+   (deterministic tiebreaker ensuring all nodes converge to the same owner regardless
+   of STORE arrival order during registration races)
 6. If same fingerprint — `sequence` must be higher than stored
 
 ### FIND_VALUE Scope
