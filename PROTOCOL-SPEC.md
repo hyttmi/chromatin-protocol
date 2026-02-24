@@ -527,9 +527,9 @@ Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
 **Security model:** The `sender_fingerprint` field is an *unverified routing
 hint*. The Kademlia STORE handler uses it solely for allowlist lookup — it
 does NOT verify that the sender actually owns the claimed fingerprint. Any
-node forwarding a STORE can set an arbitrary sender_fingerprint. Message
+node sending a STORE can set an arbitrary sender_fingerprint. Message
 authenticity and sender identity are guaranteed by the client-side E2E
-encryption layer (ML-KEM-1024 encapsulated per-recipient key + AES-256-GCM).
+encryption layer (see client protocol specification).
 The server treats message blobs as opaque ciphertext and never inspects their
 contents.
 
