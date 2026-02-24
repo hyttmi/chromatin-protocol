@@ -119,7 +119,10 @@ void WsServer<SSL>::stop() {
                 us_listen_socket_close(SSL ? 1 : 0, listen_socket_);
                 listen_socket_ = nullptr;
             }
-            // uWS will exit run() when no listeners, timers, and connections remain.
+            // Force-close all client connections so uWS exits run() immediately
+            for (auto* ws : connections_) {
+                ws->close();
+            }
         });
     }
 }
