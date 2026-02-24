@@ -106,11 +106,11 @@ being negotiated:
 | `0xCE`     | Encrypted handshake (HELLO message follows)|
 | `0x43`     | Plaintext CHRM message (`'C'` from magic)  |
 
-This allows nodes to accept both encrypted and plaintext connections on the
-same TCP port. Nodes that do not support encryption simply reject the `0xCE`
-probe byte and close the connection. The initiator then falls back to
-plaintext and caches the failure per destination to avoid repeated handshake
-attempts.
+This allows nodes to distinguish encrypted connections from legacy plaintext
+connections during protocol migration. As of protocol version 0x01,
+encryption is mandatory (see Section 2.7) — nodes MUST reject plaintext
+connections. The probe byte is retained for forward compatibility with
+future cipher suite negotiation.
 
 ### 2.2 Handshake Protocol
 
