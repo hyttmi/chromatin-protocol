@@ -806,11 +806,17 @@ The connection is closed after sending REDIRECT.
 
 ### 5.2.1 Client Node Discovery
 
+Note: discovery happens *before* the HELLO flow described in Section 5.1.
+Once the client has an address to connect to, it proceeds with HELLO; the
+REDIRECT mechanism (Section 5.2) then handles the final hop to the responsible
+node.
+
 Clients discover their first node through one of the following mechanisms:
 
 1. **Hardcoded bootstrap list:** The client ships with a list of well-known
-   bootstrap node addresses (e.g., `0.bootstrap.cpunk.io:4001`). The client
-   connects to any bootstrap node and sends HELLO with its fingerprint.
+   bootstrap node addresses (e.g., `bootstrap_node:4001`). Bootstrap addresses
+   are listed in the protocol constants table (Section 7). The client connects
+   to any bootstrap node and sends HELLO with its fingerprint.
 2. **REDIRECT chain:** If the bootstrap node is not responsible for the
    client's inbox, it responds with REDIRECT containing the addresses of
    responsible nodes. The client reconnects to the most up-to-date node.
