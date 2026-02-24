@@ -19,6 +19,13 @@ namespace protocol {
     constexpr uint32_t MAX_PROFILE_SIZE       = 1024 * 1024;           // 1 MiB
     constexpr uint32_t MAX_REQUEST_BLOB_SIZE  = 64 * 1024;             // 64 KiB
     constexpr uint32_t TTL_DAYS               = 7;
+
+    // Profile sub-field limits
+    constexpr uint32_t MAX_BIO_SIZE              = 2048;              // 2 KiB
+    constexpr uint32_t MAX_AVATAR_SIZE           = 256 * 1024;        // 256 KiB
+    constexpr uint8_t  MAX_SOCIAL_LINKS          = 16;
+    constexpr uint8_t  MAX_SOCIAL_PLATFORM_LENGTH = 64;
+    constexpr uint8_t  MAX_SOCIAL_HANDLE_LENGTH  = 128;
 }
 
 // Operational defaults — safe to differ per node, tuning only.
