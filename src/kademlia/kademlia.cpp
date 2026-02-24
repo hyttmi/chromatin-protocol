@@ -1308,6 +1308,12 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     // 1. Responsibility check
     if (!is_responsible(key)) {
         spdlog::warn("STORE rejected: not responsible for key");
+        std::vector<uint8_t> ack_payload;
+        ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+        ack_payload.push_back(0x01); // rejected
+        ack_payload.push_back(0x01); // reason: not responsible
+        Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+        transport_.send(from, port, ack);
         return;
     }
 
@@ -1340,6 +1346,12 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
 
     // 3. Validate, store in table(s), append repl_log, fire on_store_
     if (!store_locally(key, data_type, value)) {
+        std::vector<uint8_t> ack_payload;
+        ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+        ack_payload.push_back(0x01); // rejected
+        ack_payload.push_back(0x02); // reason: validation failed
+        Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+        transport_.send(from, port, ack);
         return;
     }
 
@@ -2485,7 +2497,9 @@ void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uin
     uint8_t status = data[32];
 
     if (status != 0x00) {
-        spdlog::warn("STORE_ACK rejected (status=0x{:02X}) from {}:{}", status, from, port);
+        uint8_t reason = (msg.payload.size() > 33) ? msg.payload[33] : 0x00;
+        spdlog::warn("STORE_ACK rejected (status=0x{:02X}, reason=0x{:02X}) from {}:{}",
+                     status, reason, from, port);
         return;
     }
 
