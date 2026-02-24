@@ -204,7 +204,9 @@ All TCP connections use ML-KEM-1024 + ChaCha20-Poly1305 encryption
 
 Chromatin targets dozens to hundreds of nodes. Every node maintains **full
 membership** — no k-buckets, no iterative lookups. The routing table is
-capped at **256 nodes** with LRU eviction (oldest `last_seen` evicted when full).
+capped at **256 nodes** with stale-only eviction (only nodes not seen within
+the staleness threshold may be evicted when full; if all nodes are recently
+active, the new node is rejected).
 
 - 256-bit key space (SHA3-256 output)
 - Node ID: `SHA3-256(node_ml_dsa_pubkey)`
@@ -213,7 +215,11 @@ capped at **256 nodes** with LRU eviction (oldest `last_seen` evicted when full)
 - All communication is **single-hop** (direct node-to-node TCP)
 - TCP connections are pooled per destination (max 64, 60s idle timeout)
 - IP subnet diversity: max 3 nodes per /24 (IPv4) or /48 (IPv6) prefix
-  to mitigate Sybil/eclipse attacks
+  to mitigate Sybil/eclipse attacks (uses actual TCP source IP, not
+  self-reported address)
+- Routing table eviction: only stale nodes (not seen within staleness
+  threshold) may be evicted — if all nodes are recently active, new nodes
+  are rejected to prevent displacement by Sybils
 
 ### 6.2 Responsibility
 
@@ -950,7 +956,46 @@ Each entry in `repl_log`:
 
 ---
 
-## 14. Tech Stack
+## 14. Security Considerations
+
+The following security properties are enforced by conforming implementations:
+
+- **Auth challenge bound to node identity:** The WebSocket authentication
+  challenge signature includes the node's fingerprint in the signed data
+  (`"chromatin-auth:" || node_fingerprint || nonce`), preventing cross-node
+  challenge relay attacks where an attacker forwards a challenge from one
+  node to trick a client into authenticating to a different node.
+- **HELLO rejected after authentication:** A client MUST NOT send HELLO
+  after successful authentication. The server rejects HELLO from
+  authenticated sessions with error 400, preventing session state confusion.
+- **Allowlist sequence monotonicity:** Allowlist entries enforce strictly
+  increasing sequence numbers per owner_fp + allowed_fp pair at both the
+  WebSocket and Kademlia STORE layers, preventing replay of older
+  allow/revoke operations.
+- **SYNC DEL requires responsible-peer authorization:** DEL operations in
+  SYNC_RESP are only accepted from peers that are responsible for the key
+  (per Kademlia XOR distance). Non-responsible peers' DEL operations are
+  filtered out, preventing unauthorized data deletion via the sync protocol.
+- **Per-IP WebSocket connection limits:** Implementations enforce per-IP
+  connection limits (default: 10) to prevent resource exhaustion from a
+  single source.
+- **Routing table eviction prefers established nodes:** When the routing
+  table is full, only stale nodes (not seen within the staleness threshold)
+  may be evicted. If all nodes are recently active, the new node is
+  rejected, preventing an attacker from displacing established nodes with
+  fresh Sybils.
+- **Subnet diversity uses actual TCP source IP:** Routing table subnet
+  diversity checks use the actual TCP connection source IP rather than the
+  self-reported external address, preventing an attacker from bypassing
+  subnet limits by claiming addresses in different subnets.
+- **Empty-value STORE restricted to GROUP_META:** Empty-value STORE
+  (deletion mechanism) is only accepted for data_type 0x06 (GROUP_META).
+  All other data types reject empty-value STORE, preventing unauthorized
+  data deletion via crafted STORE messages.
+
+---
+
+## 15. Tech Stack
 
 | Component          | Library                        |
 |--------------------|--------------------------------|

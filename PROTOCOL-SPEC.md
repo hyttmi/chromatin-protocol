@@ -429,8 +429,9 @@ Reason codes (when status = 0x01):
 | 0x00 | Unspecified                    |
 | 0x01 | Not responsible for key        |
 | 0x02 | Validation failed              |
+| 0x03 | Empty value not supported      |
 
-Codes 0x03-0xFF are reserved for future use (e.g., duplicate msg_id,
+Codes 0x04-0xFF are reserved for future use (e.g., duplicate msg_id,
 allowlist rejection, insufficient PoW, stale sequence).
 
 ### SEQ_REQ (0x0A)
@@ -454,7 +455,10 @@ Response with the current replication log sequence number for the requested key.
 **SYNC_RESP validation:** Every ADD entry in a SYNC_RESP is validated
 using the same rules as a direct STORE (see Section 6) before being
 applied to local storage. This prevents malicious nodes from injecting
-forged data via the sync protocol.
+forged data via the sync protocol. DEL operations in SYNC_RESP MUST only
+be accepted from peers that are responsible for the key (per Kademlia
+responsibility). Non-responsible peers' DEL operations MUST be filtered
+out.
 
 **Replication model (two-tier ACK):**
 
@@ -815,6 +819,9 @@ The node verifies:
    replay attacks. The node's fingerprint (SHA3-256 of its ML-DSA-87 public
    key) is included in the signed data to prevent cross-node challenge relay
    attacks.
+
+A client MUST NOT send HELLO after successful authentication. The server
+MUST reject HELLO from authenticated sessions with error 400.
 
 ### 5.2 REDIRECT
 
@@ -1282,6 +1289,12 @@ checks, SEND, CONTACT_REQUEST, ALLOW, REVOKE, GROUP_CREATE, GROUP_UPDATE,
 GROUP_SEND, GROUP_DELETE, GROUP_DESTROY) receive error code 503. This prevents
 unbounded memory growth under high load.
 
+### 5.5.2 Per-IP Connection Limits
+
+Implementations MUST enforce per-IP connection limits (default: 10) to
+prevent resource exhaustion. When a new WebSocket connection exceeds the
+per-IP limit, the connection is rejected before the handshake completes.
+
 ### 5.6 Error Responses
 
 ```json
@@ -1442,7 +1455,10 @@ replicated via SYNC_REQ/SYNC_RESP instead.
 2. `SHA3-256(pubkey) == owner_fingerprint` — embedded pubkey matches claimed owner
 3. ML-DSA-87 signature verified against the embedded public key
    - Signed data: `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
-4. `sequence` > currently stored sequence (enforced by WS server)
+4. `sequence` > currently stored sequence — enforced at both the WS server
+   and Kademlia STORE layers. Allowlist entries MUST enforce sequence
+   monotonicity: an entry with sequence <= the stored sequence for the same
+   owner_fp + allowed_fp pair MUST be rejected.
 
 ### REVOKE Replication
 
@@ -1454,17 +1470,23 @@ distinguish active allows from revokes.
 
 ### Group Metadata STORE Validation
 
-**Deletion carve-out:** If `value_length == 0` (empty value), the STORE is
-interpreted as a remote delete request and bypasses all validation rules
-below. The receiving node deletes the GROUP_META record for the given key and
-appends a DEL entry to its replication log. This is the mechanism used by
-`GROUP_DESTROY` to propagate deletion to other responsible nodes via
-`delete_remote()`.
+**Deletion carve-out:** If `value_length == 0` (empty value) and
+`data_type == 0x06` (GROUP_META), the STORE is interpreted as a remote
+delete request and bypasses all validation rules below. The receiving node
+deletes the GROUP_META record for the given key and appends a DEL entry to
+its replication log. This is the mechanism used by `GROUP_DESTROY` to
+propagate deletion to other responsible nodes via `delete_remote()`.
+Empty-value STORE is only supported for GROUP_META (data_type 0x06). All
+other data types MUST reject empty-value STORE with STORE_ACK reason 0x03.
 
 For non-empty STOREs (`value_length > 0`), all of the following must hold:
 
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
-2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin)
+2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin).
+   When the owner's profile is available in local storage, the ML-DSA-87
+   signature MUST be verified against the owner's public key. When the profile
+   is unavailable (e.g., during initial sync), the record MAY be accepted
+   with deferred validation.
 3. `version` > currently stored version for this group_id — reject replays
 4. At least one member must have role=0x02 (Owner)
 5. `member_count` >= 1 and <= 512
@@ -1507,7 +1529,10 @@ group metadata, and group messages (GROUP_INDEX + GROUP_BLOBS tables).
 ### Routing Table
 
 The routing table holds up to **256 nodes**. When full and a new node is
-discovered, the node with the oldest `last_seen` timestamp is evicted (LRU).
+discovered, the routing table attempts to evict a stale node (oldest
+`last_seen` timestamp, only if not seen within the staleness threshold).
+If all nodes are recently active, the new node MUST be rejected — this
+prevents an attacker from displacing established nodes with fresh Sybils.
 `closest_to()` queries use partial sort for efficiency — only the top K
 results are sorted, not the entire table.
 
@@ -1515,7 +1540,8 @@ results are sorted, not the entire table.
 per /24 IPv4 subnet** (or **/48 IPv6 prefix**) to mitigate Sybil and eclipse
 attacks. New nodes from over-represented subnets are silently rejected. This
 prevents an attacker from filling the routing table with nodes from a single
-network range.
+network range. Subnet diversity checks MUST use the actual TCP connection
+source IP, not the self-reported external address.
 
 ### TCP Connection Pooling
 
@@ -1624,6 +1650,7 @@ deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
 | TCP conn pool max idle     | 60 seconds                             |
 | TCP conn pool max size     | 64 connections                         |
 | Max TCP clients            | 256                                    |
+| Max WS connections per IP  | 10                                     |
 | TCP encryption probe byte  | `0xCE`                                 |
 | TCP encryption cipher 0x01 | ChaCha20-Poly1305 + ML-KEM-1024       |
 | TCP i2r key prefix         | `"chromatin:tcp:i2r:"`                 |
