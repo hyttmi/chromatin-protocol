@@ -1091,6 +1091,13 @@ Response:
 Messages with `size` <= 64 KB have their blob inlined (hex). Larger messages
 have `blob: null` — the client must fetch them separately with GROUP_GET.
 
+**Encoding note:** Group commands (GROUP_SEND, GROUP_LIST, GROUP_GET) use hex
+encoding for all binary fields (group_id, msg_id, blob, group_meta). 1:1
+messaging commands (SEND, LIST, GET) use base64 for blob data. This difference
+is intentional — the group API was designed as a unified hex-based API surface,
+while 1:1 commands use base64 for historical reasons. Implementations MUST use
+the correct encoding per command.
+
 **GROUP_GET** — Fetch a specific group message blob:
 ```json
 {"type": "GROUP_GET", "id": 22, "group_id": "<hex>", "msg_id": "<hex>"}
