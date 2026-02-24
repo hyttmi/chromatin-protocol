@@ -387,7 +387,7 @@ def build_hello(fingerprint: bytes, msg_id: int) -> str:
 
 
 def build_auth(pubkey: bytes, seckey: bytes, nonce: bytes, msg_id: int,
-               node_fingerprint: bytes = b"") -> str:
+               node_fingerprint: bytes) -> str:
     message = b"chromatin-auth:" + node_fingerprint + nonce
     sig = sign(seckey, message)
     return json.dumps({
