@@ -758,7 +758,12 @@ Fields:
 - `group_id`: SHA3-256 of the group creation record (unique group identifier)
 - `owner_fingerprint`: The original group creator. After multi-owner support,
   this is informational — any Owner can sign metadata updates
-- `version`: Monotonically increasing, incremented on any member change or GEK rotation
+- `version`: Monotonically increasing, incremented on any member change or GEK rotation.
+  **Known limitation:** If multiple owners publish GROUP_META updates with the
+  same version concurrently, last-write-wins semantics apply — one update is
+  silently lost. There is no CRDT merge. In practice, group administration is
+  typically performed by a single owner; concurrent edits are rare and can be
+  retried by incrementing the version.
 - `member_count`: 1 to 512 members per group
 - Per-member block: fingerprint, role, and the current GEK encrypted with the
   member's ML-KEM-1024 public key (from their profile)
