@@ -675,7 +675,8 @@ senders with proof-of-work.
 2. Alice computes Bob's responsible nodes: R closest to
    `SHA3-256("inbox:" || bob_fp)` (co-located with Bob's inbox)
 3. Alice computes PoW: find `nonce` such that
-   `SHA3-256("chromatin:request:" || alice_fp || bob_fp || timestamp_BE || nonce_BE)` has M leading zero bits
+   `SHA3-256(preimage || nonce_BE)` has >= 16 leading zero bits, where
+   `preimage = "chromatin:request:" || alice_fp || bob_fp || timestamp_BE`
 4. Alice sends `CONTACT_REQUEST { to: bob_fp, blob, pow_nonce, timestamp }` to a
    responsible node. Timestamp must be within 1 hour of server time.
 5. Node verifies PoW, stores in Bob's request inbox (replication log)
