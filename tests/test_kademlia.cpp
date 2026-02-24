@@ -3604,3 +3604,62 @@ TEST_F(KademliaTest, EmptyValueStoreRejectsNonGroupMeta) {
     EXPECT_TRUE(stored.has_value())
         << "Profile should not have been deleted by empty-value STORE";
 }
+
+// ---------------------------------------------------------------------------
+// Test: AllowlistSequenceReplayRejected — sequence monotonicity for allowlist
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, AllowlistSequenceReplayRejected) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    KeyPair contact_kp = generate_keypair();
+    Hash contact_fp = sha3_256(contact_kp.public_key);
+    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
+    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
+
+    // Helper to build a signed allowlist entry
+    auto make_entry = [&](uint8_t action, uint64_t seq) -> std::vector<uint8_t> {
+        const std::string domain = "chromatin:allowlist:";
+        std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), domain.begin(), domain.end());
+        signed_data.insert(signed_data.end(), owner_fp.begin(), owner_fp.end());
+        signed_data.push_back(action);
+        signed_data.insert(signed_data.end(), contact_fp.begin(), contact_fp.end());
+        for (int i = 7; i >= 0; --i)
+            signed_data.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+        auto sig = sign(signed_data, owner_kp.secret_key);
+
+        std::vector<uint8_t> value;
+        value.insert(value.end(), owner_fp.begin(), owner_fp.end());
+        value.insert(value.end(), contact_fp.begin(), contact_fp.end());
+        value.push_back(action);
+        for (int i = 7; i >= 0; --i)
+            value.push_back(static_cast<uint8_t>((seq >> (i * 8)) & 0xFF));
+        value.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+        value.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+        value.insert(value.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
+        value.insert(value.end(), sig.begin(), sig.end());
+        return value;
+    };
+
+    // Store ALLOW with seq=2
+    ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, make_entry(0x01, 2)));
+
+    // Store REVOKE with seq=3
+    ASSERT_TRUE(n1.kad->store(allowlist_key, 0x04, make_entry(0x00, 3)));
+
+    // Replay old ALLOW with seq=2 — should be rejected
+    EXPECT_FALSE(n1.kad->store(allowlist_key, 0x04, make_entry(0x01, 2)))
+        << "Replaying older allowlist entry (seq=2 after seq=3) should be rejected";
+
+    // Same seq=3 again — should also be rejected (must be strictly higher)
+    EXPECT_FALSE(n1.kad->store(allowlist_key, 0x04, make_entry(0x01, 3)))
+        << "Same sequence number should be rejected (must be strictly higher)";
+
+    // Higher seq=4 — should be accepted
+    EXPECT_TRUE(n1.kad->store(allowlist_key, 0x04, make_entry(0x01, 4)))
+        << "Higher sequence number should be accepted";
+}

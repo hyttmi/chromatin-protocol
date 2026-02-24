@@ -2196,6 +2196,34 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
         return false;
     }
 
+    // Sequence monotonicity: reject if incoming sequence <= existing sequence
+    // for the same owner_fp + allowed_fp pair
+    uint64_t sequence = 0;
+    for (int i = 0; i < 8; ++i) {
+        sequence = (sequence << 8) | value[65 + i];
+    }
+
+    // Build composite key to look up existing entry
+    crypto::Hash ofp{};
+    std::copy_n(value.data(), 32, ofp.begin());
+    auto inbox_key = crypto::sha3_256_prefixed("inbox:", ofp);
+    std::vector<uint8_t> composite_key;
+    composite_key.reserve(64);
+    composite_key.insert(composite_key.end(), inbox_key.begin(), inbox_key.end());
+    composite_key.insert(composite_key.end(), value.data() + 32, value.data() + 64);
+
+    auto existing = storage_.get(storage::TABLE_ALLOWLISTS, composite_key);
+    if (existing && !existing->empty() && existing->size() >= 73) {
+        uint64_t existing_seq = 0;
+        for (int i = 0; i < 8; ++i) {
+            existing_seq = (existing_seq << 8) | (*existing)[65 + i];
+        }
+        if (sequence <= existing_seq) {
+            spdlog::debug("Allowlist rejected: sequence {} <= existing {}", sequence, existing_seq);
+            return false;
+        }
+    }
+
     return true;
 }
 
