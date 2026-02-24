@@ -42,13 +42,24 @@ void WsServer<SSL>::run() {
         .maxBackpressure = 64 * 1024 * 1024,
 
         .open = [this](ws_t* ws) {
+            // Per-IP connection limit
+            std::string peer_ip(ws->getRemoteAddressAsText());
+            auto& count = ip_connections_[peer_ip];
+            if (count >= config::defaults::MAX_WS_CONNECTIONS_PER_IP) {
+                spdlog::warn("WS: rejecting connection from {} (limit {} reached)",
+                             peer_ip, config::defaults::MAX_WS_CONNECTIONS_PER_IP);
+                ws->close();
+                return;
+            }
+            ++count;
+
             connections_.insert(ws);
             auto* session = ws->getUserData();
             session->rate_limiter.tokens = config::defaults::RATE_LIMIT_TOKENS;
             session->rate_limiter.max_tokens = config::defaults::RATE_LIMIT_MAX;
             session->rate_limiter.refill_rate = config::defaults::RATE_LIMIT_REFILL;
             session->rate_limiter.last_refill = std::chrono::steady_clock::now();
-            spdlog::info("WS: client connected");
+            spdlog::info("WS: client connected from {}", peer_ip);
         },
 
         .message = [this](ws_t* ws, std::string_view message, uWS::OpCode opCode) {
@@ -62,6 +73,17 @@ void WsServer<SSL>::run() {
         },
 
         .close = [this](ws_t* ws, int /*code*/, std::string_view /*message*/) {
+            // Decrement per-IP counter only if this connection was counted.
+            // ws->close() in .open triggers .close, but rejected connections
+            // were never added to connections_ or counted.
+            if (connections_.count(ws)) {
+                std::string peer_ip(ws->getRemoteAddressAsText());
+                auto ip_it = ip_connections_.find(peer_ip);
+                if (ip_it != ip_connections_.end()) {
+                    if (--ip_it->second == 0) ip_connections_.erase(ip_it);
+                }
+            }
+
             connections_.erase(ws);
             auto* session = ws->getUserData();
             if (session->authenticated) {

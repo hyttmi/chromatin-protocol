@@ -126,6 +126,9 @@ private:
     // to verify a ws pointer is still valid before sending a reply.
     std::unordered_set<ws_t*> connections_;
 
+    // Per-IP connection count (uWS thread only).
+    std::unordered_map<std::string, size_t> ip_connections_;
+
     // Authenticated sessions: fingerprint -> set of ws pointers (uWS thread only).
     // Multiple devices can be connected with the same identity simultaneously.
     std::unordered_map<crypto::Hash, std::unordered_set<ws_t*>, crypto::HashHash> authenticated_;

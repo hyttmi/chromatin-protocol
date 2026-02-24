@@ -54,6 +54,9 @@ namespace defaults {
     // TCP transport
     constexpr uint16_t MAX_TCP_CLIENTS = 256;
 
+    // WebSocket
+    constexpr uint16_t MAX_WS_CONNECTIONS_PER_IP = 10;
+
     // Connection pool
     constexpr uint16_t CONN_POOL_MAX          = 64;
     constexpr uint16_t CONN_POOL_IDLE_SECONDS = 60;

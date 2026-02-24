@@ -3734,6 +3734,49 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
     client.close();
 }
 
+TEST_F(WsServerTest, PerIPConnectionLimit) {
+    start_ws_server();
+
+    std::vector<std::unique_ptr<TestWsClient>> clients;
+    // Open the maximum allowed connections — all should succeed
+    for (int i = 0; i < config::defaults::MAX_WS_CONNECTIONS_PER_IP; ++i) {
+        auto c = std::make_unique<TestWsClient>();
+        ASSERT_TRUE(c->connect("127.0.0.1", ws_port_))
+            << "Connection " << i << " should succeed";
+        clients.push_back(std::move(c));
+    }
+
+    // Verify the last accepted connection is functional
+    {
+        std::string status = R"({"type":"STATUS","id":1})";
+        clients.back()->send_text(status);
+        auto resp = clients.back()->recv_text(2000);
+        ASSERT_TRUE(resp.has_value()) << "Last accepted connection should be functional";
+        auto parsed = parse_json(*resp);
+        EXPECT_EQ(parsed["type"].asString(), "OK");
+    }
+
+    // Give the server a moment to register all connections
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // The next connection should be rejected (closed by server)
+    TestWsClient extra;
+    bool connected = extra.connect("127.0.0.1", ws_port_);
+    if (connected) {
+        // Connection may briefly succeed at TCP level but server closes the WS
+        std::string status = R"({"type":"STATUS","id":1})";
+        extra.send_text(status);
+        auto resp = extra.recv_text(1000);
+        // Server should have closed the connection
+        EXPECT_FALSE(resp.has_value())
+            << "Connection over per-IP limit should be closed by server";
+    }
+
+    // Clean up
+    for (auto& c : clients) c->close();
+    extra.close();
+}
+
 TEST_F(WsServerTest, HelloRejectedAfterAuth) {
     start_ws_server();
     auto user_kp = crypto::generate_keypair();
