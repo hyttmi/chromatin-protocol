@@ -698,7 +698,8 @@ For each member:
 
 The signature covers everything preceding `signature_length` (i.e., from
 `group_id` through the last member's `kem_ciphertext`). Signed by any member
-with role=0x02 (Owner).
+with role >= 0x01 (Admin or Owner). Admins may sign GROUP_META updates for
+member additions/removals of regular members. Owners may sign any update.
 
 **Member roles:**
 
