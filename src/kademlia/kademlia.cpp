@@ -2302,8 +2302,41 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return false;
     }
 
-    // Structural validation only — signature verification is done at WsServer level
-    // during GROUP_CREATE/UPDATE where the authenticated session provides the pubkey.
+    // Verify ML-DSA-87 signature using owner's pubkey from local profile store
+    std::span<const uint8_t> owner_fp_span(value.data() + 32, 32);
+    crypto::Hash ofp{};
+    std::copy_n(owner_fp_span.data(), 32, ofp.begin());
+    auto owner_profile_key = crypto::sha3_256_prefixed("profile:", ofp);
+
+    auto profile_data = storage_.get(storage::TABLE_PROFILES, owner_profile_key);
+    if (!profile_data || profile_data->empty()) {
+        // Owner profile not available locally — accept with warning.
+        // Integrity sweep will re-validate later when profile is synced.
+        spdlog::warn("Group meta validation: owner profile not found locally, deferring sig check");
+        return true;
+    }
+
+    // Extract pubkey from profile: fingerprint(32) || pubkey_len(2 BE) || pubkey
+    if (profile_data->size() < 34) return false;
+    uint16_t pk_len = (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33];
+    if (profile_data->size() < 34u + pk_len) return false;
+    std::span<const uint8_t> owner_pubkey(profile_data->data() + 34, pk_len);
+
+    // Verify owner pubkey hashes to owner_fp
+    auto computed_owner_fp = crypto::sha3_256(owner_pubkey);
+    if (computed_owner_fp != ofp) {
+        spdlog::warn("Group meta validation: stored profile pubkey doesn't match owner_fp");
+        return false;
+    }
+
+    // Signature covers everything before sig_len: value[0..members_end)
+    std::span<const uint8_t> signed_data_span(value.data(), members_end);
+    std::span<const uint8_t> signature(value.data() + members_end + 2, sig_len);
+
+    if (!crypto::verify(signed_data_span, signature, owner_pubkey)) {
+        spdlog::warn("Group meta validation: signature verification failed");
+        return false;
+    }
 
     return true;
 }

@@ -3441,6 +3441,94 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsProfiles) {
     EXPECT_EQ(*results[0].value, profile);
 }
 
+// Build a valid GROUP_META binary blob for testing.
+// Format: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+//         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
+//         sig_len(2 BE) || ML-DSA-87 signature
+static std::vector<uint8_t> build_group_meta_binary(
+    const Hash& group_id,
+    uint32_t version,
+    const std::vector<std::pair<Hash, uint8_t>>& members,  // (fp, role) pairs
+    const KeyPair& signer_kp)
+{
+    std::vector<uint8_t> meta;
+    // group_id(32)
+    meta.insert(meta.end(), group_id.begin(), group_id.end());
+    // owner_fp(32) — first member with role=0x02
+    Hash owner_fp{};
+    for (const auto& [fp, role] : members) {
+        if (role == 0x02) { owner_fp = fp; break; }
+    }
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    // version(4 BE)
+    meta.push_back((version >> 24) & 0xFF);
+    meta.push_back((version >> 16) & 0xFF);
+    meta.push_back((version >> 8) & 0xFF);
+    meta.push_back(version & 0xFF);
+    // member_count(2 BE)
+    uint16_t count = static_cast<uint16_t>(members.size());
+    meta.push_back((count >> 8) & 0xFF);
+    meta.push_back(count & 0xFF);
+    // per-member: fp(32) + role(1) + kem_ciphertext(1568)
+    for (const auto& [fp, role] : members) {
+        meta.insert(meta.end(), fp.begin(), fp.end());
+        meta.push_back(role);
+        meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
+    }
+    // Sign everything so far
+    auto signature = sign(meta, signer_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(signature.size());
+    meta.push_back((sig_len >> 8) & 0xFF);
+    meta.push_back(sig_len & 0xFF);
+    meta.insert(meta.end(), signature.begin(), signature.end());
+    return meta;
+}
+
+TEST_F(KademliaTest, GroupMetaForgedSignatureRejected) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Create owner and build group
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    Hash group_id{};
+    group_id.fill(0xBB);
+    auto group_key = sha3_256_prefixed("group:", group_id);
+
+    // Store owner's profile first (so validation can look up the pubkey)
+    auto profile = build_profile(owner_kp, 1);
+    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
+    ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
+
+    // Valid GROUP_META signed by owner — should be accepted
+    auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+    ASSERT_TRUE(n1.kad->store(group_key, 0x06, valid_meta));
+
+    // Forged GROUP_META signed by attacker — should be rejected
+    KeyPair attacker_kp = generate_keypair();
+    auto forged_meta = build_group_meta_binary(group_id, 2, {{owner_fp, 0x02}}, attacker_kp);
+    EXPECT_FALSE(n1.kad->store(group_key, 0x06, forged_meta))
+        << "GROUP_META with forged signature should be rejected";
+}
+
+TEST_F(KademliaTest, GroupMetaAcceptedWithoutProfileAvailable) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    // Create owner but do NOT store their profile
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    Hash group_id{};
+    group_id.fill(0xCC);
+    auto group_key = sha3_256_prefixed("group:", group_id);
+
+    // Valid GROUP_META — should be accepted even without profile
+    // (deferred validation, integrity sweep will verify later)
+    auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
+    EXPECT_TRUE(n1.kad->store(group_key, 0x06, valid_meta))
+        << "GROUP_META should be accepted when owner profile is not available locally";
+}
+
 TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     auto& n1 = create_node(8);
     start_all();
