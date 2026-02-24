@@ -2474,6 +2474,31 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
         }
     }
 
+    // Check if sender is responsible for this key (required for DEL authorization).
+    // A compromised peer could delete arbitrary data by sending SYNC_RESP with
+    // DEL entries — only responsible peers are trusted to issue deletions.
+    bool sender_is_responsible = false;
+    {
+        auto responsible = responsible_nodes(key);
+        for (const auto& rn : responsible) {
+            if (rn.id == msg.sender) {
+                sender_is_responsible = true;
+                break;
+            }
+        }
+    }
+
+    // Filter out DEL entries from non-responsible peers before they reach
+    // repl_log or storage, preventing unauthorized deletions.
+    if (!sender_is_responsible) {
+        std::erase_if(entries, [](const auto& e) { return e.op == replication::Op::DEL; });
+        if (entries.empty()) {
+            spdlog::warn("SYNC_RESP: all entries were unauthorized DELs from {}:{}", from, port);
+            return;
+        }
+        spdlog::debug("SYNC_RESP: filtered DEL entries from non-responsible peer {}:{}", from, port);
+    }
+
     // Apply entries to replication log (idempotent)
     repl_log_.apply(key, entries);
 
