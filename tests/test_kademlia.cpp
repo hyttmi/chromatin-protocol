@@ -698,6 +698,197 @@ TEST_F(KademliaTest, StoreAckSent) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 10a: StoreAckRejectionNotResponsible — STORE_ACK with reason=0x01
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreAckRejectionNotResponsible) {
+    // With REPLICATION_FACTOR=3 and network_size=N, R = min(3, N).
+    // We need R < N so that at least one node is NOT responsible for some keys.
+    // 4 nodes: R = min(3, 4) = 3 — for any key exactly 1 node is not responsible.
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+    auto& n4 = create_node(8);
+
+    start_all();
+
+    // Bootstrap all nodes bidirectionally via n1 so everyone has each other's pubkeys
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    bootstrap_bidirectional(n4, n1);
+    // Re-bootstrap to ensure all nodes discover each other fully
+    bootstrap_bidirectional(n3, n2);
+    bootstrap_bidirectional(n4, n2);
+
+    ASSERT_EQ(n1.kad->replication_factor(), 3u)
+        << "Need 4 nodes so R=3 and one node per key is NOT responsible";
+
+    // Find a key that n1 is NOT responsible for.
+    // With 4 nodes and R=3, exactly 1 of the 4 nodes is not responsible per key,
+    // so roughly 25% of keys will have n1 not responsible.
+    Hash target_key{};
+    bool found = false;
+    for (uint32_t attempt = 0; attempt < 10000 && !found; ++attempt) {
+        // Generate a deterministic candidate key by hashing the attempt counter
+        std::vector<uint8_t> seed(4);
+        seed[0] = static_cast<uint8_t>((attempt >> 24) & 0xFF);
+        seed[1] = static_cast<uint8_t>((attempt >> 16) & 0xFF);
+        seed[2] = static_cast<uint8_t>((attempt >> 8) & 0xFF);
+        seed[3] = static_cast<uint8_t>(attempt & 0xFF);
+        target_key = sha3_256(seed);
+
+        if (!n1.kad->is_responsible(target_key)) {
+            found = true;
+        }
+    }
+    ASSERT_TRUE(found) << "Could not find a key that n1 is not responsible for";
+
+    // Build a minimal allowlist STORE payload for that key.
+    // Content validity doesn't matter here — the rejection happens before validation.
+    KeyPair owner_kp = generate_keypair();
+    Hash contact_fp{};
+    contact_fp.fill(0xAB);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+
+    std::vector<uint8_t> store_payload;
+    store_payload.insert(store_payload.end(), target_key.begin(), target_key.end());
+    store_payload.push_back(0x04); // allowlist
+    uint32_t vlen = static_cast<uint32_t>(value.size());
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+    store_payload.insert(store_payload.end(), value.begin(), value.end());
+
+    // Track received STORE_ACK
+    std::atomic<bool> got_ack{false};
+    uint8_t ack_status = 0xFF;
+    uint8_t ack_reason = 0xFF;
+
+    // Restart n2 with a custom handler that captures the STORE_ACK
+    n2.stop();
+    n2.recv_thread = std::thread([&]() {
+        n2.transport->run([&](const Message& msg, const std::string& from_addr, uint16_t from_port) {
+            if (msg.type == MessageType::STORE_ACK) {
+                if (msg.payload.size() >= 33) {
+                    ack_status = msg.payload[32];
+                }
+                if (msg.payload.size() >= 34) {
+                    ack_reason = msg.payload[33];
+                }
+                got_ack.store(true);
+                n2.transport->stop();
+            } else {
+                n2.kad->handle_message(msg, from_addr, from_port);
+            }
+        });
+    });
+    n2.running.store(true);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Send STORE from n2 to n1 for a key n1 is NOT responsible for
+    Message store_msg;
+    store_msg.type = MessageType::STORE;
+    store_msg.sender = n2.info.id;
+    store_msg.sender_port = n2.info.tcp_port;
+    store_msg.payload = store_payload;
+    sign_message(store_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, store_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    n2.transport->stop();
+    if (n2.recv_thread.joinable()) n2.recv_thread.join();
+    n2.running.store(false);
+
+    ASSERT_TRUE(got_ack.load()) << "n2 should have received STORE_ACK from n1";
+    EXPECT_EQ(ack_status, 0x01) << "STORE_ACK status should be rejected (0x01)";
+    EXPECT_EQ(ack_reason, 0x01) << "Rejection reason should be 0x01 (not responsible)";
+}
+
+// ---------------------------------------------------------------------------
+// Test 10b: StoreAckRejectionValidationFailed — STORE_ACK with reason=0x02
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreAckRejectionValidationFailed) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    // Bootstrap bidirectionally so n1 knows n2's pubkey (required for STORE verification).
+    // With 2 nodes, both are responsible for all keys (R = min(3,2) = 2), so n1 will
+    // always accept responsibility and attempt to validate the data.
+    bootstrap_bidirectional(n2, n1);
+
+    ASSERT_EQ(n1.kad->replication_factor(), 2u);
+
+    // Pick an arbitrary key. Use a profile store (data_type=0x00) with completely
+    // garbage data so that validate_profile() fails, triggering reason=0x02.
+    Hash key = sha3_256_prefixed("profile:", Hash{});
+
+    // Garbage value: 50 bytes of 0xFF — not a valid profile
+    std::vector<uint8_t> garbage_value(50, 0xFF);
+
+    std::vector<uint8_t> store_payload;
+    store_payload.insert(store_payload.end(), key.begin(), key.end());
+    store_payload.push_back(0x00); // profile data_type
+    uint32_t vlen = static_cast<uint32_t>(garbage_value.size());
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+    store_payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+    store_payload.insert(store_payload.end(), garbage_value.begin(), garbage_value.end());
+
+    // Track received STORE_ACK
+    std::atomic<bool> got_ack{false};
+    uint8_t ack_status = 0xFF;
+    uint8_t ack_reason = 0xFF;
+
+    // Restart n2 with a custom handler that captures the STORE_ACK
+    n2.stop();
+    n2.recv_thread = std::thread([&]() {
+        n2.transport->run([&](const Message& msg, const std::string& from_addr, uint16_t from_port) {
+            if (msg.type == MessageType::STORE_ACK) {
+                if (msg.payload.size() >= 33) {
+                    ack_status = msg.payload[32];
+                }
+                if (msg.payload.size() >= 34) {
+                    ack_reason = msg.payload[33];
+                }
+                got_ack.store(true);
+                n2.transport->stop();
+            } else {
+                n2.kad->handle_message(msg, from_addr, from_port);
+            }
+        });
+    });
+    n2.running.store(true);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Send STORE from n2 to n1 with garbage profile data
+    Message store_msg;
+    store_msg.type = MessageType::STORE;
+    store_msg.sender = n2.info.id;
+    store_msg.sender_port = n2.info.tcp_port;
+    store_msg.payload = store_payload;
+    sign_message(store_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, store_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    n2.transport->stop();
+    if (n2.recv_thread.joinable()) n2.recv_thread.join();
+    n2.running.store(false);
+
+    ASSERT_TRUE(got_ack.load()) << "n2 should have received STORE_ACK from n1";
+    EXPECT_EQ(ack_status, 0x01) << "STORE_ACK status should be rejected (0x01)";
+    EXPECT_EQ(ack_reason, 0x02) << "Rejection reason should be 0x02 (validation failed)";
+}
+
+// ---------------------------------------------------------------------------
 // Test 11: PendingStoreTracking — store() creates and resolves pending entries
 // ---------------------------------------------------------------------------
 
