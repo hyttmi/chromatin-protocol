@@ -743,6 +743,7 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
     sender_info.id = msg.sender;
     sender_info.tcp_port = port;
     sender_info.ws_port = 0;
+    sender_info.tcp_source_ip = from;
     sender_info.last_seen = std::chrono::steady_clock::now();
     auto existing = table_.find(msg.sender);
     sender_info.address = existing ? existing->address : from;
@@ -772,6 +773,7 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
     sender_info.id = msg.sender;
     sender_info.tcp_port = port;
     sender_info.ws_port = 0;
+    sender_info.tcp_source_ip = from;
     sender_info.last_seen = std::chrono::steady_clock::now();
     auto existing = table_.find(msg.sender);
     sender_info.address = existing ? existing->address : from;
@@ -826,6 +828,7 @@ void Kademlia::handle_find_node(const Message& msg, const std::string& from, uin
         NodeInfo sender_info;
         sender_info.id = msg.sender;
         sender_info.address = from;
+        sender_info.tcp_source_ip = from;
         sender_info.tcp_port = port;
         sender_info.ws_port = 0;
         sender_info.last_seen = std::chrono::steady_clock::now();

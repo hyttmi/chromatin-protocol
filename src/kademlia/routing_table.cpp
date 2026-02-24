@@ -33,6 +33,9 @@ void RoutingTable::add_or_update(NodeInfo info) {
     for (auto& existing : nodes_) {
         if (existing.id == info.id) {
             existing.address = std::move(info.address);
+            if (!info.tcp_source_ip.empty()) {
+                existing.tcp_source_ip = std::move(info.tcp_source_ip);
+            }
             existing.tcp_port = info.tcp_port;
             existing.ws_port = info.ws_port;
             // Don't overwrite a verified pubkey with an empty one.
@@ -55,11 +58,15 @@ void RoutingTable::add_or_update(NodeInfo info) {
 
     // Subnet diversity check: reject if too many nodes from same /24 (IPv4)
     // or /48 (IPv6) subnet to prevent Sybil/eclipse attacks.
+    // Use tcp_source_ip (actual TCP connection source) when available,
+    // falling back to address for test-constructed or NODES-response entries.
     if (max_per_subnet_ > 0) {
-        std::string new_subnet = extract_subnet(info.address);
+        std::string check_ip = info.tcp_source_ip.empty() ? info.address : info.tcp_source_ip;
+        std::string new_subnet = extract_subnet(check_ip);
         size_t same_subnet = 0;
         for (const auto& node : nodes_) {
-            if (extract_subnet(node.address) == new_subnet) {
+            std::string node_ip = node.tcp_source_ip.empty() ? node.address : node.tcp_source_ip;
+            if (extract_subnet(node_ip) == new_subnet) {
                 ++same_subnet;
             }
         }

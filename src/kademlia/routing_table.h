@@ -20,7 +20,8 @@ enum class Capability : uint32_t {
 
 struct NodeInfo {
     NodeId id;
-    std::string address;
+    std::string address;           // routable address (may be self-reported)
+    std::string tcp_source_ip;     // actual TCP connection source IP (for subnet checks)
     uint16_t tcp_port = 0;
     uint16_t ws_port = 0;
     std::vector<uint8_t> pubkey;

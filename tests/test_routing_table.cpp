@@ -323,3 +323,68 @@ TEST(RoutingTable, SubnetDiversityDisabled) {
     }
     EXPECT_EQ(rt.size(), 10u);
 }
+
+TEST(RoutingTable, SubnetDiversityUsesTcpSourceIp) {
+    // Verify that subnet diversity uses tcp_source_ip, not the self-reported
+    // address. A Sybil attacker can fake external_address but not the TCP
+    // source IP observed by the receiving node.
+    RoutingTable rt(256, 2);
+
+    // Add 2 nodes with tcp_source_ip in subnet 10.0.1.x
+    auto n1 = make_node("tcp-src-a1", "192.168.1.1");
+    n1.tcp_source_ip = "10.0.1.1";
+    auto n2 = make_node("tcp-src-a2", "192.168.2.1");
+    n2.tcp_source_ip = "10.0.1.2";
+    rt.add_or_update(std::move(n1));
+    rt.add_or_update(std::move(n2));
+    EXPECT_EQ(rt.size(), 2u);
+
+    // 3rd node claims different self-reported address but same TCP source subnet
+    // — should be rejected based on tcp_source_ip
+    auto n3 = make_node("tcp-src-a3", "172.16.0.1");
+    n3.tcp_source_ip = "10.0.1.3";
+    rt.add_or_update(std::move(n3));
+    EXPECT_EQ(rt.size(), 2u);  // rejected
+
+    // Node from different TCP source subnet — should succeed
+    auto n4 = make_node("tcp-src-b1", "192.168.3.1");
+    n4.tcp_source_ip = "10.0.2.1";
+    rt.add_or_update(std::move(n4));
+    EXPECT_EQ(rt.size(), 3u);
+}
+
+TEST(RoutingTable, SubnetDiversityFallsBackToAddress) {
+    // When tcp_source_ip is empty (e.g. NODES response entries), the subnet
+    // check should fall back to using the address field.
+    RoutingTable rt(256, 2);
+
+    auto n1 = make_node("fallback-a1", "10.0.1.1");
+    auto n2 = make_node("fallback-a2", "10.0.1.2");
+    rt.add_or_update(std::move(n1));
+    rt.add_or_update(std::move(n2));
+    EXPECT_EQ(rt.size(), 2u);
+
+    // 3rd node without tcp_source_ip, same address subnet — rejected
+    auto n3 = make_node("fallback-a3", "10.0.1.3");
+    rt.add_or_update(std::move(n3));
+    EXPECT_EQ(rt.size(), 2u);
+}
+
+TEST(RoutingTable, SubnetDiversityTcpSourceIpPreservedOnUpdate) {
+    // Verify that updating an existing node preserves tcp_source_ip
+    RoutingTable rt(256, 2);
+
+    auto n1 = make_node("preserve-a1", "192.168.1.1");
+    n1.tcp_source_ip = "10.0.1.1";
+    NodeId id = n1.id;
+    rt.add_or_update(std::move(n1));
+
+    // Update the node without providing tcp_source_ip (e.g. from NODES response)
+    auto n1_update = make_node("preserve-a1", "192.168.1.99");
+    rt.add_or_update(std::move(n1_update));
+
+    auto found = rt.find(id);
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->address, "192.168.1.99");
+    EXPECT_EQ(found->tcp_source_ip, "10.0.1.1");  // preserved
+}
