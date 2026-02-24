@@ -898,7 +898,12 @@ changes. Some keys may now have a new closest node.
 Old responsible nodes that are no longer in the top R for a key can prune
 that data after confirming the new responsible node is synced.
 
-### 12.5 Trust & Reputation
+### 12.5 Trust & Reputation (post-MVP)
+
+> **Status: deferred.** The reputation system is not implemented in protocol
+> version 0x01. The `TABLE_REPUTATION` storage table is reserved but unused.
+> Reputation criteria, wire format, and enforcement thresholds will be defined
+> in a future protocol version.
 
 - Nodes track reputation: uptime, responsiveness, correct behavior
 - New nodes receive less responsibility until proven reliable
@@ -926,7 +931,7 @@ that data after confirming the new responsible node is synced.
 | group_blobs      | `group_id(32) \|\| msg_id(32)`      | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | repl_log         | `key \|\| seq_number`               | Replication log entries   |
 | nodes            | `node_id`                           | Node info (addr, pubkey)  |
-| reputation       | `node_id`                           | Trust score + metrics     |
+| reputation       | `node_id`                           | Trust score + metrics (reserved, post-MVP — not used in v0x01) |
 
 ### 13.2 Replication Log Format
 
