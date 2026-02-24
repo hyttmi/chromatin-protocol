@@ -57,10 +57,11 @@ class ChromatinClient:
             raise RuntimeError(f"Expected CHALLENGE, got {resp.get('type')}")
 
         nonce = bytes.fromhex(resp["nonce"])
+        node_fp = bytes.fromhex(resp["node_fingerprint"])
 
         # AUTH
         auth_id = self._msg_id()
-        await self.ws.send(build_auth(self.pubkey, self.seckey, nonce, auth_id))
+        await self.ws.send(build_auth(self.pubkey, self.seckey, nonce, auth_id, node_fp))
         resp = json.loads(await self.ws.recv())
 
         if resp.get("type") == "ERROR":
@@ -385,8 +386,9 @@ def build_hello(fingerprint: bytes, msg_id: int) -> str:
     })
 
 
-def build_auth(pubkey: bytes, seckey: bytes, nonce: bytes, msg_id: int) -> str:
-    message = b"chromatin-auth:" + nonce
+def build_auth(pubkey: bytes, seckey: bytes, nonce: bytes, msg_id: int,
+               node_fingerprint: bytes = b"") -> str:
+    message = b"chromatin-auth:" + node_fingerprint + nonce
     sig = sign(seckey, message)
     return json.dumps({
         "type": "AUTH",

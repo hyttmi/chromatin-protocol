@@ -30,7 +30,7 @@ def test_fingerprint():
 
 def test_sign():
     pubkey, seckey = generate_keypair()
-    message = b"chromatin-auth:" + os.urandom(32)
+    message = b"chromatin-auth:" + os.urandom(32) + os.urandom(32)
     sig = sign(seckey, message)
     assert len(sig) == 4627
 

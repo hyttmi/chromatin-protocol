@@ -660,11 +660,12 @@ void WsServer<SSL>::handle_hello(ws_t* ws, const Json::Value& msg) {
     session->fingerprint = fingerprint;
     session->challenge_nonce = nonce;
 
-    // Send CHALLENGE
+    // Send CHALLENGE (includes node fingerprint so client can bind signature)
     Json::Value resp;
     resp["type"] = "CHALLENGE";
     resp["id"] = id;
     resp["nonce"] = to_hex(nonce);
+    resp["node_fingerprint"] = to_hex(crypto::sha3_256(keypair_.public_key));
     send_json(ws, resp);
 }
 
@@ -716,9 +717,14 @@ void WsServer<SSL>::handle_auth(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Verify signature over domain-separated data: "chromatin-auth:" || nonce
+    // Verify signature over domain-separated data:
+    // "chromatin-auth:" || node_fingerprint || nonce
+    // Node fingerprint binds the challenge to this specific node,
+    // preventing cross-node challenge relay attacks.
     const std::string prefix = "chromatin-auth:";
     std::vector<uint8_t> signed_data(prefix.begin(), prefix.end());
+    auto node_fp = crypto::sha3_256(keypair_.public_key);
+    signed_data.insert(signed_data.end(), node_fp.begin(), node_fp.end());
     signed_data.insert(signed_data.end(),
                        session->challenge_nonce.begin(),
                        session->challenge_nonce.end());

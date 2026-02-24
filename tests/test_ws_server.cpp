@@ -232,13 +232,15 @@ protected:
         auto challenge = parse_json(*resp1);
         if (challenge["type"].asString() != "CHALLENGE") return false;
 
-        // Sign domain-separated data: "chromatin-auth:" || nonce
+        // Sign domain-separated data: "chromatin-auth:" || node_fingerprint || nonce
         std::string nonce_hex = challenge["nonce"].asString();
         auto nonce_bytes = from_hex(nonce_hex);
         if (nonce_bytes.size() != 32) return false;
 
         const std::string auth_prefix = "chromatin-auth:";
         std::vector<uint8_t> signed_data(auth_prefix.begin(), auth_prefix.end());
+        auto node_fp = crypto::sha3_256(node_keypair_.public_key);
+        signed_data.insert(signed_data.end(), node_fp.begin(), node_fp.end());
         signed_data.insert(signed_data.end(), nonce_bytes.begin(), nonce_bytes.end());
         auto signature = crypto::sign(signed_data, user_kp.secret_key);
 
@@ -370,13 +372,15 @@ TEST_F(WsServerTest, FullAuthFlow) {
     auto challenge = parse_json(*resp1);
     ASSERT_EQ(challenge["type"].asString(), "CHALLENGE");
 
-    // Step 2: Sign domain-separated data: "chromatin-auth:" || nonce
+    // Step 2: Sign domain-separated data: "chromatin-auth:" || node_fingerprint || nonce
     std::string nonce_hex = challenge["nonce"].asString();
     auto nonce_bytes = from_hex(nonce_hex);
     ASSERT_EQ(nonce_bytes.size(), 32u);
 
     const std::string auth_prefix = "chromatin-auth:";
     std::vector<uint8_t> signed_data(auth_prefix.begin(), auth_prefix.end());
+    auto node_fp = crypto::sha3_256(node_keypair_.public_key);
+    signed_data.insert(signed_data.end(), node_fp.begin(), node_fp.end());
     signed_data.insert(signed_data.end(), nonce_bytes.begin(), nonce_bytes.end());
     auto signature = crypto::sign(signed_data, user_kp.secret_key);
     ASSERT_EQ(signature.size(), crypto::SIGNATURE_SIZE);
@@ -400,6 +404,44 @@ TEST_F(WsServerTest, FullAuthFlow) {
     EXPECT_EQ(ok["type"].asString(), "OK");
     EXPECT_EQ(ok["id"].asInt(), 1);
     EXPECT_EQ(ok["pending_messages"].asInt(), 0);
+
+    client.close();
+}
+
+TEST_F(WsServerTest, AuthSignatureWithoutNodeFpRejected) {
+    start_ws_server();
+    auto user_kp = crypto::generate_keypair();
+
+    TestWsClient client;
+    ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
+
+    auto fingerprint = crypto::sha3_256(user_kp.public_key);
+
+    // HELLO
+    Json::Value hello;
+    hello["type"] = "HELLO";
+    hello["fingerprint"] = to_hex(fingerprint);
+    auto resp_str = send_cmd(client, hello);
+    auto challenge = parse_json(resp_str);
+    ASSERT_EQ(challenge["type"].asString(), "CHALLENGE");
+    auto nonce_bytes = from_hex(challenge["nonce"].asString());
+
+    // Sign with OLD format (without node fingerprint) — should FAIL after fix
+    const std::string prefix = "chromatin-auth:";
+    std::vector<uint8_t> old_signed_data(prefix.begin(), prefix.end());
+    old_signed_data.insert(old_signed_data.end(), nonce_bytes.begin(), nonce_bytes.end());
+    auto old_sig = crypto::sign(old_signed_data, user_kp.secret_key);
+
+    Json::Value auth_msg;
+    auth_msg["type"] = "AUTH";
+    auth_msg["id"] = 1;
+    auth_msg["signature"] = to_hex(old_sig);
+    auth_msg["pubkey"] = to_hex(user_kp.public_key);
+    auto auth_resp = send_cmd(client, auth_msg);
+    auto result = parse_json(auth_resp);
+    EXPECT_EQ(result["type"].asString(), "ERROR")
+        << "Old signature format (without node fingerprint) should be rejected";
+    EXPECT_EQ(result["code"].asInt(), 401);
 
     client.close();
 }

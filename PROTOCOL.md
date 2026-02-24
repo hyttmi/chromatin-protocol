@@ -547,14 +547,16 @@ up-to-date node.
      respond with REDIRECT sorted by highest seq first, close connection.
    - If responsible: generate 32-byte random nonce, continue.
 
-2. Node   → Client: CHALLENGE { nonce }
-3. Client → Node:   AUTH { ML-DSA-sign("chromatin-auth:" || nonce), pubkey }
+2. Node   → Client: CHALLENGE { nonce, node_fingerprint }
+3. Client → Node:   AUTH { ML-DSA-sign("chromatin-auth:" || node_fingerprint || nonce), pubkey }
 4. Node   → Client: OK { pending_message_count }
 ```
 
 Node verifies: `fingerprint == SHA3-256(pubkey)` and signature over
-`"chromatin-auth:" || nonce` (47 bytes) is valid. The domain prefix prevents
-cross-protocol signature replay.
+`"chromatin-auth:" || node_fingerprint || nonce` (79 bytes) is valid. The
+domain prefix prevents cross-protocol signature replay. The node's fingerprint
+(SHA3-256 of its ML-DSA-87 public key) is included to prevent cross-node
+challenge relay attacks.
 
 ### 8.3 WebSocket Messages
 

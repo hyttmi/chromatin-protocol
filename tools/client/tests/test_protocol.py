@@ -25,7 +25,8 @@ def test_build_hello():
 def test_build_auth():
     pubkey, seckey = generate_keypair()
     nonce = os.urandom(32)
-    msg = build_auth(pubkey, seckey, nonce, msg_id=2)
+    node_fp = os.urandom(32)
+    msg = build_auth(pubkey, seckey, nonce, msg_id=2, node_fingerprint=node_fp)
     parsed = json.loads(msg)
     assert parsed["type"] == "AUTH"
     assert parsed["id"] == 2

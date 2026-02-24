@@ -797,7 +797,7 @@ via a reverse proxy (e.g. nginx, caddy) in front of the WebSocket port.
 {"type": "HELLO", "id": 1, "fingerprint": "<64 hex chars>"}
 
 // 2. Node -> Client
-{"type": "CHALLENGE", "id": 1, "nonce": "<64 hex chars>"}
+{"type": "CHALLENGE", "id": 1, "nonce": "<64 hex chars>", "node_fingerprint": "<64 hex chars>"}
 
 // 3. Client -> Node
 {"type": "AUTH", "id": 1, "signature": "<hex>", "pubkey": "<hex>"}
@@ -810,8 +810,11 @@ The node verifies:
 1. This node is responsible for the fingerprint's inbox — if NOT responsible,
    respond with REDIRECT (see below) and close the connection
 2. `fingerprint == SHA3-256(pubkey)`
-3. ML-DSA-87 signature over `"chromatin-auth:" || nonce` (47 bytes) is valid.
-   The domain prefix prevents cross-protocol signature replay attacks.
+3. ML-DSA-87 signature over `"chromatin-auth:" || node_fingerprint || nonce`
+   (79 bytes) is valid. The domain prefix prevents cross-protocol signature
+   replay attacks. The node's fingerprint (SHA3-256 of its ML-DSA-87 public
+   key) is included in the signed data to prevent cross-node challenge relay
+   attacks.
 
 ### 5.2 REDIRECT
 
