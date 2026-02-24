@@ -1339,7 +1339,12 @@ replicated via SYNC_REQ/SYNC_RESP instead.
    - If any entries exist (including revoke entries) → reject (sender not allowed)
    - If no entries at all → allow (open inbox, new user)
 2. `blob_length` <= 50 MiB
-3. `msg_id` is unique — reject duplicates (prevents replay attacks)
+3. `msg_id` is unique within the 7-day TTL window — reject duplicates.
+   After TTL expiry, msg_ids are purged from the database and are no longer
+   checked. The server-side dedup window is therefore equal to the TTL (7
+   days). Post-TTL replay protection is the client's responsibility via E2E
+   encryption (the encrypted payload should contain its own sequence numbers
+   or nonces that the client validates after decryption).
 
 ### Contact Request STORE Validation
 
@@ -1380,7 +1385,8 @@ distinguish active allows from revokes.
 
 1. Sender fingerprint must be in the GROUP_META member list for the group_id
 2. `blob_length` <= 50 MiB
-3. `msg_id` is unique within the group — reject duplicates
+3. `msg_id` is unique within the group's 7-day TTL window — reject duplicates.
+   Same dedup window semantics as 1:1 messages (see above).
 
 ### Group Access Control
 
