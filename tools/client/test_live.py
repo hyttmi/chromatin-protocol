@@ -1470,6 +1470,204 @@ async def run_tests():
     # ===================================================================
     # Cleanup
     # ===================================================================
+    print("\n=== Cross-Node Replication Tests ===")
+    # ===================================================================
+    # Core DHT correctness: data written on one node must be readable
+    # from any other node after replication. Tests use fresh identities
+    # and deliberately connect to different bootstrap servers.
+    # ===================================================================
+
+    try:
+        pub_r1, sec_r1 = generate_keypair()
+        pub_r2, sec_r2 = generate_keypair()
+        fp_r1 = fingerprint_of(pub_r1)
+        fp_r2 = fingerprint_of(pub_r2)
+
+        repl_sender = ChromatinClient(pub_r1, sec_r1)
+        repl_receiver = ChromatinClient(pub_r2, sec_r2)
+
+        # Connect both — follow REDIRECT so they land on their responsible nodes
+        resp = await connect_with_redirect(repl_sender, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+        check("repl: sender connected", resp.get("type") == "OK", f"got {resp}")
+        resp = await connect_with_redirect(repl_receiver, SERVERS[1][0], SERVERS[1][1], tls=SERVERS[1][2])
+        check("repl: receiver connected", resp.get("type") == "OK", f"got {resp}")
+
+        s_node = (await repl_sender.cmd_status()).get("node_id", "?")[:12]
+        r_node = (await repl_receiver.cmd_status()).get("node_id", "?")[:12]
+        print(f"  sender on {s_node}..., receiver on {r_node}...")
+
+        # Mutual allowlist
+        resp = await repl_sender.cmd_allow(fp_r2.hex())
+        check("repl: sender allows receiver", resp.get("type") == "OK", f"got {resp}")
+        resp = await repl_receiver.cmd_allow(fp_r1.hex())
+        check("repl: receiver allows sender", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)  # Let allowlist replicate
+
+        # --- 1:1 message replication ---
+        repl_blob = b"Replication test message payload"
+        resp = await repl_sender.cmd_send(fp_r2.hex(), repl_blob)
+        check("repl: sender sends message", resp.get("type") == "OK", f"got {resp}")
+        repl_msg_id = resp.get("msg_id", "")
+
+        await asyncio.sleep(3)  # Let message replicate
+
+        # Receiver (on its responsible node) can list and get
+        resp = await repl_receiver.cmd_list()
+        check("repl: receiver lists on responsible node", resp.get("type") == "OK", f"got {resp}")
+        repl_msgs = resp.get("messages", [])
+        check("repl: message visible on responsible node", len(repl_msgs) >= 1,
+              f"got {len(repl_msgs)} messages")
+
+        # Connect a SECOND receiver client (same keypair) to a DIFFERENT server
+        # without following REDIRECT to verify other bootstrap nodes also have the data
+        for srv_idx in range(len(SERVERS)):
+            srv = SERVERS[srv_idx]
+            repl_receiver2 = ChromatinClient(pub_r2, sec_r2)
+            resp2 = await connect_raw(repl_receiver2, srv[0], srv[1], tls=srv[2])
+            r2_node = ""
+            if resp2.get("type") == "OK":
+                r2_node = (await repl_receiver2.cmd_status()).get("node_id", "?")[:12]
+            elif resp2.get("type") == "REDIRECT":
+                await repl_receiver2.disconnect()
+                resp2 = await connect_with_redirect(repl_receiver2, srv[0], srv[1], tls=srv[2])
+                r2_node = (await repl_receiver2.cmd_status()).get("node_id", "?")[:12] if resp2.get("type") == "OK" else "?"
+
+            if resp2.get("type") == "OK" and r2_node != r_node:
+                print(f"  receiver2 on {r2_node}... (different node — testing replication)")
+                resp = await repl_receiver2.cmd_list()
+                check(f"repl: message visible on node {srv_idx}", resp.get("type") == "OK", f"got {resp}")
+                msgs2 = resp.get("messages", [])
+                check(f"repl: message replicated to node {srv_idx}", len(msgs2) >= 1,
+                      f"got {len(msgs2)} messages on server {srv[0]}")
+
+                if repl_msg_id and msgs2:
+                    resp = await repl_receiver2.cmd_get(repl_msg_id)
+                    blob_back = bytes.fromhex(resp.get("blob", "")) if resp.get("blob") else b""
+                    check(f"repl: GET correct blob from node {srv_idx}",
+                          blob_back == repl_blob, f"got {len(blob_back)} bytes")
+
+                await repl_receiver2.disconnect()
+                break
+        else:
+            print("  WARNING: could not find a second node for replication check — skipped")
+
+        # --- Profile replication ---
+        profile_r1 = build_profile_record(
+            seckey=sec_r1,
+            fingerprint=fp_r1,
+            pubkey=pub_r1,
+            kem_pubkey=b"",
+            bio="Replication tester",
+            avatar=b"",
+            social_links=[],
+            sequence=1,
+        )
+        resp = await repl_sender.cmd_set_profile(profile_r1)
+        check("repl: set profile on node A", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)
+
+        # GET profile from a DIFFERENT node
+        repl_getter = ChromatinClient(pub_r2, sec_r2)
+        for srv_idx in range(len(SERVERS)):
+            srv = SERVERS[srv_idx]
+            resp_conn = await connect_raw(repl_getter, srv[0], srv[1], tls=srv[2])
+            if resp_conn.get("type") == "OK":
+                g_node = (await repl_getter.cmd_status()).get("node_id", "?")[:12]
+                if g_node != s_node:
+                    print(f"  profile getter on {g_node}... (different from setter)")
+                    resp = await repl_getter.cmd_get_profile(fp_r1.hex())
+                    check("repl: profile visible from different node",
+                          resp.get("found") is True, f"got {resp}")
+                    await repl_getter.disconnect()
+                    break
+            await repl_getter.disconnect()
+
+        # --- Group replication ---
+        pub_grp_owner, sec_grp_owner = generate_keypair()
+        pub_grp_member, sec_grp_member = generate_keypair()
+        fp_grp_owner = fingerprint_of(pub_grp_owner)
+        fp_grp_member = fingerprint_of(pub_grp_member)
+
+        grp_owner = ChromatinClient(pub_grp_owner, sec_grp_owner)
+        grp_member = ChromatinClient(pub_grp_member, sec_grp_member)
+
+        # Connect owner to node 0, member to node 1 — deliberately different
+        resp = await connect_with_redirect(grp_owner, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+        check("repl: group owner connected (node 0)", resp.get("type") == "OK", f"got {resp}")
+        resp = await connect_with_redirect(grp_member, SERVERS[1][0], SERVERS[1][1], tls=SERVERS[1][2])
+        check("repl: group member connected (node 1)", resp.get("type") == "OK", f"got {resp}")
+
+        grp_owner_node = (await grp_owner.cmd_status()).get("node_id", "?")[:12]
+        grp_member_node = (await grp_member.cmd_status()).get("node_id", "?")[:12]
+        print(f"  group owner on {grp_owner_node}..., member on {grp_member_node}...")
+
+        repl_group_id = os.urandom(32)
+        kem_dummy_r = b"\x00" * 1568
+        grp_members_v1 = [
+            (fp_grp_owner, 0x02, kem_dummy_r),
+            (fp_grp_member, 0x00, kem_dummy_r),
+        ]
+        meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, 1, grp_members_v1)
+        resp = await grp_owner.cmd_group_create(meta)
+        check("repl: group create on node A", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)  # Let GROUP_META replicate
+
+        # Member on different node can fetch group info
+        resp = await grp_member.cmd_group_info(repl_group_id.hex())
+        check("repl: member gets group info from different node",
+              resp.get("type") == "OK", f"got {resp}")
+
+        # Member on different node can send group message
+        gm_id = os.urandom(32).hex()
+        resp = await grp_member.cmd_group_send(repl_group_id.hex(), gm_id, 1, b"Cross-node group msg")
+        check("repl: member sends group msg from different node",
+              resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)
+
+        # Owner on its node can list and see the member's message
+        resp = await grp_owner.cmd_group_list(repl_group_id.hex())
+        check("repl: owner sees group msg from different node",
+              resp.get("type") == "OK", f"got {resp}")
+        g_msgs = resp.get("messages", [])
+        check("repl: group msg replicated to owner's node", len(g_msgs) >= 1,
+              f"got {len(g_msgs)} messages")
+
+        # GROUP_UPDATE cross-node: owner updates on node A, member sees version change on node B
+        grp_members_v2 = [
+            (fp_grp_owner, 0x02, kem_dummy_r),
+            (fp_grp_member, 0x01, kem_dummy_r),  # promote member to admin
+        ]
+        meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, 2, grp_members_v2)
+        resp = await grp_owner.cmd_group_update(meta_v2)
+        check("repl: group update (promote member) on node A", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(2)
+
+        resp = await grp_member.cmd_group_info(repl_group_id.hex())
+        check("repl: member sees updated group meta from node B", resp.get("type") == "OK", f"got {resp}")
+        if resp.get("type") == "OK":
+            raw_meta = bytes.fromhex(resp.get("group_meta", ""))
+            # version is at offset 64 (fingerprint(32) + owner_fp(32)) as 4 BE bytes
+            if len(raw_meta) >= 68:
+                version_in_meta = int.from_bytes(raw_meta[64:68], "big")
+                check("repl: member sees version 2 group meta",
+                      version_in_meta == 2, f"version={version_in_meta}")
+            else:
+                fail("repl: member sees version 2 group meta", "meta too short")
+
+        await grp_owner.disconnect()
+        await grp_member.disconnect()
+        await repl_sender.disconnect()
+        await repl_receiver.disconnect()
+
+    except Exception as e:
+        fail("cross-node replication section", f"crashed: {e}")
+
+    # ===================================================================
     print("\n=== Cleanup ===")
     await alice.disconnect()
     await bob.disconnect()
