@@ -895,6 +895,70 @@ async def run_tests():
     check("allow self", resp.get("type") == "OK" or resp.get("type") == "ERROR",
           f"got {resp}")
 
+    # --- Allowlist sequence replay ---
+    try:
+        pub_sq, sec_sq = generate_keypair()
+        fp_sq = fingerprint_of(pub_sq)
+        seq_client = ChromatinClient(pub_sq, sec_sq)
+        resp = await connect_with_redirect(seq_client, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+        if resp.get("type") == "OK":
+            resp = await seq_client.cmd_allow(fp_a.hex())
+            check("seq: allow seq=1", resp.get("type") == "OK", f"got {resp}")
+            resp = await seq_client.cmd_revoke(fp_a.hex())
+            check("seq: revoke seq=2", resp.get("type") == "OK", f"got {resp}")
+            # Sequence monotonicity is enforced server-side; Python client auto-increments.
+            # Raw replay with lower sequence is covered by C++ unit tests.
+            print("  NOTE: sequence monotonicity enforced server-side; C++ tests cover raw replay")
+            await seq_client.disconnect()
+    except Exception as e:
+        print(f"  seq replay section: {e}")
+
+    # --- Large message NEW_MESSAGE push is metadata-only ---
+    try:
+        pub_lp1, sec_lp1 = generate_keypair()
+        pub_lp2, sec_lp2 = generate_keypair()
+        fp_lp1 = fingerprint_of(pub_lp1)
+        fp_lp2 = fingerprint_of(pub_lp2)
+        lp_sender = ChromatinClient(pub_lp1, sec_lp1)
+        lp_receiver = ChromatinClient(pub_lp2, sec_lp2)
+        lp_pushes = []
+
+        async def _lp_push(m):
+            lp_pushes.append(m)
+        lp_receiver.set_push_callback(_lp_push)
+
+        resp = await connect_with_redirect(lp_sender, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+        resp2 = await connect_with_redirect(lp_receiver, SERVERS[1][0], SERVERS[1][1], tls=SERVERS[1][2])
+        if resp.get("type") == "OK" and resp2.get("type") == "OK":
+            await lp_sender.cmd_allow(fp_lp2.hex())
+            await lp_receiver.cmd_allow(fp_lp1.hex())
+            await asyncio.sleep(1)
+
+            large_blob = os.urandom(100 * 1024)
+            resp = await lp_sender.cmd_send_large(fp_lp2.hex(), large_blob)
+            check("large msg push: send large ok", resp.get("type") == "OK", f"got {resp}")
+
+            await asyncio.sleep(3)
+
+            large_pushes = [p for p in lp_pushes if p.get("type") == "NEW_MESSAGE"]
+            check("large msg push: receiver got NEW_MESSAGE", len(large_pushes) >= 1,
+                  f"got {len(large_pushes)} pushes")
+            if large_pushes:
+                push = large_pushes[0]
+                check("large msg push: no inline blob in push",
+                      "blob" not in push or push.get("blob") is None,
+                      f"push contains blob (should be metadata-only): {list(push.keys())}")
+                check("large msg push: has msg_id", "msg_id" in push, f"push: {push}")
+                check("large msg push: has size", "size" in push, f"push: {push}")
+                if "size" in push:
+                    check("large msg push: size matches", push["size"] == len(large_blob),
+                          f"size={push.get('size')} expected={len(large_blob)}")
+
+        await lp_sender.disconnect()
+        await lp_receiver.disconnect()
+    except Exception as e:
+        fail("large msg push section", f"crashed: {e}")
+
     # ===================================================================
     print("\n=== Group Cleanup Tests ===")
     # ===================================================================
