@@ -209,8 +209,9 @@ private:
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> find_node_rate_;
 
     // Pending STORE quorum tracking (key -> status)
+    // Uses multimap: concurrent store_sync() calls for the same key coexist
     mutable std::mutex pending_mutex_;
-    std::unordered_map<crypto::Hash, PendingStore, crypto::HashHash> pending_stores_;
+    std::unordered_multimap<crypto::Hash, PendingStore, crypto::HashHash> pending_stores_;
 
     // Pending SEQ_RESP tracking for query_remote_seqs()
     struct PendingSeqQuery {

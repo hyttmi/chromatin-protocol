@@ -1660,7 +1660,7 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
         ps.acked = 0;
         ps.local_stored = local_stored;
         ps.created = std::chrono::steady_clock::now();
-        pending_stores_[key] = ps;
+        pending_stores_.emplace(key, std::move(ps));
     }
 
     return stored_any;
@@ -1725,7 +1725,7 @@ bool Kademlia::store_sync(const crypto::Hash& key, uint8_t data_type,
         ps.local_stored = local_stored;
         ps.created = std::chrono::steady_clock::now();
         ps.quorum_promise = promise;
-        pending_stores_[key] = ps;
+        pending_stores_.emplace(key, std::move(ps));
     }
 
     // Second pass: send STORE to remote nodes
@@ -1740,17 +1740,20 @@ bool Kademlia::store_sync(const crypto::Hash& key, uint8_t data_type,
         return future.get();
     }
 
-    // Timeout — check if quorum was reached between wait_for and lock
+    // Timeout — find OUR entry by matching the promise pointer
     {
         std::lock_guard lock(pending_mutex_);
-        auto it = pending_stores_.find(key);
-        if (it != pending_stores_.end()) {
-            size_t total = it->second.acked + (it->second.local_stored ? 1 : 0);
-            if (total >= w) {
+        auto [begin, end] = pending_stores_.equal_range(key);
+        for (auto it = begin; it != end; ++it) {
+            if (it->second.quorum_promise == promise) {
+                size_t total = it->second.acked + (it->second.local_stored ? 1 : 0);
+                if (total >= w) {
+                    pending_stores_.erase(it);
+                    return true;
+                }
                 pending_stores_.erase(it);
-                return true;
+                break;
             }
-            pending_stores_.erase(it);  // Clean up stale entry
         }
     }
 
@@ -2928,33 +2931,40 @@ void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uin
     }
 
     std::lock_guard lock(pending_mutex_);
-    auto it = pending_stores_.find(key);
-    if (it == pending_stores_.end()) {
+    auto [begin, end] = pending_stores_.equal_range(key);
+    if (begin == end) {
         spdlog::debug("STORE_ACK for unknown key from {}:{} (already completed or expired)", from, port);
         return;
     }
 
-    it->second.acked++;
-    size_t total_confirmed = it->second.acked + (it->second.local_stored ? 1 : 0);
     size_t w = write_quorum();
 
-    spdlog::debug("STORE_ACK from {}:{} — {}/{} confirmed (W={})",
-                  from, port, total_confirmed, it->second.expected + (it->second.local_stored ? 1 : 0), w);
+    // Credit ALL pending entries for this key — we can't distinguish which
+    // store operation this ACK corresponds to (no correlation ID in protocol)
+    for (auto it = begin; it != end;) {
+        it->second.acked++;
+        size_t total_confirmed = it->second.acked + (it->second.local_stored ? 1 : 0);
 
-    if (total_confirmed >= w) {
-        spdlog::info("Write quorum reached for key ({}/{} confirmed)", total_confirmed, w);
-        if (it->second.quorum_promise) {
-            try {
-                it->second.quorum_promise->set_value(true);
-            } catch (const std::future_error&) {
-                // Promise already set or abandoned
+        spdlog::debug("STORE_ACK from {}:{} — {}/{} confirmed (W={})",
+                      from, port, total_confirmed, it->second.expected + (it->second.local_stored ? 1 : 0), w);
+
+        if (total_confirmed >= w) {
+            spdlog::info("Write quorum reached for key ({}/{} confirmed)", total_confirmed, w);
+            if (it->second.quorum_promise) {
+                try {
+                    it->second.quorum_promise->set_value(true);
+                } catch (const std::future_error&) {
+                    // Promise already set or abandoned
+                }
             }
         }
-    }
 
-    // Clean up if all expected ACKs received
-    if (it->second.acked >= it->second.expected) {
-        pending_stores_.erase(it);
+        // Clean up if all expected ACKs received
+        if (it->second.acked >= it->second.expected) {
+            it = pending_stores_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -3145,7 +3155,7 @@ std::vector<Kademlia::NodeValue> Kademlia::query_remote_values(
 
 std::optional<PendingStore> Kademlia::pending_store_status(const crypto::Hash& key) const {
     std::lock_guard lock(pending_mutex_);
-    auto it = pending_stores_.find(key);
+    auto it = pending_stores_.find(key);  // Returns first match in multimap
     if (it == pending_stores_.end()) return std::nullopt;
     return it->second;
 }
