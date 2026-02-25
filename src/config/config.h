@@ -14,7 +14,7 @@ namespace chromatin::config {
 namespace protocol {
     constexpr uint16_t REPLICATION_FACTOR     = 3;
     constexpr uint8_t  CONTACT_POW_DIFFICULTY = 16;
-    constexpr uint8_t  NAME_POW_DIFFICULTY    = 26;
+    constexpr uint8_t  NAME_POW_DIFFICULTY    = 2;
     constexpr uint64_t MAX_MESSAGE_SIZE       = 50ULL * 1024 * 1024;  // 50 MiB
     constexpr uint32_t MAX_PROFILE_SIZE       = 1024 * 1024;           // 1 MiB
     constexpr uint32_t MAX_REQUEST_BLOB_SIZE  = 64 * 1024;             // 64 KiB

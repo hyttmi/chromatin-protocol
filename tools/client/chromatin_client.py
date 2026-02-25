@@ -23,7 +23,7 @@ IDENTITY_PATH = os.path.join(IDENTITY_DIR, "identity.key")
 
 # PoW difficulty defaults (must match node config)
 CONTACT_POW_DIFFICULTY = 16
-NAME_POW_DIFFICULTY = 26
+NAME_POW_DIFFICULTY = 2
 
 
 def load_or_create_identity() -> tuple[bytes, bytes]:

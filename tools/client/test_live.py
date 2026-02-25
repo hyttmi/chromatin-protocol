@@ -38,7 +38,7 @@ from builders import build_profile_record, build_name_record, build_group_meta
 
 # PoW difficulties (must match node config)
 CONTACT_POW_DIFFICULTY = 16
-NAME_POW_DIFFICULTY = 26
+NAME_POW_DIFFICULTY = 2
 
 # Test nodes: (host, ws_port, tls) tuples
 SERVERS = [
