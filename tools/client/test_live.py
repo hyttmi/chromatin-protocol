@@ -106,6 +106,11 @@ async def connect_with_redirect(client, host, port, tls=False, max_redirects=3):
     return resp
 
 
+async def connect_raw(client, host, port, tls=False):
+    """Connect to a specific node without following REDIRECT responses."""
+    return await client.connect(host, port, tls=tls)
+
+
 async def ensure_connected(client, servers):
     """Reconnect a client if its WebSocket is dead."""
     if client.ws and client.ws.protocol.state.name == "OPEN":
