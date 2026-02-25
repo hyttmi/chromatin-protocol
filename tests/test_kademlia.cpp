@@ -3943,3 +3943,240 @@ TEST_F(KademliaTest, AllowlistSequenceReplayRejected) {
     EXPECT_TRUE(n1.kad->store(allowlist_key, 0x04, make_entry(0x01, 4)))
         << "Higher sequence number should be accepted";
 }
+
+// ---------------------------------------------------------------------------
+// Helper: build a valid signed profile binary for store_sync tests
+// Returns {profile_key, profile_bytes}.
+// ---------------------------------------------------------------------------
+static std::pair<Hash, std::vector<uint8_t>> build_signed_profile(const KeyPair& user_kp) {
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::vector<uint8_t> profile;
+    // fingerprint(32)
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    // pubkey_len(2 BE) + pubkey
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_length = 0, bio_length = 0, avatar_length = 0, social_count = 0
+    profile.push_back(0x00); profile.push_back(0x00);  // kem_pubkey_len
+    profile.push_back(0x00); profile.push_back(0x00);  // bio_len
+    profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00);  // avatar_len
+    profile.push_back(0x00);  // social_count
+    // sequence = 1 (8 bytes BE)
+    for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
+    // sign with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+
+    Hash profile_key = sha3_256_prefixed("chromatin:profile:", user_fp);
+    return {profile_key, profile};
+}
+
+// ---------------------------------------------------------------------------
+// Test: StoreSyncQuorum — 3-node network, store_sync reaches W=2 quorum
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreSyncQuorum) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    bootstrap_bidirectional(n2, n1);  // so n2 discovers n3
+
+    ASSERT_EQ(n1.kad->replication_factor(), 3u);
+    ASSERT_EQ(n1.kad->write_quorum(), 2u);  // W = min(2, 3) = 2
+
+    KeyPair user_kp = generate_keypair();
+    auto [profile_key, profile_value] = build_signed_profile(user_kp);
+
+    // store_sync blocks until quorum
+    bool ok = n1.kad->store_sync(profile_key, 0x00, profile_value);
+    EXPECT_TRUE(ok) << "store_sync should return true when quorum is reached";
+
+    // Wait briefly for remaining replication
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Verify data exists on at least 2 of 3 nodes
+    int stored_count = 0;
+    if (n1.storage->get(TABLE_PROFILES, profile_key).has_value()) ++stored_count;
+    if (n2.storage->get(TABLE_PROFILES, profile_key).has_value()) ++stored_count;
+    if (n3.storage->get(TABLE_PROFILES, profile_key).has_value()) ++stored_count;
+
+    EXPECT_GE(stored_count, 2) << "Data should exist on at least 2 of 3 nodes";
+}
+
+// ---------------------------------------------------------------------------
+// Test: StoreSyncSoloNode — single node, W=1, returns immediately
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreSyncSoloNode) {
+    auto& n1 = create_node(8);
+
+    start_all();
+
+    ASSERT_EQ(n1.kad->replication_factor(), 1u);
+    ASSERT_EQ(n1.kad->write_quorum(), 1u);  // W = min(2, 1) = 1
+
+    KeyPair user_kp = generate_keypair();
+    auto [profile_key, profile_value] = build_signed_profile(user_kp);
+
+    bool ok = n1.kad->store_sync(profile_key, 0x00, profile_value);
+    EXPECT_TRUE(ok) << "store_sync on solo node should return true immediately";
+
+    // Verify stored locally
+    auto data = n1.storage->get(TABLE_PROFILES, profile_key);
+    ASSERT_TRUE(data.has_value()) << "Profile should be stored locally";
+    EXPECT_EQ(*data, profile_value);
+}
+
+// ---------------------------------------------------------------------------
+// Test: StoreSyncNodeDown — partial failure still reaches quorum
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreSyncNodeDown) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+    auto& n3 = create_node(8);
+
+    start_all();
+
+    bootstrap_bidirectional(n2, n1);
+    bootstrap_bidirectional(n3, n1);
+    bootstrap_bidirectional(n2, n1);
+
+    ASSERT_EQ(n1.kad->replication_factor(), 3u);
+    ASSERT_EQ(n1.kad->write_quorum(), 2u);
+
+    // Stop n3 before store — simulates a dead node
+    n3.stop();
+
+    KeyPair user_kp = generate_keypair();
+    auto [profile_key, profile_value] = build_signed_profile(user_kp);
+
+    // store_sync should still reach quorum (W=2: local n1 + remote n2)
+    bool ok = n1.kad->store_sync(profile_key, 0x00, profile_value);
+    EXPECT_TRUE(ok) << "store_sync should reach quorum even with one node down";
+
+    // Verify data on n1 and n2
+    EXPECT_TRUE(n1.storage->get(TABLE_PROFILES, profile_key).has_value())
+        << "Profile should exist on n1 (local store)";
+    EXPECT_TRUE(n2.storage->get(TABLE_PROFILES, profile_key).has_value())
+        << "Profile should exist on n2 (remote store)";
+}
+
+// ---------------------------------------------------------------------------
+// Test: StoreSyncProfileUpdate — sequential profile updates via store_sync
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreSyncProfileUpdate) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    bootstrap_bidirectional(n2, n1);
+
+    ASSERT_EQ(n1.kad->replication_factor(), 2u);
+    ASSERT_EQ(n1.kad->write_quorum(), 2u);
+
+    KeyPair user_kp = generate_keypair();
+    auto [profile_key, profile_v1] = build_signed_profile(user_kp);
+
+    // First store_sync — fresh store
+    bool ok1 = n1.kad->store_sync(profile_key, 0x00, profile_v1);
+    EXPECT_TRUE(ok1) << "First store_sync should succeed";
+
+    // Build a second profile with higher sequence (seq=2)
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::vector<uint8_t> profile_v2;
+    profile_v2.insert(profile_v2.end(), user_fp.begin(), user_fp.end());
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile_v2.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile_v2.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile_v2.insert(profile_v2.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    profile_v2.push_back(0x00); profile_v2.push_back(0x00);  // kem_pubkey_len
+    profile_v2.push_back(0x00); profile_v2.push_back(0x00);  // bio_len
+    profile_v2.push_back(0x00); profile_v2.push_back(0x00); profile_v2.push_back(0x00); profile_v2.push_back(0x00);
+    profile_v2.push_back(0x00);  // social_count
+    // sequence = 2
+    for (int i = 7; i >= 0; --i) profile_v2.push_back(i == 0 ? 0x02 : 0x00);
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile_v2.begin(), profile_v2.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile_v2.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile_v2.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile_v2.insert(profile_v2.end(), sig.begin(), sig.end());
+
+    // Second store_sync with higher sequence — should succeed on both nodes
+    bool ok2 = n1.kad->store_sync(profile_key, 0x00, profile_v2);
+    EXPECT_TRUE(ok2) << "store_sync with higher sequence profile should succeed";
+
+    // Both nodes should have the updated profile
+    auto d1 = n1.storage->get(TABLE_PROFILES, profile_key);
+    auto d2 = n2.storage->get(TABLE_PROFILES, profile_key);
+    ASSERT_TRUE(d1.has_value());
+    ASSERT_TRUE(d2.has_value());
+    EXPECT_EQ(*d1, profile_v2);
+    EXPECT_EQ(*d2, profile_v2);
+}
+
+// ---------------------------------------------------------------------------
+// Test: StoreSyncDuplicateAllowlist — allowlist store_sync with sequential
+// updates succeeds, verifying remote ACK path works across both calls.
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, StoreSyncDuplicateAllowlist) {
+    auto& n1 = create_node(8);
+    auto& n2 = create_node(8);
+
+    start_all();
+
+    bootstrap_bidirectional(n2, n1);
+
+    ASSERT_EQ(n1.kad->replication_factor(), 2u);
+    ASSERT_EQ(n1.kad->write_quorum(), 2u);
+
+    // Allowlist requires owner profile on all nodes for validation
+    KeyPair owner_kp = generate_keypair();
+    Hash owner_fp = sha3_256(owner_kp.public_key);
+    store_user_profile(n1, owner_kp);
+    store_user_profile(n2, owner_kp);
+
+    Hash contact_fp{};
+    contact_fp.fill(0xDD);
+    auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
+    Hash allowlist_key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
+
+    // First store_sync
+    bool ok1 = n1.kad->store_sync(allowlist_key, 0x04, value);
+    EXPECT_TRUE(ok1) << "First allowlist store_sync should succeed";
+
+    // Verify data on both nodes (composite key: allowlist_key || contact_fp)
+    std::vector<uint8_t> comp_key(allowlist_key.begin(), allowlist_key.end());
+    comp_key.insert(comp_key.end(), contact_fp.begin(), contact_fp.end());
+    EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+    EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+
+    // Second store_sync with higher sequence — tests that remote ACK path
+    // works for allowlist updates too
+    auto value2 = build_signed_allowlist(owner_kp, contact_fp, 0x01, 2);
+    bool ok2 = n1.kad->store_sync(allowlist_key, 0x04, value2);
+    EXPECT_TRUE(ok2) << "Second allowlist store_sync (higher seq) should succeed";
+
+    // Both nodes should have the updated entry
+    EXPECT_TRUE(n1.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+    EXPECT_TRUE(n2.storage->get(TABLE_ALLOWLISTS, comp_key).has_value());
+}
