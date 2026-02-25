@@ -1650,9 +1650,9 @@ bool Kademlia::validate_readonly(const crypto::Hash& key, uint8_t data_type,
     case 0x01: return validate_name_record(value, key, /*skip_sequence_check=*/true);
     case 0x02: return validate_inbox_message(value);
     case 0x03: return validate_contact_request(value, /*skip_timestamp_check=*/true);
-    case 0x04: return validate_allowlist_entry(value);
+    case 0x04: return validate_allowlist_entry(value, /*skip_storage_lookup=*/true);
     case 0x05: return validate_group_message(value);
-    case 0x06: return validate_group_meta(value, key);
+    case 0x06: return validate_group_meta(value, key, /*skip_storage_lookup=*/true);
     default:   return false;
     }
 }
@@ -2169,7 +2169,7 @@ bool Kademlia::validate_contact_request(std::span<const uint8_t> value,
 // Allowlist entry validation
 // ---------------------------------------------------------------------------
 
-bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
+bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value, bool skip_storage_lookup) {
     // Format: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
     // Minimum: 32 + 32 + 1 + 8 + 2 = 75 bytes + pubkey + signature
     if (value.size() < 75) {
@@ -2221,29 +2221,31 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value) {
 
     // Sequence monotonicity: reject if incoming sequence <= existing sequence
     // for the same owner_fp + allowed_fp pair
-    uint64_t sequence = 0;
-    for (int i = 0; i < 8; ++i) {
-        sequence = (sequence << 8) | value[65 + i];
-    }
-
-    // Build composite key to look up existing entry
-    crypto::Hash ofp{};
-    std::copy_n(value.data(), 32, ofp.begin());
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", ofp);
-    std::vector<uint8_t> composite_key;
-    composite_key.reserve(64);
-    composite_key.insert(composite_key.end(), inbox_key.begin(), inbox_key.end());
-    composite_key.insert(composite_key.end(), value.data() + 32, value.data() + 64);
-
-    auto existing = storage_.get(storage::TABLE_ALLOWLISTS, composite_key);
-    if (existing && !existing->empty() && existing->size() >= 73) {
-        uint64_t existing_seq = 0;
+    if (!skip_storage_lookup) {
+        uint64_t sequence = 0;
         for (int i = 0; i < 8; ++i) {
-            existing_seq = (existing_seq << 8) | (*existing)[65 + i];
+            sequence = (sequence << 8) | value[65 + i];
         }
-        if (sequence <= existing_seq) {
-            spdlog::debug("Allowlist rejected: sequence {} <= existing {}", sequence, existing_seq);
-            return false;
+
+        // Build composite key to look up existing entry
+        crypto::Hash ofp{};
+        std::copy_n(value.data(), 32, ofp.begin());
+        auto inbox_key = crypto::sha3_256_prefixed("inbox:", ofp);
+        std::vector<uint8_t> composite_key;
+        composite_key.reserve(64);
+        composite_key.insert(composite_key.end(), inbox_key.begin(), inbox_key.end());
+        composite_key.insert(composite_key.end(), value.data() + 32, value.data() + 64);
+
+        auto existing = storage_.get(storage::TABLE_ALLOWLISTS, composite_key);
+        if (existing && !existing->empty() && existing->size() >= 73) {
+            uint64_t existing_seq = 0;
+            for (int i = 0; i < 8; ++i) {
+                existing_seq = (existing_seq << 8) | (*existing)[65 + i];
+            }
+            if (sequence <= existing_seq) {
+                spdlog::debug("Allowlist rejected: sequence {} <= existing {}", sequence, existing_seq);
+                return false;
+            }
         }
     }
 
@@ -2286,7 +2288,7 @@ bool Kademlia::validate_group_message(std::span<const uint8_t> value) {
 // Group meta validation
 // ---------------------------------------------------------------------------
 
-bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key) {
+bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key, bool skip_storage_lookup) {
     // Format: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
     //         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
     //         sig_len(2 BE) || ML-DSA-87 signature
@@ -2354,6 +2356,12 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     }
 
     // Verify ML-DSA-87 signature using owner's pubkey from local profile store
+    if (skip_storage_lookup) {
+        // Called from within a foreach/scan callback — cannot nest read transactions.
+        // Integrity sweep will re-validate later.
+        return true;
+    }
+
     std::span<const uint8_t> owner_fp_span(value.data() + 32, 32);
     crypto::Hash ofp{};
     std::copy_n(owner_fp_span.data(), 32, ofp.begin());

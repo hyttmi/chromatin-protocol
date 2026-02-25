@@ -249,8 +249,8 @@ private:
     bool validate_inbox_message(std::span<const uint8_t> value);
     bool validate_contact_request(std::span<const uint8_t> value,
                                   bool skip_timestamp_check = false);
-    bool validate_allowlist_entry(std::span<const uint8_t> value);
-    bool validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key);
+    bool validate_allowlist_entry(std::span<const uint8_t> value, bool skip_storage_lookup = false);
+    bool validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key, bool skip_storage_lookup = false);
     bool validate_group_message(std::span<const uint8_t> value);
 };
 
