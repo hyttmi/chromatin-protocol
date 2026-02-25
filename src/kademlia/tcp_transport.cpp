@@ -584,15 +584,16 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
     auto pool_key = "[" + addr + "]:" + std::to_string(port);
     int fd = -1;
     bool from_pool = false;
-    std::optional<tcp_encryption::SessionKeys>* session_ptr = nullptr;
+    std::optional<tcp_encryption::SessionKeys> session;  // local copy, not a pointer into pool
 
-    // Try to get a pooled connection
+    // Try to get a pooled connection — move session out under lock
     {
         std::lock_guard lock(pool_mutex_);
         auto it = conn_pool_.find(pool_key);
         if (it != conn_pool_.end()) {
             fd = it->second.fd;
-            // Take ownership — we'll return it later
+            session = std::move(it->second.session);
+            it->second.session.reset();
             from_pool = true;
         }
     }
@@ -605,12 +606,11 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         close(fd);
         fd = -1;
         from_pool = false;
+        session.reset();
     }
 
     if (from_pool) {
         spdlog::debug("Reusing pooled connection to {} (fd={})", pool_key, fd);
-        std::lock_guard lock(pool_mutex_);
-        session_ptr = &conn_pool_[pool_key].session;
     }
 
     // If no pooled connection, create a new one
@@ -622,12 +622,12 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
         // Perform encryption handshake on new connections
         if (signing_keypair_) {
             if (perform_initiator_handshake(fd, pool_key)) {
-                // Connection is now in pool with session keys
+                // Move session out of pool under lock
                 std::lock_guard lock(pool_mutex_);
-                session_ptr = &conn_pool_[pool_key].session;
+                session = std::move(conn_pool_[pool_key].session);
+                conn_pool_[pool_key].session.reset();
                 from_pool = true;
             } else {
-                // Handshake failed — drop the message
                 spdlog::warn("Encryption handshake failed for {}, dropping message", pool_key);
                 close(fd);
                 return;
@@ -637,8 +637,8 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
 
     // Send the message
     bool send_ok;
-    if (session_ptr) {
-        send_ok = send_on_connection(fd, data, session_ptr);
+    if (session) {
+        send_ok = send_on_connection(fd, data, &session);
     } else {
         send_ok = send_all(fd, data);
     }
@@ -651,14 +651,16 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
             conn_pool_.erase(pool_key);
         }
         close(fd);
+        session.reset();
         fd = create_connection(addr, port, connect_timeout_, running_);
         if (fd < 0) return;
 
         if (signing_keypair_) {
             if (perform_initiator_handshake(fd, pool_key)) {
                 std::lock_guard lock(pool_mutex_);
-                session_ptr = &conn_pool_[pool_key].session;
-                send_ok = send_on_connection(fd, data, session_ptr);
+                session = std::move(conn_pool_[pool_key].session);
+                conn_pool_[pool_key].session.reset();
+                send_ok = send_on_connection(fd, data, &session);
             } else {
                 spdlog::warn("Encryption handshake failed on retry for {}", pool_key);
                 close(fd);
@@ -670,17 +672,18 @@ void TcpTransport::send(const std::string& addr, uint16_t port, const Message& m
     }
 
     if (send_ok) {
-        // Return connection to pool if not already there
+        // Return connection and session to pool
         std::lock_guard lock(pool_mutex_);
         if (conn_pool_.find(pool_key) == conn_pool_.end()) {
             if (conn_pool_.size() < max_pool_size_) {
-                conn_pool_[pool_key] = {fd, std::chrono::steady_clock::now(), std::nullopt};
+                conn_pool_[pool_key] = {fd, std::chrono::steady_clock::now(), std::move(session)};
                 spdlog::debug("Returned fd={} to pool for {}", fd, pool_key);
             } else {
                 close(fd);
             }
         } else {
-            // Already in pool (from handshake), just update last_used
+            // Already in pool (from handshake), move session back and update last_used
+            conn_pool_[pool_key].session = std::move(session);
             conn_pool_[pool_key].last_used = std::chrono::steady_clock::now();
         }
     } else {

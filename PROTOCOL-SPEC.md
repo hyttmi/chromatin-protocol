@@ -1501,10 +1501,9 @@ For non-empty STOREs (`value_length > 0`), all of the following must hold:
 
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
 2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin).
-   When the owner's profile is available in local storage, the ML-DSA-87
-   signature MUST be verified against the owner's public key. When the profile
-   is unavailable (e.g., during initial sync), the record MAY be accepted
-   with deferred validation.
+   The owner's profile MUST be available in local storage for signature
+   verification. If the owner's profile is not found, the GROUP_META MUST
+   be rejected.
 3. `version` > currently stored version for this group_id — reject replays
 4. At least one member must have role=0x02 (Owner)
 5. `member_count` >= 1 and <= 512

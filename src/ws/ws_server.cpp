@@ -443,7 +443,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
             auto now = std::chrono::system_clock::now();
             uint64_t timestamp = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
             uint32_t blob_len = static_cast<uint32_t>(blob_data.size());
 
             std::vector<uint8_t> msg_bytes;
@@ -2970,7 +2970,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
     // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8 BE) || gek_version(4 BE) || blob_len(4 BE) || blob
     auto now = std::chrono::system_clock::now();
     uint64_t timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
     uint32_t blob_len = static_cast<uint32_t>(blob_bytes->size());
 
     std::vector<uint8_t> msg_bytes;

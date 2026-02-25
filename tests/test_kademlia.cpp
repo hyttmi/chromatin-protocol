@@ -3214,6 +3214,11 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     auto owner_kp = generate_keypair();
     Hash owner_fp = sha3_256(owner_kp.public_key);
 
+    // Store owner's profile (required for GROUP_META signature verification)
+    auto profile = build_profile(owner_kp, 1);
+    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
+    ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
+
     Hash group_id{};
     group_id.fill(0x44);
 
@@ -3672,7 +3677,7 @@ TEST_F(KademliaTest, GroupMetaForgedSignatureRejected) {
         << "GROUP_META with forged signature should be rejected";
 }
 
-TEST_F(KademliaTest, GroupMetaAcceptedWithoutProfileAvailable) {
+TEST_F(KademliaTest, GroupMetaRejectedWithoutProfileAvailable) {
     auto& n1 = create_node(8);
     start_all();
 
@@ -3683,11 +3688,10 @@ TEST_F(KademliaTest, GroupMetaAcceptedWithoutProfileAvailable) {
     group_id.fill(0xCC);
     auto group_key = sha3_256_prefixed("group:", group_id);
 
-    // Valid GROUP_META — should be accepted even without profile
-    // (deferred validation, integrity sweep will verify later)
+    // Valid GROUP_META — should be rejected without owner profile
     auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
-    EXPECT_TRUE(n1.kad->store(group_key, 0x06, valid_meta))
-        << "GROUP_META should be accepted when owner profile is not available locally";
+    EXPECT_FALSE(n1.kad->store(group_key, 0x06, valid_meta))
+        << "GROUP_META should be rejected when owner profile is not available locally";
 }
 
 TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {

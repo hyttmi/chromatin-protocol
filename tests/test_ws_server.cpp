@@ -102,6 +102,30 @@ std::vector<uint8_t> build_group_meta(
     return meta;
 }
 
+// Build a minimal valid profile binary for testing.
+std::vector<uint8_t> build_profile(const chromatin::crypto::KeyPair& user_kp, uint64_t sequence = 1) {
+    auto user_fp = chromatin::crypto::sha3_256(user_kp.public_key);
+    std::vector<uint8_t> profile;
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());           // fingerprint(32)
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));           // pubkey_len(2 BE)
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    profile.push_back(0x00); profile.push_back(0x00);                         // kem_pubkey_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);                         // bio_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    profile.push_back(0x00); profile.push_back(0x00);                         // avatar_len = 0
+    profile.push_back(0x00);                                                   // social_count = 0
+    for (int i = 7; i >= 0; --i)                                              // sequence(8 BE)
+        profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    auto sig = chromatin::crypto::sign(profile, user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+    return profile;
+}
+
 std::string send_cmd(TestWsClient& client, const Json::Value& cmd, int timeout_ms = 3000) {
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
@@ -261,6 +285,19 @@ protected:
 
         auto ok = parse_json(*resp2);
         return ok["type"].asString() == "OK";
+    }
+
+    // Publish a profile for the given keypair via SET_PROFILE.
+    // Must be called after authenticate() and before GROUP_CREATE.
+    void publish_profile(TestWsClient& client, const crypto::KeyPair& kp) {
+        auto profile = build_profile(kp);
+        std::string msg = R"({"type":"SET_PROFILE","id":999,"profile":")" +
+                          to_base64(profile) + R"("})";
+        client.send_text(msg);
+        auto resp = client.recv_text(5000);
+        ASSERT_TRUE(resp.has_value()) << "no response to SET_PROFILE";
+        auto root = parse_json(*resp);
+        ASSERT_EQ(root["type"].asString(), "OK") << "SET_PROFILE failed: " << *resp;
     }
 
     void start_ws_server() {
@@ -2353,6 +2390,7 @@ TEST_F(WsServerTest, GroupCreateAndInfo) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, user_kp));
+    publish_profile(client, user_kp);
 
     // Build a random group_id
     crypto::Hash group_id{};
@@ -2403,6 +2441,7 @@ TEST_F(WsServerTest, GroupInfoNotMember) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     // Build group with only the owner
     crypto::Hash group_id{};
@@ -2450,6 +2489,7 @@ TEST_F(WsServerTest, GroupCreateDuplicate) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, user_kp));
+    publish_profile(client, user_kp);
 
     crypto::Hash group_id{};
     for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
@@ -2520,6 +2560,7 @@ TEST_F(WsServerTest, GroupSendAndList) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     // Create a group
     crypto::Hash group_id{};
@@ -2592,6 +2633,7 @@ TEST_F(WsServerTest, GroupSendNotMember) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     crypto::Hash group_id{};
     for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
@@ -2646,6 +2688,7 @@ TEST_F(WsServerTest, GroupListPagination) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     // Create a group
     crypto::Hash group_id{};
@@ -2735,6 +2778,7 @@ TEST_F(WsServerTest, GroupGetMessage) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     // Create a group
     crypto::Hash group_id{};
@@ -2809,6 +2853,7 @@ TEST_F(WsServerTest, GroupDeleteOwnMessage) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -2895,6 +2940,7 @@ TEST_F(WsServerTest, GroupDeleteByAdmin) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -2973,6 +3019,7 @@ TEST_F(WsServerTest, GroupDeleteForbidden) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3047,6 +3094,7 @@ TEST_F(WsServerTest, GroupUpdateAddMember) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3110,6 +3158,7 @@ TEST_F(WsServerTest, GroupUpdateVersionMustIncrease) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3156,6 +3205,7 @@ TEST_F(WsServerTest, GroupUpdateNonMemberRejected) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3212,6 +3262,7 @@ TEST_F(WsServerTest, GroupUpdateAdminCanAddMember) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3267,6 +3318,7 @@ TEST_F(WsServerTest, GroupUpdateAdminCannotChangeRoles) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3320,6 +3372,7 @@ TEST_F(WsServerTest, GroupDestroy) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3401,6 +3454,7 @@ TEST_F(WsServerTest, GroupDestroyNotOwner) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     Json::Value create_cmd;
     create_cmd["type"] = "GROUP_CREATE";
@@ -3463,6 +3517,7 @@ TEST_F(WsServerTest, GroupMessagePush) {
     TestWsClient owner_client;
     ASSERT_TRUE(owner_client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(owner_client, owner_kp));
+    publish_profile(owner_client, owner_kp);
 
     crypto::Hash group_id{};
     for (auto& b : group_id) b = static_cast<uint8_t>(rand() & 0xFF);
@@ -3549,6 +3604,7 @@ TEST_F(WsServerTest, GroupSendLargeBlob) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     // Create a group with owner as the sole member
     crypto::Hash group_id{};
@@ -3682,6 +3738,7 @@ TEST_F(WsServerTest, GroupGetSmallBlobInline) {
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
     ASSERT_TRUE(authenticate(client, owner_kp));
+    publish_profile(client, owner_kp);
 
     // Create a group
     crypto::Hash group_id{};

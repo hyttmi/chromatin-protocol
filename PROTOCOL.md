@@ -993,6 +993,16 @@ The following security properties are enforced by conforming implementations:
   subnet limits by claiming addresses in different subnets. Nodes behind
   the same NAT are limited to 3 per gateway (acceptable tradeoff vs.
   trusting self-reported addresses).
+- **GROUP_META version monotonicity:** GROUP_META STORE operations enforce
+  strictly increasing version numbers per group_id at the Kademlia layer,
+  preventing replay of older group metadata records.
+- **GROUP_META requires owner profile for signature verification:** GROUP_META
+  STORE is rejected if the owner's profile is not available locally. This
+  prevents storing unverifiable group metadata that could be crafted by an
+  attacker.
+- **Unknown data types rejected:** STORE operations with unrecognized
+  `data_type` values are rejected during validation, preventing storage of
+  data that cannot be verified.
 - **Empty-value STORE restricted to GROUP_META:** Empty-value STORE
   (deletion mechanism) is only accepted for data_type 0x06 (GROUP_META).
   All other data types reject empty-value STORE, preventing unauthorized

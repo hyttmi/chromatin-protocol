@@ -1109,7 +1109,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         case 0x04: valid = validate_allowlist_entry(value);  break;
         case 0x05: valid = validate_group_message(value);    break;
         case 0x06: valid = validate_group_meta(value, key);  break;
-        default: break;
+        default: valid = false; break;
         }
         if (!valid) {
             spdlog::warn("store_locally: validation failed for data_type 0x{:02X}", data_type);
@@ -2355,6 +2355,26 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return false;
     }
 
+    // Version monotonicity: reject if incoming version <= existing version
+    if (!skip_storage_lookup) {
+        uint32_t new_version = (static_cast<uint32_t>(value[64]) << 24)
+                             | (static_cast<uint32_t>(value[65]) << 16)
+                             | (static_cast<uint32_t>(value[66]) << 8)
+                             |  static_cast<uint32_t>(value[67]);
+
+        auto existing = storage_.get(storage::TABLE_GROUP_META, key);
+        if (existing && existing->size() >= 68) {
+            uint32_t existing_version = (static_cast<uint32_t>((*existing)[64]) << 24)
+                                      | (static_cast<uint32_t>((*existing)[65]) << 16)
+                                      | (static_cast<uint32_t>((*existing)[66]) << 8)
+                                      |  static_cast<uint32_t>((*existing)[67]);
+            if (new_version <= existing_version) {
+                spdlog::debug("Group meta rejected: version {} <= existing {}", new_version, existing_version);
+                return false;
+            }
+        }
+    }
+
     // Verify ML-DSA-87 signature using owner's pubkey from local profile store
     if (skip_storage_lookup) {
         // Called from within a foreach/scan callback — cannot nest read transactions.
@@ -2369,10 +2389,8 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
 
     auto profile_data = storage_.get(storage::TABLE_PROFILES, owner_profile_key);
     if (!profile_data || profile_data->empty()) {
-        // Owner profile not available locally — accept with warning.
-        // Integrity sweep will re-validate later when profile is synced.
-        spdlog::warn("Group meta validation: owner profile not found locally, deferring sig check");
-        return true;
+        spdlog::warn("Group meta validation: rejected — owner profile not found locally");
+        return false;
     }
 
     // Extract pubkey from profile: fingerprint(32) || pubkey_len(2 BE) || pubkey
