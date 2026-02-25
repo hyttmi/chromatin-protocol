@@ -815,9 +815,9 @@ Group metadata (data_type 0x06) is stored at routing key
 - ML-DSA-87 signature by a member with role >= 0x01 (Admin or Owner),
   identified by the `signer_fingerprint` field in the GROUP_META header
 
-Nodes verify the signature against the signer's profile before accepting a
-GROUP_META STORE. Version must be strictly greater than the currently stored
-version (replay prevention).
+GROUP_META is self-verifiable: the signer's ML-DSA-87 public key is embedded
+in the record and verified via SHA3-256(pubkey) == signer_fingerprint. Version
+must be strictly greater than the currently stored version (replay prevention).
 Concurrent updates are resolved by version number — lower version is rejected
 and the client retries with the latest version.
 
@@ -1025,10 +1025,9 @@ The following security properties are enforced by conforming implementations:
 - **GROUP_META version monotonicity:** GROUP_META STORE operations enforce
   strictly increasing version numbers per group_id at the Kademlia layer,
   preventing replay of older group metadata records.
-- **GROUP_META requires signer's profile for signature verification:** GROUP_META
-  STORE is rejected if the signer's profile is not available locally. This
-  prevents storing unverifiable group metadata that could be crafted by an
-  attacker.
+- **GROUP_META is self-verifiable:** GROUP_META embeds the signer's ML-DSA-87
+  public key. Nodes verify SHA3-256(pubkey) == signer_fingerprint and check
+  the ML-DSA-87 signature using the embedded key. No profile lookup required.
 - **Unknown data types rejected:** STORE operations with unrecognized
   `data_type` values are rejected during validation, preventing storage of
   data that cannot be verified.

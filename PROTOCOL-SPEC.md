@@ -768,13 +768,18 @@ For each member:
   [1568 bytes: kem_ciphertext]          // ML-KEM-1024 ciphertext for GEK wrapping
   [48 bytes: wrapped_gek]              // AES-256-GCM(wrap_key, zeros(12), gek, "chromatin:gek")
                                        // wrap_key = SHA3-256("chromatin:gek:wrap:" || KEM shared secret)
+[2 bytes BE: signer_pubkey_length]
+[signer_pubkey_length bytes: ML-DSA-87 public key]  // Self-verifiable: SHA3-256(pubkey) == signer_fingerprint
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature]
 ```
 
 The signature covers everything preceding `signature_length` (i.e., from
-`group_id` through the last member's `wrapped_gek`). Signed by the member
-identified by `signer_fingerprint`, who must have role >= 0x01 (Admin or Owner).
+`group_id` through the signer's public key). The embedded public key is
+verified via `SHA3-256(signer_pubkey) == signer_fingerprint`, making the
+record self-verifiable without requiring the signer's profile in local storage.
+Signed by the member identified by `signer_fingerprint`, who must have
+role >= 0x01 (Admin or Owner).
 For updates to existing groups, the signer is verified against the **existing**
 stored GROUP_META's member list. For creation, the signer is verified against
 the **new** meta's member list. Admins may sign GROUP_META updates for member
@@ -1578,10 +1583,10 @@ other data types MUST reject empty-value STORE with STORE_ACK reason 0x03.
 For non-empty STOREs (`value_length > 0`), all of the following must hold:
 
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
-2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin).
-   The signer's profile MUST be available in local storage for signature
-   verification. If the signer's profile is not found, the GROUP_META MUST
-   be rejected.
+2. ML-DSA-87 signature valid — signed by a member with role >= 0x01 (Admin or Owner).
+   The signer's public key is embedded in the GROUP_META record. Nodes verify
+   `SHA3-256(signer_pubkey) == signer_fingerprint` before checking the signature.
+   No profile lookup required — GROUP_META is self-verifiable.
 3. `version` > currently stored version for this group_id — reject replays
 4. At least one member must have role=0x02 (Owner)
 5. `member_count` >= 1 and <= 512
