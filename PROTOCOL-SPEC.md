@@ -533,6 +533,18 @@ These define the structure of values carried inside STORE and VALUE payloads.
 
 Storage key: `SHA3-256("profile:" || fingerprint)`
 
+**Profile sub-field limits:**
+
+| Field | Max size |
+|-------|----------|
+| bio | 2,048 bytes |
+| avatar | 262,144 bytes (256 KiB) |
+| social_links_count | 16 |
+| platform (per link) | 64 bytes |
+| handle (per link) | 128 bytes |
+
+These limits are enforced independently of the 1 MiB total profile size cap.
+
 ### Name Record (data_type 0x01)
 
 ```
@@ -1407,6 +1419,12 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 2. ML-DSA-87 signature valid over all fields preceding the signature
 3. `sequence` > currently stored sequence for this fingerprint — reject replays
 4. Total profile size <= 1 MiB (including avatar)
+5. Per-field limits:
+   - `bio_length` <= 2,048 bytes
+   - `avatar_length` <= 262,144 bytes (256 KiB)
+   - `social_links_count` <= 16
+   - Each `platform_length` <= 64 bytes
+   - Each `handle_length` <= 128 bytes
 
 ### Name Registration STORE Validation
 
@@ -1633,6 +1651,11 @@ deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
 | Contact request max drift  | 1 hour (3,600,000 ms)                  |
 | Name regex                 | `^[a-z0-9]{3,36}$`                     |
 | Max profile size           | 1 MiB                                  |
+| Max bio size               | 2,048 bytes                             |
+| Max avatar size            | 256 KiB (262,144 bytes)                 |
+| Max social links           | 16                                      |
+| Max social platform length | 64 bytes                                |
+| Max social handle length   | 128 bytes                               |
 | Max message blob           | 50 MiB                                 |
 | Inline threshold (WS)      | 64 KiB                                 |
 | Chunk size (WS binary)     | 1 MiB (1,048,576 bytes)                |
