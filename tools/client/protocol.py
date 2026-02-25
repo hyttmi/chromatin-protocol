@@ -227,6 +227,13 @@ class ChromatinClient:
             "group_meta": group_meta.hex(),
         }, timeout=30.0)
 
+    async def cmd_group_update(self, group_meta: bytes) -> dict:
+        mid = self._msg_id()
+        return await self.send_command({
+            "type": "GROUP_UPDATE", "id": mid,
+            "group_meta": group_meta.hex(),
+        }, timeout=30.0)
+
     async def cmd_group_info(self, group_id: str) -> dict:
         mid = self._msg_id()
         return await self.send_command({
