@@ -10,6 +10,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include "../version.h"
+
 namespace chromatin::kademlia {
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,7 @@ void Kademlia::tick() {
 
     // 9. Clean up stale FIND_NODE rate entries (older than 30 seconds)
     {
+        std::lock_guard lock(find_node_rate_mutex_);
         auto cutoff = now - std::chrono::seconds(30);
         for (auto it = find_node_rate_.begin(); it != find_node_rate_.end(); ) {
             if (it->second < cutoff) {
@@ -466,6 +469,92 @@ void Kademlia::transfer_responsibility() {
         }
     }
 
+    // Transfer group messages (TABLE_GROUP_INDEX + TABLE_GROUP_BLOBS) to newly-responsible nodes.
+    // Similar to inbox message transfer: reassemble the full store value from index + blob.
+    struct GroupMsgEntry {
+        crypto::Hash group_id;
+        crypto::Hash msg_id;
+        std::vector<uint8_t> index_value; // sender_fp(32) || timestamp(8) || size(4) || gek_version(4) = 48
+    };
+    std::vector<GroupMsgEntry> group_entries;
+
+    storage_.foreach(storage::TABLE_GROUP_INDEX,
+        [&](std::span<const uint8_t> key, std::span<const uint8_t> index_value) -> bool {
+            if (key.size() < 64) return true;
+            if (index_value.size() < 48) return true;
+
+            GroupMsgEntry entry;
+            std::copy_n(key.data(), 32, entry.group_id.begin());
+            std::copy_n(key.data() + 32, 32, entry.msg_id.begin());
+            entry.index_value.assign(index_value.begin(), index_value.end());
+            group_entries.push_back(std::move(entry));
+            return true;
+        });
+
+    for (const auto& entry : group_entries) {
+        auto gid_span = std::span<const uint8_t>(entry.group_id.data(), entry.group_id.size());
+        auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+        auto nodes = responsible_nodes(routing_key);
+
+        bool has_new_responsible = false;
+        for (const auto& node : nodes) {
+            if (node.id != self_.id && new_nodes.find(node.id) != new_nodes.end()) {
+                has_new_responsible = true;
+                break;
+            }
+        }
+        if (!has_new_responsible) continue;
+
+        // Look up blob
+        std::vector<uint8_t> composite_key;
+        composite_key.reserve(64);
+        composite_key.insert(composite_key.end(), entry.group_id.begin(), entry.group_id.end());
+        composite_key.insert(composite_key.end(), entry.msg_id.begin(), entry.msg_id.end());
+        auto blob = storage_.get(storage::TABLE_GROUP_BLOBS, composite_key);
+        if (!blob) continue;
+
+        // Reassemble store value:
+        // group_id(32) || sender_fp(32) || msg_id(32) || timestamp(8) || gek_version(4) || blob_len(4) || blob
+        std::vector<uint8_t> store_value;
+        store_value.reserve(112 + blob->size());
+        store_value.insert(store_value.end(), entry.group_id.begin(), entry.group_id.end());     // group_id(32)
+        store_value.insert(store_value.end(), entry.index_value.begin(), entry.index_value.begin() + 32); // sender_fp(32)
+        store_value.insert(store_value.end(), entry.msg_id.begin(), entry.msg_id.end());         // msg_id(32)
+        store_value.insert(store_value.end(), entry.index_value.begin() + 32, entry.index_value.begin() + 40); // timestamp(8)
+        store_value.insert(store_value.end(), entry.index_value.begin() + 44, entry.index_value.begin() + 48); // gek_version(4)
+        uint32_t blen = static_cast<uint32_t>(blob->size());
+        store_value.push_back(static_cast<uint8_t>((blen >> 24) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>((blen >> 16) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>((blen >> 8) & 0xFF));
+        store_value.push_back(static_cast<uint8_t>(blen & 0xFF));
+        store_value.insert(store_value.end(), blob->begin(), blob->end());
+
+        // Validate before sending
+        if (!validate_group_message(store_value)) {
+            spdlog::warn("transfer: skipping corrupt group message");
+            continue;
+        }
+
+        for (const auto& node : nodes) {
+            if (node.id == self_.id) continue;
+            if (new_nodes.find(node.id) == new_nodes.end()) continue;
+
+            std::vector<uint8_t> payload;
+            payload.insert(payload.end(), routing_key.begin(), routing_key.end());
+            payload.push_back(0x05);
+            uint32_t vlen = static_cast<uint32_t>(store_value.size());
+            payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+            payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+            payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+            payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+            payload.insert(payload.end(), store_value.begin(), store_value.end());
+
+            Message msg = make_message(MessageType::STORE, payload);
+            send_to_node(node, msg);
+            ++pushed;
+        }
+    }
+
     if (pushed > 0) {
         spdlog::info("Responsibility transfer: pushed {} entries to {} new node(s)",
                      pushed, new_nodes.size());
@@ -749,8 +838,8 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
     sender_info.address = existing ? existing->address : from;
     table_.add_or_update(sender_info);
 
-    // PONG payload: min_version(1) || max_version(1) || capabilities(4 BE)
-    std::vector<uint8_t> pong_payload(6);
+    // PONG payload: min_version(1) || max_version(1) || capabilities(4 BE) || app_major(1) || app_minor(1) || app_patch(1)
+    std::vector<uint8_t> pong_payload(9);
     pong_payload[0] = PROTOCOL_VERSION;  // min supported
     pong_payload[1] = PROTOCOL_VERSION;  // max supported
     uint32_t caps = static_cast<uint32_t>(Capability::GROUPS)
@@ -759,6 +848,9 @@ void Kademlia::handle_ping(const Message& msg, const std::string& from, uint16_t
     pong_payload[3] = static_cast<uint8_t>((caps >> 16) & 0xFF);
     pong_payload[4] = static_cast<uint8_t>((caps >> 8) & 0xFF);
     pong_payload[5] = static_cast<uint8_t>(caps & 0xFF);
+    pong_payload[6] = VERSION_MAJOR;
+    pong_payload[7] = VERSION_MINOR;
+    pong_payload[8] = VERSION_PATCH;
 
     Message reply = make_message(MessageType::PONG, pong_payload);
     transport_.send(from, port, reply);
@@ -778,22 +870,40 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
     auto existing = table_.find(msg.sender);
     sender_info.address = existing ? existing->address : from;
 
-    // Parse version/capability payload if present (6 bytes)
-    if (msg.payload.size() >= 6) {
-        sender_info.proto_version_min = msg.payload[0];
-        sender_info.proto_version_max = msg.payload[1];
-        sender_info.capabilities = (static_cast<uint32_t>(msg.payload[2]) << 24)
-                                 | (static_cast<uint32_t>(msg.payload[3]) << 16)
-                                 | (static_cast<uint32_t>(msg.payload[4]) << 8)
-                                 | static_cast<uint32_t>(msg.payload[5]);
+    if (msg.payload.size() < 9) {
+        spdlog::warn("PONG from {}:{}: payload too short ({} bytes), rejecting",
+                     from, port, msg.payload.size());
+        return;
+    }
+    sender_info.proto_version_min = msg.payload[0];
+    sender_info.proto_version_max = msg.payload[1];
+    sender_info.capabilities = (static_cast<uint32_t>(msg.payload[2]) << 24)
+                             | (static_cast<uint32_t>(msg.payload[3]) << 16)
+                             | (static_cast<uint32_t>(msg.payload[4]) << 8)
+                             |  static_cast<uint32_t>(msg.payload[5]);
+    sender_info.app_version_major = msg.payload[6];
+    sender_info.app_version_minor = msg.payload[7];
+    sender_info.app_version_patch = msg.payload[8];
 
-        // Warn if peer's version range doesn't include our version
-        if (PROTOCOL_VERSION < sender_info.proto_version_min ||
-            PROTOCOL_VERSION > sender_info.proto_version_max) {
-            spdlog::warn("PONG from {}:{}: version mismatch (peer supports {}-{}, we are {})",
-                         from, port, sender_info.proto_version_min,
-                         sender_info.proto_version_max, PROTOCOL_VERSION);
-        }
+    if (PROTOCOL_VERSION < sender_info.proto_version_min ||
+        PROTOCOL_VERSION > sender_info.proto_version_max) {
+        spdlog::warn("PONG from {}:{}: wire version mismatch (peer {}-{}, ours {}), rejecting",
+                     from, port, sender_info.proto_version_min,
+                     sender_info.proto_version_max, PROTOCOL_VERSION);
+        table_.remove(sender_info.id);
+        return;
+    }
+
+    if (sender_info.app_version_major != VERSION_MAJOR ||
+        sender_info.app_version_minor != VERSION_MINOR ||
+        sender_info.app_version_patch != VERSION_PATCH) {
+        spdlog::warn("PONG from {}:{}: app version mismatch (peer={}.{}.{}, ours={}.{}.{}), rejecting",
+                     from, port,
+                     sender_info.app_version_major, sender_info.app_version_minor,
+                     sender_info.app_version_patch,
+                     VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
+        table_.remove(sender_info.id);
+        return;
     }
 
     table_.add_or_update(sender_info);
@@ -806,6 +916,7 @@ void Kademlia::handle_pong(const Message& msg, const std::string& from, uint16_t
 void Kademlia::handle_find_node(const Message& msg, const std::string& from, uint16_t port) {
     // Rate limit: max 1 FIND_NODE per second per sender
     {
+        std::lock_guard lock(find_node_rate_mutex_);
         auto key = from + ":" + std::to_string(port);
         auto now = std::chrono::steady_clock::now();
         auto it = find_node_rate_.find(key);
@@ -1325,6 +1436,28 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
         // Only GROUP_META (0x06) supports empty-value delete (GROUP_DESTROY).
         // All other data types must use the replication/sync path for deletes.
         if (data_type == 0x06) {
+            // Authorization: only responsible peers may propagate GROUP_META deletes
+            bool sender_is_responsible = false;
+            {
+                auto responsible = responsible_nodes(key);
+                for (const auto& rn : responsible) {
+                    if (rn.id == msg.sender) {
+                        sender_is_responsible = true;
+                        break;
+                    }
+                }
+            }
+            if (!sender_is_responsible) {
+                spdlog::warn("STORE rejected: empty-value GROUP_META delete from non-responsible peer {}:{}", from, port);
+                std::vector<uint8_t> ack_payload;
+                ack_payload.insert(ack_payload.end(), key.begin(), key.end());
+                ack_payload.push_back(0x01); // rejected
+                ack_payload.push_back(0x03); // reason: unauthorized
+                Message ack = make_message(MessageType::STORE_ACK, ack_payload);
+                transport_.send(from, port, ack);
+                return;
+            }
+
             storage_.del(storage::TABLE_GROUP_META, key);
             repl_log_.append(key, replication::Op::DEL, data_type,
                              std::vector<uint8_t>(key.begin(), key.end()));
@@ -2289,18 +2422,19 @@ bool Kademlia::validate_group_message(std::span<const uint8_t> value) {
 // ---------------------------------------------------------------------------
 
 bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key, bool skip_storage_lookup) {
-    // Format: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    // Format: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
     //         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
     //         sig_len(2 BE) || ML-DSA-87 signature
-    // Minimum header: 32 + 32 + 4 + 2 = 70 bytes
-    if (value.size() < 70) {
+    // Minimum header: 32 + 32 + 32 + 4 + 2 = 102 bytes
+    constexpr size_t HEADER_SIZE = 102;
+    if (value.size() < HEADER_SIZE) {
         spdlog::warn("Group meta validation: too short ({} bytes)", value.size());
         return false;
     }
 
-    // Parse member_count
-    uint16_t member_count = (static_cast<uint16_t>(value[68]) << 8)
-                          | static_cast<uint16_t>(value[69]);
+    // Parse member_count at offset 100
+    uint16_t member_count = (static_cast<uint16_t>(value[100]) << 8)
+                          | static_cast<uint16_t>(value[101]);
 
     if (member_count == 0 || member_count > 512) {
         spdlog::warn("Group meta validation: invalid member_count {}", member_count);
@@ -2309,7 +2443,7 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
 
     // Per-member entry size: fingerprint(32) + role(1) + kem_ciphertext(1568) = 1601
     constexpr size_t MEMBER_ENTRY_SIZE = 1601;
-    size_t members_end = 70 + static_cast<size_t>(member_count) * MEMBER_ENTRY_SIZE;
+    size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_ENTRY_SIZE;
 
     // Need at least members_end + sig_len(2)
     if (value.size() < members_end + 2) {
@@ -2330,7 +2464,7 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     // Verify at least one member has role=0x02 (owner)
     bool has_owner = false;
     for (uint16_t i = 0; i < member_count; ++i) {
-        size_t entry_offset = 70 + static_cast<size_t>(i) * MEMBER_ENTRY_SIZE;
+        size_t entry_offset = HEADER_SIZE + static_cast<size_t>(i) * MEMBER_ENTRY_SIZE;
         uint8_t role = value[entry_offset + 32]; // role byte after fingerprint
         if (role == 0x02) {
             has_owner = true;
@@ -2355,41 +2489,78 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return false;
     }
 
+    // Parse signer_fp (bytes 64-95)
+    crypto::Hash signer_fp{};
+    std::copy_n(value.data() + 64, 32, signer_fp.begin());
+
     // Version monotonicity: reject if incoming version <= existing version
+    // Also verify signer authorization against EXISTING meta's member list
     if (!skip_storage_lookup) {
-        uint32_t new_version = (static_cast<uint32_t>(value[64]) << 24)
-                             | (static_cast<uint32_t>(value[65]) << 16)
-                             | (static_cast<uint32_t>(value[66]) << 8)
-                             |  static_cast<uint32_t>(value[67]);
+        uint32_t new_version = (static_cast<uint32_t>(value[96]) << 24)
+                             | (static_cast<uint32_t>(value[97]) << 16)
+                             | (static_cast<uint32_t>(value[98]) << 8)
+                             |  static_cast<uint32_t>(value[99]);
 
         auto existing = storage_.get(storage::TABLE_GROUP_META, key);
-        if (existing && existing->size() >= 68) {
-            uint32_t existing_version = (static_cast<uint32_t>((*existing)[64]) << 24)
-                                      | (static_cast<uint32_t>((*existing)[65]) << 16)
-                                      | (static_cast<uint32_t>((*existing)[66]) << 8)
-                                      |  static_cast<uint32_t>((*existing)[67]);
+        if (existing && existing->size() >= HEADER_SIZE) {
+            uint32_t existing_version = (static_cast<uint32_t>((*existing)[96]) << 24)
+                                      | (static_cast<uint32_t>((*existing)[97]) << 16)
+                                      | (static_cast<uint32_t>((*existing)[98]) << 8)
+                                      |  static_cast<uint32_t>((*existing)[99]);
             if (new_version <= existing_version) {
                 spdlog::debug("Group meta rejected: version {} <= existing {}", new_version, existing_version);
+                return false;
+            }
+
+            // Verify signer has role >= 0x01 (admin/owner) in EXISTING meta's member list
+            uint16_t existing_mc = (static_cast<uint16_t>((*existing)[100]) << 8)
+                                 | static_cast<uint16_t>((*existing)[101]);
+            bool signer_authorized = false;
+            for (uint16_t i = 0; i < existing_mc; ++i) {
+                size_t eo = HEADER_SIZE + static_cast<size_t>(i) * MEMBER_ENTRY_SIZE;
+                if (eo + 33 > existing->size()) break;
+                crypto::Hash member_fp{};
+                std::copy_n(existing->data() + eo, 32, member_fp.begin());
+                if (member_fp == signer_fp && (*existing)[eo + 32] >= 0x01) {
+                    signer_authorized = true;
+                    break;
+                }
+            }
+            if (!signer_authorized) {
+                spdlog::warn("Group meta validation: signer not admin/owner in existing meta");
+                return false;
+            }
+        } else {
+            // No existing meta (creation): verify signer has role >= 0x01 in NEW meta
+            bool signer_in_new = false;
+            for (uint16_t i = 0; i < member_count; ++i) {
+                size_t eo = HEADER_SIZE + static_cast<size_t>(i) * MEMBER_ENTRY_SIZE;
+                crypto::Hash member_fp{};
+                std::copy_n(value.data() + eo, 32, member_fp.begin());
+                if (member_fp == signer_fp && value[eo + 32] >= 0x01) {
+                    signer_in_new = true;
+                    break;
+                }
+            }
+            if (!signer_in_new) {
+                spdlog::warn("Group meta validation: signer not admin/owner in new meta (creation)");
                 return false;
             }
         }
     }
 
-    // Verify ML-DSA-87 signature using owner's pubkey from local profile store
+    // Verify ML-DSA-87 signature using signer's pubkey from local profile store
     if (skip_storage_lookup) {
         // Called from within a foreach/scan callback — cannot nest read transactions.
         // Integrity sweep will re-validate later.
         return true;
     }
 
-    std::span<const uint8_t> owner_fp_span(value.data() + 32, 32);
-    crypto::Hash ofp{};
-    std::copy_n(owner_fp_span.data(), 32, ofp.begin());
-    auto owner_profile_key = crypto::sha3_256_prefixed("profile:", ofp);
+    auto signer_profile_key = crypto::sha3_256_prefixed("profile:", signer_fp);
 
-    auto profile_data = storage_.get(storage::TABLE_PROFILES, owner_profile_key);
+    auto profile_data = storage_.get(storage::TABLE_PROFILES, signer_profile_key);
     if (!profile_data || profile_data->empty()) {
-        spdlog::warn("Group meta validation: rejected — owner profile not found locally");
+        spdlog::warn("Group meta validation: rejected — signer profile not found locally");
         return false;
     }
 
@@ -2397,12 +2568,12 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     if (profile_data->size() < 34) return false;
     uint16_t pk_len = (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33];
     if (profile_data->size() < 34u + pk_len) return false;
-    std::span<const uint8_t> owner_pubkey(profile_data->data() + 34, pk_len);
+    std::span<const uint8_t> signer_pubkey(profile_data->data() + 34, pk_len);
 
-    // Verify owner pubkey hashes to owner_fp
-    auto computed_owner_fp = crypto::sha3_256(owner_pubkey);
-    if (computed_owner_fp != ofp) {
-        spdlog::warn("Group meta validation: stored profile pubkey doesn't match owner_fp");
+    // Verify signer pubkey hashes to signer_fp
+    auto computed_signer_fp = crypto::sha3_256(signer_pubkey);
+    if (computed_signer_fp != signer_fp) {
+        spdlog::warn("Group meta validation: stored profile pubkey doesn't match signer_fp");
         return false;
     }
 
@@ -2410,7 +2581,7 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     std::span<const uint8_t> signed_data_span(value.data(), members_end);
     std::span<const uint8_t> signature(value.data() + members_end + 2, sig_len);
 
-    if (!crypto::verify(signed_data_span, signature, owner_pubkey)) {
+    if (!crypto::verify(signed_data_span, signature, signer_pubkey)) {
         spdlog::warn("Group meta validation: signature verification failed");
         return false;
     }
@@ -2548,11 +2719,30 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
         spdlog::debug("SYNC_RESP: filtered DEL entries from non-responsible peer {}:{}", from, port);
     }
 
-    // Apply entries to replication log (idempotent)
-    repl_log_.apply(key, entries);
-
-    // Route entries to the correct storage table using data_type and op.
+    // Validate ADD entries before applying to repl_log to prevent invalid
+    // entries from persisting and propagating via SYNC.
+    std::vector<replication::LogEntry> valid_entries;
+    valid_entries.reserve(entries.size());
     for (const auto& entry : entries) {
+        if (entry.op == replication::Op::ADD && !entry.data.empty()) {
+            if (store_locally(key, entry.data_type, entry.data,
+                              /*validate=*/true, /*log_and_notify=*/false)) {
+                valid_entries.push_back(entry);
+            } else {
+                spdlog::debug("SYNC_RESP: rejected invalid ADD entry (data_type=0x{:02X}) from {}:{}",
+                              entry.data_type, from, port);
+            }
+        } else {
+            valid_entries.push_back(entry);  // DEL entries already authorized above
+        }
+    }
+
+    // Apply only validated entries to replication log (idempotent)
+    repl_log_.apply(key, valid_entries);
+
+    // Route DEL entries to the correct storage table.
+    // ADD entries were already stored by store_locally() above.
+    for (const auto& entry : valid_entries) {
         if (entry.op == replication::Op::DEL) {
             if (entry.data_type == 0x02 && entry.data.size() >= 64) {
                 // Inbox delete: delete_info = recipient_fp(32) || msg_id(32)
@@ -2603,12 +2793,7 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
             continue;
         }
 
-        if (entry.op == replication::Op::ADD && !entry.data.empty()) {
-            // Validate and store locally; skip repl_log append and on_store_
-            // callback since repl_log_.apply() already handled the log above.
-            store_locally(key, entry.data_type, entry.data,
-                          /*validate=*/true, /*log_and_notify=*/false);
-        }
+        // ADD entries were already validated and stored above (before repl_log apply)
     }
 
     spdlog::info("Applied {} SYNC entries for key from {}:{}", entries.size(), from, port);

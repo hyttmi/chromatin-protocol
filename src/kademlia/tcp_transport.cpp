@@ -492,6 +492,10 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
     }
 
     uint16_t ct_len = (static_cast<uint16_t>(accept_header[34]) << 8) | accept_header[35];
+    if (ct_len > 2048) {
+        spdlog::debug("Encryption handshake: ct_len {} exceeds max from {}", ct_len, pool_key);
+        return false;
+    }
 
     // Read ct + accept_random(32)
     std::vector<uint8_t> ct_and_random(ct_len + 32);
@@ -507,6 +511,10 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
         return false;
     }
     uint16_t sig_pk_len = (static_cast<uint16_t>(sig_pk_len_buf[0]) << 8) | sig_pk_len_buf[1];
+    if (sig_pk_len > 4096) {
+        spdlog::debug("Encryption handshake: sig_pk_len {} exceeds max from {}", sig_pk_len, pool_key);
+        return false;
+    }
 
     // Read signing_pk + sig_len(2)
     std::vector<uint8_t> sig_pk_and_sig_len(sig_pk_len + 2);
@@ -517,6 +525,10 @@ bool TcpTransport::perform_initiator_handshake(int fd, const std::string& pool_k
 
     uint16_t sig_len = (static_cast<uint16_t>(sig_pk_and_sig_len[sig_pk_len]) << 8) |
                         sig_pk_and_sig_len[sig_pk_len + 1];
+    if (sig_len > 8192) {
+        spdlog::debug("Encryption handshake: sig_len {} exceeds max from {}", sig_len, pool_key);
+        return false;
+    }
 
     // Read signature
     std::vector<uint8_t> sig(sig_len);
@@ -790,6 +802,13 @@ void TcpTransport::run(Handler handler) {
                 }
 
                 uint16_t pk_len = (static_cast<uint16_t>(hello_prefix[35]) << 8) | hello_prefix[36];
+                if (pk_len > 2048) {
+                    spdlog::debug("TCP encryption: pk_len {} exceeds max from fd={}", pk_len, client_fd);
+                    close(client_fd);
+                    fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                    client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
 
                 // Read pk + random(32)
                 std::vector<uint8_t> hello_rest(pk_len + 32);
@@ -810,6 +829,13 @@ void TcpTransport::run(Handler handler) {
                 }
                 uint16_t sig_pk_len = (static_cast<uint16_t>(sig_pk_len_buf[0]) << 8) |
                                        sig_pk_len_buf[1];
+                if (sig_pk_len > 4096) {
+                    spdlog::debug("TCP encryption: sig_pk_len {} exceeds max from fd={}", sig_pk_len, client_fd);
+                    close(client_fd);
+                    fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                    client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
 
                 // Read signing_pk
                 std::vector<uint8_t> signing_pk(sig_pk_len);
@@ -859,6 +885,13 @@ void TcpTransport::run(Handler handler) {
                     continue;
                 }
                 uint16_t sig_len = (static_cast<uint16_t>(confirm_header[0]) << 8) | confirm_header[1];
+                if (sig_len > 8192) {
+                    spdlog::debug("TCP encryption: confirm sig_len {} exceeds max from fd={}", sig_len, client_fd);
+                    close(client_fd);
+                    fds.erase(fds.begin() + static_cast<ptrdiff_t>(i));
+                    client_addrs.erase(client_addrs.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
                 std::vector<uint8_t> confirm_bytes(2 + sig_len);
                 confirm_bytes[0] = confirm_header[0];
                 confirm_bytes[1] = confirm_header[1];

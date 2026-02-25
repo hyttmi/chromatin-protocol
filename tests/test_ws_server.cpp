@@ -62,7 +62,7 @@ Json::Value parse_json(const std::string& s) {
 
 // Build a valid GROUP_META binary for testing.
 // members: vector of (fingerprint, role) pairs.
-// signer_kp: keypair that signs the meta (should be an owner in the list).
+// signer_kp: keypair that signs the meta (should be an admin/owner in the list).
 std::vector<uint8_t> build_group_meta(
     const chromatin::crypto::Hash& group_id,
     uint32_t version,
@@ -78,6 +78,9 @@ std::vector<uint8_t> build_group_meta(
         if (role == 0x02) { owner_fp = fp; break; }
     }
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    // signer_fp(32)
+    auto signer_fp = chromatin::crypto::sha3_256(signer_kp.public_key);
+    meta.insert(meta.end(), signer_fp.begin(), signer_fp.end());
     // version(4 BE)
     meta.push_back((version >> 24) & 0xFF);
     meta.push_back((version >> 16) & 0xFF);
@@ -3134,10 +3137,10 @@ TEST_F(WsServerTest, GroupUpdateAddMember) {
     // Parse the returned group_meta to verify 2 members
     auto returned_hex = info_resp["group_meta"].asString();
     auto returned_bytes = from_hex(returned_hex);
-    ASSERT_GE(returned_bytes.size(), 70u);
-    // member_count at offset 68-69 (BE)
-    uint16_t member_count = (static_cast<uint16_t>(returned_bytes[68]) << 8) |
-                             static_cast<uint16_t>(returned_bytes[69]);
+    ASSERT_GE(returned_bytes.size(), 102u);
+    // member_count at offset 100-101 (BE) — after group_id(32) + owner_fp(32) + signer_fp(32) + version(4)
+    uint16_t member_count = (static_cast<uint16_t>(returned_bytes[100]) << 8) |
+                             static_cast<uint16_t>(returned_bytes[101]);
     EXPECT_EQ(member_count, 2u);
 
     client.close();

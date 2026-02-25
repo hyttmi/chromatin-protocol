@@ -3209,7 +3209,7 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     start_all();
 
     // Build valid GROUP_META:
-    // group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    // group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
     // per-member[fp(32) + role(1) + kem_ciphertext(1568)] || sig_len(2 BE) || signature
     auto owner_kp = generate_keypair();
     Hash owner_fp = sha3_256(owner_kp.public_key);
@@ -3225,6 +3225,7 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());       // group_id(32)
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // owner_fp(32)
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // signer_fp(32) = owner
     // version = 1 (4 BE)
     meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
     // member_count = 1 (2 BE)
@@ -3264,6 +3265,7 @@ TEST_F(KademliaTest, GroupMetaValidation_ZeroMembers) {
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // signer_fp(32)
     meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);  // version
     meta.push_back(0); meta.push_back(0);  // member_count = 0
     // sig_len + dummy sig
@@ -3287,6 +3289,7 @@ TEST_F(KademliaTest, GroupMetaValidation_NoOwner) {
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());
     meta.insert(meta.end(), member_fp.begin(), member_fp.end());  // owner_fp field
+    meta.insert(meta.end(), member_fp.begin(), member_fp.end());  // signer_fp(32)
     meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
     meta.push_back(0); meta.push_back(1);  // 1 member
     meta.insert(meta.end(), member_fp.begin(), member_fp.end());
@@ -3314,6 +3317,7 @@ TEST_F(KademliaTest, GroupMetaValidation_WrongKey) {
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // signer_fp(32)
     meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
     meta.push_back(0); meta.push_back(1);
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
@@ -3608,7 +3612,7 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsProfiles) {
 }
 
 // Build a valid GROUP_META binary blob for testing.
-// Format: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+// Format: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
 //         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
 //         sig_len(2 BE) || ML-DSA-87 signature
 static std::vector<uint8_t> build_group_meta_binary(
@@ -3626,6 +3630,9 @@ static std::vector<uint8_t> build_group_meta_binary(
         if (role == 0x02) { owner_fp = fp; break; }
     }
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    // signer_fp(32)
+    auto signer_fp = sha3_256(signer_kp.public_key);
+    meta.insert(meta.end(), signer_fp.begin(), signer_fp.end());
     // version(4 BE)
     meta.push_back((version >> 24) & 0xFF);
     meta.push_back((version >> 16) & 0xFF);
@@ -3706,12 +3713,13 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     group_id.fill(0xAA);
     Hash routing_key = sha3_256_prefixed("group:", group_id);
 
-    // Build group meta: group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE)
+    // Build group meta: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE)
     //   || member: fp(32) + role(1) + kem_ciphertext(1568)
     //   || sig_len(2 BE) || signature
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
+    meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // signer_fp(32) = owner
     // version = 1
     meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x01);
     // member_count = 1

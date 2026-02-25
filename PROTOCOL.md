@@ -650,7 +650,7 @@ This ensures allowlist checks during message delivery are always local lookups.
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
 - Allowlist routing key: `SHA3-256("inbox:" || fingerprint)` (same as inbox)
 - Local mdbx key: `allowlist_key(32) || allowed_fp(32)` — O(1) lookup for SEND validation
-- REVOKE is replicated as `Op::DEL` in the replication log (not `Op::ADD`)
+- REVOKE is stored as a record and replicated as `Op::ADD` (the revoke entry is stored, not deleted, preserving the allowlist-exists flag)
 - Replicated with the same seq-based mechanism
 - Race condition: server does best-effort enforcement; client maintains authoritative
   allowlist locally and discards messages from revoked contacts

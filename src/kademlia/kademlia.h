@@ -188,6 +188,7 @@ private:
     std::unordered_set<NodeId, NodeIdHash> prev_routing_nodes_;  // for transfer dedup
 
     // FIND_NODE rate limiting: "addr:port" -> last request time
+    std::mutex find_node_rate_mutex_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> find_node_rate_;
 
     // Pending STORE quorum tracking (key -> status)

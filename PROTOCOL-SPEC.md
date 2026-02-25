@@ -653,6 +653,11 @@ for self-contained signature verification and composite key construction):
 [SIGNATURE_SIZE bytes: ML-DSA-87 signature]
 ```
 
+> **Note:** Unlike other signed data types which use length-prefixed signatures
+> (`sig_len(2 BE) || signature`), allowlist entries use a fixed `SIGNATURE_SIZE`
+> (4627 bytes) field. The signature is zero-padded if shorter than
+> `SIGNATURE_SIZE`.
+
 The public key is embedded so that any node can verify the signature without
 needing the owner's profile. Validators verify that
 `owner_fingerprint == SHA3-256(pubkey)` before checking the signature.
@@ -733,6 +738,7 @@ the Group Encryption Key (GEK) to each member via ML-KEM-1024 encapsulation.
 ```
 [32 bytes: group_id]                    // SHA3-256 of group creation record
 [32 bytes: owner_fingerprint]           // Original creator (informational after multi-owner)
+[32 bytes: signer_fingerprint]          // Identity that signed this update
 [4 bytes BE: version]                   // Monotonic, incremented on any change
 [2 bytes BE: member_count]              // Number of members (1-512)
 For each member:
@@ -744,9 +750,12 @@ For each member:
 ```
 
 The signature covers everything preceding `signature_length` (i.e., from
-`group_id` through the last member's `kem_ciphertext`). Signed by any member
-with role >= 0x01 (Admin or Owner). Admins may sign GROUP_META updates for
-member additions/removals of regular members. Owners may sign any update.
+`group_id` through the last member's `kem_ciphertext`). Signed by the member
+identified by `signer_fingerprint`, who must have role >= 0x01 (Admin or Owner).
+For updates to existing groups, the signer is verified against the **existing**
+stored GROUP_META's member list. For creation, the signer is verified against
+the **new** meta's member list. Admins may sign GROUP_META updates for member
+additions/removals of regular members. Owners may sign any update.
 
 **Member roles:**
 
@@ -827,10 +836,13 @@ The node verifies:
    respond with REDIRECT (see below) and close the connection
 2. `fingerprint == SHA3-256(pubkey)`
 3. ML-DSA-87 signature over `"chromatin-auth:" || node_fingerprint || nonce`
-   (79 bytes) is valid. The domain prefix prevents cross-protocol signature
-   replay attacks. The node's fingerprint (SHA3-256 of its ML-DSA-87 public
-   key) is included in the signed data to prevent cross-node challenge relay
-   attacks.
+   (79 bytes) is valid. The signature is computed over the binary
+   concatenation: the 15-byte ASCII prefix `chromatin-auth:`, followed by the
+   32-byte raw node fingerprint, followed by the 32-byte raw nonce. All values
+   are raw bytes, not hex-encoded. The domain prefix prevents cross-protocol
+   signature replay attacks. The node's fingerprint (SHA3-256 of its ML-DSA-87
+   public key) is included in the signed data to prevent cross-node challenge
+   relay attacks.
 
 A client MUST NOT send HELLO after successful authentication. The server
 MUST reject HELLO from authenticated sessions with error 400.
@@ -1279,16 +1291,13 @@ connection multiplication. Different commands consume different token costs:
 
 | Command          | Cost |
 |------------------|------|
-| SEND             | 2    |
-| CONTACT_REQUEST  | 3    |
-| SET_PROFILE / REGISTER_NAME | 2 |
-| GROUP_CREATE / GROUP_UPDATE / GROUP_DESTROY | 2 |
-| GROUP_SEND       | 2    |
+| SEND / GROUP_SEND / SET_PROFILE / GROUP_UPDATE | 2    |
+| CONTACT_REQUEST / GROUP_CREATE / GROUP_DESTROY / REGISTER_NAME | 3 |
 | LIST / GET / DELETE / ALLOW / REVOKE | 1 |
 | GROUP_LIST / GROUP_GET / GROUP_DELETE / GROUP_INFO | 1 |
 | RESOLVE_NAME / GET_PROFILE / LIST_REQUESTS | 1 |
-| EVENT            | 0.5  |
 | HELLO / AUTH     | 1    |
+| EVENT            | 0.5  |
 | STATUS           | 0    |
 
 When a client exceeds the rate limit, the node responds with error code 429.
@@ -1745,4 +1754,4 @@ The protocol is designed for future extension:
 - **Protocol version:** The version byte in the TCP header allows breaking
   changes. Nodes reject unknown versions, and implementations can support
   multiple versions simultaneously.
-- **Message types:** Values 0x0C-0xFF are reserved for future TCP message types.
+- **Message types:** Values 0x0D-0xFF are reserved for future TCP message types.

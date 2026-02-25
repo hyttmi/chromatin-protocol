@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -138,7 +139,9 @@ private:
     std::unordered_map<crypto::Hash, RateLimiter, crypto::HashHash> fp_rate_limiters_;
 
     // Group metadata cache for ACL checks (uWS thread only)
+    static constexpr size_t GROUP_META_CACHE_MAX = 10000;
     std::unordered_map<crypto::Hash, GroupMeta, crypto::HashHash> group_meta_cache_;
+    std::deque<crypto::Hash> group_meta_cache_order_;  // insertion order for eviction
 
     // Parse raw GROUP_META binary into GroupMeta struct.
     std::optional<GroupMeta> parse_group_meta(std::span<const uint8_t> data);

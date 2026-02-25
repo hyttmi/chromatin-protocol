@@ -106,6 +106,7 @@ KeyPair generate_keypair() {
 
 std::vector<uint8_t> sign(std::span<const uint8_t> message,
                           std::span<const uint8_t> secret_key) {
+    if (secret_key.size() != SECRET_KEY_SIZE) return {};
     auto sig = make_sig();
 
     std::vector<uint8_t> signature(sig->length_signature);
@@ -125,6 +126,7 @@ std::vector<uint8_t> sign(std::span<const uint8_t> message,
 bool verify(std::span<const uint8_t> message,
             std::span<const uint8_t> signature,
             std::span<const uint8_t> public_key) {
+    if (public_key.size() != PUBLIC_KEY_SIZE) return false;
     auto sig = make_sig();
 
     return OQS_SIG_verify(sig.get(),

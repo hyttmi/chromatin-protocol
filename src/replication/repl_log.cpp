@@ -61,7 +61,9 @@ LogEntry deserialize_entry(std::span<const uint8_t> data) {
     offset += 8;
 
     // op (1 byte)
-    entry.op = static_cast<Op>(data[offset]);
+    uint8_t op_raw = data[offset];
+    if (op_raw > 0x02) throw std::runtime_error("invalid op byte");
+    entry.op = static_cast<Op>(op_raw);
     offset += 1;
 
     // timestamp (8 bytes BE)
@@ -165,6 +167,7 @@ std::vector<LogEntry> ReplLog::entries_after(const crypto::Hash& key, uint64_t a
 }
 
 void ReplLog::apply(const crypto::Hash& key, const std::vector<LogEntry>& entries) {
+    std::lock_guard lock(append_mutex_);
     for (const auto& entry : entries) {
         auto composite_key = make_composite_key(key, entry.seq);
 
@@ -205,6 +208,7 @@ uint64_t ReplLog::current_seq(const crypto::Hash& key) const {
 }
 
 void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq) {
+    std::lock_guard lock(append_mutex_);
     // Collect keys to delete first, then delete them
     std::vector<std::vector<uint8_t>> to_delete;
     std::vector<uint8_t> prefix(key.begin(), key.end());
@@ -233,6 +237,7 @@ void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq) {
 }
 
 void ReplLog::compact(const crypto::Hash& key, uint64_t before_seq, uint64_t before_timestamp_ms) {
+    std::lock_guard lock(append_mutex_);
     std::vector<std::vector<uint8_t>> to_delete;
     std::vector<uint8_t> prefix(key.begin(), key.end());
 

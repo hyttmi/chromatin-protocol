@@ -696,6 +696,12 @@ void WsServer<SSL>::handle_auth(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
+    // Prevent re-authentication (replay protection)
+    if (session->authenticated) {
+        send_error(ws, id, 400, "already authenticated");
+        return;
+    }
+
     // Must have received HELLO first (nonce must be set)
     bool nonce_empty = true;
     for (auto b : session->challenge_nonce) {
@@ -807,10 +813,7 @@ void WsServer<SSL>::handle_list(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
-    // INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
-    // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
-
-    // Pagination: limit (default 50, max 200), after (msg_id hex to skip past)
+    // Parse pagination params on uWS thread (lightweight)
     int limit = msg.get("limit", 50).asInt();
     if (limit <= 0) limit = 50;
     if (limit > 200) limit = 200;
@@ -821,86 +824,94 @@ void WsServer<SSL>::handle_list(ws_t* ws, const Json::Value& msg) {
         auto parsed = from_hex(after_hex);
         if (parsed) after_id = std::move(*parsed);
     }
-    bool skip_until_after = !after_id.empty();
 
-    // Collect index entries (scan holds a read txn, can't nest another).
-    struct IndexEntry {
-        std::vector<uint8_t> msg_id;
-        std::string from_hex;
-        uint64_t timestamp;
-        uint32_t size;
-    };
-    std::vector<IndexEntry> entries;
-    bool has_more = false;
+    auto fp = session->fingerprint;
 
-    storage_.scan(storage::TABLE_INBOX_INDEX, session->fingerprint,
-                  [&](std::span<const uint8_t> key,
-                      std::span<const uint8_t> value) -> bool {
-        if (key.size() != 64) return true;
-        if (value.size() != 44) return true;
+    // Dispatch storage operations to worker pool
+    if (!workers_.post([this, ws, id, fp, limit, after_id = std::move(after_id)]() {
+        bool skip_until_after = !after_id.empty();
 
-        auto msg_id_span = key.subspan(32, 32);
+        struct IndexEntry {
+            std::vector<uint8_t> msg_id;
+            std::string from_hex;
+            uint64_t timestamp;
+            uint32_t size;
+        };
+        std::vector<IndexEntry> entries;
+        bool has_more = false;
 
-        // Skip entries until we pass the "after" cursor
-        if (skip_until_after) {
-            if (std::equal(msg_id_span.begin(), msg_id_span.end(), after_id.begin())) {
-                skip_until_after = false;
+        storage_.scan(storage::TABLE_INBOX_INDEX, fp,
+                      [&](std::span<const uint8_t> key,
+                          std::span<const uint8_t> value) -> bool {
+            if (key.size() != 64) return true;
+            if (value.size() != 44) return true;
+
+            auto msg_id_span = key.subspan(32, 32);
+
+            if (skip_until_after) {
+                if (std::equal(msg_id_span.begin(), msg_id_span.end(), after_id.begin())) {
+                    skip_until_after = false;
+                }
+                return true;
             }
+
+            if (static_cast<int>(entries.size()) >= limit) {
+                has_more = true;
+                return false;
+            }
+
+            IndexEntry e;
+            e.msg_id.assign(msg_id_span.begin(), msg_id_span.end());
+            e.from_hex = to_hex(value.subspan(0, 32));
+
+            e.timestamp = 0;
+            for (int i = 0; i < 8; ++i)
+                e.timestamp = (e.timestamp << 8) | value[32 + i];
+
+            e.size = (static_cast<uint32_t>(value[40]) << 24) |
+                     (static_cast<uint32_t>(value[41]) << 16) |
+                     (static_cast<uint32_t>(value[42]) << 8) |
+                     static_cast<uint32_t>(value[43]);
+
+            entries.push_back(std::move(e));
             return true;
-        }
+        });
 
-        if (static_cast<int>(entries.size()) >= limit) {
-            has_more = true;
-            return false;  // stop scanning
-        }
+        // Build JSON response, fetching blobs outside the scan transaction
+        Json::Value messages(Json::arrayValue);
+        for (const auto& e : entries) {
+            Json::Value entry;
+            entry["msg_id"] = to_hex(e.msg_id);
+            entry["from"] = e.from_hex;
+            entry["timestamp"] = Json::UInt64(e.timestamp);
+            entry["size"] = e.size;
 
-        IndexEntry e;
-        e.msg_id.assign(msg_id_span.begin(), msg_id_span.end());
-        e.from_hex = to_hex(value.subspan(0, 32));
-
-        e.timestamp = 0;
-        for (int i = 0; i < 8; ++i)
-            e.timestamp = (e.timestamp << 8) | value[32 + i];
-
-        e.size = (static_cast<uint32_t>(value[40]) << 24) |
-                 (static_cast<uint32_t>(value[41]) << 16) |
-                 (static_cast<uint32_t>(value[42]) << 8) |
-                 static_cast<uint32_t>(value[43]);
-
-        entries.push_back(std::move(e));
-        return true;
-    });
-
-    // Now build the JSON response, fetching blobs outside the scan transaction.
-    Json::Value messages(Json::arrayValue);
-    for (const auto& e : entries) {
-        Json::Value entry;
-        entry["msg_id"] = to_hex(e.msg_id);
-        entry["from"] = e.from_hex;
-        entry["timestamp"] = Json::UInt64(e.timestamp);
-        entry["size"] = e.size;
-
-        if (e.size <= INLINE_THRESHOLD) {
-            // Fetch blob from TABLE_MESSAGE_BLOBS and inline as base64
-            auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, e.msg_id);
-            if (blob) {
-                entry["blob"] = to_base64(*blob);
+            if (e.size <= INLINE_THRESHOLD) {
+                auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, e.msg_id);
+                if (blob) {
+                    entry["blob"] = to_base64(*blob);
+                } else {
+                    entry["blob"] = Json::nullValue;
+                }
             } else {
                 entry["blob"] = Json::nullValue;
             }
-        } else {
-            entry["blob"] = Json::nullValue;
+
+            messages.append(entry);
         }
 
-        messages.append(entry);
+        loop_->defer([this, ws, id, messages = std::move(messages), has_more]() {
+            if (connections_.count(ws) == 0) return;
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            resp["messages"] = messages;
+            resp["has_more"] = has_more;
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
-
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    resp["messages"] = messages;
-    resp["has_more"] = has_more;
-    send_json(ws, resp);
 }
 
 template<bool SSL>
@@ -920,74 +931,85 @@ void WsServer<SSL>::handle_get(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Authorization: verify the message belongs to this user's inbox
-    std::vector<uint8_t> index_key;
-    index_key.reserve(64);
-    index_key.insert(index_key.end(),
-                     session->fingerprint.begin(), session->fingerprint.end());
-    index_key.insert(index_key.end(),
-                     msg_id_bytes->begin(), msg_id_bytes->end());
-    if (!storage_.get(storage::TABLE_INBOX_INDEX, index_key)) {
-        send_error(ws, id, 404, "message not found");
-        return;
-    }
+    auto fp = session->fingerprint;
+    auto mid = std::move(*msg_id_bytes);
 
-    // Look up the blob in TABLE_MESSAGE_BLOBS
-    auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, *msg_id_bytes);
-    if (!blob) {
-        send_error(ws, id, 404, "message not found");
-        return;
-    }
+    // Dispatch storage operations to worker pool
+    if (!workers_.post([this, ws, id, fp, mid = std::move(mid), msg_id_hex]() {
+        // Authorization: verify the message belongs to this user's inbox
+        std::vector<uint8_t> index_key;
+        index_key.reserve(64);
+        index_key.insert(index_key.end(), fp.begin(), fp.end());
+        index_key.insert(index_key.end(), mid.begin(), mid.end());
+        if (!storage_.get(storage::TABLE_INBOX_INDEX, index_key)) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "message not found");
+            });
+            return;
+        }
 
+        auto blob = storage_.get(storage::TABLE_MESSAGE_BLOBS, mid);
+        if (!blob) {
+            loop_->defer([this, ws, id]() {
+                if (connections_.count(ws) == 0) return;
+                send_error(ws, id, 404, "message not found");
+            });
+            return;
+        }
 
-
-    if (blob->size() <= INLINE_THRESHOLD) {
-        Json::Value resp;
-        resp["type"] = "OK";
-        resp["id"] = id;
-        resp["msg_id"] = msg_id_hex;
-        resp["blob"] = to_base64(*blob);
-        send_json(ws, resp);
-    } else {
-        // Chunked download: send JSON header then binary DOWNLOAD_CHUNK frames
-        static constexpr size_t CHUNK_SIZE = 1048576;  // 1 MiB
-        uint32_t num_chunks = static_cast<uint32_t>(
-            (blob->size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+        auto blob_copy = std::make_shared<std::vector<uint8_t>>(std::move(*blob));
         uint32_t request_id = next_request_id_.fetch_add(1);
 
-        // Send JSON header with size and chunk count
-        Json::Value resp;
-        resp["type"] = "OK";
-        resp["id"] = id;
-        resp["msg_id"] = msg_id_hex;
-        resp["size"] = static_cast<Json::UInt>(blob->size());
-        resp["chunks"] = num_chunks;
-        send_json(ws, resp);
+        loop_->defer([this, ws, id, msg_id_hex, blob_copy, request_id]() {
+            if (connections_.count(ws) == 0) return;
 
-        // Send binary DOWNLOAD_CHUNK frames
-        // Frame format: [0x02][4B request_id BE][2B chunk_index BE][payload]
-        for (uint32_t i = 0; i < num_chunks; ++i) {
-            size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
-            size_t payload_size = std::min(CHUNK_SIZE, blob->size() - offset);
+            if (blob_copy->size() <= INLINE_THRESHOLD) {
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                resp["msg_id"] = msg_id_hex;
+                resp["blob"] = to_base64(*blob_copy);
+                send_json(ws, resp);
+            } else {
+                static constexpr size_t CHUNK_SIZE = 1048576;
+                uint32_t num_chunks = static_cast<uint32_t>(
+                    (blob_copy->size() + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
-            std::vector<uint8_t> frame;
-            frame.reserve(7 + payload_size);
-            frame.push_back(0x02);  // DOWNLOAD_CHUNK frame type
-            frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
-            frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
-            frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
-            frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
-            uint16_t chunk_index = static_cast<uint16_t>(i);
-            frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
-            frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
-            frame.insert(frame.end(),
-                         blob->data() + offset,
-                         blob->data() + offset + payload_size);
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                resp["msg_id"] = msg_id_hex;
+                resp["size"] = static_cast<Json::UInt>(blob_copy->size());
+                resp["chunks"] = num_chunks;
+                send_json(ws, resp);
 
-            std::string_view sv(reinterpret_cast<const char*>(frame.data()),
-                                frame.size());
-            ws->send(sv, uWS::OpCode::BINARY);
-        }
+                for (uint32_t i = 0; i < num_chunks; ++i) {
+                    size_t offset = static_cast<size_t>(i) * CHUNK_SIZE;
+                    size_t payload_size = std::min(CHUNK_SIZE, blob_copy->size() - offset);
+
+                    std::vector<uint8_t> frame;
+                    frame.reserve(7 + payload_size);
+                    frame.push_back(0x02);
+                    frame.push_back(static_cast<uint8_t>((request_id >> 24) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>((request_id >> 16) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>((request_id >> 8) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>(request_id & 0xFF));
+                    uint16_t chunk_index = static_cast<uint16_t>(i);
+                    frame.push_back(static_cast<uint8_t>((chunk_index >> 8) & 0xFF));
+                    frame.push_back(static_cast<uint8_t>(chunk_index & 0xFF));
+                    frame.insert(frame.end(),
+                                 blob_copy->data() + offset,
+                                 blob_copy->data() + offset + payload_size);
+
+                    std::string_view sv(reinterpret_cast<const char*>(frame.data()),
+                                        frame.size());
+                    ws->send(sv, uWS::OpCode::BINARY);
+                }
+            }
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
 }
 
@@ -1626,9 +1648,14 @@ void WsServer<SSL>::handle_delete(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
+    const auto& ids = msg["msg_ids"];
+    if (ids.size() > 100) {
+        send_error(ws, id, 400, "too many msg_ids (max 100)");
+        return;
+    }
+
     // Parse msg_ids on the event loop (lightweight)
     std::vector<std::vector<uint8_t>> parsed_ids;
-    const auto& ids = msg["msg_ids"];
     for (const auto& mid : ids) {
         std::string mid_hex = mid.asString();
         if (mid_hex.size() != 64) continue;
@@ -1874,40 +1901,51 @@ template<bool SSL>
 void WsServer<SSL>::deliver_event(const crypto::Hash& target_fp,
                                   const crypto::Hash& sender_fp,
                                   const std::string& event_type) {
-    // Allowlist check: if target has an allowlist, sender must be on it
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", target_fp);
-    std::vector<uint8_t> allow_check;
-    allow_check.reserve(64);
-    allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
-    allow_check.insert(allow_check.end(), sender_fp.begin(), sender_fp.end());
-    auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
-    bool sender_allowed = allowed && allowed->size() > 64 && (*allowed)[64] == 0x01;
-    if (!sender_allowed) {
-        // Check if any allowlist exists for this recipient
-        bool has_allowlist = false;
-        storage_.scan(storage::TABLE_ALLOWLISTS,
-                      std::vector<uint8_t>(allowlist_key.begin(), allowlist_key.end()),
-                      [&](auto, auto) { has_allowlist = true; return false; });
-        if (has_allowlist) {
-            return;  // Sender not allowed — drop silently
-        }
-        // No allowlist at all = open inbox, deliver
-    }
-
-    // Build push JSON
-    Json::Value push;
-    push["type"] = "EVENT";
-    push["from"] = to_hex(sender_fp);
-    push["event"] = event_type;
-
+    // Check if target is even connected before doing the worker dispatch
     auto it = authenticated_.find(target_fp);
     if (it == authenticated_.end()) return;
 
-    for (auto* client_ws : it->second) {
-        if (connections_.count(client_ws) > 0) {
-            send_json(client_ws, push);
+    // Dispatch allowlist check to worker pool to avoid blocking uWS thread
+    auto target_copy = target_fp;
+    auto sender_copy = sender_fp;
+    auto event_copy = event_type;
+    workers_.post([this, target_copy, sender_copy, event_copy]() {
+        // Allowlist check: if target has an allowlist, sender must be on it
+        auto allowlist_key = crypto::sha3_256_prefixed("inbox:", target_copy);
+        std::vector<uint8_t> allow_check;
+        allow_check.reserve(64);
+        allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
+        allow_check.insert(allow_check.end(), sender_copy.begin(), sender_copy.end());
+        auto allowed = storage_.get(storage::TABLE_ALLOWLISTS, allow_check);
+        bool sender_allowed = allowed && allowed->size() > 64 && (*allowed)[64] == 0x01;
+        if (!sender_allowed) {
+            bool has_allowlist = false;
+            storage_.scan(storage::TABLE_ALLOWLISTS,
+                          std::vector<uint8_t>(allowlist_key.begin(), allowlist_key.end()),
+                          [&](auto, auto) { has_allowlist = true; return false; });
+            if (has_allowlist) {
+                return;  // Sender not allowed — drop silently
+            }
         }
-    }
+
+        // Defer back to uWS thread for the actual send
+        loop_->defer([this, target_copy, sender_copy, event_copy]() {
+            auto it = authenticated_.find(target_copy);
+            if (it == authenticated_.end()) return;
+
+            Json::Value push;
+            push["type"] = "EVENT";
+            push["from"] = to_hex(sender_copy);
+            push["event"] = event_copy;
+
+            for (auto* client_ws : it->second) {
+                if (connections_.count(client_ws) > 0) {
+                    send_json(client_ws, push);
+                }
+            }
+        });
+    });
+    // Silently drop if worker pool is full (ephemeral, best-effort)
 }
 
 template<bool SSL>
@@ -1930,6 +1968,12 @@ void WsServer<SSL>::on_kademlia_relay(std::span<const uint8_t> payload) {
 
         std::string event_type(payload_copy.begin() + 65,
                                payload_copy.begin() + 65 + event_type_len);
+
+        // Whitelist: only deliver known event types from relayed messages
+        static const std::unordered_set<std::string> valid_events = {
+            "typing", "read", "online", "offline"
+        };
+        if (valid_events.find(event_type) == valid_events.end()) return;
 
         deliver_event(target_fp, sender_fp, event_type);
     });
@@ -2044,103 +2088,120 @@ void WsServer<SSL>::handle_get_profile(ws_t* ws, const Json::Value& msg) {
     crypto::Hash fingerprint{};
     std::copy(fp_bytes->begin(), fp_bytes->end(), fingerprint.begin());
 
-    // Look up in TABLE_PROFILES: key = SHA3-256("profile:" || fingerprint)
-    auto profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
+    // Dispatch storage read to worker pool
+    if (!workers_.post([this, ws, id, fingerprint]() {
+        auto profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
+        auto profile = storage_.get(storage::TABLE_PROFILES,
+            std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
 
-    auto profile = storage_.get(storage::TABLE_PROFILES,
-        std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
+        Json::Value resp;
+        resp["type"] = "OK";
+        resp["id"] = id;
 
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
+        if (!profile || profile->empty()) {
+            resp["found"] = false;
+            loop_->defer([this, ws, resp = std::move(resp)]() {
+                if (connections_.count(ws) == 0) return;
+                send_json(ws, resp);
+            });
+            return;
+        }
 
-    if (!profile || profile->empty()) {
-        resp["found"] = false;
-        send_json(ws, resp);
-        return;
+        resp["found"] = true;
+
+        const auto& data = *profile;
+        size_t offset = 0;
+
+        if (data.size() < 53) {
+            resp["found"] = false;
+            loop_->defer([this, ws, resp = std::move(resp)]() {
+                if (connections_.count(ws) == 0) return;
+                send_json(ws, resp);
+            });
+            return;
+        }
+
+        // fingerprint (32)
+        resp["fingerprint"] = to_hex(std::span<const uint8_t>(data.data(), 32));
+        offset += 32;
+
+        // pubkey_len + pubkey
+        uint16_t pk_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+        offset += 2;
+        if (offset + pk_len > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        resp["pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, pk_len));
+        offset += pk_len;
+
+        // kem_pubkey_len + kem_pubkey
+        if (offset + 2 > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        uint16_t kem_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+        offset += 2;
+        if (offset + kem_len > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        resp["kem_pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, kem_len));
+        offset += kem_len;
+
+        // bio_len + bio
+        if (offset + 2 > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        uint16_t bio_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+        offset += 2;
+        if (offset + bio_len > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        resp["bio"] = std::string(reinterpret_cast<const char*>(data.data() + offset), bio_len);
+        offset += bio_len;
+
+        // avatar_len + avatar (base64)
+        if (offset + 4 > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        uint32_t avatar_len = (static_cast<uint32_t>(data[offset]) << 24)
+                            | (static_cast<uint32_t>(data[offset + 1]) << 16)
+                            | (static_cast<uint32_t>(data[offset + 2]) << 8)
+                            | static_cast<uint32_t>(data[offset + 3]);
+        offset += 4;
+        if (offset + avatar_len > data.size()) { resp["found"] = false; loop_->defer([this, ws, resp = std::move(resp)]() { if (connections_.count(ws) == 0) return; send_json(ws, resp); }); return; }
+        if (avatar_len > 0) {
+            resp["avatar"] = to_base64(std::span<const uint8_t>(data.data() + offset, avatar_len));
+        }
+        offset += avatar_len;
+
+        // social links
+        if (offset + 1 <= data.size()) {
+            uint8_t social_count = data[offset];
+            offset += 1;
+            Json::Value socials(Json::arrayValue);
+            for (uint8_t i = 0; i < social_count; ++i) {
+                if (offset + 1 > data.size()) break;
+                uint8_t platform_len = data[offset]; offset += 1;
+                if (offset + platform_len > data.size()) break;
+                std::string platform(reinterpret_cast<const char*>(data.data() + offset), platform_len);
+                offset += platform_len;
+                if (offset + 1 > data.size()) break;
+                uint8_t handle_len = data[offset]; offset += 1;
+                if (offset + handle_len > data.size()) break;
+                std::string handle(reinterpret_cast<const char*>(data.data() + offset), handle_len);
+                offset += handle_len;
+
+                Json::Value link;
+                link["platform"] = platform;
+                link["handle"] = handle;
+                socials.append(link);
+            }
+            resp["social_links"] = socials;
+        }
+
+        // Parse sequence (8 BE) — after social links, before sig_len + signature
+        // sequence is at current offset if remaining data is >= 8 + 2 + sig
+        if (offset + 8 <= data.size()) {
+            uint64_t sequence = 0;
+            for (int i = 0; i < 8; ++i)
+                sequence = (sequence << 8) | data[offset + i];
+            resp["sequence"] = Json::UInt64(sequence);
+        }
+
+        loop_->defer([this, ws, resp = std::move(resp)]() {
+            if (connections_.count(ws) == 0) return;
+            send_json(ws, resp);
+        });
+    })) {
+        send_error(ws, id, 503, "server overloaded");
     }
-
-    resp["found"] = true;
-
-    // Parse profile binary:
-    // fingerprint(32) || pubkey_len(2 BE) || pubkey || kem_pubkey_len(2 BE) || kem_pubkey
-    // || bio_len(2 BE) || bio || avatar_len(4 BE) || avatar || social_count(1)
-    // || [platform_len(1) || platform || handle_len(1) || handle]...
-    // || sequence(8 BE) || sig_len(2 BE) || signature
-    const auto& data = *profile;
-    size_t offset = 0;
-
-    if (data.size() < 53) {
-        resp["found"] = false;
-        send_json(ws, resp);
-        return;
-    }
-
-    // fingerprint (32)
-    resp["fingerprint"] = to_hex(std::span<const uint8_t>(data.data(), 32));
-    offset += 32;
-
-    // pubkey_len + pubkey
-    uint16_t pk_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
-    offset += 2;
-    if (offset + pk_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    resp["pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, pk_len));
-    offset += pk_len;
-
-    // kem_pubkey_len + kem_pubkey
-    if (offset + 2 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    uint16_t kem_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
-    offset += 2;
-    if (offset + kem_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    resp["kem_pubkey"] = to_hex(std::span<const uint8_t>(data.data() + offset, kem_len));
-    offset += kem_len;
-
-    // bio_len + bio
-    if (offset + 2 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    uint16_t bio_len = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
-    offset += 2;
-    if (offset + bio_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    resp["bio"] = std::string(reinterpret_cast<const char*>(data.data() + offset), bio_len);
-    offset += bio_len;
-
-    // avatar_len + avatar (base64)
-    if (offset + 4 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    uint32_t avatar_len = (static_cast<uint32_t>(data[offset]) << 24)
-                        | (static_cast<uint32_t>(data[offset + 1]) << 16)
-                        | (static_cast<uint32_t>(data[offset + 2]) << 8)
-                        | static_cast<uint32_t>(data[offset + 3]);
-    offset += 4;
-    if (offset + avatar_len > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    if (avatar_len > 0) {
-        resp["avatar"] = to_base64(std::span<const uint8_t>(data.data() + offset, avatar_len));
-    }
-    offset += avatar_len;
-
-    // social links
-    if (offset + 1 > data.size()) { resp["found"] = false; send_json(ws, resp); return; }
-    uint8_t social_count = data[offset];
-    offset += 1;
-    Json::Value socials(Json::arrayValue);
-    for (uint8_t i = 0; i < social_count; ++i) {
-        if (offset + 1 > data.size()) break;
-        uint8_t platform_len = data[offset]; offset += 1;
-        if (offset + platform_len > data.size()) break;
-        std::string platform(reinterpret_cast<const char*>(data.data() + offset), platform_len);
-        offset += platform_len;
-        if (offset + 1 > data.size()) break;
-        uint8_t handle_len = data[offset]; offset += 1;
-        if (offset + handle_len > data.size()) break;
-        std::string handle(reinterpret_cast<const char*>(data.data() + offset), handle_len);
-        offset += handle_len;
-
-        Json::Value link;
-        link["platform"] = platform;
-        link["handle"] = handle;
-        socials.append(link);
-    }
-    resp["social_links"] = socials;
-
-    send_json(ws, resp);
 }
 
 // ---------- LIST_REQUESTS handler ----------
@@ -2150,47 +2211,73 @@ void WsServer<SSL>::handle_list_requests(ws_t* ws, const Json::Value& msg) {
     auto* session = ws->getUserData();
     int id = msg.get("id", 0).asInt();
 
-    // Prefix scan TABLE_REQUESTS with recipient_fp (authenticated user's fingerprint)
-    // Contact request storage key: recipient_fp(32) || sender_fp(32)
-    // Contact request value: recipient_fp(32) || sender_fp(32) || pow_nonce(8) || timestamp(8) || blob_len(4) || blob
-    std::vector<uint8_t> prefix(session->fingerprint.begin(), session->fingerprint.end());
+    // Pagination parameters
+    int limit = msg.get("limit", 100).asInt();
+    if (limit <= 0) limit = 100;
+    if (limit > 500) limit = 500;
+    int req_offset = msg.get("offset", 0).asInt();
+    if (req_offset < 0) req_offset = 0;
 
-    Json::Value resp;
-    resp["type"] = "OK";
-    resp["id"] = id;
-    Json::Value requests(Json::arrayValue);
+    auto fp = session->fingerprint;
 
-    storage_.scan(storage::TABLE_REQUESTS, prefix,
-        [&](std::span<const uint8_t> key, std::span<const uint8_t> value) {
-            if (value.size() < 84) return true;  // skip malformed
+    // Dispatch storage scan to worker pool
+    if (!workers_.post([this, ws, id, fp, limit, req_offset]() {
+        std::vector<uint8_t> prefix(fp.begin(), fp.end());
 
-            // sender_fp at offset 32
-            Json::Value entry;
-            entry["from"] = to_hex(std::span<const uint8_t>(value.data() + 32, 32));
+        Json::Value requests(Json::arrayValue);
+        int skipped = 0;
+        int collected = 0;
+        bool has_more = false;
 
-            // timestamp at offset 72 (8 bytes BE, milliseconds)
-            uint64_t ts = 0;
-            for (int i = 0; i < 8; ++i) {
-                ts = (ts << 8) | value[72 + i];
-            }
-            entry["timestamp"] = Json::UInt64(ts);
+        storage_.scan(storage::TABLE_REQUESTS, prefix,
+            [&](std::span<const uint8_t> key, std::span<const uint8_t> value) {
+                if (value.size() < 84) return true;
 
-            // blob at offset 84
-            uint32_t blob_len = (static_cast<uint32_t>(value[80]) << 24)
-                              | (static_cast<uint32_t>(value[81]) << 16)
-                              | (static_cast<uint32_t>(value[82]) << 8)
-                              | static_cast<uint32_t>(value[83]);
-            if (84 + blob_len <= value.size()) {
-                entry["blob"] = to_base64(
-                    std::span<const uint8_t>(value.data() + 84, blob_len));
-            }
+                if (skipped < req_offset) {
+                    ++skipped;
+                    return true;
+                }
 
-            requests.append(entry);
-            return true;  // continue scanning
+                if (collected >= limit) {
+                    has_more = true;
+                    return false;  // stop scanning
+                }
+
+                Json::Value entry;
+                entry["from"] = to_hex(std::span<const uint8_t>(value.data() + 32, 32));
+
+                uint64_t ts = 0;
+                for (int i = 0; i < 8; ++i) {
+                    ts = (ts << 8) | value[72 + i];
+                }
+                entry["timestamp"] = Json::UInt64(ts);
+
+                uint32_t blob_len = (static_cast<uint32_t>(value[80]) << 24)
+                                  | (static_cast<uint32_t>(value[81]) << 16)
+                                  | (static_cast<uint32_t>(value[82]) << 8)
+                                  | static_cast<uint32_t>(value[83]);
+                if (84 + blob_len <= value.size()) {
+                    entry["blob"] = to_base64(
+                        std::span<const uint8_t>(value.data() + 84, blob_len));
+                }
+
+                requests.append(entry);
+                ++collected;
+                return true;
+            });
+
+        loop_->defer([this, ws, id, requests = std::move(requests), has_more]() {
+            if (connections_.count(ws) == 0) return;
+            Json::Value resp;
+            resp["type"] = "OK";
+            resp["id"] = id;
+            resp["requests"] = requests;
+            resp["has_more"] = has_more;
+            send_json(ws, resp);
         });
-
-    resp["requests"] = requests;
-    send_json(ws, resp);
+    })) {
+        send_error(ws, id, 503, "server overloaded");
+    }
 }
 
 // ---------- SET_PROFILE handler ----------
@@ -2345,12 +2432,12 @@ void WsServer<SSL>::check_upload_timeouts() {
 template<bool SSL>
 std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t> data) {
     // Binary format:
-    //   group_id(32) || owner_fp(32) || version(4 BE) || member_count(2 BE) ||
+    //   group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
     //   per-member[fp(32) + role(1) + kem_ciphertext(1568)] × member_count ||
     //   sig_len(2 BE) || signature
 
-    constexpr size_t HEADER_SIZE = 32 + 32 + 4 + 2;  // 70 bytes
-    constexpr size_t MEMBER_SIZE = 32 + 1 + 1568;     // 1601 bytes per member
+    constexpr size_t HEADER_SIZE = 32 + 32 + 32 + 4 + 2;  // 102 bytes
+    constexpr size_t MEMBER_SIZE = 32 + 1 + 1568;          // 1601 bytes per member
 
     if (data.size() < HEADER_SIZE) return std::nullopt;
 
@@ -2362,15 +2449,17 @@ std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t
     // owner_fp (32 bytes)
     std::memcpy(meta.owner_fingerprint.data(), data.data() + 32, 32);
 
-    // version (4 bytes BE)
-    meta.version = (static_cast<uint32_t>(data[64]) << 24) |
-                   (static_cast<uint32_t>(data[65]) << 16) |
-                   (static_cast<uint32_t>(data[66]) << 8) |
-                   static_cast<uint32_t>(data[67]);
+    // signer_fp at offset 64 (32 bytes) — parsed but not stored in GroupMeta struct
 
-    // member_count (2 bytes BE)
-    uint16_t member_count = (static_cast<uint16_t>(data[68]) << 8) |
-                            static_cast<uint16_t>(data[69]);
+    // version (4 bytes BE) — at offset 96 now
+    meta.version = (static_cast<uint32_t>(data[96]) << 24) |
+                   (static_cast<uint32_t>(data[97]) << 16) |
+                   (static_cast<uint32_t>(data[98]) << 8) |
+                   static_cast<uint32_t>(data[99]);
+
+    // member_count (2 bytes BE) — at offset 100
+    uint16_t member_count = (static_cast<uint16_t>(data[100]) << 8) |
+                            static_cast<uint16_t>(data[101]);
 
     // Validate total size: header + members + sig_len(2) + signature(variable)
     size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_SIZE;
@@ -2411,13 +2500,21 @@ const GroupMeta* WsServer<SSL>::get_group_meta(const crypto::Hash& group_id) {
     auto meta = parse_group_meta(*raw);
     if (!meta) return nullptr;
 
+    // Evict oldest entries if cache exceeds size limit
+    while (group_meta_cache_.size() >= GROUP_META_CACHE_MAX && !group_meta_cache_order_.empty()) {
+        group_meta_cache_.erase(group_meta_cache_order_.front());
+        group_meta_cache_order_.pop_front();
+    }
+
     auto [ins, _] = group_meta_cache_.emplace(group_id, std::move(*meta));
+    group_meta_cache_order_.push_back(group_id);
     return &ins->second;
 }
 
 template<bool SSL>
 void WsServer<SSL>::invalidate_group_meta(const crypto::Hash& group_id) {
     group_meta_cache_.erase(group_id);
+    // Note: not removing from order deque (stale entries are harmless — erase is a no-op)
 }
 
 template<bool SSL>
@@ -2764,25 +2861,28 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
             auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
             auto routing_key = crypto::sha3_256_prefixed("group:", group_id_span);
 
+            // Delete GROUP_META locally
             storage_.del(storage::TABLE_GROUP_META, routing_key);
 
+            // Propagate GROUP_META deletion to responsible nodes + repl_log
+            kad_.delete_remote(routing_key, 0x06);
+            kad_.delete_value(routing_key, 0x06,
+                std::span<const uint8_t>(routing_key.data(), routing_key.size()));
+
+            // Collect and delete group index + blob entries
             std::vector<std::vector<uint8_t>> index_keys;
             storage_.scan(storage::TABLE_GROUP_INDEX, group_id_span,
                 [&](std::span<const uint8_t> key, std::span<const uint8_t>) -> bool {
                     index_keys.emplace_back(key.begin(), key.end());
                     return true;
                 });
-            for (const auto& k : index_keys)
+            for (const auto& k : index_keys) {
                 storage_.del(storage::TABLE_GROUP_INDEX, k);
-
-            std::vector<std::vector<uint8_t>> blob_keys;
-            storage_.scan(storage::TABLE_GROUP_BLOBS, group_id_span,
-                [&](std::span<const uint8_t> key, std::span<const uint8_t>) -> bool {
-                    blob_keys.emplace_back(key.begin(), key.end());
-                    return true;
-                });
-            for (const auto& k : blob_keys)
                 storage_.del(storage::TABLE_GROUP_BLOBS, k);
+                // Propagate each group message deletion via repl_log
+                kad_.delete_value(routing_key, 0x05,
+                    std::span<const uint8_t>(k.data(), k.size()));
+            }
 
             auto group_id_copy = group_id;
             loop_->defer([this, ws, id, group_id_copy]() {
@@ -3519,10 +3619,32 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
                 std::span<const uint8_t>(k.data(), k.size()));
         }
 
+        // Collect member fingerprints for push notification (before meta is gone)
+        std::vector<crypto::Hash> member_fps;
+        for (const auto& m : meta->members) {
+            if (m.fingerprint != fp_copy)  // skip the destroyer
+                member_fps.push_back(m.fingerprint);
+        }
+
         auto group_id_copy = group_id;
-        loop_->defer([this, ws, id, group_id_copy]() {
+        loop_->defer([this, ws, id, group_id_copy, member_fps = std::move(member_fps)]() {
             if (connections_.count(ws) == 0) return;
             invalidate_group_meta(group_id_copy);
+
+            // Push GROUP_DESTROYED notification to other online members
+            Json::Value push;
+            push["type"] = "GROUP_DESTROYED";
+            push["group_id"] = to_hex(group_id_copy);
+            for (const auto& mfp : member_fps) {
+                auto it = authenticated_.find(mfp);
+                if (it == authenticated_.end()) continue;
+                for (auto* client_ws : it->second) {
+                    if (connections_.count(client_ws) > 0) {
+                        send_json(client_ws, push);
+                    }
+                }
+            }
+
             Json::Value resp;
             resp["type"] = "OK";
             resp["id"] = id;
