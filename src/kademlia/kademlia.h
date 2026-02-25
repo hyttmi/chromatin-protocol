@@ -41,6 +41,13 @@ enum class DataType : uint8_t {
     GROUP_META      = 0x06,  // Group metadata (member list, GEK distribution)
 };
 
+// Result of a local store attempt.
+enum class StoreResult : uint8_t {
+    OK             = 0x00,  // Stored successfully
+    ALREADY_EXISTS = 0x01,  // Duplicate — data already present (not an error)
+    REJECTED       = 0x02,  // Validation failed — bad data
+};
+
 class Kademlia {
 public:
     Kademlia(const config::Config& cfg, NodeInfo self, TcpTransport& transport,
@@ -238,9 +245,9 @@ private:
     // optionally appends to repl_log and fires on_store_ callback.
     // When log_and_notify is false (used by SYNC), repl_log append and
     // on_store_ callback are skipped (SYNC handles repl_log via apply()).
-    bool store_locally(const crypto::Hash& key, uint8_t data_type,
-                       std::span<const uint8_t> value,
-                       bool validate = true, bool log_and_notify = true);
+    StoreResult store_locally(const crypto::Hash& key, uint8_t data_type,
+                             std::span<const uint8_t> value,
+                             bool validate = true, bool log_and_notify = true);
 
     // Data type validators (PROTOCOL-SPEC.md)
     bool validate_name_record(std::span<const uint8_t> value, const crypto::Hash& key,

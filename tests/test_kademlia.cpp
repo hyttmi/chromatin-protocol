@@ -2305,10 +2305,10 @@ TEST_F(KademliaTest, SyncHandlesDelete) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 32: DuplicateInboxMessageRejected — same msg_id is not stored twice
+// Test 32: DuplicateInboxMessageDeduped — same msg_id is not stored twice
 // ---------------------------------------------------------------------------
 
-TEST_F(KademliaTest, DuplicateInboxMessageRejected) {
+TEST_F(KademliaTest, DuplicateInboxMessageDeduped) {
     auto& n1 = create_node(8);
     start_all();
 
@@ -2345,9 +2345,9 @@ TEST_F(KademliaTest, DuplicateInboxMessageRejected) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     ASSERT_TRUE(n1.storage->get(TABLE_MESSAGE_BLOBS, msg_id).has_value());
 
-    // Store same msg_id again with different blob — should be silently rejected
+    // Store same msg_id again with different blob — ALREADY_EXISTS is not an error
     auto val2 = build_inbox("Different payload");
-    n1.kad->store(inbox_key, 0x02, val2);
+    EXPECT_TRUE(n1.kad->store(inbox_key, 0x02, val2));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // Verify original blob is unchanged
@@ -3441,7 +3441,7 @@ TEST_F(KademliaTest, GroupMetaValidation_WrongKey) {
     EXPECT_FALSE(ok);
 }
 
-TEST_F(KademliaTest, DuplicateGroupMessageRejected) {
+TEST_F(KademliaTest, DuplicateGroupMessageDeduped) {
     auto& n1 = create_node();
     start_all();
 
@@ -3465,9 +3465,9 @@ TEST_F(KademliaTest, DuplicateGroupMessageRejected) {
     bool ok1 = n1.kad->store(group_key, 0x05, value);
     EXPECT_TRUE(ok1);
 
-    // Second store with same msg_id should be rejected
+    // Second store with same msg_id succeeds (ALREADY_EXISTS is not an error)
     bool ok2 = n1.kad->store(group_key, 0x05, value);
-    EXPECT_FALSE(ok2);
+    EXPECT_TRUE(ok2);
 }
 
 // ---------------------------------------------------------------------------

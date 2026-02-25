@@ -1206,9 +1206,9 @@ void Kademlia::handle_nodes(const Message& msg, const std::string& /*from*/, uin
 // appends to repl_log, and fires the on_store_ callback.
 // ---------------------------------------------------------------------------
 
-bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
-                             std::span<const uint8_t> value,
-                             bool validate, bool log_and_notify) {
+StoreResult Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
+                                    std::span<const uint8_t> value,
+                                    bool validate, bool log_and_notify) {
     // 1. Data-type-specific validation
     if (validate) {
         bool valid = true;
@@ -1224,7 +1224,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         }
         if (!valid) {
             spdlog::warn("store_locally: validation failed for data_type 0x{:02X}", data_type);
-            return false;
+            return StoreResult::REJECTED;
         }
     }
 
@@ -1244,8 +1244,8 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         crypto::Hash mid{};
         std::copy_n(msg_id.data(), 32, mid.begin());
         if (storage_.get(storage::TABLE_MESSAGE_BLOBS, mid)) {
-            spdlog::debug("store_locally: duplicate inbox message rejected (msg_id already exists)");
-            return false;
+            spdlog::debug("store_locally: duplicate inbox message (msg_id already exists)");
+            return StoreResult::ALREADY_EXISTS;
         }
 
         // INDEX key: recipient_fp(32) || msg_id(32)
@@ -1325,8 +1325,8 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
 
         if (storage_.get(storage::TABLE_GROUP_BLOBS, idx_key)) {
-            spdlog::debug("store_locally: duplicate group message rejected (msg_id already exists)");
-            return false;
+            spdlog::debug("store_locally: duplicate group message (msg_id already exists)");
+            return StoreResult::ALREADY_EXISTS;
         }
 
         // INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) || gek_version(4 BE) = 48 bytes
@@ -1362,7 +1362,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         case 0x01: table_name = storage::TABLE_NAMES;      break;
         default:
             spdlog::warn("store_locally: unknown data_type 0x{:02X}", data_type);
-            return false;
+            return StoreResult::REJECTED;
         }
 
         std::vector<uint8_t> value_vec(value.begin(), value.end());
@@ -1379,7 +1379,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
         }
     }
 
-    return true;
+    return StoreResult::OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -1481,7 +1481,8 @@ void Kademlia::handle_store(const Message& msg, const std::string& from, uint16_
     }
 
     // 3. Validate, store in table(s), append repl_log, fire on_store_
-    if (!store_locally(key, data_type, value)) {
+    auto result = store_locally(key, data_type, value);
+    if (result == StoreResult::REJECTED) {
         std::vector<uint8_t> ack_payload;
         ack_payload.insert(ack_payload.end(), key.begin(), key.end());
         ack_payload.push_back(0x01); // rejected
@@ -1631,11 +1632,12 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
     for (const auto& node : nodes) {
         if (node.id == self_.id) {
             // Store locally — validate, dispatch, log, notify
-            if (!store_locally(key, data_type, value)) {
+            auto result = store_locally(key, data_type, value);
+            if (result == StoreResult::REJECTED) {
                 continue;
             }
             stored_any = true;
-            local_stored = true;
+            local_stored = true;  // OK or ALREADY_EXISTS both count
         } else {
             // Send STORE to remote node (async — don't block)
             Message msg = make_message(MessageType::STORE, payload);
@@ -2729,9 +2731,10 @@ void Kademlia::handle_sync_resp(const Message& msg, const std::string& from, uin
     valid_entries.reserve(entries.size());
     for (const auto& entry : entries) {
         if (entry.op == replication::Op::ADD && !entry.data.empty()) {
-            if (store_locally(key, entry.data_type, entry.data,
-                              /*validate=*/true, /*log_and_notify=*/false)) {
-                valid_entries.push_back(entry);
+            auto sync_result = store_locally(key, entry.data_type, entry.data,
+                                             /*validate=*/true, /*log_and_notify=*/false);
+            if (sync_result != StoreResult::REJECTED) {
+                valid_entries.push_back(entry);  // OK and ALREADY_EXISTS are both valid
             } else {
                 spdlog::debug("SYNC_RESP: rejected invalid ADD entry (data_type=0x{:02X}) from {}:{}",
                               entry.data_type, from, port);
