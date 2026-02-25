@@ -63,9 +63,9 @@ A profile is a signed, versioned document. The server stores and validates:
 | fingerprint      | 32 bytes                     | SHA3-256(ml_dsa_pubkey)            |
 | ml_dsa_pubkey    | bytes                        | Public signing key                 |
 | ml_kem_pubkey    | bytes                        | Public encryption key              |
-| bio              | string                       | Free text                          |
-| avatar           | blob                         | Profile image                      |
-| social_links     | list of {platform, handle}   | Social media addresses             |
+| bio              | string                       | Free text (max 2 KB)               |
+| avatar           | blob                         | Profile image (max 256 KB)         |
+| social_links     | list of {platform, handle}   | Max 16 links (platform≤64B, handle≤128B) |
 | sequence         | uint64                       | Monotonically increasing version   |
 | signature        | bytes                        | ML-DSA signature over all above    |
 
@@ -292,6 +292,7 @@ node cannot bypass protections by sending STORE messages directly.
 | STORE_ACK    | Acknowledgment of a STORE request            |
 | SEQ_REQ      | Query replication log sequence for a key     |
 | SEQ_RESP     | Replication log sequence response            |
+| RELAY        | Ephemeral event relay (fire-and-forget)      |
 
 All messages are ML-DSA signed by the sending node. PING and FIND_NODE are
 accepted without signature verification (needed for initial discovery).
