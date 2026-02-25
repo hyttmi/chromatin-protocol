@@ -97,6 +97,11 @@ std::vector<uint8_t> build_group_meta(
         meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
         meta.resize(meta.size() + 48, 0x00);  // dummy wrapped_gek
     }
+    // signer_pubkey_len(2 BE) + signer_pubkey
+    uint16_t pk_len = static_cast<uint16_t>(signer_kp.public_key.size());
+    meta.push_back((pk_len >> 8) & 0xFF);
+    meta.push_back(pk_len & 0xFF);
+    meta.insert(meta.end(), signer_kp.public_key.begin(), signer_kp.public_key.end());
     // Sign everything so far
     auto signature = chromatin::crypto::sign(meta, signer_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(signature.size());

@@ -3316,10 +3316,7 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     auto owner_kp = generate_keypair();
     Hash owner_fp = sha3_256(owner_kp.public_key);
 
-    // Store owner's profile (required for GROUP_META signature verification)
-    auto profile = build_profile(owner_kp, 1);
-    auto profile_key = sha3_256_prefixed("chromatin:profile:", owner_fp);
-    ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
+    // No need to store owner profile — GROUP_META is self-verifiable now
 
     Hash group_id{};
     group_id.fill(0x44);
@@ -3337,6 +3334,12 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     meta.push_back(0x02);                                             // role = owner
     meta.resize(meta.size() + 1568, 0x00);                           // dummy kem_ciphertext
     meta.resize(meta.size() + 48, 0x00);                             // dummy wrapped_gek
+
+    // signer pubkey
+    uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
+    meta.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    meta.insert(meta.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
 
     // Sign the data so far
     auto signature = sign(meta, owner_kp.secret_key);
@@ -3428,6 +3431,11 @@ TEST_F(KademliaTest, GroupMetaValidation_WrongKey) {
     meta.push_back(0x02);
     meta.resize(meta.size() + 1568, 0x00);
     meta.resize(meta.size() + 48, 0x00);                            // dummy wrapped_gek
+    // signer pubkey
+    uint16_t pk_len_wk = static_cast<uint16_t>(owner_kp.public_key.size());
+    meta.push_back(static_cast<uint8_t>((pk_len_wk >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(pk_len_wk & 0xFF));
+    meta.insert(meta.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
     auto signature = sign(meta, owner_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(signature.size());
     meta.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
@@ -3754,6 +3762,11 @@ static std::vector<uint8_t> build_group_meta_binary(
         meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
         meta.resize(meta.size() + 48, 0x00);    // dummy wrapped_gek
     }
+    // signer_pubkey_len(2 BE) + signer_pubkey
+    uint16_t pk_len = static_cast<uint16_t>(signer_kp.public_key.size());
+    meta.push_back((pk_len >> 8) & 0xFF);
+    meta.push_back(pk_len & 0xFF);
+    meta.insert(meta.end(), signer_kp.public_key.begin(), signer_kp.public_key.end());
     // Sign everything so far
     auto signature = sign(meta, signer_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(signature.size());
@@ -3774,10 +3787,7 @@ TEST_F(KademliaTest, GroupMetaForgedSignatureRejected) {
     group_id.fill(0xBB);
     auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
 
-    // Store owner's profile first (so validation can look up the pubkey)
-    auto profile = build_profile(owner_kp, 1);
-    auto profile_key = sha3_256_prefixed("chromatin:profile:", owner_fp);
-    ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
+    // No need to store owner profile — GROUP_META is self-verifiable now
 
     // Valid GROUP_META signed by owner — should be accepted
     auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
@@ -3790,7 +3800,7 @@ TEST_F(KademliaTest, GroupMetaForgedSignatureRejected) {
         << "GROUP_META with forged signature should be rejected";
 }
 
-TEST_F(KademliaTest, GroupMetaRejectedWithoutProfileAvailable) {
+TEST_F(KademliaTest, GroupMetaSelfVerifiableWithoutProfile) {
     auto& n1 = create_node(8);
     start_all();
 
@@ -3801,10 +3811,10 @@ TEST_F(KademliaTest, GroupMetaRejectedWithoutProfileAvailable) {
     group_id.fill(0xCC);
     auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
 
-    // Valid GROUP_META — should be rejected without owner profile
+    // GROUP_META should succeed even without profile — pubkey is embedded
     auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
-    EXPECT_FALSE(n1.kad->store(group_key, 0x06, valid_meta))
-        << "GROUP_META should be rejected when owner profile is not available locally";
+    EXPECT_TRUE(n1.kad->store(group_key, 0x06, valid_meta))
+        << "GROUP_META with embedded pubkey should be accepted without profile in storage";
 }
 
 TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
@@ -3835,6 +3845,12 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     meta.push_back(0x02); // owner role
     meta.resize(meta.size() + 1568, 0x00); // kem_ciphertext placeholder
     meta.resize(meta.size() + 48, 0x00);   // wrapped_gek placeholder
+
+    // signer pubkey
+    uint16_t pk_len_val = static_cast<uint16_t>(owner_kp.public_key.size());
+    meta.push_back(static_cast<uint8_t>((pk_len_val >> 8) & 0xFF));
+    meta.push_back(static_cast<uint8_t>(pk_len_val & 0xFF));
+    meta.insert(meta.end(), owner_kp.public_key.begin(), owner_kp.public_key.end());
 
     // Sign it
     auto signature = sign(std::span<const uint8_t>(meta.data(), meta.size()), owner_kp.secret_key);
