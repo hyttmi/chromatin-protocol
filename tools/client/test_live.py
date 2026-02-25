@@ -629,7 +629,7 @@ async def run_tests():
         resp = await alice.cmd_register_name(record)
         check("register name", resp.get("type") == "OK", f"got {resp}")
 
-        await asyncio.sleep(3)  # Allow time for replication
+        await asyncio.sleep(1)  # Sync replication ensures data is available on OK; small wait for routing
 
         # Test 58: Resolve the name
         await ensure_connected(bob, SERVERS)
@@ -988,7 +988,7 @@ async def run_tests():
             resp = await lp_sender.cmd_send_large(fp_lp2.hex(), large_blob)
             check("large msg push: send large ok", resp.get("type") == "OK", f"got {resp}")
 
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)  # Wait for push notification delivery
 
             large_pushes = [p for p in lp_pushes if p.get("type") == "NEW_MESSAGE"]
             check("large msg push: receiver got NEW_MESSAGE", len(large_pushes) >= 1,
@@ -1234,8 +1234,8 @@ async def run_tests():
         check("at least one registration succeeds", either_ok,
               f"r1={resp1}, r2={resp2}")
 
-        # Wait for replication to settle
-        await asyncio.sleep(3)
+        # Sync replication ensures data is available on OK; small wait for routing
+        await asyncio.sleep(1)
 
         # Resolve from a third node to verify convergence
         await ensure_connected(alice, SERVERS)
@@ -1500,7 +1500,7 @@ async def run_tests():
             check("large group: owner destroys", resp.get("type") == "OK",
                   f"got {resp}")
 
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)  # Sync replication ensures data is available on OK; small wait for routing
 
             # GROUP_INFO should fail after destroy
             resp = await owner_client.cmd_group_info(large_group_id.hex())
@@ -1645,7 +1645,7 @@ async def run_tests():
         resp = await repl_receiver.cmd_allow(fp_r1.hex())
         check("repl: receiver allows sender", resp.get("type") == "OK", f"got {resp}")
 
-        await asyncio.sleep(2)  # Let allowlist replicate
+        await asyncio.sleep(1)  # Sync replication ensures data is available on OK; small wait for routing
 
         # --- 1:1 message replication ---
         repl_blob = encrypt_1to1_message(sec_r1, fp_r1, fp_r2, kem_pub_r2, b"Replication test message payload")
@@ -1653,7 +1653,7 @@ async def run_tests():
         check("repl: sender sends message", resp.get("type") == "OK", f"got {resp}")
         repl_msg_id = resp.get("msg_id", "")
 
-        await asyncio.sleep(3)  # Let message replicate
+        await asyncio.sleep(1)  # Sync replication ensures data is available on OK; small wait for routing
 
         # Receiver (on its responsible node) can list and get
         resp = await repl_receiver.cmd_list()
@@ -1764,7 +1764,7 @@ async def run_tests():
         resp = await grp_owner.cmd_group_create(meta)
         check("repl: group create on node A", resp.get("type") == "OK", f"got {resp}")
 
-        await asyncio.sleep(8)  # Let GROUP_META replicate (needs time across 3 nodes)
+        await asyncio.sleep(2)  # Sync replication ensures data is available on OK; small wait for routing
 
         # Member on different node can fetch group info
         resp = await grp_member.cmd_group_info(repl_group_id.hex())
