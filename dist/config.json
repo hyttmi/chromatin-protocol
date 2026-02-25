@@ -4,9 +4,9 @@
   "tcp_port" : 4000,
   "ws_port" : 4001,
   "bootstrap" : [
-    "0.chromatin.cpunk.io:62000",
-    "1.chromatin.cpunk.io:62001",
-    "2.chromatin.cpunk.io:62002"
+    "0.bootstrap.pqcc.fi:62000",
+    "1.bootstrap.pqcc.fi:62001",
+    "2.bootstrap.pqcc.fi:62002"
   ],
   "external_address" : ""
 }

@@ -17,6 +17,7 @@
 #include "replication/repl_log.h"
 #include "storage/storage.h"
 #include "ws/ws_server.h"
+#include "version.h"
 
 static std::string hex(const chromatin::crypto::Hash& h) {
     std::ostringstream oss;
@@ -31,7 +32,7 @@ static void print_usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
-    spdlog::info("chromatin-node v0.1.0 starting");
+    spdlog::info("chromatin-node v{}.{}.{} starting", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
 
     // --- 1. Parse --config <path> ---
     std::filesystem::path config_path;
