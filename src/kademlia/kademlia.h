@@ -4,6 +4,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -28,6 +30,7 @@ struct PendingStore {
     size_t acked;        // number of STORE_ACKs received
     bool local_stored;   // whether we stored locally (counts toward quorum)
     std::chrono::steady_clock::time_point created;
+    std::shared_ptr<std::promise<bool>> quorum_promise;  // set when W nodes confirm
 };
 
 // Data types stored in the DHT (matches PROTOCOL-SPEC.md wire format).
@@ -62,6 +65,13 @@ public:
 
     // High-level operations
     bool store(const crypto::Hash& key, uint8_t data_type, std::span<const uint8_t> value);
+
+    /// Blocking store: replicates to write quorum (W nodes) before returning.
+    /// Returns true if quorum reached, false on timeout or no responsible nodes.
+    bool store_sync(const crypto::Hash& key, uint8_t data_type,
+                    std::span<const uint8_t> value,
+                    std::chrono::milliseconds timeout = std::chrono::milliseconds{5000});
+
     void delete_value(const crypto::Hash& key, uint8_t data_type, std::span<const uint8_t> delete_info);
     void delete_remote(const crypto::Hash& key, uint8_t data_type);
     std::optional<std::vector<uint8_t>> find_value(const crypto::Hash& key);

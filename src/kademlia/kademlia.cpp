@@ -288,6 +288,11 @@ void Kademlia::cleanup_pending_stores() {
         if (now - it->second.created > pending_store_timeout_) {
             spdlog::debug("Pending store timed out (expected {} ACKs, got {})",
                           it->second.expected, it->second.acked);
+            if (it->second.quorum_promise) {
+                try {
+                    it->second.quorum_promise->set_value(false);
+                } catch (const std::future_error&) {}
+            }
             it = pending_stores_.erase(it);
         } else {
             ++it;
@@ -1662,6 +1667,98 @@ bool Kademlia::store(const crypto::Hash& key, uint8_t data_type, std::span<const
 }
 
 // ---------------------------------------------------------------------------
+// High-level: store_sync() — blocking store with quorum wait
+// ---------------------------------------------------------------------------
+
+bool Kademlia::store_sync(const crypto::Hash& key, uint8_t data_type,
+                           std::span<const uint8_t> value,
+                           std::chrono::milliseconds timeout) {
+    auto nodes = responsible_nodes(key);
+    if (nodes.empty()) return false;
+
+    // Build STORE payload per spec
+    std::vector<uint8_t> payload;
+    payload.insert(payload.end(), key.begin(), key.end());
+    payload.push_back(data_type);
+    uint32_t vlen = static_cast<uint32_t>(value.size());
+    payload.push_back(static_cast<uint8_t>((vlen >> 24) & 0xFF));
+    payload.push_back(static_cast<uint8_t>((vlen >> 16) & 0xFF));
+    payload.push_back(static_cast<uint8_t>((vlen >> 8) & 0xFF));
+    payload.push_back(static_cast<uint8_t>(vlen & 0xFF));
+    payload.insert(payload.end(), value.begin(), value.end());
+
+    bool local_stored = false;
+    size_t remote_count = 0;
+    std::vector<NodeInfo> remote_nodes;
+
+    // First pass: store locally, count remotes
+    for (const auto& node : nodes) {
+        if (node.id == self_.id) {
+            auto result = store_locally(key, data_type, value);
+            if (result != StoreResult::REJECTED) {
+                local_stored = true;
+            }
+        } else {
+            remote_nodes.push_back(node);
+            ++remote_count;
+        }
+    }
+
+    size_t w = write_quorum();
+    size_t initial = local_stored ? 1 : 0;
+
+    // Fast path: quorum already met locally (e.g. solo node, W=1)
+    if (initial >= w || remote_count == 0) {
+        return local_stored;
+    }
+
+    // Register PendingStore BEFORE sending — prevents race where ACKs
+    // arrive before the entry exists in pending_stores_
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+
+    {
+        std::lock_guard lock(pending_mutex_);
+        PendingStore ps;
+        ps.expected = remote_count;
+        ps.acked = 0;
+        ps.local_stored = local_stored;
+        ps.created = std::chrono::steady_clock::now();
+        ps.quorum_promise = promise;
+        pending_stores_[key] = ps;
+    }
+
+    // Second pass: send STORE to remote nodes
+    for (const auto& node : remote_nodes) {
+        Message msg = make_message(MessageType::STORE, payload);
+        send_to_node(node, msg);
+    }
+
+    // Block until quorum or timeout
+    auto status = future.wait_for(timeout);
+    if (status == std::future_status::ready) {
+        return future.get();
+    }
+
+    // Timeout — check if quorum was reached between wait_for and lock
+    {
+        std::lock_guard lock(pending_mutex_);
+        auto it = pending_stores_.find(key);
+        if (it != pending_stores_.end()) {
+            size_t total = it->second.acked + (it->second.local_stored ? 1 : 0);
+            if (total >= w) {
+                pending_stores_.erase(it);
+                return true;
+            }
+            pending_stores_.erase(it);  // Clean up stale entry
+        }
+    }
+
+    spdlog::warn("store_sync: quorum timeout for data_type 0x{:02X} (W={})", data_type, w);
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // High-level: delete_value() — replicates a deletion via repl_log
 // ---------------------------------------------------------------------------
 
@@ -2844,8 +2941,15 @@ void Kademlia::handle_store_ack(const Message& msg, const std::string& from, uin
     spdlog::debug("STORE_ACK from {}:{} — {}/{} confirmed (W={})",
                   from, port, total_confirmed, it->second.expected + (it->second.local_stored ? 1 : 0), w);
 
-    if (total_confirmed == w) {
+    if (total_confirmed >= w) {
         spdlog::info("Write quorum reached for key ({}/{} confirmed)", total_confirmed, w);
+        if (it->second.quorum_promise) {
+            try {
+                it->second.quorum_promise->set_value(true);
+            } catch (const std::future_error&) {
+                // Promise already set or abandoned
+            }
+        }
     }
 
     // Clean up if all expected ACKs received
