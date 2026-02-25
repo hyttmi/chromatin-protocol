@@ -1928,14 +1928,18 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
     if (offset + kem_len > value.size()) return false;
     offset += kem_len;
 
-    // Skip bio
+    // bio
     if (offset + 2 > value.size()) return false;
     uint16_t bio_len = (static_cast<uint16_t>(value[offset]) << 8) | value[offset + 1];
     offset += 2;
     if (offset + bio_len > value.size()) return false;
+    if (bio_len > config::protocol::MAX_BIO_SIZE) {
+        spdlog::warn("Profile validation: bio size {} exceeds {} byte limit", bio_len, config::protocol::MAX_BIO_SIZE);
+        return false;
+    }
     offset += bio_len;
 
-    // Skip avatar
+    // avatar
     if (offset + 4 > value.size()) return false;
     uint32_t avatar_len = (static_cast<uint32_t>(value[offset]) << 24)
                         | (static_cast<uint32_t>(value[offset + 1]) << 16)
@@ -1943,20 +1947,36 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
                         | static_cast<uint32_t>(value[offset + 3]);
     offset += 4;
     if (offset + avatar_len > value.size()) return false;
+    if (avatar_len > config::protocol::MAX_AVATAR_SIZE) {
+        spdlog::warn("Profile validation: avatar size {} exceeds {} byte limit", avatar_len, config::protocol::MAX_AVATAR_SIZE);
+        return false;
+    }
     offset += avatar_len;
 
-    // Skip social links
+    // social links
     if (offset + 1 > value.size()) return false;
     uint8_t social_count = value[offset];
     offset += 1;
+    if (social_count > config::protocol::MAX_SOCIAL_LINKS) {
+        spdlog::warn("Profile validation: social link count {} exceeds {} limit", social_count, config::protocol::MAX_SOCIAL_LINKS);
+        return false;
+    }
     for (uint8_t i = 0; i < social_count; ++i) {
         if (offset + 1 > value.size()) return false;
         uint8_t platform_len = value[offset]; offset += 1;
         if (offset + platform_len > value.size()) return false;
+        if (platform_len > config::protocol::MAX_SOCIAL_PLATFORM_LENGTH) {
+            spdlog::warn("Profile validation: social platform length {} exceeds {} byte limit", platform_len, config::protocol::MAX_SOCIAL_PLATFORM_LENGTH);
+            return false;
+        }
         offset += platform_len;
         if (offset + 1 > value.size()) return false;
         uint8_t handle_len = value[offset]; offset += 1;
         if (offset + handle_len > value.size()) return false;
+        if (handle_len > config::protocol::MAX_SOCIAL_HANDLE_LENGTH) {
+            spdlog::warn("Profile validation: social handle length {} exceeds {} byte limit", handle_len, config::protocol::MAX_SOCIAL_HANDLE_LENGTH);
+            return false;
+        }
         offset += handle_len;
     }
 
