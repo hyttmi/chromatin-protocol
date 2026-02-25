@@ -5,15 +5,16 @@
 namespace chromatin::kademlia {
 
 std::string RoutingTable::extract_subnet(const std::string& address) {
-    // IPv6: contains ':' - extract first 3 groups (48-bit prefix)
+    // IPv6: contains ':' - extract first 3 groups (/48 prefix)
     if (address.find(':') != std::string::npos) {
         size_t count = 0;
-        size_t pos = 0;
-        for (size_t i = 0; i < address.size() && count < 3; ++i) {
-            if (address[i] == ':') ++count;
-            if (count < 3) pos = i + 1;
+        for (size_t i = 0; i < address.size(); ++i) {
+            if (address[i] == ':') {
+                ++count;
+                if (count == 3) return address.substr(0, i);
+            }
         }
-        return address.substr(0, pos);
+        return address;  // fewer than 3 colons — return full address
     }
     // IPv4: extract first 3 octets (e.g., "192.168.1")
     size_t count = 0;

@@ -30,6 +30,9 @@ struct NodeInfo {
     uint8_t proto_version_min = 0;
     uint8_t proto_version_max = 0;
     uint32_t capabilities = 0;
+    uint8_t  app_version_major = 0;
+    uint8_t  app_version_minor = 0;
+    uint8_t  app_version_patch = 0;
 };
 
 class RoutingTable {
