@@ -482,7 +482,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             if (!workers_.post([this, ws, send_id, group_key, group_id, sender_fp,
                                 msg_bytes = std::move(msg_bytes),
                                 msg_id_copy]() mutable {
-                bool ok = kad_.store(group_key, 0x05, msg_bytes);
+                bool ok = kad_.store_sync(group_key, 0x05, msg_bytes);
 
                 // Ensure data is stored locally for GROUP_LIST/GET/DELETE
                 if (ok) {
@@ -517,7 +517,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
                         resp["msg_id"] = to_hex(msg_id_copy);
                         send_json(ws, resp);
                     } else {
-                        send_error(ws, send_id, 500, "store failed");
+                        send_error(ws, send_id, 504, "replication timeout");
                     }
                 });
             })) {
@@ -542,25 +542,8 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             auto blob_data = std::move(upload.data);
             session->pending_upload.reset();
 
-            // Build index key/value (same format as small SEND)
-            std::vector<uint8_t> idx_key;
-            idx_key.reserve(64);
-            idx_key.insert(idx_key.end(), recipient_fp.begin(), recipient_fp.end());
-            idx_key.insert(idx_key.end(), msg_id.begin(), msg_id.end());
-
-            std::vector<uint8_t> idx_value;
-            idx_value.reserve(44);
-            idx_value.insert(idx_value.end(), sender_fp.begin(), sender_fp.end());
-            for (int i = 7; i >= 0; --i)
-                idx_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-            uint32_t sz = static_cast<uint32_t>(blob_data.size());
-            idx_value.push_back(static_cast<uint8_t>((sz >> 24) & 0xFF));
-            idx_value.push_back(static_cast<uint8_t>((sz >> 16) & 0xFF));
-            idx_value.push_back(static_cast<uint8_t>((sz >> 8) & 0xFF));
-            idx_value.push_back(static_cast<uint8_t>(sz & 0xFF));
-
-            std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
             auto msg_id_copy = msg_id;
+            uint32_t sz = static_cast<uint32_t>(blob_data.size());
 
             // Build message_binary for Kademlia replication:
             // msg_id(32) || sender_fp(32) || timestamp(8 BE) || blob_len(4 BE) || blob
@@ -585,24 +568,19 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
             // Dispatch to worker pool for storage
-            if (!workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
-                           idx_value = std::move(idx_value),
-                           blob_key = std::move(blob_key),
-                           blob_data = std::move(blob_data),
+            if (!workers_.post([this, ws, send_id,
                            kad_value = std::move(kad_value),
                            inbox_key,
                            msg_id_copy]() {
-                bool ok = storage_.put(storage::TABLE_INBOX_INDEX, idx_key, idx_value);
-                if (ok) storage_.put(storage::TABLE_MESSAGE_BLOBS, blob_key, blob_data);
+                bool ok = kad_.store_sync(inbox_key, 0x02, kad_value);
 
                 if (ok) {
-                    kad_.store(inbox_key, 0x02, kad_value);
-
-                    // Fire push notification directly — store_locally()
-                    // will hit dedup (we pre-stored above) and skip
-                    // on_store_, so we trigger the push explicitly.
-                    on_kademlia_store(inbox_key, 0x02,
-                                      std::span<const uint8_t>(kad_value));
+                    // Push was already fired via store_locally() → on_store_
+                    // if this node is responsible. Only fire explicitly if not.
+                    if (!kad_.is_responsible(inbox_key)) {
+                        on_kademlia_store(inbox_key, 0x02,
+                                          std::span<const uint8_t>(kad_value));
+                    }
                 }
 
                 loop_->defer([this, ws, send_id, ok, msg_id_copy]() {
@@ -614,7 +592,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
                         resp["msg_id"] = to_hex(msg_id_copy);
                         send_json(ws, resp);
                     } else {
-                        send_error(ws, send_id, 500, "store failed");
+                        send_error(ws, send_id, 504, "replication timeout");
                     }
                 });
             })) {
@@ -1194,30 +1172,6 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     message_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     message_binary.insert(message_binary.end(), blob->begin(), blob->end());
 
-    // Build INDEX key: recipient_fp(32) || msg_id(32) = 64 bytes
-    std::vector<uint8_t> index_key;
-    index_key.reserve(64);
-    index_key.insert(index_key.end(),
-                     recipient_fp.begin(), recipient_fp.end());
-    index_key.insert(index_key.end(), msg_id.begin(), msg_id.end());
-
-    // Build INDEX value: sender_fp(32) || timestamp(8 BE) || size(4 BE) = 44 bytes
-    std::vector<uint8_t> index_value;
-    index_value.reserve(44);
-    index_value.insert(index_value.end(),
-                       session->fingerprint.begin(), session->fingerprint.end());
-    for (int i = 7; i >= 0; --i) {
-        index_value.push_back(static_cast<uint8_t>((timestamp >> (i * 8)) & 0xFF));
-    }
-    index_value.push_back(static_cast<uint8_t>((blob_len >> 24) & 0xFF));
-    index_value.push_back(static_cast<uint8_t>((blob_len >> 16) & 0xFF));
-    index_value.push_back(static_cast<uint8_t>((blob_len >> 8) & 0xFF));
-    index_value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
-
-    // BLOB key: msg_id(32), value: raw blob bytes
-    std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
-    auto blob_value = std::move(*blob);
-
     // Compute inbox_key = SHA3-256("chromatin:inbox:" || recipient_fp)
     // Used for Kademlia routing (responsibility check) and replication.
     auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
@@ -1227,36 +1181,25 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
 
     // Dispatch to worker pool
     if (!workers_.post([this, ws, id, inbox_key,
-                   index_key = std::move(index_key),
-                   index_value = std::move(index_value),
-                   blob_key = std::move(blob_key),
-                   blob_value = std::move(blob_value),
+                   recipient_fp,
                    message_binary = std::move(message_binary),
                    msg_id_copy]() {
-        // Store locally in the two-table model so LIST can scan by fingerprint
-        bool ok = storage_.put(storage::TABLE_INBOX_INDEX,
-                               index_key, index_value);
-        if (ok) {
-            ok = storage_.put(storage::TABLE_MESSAGE_BLOBS,
-                              blob_key, blob_value);
-        }
-
         // Replicate via Kademlia: prepend recipient_fp so receiving nodes
         // can build the two-table inbox model (INDEX key needs recipient_fp).
-        if (ok) {
-            auto inbox_key_local = inbox_key;
-            // Retrieve recipient_fp from index_key (first 32 bytes)
-            std::vector<uint8_t> kad_value;
-            kad_value.reserve(32 + message_binary.size());
-            kad_value.insert(kad_value.end(), index_key.begin(), index_key.begin() + 32);
-            kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
-            kad_.store(inbox_key_local, 0x02, kad_value);
+        auto inbox_key_local = inbox_key;
+        std::vector<uint8_t> kad_value;
+        kad_value.reserve(32 + message_binary.size());
+        kad_value.insert(kad_value.end(), recipient_fp.begin(), recipient_fp.end());
+        kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
+        bool ok = kad_.store_sync(inbox_key_local, 0x02, kad_value);
 
-            // Fire push notification directly — store_locally() will
-            // hit dedup (we pre-stored above) and skip on_store_,
-            // so we trigger the push explicitly.
-            on_kademlia_store(inbox_key_local, 0x02,
-                              std::span<const uint8_t>(kad_value));
+        if (ok) {
+            // Push was already fired via store_locally() → on_store_
+            // if this node is responsible. Only fire explicitly if not.
+            if (!kad_.is_responsible(inbox_key_local)) {
+                on_kademlia_store(inbox_key_local, 0x02,
+                                  std::span<const uint8_t>(kad_value));
+            }
         }
 
         // Defer response back to the uWS event loop thread
@@ -1271,7 +1214,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
                 resp["msg_id"] = to_hex(msg_id_copy);
                 send_json(ws, resp);
             } else {
-                send_error(ws, id, 500, "store failed");
+                send_error(ws, id, 504, "replication timeout");
             }
         });
     })) {
@@ -1384,15 +1327,9 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
     entry_value.insert(entry_value.end(), sig_bytes->begin(), sig_bytes->end());
 
     // Dispatch to worker pool
-    if (!workers_.post([this, ws, id, allowlist_key, allowed_fp,
-                   storage_key = std::move(storage_key),
+    if (!workers_.post([this, ws, id, allowlist_key,
                    entry_value = std::move(entry_value)]() {
-        bool ok = storage_.put(storage::TABLE_ALLOWLISTS, storage_key, entry_value);
-
-        if (ok) {
-            // entry_value already has the full format for Kademlia replication
-            kad_.store(allowlist_key, 0x04, entry_value);
-        }
+        bool ok = kad_.store_sync(allowlist_key, 0x04, entry_value);
 
         loop_->defer([this, ws, id, ok]() {
             if (connections_.count(ws) == 0) return;
@@ -1403,7 +1340,7 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
                 resp["id"] = id;
                 send_json(ws, resp);
             } else {
-                send_error(ws, id, 500, "store failed");
+                send_error(ws, id, 504, "replication timeout");
             }
         });
     })) {
@@ -1522,15 +1459,19 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
         revoke_value.insert(revoke_value.end(), owner_pubkey.begin(), owner_pubkey.end());
         revoke_value.insert(revoke_value.end(), sig_bytes.begin(), sig_bytes.end());
 
-        kad_.store(allowlist_key, 0x04, revoke_value);
+        bool ok = kad_.store_sync(allowlist_key, 0x04, revoke_value);
 
-        loop_->defer([this, ws, id]() {
+        loop_->defer([this, ws, id, ok]() {
             if (connections_.count(ws) == 0) return;
 
-            Json::Value resp;
-            resp["type"] = "OK";
-            resp["id"] = id;
-            send_json(ws, resp);
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 504, "replication timeout");
+            }
         });
     })) {
         send_error(ws, id, 503, "server overloaded");
@@ -1648,15 +1589,19 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     // Dispatch to worker pool
     if (!workers_.post([this, ws, id, requests_key,
                    request_binary = std::move(request_binary)]() {
-        kad_.store(requests_key, 0x03, request_binary);
+        bool ok = kad_.store_sync(requests_key, 0x03, request_binary);
 
-        loop_->defer([this, ws, id]() {
+        loop_->defer([this, ws, id, ok]() {
             if (connections_.count(ws) == 0) return;
 
-            Json::Value resp;
-            resp["type"] = "OK";
-            resp["id"] = id;
-            send_json(ws, resp);
+            if (ok) {
+                Json::Value resp;
+                resp["type"] = "OK";
+                resp["id"] = id;
+                send_json(ws, resp);
+            } else {
+                send_error(ws, id, 504, "replication timeout");
+            }
         });
     })) {
         send_error(ws, id, 503, "server overloaded");
@@ -2351,7 +2296,7 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
     auto ws_ptr = ws;
 
     if (!workers_.post([this, ws_ptr, id, key, value]() {
-        bool ok = kad_.store(key, 0x00, *value);
+        bool ok = kad_.store_sync(key, 0x00, *value);
 
         loop_->defer([this, ws_ptr, id, ok]() {
             if (connections_.count(ws_ptr) == 0) return;
@@ -2361,7 +2306,7 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
                 resp["id"] = id;
                 send_json(ws_ptr, resp);
             } else {
-                send_error(ws_ptr, id, 500, "failed to store profile");
+                send_error(ws_ptr, id, 504, "replication timeout");
             }
         });
     })) {
@@ -2418,7 +2363,7 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
     auto ws_ptr = ws;
 
     if (!workers_.post([this, ws_ptr, id, key, value]() {
-        bool ok = kad_.store(key, 0x01, *value);
+        bool ok = kad_.store_sync(key, 0x01, *value);
 
         loop_->defer([this, ws_ptr, id, ok]() {
             if (connections_.count(ws_ptr) == 0) return;
@@ -2428,7 +2373,7 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
                 resp["id"] = id;
                 send_json(ws_ptr, resp);
             } else {
-                send_error(ws_ptr, id, 500, "failed to register name");
+                send_error(ws_ptr, id, 504, "replication timeout");
             }
         });
     })) {
@@ -2667,7 +2612,7 @@ void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
         auto group_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
-        bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
+        bool ok = kad_.store_sync(group_key, 0x06, meta_bytes_copy);
 
         auto group_id_copy = group_id;
         loop_->defer([this, ws, id, ok, group_id_copy]() {
@@ -2681,7 +2626,7 @@ void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
                 resp["group_id"] = to_hex(group_id_copy);
                 send_json(ws, resp);
             } else {
-                send_error(ws, id, 500, "store failed");
+                send_error(ws, id, 504, "replication timeout");
             }
         });
     })) {
@@ -2929,7 +2874,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
         auto group_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
-        bool ok = kad_.store(group_key, 0x06, meta_bytes);
+        bool ok = kad_.store_sync(group_key, 0x06, meta_bytes);
 
         auto group_id_copy = group_id;
         loop_->defer([this, ws, id, ok, group_id_copy]() {
@@ -2942,7 +2887,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
                 resp["id"] = id;
                 send_json(ws, resp);
             } else {
-                send_error(ws, id, 500, "store failed");
+                send_error(ws, id, 504, "replication timeout");
             }
         });
     })) {
@@ -3165,11 +3110,11 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
             return;
         }
 
-        bool ok = kad_.store(group_key, 0x05, msg_bytes);
+        bool ok = kad_.store_sync(group_key, 0x05, msg_bytes);
 
         // Ensure data is stored locally for GROUP_LIST/GET/DELETE,
         // even if this node isn't responsible for the group key.
-        // kad_.store() only stores locally on responsible nodes.
+        // store_sync() only stores locally on responsible nodes.
         if (ok) {
             std::vector<uint8_t> idx_key;
             idx_key.reserve(64);
@@ -3202,7 +3147,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
                 resp["msg_id"] = to_hex(msg_id_copy);
                 send_json(ws, resp);
             } else {
-                send_error(ws, id, 500, "store failed");
+                send_error(ws, id, 504, "replication timeout");
             }
         });
     })) {
