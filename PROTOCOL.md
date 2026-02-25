@@ -257,7 +257,7 @@ messages directly via TCP:
 - **Signature verification**: PING and FIND_NODE are accepted without
   signature verification (discovery). All other messages — including PONG,
   NODES, STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ,
-  SEQ_RESP — MUST have valid ML-DSA-87 signatures. Messages from nodes
+  SEQ_RESP, RELAY — MUST have valid ML-DSA-87 signatures. Messages from nodes
   whose public key is not yet known are rejected.
 - **Pubkey propagation**: Public keys are learned via two mechanisms:
   (1) FIND_NODE includes the sender's pubkey in its payload, verified via
@@ -594,6 +594,7 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 5.7).
 | GROUP_GET         | Fetch a specific group message blob          |
 | GROUP_DELETE      | Delete a group message                       |
 | GROUP_DESTROY     | Destroy a group and all its messages (owner-only) |
+| EVENT             | Send an ephemeral event (fire-and-forget)    |
 | STATUS            | Health check (no auth required)              |
 
 **Node → Client:**
@@ -605,6 +606,7 @@ WebSocket frames with 1 MiB chunked transfer (see PROTOCOL-SPEC.md Section 5.7).
 | CONTACT_REQUEST      | Incoming contact request (PoW-verified)      |
 | NEW_GROUP_MESSAGE    | Incoming group message notification          |
 | GROUP_DESTROYED      | Group has been destroyed                     |
+| EVENT                | Incoming ephemeral event (typing indicator, etc.) |
 | SEND_READY           | Ready for chunked upload (large SEND/GROUP_SEND) |
 | REDIRECT             | List of responsible nodes (sorted by seq)    |
 | ERROR                | Rejection with reason and error code         |
