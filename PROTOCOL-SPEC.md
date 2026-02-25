@@ -268,12 +268,15 @@ Empty payload (0 bytes).
 
 ### PONG (0x01)
 
-Version and capability negotiation payload (6 bytes):
+Version, capability, and application version negotiation payload (9 bytes):
 
 ```
 [1 byte: min_version]          // Minimum protocol version supported
 [1 byte: max_version]          // Maximum protocol version supported
 [4 bytes BE: capabilities]     // Capability bitmask
+[1 byte: app_version_major]    // Application major version
+[1 byte: app_version_minor]    // Application minor version
+[1 byte: app_version_patch]    // Application patch version
 ```
 
 **Capability bits:**
@@ -285,13 +288,14 @@ Version and capability negotiation payload (6 bytes):
 
 Bits 2-31 are reserved for future capabilities.
 
-**Backward compatibility:** Old nodes that send an empty PONG payload (0 bytes)
-are accepted — the receiver assumes `min_version = max_version = 0x01` and
-`capabilities = 0x00`. Nodes log a warning if the peer's version range does
-not include the local protocol version.
+Nodes MUST reject peers whose protocol version range does not include the
+local protocol version, and MUST reject peers with a different application
+version (major.minor.patch must match exactly). Rejected peers are removed
+from the routing table.
 
 Received version and capability data is stored in NodeInfo
-(`proto_version_min`, `proto_version_max`, `capabilities`).
+(`proto_version_min`, `proto_version_max`, `capabilities`,
+`app_version_major`, `app_version_minor`, `app_version_patch`).
 
 ### FIND_NODE (0x02)
 
@@ -374,8 +378,9 @@ Data types:
 | 0x04  | Allowlist entry |
 | 0x05  | Group message   |
 | 0x06  | Group metadata  |
+| 0x07  | Key rotation    |
 
-Values 0x07-0xFF are reserved for future use (channels, etc.).
+Values 0x08-0xFF are reserved for future use (channels, etc.).
 
 ### FIND_VALUE (0x05)
 
@@ -502,6 +507,10 @@ WebSocket push. If not found, the event is silently dropped.
 Signature policy: mandatory verification (same as STORE — must come from a known,
 verified node).
 
+**Future sub-types:** The optional payload field enables new event types (reactions,
+message edit indicators, presence updates) without wire format changes. Future
+sub-types will be defined via a type byte prefix in the payload data.
+
 ---
 
 ## 4. Data Formats
@@ -528,10 +537,13 @@ These define the structure of values carried inside STORE and VALUE payloads.
     [handle_length bytes: handle (UTF-8)]
 [8 bytes BE: sequence]
 [2 bytes BE: signature_length]
-[signature_length bytes: ML-DSA-87 signature over all preceding fields]
+[signature_length bytes: ML-DSA-87 signature]
 ```
 
-Storage key: `SHA3-256("profile:" || fingerprint)`
+The signature covers `"chromatin:profile:" || [all fields before signature_length]`
+(domain-separated to prevent cross-type signature reuse).
+
+Storage key: `SHA3-256("chromatin:profile:" || fingerprint)`
 
 **Profile sub-field limits:**
 
@@ -556,14 +568,17 @@ These limits are enforced independently of the 1 MiB total profile size cap.
 [2 bytes BE: pubkey_length]
 [pubkey_length bytes: ML-DSA-87 public key]
 [2 bytes BE: signature_length]
-[signature_length bytes: ML-DSA-87 signature over all preceding fields]
+[signature_length bytes: ML-DSA-87 signature]
 ```
+
+The signature covers `"chromatin:name:" || [all fields before signature_length]`
+(domain-separated to prevent cross-type signature reuse).
 
 The record embeds the public key so that any node can verify the signature
 without needing the owner's profile. Validators verify that
 `fingerprint == SHA3-256(pubkey)` before checking the signature.
 
-Storage key: `SHA3-256("name:" || name)`
+Storage key: `SHA3-256("chromatin:name:" || name)`
 
 ### Inbox Message (data_type 0x02)
 
@@ -577,7 +592,7 @@ Kademlia STORE value (includes recipient_fp for two-table routing):
 [blob_length bytes: encrypted blob]
 ```
 
-Storage key (DHT routing): `SHA3-256("inbox:" || recipient_fingerprint)`
+Storage key (DHT routing): `SHA3-256("chromatin:inbox:" || recipient_fingerprint)`
 
 **Security model:** The `sender_fingerprint` field is an *unverified routing
 hint*. The Kademlia STORE handler uses it solely for allowlist lookup — it
@@ -619,8 +634,8 @@ DELETE removes entries from both tables.
 
 Minimum size: 84 bytes (32 + 32 + 8 + 8 + 4 + 0).
 
-DHT routing key: `SHA3-256("inbox:" || recipient_fingerprint)` — uses the same
-`"inbox:"` prefix as messages to co-locate contact requests with inbox data on
+DHT routing key: `SHA3-256("chromatin:inbox:" || recipient_fingerprint)` — uses the same
+`"chromatin:inbox:"` prefix as messages to co-locate contact requests with inbox data on
 the same responsible nodes, enabling push notifications to connected clients.
 
 Local mdbx storage uses composite key for multi-sender support:
@@ -666,14 +681,14 @@ The signature covers a domain-separated message:
 `"chromatin:allowlist:" || owner_fingerprint(32) || action(1) || allowed_fingerprint(32) || sequence(8 BE)`
 signed by the owner's ML-DSA-87 key.
 
-Storage key (DHT routing): `SHA3-256("inbox:" || owner_fingerprint)`
+Storage key (DHT routing): `SHA3-256("chromatin:inbox:" || owner_fingerprint)`
 
 This co-locates allowlist data with inbox data on the same R responsible
 nodes, so allowlist checks during message delivery are always local lookups.
 
 Local mdbx storage uses composite key for O(1) lookup:
 ```
-Key:   SHA3-256("inbox:" || owner_fp)(32) || allowed_fp(32)
+Key:   SHA3-256("chromatin:inbox:" || owner_fp)(32) || allowed_fp(32)
 Value: owner_fp(32) || allowed_fp(32) || action(1) || sequence(8 BE) || pubkey_len(2 BE) || pubkey || signature
 ```
 
@@ -706,7 +721,7 @@ verifies their membership against the GROUP_META record.
 
 Minimum size: 112 bytes (32 + 32 + 32 + 8 + 4 + 4 + 0).
 
-Storage key (DHT routing): `SHA3-256("group:" || group_id)`
+Storage key (DHT routing): `SHA3-256("chromatin:group:" || group_id)`
 
 Local mdbx storage uses two dedicated tables (separate from 1:1 inbox tables):
 
@@ -744,13 +759,15 @@ the Group Encryption Key (GEK) to each member via ML-KEM-1024 encapsulation.
 For each member:
   [32 bytes: member_fingerprint]
   [1 byte: role]                        // 0x00=Member, 0x01=Admin, 0x02=Owner
-  [1568 bytes: kem_ciphertext]          // ML-KEM-1024 encrypted GEK for this member
+  [1568 bytes: kem_ciphertext]          // ML-KEM-1024 ciphertext for GEK wrapping
+  [48 bytes: wrapped_gek]              // AES-256-GCM(wrap_key, zeros(12), gek, "chromatin:gek")
+                                       // wrap_key = SHA3-256("chromatin:gek:wrap:" || KEM shared secret)
 [2 bytes BE: signature_length]
 [signature_length bytes: ML-DSA-87 signature]
 ```
 
 The signature covers everything preceding `signature_length` (i.e., from
-`group_id` through the last member's `kem_ciphertext`). Signed by the member
+`group_id` through the last member's `wrapped_gek`). Signed by the member
 identified by `signer_fingerprint`, who must have role >= 0x01 (Admin or Owner).
 For updates to existing groups, the signer is verified against the **existing**
 stored GROUP_META's member list. For creation, the signer is verified against
@@ -768,7 +785,7 @@ additions/removals of regular members. Owners may sign any update.
 Multiple members can have role=0x02 (Owner). At least one Owner must exist at
 all times (server-enforced).
 
-Storage key (DHT routing): `SHA3-256("group:" || group_id)`
+Storage key (DHT routing): `SHA3-256("chromatin:group:" || group_id)`
 
 Local mdbx storage uses TABLE_GROUP_META:
 ```
@@ -843,6 +860,10 @@ The node verifies:
    signature replay attacks. The node's fingerprint (SHA3-256 of its ML-DSA-87
    public key) is included in the signed data to prevent cross-node challenge
    relay attacks.
+
+The OK response includes `pending_messages` — the number of inbox entries
+currently awaiting retrieval. This allows the client to know whether a LIST
+request is worthwhile immediately after connecting.
 
 A client MUST NOT send HELLO after successful authentication. The server
 MUST reject HELLO from authenticated sessions with error 400.
@@ -967,6 +988,28 @@ Large blob response (>64 KB): JSON header followed by binary chunks:
 ```
 Then the server sends `chunks` binary DOWNLOAD_CHUNK frames (see Section 5.7).
 
+#### Chunked Download (Large Message Retrieval)
+
+When a GET or GROUP_GET response has a message size exceeding 65,536 bytes
+(inline threshold), the server responds with a JSON preamble followed by
+binary frames:
+
+**JSON Response:**
+```json
+{"type": "OK", "id": N, "msg_id": "<hex>", "size": <total_bytes>, "chunks": <count>}
+```
+
+**Binary Frames** (one per chunk):
+```
+[1 byte: 0x02]                       // frame_type: DOWNLOAD_CHUNK
+[4 bytes BE: request_id]             // matches the GET request id
+[2 bytes BE: chunk_index]            // 0-based, sequential
+[N bytes: payload]                   // up to 1,048,576 bytes (1 MiB) per chunk
+```
+
+The client reassembles chunks in order by `chunk_index`. The total
+reassembled size MUST match the `size` field from the JSON preamble.
+
 **DELETE** — Optionally delete messages the client no longer needs:
 ```json
 {"type": "DELETE", "id": 6, "msg_ids": ["<hex>", "<hex>"]}
@@ -1052,15 +1095,20 @@ Response:
 ```
 If not found: `{"type": "OK", "id": 12, "found": false}`
 
-**LIST_REQUESTS** — List pending contact requests:
+**LIST_REQUESTS** — List pending contact requests (paginated):
 ```json
-{"type": "LIST_REQUESTS", "id": 13}
+{"type": "LIST_REQUESTS", "id": 13, "limit": 100, "offset": 0}
 ```
+
+Optional fields:
+- `limit` — Maximum number of requests to return (default 100, max 500)
+- `offset` — Number of entries to skip (default 0)
+
 Response:
 ```json
 {"type": "OK", "id": 13, "requests": [
   {"from": "<fingerprint hex>", "timestamp": 1708000100000, "blob": "<base64>"}
-]}
+], "has_more": false}
 ```
 
 **SET_PROFILE** — Publish or update a signed profile:
@@ -1094,9 +1142,10 @@ Response: `{"type": "OK", "id": 12}`
 
 Defined event types:
 
-| Event   | Description        | Behavior                                                    |
-|---------|--------------------|-------------------------------------------------------------|
-| TYPING  | Sender is typing   | Client sends every ~3s; receiver shows indicator, removes after 5s without renewal |
+| Event     | Description              | Behavior                                                    |
+|-----------|--------------------------|-------------------------------------------------------------|
+| TYPING    | Sender is typing         | Client sends every ~3s; receiver shows indicator, removes after 5s without renewal |
+| DELIVERED | Message was delivered     | Client sends after receiving and decrypting a message successfully |
 
 **GROUP_CREATE** — Create a new group:
 ```json
@@ -1379,15 +1428,20 @@ On every incoming TCP message, a conforming node MUST:
 1. Verify magic == `CHRM`
 2. Verify version == `0x01` (or a supported version)
 3. Verify ML-DSA-87 signature over `magic || version || type || sender_port || sender_id || payload_length || payload`
-4. Verify sender node ID exists in membership table (exception: PING and NODES from unknown nodes during bootstrap)
+4. Verify sender node ID exists in routing table (exceptions below)
 5. Verify message size <= implementation-defined limit (recommended: 50 MiB)
 
-**Signature verification:** PING and FIND_NODE are accepted without signature
-verification (needed for initial discovery by unknown nodes). All other
-message types — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
-SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
-signatures. Messages from nodes whose public key is not yet known are
-rejected (except PING and FIND_NODE).
+**Signature verification exceptions:** PING and FIND_NODE are fully exempt —
+accepted without signature verification (needed for initial discovery by
+unknown nodes). PONG and NODES are verified when the sender's public key is
+known, but accepted without verification from unknown senders (needed for
+initial discovery before pubkey exchange). All other message types — STORE,
+FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY —
+MUST have valid ML-DSA-87 signatures and are rejected from unknown senders.
+
+**Routing table membership exceptions:** PING, FIND_NODE, and NODES are
+accepted from nodes not yet in the routing table. All other message types
+require the sender to be a known node with a stored public key.
 
 **Known risk — routing table poisoning:** Because PING and FIND_NODE are
 accepted without authentication, an attacker can inject entries into a node's
@@ -1425,7 +1479,7 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### Profile STORE Validation
 
 1. `fingerprint == SHA3-256(ml_dsa_pubkey)` — reject if mismatch
-2. ML-DSA-87 signature valid over all fields preceding the signature
+2. ML-DSA-87 signature valid over `"chromatin:profile:" || [all fields before sig_len]`
 3. `sequence` > currently stored sequence for this fingerprint — reject replays
 4. Total profile size <= 1 MiB (including avatar)
 5. Per-field limits:
@@ -1438,8 +1492,8 @@ immediate signed message exchange (STORE, FIND_VALUE, etc.).
 ### Name Registration STORE Validation
 
 1. Name matches `^[a-z0-9]{3,36}$`
-2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce)` has >= 26 leading zero bits
-3. ML-DSA-87 signature valid over all fields preceding the signature
+2. `SHA3-256("chromatin:name:" || name || fingerprint || nonce (8 bytes BE))` has >= 26 leading zero bits
+3. ML-DSA-87 signature valid over `"chromatin:name:" || [all fields before sig_len]`
 4. Owner's profile MUST be stored locally — reject if absent (prevents forged entries during propagation window)
 5. If name already registered to a different fingerprint — **lower fingerprint wins**
    (deterministic tiebreaker ensuring all nodes converge to the same owner regardless
@@ -1510,8 +1564,8 @@ For non-empty STOREs (`value_length > 0`), all of the following must hold:
 
 1. Parse GROUP_META binary format (group_id, owner_fp, version, member list with roles, signature)
 2. ML-DSA-87 signature valid — signed by a member with role=0x02 (Owner) or role=0x01 (Admin).
-   The owner's profile MUST be available in local storage for signature
-   verification. If the owner's profile is not found, the GROUP_META MUST
+   The signer's profile MUST be available in local storage for signature
+   verification. If the signer's profile is not found, the GROUP_META MUST
    be rejected.
 3. `version` > currently stored version for this group_id — reject replays
 4. At least one member must have role=0x02 (Owner)
@@ -1707,23 +1761,23 @@ deployment-specific settings (`bind`, `tcp_port`, `ws_port`, `bootstrap`,
 | Default TCP port           | 4000                                   |
 | Default WebSocket port     | 4001                                   |
 | MDBX max database size     | 1 GiB                                  |
-| Bootstrap nodes            | `0.bootstrap.cpunk.io`                 |
-|                            | `1.bootstrap.cpunk.io`                 |
-|                            | `2.bootstrap.cpunk.io`                 |
+| Bootstrap nodes            | `0.bootstrap.pqcc.fi`                  |
+|                            | `1.bootstrap.pqcc.fi`                  |
+|                            | `2.bootstrap.pqcc.fi`                  |
 
 ---
 
 ## 8. Key Computation
 
-All storage keys are derived using SHA3-256 with domain prefixes:
+All storage keys are derived using SHA3-256 with `chromatin:` namespace prefixes:
 
 ```
-profile_key  = SHA3-256("profile:"       || fingerprint)
-name_key     = SHA3-256("name:"      || name)
-inbox_key    = SHA3-256("inbox:"     || fingerprint)
-request_key  = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
-allow_key    = SHA3-256("inbox:"     || fingerprint)   // co-located with inbox
-group_key    = SHA3-256("group:"     || group_id)
+profile_key  = SHA3-256("chromatin:profile:" || fingerprint)
+name_key     = SHA3-256("chromatin:name:"    || name)
+inbox_key    = SHA3-256("chromatin:inbox:"   || fingerprint)
+request_key  = SHA3-256("chromatin:inbox:"   || fingerprint)   // co-located with inbox
+allow_key    = SHA3-256("chromatin:inbox:"   || fingerprint)   // co-located with inbox
+group_key    = SHA3-256("chromatin:group:"   || group_id)
 ```
 
 Node ID:
@@ -1741,13 +1795,160 @@ responsible for storing data associated with that key.
 
 ---
 
-## 9. Extensibility
+## 9. Client Message Encryption
+
+### 9.1 Overview
+
+Servers are opaque blob stores. All encryption and decryption is performed
+client-side — nodes never inspect message content.
+
+**Algorithms:**
+
+| Purpose              | Algorithm      |
+|----------------------|----------------|
+| Key encapsulation    | ML-KEM-1024    |
+| Message encryption   | AES-256-GCM    |
+| Sender signatures    | ML-DSA-87      |
+| Key derivation       | SHA3-256        |
+
+**Pattern:** Sign-then-encrypt for all messages. The sender signs the plaintext,
+then encrypts the signature along with the content. The recipient decrypts first,
+then verifies the signature.
+
+**Multi-device:** Same keypair on all devices. Multi-device support is achieved by
+importing the keypair — there is no device-linking protocol. All devices sharing a
+keypair can decrypt all messages for that identity.
+
+**Post-quantum only.** No classical fallback algorithms are used.
+
+### 9.2 1:1 Message Blob Format
+
+The `blob` field in SEND contains this binary structure (base64-encoded in the
+JSON frame):
+
+```
+[1568 bytes: kem_ciphertext]         // ML-KEM-1024 encapsulate to recipient's KEM pubkey
+[12 bytes: nonce]                    // random AES-256-GCM nonce
+[N bytes: aes_ciphertext]            // AES-256-GCM ciphertext
+[16 bytes: tag]                      // AES-256-GCM authentication tag
+```
+
+**Key derivation:**
+
+```
+(kem_ciphertext, shared_secret) = ML-KEM-1024.encapsulate(recipient_kem_pubkey)
+message_key = SHA3-256("chromatin:msg:1:1:" || shared_secret)
+```
+
+**Plaintext** (input to AES-256-GCM):
+
+```
+[32 bytes: sender_fingerprint]
+[N bytes: content]                   // application payload
+[2 bytes BE: sig_len]
+[sig_len bytes: ML-DSA-87 signature]
+```
+
+**Signature covers:** `"chromatin:msg:" || sender_fp(32) || recipient_fp(32) || content`
+
+**AAD for AES-256-GCM:** `kem_ciphertext(1568)`
+
+**Overhead per message:** ~6.2 KB (1568 KEM + 12 nonce + 16 tag + 4627 signature)
+
+### 9.3 Group Message Blob Format
+
+The `blob` field in GROUP_SEND contains this binary structure (hex-encoded in the
+JSON frame):
+
+```
+[12 bytes: nonce]                    // random AES-256-GCM nonce
+[N bytes: aes_ciphertext]            // AES-256-GCM ciphertext
+[16 bytes: tag]                      // AES-256-GCM authentication tag
+```
+
+**Key derivation:**
+
+```
+message_key = SHA3-256("chromatin:msg:grp:" || gek)
+```
+
+**Plaintext** (input to AES-256-GCM):
+
+```
+[32 bytes: sender_fingerprint]
+[N bytes: content]                   // application payload
+[2 bytes BE: sig_len]
+[sig_len bytes: ML-DSA-87 signature]
+```
+
+**Signature covers:** `"chromatin:grp:" || sender_fp(32) || group_id(32) || gek_version(4 BE) || content`
+
+**AAD:** `group_id(32) || gek_version(4 BE)`
+
+**Overhead per message:** ~4.6 KB (12 nonce + 16 tag + 4629 sig_len + signature)
+
+### 9.4 GEK Lifecycle
+
+GEK = Group Encryption Key, 32-byte cryptographic random.
+
+**Generation:** Owner generates a random 32-byte GEK when creating a group.
+
+**Distribution** via GROUP_META per-member fields:
+
+1. `(kem_ct, ss) = ML-KEM-1024.encapsulate(member_kem_pubkey)`
+2. `wrap_key = SHA3-256("chromatin:gek:wrap:" || ss)`
+3. `wrapped_gek = AES-256-GCM(wrap_key, nonce=zeros(12), gek, aad="chromatin:gek")`
+
+Per-member GROUP_META entry includes:
+
+```
+[32 bytes: member_fingerprint]
+[1 byte: role]
+[1568 bytes: kem_ciphertext]         // ML-KEM-1024 ciphertext for GEK wrapping
+[48 bytes: wrapped_gek]              // AES-256-GCM(wrap_key, zeros(12), gek, "chromatin:gek")
+```
+
+**Member GEK decryption:**
+
+1. `ss = ML-KEM-1024.decapsulate(kem_ciphertext, own_kem_sk)`
+2. `wrap_key = SHA3-256("chromatin:gek:wrap:" || ss)`
+3. `gek = AES-256-GCM.decrypt(wrap_key, nonce=zeros(12), wrapped_gek, aad="chromatin:gek")`
+
+**Rotation:** On member removal, Owner generates a new GEK, increments GROUP_META
+version, and re-wraps for remaining members via GROUP_UPDATE. Removed members
+cannot decrypt subsequent messages.
+
+### 9.5 Contact Requests
+
+Contact request blobs are **NOT encrypted**. They are plaintext introduction
+messages, spam-protected by PoW (16 leading zero bits). After the recipient
+accepts (ALLOW), both parties have each other's profiles (including KEM pubkeys)
+and can exchange encrypted 1:1 messages.
+
+### 9.6 Decryption Flow (1:1)
+
+Step-by-step recipient algorithm:
+
+1. Extract `kem_ciphertext` (bytes 0..1567)
+2. Decapsulate: `ss = ML-KEM-1024.decapsulate(kem_ct, own_kem_sk)`
+3. Derive key: `key = SHA3-256("chromatin:msg:1:1:" || ss)`
+4. Extract `nonce` (bytes 1568..1579), `ciphertext` (bytes 1580..N-16), `tag` (last 16 bytes)
+5. Decrypt: `plaintext = AES-256-GCM.decrypt(key, nonce, ciphertext || tag, aad=kem_ct)`
+6. Parse plaintext: `sender_fp` (0..31), then `content`, then `sig_len` (2 bytes BE), then `signature`
+7. Look up sender's ML-DSA-87 pubkey from their profile
+8. Verify: `ML-DSA-87.verify("chromatin:msg:" || sender_fp || recipient_fp || content, signature, sender_pubkey)`
+9. If verification fails, reject message
+
+---
+
+## 10. Extensibility
 
 The protocol is designed for future extension:
 
-- **Data types:** Values 0x07-0xFF in the STORE `data_type` field are reserved
-  for future use (channels, and any new data kind). Values 0x05 (GROUP_MESSAGE)
-  and 0x06 (GROUP_META) are defined for group messaging.
+- **Data types:** Data type `0x07` is reserved for KEY_ROTATION (identity key
+  rotation records). Values 0x08-0xFF are reserved for future use (channels,
+  and any new data kind). Values 0x05 (GROUP_MESSAGE) and 0x06 (GROUP_META)
+  are defined for group messaging.
 - **Profile fields:** New fields can be appended to the profile format in future
   protocol versions. The `sequence` + signature mechanism handles versioned
   updates.

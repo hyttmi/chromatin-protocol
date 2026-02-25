@@ -69,7 +69,7 @@ def build_profile_record(
         body += h
     body += struct.pack(">Q", sequence)
 
-    sig = sign(seckey, bytes(body))
+    sig = sign(seckey, b"chromatin:profile:" + bytes(body))
     body += struct.pack(">H", len(sig))
     body += sig
     return bytes(body)
@@ -103,7 +103,7 @@ def build_name_record(
     body += struct.pack(">H", len(pubkey))
     body += pubkey
 
-    sig = sign(seckey, bytes(body))
+    sig = sign(seckey, b"chromatin:name:" + bytes(body))
     body += struct.pack(">H", len(sig))
     body += sig
     return bytes(body)
@@ -113,28 +113,32 @@ def build_group_meta(
     seckey: bytes,
     group_id: bytes,
     owner_fingerprint: bytes,
+    signer_fingerprint: bytes,
     version: int,
-    members: list[tuple[bytes, int, bytes]],
+    members: list[tuple[bytes, int, bytes, bytes]],
 ) -> bytes:
     """Build a signed GROUP_META binary record.
 
     Format:
         group_id(32) ||
         owner_fingerprint(32) ||
+        signer_fingerprint(32) ||
         version(4 BE) ||
         member_count(2 BE) ||
-          [member_fp(32) || role(1) || kem_ciphertext(1568)] * count ||
+          [member_fp(32) || role(1) || kem_ciphertext(1568) || wrapped_gek(48)] * count ||
         sig_len(2 BE) || signature
     """
     body = bytearray()
     body += group_id
     body += owner_fingerprint
+    body += signer_fingerprint
     body += struct.pack(">I", version)
     body += struct.pack(">H", len(members))
-    for fp, role, kem_ct in members:
+    for fp, role, kem_ct, wrapped_gek in members:
         body += fp
         body += struct.pack("B", role)
         body += kem_ct
+        body += wrapped_gek
 
     sig = sign(seckey, bytes(body))
     body += struct.pack(">H", len(sig))

@@ -52,6 +52,9 @@ void RoutingTable::add_or_update(NodeInfo info) {
                 existing.proto_version_min = info.proto_version_min;
                 existing.proto_version_max = info.proto_version_max;
                 existing.capabilities = info.capabilities;
+                existing.app_version_major = info.app_version_major;
+                existing.app_version_minor = info.app_version_minor;
+                existing.app_version_patch = info.app_version_patch;
             }
             return;
         }

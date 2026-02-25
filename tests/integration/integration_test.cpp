@@ -340,8 +340,8 @@ int main(int argc, char* argv[]) {
             crypto::KeyPair test_kp = crypto::generate_keypair();
             auto fp = crypto::sha3_256(test_kp.public_key);
 
-            // Storage key = SHA3-256("profile:" || fingerprint)
-            auto key = crypto::sha3_256_prefixed("profile:", fp);
+            // Storage key = SHA3-256("chromatin:profile:" || fingerprint)
+            auto key = crypto::sha3_256_prefixed("chromatin:profile:", fp);
 
             // Build a valid signed profile
             std::string bio = "integration-test-" + std::to_string(i);

@@ -186,7 +186,7 @@ void WsServer<SSL>::on_message(ws_t* ws, std::string_view message) {
         {"REVOKE",          {&WsServer::handle_revoke,          true,  1.0}},
         {"CONTACT_REQUEST", {&WsServer::handle_contact_request, true,  3.0}},
         {"DELETE",          {&WsServer::handle_delete,          true,  1.0}},
-        {"STATUS",          {&WsServer::handle_status,          false, 0.0}},
+        {"STATUS",          {&WsServer::handle_status,          true,  0.0}},
         {"RESOLVE_NAME",   {&WsServer::handle_resolve_name,   true,  1.0}},
         {"GET_PROFILE",    {&WsServer::handle_get_profile,    true,  1.0}},
         {"LIST_REQUESTS",  {&WsServer::handle_list_requests,  true,  1.0}},
@@ -429,6 +429,16 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
         // Truncate to expected size (last chunk may have filled exactly)
         upload.data.resize(upload.expected_size);
 
+        // Verify blob hash if provided
+        if (upload.expected_hash) {
+            auto actual_hash = crypto::sha3_256(upload.data);
+            if (actual_hash != *upload.expected_hash) {
+                send_error(ws, upload.id, 400, "blob hash mismatch");
+                session->pending_upload.reset();
+                return;
+            }
+        }
+
         if (upload.group_id.has_value()) {
             // ---- Group upload completion ----
             auto group_id = *upload.group_id;
@@ -464,7 +474,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             msg_bytes.insert(msg_bytes.end(), blob_data.begin(), blob_data.end());
 
             // Compute DHT routing key
-            auto group_key = crypto::sha3_256_prefixed("group:",
+            auto group_key = crypto::sha3_256_prefixed("chromatin:group:",
                 std::span<const uint8_t>(group_id.data(), group_id.size()));
 
             auto msg_id_copy = upload_msg_id;
@@ -572,7 +582,7 @@ void WsServer<SSL>::on_binary(ws_t* ws, std::span<const uint8_t> data) {
             kad_value.insert(kad_value.end(), recipient_fp.begin(), recipient_fp.end());
             kad_value.insert(kad_value.end(), message_binary.begin(), message_binary.end());
 
-            auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+            auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
             // Dispatch to worker pool for storage
             if (!workers_.post([this, ws, send_id, idx_key = std::move(idx_key),
@@ -641,7 +651,7 @@ void WsServer<SSL>::handle_hello(ws_t* ws, const Json::Value& msg) {
     std::copy(fp_bytes->begin(), fp_bytes->end(), fingerprint.begin());
 
     // Compute inbox key for responsibility check
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", fingerprint);
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", fingerprint);
 
     if (!kad_.is_responsible(inbox_key)) {
         // REDIRECT — query responsible nodes for their repl_log seq,
@@ -1047,12 +1057,29 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
             return;
         }
 
+        std::optional<crypto::Hash> expected_hash;
+        std::string hash_hex = msg.get("sha3_256", "").asString();
+        if (!hash_hex.empty()) {
+            if (hash_hex.size() != 64) {
+                send_error(ws, id, 400, "sha3_256 must be 64 hex chars");
+                return;
+            }
+            auto hash_bytes = from_hex(hash_hex);
+            if (!hash_bytes || hash_bytes->size() != 32) {
+                send_error(ws, id, 400, "invalid sha3_256 hex");
+                return;
+            }
+            crypto::Hash h{};
+            std::copy(hash_bytes->begin(), hash_bytes->end(), h.begin());
+            expected_hash = h;
+        }
+
         // Check allowlist: sender must be allowed to write to recipient's inbox.
         // If no allowlist exists for the recipient, inbox is open (anyone can send).
         // This is a best-effort local check — real enforcement is at the Kademlia
         // STORE validation on the recipient's responsible nodes.
         {
-            auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+            auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
             std::vector<uint8_t> allow_check;
             allow_check.reserve(64);
             allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
@@ -1089,6 +1116,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
         upload.received = 0;
         upload.next_chunk = 0;
         upload.started = std::chrono::steady_clock::now();
+        upload.expected_hash = expected_hash;
         session->pending_upload = std::move(upload);
 
         Json::Value resp;
@@ -1117,7 +1145,7 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     // Check allowlist: sender must be allowed to write to recipient's inbox.
     // If no allowlist exists for the recipient, inbox is open (anyone can send).
     {
-        auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+        auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
         std::vector<uint8_t> allow_check;
         allow_check.reserve(64);
         allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
@@ -1190,9 +1218,9 @@ void WsServer<SSL>::handle_send(ws_t* ws, const Json::Value& msg) {
     std::vector<uint8_t> blob_key(msg_id.begin(), msg_id.end());
     auto blob_value = std::move(*blob);
 
-    // Compute inbox_key = SHA3-256("inbox:" || recipient_fp)
+    // Compute inbox_key = SHA3-256("chromatin:inbox:" || recipient_fp)
     // Used for Kademlia routing (responsibility check) and replication.
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     // Capture values needed by the worker/deferred callbacks
     auto msg_id_copy = msg_id;
@@ -1315,8 +1343,8 @@ void WsServer<SSL>::handle_allow(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute allowlist_key = SHA3-256("inbox:" || owner_fp) — co-located with inbox
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", session->fingerprint);
+    // Compute allowlist_key = SHA3-256("chromatin:inbox:" || owner_fp) — co-located with inbox
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", session->fingerprint);
 
     // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
     std::vector<uint8_t> storage_key;
@@ -1445,8 +1473,8 @@ void WsServer<SSL>::handle_revoke(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute allowlist_key = SHA3-256("inbox:" || owner_fp) — co-located with inbox
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", session->fingerprint);
+    // Compute allowlist_key = SHA3-256("chromatin:inbox:" || owner_fp) — co-located with inbox
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", session->fingerprint);
 
     // Build storage key: allowlist_key(32) || allowed_fp(32) = 64 bytes
     std::vector<uint8_t> storage_key;
@@ -1613,9 +1641,9 @@ void WsServer<SSL>::handle_contact_request(ws_t* ws, const Json::Value& msg) {
     request_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     request_binary.insert(request_binary.end(), blob->begin(), blob->end());
 
-    // Compute requests_key = SHA3-256("inbox:" || recipient_fp)
+    // Compute requests_key = SHA3-256("chromatin:inbox:" || recipient_fp)
     // Uses "inbox:" prefix to co-locate with inbox data on the same responsible nodes.
-    auto requests_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    auto requests_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     // Dispatch to worker pool
     if (!workers_.post([this, ws, id, requests_key,
@@ -1667,7 +1695,7 @@ void WsServer<SSL>::handle_delete(ws_t* ws, const Json::Value& msg) {
     auto fp = session->fingerprint;
 
     // Compute inbox routing key for repl_log
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", fp);
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", fp);
 
     // Dispatch storage ops to worker pool
     if (!workers_.post([this, ws, id, fp, inbox_key, parsed_ids = std::move(parsed_ids)]() {
@@ -1858,7 +1886,7 @@ void WsServer<SSL>::handle_event(ws_t* ws, const Json::Value& msg) {
     }
 
     // Validate event type is in whitelist
-    static const std::unordered_set<std::string> allowed_events = {"TYPING"};
+    static const std::unordered_set<std::string> allowed_events = {"TYPING", "DELIVERED"};
     if (allowed_events.find(event_type) == allowed_events.end()) {
         send_error(ws, id, 400, "unknown event type: " + event_type);
         return;
@@ -1889,7 +1917,7 @@ void WsServer<SSL>::handle_event(ws_t* ws, const Json::Value& msg) {
     if (it == authenticated_.end()) {
         auto payload_copy = relay_payload;
         if (!workers_.post([this, target_fp, payload_copy = std::move(payload_copy)]() {
-            auto inbox_key = crypto::sha3_256_prefixed("inbox:", target_fp);
+            auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", target_fp);
             kad_.relay(inbox_key, payload_copy);
         })) {
             // Worker pool full — silently drop (ephemeral, best-effort)
@@ -1911,7 +1939,7 @@ void WsServer<SSL>::deliver_event(const crypto::Hash& target_fp,
     auto event_copy = event_type;
     workers_.post([this, target_copy, sender_copy, event_copy]() {
         // Allowlist check: if target has an allowlist, sender must be on it
-        auto allowlist_key = crypto::sha3_256_prefixed("inbox:", target_copy);
+        auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", target_copy);
         std::vector<uint8_t> allow_check;
         allow_check.reserve(64);
         allow_check.insert(allow_check.end(), allowlist_key.begin(), allowlist_key.end());
@@ -1971,7 +1999,7 @@ void WsServer<SSL>::on_kademlia_relay(std::span<const uint8_t> payload) {
 
         // Whitelist: only deliver known event types from relayed messages
         static const std::unordered_set<std::string> valid_events = {
-            "typing", "read", "online", "offline"
+            "typing", "read", "online", "offline", "delivered"
         };
         if (valid_events.find(event_type) == valid_events.end()) return;
 
@@ -2010,9 +2038,9 @@ void WsServer<SSL>::handle_resolve_name(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Look up in TABLE_NAMES: key = SHA3-256("name:" || name)
+    // Look up in TABLE_NAMES: key = SHA3-256("chromatin:name:" || name)
     std::vector<uint8_t> name_bytes(name.begin(), name.end());
-    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+    auto name_key = crypto::sha3_256_prefixed("chromatin:name:", name_bytes);
 
     // Quorum read: query all R responsible nodes for the name record,
     // then apply lower-fingerprint tiebreaker for conflict resolution.
@@ -2090,7 +2118,7 @@ void WsServer<SSL>::handle_get_profile(ws_t* ws, const Json::Value& msg) {
 
     // Dispatch storage read to worker pool
     if (!workers_.post([this, ws, id, fingerprint]() {
-        auto profile_key = crypto::sha3_256_prefixed("profile:", fingerprint);
+        auto profile_key = crypto::sha3_256_prefixed("chromatin:profile:", fingerprint);
         auto profile = storage_.get(storage::TABLE_PROFILES,
             std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
 
@@ -2314,8 +2342,8 @@ void WsServer<SSL>::handle_set_profile(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute storage key: SHA3-256("profile:" || fingerprint)
-    auto profile_key = crypto::sha3_256_prefixed("profile:", session->fingerprint);
+    // Compute storage key: SHA3-256("chromatin:profile:" || fingerprint)
+    auto profile_key = crypto::sha3_256_prefixed("chromatin:profile:", session->fingerprint);
 
     // Dispatch to worker: validate + store + replicate via Kademlia
     auto value = std::make_shared<std::vector<uint8_t>>(std::move(*profile_data));
@@ -2380,9 +2408,9 @@ void WsServer<SSL>::handle_register_name(ws_t* ws, const Json::Value& msg) {
         return;
     }
 
-    // Compute storage key: SHA3-256("name:" || name)
+    // Compute storage key: SHA3-256("chromatin:name:" || name)
     std::vector<uint8_t> name_bytes(name.begin(), name.end());
-    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+    auto name_key = crypto::sha3_256_prefixed("chromatin:name:", name_bytes);
 
     // Dispatch to worker: validate + store + replicate via Kademlia
     auto value = std::make_shared<std::vector<uint8_t>>(std::move(*record_data));
@@ -2433,11 +2461,11 @@ template<bool SSL>
 std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t> data) {
     // Binary format:
     //   group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
-    //   per-member[fp(32) + role(1) + kem_ciphertext(1568)] × member_count ||
+    //   per-member[fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)] × member_count ||
     //   sig_len(2 BE) || signature
 
     constexpr size_t HEADER_SIZE = 32 + 32 + 32 + 4 + 2;  // 102 bytes
-    constexpr size_t MEMBER_SIZE = 32 + 1 + 1568;          // 1601 bytes per member
+    constexpr size_t MEMBER_SIZE = 32 + 1 + 1568 + 48;     // 1649 bytes per member
 
     if (data.size() < HEADER_SIZE) return std::nullopt;
 
@@ -2491,9 +2519,9 @@ const GroupMeta* WsServer<SSL>::get_group_meta(const crypto::Hash& group_id) {
         return &it->second;
     }
 
-    // Load from storage (keyed by routing key = SHA3-256("group:" || group_id))
+    // Load from storage (keyed by routing key = SHA3-256("chromatin:group:" || group_id))
     auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+    auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", gid_span);
     auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
     if (!raw) return nullptr;
 
@@ -2538,7 +2566,7 @@ template<bool SSL>
 std::optional<GroupMeta> WsServer<SSL>::fetch_group_meta(const crypto::Hash& group_id) {
     // Try local storage first (keyed by routing key)
     auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+    auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", gid_span);
     auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
     if (raw) {
         auto parsed = parse_group_meta(*raw);
@@ -2637,7 +2665,7 @@ void WsServer<SSL>::handle_group_create(ws_t* ws, const Json::Value& msg) {
 
         // Compute DHT routing key and store
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-        auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+        auto group_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
         bool ok = kad_.store(group_key, 0x06, meta_bytes_copy);
 
@@ -2709,7 +2737,7 @@ void WsServer<SSL>::handle_group_info(ws_t* ws, const Json::Value& msg) {
 
         // Load raw GROUP_META from storage (keyed by routing key)
         auto gid_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-        auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+        auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", gid_span);
         auto raw = storage_.get(storage::TABLE_GROUP_META, routing_key);
         auto raw_copy = raw ? std::move(*raw) : std::vector<uint8_t>{};
 
@@ -2859,7 +2887,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
         // 9. Auto-destroy if member count is 0
         if (new_members.empty()) {
             auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-            auto routing_key = crypto::sha3_256_prefixed("group:", group_id_span);
+            auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
             // Delete GROUP_META locally
             storage_.del(storage::TABLE_GROUP_META, routing_key);
@@ -2899,7 +2927,7 @@ void WsServer<SSL>::handle_group_update(ws_t* ws, const Json::Value& msg) {
 
         // 10. Compute DHT routing key and store
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-        auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+        auto group_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
         bool ok = kad_.store(group_key, 0x06, meta_bytes);
 
@@ -2977,6 +3005,23 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
             return;
         }
 
+        std::optional<crypto::Hash> expected_hash;
+        std::string hash_hex = msg.get("sha3_256", "").asString();
+        if (!hash_hex.empty()) {
+            if (hash_hex.size() != 64) {
+                send_error(ws, id, 400, "sha3_256 must be 64 hex chars");
+                return;
+            }
+            auto hash_bytes = from_hex(hash_hex);
+            if (!hash_bytes || hash_bytes->size() != 32) {
+                send_error(ws, id, 400, "invalid sha3_256 hex");
+                return;
+            }
+            crypto::Hash h{};
+            std::copy(hash_bytes->begin(), hash_bytes->end(), h.begin());
+            expected_hash = h;
+        }
+
         if (session->pending_upload) {
             send_error(ws, id, 429, "upload already in progress");
             return;
@@ -2988,7 +3033,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
 
         // Dispatch membership check to worker, then defer upload setup back to uWS
         if (!workers_.post([this, ws, id, group_id, fp_copy, declared_size,
-                            msg_id_hash, gek_version]() {
+                            msg_id_hash, gek_version, expected_hash]() {
             auto meta = fetch_group_meta(group_id);
             if (!meta) {
                 loop_->defer([this, ws, id]() {
@@ -3009,7 +3054,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
                 return;
             }
 
-            loop_->defer([this, ws, id, group_id, declared_size, msg_id_hash, gek_version]() {
+            loop_->defer([this, ws, id, group_id, declared_size, msg_id_hash, gek_version, expected_hash]() {
                 if (connections_.count(ws) == 0) return;
                 auto* s = ws->getUserData();
                 if (s->pending_upload) {
@@ -3029,6 +3074,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
                 upload.group_id = group_id;
                 upload.msg_id = msg_id_hash;
                 upload.gek_version = gek_version;
+                upload.expected_hash = expected_hash;
                 s->pending_upload = std::move(upload);
 
                 Json::Value resp;
@@ -3091,7 +3137,7 @@ void WsServer<SSL>::handle_group_send(ws_t* ws, const Json::Value& msg) {
     msg_bytes.insert(msg_bytes.end(), blob_bytes->begin(), blob_bytes->end());
 
     auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-    auto group_key = crypto::sha3_256_prefixed("group:", group_id_span);
+    auto group_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
     auto fp_copy = session->fingerprint;
 
     // Dispatch membership check + store to worker pool
@@ -3255,7 +3301,7 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
                     if (cmp <= 0) return true;
                     past_after = true;
                 }
-                if (count >= limit) return false;
+                if (count >= limit + 1) return false;
                 auto sender_fp = value.subspan(0, 32);
                 uint64_t ts = 0;
                 for (int i = 0; i < 8; ++i) ts = (ts << 8) | value[32 + i];
@@ -3276,6 +3322,9 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
                 return true;
             });
 
+        bool has_more = (static_cast<int>(entries.size()) > limit);
+        if (has_more) entries.pop_back();
+
         // Build JSON, fetching inline blobs outside the scan transaction
         Json::Value messages(Json::arrayValue);
         for (const auto& e : entries) {
@@ -3294,12 +3343,13 @@ void WsServer<SSL>::handle_group_list(ws_t* ws, const Json::Value& msg) {
             messages.append(entry);
         }
 
-        loop_->defer([this, ws, id, messages = std::move(messages)]() {
+        loop_->defer([this, ws, id, has_more, messages = std::move(messages)]() {
             if (connections_.count(ws) == 0) return;
             Json::Value resp;
             resp["type"] = "OK";
             resp["id"] = id;
             resp["messages"] = messages;
+            resp["has_more"] = has_more;
             send_json(ws, resp);
         });
     })) {
@@ -3592,7 +3642,7 @@ void WsServer<SSL>::handle_group_destroy(ws_t* ws, const Json::Value& msg) {
         }
 
         auto group_id_span = std::span<const uint8_t>(group_id.data(), group_id.size());
-        auto routing_key = crypto::sha3_256_prefixed("group:", group_id_span);
+        auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", group_id_span);
 
         // Delete GROUP_META (stored by routing key)
         storage_.del(storage::TABLE_GROUP_META, routing_key);

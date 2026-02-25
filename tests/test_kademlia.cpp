@@ -8,6 +8,7 @@
 #include "kademlia/tcp_transport.h"
 #include "replication/repl_log.h"
 #include "storage/storage.h"
+#include "version.h"
 
 #include <atomic>
 #include <chrono>
@@ -179,8 +180,12 @@ protected:
                        user_keypair.public_key.begin(),
                        user_keypair.public_key.end());
 
-        // Sign everything so far
-        auto sig = sign(record, user_keypair.secret_key);
+        // Sign with domain separation prefix
+        std::string_view name_prefix = "chromatin:name:";
+        std::vector<uint8_t> signed_data;
+        signed_data.insert(signed_data.end(), name_prefix.begin(), name_prefix.end());
+        signed_data.insert(signed_data.end(), record.begin(), record.end());
+        auto sig = sign(signed_data, user_keypair.secret_key);
 
         // sig_length (2 bytes BE)
         uint16_t sig_len = static_cast<uint16_t>(sig.size());
@@ -211,10 +216,10 @@ protected:
         return 0;
     }
 
-    // Compute name storage key: SHA3-256("name:" || name)
+    // Compute name storage key: SHA3-256("chromatin:name:" || name)
     static Hash name_key(const std::string& name) {
         std::vector<uint8_t> name_bytes(name.begin(), name.end());
-        return sha3_256_prefixed("name:", name_bytes);
+        return sha3_256_prefixed("chromatin:name:", name_bytes);
     }
 
     // Store a user's profile directly into a node's storage (test setup helper).
@@ -237,14 +242,17 @@ protected:
         profile.push_back(0x00);
         // sequence = 1
         for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
-        // sign it
-        auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+        // sign it with domain separation
+        std::string_view pfx = "chromatin:profile:";
+        std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+        signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+        auto sig = sign(signed_data, user_kp.secret_key);
         uint16_t sig_len = static_cast<uint16_t>(sig.size());
         profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
         profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
         profile.insert(profile.end(), sig.begin(), sig.end());
 
-        Hash profile_key = sha3_256_prefixed("profile:", user_fp);
+        Hash profile_key = sha3_256_prefixed("chromatin:profile:", user_fp);
         node.storage->put(TABLE_PROFILES, profile_key, profile);
     }
 
@@ -371,7 +379,7 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     // Build a valid profile to store (must pass validate_readonly)
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::vector<uint8_t> value;
     // fingerprint(32)
@@ -389,8 +397,11 @@ TEST_F(KademliaTest, StoreAndFindValue) {
     // sequence(8 BE) = 1
     for (int i = 0; i < 7; ++i) value.push_back(0x00);
     value.push_back(0x01);
-    // sign everything so far
-    auto sig = sign(std::span<const uint8_t>(value.data(), value.size()), user_kp.secret_key);
+    // sign everything so far with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), value.begin(), value.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     value.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     value.push_back(static_cast<uint8_t>(sig_len & 0xFF));
@@ -643,7 +654,7 @@ TEST_F(KademliaTest, StoreAckSent) {
     contact_fp.fill(0xAA);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("inbox:", owner_fp);
+    Hash key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
 
     // Build STORE payload: [32 key][1 data_type=0x04][4 vlen][value]
     std::vector<uint8_t> store_payload;
@@ -827,7 +838,7 @@ TEST_F(KademliaTest, StoreAckRejectionValidationFailed) {
 
     // Pick an arbitrary key. Use a profile store (data_type=0x00) with completely
     // garbage data so that validate_profile() fails, triggering reason=0x02.
-    Hash key = sha3_256_prefixed("profile:", Hash{});
+    Hash key = sha3_256_prefixed("chromatin:profile:", Hash{});
 
     // Garbage value: 50 bytes of 0xFF — not a valid profile
     std::vector<uint8_t> garbage_value(50, 0xFF);
@@ -914,7 +925,7 @@ TEST_F(KademliaTest, PendingStoreTracking) {
     contact_fp.fill(0xBB);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("inbox:", owner_fp);
+    Hash key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -979,7 +990,7 @@ TEST_F(KademliaTest, ThreeNodeQuorum) {
     contact_fp.fill(0xCC);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("inbox:", owner_fp);
+    Hash key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
 
     bool ok = n1.kad->store(key, 0x04, value);
     ASSERT_TRUE(ok);
@@ -1184,6 +1195,79 @@ TEST_F(KademliaTest, PongCarriesVersionAndCapabilities) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: PongVersionMatchAccepted — same app version → node in routing table
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PongVersionMatchAccepted) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    start_all();
+
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Send PING from n1 to n2 so n2 replies with PONG containing version info
+    Message ping_msg;
+    ping_msg.type        = MessageType::PING;
+    ping_msg.sender      = n1.info.id;
+    ping_msg.sender_port = n1.info.tcp_port;
+    ping_msg.payload     = {};
+    sign_message(ping_msg, n1.keypair.secret_key);
+    n1.transport->send("127.0.0.1", n2.info.tcp_port, ping_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    auto info = n1.table->find(n2.info.id);
+    ASSERT_TRUE(info.has_value()) << "matching-version peer must be in routing table";
+    EXPECT_EQ(info->app_version_major, VERSION_MAJOR);
+    EXPECT_EQ(info->app_version_minor, VERSION_MINOR);
+    EXPECT_EQ(info->app_version_patch, VERSION_PATCH);
+}
+
+// ---------------------------------------------------------------------------
+// Test: PongVersionMismatchRejected — different app version → evicted from table
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, PongVersionMismatchRejected) {
+    auto& n1 = create_node();
+    auto& n2 = create_node();
+
+    start_all();
+
+    // Let them bootstrap so n1 has n2's signing key (needed to verify PONG sig)
+    n2.kad->bootstrap({{"127.0.0.1", n1.info.tcp_port}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    // Build a PONG with a wrong patch version
+    std::vector<uint8_t> bad_payload(9);
+    bad_payload[0] = PROTOCOL_VERSION;
+    bad_payload[1] = PROTOCOL_VERSION;
+    uint32_t caps = static_cast<uint32_t>(Capability::GROUPS) |
+                    static_cast<uint32_t>(Capability::ENCRYPTED_TCP);
+    bad_payload[2] = static_cast<uint8_t>((caps >> 24) & 0xFF);
+    bad_payload[3] = static_cast<uint8_t>((caps >> 16) & 0xFF);
+    bad_payload[4] = static_cast<uint8_t>((caps >> 8) & 0xFF);
+    bad_payload[5] = static_cast<uint8_t>(caps & 0xFF);
+    bad_payload[6] = VERSION_MAJOR;
+    bad_payload[7] = VERSION_MINOR;
+    bad_payload[8] = VERSION_PATCH + 1;  // wrong — must be evicted
+
+    Message pong_msg;
+    pong_msg.type        = MessageType::PONG;
+    pong_msg.sender      = n2.info.id;
+    pong_msg.sender_port = n2.info.tcp_port;
+    pong_msg.payload     = bad_payload;
+    sign_message(pong_msg, n2.keypair.secret_key);
+    n2.transport->send("127.0.0.1", n1.info.tcp_port, pong_msg);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    auto info = n1.table->find(n2.info.id);
+    EXPECT_FALSE(info.has_value()) << "mismatched-version peer must be evicted";
+}
+
+// ---------------------------------------------------------------------------
 // Test 16: StaleNodeEviction — evict nodes not seen for > threshold
 // ---------------------------------------------------------------------------
 
@@ -1362,14 +1446,17 @@ TEST_F(KademliaTest, ProfileStoreValidation_FingerprintMismatch) {
     profile.push_back(0x00);
     // sequence = 1
     for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
-    // sig_length + signature (dummy)
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    // sig_length + signature with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("profile:", wrong_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", wrong_fp);
 
     bool ok = n1.kad->store(key, 0x00, profile);
     auto result = n1.storage->get(TABLE_PROFILES, key);
@@ -1503,7 +1590,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
         request.insert(request.end(), blob.begin(), blob.end());
 
-        auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
+        auto requests_key = sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
         bool ok = n1.kad->store(requests_key, 0x03, request);
         EXPECT_TRUE(ok) << "Contact request with valid PoW should succeed";
@@ -1538,7 +1625,7 @@ TEST_F(KademliaTest, ContactRequestPoWEnforced) {
         request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
         request.insert(request.end(), blob.begin(), blob.end());
 
-        auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
+        auto requests_key = sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
         bool ok = n1.kad->store(requests_key, 0x03, request);
 
@@ -1616,7 +1703,7 @@ TEST_F(KademliaTest, InboxStoreWritesTwoTables) {
     value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     value.insert(value.end(), blob.begin(), blob.end());
 
-    auto inbox_key = sha3_256_prefixed("inbox:", recipient_fp);
+    auto inbox_key = sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     bool ok = n1.kad->store(inbox_key, 0x02, value);
     EXPECT_TRUE(ok);
@@ -1655,7 +1742,7 @@ TEST_F(KademliaTest, AllowlistStoreUsesCompositeKey) {
 
     auto value = build_signed_allowlist(owner_kp, allowed_fp, 0x01, 1);
 
-    Hash routing_key = sha3_256_prefixed("inbox:", owner_fp);
+    Hash routing_key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
 
     bool ok = n1.kad->store(routing_key, 0x04, value);
     EXPECT_TRUE(ok);
@@ -1702,14 +1789,17 @@ TEST_F(KademliaTest, SyncPreservesDataType) {
     profile.push_back(0x00);
     // sequence = 1
     for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
-    // sign it
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    // sign it with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     // Store directly on n1 with data_type 0x00 (profile)
     n1.storage->put(TABLE_PROFILES, key, profile);
@@ -1776,13 +1866,16 @@ TEST_F(KademliaTest, TamperedMessageRejected) {
     profile.push_back(0x00);
     // sequence = 1
     for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00);
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     // Build STORE message payload: data_type(1) + key(32) + value
     std::vector<uint8_t> store_payload;
@@ -1837,13 +1930,16 @@ TEST_F(KademliaTest, FindValueSkipsStaleInboxTable) {
     profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); profile.push_back(0x00); // avatar_len
     profile.push_back(0x00); // social_count
     for (int i = 7; i >= 0; --i) profile.push_back(i == 0 ? 0x01 : 0x00); // seq=1
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     profile.insert(profile.end(), sig.begin(), sig.end());
 
-    Hash profile_key = sha3_256_prefixed("profile:", user_fp);
+    Hash profile_key = sha3_256_prefixed("chromatin:profile:", user_fp);
     n1.storage->put(TABLE_PROFILES, profile_key, profile);
 
     // find_value should return the profile
@@ -1852,7 +1948,7 @@ TEST_F(KademliaTest, FindValueSkipsStaleInboxTable) {
     EXPECT_EQ(*found, profile);
 
     // Store inbox data in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS
-    Hash inbox_routing_key = sha3_256_prefixed("inbox:", user_fp);
+    Hash inbox_routing_key = sha3_256_prefixed("chromatin:inbox:", user_fp);
     Hash msg_id{};
     msg_id[0] = 0xAA;
     std::vector<uint8_t> idx_key;
@@ -1893,8 +1989,11 @@ static std::vector<uint8_t> build_profile(const KeyPair& user_kp, uint64_t seque
     for (int i = 7; i >= 0; --i) {
         profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
     }
-    // sign it
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    // sign it with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
@@ -1943,8 +2042,11 @@ static std::vector<uint8_t> build_profile_with_fields(
     for (int i = 7; i >= 0; --i) {
         profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
     }
-    // sign it
-    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    // sign it with domain separation
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
@@ -1959,7 +2061,7 @@ TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     // Store profile with sequence=1 — should succeed
     auto profile_v1 = build_profile(user_kp, 1);
@@ -1999,7 +2101,7 @@ TEST_F(KademliaTest, ProfileBioExceedsLimit) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::vector<uint8_t> bio(protocol::MAX_BIO_SIZE + 1, 'a');
     auto profile = build_profile_with_fields(user_kp, 1, bio, {}, {});
@@ -2012,7 +2114,7 @@ TEST_F(KademliaTest, ProfileAvatarExceedsLimit) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::vector<uint8_t> avatar(protocol::MAX_AVATAR_SIZE + 1, 0xFF);
     auto profile = build_profile_with_fields(user_kp, 1, {}, avatar, {});
@@ -2025,7 +2127,7 @@ TEST_F(KademliaTest, ProfileTooManySocialLinks) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::vector<std::pair<std::string, std::string>> links;
     for (int i = 0; i < protocol::MAX_SOCIAL_LINKS + 1; ++i) {
@@ -2041,7 +2143,7 @@ TEST_F(KademliaTest, ProfileSocialPlatformTooLong) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::string long_platform(protocol::MAX_SOCIAL_PLATFORM_LENGTH + 1, 'p');
     std::vector<std::pair<std::string, std::string>> links = {{long_platform, "user"}};
@@ -2055,7 +2157,7 @@ TEST_F(KademliaTest, ProfileSocialHandleTooLong) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     std::string long_handle(protocol::MAX_SOCIAL_HANDLE_LENGTH + 1, 'h');
     std::vector<std::pair<std::string, std::string>> links = {{"x", long_handle}};
@@ -2069,7 +2171,7 @@ TEST_F(KademliaTest, ProfileAtFieldLimitsAccepted) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     // Bio at exactly the limit
     std::vector<uint8_t> bio(protocol::MAX_BIO_SIZE, 'b');
@@ -2091,7 +2193,7 @@ TEST_F(KademliaTest, ProfileSubFieldLimitsAcceptMinimal) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     // Empty bio, empty avatar, no social links — regression check
     auto profile = build_profile_with_fields(user_kp, 1, {}, {}, {});
@@ -2117,7 +2219,7 @@ TEST_F(KademliaTest, SyncHandlesDelete) {
     // Create an inbox message on n1
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash inbox_key = sha3_256_prefixed("inbox:", user_fp);
+    Hash inbox_key = sha3_256_prefixed("chromatin:inbox:", user_fp);
 
     Hash msg_id{};
     msg_id[0] = 0xBB;
@@ -2212,7 +2314,7 @@ TEST_F(KademliaTest, DuplicateInboxMessageRejected) {
 
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash inbox_key = sha3_256_prefixed("inbox:", user_fp);
+    Hash inbox_key = sha3_256_prefixed("chromatin:inbox:", user_fp);
 
     Hash msg_id{};
     msg_id[0] = 0xEE;
@@ -2449,7 +2551,7 @@ TEST_F(KademliaTest, EmptyPubkeyStoreRejected) {
     contact_fp.fill(0xAA);
     auto value = build_signed_allowlist(owner_kp, contact_fp, 0x01, 1);
 
-    Hash key = sha3_256_prefixed("inbox:", owner_fp);
+    Hash key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
 
     std::vector<uint8_t> store_payload;
     store_payload.insert(store_payload.end(), key.begin(), key.end());
@@ -2525,8 +2627,8 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     Hash user_d_fp{};  user_d_fp.fill(0xDD);
 
     // --- Set up allowlist for user A, allowing user B ---
-    // allowlist_key = SHA3-256("inbox:" || user_a_fp) — co-located with inbox
-    auto allowlist_key = sha3_256_prefixed("inbox:", user_a_fp);
+    // allowlist_key = SHA3-256("chromatin:inbox:" || user_a_fp) — co-located with inbox
+    auto allowlist_key = sha3_256_prefixed("chromatin:inbox:", user_a_fp);
 
     // Composite storage key: allowlist_key(32) || user_b_fp(32) = 64 bytes
     std::vector<uint8_t> allow_storage_key;
@@ -2573,7 +2675,7 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     // --- Test 1: User B sends to user A (B is on A's allowlist) — should SUCCEED ---
     {
         auto msg = build_inbox_msg(user_a_fp, user_b_fp);
-        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+        auto inbox_key = sha3_256_prefixed("chromatin:inbox:", user_a_fp);
 
         bool ok = n1.kad->store(inbox_key, 0x02, msg);
         EXPECT_TRUE(ok) << "Allowed sender B should be able to store inbox message for A";
@@ -2591,7 +2693,7 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     // --- Test 2: User C sends to user A (C is NOT on A's allowlist) — should FAIL ---
     {
         auto msg = build_inbox_msg(user_a_fp, user_c_fp);
-        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+        auto inbox_key = sha3_256_prefixed("chromatin:inbox:", user_a_fp);
 
         bool ok = n1.kad->store(inbox_key, 0x02, msg);
 
@@ -2609,7 +2711,7 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
     // --- Test 3: User B sends to user D (D has NO allowlist) — should SUCCEED ---
     {
         auto msg = build_inbox_msg(user_d_fp, user_b_fp);
-        auto inbox_key = sha3_256_prefixed("inbox:", user_d_fp);
+        auto inbox_key = sha3_256_prefixed("chromatin:inbox:", user_d_fp);
 
         bool ok = n1.kad->store(inbox_key, 0x02, msg);
         EXPECT_TRUE(ok) << "Message to user with no allowlist should succeed (open inbox)";
@@ -2639,7 +2741,7 @@ TEST_F(KademliaTest, InboxAllowlistEnforced) {
 
         // User B tries to send — should be rejected since action is 0x00
         auto msg = build_inbox_msg(user_a_fp, user_b_fp);
-        auto inbox_key = sha3_256_prefixed("inbox:", user_a_fp);
+        auto inbox_key = sha3_256_prefixed("chromatin:inbox:", user_a_fp);
 
         // Use a different msg_id so we don't hit dedup
         Hash msg_id{};
@@ -2703,7 +2805,7 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     valid_entry.insert(valid_entry.end(), allow_sig.begin(), allow_sig.end());
 
     // Store with a valid signature — should succeed
-    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
+    auto allowlist_key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
     bool ok = n1.kad->store(allowlist_key, 0x04, valid_entry);
     EXPECT_TRUE(ok) << "Allowlist entry with valid signature should be accepted";
 
@@ -2756,7 +2858,7 @@ TEST_F(KademliaTest, AllowlistSignatureEnforced) {
     // dummy signature
     no_match_entry.resize(no_match_entry.size() + SIGNATURE_SIZE, 0xFF);
 
-    auto unknown_key = sha3_256_prefixed("inbox:", unknown_owner);
+    auto unknown_key = sha3_256_prefixed("chromatin:inbox:", unknown_owner);
     n1.kad->store(unknown_key, 0x04, no_match_entry);
 
     std::vector<uint8_t> np_composite_key(unknown_key.begin(), unknown_key.end());
@@ -2780,7 +2882,7 @@ TEST_F(KademliaTest, RevokeReplicatesAsDelete) {
     KeyPair contact_kp = generate_keypair();
     Hash contact_fp = sha3_256(contact_kp.public_key);
 
-    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
+    auto allowlist_key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
     uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
 
     // 1. Store ALLOW entry (action=0x01)
@@ -2959,7 +3061,7 @@ TEST_F(KademliaTest, ContactRequestExpiry) {
     request.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     request.insert(request.end(), blob.begin(), blob.end());
 
-    auto requests_key = sha3_256_prefixed("inbox:", recipient_fp);
+    auto requests_key = sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     // Store the contact request
     bool ok = n1.kad->store(requests_key, 0x03, request);
@@ -3045,7 +3147,7 @@ TEST_F(KademliaTest, InboxResponsibilityTransfer) {
     inbox_value.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     inbox_value.insert(inbox_value.end(), blob.begin(), blob.end());
 
-    auto inbox_key = sha3_256_prefixed("inbox:", recipient_fp);
+    auto inbox_key = sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     // Store inbox message on n1 (single node, responsible for everything)
     bool ok = n1.kad->store(inbox_key, 0x02, inbox_value);
@@ -3159,7 +3261,7 @@ TEST_F(KademliaTest, GroupMessageValidation) {
         value.push_back(static_cast<uint8_t>((blob_len >> (i * 8)) & 0xFF));
     value.insert(value.end(), blob.begin(), blob.end());              // blob
 
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
     bool ok = n1.kad->store(group_key, 0x05, value);
     EXPECT_TRUE(ok);
 
@@ -3210,13 +3312,13 @@ TEST_F(KademliaTest, GroupMetaValidation) {
 
     // Build valid GROUP_META:
     // group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
-    // per-member[fp(32) + role(1) + kem_ciphertext(1568)] || sig_len(2 BE) || signature
+    // per-member[fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)] || sig_len(2 BE) || signature
     auto owner_kp = generate_keypair();
     Hash owner_fp = sha3_256(owner_kp.public_key);
 
     // Store owner's profile (required for GROUP_META signature verification)
     auto profile = build_profile(owner_kp, 1);
-    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
+    auto profile_key = sha3_256_prefixed("chromatin:profile:", owner_fp);
     ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
 
     Hash group_id{};
@@ -3230,10 +3332,11 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     meta.push_back(0); meta.push_back(0); meta.push_back(0); meta.push_back(1);
     // member_count = 1 (2 BE)
     meta.push_back(0); meta.push_back(1);
-    // member: fp(32) + role(1) + kem_ciphertext(1568)
+    // member: fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());       // member fp
     meta.push_back(0x02);                                             // role = owner
     meta.resize(meta.size() + 1568, 0x00);                           // dummy kem_ciphertext
+    meta.resize(meta.size() + 48, 0x00);                             // dummy wrapped_gek
 
     // Sign the data so far
     auto signature = sign(meta, owner_kp.secret_key);
@@ -3242,7 +3345,7 @@ TEST_F(KademliaTest, GroupMetaValidation) {
     meta.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     meta.insert(meta.end(), signature.begin(), signature.end());
 
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
     bool ok = n1.kad->store(group_key, 0x06, meta);
     EXPECT_TRUE(ok);
 
@@ -3272,7 +3375,7 @@ TEST_F(KademliaTest, GroupMetaValidation_ZeroMembers) {
     meta.push_back(0); meta.push_back(4);
     meta.push_back(0xDE); meta.push_back(0xAD); meta.push_back(0xBE); meta.push_back(0xEF);
 
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
     bool ok = n1.kad->store(group_key, 0x06, meta);
     EXPECT_FALSE(ok);
 }
@@ -3295,11 +3398,12 @@ TEST_F(KademliaTest, GroupMetaValidation_NoOwner) {
     meta.insert(meta.end(), member_fp.begin(), member_fp.end());
     meta.push_back(0x00);  // role = member (NOT owner)
     meta.resize(meta.size() + 1568, 0x00);
+    meta.resize(meta.size() + 48, 0x00);                            // dummy wrapped_gek
     // sig_len + dummy sig
     meta.push_back(0); meta.push_back(4);
     meta.push_back(0xDE); meta.push_back(0xAD); meta.push_back(0xBE); meta.push_back(0xEF);
 
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
     bool ok = n1.kad->store(group_key, 0x06, meta);
     EXPECT_FALSE(ok);
 }
@@ -3323,13 +3427,14 @@ TEST_F(KademliaTest, GroupMetaValidation_WrongKey) {
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
     meta.push_back(0x02);
     meta.resize(meta.size() + 1568, 0x00);
+    meta.resize(meta.size() + 48, 0x00);                            // dummy wrapped_gek
     auto signature = sign(meta, owner_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(signature.size());
     meta.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     meta.push_back(static_cast<uint8_t>(sig_len & 0xFF));
     meta.insert(meta.end(), signature.begin(), signature.end());
 
-    // Use wrong key (not SHA3-256("group:" || group_id))
+    // Use wrong key (not SHA3-256("chromatin:group:" || group_id))
     Hash wrong_key{};
     wrong_key.fill(0xFF);
     bool ok = n1.kad->store(wrong_key, 0x06, meta);
@@ -3354,7 +3459,7 @@ TEST_F(KademliaTest, DuplicateGroupMessageRejected) {
     value.resize(108, 0x00);  // timestamp + gek_version + blob_len=0
     value.resize(112, 0x00);  // ensure 112 bytes
 
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
 
     // First store should succeed
     bool ok1 = n1.kad->store(group_key, 0x05, value);
@@ -3403,7 +3508,7 @@ TEST_F(KademliaTest, ValidateReadonlyAcceptsValidProfile) {
     KeyPair user_kp = generate_keypair();
     auto profile = build_profile(user_kp, 1);
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
 
     EXPECT_TRUE(n1.kad->validate_readonly(key, 0x00, profile));
 }
@@ -3598,7 +3703,7 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsProfiles) {
     // Store a valid profile
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    Hash key = sha3_256_prefixed("profile:", user_fp);
+    Hash key = sha3_256_prefixed("chromatin:profile:", user_fp);
     auto profile = build_profile(user_kp, 1);
     n1.storage->put(TABLE_PROFILES, key, profile);
 
@@ -3613,7 +3718,7 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsProfiles) {
 
 // Build a valid GROUP_META binary blob for testing.
 // Format: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
-//         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
+//         per-member[fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)] * member_count ||
 //         sig_len(2 BE) || ML-DSA-87 signature
 static std::vector<uint8_t> build_group_meta_binary(
     const Hash& group_id,
@@ -3642,11 +3747,12 @@ static std::vector<uint8_t> build_group_meta_binary(
     uint16_t count = static_cast<uint16_t>(members.size());
     meta.push_back((count >> 8) & 0xFF);
     meta.push_back(count & 0xFF);
-    // per-member: fp(32) + role(1) + kem_ciphertext(1568)
+    // per-member: fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)
     for (const auto& [fp, role] : members) {
         meta.insert(meta.end(), fp.begin(), fp.end());
         meta.push_back(role);
         meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
+        meta.resize(meta.size() + 48, 0x00);    // dummy wrapped_gek
     }
     // Sign everything so far
     auto signature = sign(meta, signer_kp.secret_key);
@@ -3666,11 +3772,11 @@ TEST_F(KademliaTest, GroupMetaForgedSignatureRejected) {
     Hash owner_fp = sha3_256(owner_kp.public_key);
     Hash group_id{};
     group_id.fill(0xBB);
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
 
     // Store owner's profile first (so validation can look up the pubkey)
     auto profile = build_profile(owner_kp, 1);
-    auto profile_key = sha3_256_prefixed("profile:", owner_fp);
+    auto profile_key = sha3_256_prefixed("chromatin:profile:", owner_fp);
     ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
 
     // Valid GROUP_META signed by owner — should be accepted
@@ -3693,7 +3799,7 @@ TEST_F(KademliaTest, GroupMetaRejectedWithoutProfileAvailable) {
     Hash owner_fp = sha3_256(owner_kp.public_key);
     Hash group_id{};
     group_id.fill(0xCC);
-    auto group_key = sha3_256_prefixed("group:", group_id);
+    auto group_key = sha3_256_prefixed("chromatin:group:", group_id);
 
     // Valid GROUP_META — should be rejected without owner profile
     auto valid_meta = build_group_meta_binary(group_id, 1, {{owner_fp, 0x02}}, owner_kp);
@@ -3711,10 +3817,10 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     Hash owner_fp = sha3_256(owner_kp.public_key);
     Hash group_id{};
     group_id.fill(0xAA);
-    Hash routing_key = sha3_256_prefixed("group:", group_id);
+    Hash routing_key = sha3_256_prefixed("chromatin:group:", group_id);
 
     // Build group meta: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE)
-    //   || member: fp(32) + role(1) + kem_ciphertext(1568)
+    //   || member: fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)
     //   || sig_len(2 BE) || signature
     std::vector<uint8_t> meta;
     meta.insert(meta.end(), group_id.begin(), group_id.end());
@@ -3724,10 +3830,11 @@ TEST_F(KademliaTest, QueryRemoteValuesFindsGroupMeta) {
     meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x00); meta.push_back(0x01);
     // member_count = 1
     meta.push_back(0x00); meta.push_back(0x01);
-    // member: owner_fp(32) + role=0x02 + kem_ciphertext(1568 zeros)
+    // member: owner_fp(32) + role=0x02 + kem_ciphertext(1568 zeros) + wrapped_gek(48 zeros)
     meta.insert(meta.end(), owner_fp.begin(), owner_fp.end());
     meta.push_back(0x02); // owner role
     meta.resize(meta.size() + 1568, 0x00); // kem_ciphertext placeholder
+    meta.resize(meta.size() + 48, 0x00);   // wrapped_gek placeholder
 
     // Sign it
     auto signature = sign(std::span<const uint8_t>(meta.data(), meta.size()), owner_kp.secret_key);
@@ -3759,7 +3866,7 @@ TEST_F(KademliaTest, EmptyValueStoreRejectsNonGroupMeta) {
     // Store a valid profile first
     KeyPair user_kp = generate_keypair();
     Hash user_fp = sha3_256(user_kp.public_key);
-    auto profile_key = sha3_256_prefixed("profile:", user_fp);
+    auto profile_key = sha3_256_prefixed("chromatin:profile:", user_fp);
     auto profile = build_profile(user_kp, 1);
     ASSERT_TRUE(n1.kad->store(profile_key, 0x00, profile));
 
@@ -3790,7 +3897,7 @@ TEST_F(KademliaTest, AllowlistSequenceReplayRejected) {
     Hash owner_fp = sha3_256(owner_kp.public_key);
     KeyPair contact_kp = generate_keypair();
     Hash contact_fp = sha3_256(contact_kp.public_key);
-    auto allowlist_key = sha3_256_prefixed("inbox:", owner_fp);
+    auto allowlist_key = sha3_256_prefixed("chromatin:inbox:", owner_fp);
     uint16_t pk_len = static_cast<uint16_t>(owner_kp.public_key.size());
 
     // Helper to build a signed allowlist entry

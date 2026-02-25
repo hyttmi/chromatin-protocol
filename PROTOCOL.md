@@ -1,7 +1,6 @@
 # Chromatin Protocol — Server Design
 
 > Working document — v2 redesign. Server-only scope.
-> Client protocol (message encryption, GEK, message format) deferred.
 
 ---
 
@@ -63,8 +62,8 @@ A profile is a signed, versioned document. The server stores and validates:
 | fingerprint      | 32 bytes                     | SHA3-256(ml_dsa_pubkey)            |
 | ml_dsa_pubkey    | bytes                        | Public signing key                 |
 | ml_kem_pubkey    | bytes                        | Public encryption key              |
-| bio              | string                       | Free text (max 2 KB)               |
-| avatar           | blob                         | Profile image (max 256 KB)         |
+| bio              | string                       | Free text (max 2,048 bytes)        |
+| avatar           | blob                         | Profile image (max 262,144 bytes / 256 KiB) |
 | social_links     | list of {platform, handle}   | Max 16 links (platform≤64B, handle≤128B) |
 | sequence         | uint64                       | Monotonically increasing version   |
 | signature        | bytes                        | ML-DSA signature over all above    |
@@ -75,7 +74,7 @@ inbox via XOR distance — users don't choose their relay.
 ### 3.2 Storage Key
 
 ```
-profile_key = SHA3-256("profile:" || fingerprint)
+profile_key = SHA3-256("chromatin:profile:" || fingerprint)
 ```
 
 Stored on the R closest nodes to `profile_key`. Persistent (no expiry).
@@ -111,11 +110,11 @@ Human-readable names mapped to fingerprints, stored on the network.
 The public key is embedded directly in the name record so that any node
 can verify the signature without needing to look up the owner's profile.
 
-Storage key: `SHA3-256("name:" || name)`
+Storage key: `SHA3-256("chromatin:name:" || name)`
 
 ### 4.2 Server Validation Rules
 
-1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce)`
+1. Verify PoW: `SHA3-256("chromatin:name:" || name || fingerprint || nonce(8 bytes BE))`
    has >= 26 leading zero bits
 2. Verify `fingerprint == SHA3-256(pubkey)` (embedded pubkey authenticity)
 3. Verify ML-DSA signature over all preceding fields
@@ -141,11 +140,11 @@ is assigned to nodes using the **same Kademlia XOR distance** mechanism and
 replicated using the **same sequence-based mdbx replication**.
 
 ```
-profile_key = SHA3-256("profile:" || fingerprint)     → R closest nodes store it
-name_key    = SHA3-256("name:" || name)            → R closest nodes store it
-inbox_key   = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it
-request_key = SHA3-256("inbox:" || fingerprint)    → R closest nodes store it (co-located with inbox)
-group_key   = SHA3-256("group:" || group_id)       → R closest nodes store it
+profile_key = SHA3-256("chromatin:profile:" || fingerprint)     → R closest nodes store it
+name_key    = SHA3-256("chromatin:name:" || name)            → R closest nodes store it
+inbox_key   = SHA3-256("chromatin:inbox:" || fingerprint)    → R closest nodes store it
+request_key = SHA3-256("chromatin:inbox:" || fingerprint)    → R closest nodes store it (co-located with inbox)
+group_key   = SHA3-256("chromatin:group:" || group_id)       → R closest nodes store it
 ```
 
 No separate "DHT layer" vs "relay layer". One node, one storage engine, one
@@ -254,11 +253,13 @@ messages directly via TCP:
   ML-DSA-87 signature is verified against the embedded key.
 - **SYNC_RESP validation**: All entries received via SYNC_RESP are validated
   using the same rules as direct STORE before being applied to storage.
-- **Signature verification**: PING and FIND_NODE are accepted without
-  signature verification (discovery). All other messages — including PONG,
-  NODES, STORE, FIND_VALUE, SYNC_REQ, SYNC_RESP, STORE_ACK, SEQ_REQ,
-  SEQ_RESP, RELAY — MUST have valid ML-DSA-87 signatures. Messages from nodes
-  whose public key is not yet known are rejected.
+- **Signature verification exceptions**: PING and FIND_NODE are accepted
+  without signature verification (needed for initial bootstrap discovery).
+  All other messages — including PONG, NODES, STORE, FIND_VALUE, SYNC_REQ,
+  SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
+  signatures. Messages from nodes whose public key is not yet known are rejected.
+- **Routing table membership exceptions**: PING, FIND_NODE, and NODES are
+  accepted from unknown nodes (not yet in routing table) during bootstrap.
 - **Pubkey propagation**: Public keys are learned via two mechanisms:
   (1) FIND_NODE includes the sender's pubkey in its payload, verified via
   `SHA3-256(pubkey) == sender_id`; (2) NODES responses include each node's
@@ -294,12 +295,20 @@ node cannot bypass protections by sending STORE messages directly.
 | SEQ_RESP     | Replication log sequence response            |
 | RELAY        | Ephemeral event relay (fire-and-forget)      |
 
-All messages are ML-DSA signed by the sending node. PING and FIND_NODE are
-accepted without signature verification (needed for initial discovery).
-FIND_NODE carries the sender's pubkey so recipients can immediately verify
-future signed messages. All other types — including PONG, NODES, and all
-trust-sensitive messages — MUST have valid signatures. Messages from nodes
-whose public key is not yet known are rejected (except PING and FIND_NODE).
+All messages are ML-DSA signed by the sending node. Two categories of
+exceptions exist for bootstrap:
+
+- **Signature verification exceptions:** PING and FIND_NODE are accepted
+  without signature verification, enabling initial discovery before public
+  keys are known. FIND_NODE carries the sender's pubkey so recipients can
+  immediately verify future signed messages.
+- **Routing table membership exceptions:** PING, FIND_NODE, and NODES are
+  accepted from unknown nodes (not yet in routing table) during bootstrap,
+  allowing the initial peer discovery handshake to complete.
+
+All other message types — including PONG, STORE, FIND_VALUE, SYNC_REQ,
+SYNC_RESP, STORE_ACK, SEQ_REQ, SEQ_RESP, RELAY — MUST have valid ML-DSA-87
+signatures and originate from nodes whose public key is already known.
 
 **PONG version/capability negotiation:** PONG carries a 6-byte payload with
 the sender's supported protocol version range (`min_version`, `max_version`)
@@ -429,7 +438,7 @@ Nodes run a periodic `tick()` (~200ms) that keeps the network self-healing:
   nodes in the network are unaffected — they maintain connections via the
   surviving bootstrap(s) and direct peer-to-peer discovery
 - New nodes joining need at least one working bootstrap address in their config
-- Future: DNS-based bootstrap (`bootstrap.cpunk.io` resolving to current IPs)
+- Future: DNS-based bootstrap (`bootstrap.pqcc.fi` resolving to current IPs)
   would allow transparent bootstrap rotation without config changes
 
 ---
@@ -533,7 +542,7 @@ notifications (NEW_MESSAGE, CONTACT_REQUEST) are delivered to all connected
 devices for that fingerprint.
 
 ```
-inbox_key = SHA3-256("inbox:" || fingerprint)
+inbox_key = SHA3-256("chromatin:inbox:" || fingerprint)
 responsible_nodes = R closest nodes to inbox_key
 client connects to any one of them via WebSocket
 ```
@@ -549,7 +558,7 @@ up-to-date node.
 ```
 1. Client → Node:   HELLO { fingerprint }
 
-   Node checks is_responsible(SHA3-256("inbox:" || fingerprint)):
+   Node checks is_responsible(SHA3-256("chromatin:inbox:" || fingerprint)):
    - If NOT responsible: query R responsible nodes for their seq number,
      respond with REDIRECT sorted by highest seq first, close connection.
    - If responsible: generate 32-byte random nonce, continue.
@@ -617,7 +626,7 @@ When Alice sends a message to Bob:
 
 **Small message (<=64 KB):**
 1. Alice sends `SEND { to: bob_fp, blob }` (inline base64) to her connected node
-2. Alice's node computes `inbox_key = SHA3-256("inbox:" || bob_fp)`
+2. Alice's node computes `inbox_key = SHA3-256("chromatin:inbox:" || bob_fp)`
 3. Alice's node determines R responsible nodes for Bob's inbox
 4. Alice's node stores in TABLE_INBOX_INDEX + TABLE_MESSAGE_BLOBS locally
 5. Alice's node forwards via TCP STORE to **all R responsible nodes**
@@ -639,7 +648,7 @@ Incomplete chunked uploads are discarded after 30 seconds.
 ### 8.5 Allowlist
 
 Each user has an allowlist co-located with their inbox on the same R
-responsible nodes (both route to `SHA3-256("inbox:" || fingerprint)`).
+responsible nodes (both route to `SHA3-256("chromatin:inbox:" || fingerprint)`).
 This ensures allowlist checks during message delivery are always local lookups.
 
 - Managed via `ALLOW` / `REVOKE` commands (signed by the client)
@@ -648,7 +657,7 @@ This ensures allowlist checks during message delivery are always local lookups.
 - Kademlia STORE value includes `owner_fp` and the owner's public key for
   self-contained signature verification at the DHT layer (no profile lookup needed)
 - Stored in mdbx on all R responsible nodes (replicated like everything else)
-- Allowlist routing key: `SHA3-256("inbox:" || fingerprint)` (same as inbox)
+- Allowlist routing key: `SHA3-256("chromatin:inbox:" || fingerprint)` (same as inbox)
 - Local mdbx key: `allowlist_key(32) || allowed_fp(32)` — O(1) lookup for SEND validation
 - REVOKE is stored as a record and replicated as `Op::ADD` (the revoke entry is stored, not deleted, preserving the allowlist-exists flag)
 - Replicated with the same seq-based mechanism
@@ -665,6 +674,12 @@ multiplication. Commands consume tokens at different rates (SEND: 2,
 CONTACT_REQUEST: 3, most others: 1). Exceeding the rate limit returns error
 code 429.
 
+**Message Encryption:** All message blobs (SEND, GROUP_SEND) are end-to-end
+encrypted by clients. Servers store and forward opaque blobs without inspecting
+content. Client encryption uses ML-KEM-1024 for key encapsulation, AES-256-GCM
+for message encryption, and ML-DSA-87 for sender authentication
+(sign-then-encrypt). See PROTOCOL-SPEC.md Section 9 for complete wire formats.
+
 ---
 
 ## 9. Contact Requests
@@ -674,7 +689,7 @@ code 429.
 Separate from the main inbox. Stored under:
 
 ```
-request_key = SHA3-256("inbox:" || fingerprint)   // co-located with inbox
+request_key = SHA3-256("chromatin:inbox:" || fingerprint)   // co-located with inbox
 ```
 
 Same R-node responsibility, same replication. Accepts messages from unknown
@@ -684,7 +699,7 @@ senders with proof-of-work.
 
 1. Alice looks up Bob's profile on network → gets Bob's fingerprint
 2. Alice computes Bob's responsible nodes: R closest to
-   `SHA3-256("inbox:" || bob_fp)` (co-located with Bob's inbox)
+   `SHA3-256("chromatin:inbox:" || bob_fp)` (co-located with Bob's inbox)
 3. Alice computes PoW: find `nonce` such that
    `SHA3-256(preimage || nonce_BE)` has >= 16 leading zero bits, where
    `preimage = "chromatin:request:" || alice_fp || bob_fp || timestamp_BE`
@@ -741,7 +756,7 @@ When a group member sends a message:
 6. Members fetch messages via GROUP_LIST / GROUP_GET
 
 All group data (meta + messages) is stored at DHT key
-`SHA3-256("group:" || group_id)` on the R closest nodes. This means a single
+`SHA3-256("chromatin:group:" || group_id)` on the R closest nodes. This means a single
 REDIRECT handles both metadata and message access.
 
 ### 10.4 Roles & Access Control
@@ -754,9 +769,9 @@ Groups use a 3-level role model with server-enforced access control:
 | Admin  | 0x01  | + Add/remove regular members, sign GROUP_META updates |
 | Owner  | 0x02  | + Add/remove anyone, change roles, GROUP_DESTROY      |
 
-**Multiple owners are allowed.** Any member with role=0x02 can sign GROUP_META
-updates with full authority. At least one Owner must exist at all times
-(server-enforced).
+**Multiple owners are allowed.** Any member with role >= 0x01 (Admin or Owner)
+can sign GROUP_META updates, identified by the `signer_fingerprint` field.
+At least one Owner must exist at all times (server-enforced).
 
 **Admin restrictions:** Admins can only add or remove members with role=0x00.
 They cannot change roles, add/remove other admins, or add/remove owners. The
@@ -780,16 +795,18 @@ version.
 ### 10.5 Group Metadata
 
 Group metadata (data_type 0x06) is stored at routing key
-`SHA3-256("group:" || group_id)` on the R closest nodes. It contains:
+`SHA3-256("chromatin:group:" || group_id)` on the R closest nodes. It contains:
 
 - Group identity (`group_id` = SHA3-256 of group creation record)
 - Owner fingerprint (original creator, informational after multi-owner)
 - Version number (monotonically increasing)
 - Member list with role and ML-KEM-1024 encrypted GEK per member
-- ML-DSA-87 signature by an Owner (any member with role=0x02)
+- ML-DSA-87 signature by a member with role >= 0x01 (Admin or Owner),
+  identified by the `signer_fingerprint` field in the GROUP_META header
 
-Nodes verify the signature before accepting a GROUP_META STORE. Version must
-be strictly greater than the currently stored version (replay prevention).
+Nodes verify the signature against the signer's profile before accepting a
+GROUP_META STORE. Version must be strictly greater than the currently stored
+version (replay prevention).
 Concurrent updates are resolved by version number — lower version is rejected
 and the client retries with the latest version.
 
@@ -850,7 +867,7 @@ dropped. This is the correct behavior for transient signals like typing indicato
 3. **Same-node (fast path):** If the target is connected to the same node, the
    event is delivered directly after an allowlist check
 4. **Cross-node:** The node dispatches to the worker pool, computes the target's
-   inbox key (`SHA3-256("inbox:" || target_fp)`), and sends a TCP RELAY (0x0C) to
+   inbox key (`SHA3-256("chromatin:inbox:" || target_fp)`), and sends a TCP RELAY (0x0C) to
    each responsible node. Receiving nodes check for the target locally and deliver
    if connected
 5. Response: `OK` is sent immediately (before relay, if cross-node)
@@ -884,8 +901,8 @@ Each node has:
 
 ### 12.2 Bootstrap
 
-- 3 hardcoded bootstrap nodes: `0.bootstrap.cpunk.io`, `1.bootstrap.cpunk.io`,
-  `2.bootstrap.cpunk.io`
+- 3 hardcoded bootstrap nodes: `0.bootstrap.pqcc.fi`, `1.bootstrap.pqcc.fi`,
+  `2.bootstrap.pqcc.fi`
 - Bootstrap nodes are regular nodes with well-known DNS entries
 - New node contacts any bootstrap → receives full membership list
 - Bootstrap nodes have elevated role: can **slash bad nodes**
@@ -931,12 +948,12 @@ that data after confirming the new responsible node is synced.
 
 | Database         | Key Format                          | Value                     |
 |------------------|-------------------------------------|---------------------------|
-| profiles         | `SHA3-256("profile:" \|\| fp)`          | Signed profile document   |
-| names            | `SHA3-256("name:" \|\| name)`       | Signed name record        |
+| profiles         | `SHA3-256("chromatin:profile:" \|\| fp)`          | Signed profile document   |
+| names            | `SHA3-256("chromatin:name:" \|\| name)`       | Signed name record        |
 | inbox_index      | `recipient_fp(32) \|\| msg_id(32)`  | sender_fp + timestamp + size (44 bytes) |
 | message_blobs    | `msg_id(32)`                        | Encrypted blob (up to 50 MiB, 7-day TTL) |
 | requests         | `recipient_fp(32) \|\| sender_fp(32)` | Contact request binary (composite key) |
-| allowlists       | `SHA3-256("inbox:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (co-located with inbox, O(1) lookup) |
+| allowlists       | `SHA3-256("chromatin:inbox:" \|\| fp) \|\| allowed_fp(32)` | Allowlist entry (co-located with inbox, O(1) lookup) |
 | group_meta       | `group_id(32)`                      | Group metadata binary (signed, no TTL) |
 | group_index      | `group_id(32) \|\| msg_id(32)`      | sender_fp + timestamp + size + gek_version (48 bytes) |
 | group_blobs      | `group_id(32) \|\| msg_id(32)`      | Encrypted blob (up to 50 MiB, 7-day TTL) |
@@ -952,6 +969,7 @@ Each entry in `repl_log`:
 {
     seq:       uint64,       // monotonically increasing per key
     op:        ADD | DEL | UPD,
+    data_type: uint8,        // Kademlia data type (0x01–0x07)
     timestamp: uint64,       // milliseconds since Unix epoch
     data:      bytes         // the payload (blob, profile, etc.)
 }
@@ -996,8 +1014,8 @@ The following security properties are enforced by conforming implementations:
 - **GROUP_META version monotonicity:** GROUP_META STORE operations enforce
   strictly increasing version numbers per group_id at the Kademlia layer,
   preventing replay of older group metadata records.
-- **GROUP_META requires owner profile for signature verification:** GROUP_META
-  STORE is rejected if the owner's profile is not available locally. This
+- **GROUP_META requires signer's profile for signature verification:** GROUP_META
+  STORE is rejected if the signer's profile is not available locally. This
   prevents storing unverifiable group metadata that could be crafted by an
   attacker.
 - **Unknown data types rejected:** STORE operations with unrecognized

@@ -60,6 +60,7 @@ struct Session {
         std::optional<crypto::Hash> group_id;
         crypto::Hash msg_id{};          // client-provided msg_id for GROUP_SEND
         uint32_t gek_version = 0;       // for GROUP_SEND
+        std::optional<crypto::Hash> expected_hash;  // SHA3-256 of reassembled blob
     };
     std::optional<PendingUpload> pending_upload;
 };

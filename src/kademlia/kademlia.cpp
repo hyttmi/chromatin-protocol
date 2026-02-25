@@ -254,7 +254,7 @@ void Kademlia::expire_ttl() {
     // Now check repl_log timestamps outside of the foreach transaction
     std::vector<std::vector<uint8_t>> expired_request_keys;
     for (const auto& ri : all_requests) {
-        auto routing_key = crypto::sha3_256_prefixed("inbox:", ri.recipient_fp);
+        auto routing_key = crypto::sha3_256_prefixed("chromatin:inbox:", ri.recipient_fp);
         auto entries = repl_log_.entries_after(routing_key, 0);
         if (entries.empty()) continue;  // no repl_log entry — can't determine age, skip
 
@@ -409,7 +409,7 @@ void Kademlia::transfer_responsibility() {
         });
 
     for (const auto& entry : inbox_entries) {
-        auto routing_key = crypto::sha3_256_prefixed("inbox:", entry.recipient_fp);
+        auto routing_key = crypto::sha3_256_prefixed("chromatin:inbox:", entry.recipient_fp);
         auto nodes = responsible_nodes(routing_key);
 
         // Check if any newly-added node is responsible before doing blob lookup
@@ -493,7 +493,7 @@ void Kademlia::transfer_responsibility() {
 
     for (const auto& entry : group_entries) {
         auto gid_span = std::span<const uint8_t>(entry.group_id.data(), entry.group_id.size());
-        auto routing_key = crypto::sha3_256_prefixed("group:", gid_span);
+        auto routing_key = crypto::sha3_256_prefixed("chromatin:group:", gid_span);
         auto nodes = responsible_nodes(routing_key);
 
         bool has_new_responsible = false;
@@ -1350,7 +1350,7 @@ bool Kademlia::store_locally(const crypto::Hash& key, uint8_t data_type,
             {storage::TABLE_GROUP_BLOBS, idx_key, blob_value}
         });
     } else if (data_type == 0x06) {
-        // GROUP_META: single-table write keyed by routing key (= SHA3-256("group:" || group_id)).
+        // GROUP_META: single-table write keyed by routing key (= SHA3-256("chromatin:group:" || group_id)).
         // This matches profiles/names which also use the routing key as storage key,
         // allowing FIND_VALUE to look up group meta on remote nodes.
         std::vector<uint8_t> value_vec(value.begin(), value.end());
@@ -1890,12 +1890,14 @@ bool Kademlia::validate_name_record(std::span<const uint8_t> value, const crypto
         return false;
     }
 
-    // 3. ML-DSA signature over all fields preceding the signature
-    // signed_data = everything before sig_length field
+    // 3. ML-DSA signature over all fields preceding the signature (with domain separation)
     size_t pre_sig_len = 1 + name_length + 32 + 8 + 8 + 2 + pk_len;
-    std::span<const uint8_t> signed_data(value.data(), pre_sig_len);
+    std::string_view name_prefix = "chromatin:name:";
+    std::vector<uint8_t> name_signed_data;
+    name_signed_data.insert(name_signed_data.end(), name_prefix.begin(), name_prefix.end());
+    name_signed_data.insert(name_signed_data.end(), value.begin(), value.begin() + pre_sig_len);
 
-    if (!crypto::verify(signed_data, signature, pubkey)) {
+    if (!crypto::verify(name_signed_data, signature, pubkey)) {
         spdlog::warn("Name record validation: signature verification failed for '{}'", name);
         return false;
     }
@@ -2047,8 +2049,8 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
         return false;
     }
 
-    // Verify storage key == SHA3-256("profile:" || fingerprint)
-    auto expected_key = crypto::sha3_256_prefixed("profile:", fingerprint);
+    // Verify storage key == SHA3-256("chromatin:profile:" || fingerprint)
+    auto expected_key = crypto::sha3_256_prefixed("chromatin:profile:", fingerprint);
     if (expected_key != key) {
         spdlog::warn("Profile validation: storage key mismatch");
         return false;
@@ -2128,12 +2130,14 @@ bool Kademlia::validate_profile(std::span<const uint8_t> value, const crypto::Ha
     if (offset + sig_len > value.size()) return false;
 
     std::span<const uint8_t> signature(value.data() + offset, sig_len);
-    std::span<const uint8_t> signed_data(value.data(), offset - 2 - sig_len);
 
-    // Verify ML-DSA-87 signature
-    // signed_data = everything before sig_len field
+    // Verify ML-DSA-87 signature with domain separation
     size_t pre_sig_offset = offset - 2; // before sig_len
-    if (!crypto::verify(std::span<const uint8_t>(value.data(), pre_sig_offset), signature, pubkey)) {
+    std::string_view profile_prefix = "chromatin:profile:";
+    std::vector<uint8_t> profile_signed_data;
+    profile_signed_data.insert(profile_signed_data.end(), profile_prefix.begin(), profile_prefix.end());
+    profile_signed_data.insert(profile_signed_data.end(), value.begin(), value.begin() + pre_sig_offset);
+    if (!crypto::verify(profile_signed_data, signature, pubkey)) {
         spdlog::warn("Profile validation: signature verification failed");
         return false;
     }
@@ -2188,8 +2192,8 @@ bool Kademlia::validate_inbox_message(std::span<const uint8_t> value) {
     std::span<const uint8_t> recipient_fp = value.subspan(0, 32);
     std::span<const uint8_t> sender_fp    = value.subspan(64, 32);
 
-    // Compute allowlist routing key: co-located with inbox on SHA3-256("inbox:" || recipient_fp)
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    // Compute allowlist routing key: co-located with inbox on SHA3-256("chromatin:inbox:" || recipient_fp)
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
 
     // Build composite lookup key: allowlist_key(32) || sender_fp(32)
     std::vector<uint8_t> composite_key;
@@ -2363,7 +2367,7 @@ bool Kademlia::validate_allowlist_entry(std::span<const uint8_t> value, bool ski
         // Build composite key to look up existing entry
         crypto::Hash ofp{};
         std::copy_n(value.data(), 32, ofp.begin());
-        auto inbox_key = crypto::sha3_256_prefixed("inbox:", ofp);
+        auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", ofp);
         std::vector<uint8_t> composite_key;
         composite_key.reserve(64);
         composite_key.insert(composite_key.end(), inbox_key.begin(), inbox_key.end());
@@ -2441,8 +2445,8 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return false;
     }
 
-    // Per-member entry size: fingerprint(32) + role(1) + kem_ciphertext(1568) = 1601
-    constexpr size_t MEMBER_ENTRY_SIZE = 1601;
+    // Per-member entry size: fingerprint(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48) = 1649
+    constexpr size_t MEMBER_ENTRY_SIZE = 1649;
     size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_ENTRY_SIZE;
 
     // Need at least members_end + sig_len(2)
@@ -2481,9 +2485,9 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return false;
     }
 
-    // Verify key derivation: key must equal SHA3-256("group:" || group_id)
+    // Verify key derivation: key must equal SHA3-256("chromatin:group:" || group_id)
     std::span<const uint8_t> group_id(value.data(), 32);
-    auto expected_key = crypto::sha3_256_prefixed("group:", group_id);
+    auto expected_key = crypto::sha3_256_prefixed("chromatin:group:", group_id);
     if (key != expected_key) {
         spdlog::warn("Group meta validation: key mismatch (expected SHA3-256('group:' || group_id))");
         return false;
@@ -2556,7 +2560,7 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         return true;
     }
 
-    auto signer_profile_key = crypto::sha3_256_prefixed("profile:", signer_fp);
+    auto signer_profile_key = crypto::sha3_256_prefixed("chromatin:profile:", signer_fp);
 
     auto profile_data = storage_.get(storage::TABLE_PROFILES, signer_profile_key);
     if (!profile_data || profile_data->empty()) {

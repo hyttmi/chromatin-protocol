@@ -636,10 +636,10 @@ async def run_tests():
 
         # Test 61: Create group (Alice as owner, Bob as member)
         members = [
-            (fp_a, 0x02, kem_dummy),  # Alice = owner
-            (fp_b, 0x00, kem_dummy),  # Bob = member
+            (fp_a, 0x02, kem_dummy, b"\x00" * 48),  # Alice = owner
+            (fp_b, 0x00, kem_dummy, b"\x00" * 48),  # Bob = member
         ]
-        meta = build_group_meta(sec_a, group_id, fp_a, 1, members)
+        meta = build_group_meta(sec_a, group_id, fp_a, fp_a, 1, members)
         resp = await alice.cmd_group_create(meta)
         check("create group", resp.get("type") == "OK", f"got {resp}")
         group_ok = resp.get("type") == "OK"
@@ -737,10 +737,10 @@ async def run_tests():
 
         # Test: Create base group (v1) — Alice=owner, Bob=member
         members_v1 = [
-            (fp_a, 0x02, kem_dummy),
-            (fp_b, 0x00, kem_dummy),
+            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
+            (fp_b, 0x00, kem_dummy, b"\x00" * 48),
         ]
-        meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, 1, members_v1)
+        meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 1, members_v1)
         resp = await alice.cmd_group_create(meta_v1)
         check("group update: create base group", resp.get("type") == "OK", f"got {resp}")
 
@@ -761,11 +761,11 @@ async def run_tests():
 
         # Test: Add Charlie2 (v2) — Alice=owner, Bob=member, Charlie2=member
         members_v2 = [
-            (fp_a, 0x02, kem_dummy),
-            (fp_b, 0x00, kem_dummy),
-            (fp_c2, 0x00, kem_dummy),
+            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
+            (fp_b, 0x00, kem_dummy, b"\x00" * 48),
+            (fp_c2, 0x00, kem_dummy, b"\x00" * 48),
         ]
-        meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, 2, members_v2)
+        meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 2, members_v2)
         resp = await alice.cmd_group_update(meta_v2)
         check("group update: add charlie2 (v2)", resp.get("type") == "OK", f"got {resp}")
 
@@ -786,10 +786,10 @@ async def run_tests():
 
         # Test: Remove Bob (v3) — Alice=owner, Charlie2=member
         members_v3 = [
-            (fp_a, 0x02, kem_dummy),
-            (fp_c2, 0x00, kem_dummy),
+            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
+            (fp_c2, 0x00, kem_dummy, b"\x00" * 48),
         ]
-        meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, 3, members_v3)
+        meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 3, members_v3)
         resp = await alice.cmd_group_update(meta_v3)
         check("group update: remove bob (v3)", resp.get("type") == "OK", f"got {resp}")
 
@@ -809,7 +809,7 @@ async def run_tests():
         check("group update: replay old version rejected", resp.get("type") == "ERROR", f"got {resp}")
 
         # Test: Non-member can't update (Bob signs with his key)
-        meta_bob_attempt = build_group_meta(sec_b, upd_group_id, fp_b, 4, members_v3)
+        meta_bob_attempt = build_group_meta(sec_b, upd_group_id, fp_b, fp_b, 4, members_v3)
         resp = await bob.cmd_group_update(meta_bob_attempt)
         check("group update: non-member can't update", resp.get("type") == "ERROR", f"got {resp}")
 
@@ -1354,11 +1354,11 @@ async def run_tests():
                 role = 0x01  # admin
             else:
                 role = 0x00  # member
-            group_members.append((fp, role, kem_dummy))
+            group_members.append((fp, role, kem_dummy, b"\x00" * 48))
 
         # user_0 (owner) creates the group
         _, owner_sec, owner_fp, owner_client, _ = mesh_users[0]
-        meta = build_group_meta(owner_sec, large_group_id, owner_fp, 1, group_members)
+        meta = build_group_meta(owner_sec, large_group_id, owner_fp, owner_fp, 1, group_members)
         resp = await owner_client.cmd_group_create(meta)
         check("large group: create (10 members)", resp.get("type") == "OK",
               f"got {resp}")
@@ -1670,10 +1670,10 @@ async def run_tests():
         repl_group_id = os.urandom(32)
         kem_dummy_r = b"\x00" * 1568
         grp_members_v1 = [
-            (fp_grp_owner, 0x02, kem_dummy_r),
-            (fp_grp_member, 0x00, kem_dummy_r),
+            (fp_grp_owner, 0x02, kem_dummy_r, b"\x00" * 48),
+            (fp_grp_member, 0x00, kem_dummy_r, b"\x00" * 48),
         ]
-        meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, 1, grp_members_v1)
+        meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 1, grp_members_v1)
         resp = await grp_owner.cmd_group_create(meta)
         check("repl: group create on node A", resp.get("type") == "OK", f"got {resp}")
 
@@ -1702,10 +1702,10 @@ async def run_tests():
 
         # GROUP_UPDATE cross-node: owner updates on node A, member sees version change on node B
         grp_members_v2 = [
-            (fp_grp_owner, 0x02, kem_dummy_r),
-            (fp_grp_member, 0x01, kem_dummy_r),  # promote member to admin
+            (fp_grp_owner, 0x02, kem_dummy_r, b"\x00" * 48),
+            (fp_grp_member, 0x01, kem_dummy_r, b"\x00" * 48),  # promote member to admin
         ]
-        meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, 2, grp_members_v2)
+        meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 2, grp_members_v2)
         resp = await grp_owner.cmd_group_update(meta_v2)
         check("repl: group update (promote member) on node A", resp.get("type") == "OK", f"got {resp}")
 
@@ -1715,9 +1715,9 @@ async def run_tests():
         check("repl: member sees updated group meta from node B", resp.get("type") == "OK", f"got {resp}")
         if resp.get("type") == "OK":
             raw_meta = bytes.fromhex(resp.get("group_meta", ""))
-            # version is at offset 64 (fingerprint(32) + owner_fp(32)) as 4 BE bytes
-            if len(raw_meta) >= 68:
-                version_in_meta = int.from_bytes(raw_meta[64:68], "big")
+            # version is at offset 96 (group_id(32) + owner_fp(32) + signer_fp(32)) as 4 BE bytes
+            if len(raw_meta) >= 100:
+                version_in_meta = int.from_bytes(raw_meta[96:100], "big")
                 check("repl: member sees version 2 group meta",
                       version_in_meta == 2, f"version={version_in_meta}")
             else:

@@ -1,4 +1,5 @@
-"""ML-DSA-87 key management, SHA3-256 hashing, and proof-of-work mining."""
+"""ML-DSA-87 key management, ML-KEM-1024 encapsulation, AES-256-GCM,
+SHA3-256 hashing, proof-of-work mining, and E2E message encryption."""
 
 import hashlib
 import os
@@ -69,3 +70,102 @@ def mine_pow(prefix: bytes, difficulty: int) -> int:
         if count_leading_zero_bits(h) >= difficulty:
             return nonce
         nonce += 1
+
+
+# ---------------------------------------------------------------------------
+# E2E encryption helpers
+# ---------------------------------------------------------------------------
+
+
+def sha3_256(data: bytes) -> bytes:
+    """SHA3-256 hash."""
+    return hashlib.sha3_256(data).digest()
+
+
+def kem_generate_keypair() -> tuple[bytes, bytes]:
+    """Generate ML-KEM-1024 keypair. Returns (pubkey, seckey)."""
+    kem = oqs.KeyEncapsulation("ML-KEM-1024")
+    pk = kem.generate_keypair()
+    sk = kem.export_secret_key()
+    return bytes(pk), bytes(sk)
+
+
+def kem_encapsulate(pubkey: bytes) -> tuple[bytes, bytes]:
+    """Encapsulate to pubkey. Returns (ciphertext, shared_secret)."""
+    kem = oqs.KeyEncapsulation("ML-KEM-1024")
+    ct, ss = kem.encap_secret(pubkey)
+    return bytes(ct), bytes(ss)
+
+
+def kem_decapsulate(ciphertext: bytes, seckey: bytes) -> bytes:
+    """Decapsulate with secret key. Returns shared_secret."""
+    kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=seckey)
+    return bytes(kem.decap_secret(ciphertext))
+
+
+def aes_gcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
+    """AES-256-GCM encrypt. Returns ciphertext || tag (16 bytes)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aesgcm = AESGCM(key)
+    return aesgcm.encrypt(nonce, plaintext, aad)
+
+
+def aes_gcm_decrypt(key: bytes, nonce: bytes, ciphertext_and_tag: bytes, aad: bytes) -> bytes:
+    """AES-256-GCM decrypt. Returns plaintext."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext_and_tag, aad)
+
+
+def encrypt_1to1_message(
+    sender_sk: bytes, sender_fp: bytes, recipient_fp: bytes,
+    recipient_kem_pk: bytes, content: bytes
+) -> bytes:
+    """Encrypt a 1:1 message blob (sign-then-encrypt).
+
+    Returns: kem_ciphertext(1568) || nonce(12) || aes_ciphertext || tag(16)
+    """
+    # Sign
+    sig_data = b"chromatin:msg:" + sender_fp + recipient_fp + content
+    sig = sign(sender_sk, sig_data)
+
+    # Build plaintext: sender_fp(32) || content || sig_len(2 BE) || sig
+    plaintext = sender_fp + content + struct.pack(">H", len(sig)) + sig
+
+    # KEM encapsulate
+    kem_ct, ss = kem_encapsulate(recipient_kem_pk)
+
+    # Derive message key
+    message_key = sha3_256(b"chromatin:msg:1:1:" + ss)
+
+    # Encrypt
+    nonce = os.urandom(12)
+    ct_and_tag = aes_gcm_encrypt(message_key, nonce, plaintext, kem_ct)
+
+    return kem_ct + nonce + ct_and_tag
+
+
+def decrypt_1to1_message(
+    recipient_kem_sk: bytes, recipient_fp: bytes, blob: bytes
+) -> tuple[bytes, bytes, bytes]:
+    """Decrypt a 1:1 message blob.
+
+    Returns: (sender_fp, content, signature)
+    """
+    kem_ct = blob[:1568]
+    nonce = blob[1568:1580]
+    ct_and_tag = blob[1580:]
+
+    ss = kem_decapsulate(kem_ct, recipient_kem_sk)
+    message_key = sha3_256(b"chromatin:msg:1:1:" + ss)
+    plaintext = aes_gcm_decrypt(message_key, nonce, ct_and_tag, kem_ct)
+
+    sender_fp = plaintext[:32]
+    # ML-DSA-87 signature is fixed 4627 bytes
+    sig = plaintext[-(4627):]
+    sig_len_bytes = plaintext[-(4627 + 2):-(4627)]
+    sig_len = struct.unpack(">H", sig_len_bytes)[0]
+    assert sig_len == 4627, f"unexpected sig_len: {sig_len}"
+    content = plaintext[32:-(4627 + 2)]
+
+    return sender_fp, content, sig

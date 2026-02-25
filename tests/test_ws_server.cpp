@@ -90,11 +90,12 @@ std::vector<uint8_t> build_group_meta(
     uint16_t count = static_cast<uint16_t>(members.size());
     meta.push_back((count >> 8) & 0xFF);
     meta.push_back(count & 0xFF);
-    // per-member: fp(32) + role(1) + kem_ciphertext(1568)
+    // per-member: fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)
     for (const auto& [fp, role] : members) {
         meta.insert(meta.end(), fp.begin(), fp.end());
         meta.push_back(role);
         meta.resize(meta.size() + 1568, 0x00);  // dummy kem_ciphertext
+        meta.resize(meta.size() + 48, 0x00);  // dummy wrapped_gek
     }
     // Sign everything so far
     auto signature = chromatin::crypto::sign(meta, signer_kp.secret_key);
@@ -121,7 +122,10 @@ std::vector<uint8_t> build_profile(const chromatin::crypto::KeyPair& user_kp, ui
     profile.push_back(0x00);                                                   // social_count = 0
     for (int i = 7; i >= 0; --i)                                              // sequence(8 BE)
         profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
-    auto sig = chromatin::crypto::sign(profile, user_kp.secret_key);
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto sig = chromatin::crypto::sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(sig.size());
     profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
@@ -686,8 +690,8 @@ TEST_F(WsServerTest, SendAndList) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Manually add sender to recipient's allowlist.
-    // Allowlist key: SHA3-256("inbox:" || recipient_fp) || sender_fp = 64 bytes
-    auto allowlist_prefix = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    // Allowlist key: SHA3-256("chromatin:inbox:" || recipient_fp) || sender_fp = 64 bytes
+    auto allowlist_prefix = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.reserve(64);
     allow_key.insert(allow_key.end(), allowlist_prefix.begin(), allowlist_prefix.end());
@@ -799,7 +803,7 @@ TEST_F(WsServerTest, AllowAndRevoke) {
 
     // Verify the entry was stored in TABLE_ALLOWLISTS
     auto user_fp = crypto::sha3_256(user_kp.public_key);
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", user_fp);
     std::vector<uint8_t> storage_key;
     storage_key.insert(storage_key.end(), allowlist_key.begin(), allowlist_key.end());
     storage_key.insert(storage_key.end(), contact_fp.begin(), contact_fp.end());
@@ -1357,8 +1361,8 @@ TEST_F(WsServerTest, PushNotification) {
     msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
 
-    // Compute inbox_key = SHA3-256("inbox:" || user_fp)
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    // Compute inbox_key = SHA3-256("chromatin:inbox:" || user_fp)
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", user_fp);
 
     // Simulate a Kademlia STORE arriving for this user's inbox
     server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
@@ -1411,7 +1415,7 @@ TEST_F(WsServerTest, PushLargeMessageBlobNull) {
     msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
 
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", user_fp);
     server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
 
     auto resp = client.recv_text(3000);
@@ -1468,8 +1472,8 @@ TEST_F(WsServerTest, SendLargeChunked) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Manually add sender to recipient's allowlist
-    // Key format: SHA3-256("inbox:" || recipient_fp) || sender_fp
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    // Key format: SHA3-256("chromatin:inbox:" || recipient_fp) || sender_fp
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
@@ -1679,7 +1683,7 @@ TEST_F(WsServerTest, UploadAlreadyInProgressRejects) {
     auto recipient_fp = crypto::sha3_256(recipient_kp.public_key);
 
     // Add sender to recipient's allowlist
-    auto allowlist_key = crypto::sha3_256_prefixed("inbox:", recipient_fp);
+    auto allowlist_key = crypto::sha3_256_prefixed("chromatin:inbox:", recipient_fp);
     std::vector<uint8_t> allow_key;
     allow_key.insert(allow_key.end(), allowlist_key.begin(), allowlist_key.end());
     allow_key.insert(allow_key.end(), sender_fp.begin(), sender_fp.end());
@@ -1782,7 +1786,7 @@ TEST_F(WsServerTest, DeleteReplicates) {
         << "blob should be deleted";
 
     // Verify repl_log has a DEL entry
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", user_fp);
     auto entries = repl_log_->entries_after(inbox_key, 0);
     bool found_del = false;
     for (const auto& entry : entries) {
@@ -1919,30 +1923,22 @@ TEST_F(WsServerTest, HelloRateLimited) {
     client.close();
 }
 
-// ---------- STATUS (no auth required) ----------
+// ---------- STATUS (requires auth) ----------
 
-TEST_F(WsServerTest, StatusWithoutAuth) {
+TEST_F(WsServerTest, StatusRequiresAuth) {
     start_ws_server();
 
     TestWsClient client;
     ASSERT_TRUE(client.connect("127.0.0.1", ws_port_));
 
-    // STATUS should work without authentication
+    // STATUS should require authentication
     ASSERT_TRUE(client.send_text(R"({"type":"STATUS","id":1})"));
     auto resp = client.recv_text(2000);
     ASSERT_TRUE(resp.has_value());
 
     auto root = parse_json(*resp);
-    EXPECT_EQ(root["type"].asString(), "OK");
-    EXPECT_EQ(root["id"].asInt(), 1);
-    EXPECT_TRUE(root.isMember("node_id"));
-    EXPECT_TRUE(root.isMember("uptime_seconds"));
-    EXPECT_TRUE(root.isMember("connected_clients"));
-    EXPECT_TRUE(root.isMember("authenticated_clients"));
-    EXPECT_TRUE(root.isMember("routing_table_size"));
-    EXPECT_GE(root["uptime_seconds"].asInt64(), 0);
-    EXPECT_GE(root["connected_clients"].asUInt64(), 1u);  // at least this client
-    EXPECT_EQ(root["authenticated_clients"].asUInt64(), 0u);  // not authenticated
+    EXPECT_EQ(root["type"].asString(), "ERROR");
+    EXPECT_EQ(root["code"].asInt(), 401);
 
     client.close();
 }
@@ -1989,8 +1985,8 @@ TEST_F(WsServerTest, MultiDevicePush) {
     msg_binary.push_back(static_cast<uint8_t>(blob_len & 0xFF));
     msg_binary.insert(msg_binary.end(), blob.begin(), blob.end());
 
-    // Compute inbox_key = SHA3-256("inbox:" || user_fp)
-    auto inbox_key = crypto::sha3_256_prefixed("inbox:", user_fp);
+    // Compute inbox_key = SHA3-256("chromatin:inbox:" || user_fp)
+    auto inbox_key = crypto::sha3_256_prefixed("chromatin:inbox:", user_fp);
 
     // Simulate a Kademlia STORE arriving for this user's inbox
     server_->on_kademlia_store(inbox_key, 0x02, msg_binary);
@@ -2059,7 +2055,7 @@ TEST_F(WsServerTest, ResolveNameFound) {
     name_record.resize(name_record.size() + 8 + 8 + 2, 0x00);
 
     std::vector<uint8_t> name_bytes(name.begin(), name.end());
-    auto name_key = crypto::sha3_256_prefixed("name:", name_bytes);
+    auto name_key = crypto::sha3_256_prefixed("chromatin:name:", name_bytes);
     storage_->put(storage::TABLE_NAMES,
         std::vector<uint8_t>(name_key.begin(), name_key.end()), name_record);
 
@@ -2136,7 +2132,7 @@ TEST_F(WsServerTest, GetProfileFound) {
     // sig_len = 0
     profile.push_back(0x00); profile.push_back(0x00);
 
-    auto profile_key = crypto::sha3_256_prefixed("profile:", user_fp);
+    auto profile_key = crypto::sha3_256_prefixed("chromatin:profile:", user_fp);
     storage_->put(storage::TABLE_PROFILES,
         std::vector<uint8_t>(profile_key.begin(), profile_key.end()), profile);
 
@@ -2293,7 +2289,10 @@ TEST_F(WsServerTest, SetProfileStoresValidProfile) {
     profile.push_back(0x01);
 
     // Sign everything up to this point
-    auto signature = crypto::sign(profile, user_kp.secret_key);
+    std::string_view pfx = "chromatin:profile:";
+    std::vector<uint8_t> signed_data(pfx.begin(), pfx.end());
+    signed_data.insert(signed_data.end(), profile.begin(), profile.end());
+    auto signature = crypto::sign(signed_data, user_kp.secret_key);
     uint16_t sig_len = static_cast<uint16_t>(signature.size());
     profile.push_back(static_cast<uint8_t>(sig_len >> 8));
     profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
@@ -2315,7 +2314,7 @@ TEST_F(WsServerTest, SetProfileStoresValidProfile) {
     EXPECT_EQ(root["id"].asInt(), 200);
 
     // Verify stored
-    auto profile_key = crypto::sha3_256_prefixed("profile:", user_fp);
+    auto profile_key = crypto::sha3_256_prefixed("chromatin:profile:", user_fp);
     auto stored = storage_->get(storage::TABLE_PROFILES,
         std::vector<uint8_t>(profile_key.begin(), profile_key.end()));
     EXPECT_TRUE(stored.has_value()) << "profile should be stored";
@@ -3807,13 +3806,12 @@ TEST_F(WsServerTest, PerIPConnectionLimit) {
     }
 
     // Verify the last accepted connection is functional
+    // Send an invalid command — getting any response proves the connection works
     {
-        std::string status = R"({"type":"STATUS","id":1})";
-        clients.back()->send_text(status);
+        std::string ping = R"({"type":"PING","id":1})";
+        clients.back()->send_text(ping);
         auto resp = clients.back()->recv_text(2000);
         ASSERT_TRUE(resp.has_value()) << "Last accepted connection should be functional";
-        auto parsed = parse_json(*resp);
-        EXPECT_EQ(parsed["type"].asString(), "OK");
     }
 
     // Give the server a moment to register all connections
@@ -3824,8 +3822,8 @@ TEST_F(WsServerTest, PerIPConnectionLimit) {
     bool connected = extra.connect("127.0.0.1", ws_port_);
     if (connected) {
         // Connection may briefly succeed at TCP level but server closes the WS
-        std::string status = R"({"type":"STATUS","id":1})";
-        extra.send_text(status);
+        std::string ping = R"({"type":"PING","id":1})";
+        extra.send_text(ping);
         auto resp = extra.recv_text(1000);
         // Server should have closed the connection
         EXPECT_FALSE(resp.has_value())
