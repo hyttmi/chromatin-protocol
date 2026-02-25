@@ -2085,7 +2085,18 @@ TEST_F(KademliaTest, ProfileAtFieldLimitsAccepted) {
     EXPECT_TRUE(n1.kad->store(key, 0x00, profile));
 }
 
+TEST_F(KademliaTest, ProfileSubFieldLimitsAcceptMinimal) {
+    auto& n1 = create_node(8);
+    start_all();
 
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    // Empty bio, empty avatar, no social links — regression check
+    auto profile = build_profile_with_fields(user_kp, 1, {}, {}, {});
+    EXPECT_TRUE(n1.kad->store(key, 0x00, profile));
+}
 
 // ---------------------------------------------------------------------------
 // Test 31: SyncHandlesDelete — DEL entries propagate via sync
