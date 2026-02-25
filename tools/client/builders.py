@@ -4,6 +4,13 @@ import struct
 
 from crypto_utils import sign
 
+# Profile sub-field limits (must match config::protocol:: in C++)
+MAX_BIO_SIZE = 2048
+MAX_AVATAR_SIZE = 256 * 1024
+MAX_SOCIAL_LINKS = 16
+MAX_SOCIAL_PLATFORM_LENGTH = 64
+MAX_SOCIAL_HANDLE_LENGTH = 128
+
 
 def build_profile_record(
     seckey: bytes,
@@ -29,6 +36,19 @@ def build_profile_record(
         sig_len(2 BE) || signature
     """
     bio_bytes = bio.encode("utf-8")
+    if len(bio_bytes) > MAX_BIO_SIZE:
+        raise ValueError(f"bio exceeds {MAX_BIO_SIZE} byte limit ({len(bio_bytes)} bytes)")
+    if len(avatar) > MAX_AVATAR_SIZE:
+        raise ValueError(f"avatar exceeds {MAX_AVATAR_SIZE} byte limit ({len(avatar)} bytes)")
+    if len(social_links) > MAX_SOCIAL_LINKS:
+        raise ValueError(f"social_links count exceeds {MAX_SOCIAL_LINKS} limit ({len(social_links)})")
+    for platform, handle in social_links:
+        p = platform.encode("utf-8")
+        h = handle.encode("utf-8")
+        if len(p) > MAX_SOCIAL_PLATFORM_LENGTH:
+            raise ValueError(f"platform string exceeds {MAX_SOCIAL_PLATFORM_LENGTH} byte limit ({len(p)} bytes)")
+        if len(h) > MAX_SOCIAL_HANDLE_LENGTH:
+            raise ValueError(f"handle string exceeds {MAX_SOCIAL_HANDLE_LENGTH} byte limit ({len(h)} bytes)")
     body = bytearray()
     body += fingerprint
     body += struct.pack(">H", len(pubkey))
