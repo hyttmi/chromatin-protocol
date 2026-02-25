@@ -23,6 +23,7 @@ using namespace chromatin::kademlia;
 using namespace chromatin::crypto;
 using namespace chromatin::replication;
 using namespace chromatin::storage;
+using namespace chromatin::config;
 
 // ---------------------------------------------------------------------------
 // Test infrastructure: in-process test node
@@ -1901,6 +1902,57 @@ static std::vector<uint8_t> build_profile(const KeyPair& user_kp, uint64_t seque
     return profile;
 }
 
+// Helper: build a profile with custom bio, avatar, and social links
+static std::vector<uint8_t> build_profile_with_fields(
+    const KeyPair& user_kp, uint64_t sequence,
+    const std::vector<uint8_t>& bio,
+    const std::vector<uint8_t>& avatar,
+    const std::vector<std::pair<std::string, std::string>>& social_links) {
+    Hash user_fp = sha3_256(user_kp.public_key);
+    std::vector<uint8_t> profile;
+    // fingerprint(32)
+    profile.insert(profile.end(), user_fp.begin(), user_fp.end());
+    // pubkey_len(2 BE) + pubkey
+    uint16_t pk_len = static_cast<uint16_t>(user_kp.public_key.size());
+    profile.push_back(static_cast<uint8_t>((pk_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(pk_len & 0xFF));
+    profile.insert(profile.end(), user_kp.public_key.begin(), user_kp.public_key.end());
+    // kem_pubkey_len = 0
+    profile.push_back(0x00); profile.push_back(0x00);
+    // bio_len(2 BE) + bio
+    uint16_t bio_len = static_cast<uint16_t>(bio.size());
+    profile.push_back(static_cast<uint8_t>((bio_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(bio_len & 0xFF));
+    profile.insert(profile.end(), bio.begin(), bio.end());
+    // avatar_len(4 BE) + avatar
+    uint32_t avatar_len = static_cast<uint32_t>(avatar.size());
+    profile.push_back(static_cast<uint8_t>((avatar_len >> 24) & 0xFF));
+    profile.push_back(static_cast<uint8_t>((avatar_len >> 16) & 0xFF));
+    profile.push_back(static_cast<uint8_t>((avatar_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(avatar_len & 0xFF));
+    profile.insert(profile.end(), avatar.begin(), avatar.end());
+    // social_count(1) + social links
+    profile.push_back(static_cast<uint8_t>(social_links.size()));
+    for (const auto& [platform, handle] : social_links) {
+        profile.push_back(static_cast<uint8_t>(platform.size()));
+        profile.insert(profile.end(), platform.begin(), platform.end());
+        profile.push_back(static_cast<uint8_t>(handle.size()));
+        profile.insert(profile.end(), handle.begin(), handle.end());
+    }
+    // sequence(8 BE)
+    for (int i = 7; i >= 0; --i) {
+        profile.push_back(static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF));
+    }
+    // sign it
+    auto sig = sign(std::span<const uint8_t>(profile.data(), profile.size()), user_kp.secret_key);
+    uint16_t sig_len = static_cast<uint16_t>(sig.size());
+    profile.push_back(static_cast<uint8_t>((sig_len >> 8) & 0xFF));
+    profile.push_back(static_cast<uint8_t>(sig_len & 0xFF));
+    profile.insert(profile.end(), sig.begin(), sig.end());
+    return profile;
+}
+
+
 TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
     auto& n1 = create_node(8);
     start_all();
@@ -1936,6 +1988,104 @@ TEST_F(KademliaTest, ProfileSequenceMonotonicity) {
     ASSERT_TRUE(stored.has_value());
     EXPECT_EQ(*stored, profile_v2);
 }
+
+// ---------------------------------------------------------------------------
+// Tests 30.1-30.6: Profile sub-field limit enforcement
+// ---------------------------------------------------------------------------
+
+TEST_F(KademliaTest, ProfileBioExceedsLimit) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::vector<uint8_t> bio(protocol::MAX_BIO_SIZE + 1, 'a');
+    auto profile = build_profile_with_fields(user_kp, 1, bio, {}, {});
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ProfileAvatarExceedsLimit) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::vector<uint8_t> avatar(protocol::MAX_AVATAR_SIZE + 1, 0xFF);
+    auto profile = build_profile_with_fields(user_kp, 1, {}, avatar, {});
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ProfileTooManySocialLinks) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::vector<std::pair<std::string, std::string>> links;
+    for (int i = 0; i < protocol::MAX_SOCIAL_LINKS + 1; ++i) {
+        links.emplace_back("x", "user" + std::to_string(i));
+    }
+    auto profile = build_profile_with_fields(user_kp, 1, {}, {}, links);
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ProfileSocialPlatformTooLong) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::string long_platform(protocol::MAX_SOCIAL_PLATFORM_LENGTH + 1, 'p');
+    std::vector<std::pair<std::string, std::string>> links = {{long_platform, "user"}};
+    auto profile = build_profile_with_fields(user_kp, 1, {}, {}, links);
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ProfileSocialHandleTooLong) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    std::string long_handle(protocol::MAX_SOCIAL_HANDLE_LENGTH + 1, 'h');
+    std::vector<std::pair<std::string, std::string>> links = {{"x", long_handle}};
+    auto profile = build_profile_with_fields(user_kp, 1, {}, {}, links);
+    EXPECT_FALSE(n1.kad->store(key, 0x00, profile));
+}
+
+TEST_F(KademliaTest, ProfileAtFieldLimitsAccepted) {
+    auto& n1 = create_node(8);
+    start_all();
+
+    KeyPair user_kp = generate_keypair();
+    Hash user_fp = sha3_256(user_kp.public_key);
+    Hash key = sha3_256_prefixed("profile:", user_fp);
+
+    // Bio at exactly the limit
+    std::vector<uint8_t> bio(protocol::MAX_BIO_SIZE, 'b');
+    // Skip avatar — at 256 KiB + pubkey it would exceed MAX_PROFILE_SIZE (1 MiB)
+    // Social links at exactly the limits
+    std::vector<std::pair<std::string, std::string>> links;
+    for (int i = 0; i < protocol::MAX_SOCIAL_LINKS; ++i) {
+        std::string platform(protocol::MAX_SOCIAL_PLATFORM_LENGTH, 'p');
+        std::string handle(protocol::MAX_SOCIAL_HANDLE_LENGTH, 'h');
+        links.emplace_back(platform, handle);
+    }
+    auto profile = build_profile_with_fields(user_kp, 1, bio, {}, links);
+    EXPECT_TRUE(n1.kad->store(key, 0x00, profile));
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Test 31: SyncHandlesDelete — DEL entries propagate via sync
