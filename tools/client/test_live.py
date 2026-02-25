@@ -23,6 +23,15 @@ from crypto_utils import (
     sign,
     mine_pow,
     count_leading_zero_bits,
+    kem_generate_keypair,
+    kem_encapsulate,
+    encrypt_1to1_message,
+    decrypt_1to1_message,
+    wrap_gek_for_member,
+    unwrap_gek,
+    encrypt_group_message,
+    decrypt_group_message,
+    sha3_256,
 )
 from protocol import ChromatinClient, build_hello, build_auth, build_allowlist_signature_payload
 from builders import build_profile_record, build_name_record, build_group_meta
@@ -135,6 +144,8 @@ async def run_tests():
     pub_b, sec_b = generate_keypair()
     fp_a = fingerprint_of(pub_a)
     fp_b = fingerprint_of(pub_b)
+    kem_pub_a, kem_sec_a = kem_generate_keypair()
+    kem_pub_b, kem_sec_b = kem_generate_keypair()
     print(f"  Alice: {fp_a.hex()[:16]}...")
     print(f"  Bob:   {fp_b.hex()[:16]}...")
 
@@ -205,6 +216,19 @@ async def run_tests():
     check("bob status response", status_b.get("type") == "OK")
 
     # ===================================================================
+    print("\n=== Profile Setup (KEM pubkeys for encryption) ===")
+    # ===================================================================
+    profile_a = build_profile_record(sec_a, fp_a, pub_a, kem_pub_a, "", b"", [], 1)
+    resp = await alice.cmd_set_profile(profile_a)
+    check("alice profile with kem pubkey", resp.get("type") == "OK", f"got {resp}")
+
+    profile_b = build_profile_record(sec_b, fp_b, pub_b, kem_pub_b, "", b"", [], 1)
+    resp = await bob.cmd_set_profile(profile_b)
+    check("bob profile with kem pubkey", resp.get("type") == "OK", f"got {resp}")
+
+    await asyncio.sleep(1)  # Let profiles propagate to DHT
+
+    # ===================================================================
     print("\n=== Allowlist Tests ===")
     # ===================================================================
 
@@ -227,23 +251,23 @@ async def run_tests():
     await asyncio.sleep(0.5)  # Let allowlist propagate
 
     # Test 15: Alice sends to Bob
-    resp = await alice.cmd_send(fp_b.hex(), b"Hello Bob!")
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, b"Hello Bob!"))
     check("alice sends to bob", resp.get("type") == "OK", f"got {resp}")
     msg_id_1 = resp.get("msg_id", "")
     check("send returns msg_id", len(msg_id_1) > 0, "no msg_id")
 
     # Test 17: Send a second message
-    resp = await alice.cmd_send(fp_b.hex(), b"Second message")
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, b"Second message"))
     check("alice sends second msg", resp.get("type") == "OK", f"got {resp}")
     msg_id_2 = resp.get("msg_id", "")
 
     # Test 18: Send a third message
-    resp = await alice.cmd_send(fp_b.hex(), b"Third message")
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, b"Third message"))
     check("alice sends third msg", resp.get("type") == "OK", f"got {resp}")
     msg_id_3 = resp.get("msg_id", "")
 
     # Test 19: Bob sends to Alice
-    resp = await bob.cmd_send(fp_a.hex(), b"Hello Alice!")
+    resp = await bob.cmd_send(fp_a.hex(), encrypt_1to1_message(sec_b, fp_b, fp_a, kem_pub_a, b"Hello Alice!"))
     check("bob sends to alice", resp.get("type") == "OK", f"got {resp}")
     msg_id_4 = resp.get("msg_id", "")
 
@@ -253,12 +277,12 @@ async def run_tests():
 
     # Test 21: Send large message (10KB)
     large_msg = b"X" * 10240
-    resp = await alice.cmd_send(fp_b.hex(), large_msg)
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, large_msg))
     check("send 10KB message", resp.get("type") == "OK", f"got {resp}")
     msg_id_large = resp.get("msg_id", "")
 
     # Test 22: Send unicode message
-    resp = await alice.cmd_send(fp_b.hex(), "Hello from the future! 🌐".encode("utf-8"))
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, "Hello from the future! 🌐".encode("utf-8")))
     check("send unicode message", resp.get("type") == "OK", f"got {resp}")
 
     # Wait for messages to propagate
@@ -292,8 +316,10 @@ async def run_tests():
         check("bob gets msg by id", resp.get("type") == "OK" or "blob" in resp, f"got {resp}")
         if resp.get("blob"):
             raw = base64.b64decode(resp["blob"])
-            check("msg content correct", raw == b"Hello Bob!",
-                  f"got {raw[:50]}")
+            sender_fp, content, _ = decrypt_1to1_message(kem_sec_b, fp_b, raw)
+            check("msg content correct", content == b"Hello Bob!",
+                  f"got {content[:50]}")
+            check("msg sender correct", sender_fp == fp_a, "wrong sender")
         else:
             check("msg content correct", False, "no blob in response")
     else:
@@ -359,11 +385,12 @@ async def run_tests():
     for name, size_mb in photos:
         size = int(size_mb * 1024 * 1024)
         photo_data = os.urandom(size)
+        encrypted_photo = encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, photo_data)
         print(f"  Uploading {name} ({size_mb} MB)...")
         try:
-            resp = await alice.cmd_send_large(fp_b.hex(), photo_data, timeout=60.0)
+            resp = await alice.cmd_send_large(fp_b.hex(), encrypted_photo, timeout=60.0)
             if resp.get("type") == "OK" and resp.get("msg_id"):
-                large_msg_ids.append((resp["msg_id"], photo_data, name))
+                large_msg_ids.append((resp["msg_id"], encrypted_photo, name))
                 ok(f"chunked upload {name} ({size_mb} MB)")
             else:
                 fail(f"chunked upload {name}", str(resp))
@@ -401,7 +428,7 @@ async def run_tests():
 
     # Test 38: Bob sends to Alice (should fail - revoked)
     # Note: may still succeed if Bob's node hasn't received the revoke yet
-    resp = await bob.cmd_send(fp_a.hex(), b"Should be denied")
+    resp = await bob.cmd_send(fp_a.hex(), encrypt_1to1_message(sec_b, fp_b, fp_a, kem_pub_a, b"Should be denied"))
     check("send to revoked fails", resp.get("type") == "ERROR",
           f"got {resp} (may be replication delay)")
 
@@ -412,7 +439,7 @@ async def run_tests():
     await asyncio.sleep(2)  # Allow time for allow to replicate
 
     # Test 40: Bob can send again
-    resp = await bob.cmd_send(fp_a.hex(), b"I'm back!")
+    resp = await bob.cmd_send(fp_a.hex(), encrypt_1to1_message(sec_b, fp_b, fp_a, kem_pub_a, b"I'm back!"))
     check("send after re-allow", resp.get("type") == "OK", f"got {resp}")
 
     # ===================================================================
@@ -521,11 +548,11 @@ async def run_tests():
         seckey=sec_a,
         fingerprint=fp_a,
         pubkey=pub_a,
-        kem_pubkey=b"",
+        kem_pubkey=kem_pub_a,
         bio="Alice in Chromatin-land",
         avatar=b"",
         social_links=[],
-        sequence=1,
+        sequence=2,
     )
     resp = await alice.cmd_set_profile(profile)
     check("alice set profile", resp.get("type") == "OK", f"got {resp}")
@@ -535,11 +562,11 @@ async def run_tests():
         seckey=sec_b,
         fingerprint=fp_b,
         pubkey=pub_b,
-        kem_pubkey=b"",
+        kem_pubkey=kem_pub_b,
         bio="Bob the Builder",
         avatar=b"",
         social_links=[],
-        sequence=1,
+        sequence=2,
     )
     resp = await bob.cmd_set_profile(profile_b)
     check("bob set profile", resp.get("type") == "OK", f"got {resp}")
@@ -555,16 +582,16 @@ async def run_tests():
     resp = await alice.cmd_get_profile("aa" * 32)
     check("get nonexistent profile", not resp.get("found", True), f"got {resp}")
 
-    # Test 54: Alice updates profile (sequence 2)
+    # Test 54: Alice updates profile (sequence 3)
     profile2 = build_profile_record(
         seckey=sec_a,
         fingerprint=fp_a,
         pubkey=pub_a,
-        kem_pubkey=b"",
+        kem_pubkey=kem_pub_a,
         bio="Alice updated!",
         avatar=b"",
         social_links=[],
-        sequence=2,
+        sequence=3,
     )
     resp = await alice.cmd_set_profile(profile2)
     check("alice update profile", resp.get("type") == "OK", f"got {resp}")
@@ -574,11 +601,11 @@ async def run_tests():
         seckey=sec_a,
         fingerprint=fp_a,
         pubkey=pub_a,
-        kem_pubkey=b"",
+        kem_pubkey=kem_pub_a,
         bio="A" * 500,
         avatar=b"",
         social_links=[],
-        sequence=3,
+        sequence=4,
     )
     resp = await alice.cmd_set_profile(profile_bio)
     check("profile with long bio", resp.get("type") == "OK", f"got {resp}")
@@ -629,15 +656,18 @@ async def run_tests():
     # ===================================================================
 
     group_id = os.urandom(32)
+    group_gek = os.urandom(32)
     group_ok = False
 
     try:
-        kem_dummy = b"\x00" * 1568
+        # Generate real GEK and wrap for members
+        kem_ct_a, wrapped_gek_a = wrap_gek_for_member(kem_pub_a, group_gek)
+        kem_ct_b, wrapped_gek_b = wrap_gek_for_member(kem_pub_b, group_gek)
 
         # Test 61: Create group (Alice as owner, Bob as member)
         members = [
-            (fp_a, 0x02, kem_dummy, b"\x00" * 48),  # Alice = owner
-            (fp_b, 0x00, kem_dummy, b"\x00" * 48),  # Bob = member
+            (fp_a, 0x02, kem_ct_a, wrapped_gek_a),  # Alice = owner
+            (fp_b, 0x00, kem_ct_b, wrapped_gek_b),  # Bob = member
         ]
         meta = build_group_meta(sec_a, group_id, fp_a, fp_a, 1, members)
         resp = await alice.cmd_group_create(meta)
@@ -660,9 +690,10 @@ async def run_tests():
         group_msg_ids = []
         for i in range(5):
             mid = os.urandom(32).hex()
+            encrypted = encrypt_group_message(sec_a, fp_a, group_id, 1, group_gek, f"Group msg {i}".encode("utf-8"))
             resp = await alice.cmd_group_send(
                 group_id.hex(), mid, gek_version=1,
-                blob=f"Group msg {i}".encode("utf-8")
+                blob=encrypted
             )
             check(f"group send msg {i}", resp.get("type") == "OK", f"got {resp}")
             group_msg_ids.append(mid)
@@ -678,16 +709,21 @@ async def run_tests():
         # Test 71: Get specific group message
         if group_msg_ids:
             resp = await alice.cmd_group_get(group_id.hex(), group_msg_ids[0])
-            check("get group msg", resp.get("type") == "OK",
-                  f"got {resp}")
+            check("get group msg", resp.get("type") == "OK", f"got {resp}")
+            if resp.get("blob"):
+                raw = bytes.fromhex(resp["blob"])
+                sender_fp, content = decrypt_group_message(group_gek, group_id, 1, raw)
+                check("group msg decrypts", content == b"Group msg 0", f"got {content[:50]}")
+                check("group msg sender", sender_fp == fp_a, "wrong sender")
         else:
             fail("get group msg", "no msg ids")
 
         # Test 72: Bob sends group message
         bob_gmsg = os.urandom(32).hex()
+        encrypted_bob = encrypt_group_message(sec_b, fp_b, group_id, 1, group_gek, b"Bob's group message")
         resp = await bob.cmd_group_send(
             group_id.hex(), bob_gmsg, gek_version=1,
-            blob=b"Bob's group message"
+            blob=encrypted_bob
         )
         check("bob group send", resp.get("type") == "OK", f"got {resp}")
 
@@ -727,18 +763,22 @@ async def run_tests():
     charlie2_client = None
 
     try:
-        kem_dummy = b"\x00" * 1568
-
         # Generate Charlie2 identity
         pub_c2, sec_c2 = generate_keypair()
         fp_c2 = fingerprint_of(pub_c2)
+        kem_pub_c2, kem_sec_c2 = kem_generate_keypair()
         charlie2 = ChromatinClient(pub_c2, sec_c2)
         charlie2_client = charlie2
 
+        # Generate real GEK v1 and wrap for initial members
+        upd_gek_v1 = os.urandom(32)
+        upd_kem_ct_a, upd_wrapped_a = wrap_gek_for_member(kem_pub_a, upd_gek_v1)
+        upd_kem_ct_b, upd_wrapped_b = wrap_gek_for_member(kem_pub_b, upd_gek_v1)
+
         # Test: Create base group (v1) — Alice=owner, Bob=member
         members_v1 = [
-            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
-            (fp_b, 0x00, kem_dummy, b"\x00" * 48),
+            (fp_a, 0x02, upd_kem_ct_a, upd_wrapped_a),
+            (fp_b, 0x00, upd_kem_ct_b, upd_wrapped_b),
         ]
         meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 1, members_v1)
         resp = await alice.cmd_group_create(meta_v1)
@@ -749,9 +789,9 @@ async def run_tests():
         # Test: Bob can send before update
         resp = await bob.cmd_group_send(
             upd_group_id.hex(),
-            os.urandom(16).hex(),
+            os.urandom(32).hex(),
             1,
-            b"bob pre-update",
+            encrypt_group_message(sec_b, fp_b, upd_group_id, 1, upd_gek_v1, b"bob pre-update"),
         )
         check("group update: bob sends before update", resp.get("type") == "OK", f"got {resp}")
 
@@ -760,10 +800,14 @@ async def run_tests():
         check("group update: charlie2 connected", resp_c2.get("type") == "OK", f"got {resp_c2}")
 
         # Test: Add Charlie2 (v2) — Alice=owner, Bob=member, Charlie2=member
+        upd_v2_ct_a, upd_v2_wrapped_a = wrap_gek_for_member(kem_pub_a, upd_gek_v1)
+        upd_v2_ct_b, upd_v2_wrapped_b = wrap_gek_for_member(kem_pub_b, upd_gek_v1)
+        upd_v2_ct_c2, upd_v2_wrapped_c2 = wrap_gek_for_member(kem_pub_c2, upd_gek_v1)
+
         members_v2 = [
-            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
-            (fp_b, 0x00, kem_dummy, b"\x00" * 48),
-            (fp_c2, 0x00, kem_dummy, b"\x00" * 48),
+            (fp_a, 0x02, upd_v2_ct_a, upd_v2_wrapped_a),
+            (fp_b, 0x00, upd_v2_ct_b, upd_v2_wrapped_b),
+            (fp_c2, 0x00, upd_v2_ct_c2, upd_v2_wrapped_c2),
         ]
         meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 2, members_v2)
         resp = await alice.cmd_group_update(meta_v2)
@@ -778,16 +822,20 @@ async def run_tests():
         # Test: New member can send
         resp = await charlie2.cmd_group_send(
             upd_group_id.hex(),
-            os.urandom(16).hex(),
+            os.urandom(32).hex(),
             1,
-            b"charlie2 hello",
+            encrypt_group_message(sec_c2, fp_c2, upd_group_id, 1, upd_gek_v1, b"charlie2 hello"),
         )
         check("group update: new member can send", resp.get("type") == "OK", f"got {resp}")
 
-        # Test: Remove Bob (v3) — Alice=owner, Charlie2=member
+        # Test: Remove Bob (v3) — rotate GEK since member removed
+        upd_gek_v2 = os.urandom(32)
+        upd_v3_ct_a, upd_v3_wrapped_a = wrap_gek_for_member(kem_pub_a, upd_gek_v2)
+        upd_v3_ct_c2, upd_v3_wrapped_c2 = wrap_gek_for_member(kem_pub_c2, upd_gek_v2)
+
         members_v3 = [
-            (fp_a, 0x02, kem_dummy, b"\x00" * 48),
-            (fp_c2, 0x00, kem_dummy, b"\x00" * 48),
+            (fp_a, 0x02, upd_v3_ct_a, upd_v3_wrapped_a),
+            (fp_c2, 0x00, upd_v3_ct_c2, upd_v3_wrapped_c2),
         ]
         meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 3, members_v3)
         resp = await alice.cmd_group_update(meta_v3)
@@ -798,9 +846,9 @@ async def run_tests():
         # Test: Removed member can't send
         resp = await bob.cmd_group_send(
             upd_group_id.hex(),
-            os.urandom(16).hex(),
+            os.urandom(32).hex(),
             1,
-            b"bob post-remove",
+            encrypt_group_message(sec_b, fp_b, upd_group_id, 1, upd_gek_v1, b"bob post-remove"),
         )
         check("group update: removed member can't send", resp.get("type") == "ERROR", f"got {resp}")
 
@@ -829,7 +877,7 @@ async def run_tests():
     # Test 77-86: Send 10 messages rapidly
     rapid_ids = []
     for i in range(10):
-        resp = await alice.cmd_send(fp_b.hex(), f"Rapid {i}".encode())
+        resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, f"Rapid {i}".encode()))
         check(f"rapid send {i}", resp.get("type") == "OK", f"got {resp}")
         if resp.get("msg_id"):
             rapid_ids.append(resp["msg_id"])
@@ -845,7 +893,7 @@ async def run_tests():
 
     # Test 89-91: Various message sizes
     for size_name, size in [("1 byte", 1), ("1KB", 1024), ("50KB", 50 * 1024)]:
-        resp = await alice.cmd_send(fp_b.hex(), os.urandom(size))
+        resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, os.urandom(size)))
         check(f"send {size_name} msg", resp.get("type") == "OK", f"got {resp}")
 
     # ===================================================================
@@ -861,7 +909,7 @@ async def run_tests():
     check("alice reconnected", resp.get("type") == "OK", f"got {resp}")
 
     # Test 94: Alice can still send after reconnect
-    resp = await alice.cmd_send(fp_b.hex(), b"After reconnect")
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, b"After reconnect"))
     check("send after reconnect", resp.get("type") == "OK", f"got {resp}")
 
     # Test 95: Alice can list after reconnect
@@ -873,7 +921,7 @@ async def run_tests():
     # ===================================================================
 
     # Test 96: Send binary data
-    resp = await alice.cmd_send(fp_b.hex(), bytes(range(256)))
+    resp = await alice.cmd_send(fp_b.hex(), encrypt_1to1_message(sec_a, fp_a, fp_b, kem_pub_b, bytes(range(256))))
     check("send all byte values", resp.get("type") == "OK", f"got {resp}")
 
     # Test 97: List with limit=0
@@ -917,6 +965,8 @@ async def run_tests():
     try:
         pub_lp1, sec_lp1 = generate_keypair()
         pub_lp2, sec_lp2 = generate_keypair()
+        kem_pub_lp1, kem_sec_lp1 = kem_generate_keypair()
+        kem_pub_lp2, kem_sec_lp2 = kem_generate_keypair()
         fp_lp1 = fingerprint_of(pub_lp1)
         fp_lp2 = fingerprint_of(pub_lp2)
         lp_sender = ChromatinClient(pub_lp1, sec_lp1)
@@ -934,7 +984,7 @@ async def run_tests():
             await lp_receiver.cmd_allow(fp_lp1.hex())
             await asyncio.sleep(1)
 
-            large_blob = os.urandom(100 * 1024)
+            large_blob = encrypt_1to1_message(sec_lp1, fp_lp1, fp_lp2, kem_pub_lp2, os.urandom(100 * 1024))
             resp = await lp_sender.cmd_send_large(fp_lp2.hex(), large_blob)
             check("large msg push: send large ok", resp.get("type") == "OK", f"got {resp}")
 
@@ -977,8 +1027,10 @@ async def run_tests():
                   f"got {resp}")
 
             # Test 105: Send to destroyed group
+            dummy_gek = os.urandom(32)
             resp = await alice.cmd_group_send(
-                group_id.hex(), os.urandom(32).hex(), 1, b"ghost msg"
+                group_id.hex(), os.urandom(32).hex(), 1,
+                encrypt_group_message(sec_a, fp_a, group_id, 1, dummy_gek, b"ghost msg")
             )
             check("send to destroyed group", resp.get("type") == "ERROR", f"got {resp}")
         except Exception as e:
@@ -994,6 +1046,8 @@ async def run_tests():
     try:
         pub_x, sec_x = generate_keypair()
         pub_y, sec_y = generate_keypair()
+        kem_pub_x, kem_sec_x = kem_generate_keypair()
+        kem_pub_y, kem_sec_y = kem_generate_keypair()
         fp_x = fingerprint_of(pub_x)
         fp_y = fingerprint_of(pub_y)
 
@@ -1026,6 +1080,10 @@ async def run_tests():
         y_node = sy.get("node_id", "?")[:16]
         print(f"  Xander on node {x_node}..., Yara on node {y_node}...")
 
+        # Set profiles with KEM pubkeys
+        await xander.cmd_set_profile(build_profile_record(sec_x, fp_x, pub_x, kem_pub_x, "", b"", [], 1))
+        await yara.cmd_set_profile(build_profile_record(sec_y, fp_y, pub_y, kem_pub_y, "", b"", [], 1))
+
         # Mutual allowlist
         resp = await xander.cmd_allow(fp_y.hex())
         check("xander allows yara", resp.get("type") == "OK", f"got {resp}")
@@ -1039,7 +1097,7 @@ async def run_tests():
         yara_pushes.clear()
 
         # Xander sends to Yara — Yara should get a NEW_MESSAGE push
-        resp = await xander.cmd_send(fp_y.hex(), b"Cross-node push test!")
+        resp = await xander.cmd_send(fp_y.hex(), encrypt_1to1_message(sec_x, fp_x, fp_y, kem_pub_y, b"Cross-node push test!"))
         check("xander sends to yara", resp.get("type") == "OK", f"got {resp}")
 
         # Wait for push notification to arrive
@@ -1065,7 +1123,7 @@ async def run_tests():
 
         # Yara sends back to Xander — Xander should get a push
         xander_pushes.clear()
-        resp = await yara.cmd_send(fp_x.hex(), b"Cross-node reply!")
+        resp = await yara.cmd_send(fp_x.hex(), encrypt_1to1_message(sec_y, fp_y, fp_x, kem_pub_x, b"Cross-node reply!"))
         check("yara sends to xander", resp.get("type") == "OK", f"got {resp}")
 
         await asyncio.sleep(2)
@@ -1221,7 +1279,7 @@ async def run_tests():
     print("\n=== Multi-User Messaging Mesh (10 users, 25+ messages) ===")
     # ===================================================================
 
-    mesh_users = []  # [(pub, sec, fp, client, pushes), ...]
+    mesh_users = []  # [(pub, sec, fp, client, pushes, kem_pub, kem_sec), ...]
     try:
         # Create and connect 10 fresh identities
         def _make_mesh_cb(pl):
@@ -1231,14 +1289,15 @@ async def run_tests():
 
         for i in range(10):
             pub, sec = generate_keypair()
+            kem_pub, kem_sec = kem_generate_keypair()
             fp = fingerprint_of(pub)
             client = ChromatinClient(pub, sec)
             pushes = []
             client.set_push_callback(_make_mesh_cb(pushes))
-            mesh_users.append((pub, sec, fp, client, pushes))
+            mesh_users.append((pub, sec, fp, client, pushes, kem_pub, kem_sec))
 
         connected = 0
-        for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
+        for i, (pub, sec, fp, client, _, _, _) in enumerate(mesh_users):
             srv = SERVERS[i % len(SERVERS)]
             resp = await connect_with_redirect(client, srv[0], srv[1], tls=srv[2])
             if resp.get("type") == "OK":
@@ -1248,12 +1307,20 @@ async def run_tests():
         check("mesh: all 10 users connected", connected == 10,
               f"{connected}/10 connected")
 
+        # Set profiles with KEM pubkeys for all mesh users
+        for i, (pub, sec, fp, client, _, kem_pub, _) in enumerate(mesh_users):
+            profile = build_profile_record(sec, fp, pub, kem_pub, "", b"", [], 1)
+            resp = await client.cmd_set_profile(profile)
+            if resp.get("type") != "OK":
+                fail(f"mesh user_{i} set profile", f"got {resp}")
+        await asyncio.sleep(1)  # Let profiles propagate
+
         # Ring allowlists: user_i allows user_{i-1} and user_{i+1}
         allow_ok = 0
         for i in range(10):
-            _, _, _, client, _ = mesh_users[i]
-            _, _, fp_prev, _, _ = mesh_users[(i - 1) % 10]
-            _, _, fp_next, _, _ = mesh_users[(i + 1) % 10]
+            _, _, _, client, _, _, _ = mesh_users[i]
+            _, _, fp_prev, _, _, _, _ = mesh_users[(i - 1) % 10]
+            _, _, fp_next, _, _, _, _ = mesh_users[(i + 1) % 10]
             r1 = await client.cmd_allow(fp_prev.hex())
             r2 = await client.cmd_allow(fp_next.hex())
             if r1.get("type") == "OK":
@@ -1269,12 +1336,11 @@ async def run_tests():
         sent_count = 0
         sent_to = {}  # recipient_idx -> [msg_id, ...]
         for i in range(10):
-            _, _, _, client, _ = mesh_users[i]
+            _, sec_i, fp_i, client, _, _, _ = mesh_users[i]
             for nbr in [(i - 1) % 10, (i + 1) % 10]:
-                _, _, fp_nbr, _, _ = mesh_users[nbr]
-                resp = await client.cmd_send(
-                    fp_nbr.hex(), f"mesh {i}->{nbr}".encode()
-                )
+                _, _, fp_nbr, _, _, kem_pub_nbr, _ = mesh_users[nbr]
+                encrypted = encrypt_1to1_message(sec_i, fp_i, fp_nbr, kem_pub_nbr, f"mesh {i}->{nbr}".encode())
+                resp = await client.cmd_send(fp_nbr.hex(), encrypted)
                 if resp.get("type") == "OK":
                     sent_count += 1
                     sent_to.setdefault(nbr, []).append(resp.get("msg_id"))
@@ -1284,11 +1350,10 @@ async def run_tests():
         # 5 extra messages (users 0,2,4,6,8 → their next neighbor)
         for i in [0, 2, 4, 6, 8]:
             nbr = (i + 1) % 10
-            _, _, _, client, _ = mesh_users[i]
-            _, _, fp_nbr, _, _ = mesh_users[nbr]
-            resp = await client.cmd_send(
-                fp_nbr.hex(), f"extra {i}->{nbr}".encode()
-            )
+            _, sec_i, fp_i, client, _, _, _ = mesh_users[i]
+            _, _, fp_nbr, _, _, kem_pub_nbr, _ = mesh_users[nbr]
+            encrypted = encrypt_1to1_message(sec_i, fp_i, fp_nbr, kem_pub_nbr, f"extra {i}->{nbr}".encode())
+            resp = await client.cmd_send(fp_nbr.hex(), encrypted)
             if resp.get("type") == "OK":
                 sent_count += 1
                 sent_to.setdefault(nbr, []).append(resp.get("msg_id"))
@@ -1300,7 +1365,7 @@ async def run_tests():
         # Verify: each recipient has >= 2 messages
         recipients_ok = 0
         for i in range(10):
-            _, _, _, client, _ = mesh_users[i]
+            _, _, _, client, _, _, _ = mesh_users[i]
             resp = await client.cmd_list(50)
             msg_count = len(resp.get("messages", []))
             if msg_count >= 2:
@@ -1308,20 +1373,24 @@ async def run_tests():
         check("mesh: all recipients have >=2 msgs", recipients_ok >= 8,
               f"{recipients_ok}/10 have >=2 messages")
 
-        # Spot-check: GET one message for content correctness
+        # Spot-check: GET one message for content correctness (decrypt it)
         spot_target = 1  # user_1 should have msgs from user_0 and user_2
         if sent_to.get(spot_target):
-            _, _, _, client_1, _ = mesh_users[spot_target]
+            _, _, fp_1, client_1, _, _, kem_sec_1 = mesh_users[spot_target]
             resp = await client_1.cmd_get(sent_to[spot_target][0])
-            check("mesh: GET content spot-check",
-                  resp.get("type") == "OK" or "blob" in resp, f"got {resp}")
+            if resp.get("blob"):
+                raw = base64.b64decode(resp["blob"])
+                sender_fp_check, content_check, _ = decrypt_1to1_message(kem_sec_1, fp_1, raw)
+                check("mesh: GET content spot-check", len(content_check) > 0, f"decrypted {len(content_check)} bytes")
+            else:
+                check("mesh: GET content spot-check", resp.get("type") == "OK", f"got {resp}")
         else:
             fail("mesh: GET content spot-check", "no messages for user_1")
 
         # Check cross-node push notifications arrived
         total_pushes = sum(
             len([p for p in pushes if p.get("type") == "NEW_MESSAGE"])
-            for _, _, _, _, pushes in mesh_users
+            for _, _, _, _, pushes, _, _ in mesh_users
         )
         check("mesh: push notifications received", total_pushes >= 5,
               f"got {total_pushes} NEW_MESSAGE pushes")
@@ -1340,24 +1409,26 @@ async def run_tests():
 
     try:
         # Ensure mesh users are still connected
-        for i, (_, _, _, client, _) in enumerate(mesh_users):
+        for i, (_, _, _, client, _, _, _) in enumerate(mesh_users):
             await ensure_connected(client, SERVERS)
 
-        kem_dummy = b"\x00" * 1568
+        # Generate real GEK and wrap for all 10 members
+        lg_gek = os.urandom(32)
 
         # Build member list: user_0=owner, user_1=admin, rest=members
         group_members = []
-        for i, (pub, sec, fp, client, _) in enumerate(mesh_users):
+        for i, (pub, sec, fp, client, _, kem_pub, _) in enumerate(mesh_users):
             if i == 0:
                 role = 0x02  # owner
             elif i == 1:
                 role = 0x01  # admin
             else:
                 role = 0x00  # member
-            group_members.append((fp, role, kem_dummy, b"\x00" * 48))
+            kem_ct, wrapped_gek = wrap_gek_for_member(kem_pub, lg_gek)
+            group_members.append((fp, role, kem_ct, wrapped_gek))
 
         # user_0 (owner) creates the group
-        _, owner_sec, owner_fp, owner_client, _ = mesh_users[0]
+        _, owner_sec, owner_fp, owner_client, _, _, _ = mesh_users[0]
         meta = build_group_meta(owner_sec, large_group_id, owner_fp, owner_fp, 1, group_members)
         resp = await owner_client.cmd_group_create(meta)
         check("large group: create (10 members)", resp.get("type") == "OK",
@@ -1369,7 +1440,7 @@ async def run_tests():
 
             # All 10 members query GROUP_INFO
             info_ok = 0
-            for i, (_, _, _, client, _) in enumerate(mesh_users):
+            for i, (_, _, _, client, _, _, _) in enumerate(mesh_users):
                 resp = await client.cmd_group_info(large_group_id.hex())
                 if resp.get("type") == "OK":
                     info_ok += 1
@@ -1379,11 +1450,15 @@ async def run_tests():
             # 5 different members each send a group message
             lg_msg_ids = []
             for sender_idx in [0, 2, 4, 6, 8]:
-                _, _, _, client, _ = mesh_users[sender_idx]
+                _, sec_sender, fp_sender, client, _, _, _ = mesh_users[sender_idx]
                 mid = os.urandom(32).hex()
+                encrypted = encrypt_group_message(
+                    sec_sender, fp_sender, large_group_id, 1, lg_gek,
+                    f"Group msg from user_{sender_idx}".encode()
+                )
                 resp = await client.cmd_group_send(
                     large_group_id.hex(), mid, gek_version=1,
-                    blob=f"Group msg from user_{sender_idx}".encode()
+                    blob=encrypted
                 )
                 check(f"large group: send from user_{sender_idx}",
                       resp.get("type") == "OK", f"got {resp}")
@@ -1403,7 +1478,7 @@ async def run_tests():
             # Admin (user_1) deletes one message
             if lg_msg_ids:
                 del_mid, del_sender = lg_msg_ids[0]
-                _, _, _, admin_client, _ = mesh_users[1]
+                _, _, _, admin_client, _, _, _ = mesh_users[1]
                 resp = await admin_client.cmd_group_delete(
                     large_group_id.hex(), del_mid
                 )
@@ -1413,7 +1488,7 @@ async def run_tests():
             # Non-admin member (user_3) tries to delete another's message
             if len(lg_msg_ids) >= 2:
                 del_mid2, _ = lg_msg_ids[1]
-                _, _, _, member_client, _ = mesh_users[3]
+                _, _, _, member_client, _, _, _ = mesh_users[3]
                 resp = await member_client.cmd_group_delete(
                     large_group_id.hex(), del_mid2
                 )
@@ -1434,8 +1509,10 @@ async def run_tests():
                   f"got {resp}")
 
             # GROUP_SEND should fail after destroy
+            dummy_lg_gek = os.urandom(32)
             resp = await owner_client.cmd_group_send(
-                large_group_id.hex(), os.urandom(32).hex(), 1, b"ghost"
+                large_group_id.hex(), os.urandom(32).hex(), 1,
+                encrypt_group_message(owner_sec, owner_fp, large_group_id, 1, dummy_lg_gek, b"ghost")
             )
             check("large group: send fails after destroy",
                   resp.get("type") == "ERROR", f"got {resp}")
@@ -1446,7 +1523,7 @@ async def run_tests():
         fail("large group lifecycle section", f"crashed: {e}")
 
     # Cleanup mesh users
-    for _, _, _, client, _ in mesh_users:
+    for _, _, _, client, _, _, _ in mesh_users:
         try:
             await client.disconnect()
         except Exception:
@@ -1546,6 +1623,8 @@ async def run_tests():
         pub_r2, sec_r2 = generate_keypair()
         fp_r1 = fingerprint_of(pub_r1)
         fp_r2 = fingerprint_of(pub_r2)
+        kem_pub_r1, kem_sec_r1 = kem_generate_keypair()
+        kem_pub_r2, kem_sec_r2 = kem_generate_keypair()
 
         repl_sender = ChromatinClient(pub_r1, sec_r1)
         repl_receiver = ChromatinClient(pub_r2, sec_r2)
@@ -1569,7 +1648,7 @@ async def run_tests():
         await asyncio.sleep(2)  # Let allowlist replicate
 
         # --- 1:1 message replication ---
-        repl_blob = b"Replication test message payload"
+        repl_blob = encrypt_1to1_message(sec_r1, fp_r1, fp_r2, kem_pub_r2, b"Replication test message payload")
         resp = await repl_sender.cmd_send(fp_r2.hex(), repl_blob)
         check("repl: sender sends message", resp.get("type") == "OK", f"got {resp}")
         repl_msg_id = resp.get("msg_id", "")
@@ -1607,9 +1686,12 @@ async def run_tests():
 
                 if repl_msg_id and msgs2:
                     resp = await repl_receiver2.cmd_get(repl_msg_id)
-                    blob_back = bytes.fromhex(resp.get("blob", "")) if resp.get("blob") else b""
-                    check(f"repl: GET correct blob from node {srv_idx}",
-                          blob_back == repl_blob, f"got {len(blob_back)} bytes")
+                    if resp.get("blob"):
+                        blob_back = base64.b64decode(resp["blob"])
+                        check(f"repl: GET correct blob from node {srv_idx}",
+                              blob_back == repl_blob, f"got {len(blob_back)} bytes vs expected {len(repl_blob)}")
+                    else:
+                        check(f"repl: GET correct blob from node {srv_idx}", False, "no blob in response")
 
                 await repl_receiver2.disconnect()
                 break
@@ -1621,7 +1703,7 @@ async def run_tests():
             seckey=sec_r1,
             fingerprint=fp_r1,
             pubkey=pub_r1,
-            kem_pubkey=b"",
+            kem_pubkey=kem_pub_r1,
             bio="Replication tester",
             avatar=b"",
             social_links=[],
@@ -1653,6 +1735,8 @@ async def run_tests():
         pub_grp_member, sec_grp_member = generate_keypair()
         fp_grp_owner = fingerprint_of(pub_grp_owner)
         fp_grp_member = fingerprint_of(pub_grp_member)
+        kem_pub_grp_owner, kem_sec_grp_owner = kem_generate_keypair()
+        kem_pub_grp_member, kem_sec_grp_member = kem_generate_keypair()
 
         grp_owner = ChromatinClient(pub_grp_owner, sec_grp_owner)
         grp_member = ChromatinClient(pub_grp_member, sec_grp_member)
@@ -1668,16 +1752,19 @@ async def run_tests():
         print(f"  group owner on {grp_owner_node}..., member on {grp_member_node}...")
 
         repl_group_id = os.urandom(32)
-        kem_dummy_r = b"\x00" * 1568
+        repl_gek = os.urandom(32)
+        repl_kem_ct_o, repl_wrapped_o = wrap_gek_for_member(kem_pub_grp_owner, repl_gek)
+        repl_kem_ct_m, repl_wrapped_m = wrap_gek_for_member(kem_pub_grp_member, repl_gek)
+
         grp_members_v1 = [
-            (fp_grp_owner, 0x02, kem_dummy_r, b"\x00" * 48),
-            (fp_grp_member, 0x00, kem_dummy_r, b"\x00" * 48),
+            (fp_grp_owner, 0x02, repl_kem_ct_o, repl_wrapped_o),
+            (fp_grp_member, 0x00, repl_kem_ct_m, repl_wrapped_m),
         ]
         meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 1, grp_members_v1)
         resp = await grp_owner.cmd_group_create(meta)
         check("repl: group create on node A", resp.get("type") == "OK", f"got {resp}")
 
-        await asyncio.sleep(2)  # Let GROUP_META replicate
+        await asyncio.sleep(8)  # Let GROUP_META replicate (needs time across 3 nodes)
 
         # Member on different node can fetch group info
         resp = await grp_member.cmd_group_info(repl_group_id.hex())
@@ -1686,7 +1773,8 @@ async def run_tests():
 
         # Member on different node can send group message
         gm_id = os.urandom(32).hex()
-        resp = await grp_member.cmd_group_send(repl_group_id.hex(), gm_id, 1, b"Cross-node group msg")
+        encrypted_gm = encrypt_group_message(sec_grp_member, fp_grp_member, repl_group_id, 1, repl_gek, b"Cross-node group msg")
+        resp = await grp_member.cmd_group_send(repl_group_id.hex(), gm_id, 1, encrypted_gm)
         check("repl: member sends group msg from different node",
               resp.get("type") == "OK", f"got {resp}")
 
@@ -1701,9 +1789,12 @@ async def run_tests():
               f"got {len(g_msgs)} messages")
 
         # GROUP_UPDATE cross-node: owner updates on node A, member sees version change on node B
+        repl_v2_ct_o, repl_v2_wrapped_o = wrap_gek_for_member(kem_pub_grp_owner, repl_gek)
+        repl_v2_ct_m, repl_v2_wrapped_m = wrap_gek_for_member(kem_pub_grp_member, repl_gek)
+
         grp_members_v2 = [
-            (fp_grp_owner, 0x02, kem_dummy_r, b"\x00" * 48),
-            (fp_grp_member, 0x01, kem_dummy_r, b"\x00" * 48),  # promote member to admin
+            (fp_grp_owner, 0x02, repl_v2_ct_o, repl_v2_wrapped_o),
+            (fp_grp_member, 0x01, repl_v2_ct_m, repl_v2_wrapped_m),  # promote member to admin
         ]
         meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 2, grp_members_v2)
         resp = await grp_owner.cmd_group_update(meta_v2)
@@ -1730,6 +1821,125 @@ async def run_tests():
 
     except Exception as e:
         fail("cross-node replication section", f"crashed: {e}")
+
+    # ===================================================================
+    print("\n=== Realistic Encrypted Conversation (25 messages) ===")
+    # ===================================================================
+
+    try:
+        # Create fresh identities
+        pub_ca, sec_ca = generate_keypair()
+        pub_cb, sec_cb = generate_keypair()
+        kem_pub_ca, kem_sec_ca = kem_generate_keypair()
+        kem_pub_cb, kem_sec_cb = kem_generate_keypair()
+        fp_ca = fingerprint_of(pub_ca)
+        fp_cb = fingerprint_of(pub_cb)
+
+        conv_alice = ChromatinClient(pub_ca, sec_ca)
+        conv_bob = ChromatinClient(pub_cb, sec_cb)
+        ca_pushes, cb_pushes = [], []
+
+        async def _ca_push(m):
+            ca_pushes.append(m)
+
+        async def _cb_push(m):
+            cb_pushes.append(m)
+
+        conv_alice.set_push_callback(_ca_push)
+        conv_bob.set_push_callback(_cb_push)
+
+        # Connect to DIFFERENT nodes
+        resp = await connect_with_redirect(conv_alice, SERVERS[0][0], SERVERS[0][1])
+        check("conv: alice connected", resp.get("type") == "OK", f"got {resp}")
+        resp = await connect_with_redirect(conv_bob, SERVERS[1][0], SERVERS[1][1])
+        check("conv: bob connected", resp.get("type") == "OK", f"got {resp}")
+
+        # Set profiles (with KEM pubkeys)
+        await conv_alice.cmd_set_profile(build_profile_record(sec_ca, fp_ca, pub_ca, kem_pub_ca, "", b"", [], 1))
+        await conv_bob.cmd_set_profile(build_profile_record(sec_cb, fp_cb, pub_cb, kem_pub_cb, "", b"", [], 1))
+        await asyncio.sleep(1)
+
+        # Mutual allow
+        await conv_alice.cmd_allow(fp_cb.hex())
+        await conv_bob.cmd_allow(fp_ca.hex())
+        await asyncio.sleep(1)
+
+        # Simulate a conversation — alternating messages
+        conversation = [
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "hey, are you there?"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "yeah! just got on. what's up?"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "wanted to share something cool"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "go for it"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "check this link: https://example.com/cool-thing"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "nice, checking it out now"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "it's a new protocol for decentralized messaging"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "like this one? \U0001f604"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "exactly lol"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "that's meta"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "anyway, dinner tonight?"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "sure, where?"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "that ramen place on 5th"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "sounds good. 7pm?"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "perfect, see you there"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "btw did you fix the bug?"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "which one, the auth race?"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "yeah that one"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "yep, pushed the fix yesterday"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "great. tests passing?"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "261/261 \u2705"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "nice work"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "thanks! heading out now"),
+            (conv_bob, sec_cb, fp_cb, fp_ca, kem_pub_ca, "see ya tonight"),
+            (conv_alice, sec_ca, fp_ca, fp_cb, kem_pub_cb, "\U0001f35c"),
+        ]
+
+        sent_ok = 0
+        for sender, sk, sfp, rfp, rkpk, text in conversation:
+            blob = encrypt_1to1_message(sk, sfp, rfp, rkpk, text.encode("utf-8"))
+            resp = await sender.cmd_send(rfp.hex(), blob)
+            if resp.get("type") == "OK":
+                sent_ok += 1
+        check("conv: all 25 messages sent", sent_ok == 25, f"{sent_ok}/25 sent")
+
+        await asyncio.sleep(2)
+
+        # Verify alice's inbox — should have bob's messages (decrypt and check)
+        resp = await conv_alice.cmd_list(50)
+        a_msgs = resp.get("messages", [])
+        check("conv: alice received messages", len(a_msgs) >= 10, f"got {len(a_msgs)}")
+
+        # Decrypt first received message
+        if a_msgs:
+            resp = await conv_alice.cmd_get(a_msgs[0]["msg_id"])
+            if resp.get("blob"):
+                raw = base64.b64decode(resp["blob"])
+                sender_fp, content, _ = decrypt_1to1_message(kem_sec_ca, fp_ca, raw)
+                check("conv: decrypted msg from bob", sender_fp == fp_cb, f"wrong sender")
+                check("conv: decrypted content valid", len(content) > 0, "empty content")
+
+        # Verify bob's inbox
+        resp = await conv_bob.cmd_list(50)
+        b_msgs = resp.get("messages", [])
+        check("conv: bob received messages", len(b_msgs) >= 10, f"got {len(b_msgs)}")
+
+        # Decrypt bob's first received message
+        if b_msgs:
+            resp = await conv_bob.cmd_get(b_msgs[0]["msg_id"])
+            if resp.get("blob"):
+                raw = base64.b64decode(resp["blob"])
+                sender_fp, content, _ = decrypt_1to1_message(kem_sec_cb, fp_cb, raw)
+                check("conv: decrypted msg from alice", sender_fp == fp_ca, f"wrong sender")
+
+        # Count cross-node push notifications
+        push_count = len([p for p in ca_pushes if p.get("type") == "NEW_MESSAGE"])
+        push_count += len([p for p in cb_pushes if p.get("type") == "NEW_MESSAGE"])
+        check("conv: push notifications received", push_count >= 5, f"got {push_count}")
+
+        await conv_alice.disconnect()
+        await conv_bob.disconnect()
+
+    except Exception as e:
+        fail("realistic conversation section", f"crashed: {e}")
 
     # ===================================================================
     print("\n=== Cleanup ===")

@@ -169,3 +169,68 @@ def decrypt_1to1_message(
     content = plaintext[32:-(4627 + 2)]
 
     return sender_fp, content, sig
+
+
+# ---------------------------------------------------------------------------
+# Group E2E encryption helpers
+# ---------------------------------------------------------------------------
+
+
+def wrap_gek_for_member(member_kem_pk: bytes, gek: bytes) -> tuple[bytes, bytes]:
+    """Wrap a GEK for one member via ML-KEM-1024.
+    Returns (kem_ciphertext(1568), wrapped_gek(48)).
+    wrapped_gek = AES-256-GCM(wrap_key, zeros(12), gek, aad="chromatin:gek")
+    """
+    kem_ct, ss = kem_encapsulate(member_kem_pk)
+    wrap_key = sha3_256(b"chromatin:gek:wrap:" + ss)
+    nonce = b"\x00" * 12
+    wrapped = aes_gcm_encrypt(wrap_key, nonce, gek, b"chromatin:gek")
+    return kem_ct, wrapped
+
+
+def unwrap_gek(kem_ct: bytes, kem_sk: bytes, wrapped_gek: bytes) -> bytes:
+    """Unwrap a GEK using ML-KEM-1024 decapsulation.
+    Returns the 32-byte GEK.
+    """
+    ss = kem_decapsulate(kem_ct, kem_sk)
+    wrap_key = sha3_256(b"chromatin:gek:wrap:" + ss)
+    nonce = b"\x00" * 12
+    return aes_gcm_decrypt(wrap_key, nonce, wrapped_gek, b"chromatin:gek")
+
+
+def encrypt_group_message(
+    sender_sk: bytes, sender_fp: bytes, group_id: bytes, gek_version: int,
+    gek: bytes, content: bytes
+) -> bytes:
+    """Encrypt a group message blob (sign-then-encrypt with GEK).
+    Returns: nonce(12) || aes_ciphertext || tag(16)
+    """
+    sig_data = b"chromatin:grp:" + sender_fp + group_id + struct.pack(">I", gek_version) + content
+    sig = sign(sender_sk, sig_data)
+    plaintext = sender_fp + content + struct.pack(">H", len(sig)) + sig
+    message_key = sha3_256(b"chromatin:msg:grp:" + gek)
+    nonce = os.urandom(12)
+    # AAD: group_id(32) || gek_version(4 BE) per spec
+    aad = group_id + struct.pack(">I", gek_version)
+    ct_and_tag = aes_gcm_encrypt(message_key, nonce, plaintext, aad)
+    return nonce + ct_and_tag
+
+
+def decrypt_group_message(
+    gek: bytes, group_id: bytes, gek_version: int, blob: bytes
+) -> tuple[bytes, bytes]:
+    """Decrypt a group message blob.
+    Returns: (sender_fp, content)
+    """
+    nonce = blob[:12]
+    ct_and_tag = blob[12:]
+    message_key = sha3_256(b"chromatin:msg:grp:" + gek)
+    aad = group_id + struct.pack(">I", gek_version)
+    plaintext = aes_gcm_decrypt(message_key, nonce, ct_and_tag, aad)
+    sender_fp = plaintext[:32]
+    # ML-DSA-87 signature is fixed 4627 bytes
+    sig = plaintext[-4627:]
+    sig_len = struct.unpack(">H", plaintext[-(4627 + 2):-4627])[0]
+    assert sig_len == 4627, f"unexpected sig_len: {sig_len}"
+    content = plaintext[32:-(4627 + 2)]
+    return sender_fp, content
