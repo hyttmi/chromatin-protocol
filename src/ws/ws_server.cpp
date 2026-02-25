@@ -2407,6 +2407,7 @@ std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t
     // Binary format:
     //   group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
     //   per-member[fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)] × member_count ||
+    //   signer_pubkey_len(2 BE) || signer_pubkey ||
     //   sig_len(2 BE) || signature
 
     constexpr size_t HEADER_SIZE = 32 + 32 + 32 + 4 + 2;  // 102 bytes
@@ -2434,7 +2435,7 @@ std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t
     uint16_t member_count = (static_cast<uint16_t>(data[100]) << 8) |
                             static_cast<uint16_t>(data[101]);
 
-    // Validate total size: header + members + sig_len(2) + signature(variable)
+    // Validate minimum size: header + members + pubkey_len(2)
     size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_SIZE;
     if (data.size() < members_end + 2) return std::nullopt;
 
@@ -2448,10 +2449,16 @@ std::optional<GroupMeta> WsServer<SSL>::parse_group_meta(std::span<const uint8_t
         meta.members.push_back(member);
     }
 
+    // Skip signer_pubkey_len(2 BE) + signer_pubkey
+    uint16_t pk_len = (static_cast<uint16_t>(data[members_end]) << 8) |
+                      static_cast<uint16_t>(data[members_end + 1]);
+    size_t pk_end = members_end + 2 + pk_len;
+
     // Validate signature length field exists (we don't verify the signature here)
-    uint16_t sig_len = (static_cast<uint16_t>(data[members_end]) << 8) |
-                       static_cast<uint16_t>(data[members_end + 1]);
-    if (data.size() < members_end + 2 + sig_len) return std::nullopt;
+    if (data.size() < pk_end + 2) return std::nullopt;
+    uint16_t sig_len = (static_cast<uint16_t>(data[pk_end]) << 8) |
+                       static_cast<uint16_t>(data[pk_end + 1]);
+    if (data.size() < pk_end + 2 + sig_len) return std::nullopt;
 
     return meta;
 }

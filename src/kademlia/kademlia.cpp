@@ -2529,7 +2529,8 @@ bool Kademlia::validate_group_message(std::span<const uint8_t> value) {
 
 bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto::Hash& key, bool skip_storage_lookup) {
     // Format: group_id(32) || owner_fp(32) || signer_fp(32) || version(4 BE) || member_count(2 BE) ||
-    //         per-member[fp(32) + role(1) + kem_ciphertext(1568)] * member_count ||
+    //         per-member[fp(32) + role(1) + kem_ciphertext(1568) + wrapped_gek(48)] * member_count ||
+    //         signer_pubkey_len(2 BE) || signer_pubkey ||
     //         sig_len(2 BE) || ML-DSA-87 signature
     // Minimum header: 32 + 32 + 32 + 4 + 2 = 102 bytes
     constexpr size_t HEADER_SIZE = 102;
@@ -2551,18 +2552,27 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     constexpr size_t MEMBER_ENTRY_SIZE = 1649;
     size_t members_end = HEADER_SIZE + static_cast<size_t>(member_count) * MEMBER_ENTRY_SIZE;
 
-    // Need at least members_end + sig_len(2)
+    // Parse signer_pubkey_len (2 BE) at members_end
     if (value.size() < members_end + 2) {
-        spdlog::warn("Group meta validation: too short for {} members (need {}, have {})",
-                      member_count, members_end + 2, value.size());
+        spdlog::warn("Group meta validation: too short for signer_pubkey_len");
+        return false;
+    }
+    uint16_t pk_len = (static_cast<uint16_t>(value[members_end]) << 8)
+                    | static_cast<uint16_t>(value[members_end + 1]);
+
+    size_t pk_end = members_end + 2 + pk_len;
+    if (value.size() < pk_end + 2) {
+        spdlog::warn("Group meta validation: too short for signer pubkey ({} bytes)", pk_len);
         return false;
     }
 
-    // Parse sig_len
-    uint16_t sig_len = (static_cast<uint16_t>(value[members_end]) << 8)
-                     | static_cast<uint16_t>(value[members_end + 1]);
+    std::span<const uint8_t> signer_pubkey(value.data() + members_end + 2, pk_len);
 
-    if (value.size() != members_end + 2 + sig_len) {
+    // sig_len is now at pk_end (after signer pubkey)
+    uint16_t sig_len = (static_cast<uint16_t>(value[pk_end]) << 8)
+                     | static_cast<uint16_t>(value[pk_end + 1]);
+
+    if (value.size() != pk_end + 2 + sig_len) {
         spdlog::warn("Group meta validation: sig_len {} doesn't match remaining data", sig_len);
         return false;
     }
@@ -2598,6 +2608,13 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
     // Parse signer_fp (bytes 64-95)
     crypto::Hash signer_fp{};
     std::copy_n(value.data() + 64, 32, signer_fp.begin());
+
+    // Verify SHA3-256(signer_pubkey) == signer_fp (self-verifiable)
+    auto computed_fp = crypto::sha3_256(signer_pubkey);
+    if (computed_fp != signer_fp) {
+        spdlog::warn("Group meta validation: signer pubkey doesn't match signer_fp");
+        return false;
+    }
 
     // Version monotonicity: reject if incoming version <= existing version
     // Also verify signer authorization against EXISTING meta's member list
@@ -2655,37 +2672,16 @@ bool Kademlia::validate_group_meta(std::span<const uint8_t> value, const crypto:
         }
     }
 
-    // Verify ML-DSA-87 signature using signer's pubkey from local profile store
+    // Verify ML-DSA-87 signature using EMBEDDED pubkey (self-verifiable)
     if (skip_storage_lookup) {
         // Called from within a foreach/scan callback — cannot nest read transactions.
         // Integrity sweep will re-validate later.
         return true;
     }
 
-    auto signer_profile_key = crypto::sha3_256_prefixed("chromatin:profile:", signer_fp);
-
-    auto profile_data = storage_.get(storage::TABLE_PROFILES, signer_profile_key);
-    if (!profile_data || profile_data->empty()) {
-        spdlog::warn("Group meta validation: rejected — signer profile not found locally");
-        return false;
-    }
-
-    // Extract pubkey from profile: fingerprint(32) || pubkey_len(2 BE) || pubkey
-    if (profile_data->size() < 34) return false;
-    uint16_t pk_len = (static_cast<uint16_t>((*profile_data)[32]) << 8) | (*profile_data)[33];
-    if (profile_data->size() < 34u + pk_len) return false;
-    std::span<const uint8_t> signer_pubkey(profile_data->data() + 34, pk_len);
-
-    // Verify signer pubkey hashes to signer_fp
-    auto computed_signer_fp = crypto::sha3_256(signer_pubkey);
-    if (computed_signer_fp != signer_fp) {
-        spdlog::warn("Group meta validation: stored profile pubkey doesn't match signer_fp");
-        return false;
-    }
-
-    // Signature covers everything before sig_len: value[0..members_end)
-    std::span<const uint8_t> signed_data_span(value.data(), members_end);
-    std::span<const uint8_t> signature(value.data() + members_end + 2, sig_len);
+    // Signature covers everything before sig_len: value[0..pk_end)
+    std::span<const uint8_t> signed_data_span(value.data(), pk_end);
+    std::span<const uint8_t> signature(value.data() + pk_end + 2, sig_len);
 
     if (!crypto::verify(signed_data_span, signature, signer_pubkey)) {
         spdlog::warn("Group meta validation: signature verification failed");
