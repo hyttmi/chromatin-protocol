@@ -33,23 +33,22 @@ NAME_POW_DIFFICULTY = 26
 
 # Test nodes: (host, ws_port, tls) tuples
 SERVERS = [
-    ("195.181.202.122", 62010, False),
-    ("195.181.202.122", 62011, False),
-    ("2.chromatin.cpunk.io", 62012, True),
+    ("0.bootstrap.pqcc.fi", 62010, False),
+    ("1.bootstrap.pqcc.fi", 62011, False),
+    ("2.bootstrap.pqcc.fi", 62012, False),
 ]
 
 # Map TCP addresses (from REDIRECT) to WS (host, port).
 # Nodes advertise their TCP bind address in routing, which may be a LAN IP
 # or lack the WS port. This maps any known address to the correct WS endpoint.
 ADDR_TO_WS = {
-    "195.181.202.122": ("195.181.202.122", 62010),  # node1 (tcp 62000)
-    "192.168.1.201":   ("195.181.202.122", 62010),  # node1 LAN
-    "192.168.1.202":   ("195.181.202.122", 62011),  # node2 LAN
-    "37.187.78.91":    ("37.187.78.91", 62012),      # node3 (France)
+    "0.bootstrap.pqcc.fi": ("0.bootstrap.pqcc.fi", 62010),
+    "1.bootstrap.pqcc.fi": ("1.bootstrap.pqcc.fi", 62011),
+    "2.bootstrap.pqcc.fi": ("2.bootstrap.pqcc.fi", 62012),
 }
 
 
-def resolve_redirect(node, fallback_host="195.181.202.122", fallback_port=62010):
+def resolve_redirect(node, fallback_host="0.bootstrap.pqcc.fi", fallback_port=62010):
     """Map a REDIRECT node entry to a reachable (host, ws_port) pair."""
     addr = node.get("address", "")
     ws_port = node.get("ws_port", 0)
@@ -714,6 +713,105 @@ async def run_tests():
         fail("group tests section", f"crashed: {e}")
         await ensure_connected(alice, SERVERS)
         await ensure_connected(bob, SERVERS)
+
+    # ===================================================================
+    print("\n=== Group Update Tests ===")
+    # ===================================================================
+
+    upd_group_id = os.urandom(32)
+    charlie2_client = None
+
+    try:
+        kem_dummy = b"\x00" * 1568
+
+        # Generate Charlie2 identity
+        pub_c2, sec_c2 = generate_keypair()
+        fp_c2 = fingerprint_of(pub_c2)
+        charlie2 = ChromatinClient(pub_c2, sec_c2)
+        charlie2_client = charlie2
+
+        # Test: Create base group (v1) — Alice=owner, Bob=member
+        members_v1 = [
+            (fp_a, 0x02, kem_dummy),
+            (fp_b, 0x00, kem_dummy),
+        ]
+        meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, 1, members_v1)
+        resp = await alice.cmd_group_create(meta_v1)
+        check("group update: create base group", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(0.5)
+
+        # Test: Bob can send before update
+        resp = await bob.cmd_group_send(
+            upd_group_id.hex(),
+            os.urandom(16).hex(),
+            b"bob pre-update",
+            [],
+        )
+        check("group update: bob sends before update", resp.get("type") == "OK", f"got {resp}")
+
+        # Connect Charlie2
+        resp_c2 = await connect_with_redirect(charlie2, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+
+        # Test: Add Charlie2 (v2) — Alice=owner, Bob=member, Charlie2=member
+        members_v2 = [
+            (fp_a, 0x02, kem_dummy),
+            (fp_b, 0x00, kem_dummy),
+            (fp_c2, 0x00, kem_dummy),
+        ]
+        meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, 2, members_v2)
+        resp = await alice.cmd_group_update(meta_v2)
+        check("group update: add charlie2 (v2)", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(1)
+
+        # Test: New member gets group info
+        resp = await charlie2.cmd_group_info(upd_group_id.hex())
+        check("group update: new member gets group info", resp.get("type") == "OK", f"got {resp}")
+
+        # Test: New member can send
+        resp = await charlie2.cmd_group_send(
+            upd_group_id.hex(),
+            os.urandom(16).hex(),
+            b"charlie2 hello",
+            [],
+        )
+        check("group update: new member can send", resp.get("type") == "OK", f"got {resp}")
+
+        # Test: Remove Bob (v3) — Alice=owner, Charlie2=member
+        members_v3 = [
+            (fp_a, 0x02, kem_dummy),
+            (fp_c2, 0x00, kem_dummy),
+        ]
+        meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, 3, members_v3)
+        resp = await alice.cmd_group_update(meta_v3)
+        check("group update: remove bob (v3)", resp.get("type") == "OK", f"got {resp}")
+
+        await asyncio.sleep(1)
+
+        # Test: Removed member can't send
+        resp = await bob.cmd_group_send(
+            upd_group_id.hex(),
+            os.urandom(16).hex(),
+            b"bob post-remove",
+            [],
+        )
+        check("group update: removed member can't send", resp.get("type") == "ERROR", f"got {resp}")
+
+        # Test: Replay old version rejected
+        resp = await alice.cmd_group_update(meta_v1)
+        check("group update: replay old version rejected", resp.get("type") == "ERROR", f"got {resp}")
+
+        # Test: Non-member can't update (Bob signs with his key)
+        meta_bob_attempt = build_group_meta(sec_b, upd_group_id, fp_b, 4, members_v3)
+        resp = await bob.cmd_group_update(meta_bob_attempt)
+        check("group update: non-member can't update", resp.get("type") == "ERROR", f"got {resp}")
+
+    except Exception as e:
+        fail("group update section", f"crashed: {e}")
+    finally:
+        if charlie2_client is not None:
+            await charlie2_client.disconnect()
 
     # ===================================================================
     print("\n=== Multi-Message Stress Tests ===")
