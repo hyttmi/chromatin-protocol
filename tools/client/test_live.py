@@ -745,13 +745,14 @@ async def run_tests():
         resp = await bob.cmd_group_send(
             upd_group_id.hex(),
             os.urandom(16).hex(),
+            1,
             b"bob pre-update",
-            [],
         )
         check("group update: bob sends before update", resp.get("type") == "OK", f"got {resp}")
 
         # Connect Charlie2
         resp_c2 = await connect_with_redirect(charlie2, SERVERS[0][0], SERVERS[0][1], tls=SERVERS[0][2])
+        check("group update: charlie2 connected", resp_c2.get("type") == "OK", f"got {resp_c2}")
 
         # Test: Add Charlie2 (v2) — Alice=owner, Bob=member, Charlie2=member
         members_v2 = [
@@ -773,8 +774,8 @@ async def run_tests():
         resp = await charlie2.cmd_group_send(
             upd_group_id.hex(),
             os.urandom(16).hex(),
+            1,
             b"charlie2 hello",
-            [],
         )
         check("group update: new member can send", resp.get("type") == "OK", f"got {resp}")
 
@@ -793,8 +794,8 @@ async def run_tests():
         resp = await bob.cmd_group_send(
             upd_group_id.hex(),
             os.urandom(16).hex(),
+            1,
             b"bob post-remove",
-            [],
         )
         check("group update: removed member can't send", resp.get("type") == "ERROR", f"got {resp}")
 
