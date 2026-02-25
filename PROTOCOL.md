@@ -507,6 +507,17 @@ When a client stores data (e.g., sends a message to an inbox):
 3. Write is confirmed when **W of R** nodes ACK (W = quorum, e.g. 2 of 3)
 4. Background sync ensures the remaining nodes catch up
 
+**Synchronous replication:** Store operations initiated by WebSocket clients
+block until a write quorum W = min(2, R) is reached before returning OK to the
+client. This ensures data durability before client confirmation — the client
+knows its data survives at least one node failure. Internally, the node uses
+`std::promise`/`std::future` for cross-thread quorum notification: each
+incoming STORE_ACK from a peer decrements the pending count, and when the
+quorum is satisfied the future resolves. The default timeout is 5 seconds; if
+quorum is not reached in time, the client receives error code 504 ("replication
+timeout") and should retry. Node-to-node STORE operations (replication sync,
+responsibility transfer) remain asynchronous.
+
 ### 7.6 Message Expiry & Deletion
 
 Messages expire automatically after 7 days (TTL). The node's periodic `tick()`
@@ -1025,6 +1036,10 @@ The following security properties are enforced by conforming implementations:
   (deletion mechanism) is only accepted for data_type 0x06 (GROUP_META).
   All other data types reject empty-value STORE, preventing unauthorized
   data deletion via crafted STORE messages.
+- **Synchronous write quorum prevents data loss on crash:** Store operations
+  block until W = min(2, R) nodes have acknowledged the write. This prevents
+  the window between client ACK and asynchronous replication where a node
+  crash could lose data that the client believed was durably stored.
 
 ---
 

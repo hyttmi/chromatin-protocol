@@ -382,6 +382,12 @@ Data types:
 
 Values 0x08-0xFF are reserved for future use (channels, etc.).
 
+**Synchronous replication:** When a node processes a STORE on behalf of a
+WebSocket client, it performs synchronous replication (`store_sync`), blocking
+until a write quorum of W = min(2, R) nodes have acknowledged the STORE before
+returning the result to the client. The default timeout is 5 seconds; if the
+quorum is not reached within this period, the client receives error code 504.
+
 ### FIND_VALUE (0x05)
 
 ```
@@ -917,6 +923,14 @@ bootstrap nodes in parallel for faster discovery and resilience.
 All successful responses use `"type": "OK"` with command-specific data fields.
 Error responses use `"type": "ERROR"` (see Section 5.6).
 
+**Write quorum guarantee:** For store operations (SEND, ALLOW, REVOKE,
+CONTACT_REQUEST, SET_PROFILE, REGISTER_NAME, GROUP_SEND, GROUP_CREATE,
+GROUP_UPDATE), an OK response guarantees the data has been replicated to at
+least W = min(2, R) nodes. If the write quorum cannot be reached within the
+timeout period, the client receives error code 504 ("replication timeout").
+The data MAY be stored on some nodes but durability is not guaranteed; the
+client SHOULD retry.
+
 **SEND (small, <=64 KB)** — Push encrypted blob inline to recipient's inbox:
 ```json
 {"type": "SEND", "id": 2, "to": "<fingerprint hex>", "blob": "<base64>"}
@@ -1383,6 +1397,7 @@ per-IP limit, the connection is rejected before the handshake completes.
 | 429  | Rate limited / upload already in progress     |
 | 500  | Internal error                                |
 | 503  | Service unavailable (worker pool at capacity) |
+| 504  | Replication timeout (write quorum not reached) |
 
 ### 5.7 Binary WebSocket Frames — Chunked Transfer
 
