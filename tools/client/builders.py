@@ -116,6 +116,7 @@ def build_group_meta(
     signer_fingerprint: bytes,
     version: int,
     members: list[tuple[bytes, int, bytes, bytes]],
+    signer_pubkey: bytes,
 ) -> bytes:
     """Build a signed GROUP_META binary record.
 
@@ -126,6 +127,7 @@ def build_group_meta(
         version(4 BE) ||
         member_count(2 BE) ||
           [member_fp(32) || role(1) || kem_ciphertext(1568) || wrapped_gek(48)] * count ||
+        signer_pubkey_len(2 BE) || signer_pubkey ||
         sig_len(2 BE) || signature
     """
     body = bytearray()
@@ -139,6 +141,10 @@ def build_group_meta(
         body += struct.pack("B", role)
         body += kem_ct
         body += wrapped_gek
+
+    # Signer pubkey (self-verifiable — SHA3(pubkey) == signer_fingerprint)
+    body += struct.pack(">H", len(signer_pubkey))
+    body += signer_pubkey
 
     sig = sign(seckey, bytes(body))
     body += struct.pack(">H", len(sig))

@@ -669,7 +669,7 @@ async def run_tests():
             (fp_a, 0x02, kem_ct_a, wrapped_gek_a),  # Alice = owner
             (fp_b, 0x00, kem_ct_b, wrapped_gek_b),  # Bob = member
         ]
-        meta = build_group_meta(sec_a, group_id, fp_a, fp_a, 1, members)
+        meta = build_group_meta(sec_a, group_id, fp_a, fp_a, 1, members, pub_a)
         resp = await alice.cmd_group_create(meta)
         check("create group", resp.get("type") == "OK", f"got {resp}")
         group_ok = resp.get("type") == "OK"
@@ -780,7 +780,7 @@ async def run_tests():
             (fp_a, 0x02, upd_kem_ct_a, upd_wrapped_a),
             (fp_b, 0x00, upd_kem_ct_b, upd_wrapped_b),
         ]
-        meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 1, members_v1)
+        meta_v1 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 1, members_v1, pub_a)
         resp = await alice.cmd_group_create(meta_v1)
         check("group update: create base group", resp.get("type") == "OK", f"got {resp}")
 
@@ -809,7 +809,7 @@ async def run_tests():
             (fp_b, 0x00, upd_v2_ct_b, upd_v2_wrapped_b),
             (fp_c2, 0x00, upd_v2_ct_c2, upd_v2_wrapped_c2),
         ]
-        meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 2, members_v2)
+        meta_v2 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 2, members_v2, pub_a)
         resp = await alice.cmd_group_update(meta_v2)
         check("group update: add charlie2 (v2)", resp.get("type") == "OK", f"got {resp}")
 
@@ -837,7 +837,7 @@ async def run_tests():
             (fp_a, 0x02, upd_v3_ct_a, upd_v3_wrapped_a),
             (fp_c2, 0x00, upd_v3_ct_c2, upd_v3_wrapped_c2),
         ]
-        meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 3, members_v3)
+        meta_v3 = build_group_meta(sec_a, upd_group_id, fp_a, fp_a, 3, members_v3, pub_a)
         resp = await alice.cmd_group_update(meta_v3)
         check("group update: remove bob (v3)", resp.get("type") == "OK", f"got {resp}")
 
@@ -857,7 +857,7 @@ async def run_tests():
         check("group update: replay old version rejected", resp.get("type") == "ERROR", f"got {resp}")
 
         # Test: Non-member can't update (Bob signs with his key)
-        meta_bob_attempt = build_group_meta(sec_b, upd_group_id, fp_b, fp_b, 4, members_v3)
+        meta_bob_attempt = build_group_meta(sec_b, upd_group_id, fp_b, fp_b, 4, members_v3, pub_b)
         resp = await bob.cmd_group_update(meta_bob_attempt)
         check("group update: non-member can't update", resp.get("type") == "ERROR", f"got {resp}")
 
@@ -1428,8 +1428,8 @@ async def run_tests():
             group_members.append((fp, role, kem_ct, wrapped_gek))
 
         # user_0 (owner) creates the group
-        _, owner_sec, owner_fp, owner_client, _, _, _ = mesh_users[0]
-        meta = build_group_meta(owner_sec, large_group_id, owner_fp, owner_fp, 1, group_members)
+        owner_pub, owner_sec, owner_fp, owner_client, _, _, _ = mesh_users[0]
+        meta = build_group_meta(owner_sec, large_group_id, owner_fp, owner_fp, 1, group_members, owner_pub)
         resp = await owner_client.cmd_group_create(meta)
         check("large group: create (10 members)", resp.get("type") == "OK",
               f"got {resp}")
@@ -1760,7 +1760,7 @@ async def run_tests():
             (fp_grp_owner, 0x02, repl_kem_ct_o, repl_wrapped_o),
             (fp_grp_member, 0x00, repl_kem_ct_m, repl_wrapped_m),
         ]
-        meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 1, grp_members_v1)
+        meta = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 1, grp_members_v1, pub_grp_owner)
         resp = await grp_owner.cmd_group_create(meta)
         check("repl: group create on node A", resp.get("type") == "OK", f"got {resp}")
 
@@ -1796,7 +1796,7 @@ async def run_tests():
             (fp_grp_owner, 0x02, repl_v2_ct_o, repl_v2_wrapped_o),
             (fp_grp_member, 0x01, repl_v2_ct_m, repl_v2_wrapped_m),  # promote member to admin
         ]
-        meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 2, grp_members_v2)
+        meta_v2 = build_group_meta(sec_grp_owner, repl_group_id, fp_grp_owner, fp_grp_owner, 2, grp_members_v2, pub_grp_owner)
         resp = await grp_owner.cmd_group_update(meta_v2)
         check("repl: group update (promote member) on node A", resp.get("type") == "OK", f"got {resp}")
 

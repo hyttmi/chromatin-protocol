@@ -58,14 +58,21 @@ def test_build_group_meta():
     fp = fingerprint_of(pubkey)
     group_id = os.urandom(32)
     kem_dummy = b"\x00" * 1568
-    members = [(fp, 0x02, kem_dummy)]
-    meta = build_group_meta(seckey, group_id, fp, 1, members)
+    gek_dummy = b"\x00" * 48
+    members = [(fp, 0x02, kem_dummy, gek_dummy)]
+    meta = build_group_meta(seckey, group_id, fp, fp, 1, members, pubkey)
     assert meta[:32] == group_id
-    assert meta[32:64] == fp
-    version = struct.unpack(">I", meta[64:68])[0]
+    assert meta[32:64] == fp  # owner_fingerprint
+    assert meta[64:96] == fp  # signer_fingerprint
+    version = struct.unpack(">I", meta[96:100])[0]
     assert version == 1
-    member_count = struct.unpack(">H", meta[68:70])[0]
+    member_count = struct.unpack(">H", meta[100:102])[0]
     assert member_count == 1
+    # After header(102) + 1 member(32+1+1568+48=1649) = offset 1751
+    member_end = 102 + 1649
+    pk_len = struct.unpack(">H", meta[member_end : member_end + 2])[0]
+    assert pk_len == len(pubkey)
+    assert meta[member_end + 2 : member_end + 2 + pk_len] == pubkey
 
 
 def test_profile_bio_exceeds_limit():

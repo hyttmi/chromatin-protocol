@@ -336,13 +336,15 @@ async def repl(client: ChromatinClient):
                     continue
                 group_id = os.urandom(32)
                 # Build member list: self as owner, others as members
-                # Use dummy KEM ciphertext (1568 zero bytes) for testing
+                # Use dummy KEM ciphertext and wrapped GEK for testing
                 kem_dummy = b"\x00" * 1568
-                members = [(client.fingerprint, 0x02, kem_dummy)]  # self = owner
+                gek_dummy = b"\x00" * 48
+                members = [(client.fingerprint, 0x02, kem_dummy, gek_dummy)]  # self = owner
                 for fp_hex in parts[1:]:
-                    members.append((bytes.fromhex(fp_hex), 0x00, kem_dummy))
+                    members.append((bytes.fromhex(fp_hex), 0x00, kem_dummy, gek_dummy))
                 meta = build_group_meta(
-                    client.seckey, group_id, client.fingerprint, 1, members
+                    client.seckey, group_id, client.fingerprint,
+                    client.fingerprint, 1, members, client.pubkey,
                 )
                 resp = await client.cmd_group_create(meta)
                 if resp.get("ok"):
