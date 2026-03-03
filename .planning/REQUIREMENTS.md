@@ -22,12 +22,12 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Storage
 
-- [ ] **STOR-01**: Node stores signed blobs in libmdbx keyed by namespace + SHA3-256 hash
-- [ ] **STOR-02**: Node deduplicates blobs by content-addressed SHA3-256 hash
-- [ ] **STOR-03**: Node maintains per-namespace monotonic sequence index (seq_num -> blob hash)
-- [ ] **STOR-04**: Node maintains expiry index sorted by expiry timestamp
-- [ ] **STOR-05**: Node automatically prunes expired blobs (TTL elapsed) via background scan
-- [ ] **STOR-06**: Blobs have configurable TTL (default 7 days / 604800s, TTL=0 = permanent)
+- [x] **STOR-01**: Node stores signed blobs in libmdbx keyed by namespace + SHA3-256 hash
+- [x] **STOR-02**: Node deduplicates blobs by content-addressed SHA3-256 hash
+- [x] **STOR-03**: Node maintains per-namespace monotonic sequence index (seq_num -> blob hash)
+- [x] **STOR-04**: Node maintains expiry index sorted by expiry timestamp
+- [x] **STOR-05**: Node automatically prunes expired blobs (TTL elapsed) via background scan
+- [x] **STOR-06**: Blobs have configurable TTL (default 7 days / 604800s, TTL=0 = permanent)
 
 ### Wire Format
 
@@ -67,7 +67,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 - [x] **DAEM-01**: Node reads configuration from JSON file (bind address, storage path, bootstrap peers, default TTL)
 - [x] **DAEM-02**: Node logs all operations via structured logging (spdlog)
 - [ ] **DAEM-03**: Node handles signals for graceful shutdown (drain connections, flush storage)
-- [ ] **DAEM-04**: Node recovers cleanly from crashes (libmdbx ACID guarantees)
+- [x] **DAEM-04**: Node recovers cleanly from crashes (libmdbx ACID guarantees)
 
 ## v2 Requirements
 
@@ -126,13 +126,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NSPC-01 | Phase 1: Foundation | Complete |
 | DAEM-01 | Phase 1: Foundation | Complete |
 | DAEM-02 | Phase 1: Foundation | Complete |
-| STOR-01 | Phase 2: Storage Engine | Pending |
-| STOR-02 | Phase 2: Storage Engine | Pending |
-| STOR-03 | Phase 2: Storage Engine | Pending |
-| STOR-04 | Phase 2: Storage Engine | Pending |
-| STOR-05 | Phase 2: Storage Engine | Pending |
-| STOR-06 | Phase 2: Storage Engine | Pending |
-| DAEM-04 | Phase 2: Storage Engine | Pending |
+| STOR-01 | Phase 2: Storage Engine | Complete |
+| STOR-02 | Phase 2: Storage Engine | Complete |
+| STOR-03 | Phase 2: Storage Engine | Complete |
+| STOR-04 | Phase 2: Storage Engine | Complete |
+| STOR-05 | Phase 2: Storage Engine | Complete |
+| STOR-06 | Phase 2: Storage Engine | Complete |
+| DAEM-04 | Phase 2: Storage Engine | Complete |
 | NSPC-02 | Phase 3: Blob Engine | Pending |
 | NSPC-03 | Phase 3: Blob Engine | Pending |
 | QURY-01 | Phase 3: Blob Engine | Pending |
@@ -157,4 +157,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after Phase 1 completion*
+*Last updated: 2026-03-03 after Phase 2 completion*

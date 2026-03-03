@@ -13,7 +13,7 @@ chromatindb builds bottom-up along its dependency graph: crypto primitives and w
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Crypto primitives, wire format schemas, config, logging, and node identity
-- [ ] **Phase 2: Storage Engine** - libmdbx wrapper with all four sub-databases, batch writes, TTL expiry, and crash recovery
+- [x] **Phase 2: Storage Engine** - libmdbx wrapper with all four sub-databases, batch writes, TTL expiry, and crash recovery
 - [ ] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
 - [ ] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
 - [ ] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
@@ -35,7 +35,7 @@ Plans:
 - [x] 01-01: CMake scaffold + crypto RAII wrappers (ML-DSA-87, ML-KEM-1024, SHA3-256, ChaCha20-Poly1305, HKDF-SHA256)
 - [x] 01-02: FlatBuffers wire format + canonical signing codec
 - [x] 01-03: Config loading, structured logging, and node identity
-- [ ] 01-04: Gap closure -- Make TTL a protocol constant (not user-configurable)
+- [x] 01-04: Gap closure -- Make TTL a protocol constant (not user-configurable)
 
 ### Phase 2: Storage Engine
 **Goal**: Node can persistently store, retrieve, deduplicate, index, and expire blobs using libmdbx with crash-safe ACID guarantees
@@ -46,12 +46,12 @@ Plans:
   2. Each blob stored in a namespace receives a monotonically increasing seq_num, and blobs can be retrieved by namespace + seq_num range
   3. Blobs with elapsed TTL are automatically pruned by the background expiry scanner, while TTL=0 blobs persist indefinitely
   4. After a simulated crash (kill -9), the node restarts and all committed data is intact with no corruption (libmdbx ACID)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
-- [ ] 02-03: TBD
+- [x] 02-01: CMake + libmdbx + Storage class with store/retrieve/dedup + crash recovery
+- [x] 02-02: Sequence indexing + range queries + expiry index verification
+- [x] 02-03: TTL expiry scanner with injectable clock
 
 ### Phase 3: Blob Engine
 **Goal**: Node can accept blobs from any source, verify namespace ownership and signature, deduplicate, assign sequence numbers, acknowledge writes, and answer queries -- all without network dependencies
@@ -108,8 +108,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/4 | Gap closure | 2026-03-03 |
-| 2. Storage Engine | 0/3 | Not started | - |
+| 1. Foundation | 4/4 | Complete | 2026-03-03 |
+| 2. Storage Engine | 3/3 | Complete | 2026-03-03 |
 | 3. Blob Engine | 0/3 | Not started | - |
 | 4. Networking | 0/3 | Not started | - |
 | 5. Peer System | 0/3 | Not started | - |
