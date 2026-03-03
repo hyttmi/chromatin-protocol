@@ -79,7 +79,7 @@ Storage model (libmdbx):
 ## Constraints
 
 - **Crypto (PQ)**: liboqs — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing)
-- **Crypto (symmetric)**: Small, audited AEAD+KDF library for AES-256-GCM and key derivation (TBD — no OpenSSL)
+- **Crypto (symmetric)**: libsodium — ChaCha20-Poly1305 (AEAD) + KDF. No OpenSSL.
 - **Storage**: libmdbx — LMDB-compatible, crash-safe
 - **Wire format**: FlatBuffers — deterministic encoding required for signing
 - **Language**: C++20, CMake, FetchContent for all dependencies (always use latest available version)
@@ -98,8 +98,10 @@ Storage model (libmdbx):
 | libmdbx over SQLite for node storage | LMDB-style MVCC fits high-throughput concurrent reads; crash-safe | — Pending |
 | FlatBuffers over Protobuf | Deterministic encoding needed for signing; zero-copy deserialization | — Pending |
 | ML-DSA-87 + ML-KEM-1024 (NIST Cat 5) | Maximum PQ security; proven in PQCC project | — Pending |
-| No OpenSSL (prefer minimal deps) | Use liboqs for PQ (ML-KEM/ML-DSA) + a small, audited AEAD+KDF library for symmetric crypto | — Pending |
+| No OpenSSL (prefer minimal deps) | Use liboqs for PQ (ML-KEM/ML-DSA) + libsodium for symmetric (ChaCha20-Poly1305, KDF) | — Pending |
+| ChaCha20-Poly1305 over AES-256-GCM | Software-fast, constant-time, no hardware dependency. Used by WireGuard, TLS 1.3 | — Pending |
+| Canonical signing (not raw FlatBuffer) | Sign SHA3-256(namespace\|\|data\|\|ttl\|\|timestamp), independent of wire format. Irreversible decision | — Pending |
 | Database is intentionally dumb | Separation of concerns: db stores blobs, app layer interprets them | — Pending |
 
 ---
-*Last updated: 2026-03-03 after initialization*
+*Last updated: 2026-03-03 after Phase 1 context discussion*
