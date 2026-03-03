@@ -1,0 +1,12 @@
+namespace chromatin.wire;
+
+table Blob {
+  namespace_id:[ubyte];   // 32 bytes: SHA3-256(pubkey)
+  pubkey:[ubyte];         // 2592 bytes: ML-DSA-87 public key
+  data:[ubyte];           // variable length: application data
+  ttl:uint32;             // seconds until expiry, 0 = permanent
+  timestamp:uint64;       // writer's unix timestamp
+  signature:[ubyte];      // up to 4627 bytes: ML-DSA-87 signature
+}
+
+root_type Blob;
