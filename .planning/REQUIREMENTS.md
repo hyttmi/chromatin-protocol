@@ -1,7 +1,7 @@
 # Requirements: chromatindb
 
 **Defined:** 2026-03-03
-**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 
 ## v1 Requirements
 
@@ -24,7 +24,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 - [ ] **STOR-01**: Node stores signed blobs in libmdbx keyed by namespace + SHA3-256 hash
 - [ ] **STOR-02**: Node deduplicates blobs by content-addressed SHA3-256 hash
-- [ ] **STOR-03**: Node maintains per-namespace monotonic sequence index (seq_num → blob hash)
+- [ ] **STOR-03**: Node maintains per-namespace monotonic sequence index (seq_num -> blob hash)
 - [ ] **STOR-04**: Node maintains expiry index sorted by expiry timestamp
 - [ ] **STOR-05**: Node automatically prunes expired blobs (TTL elapsed) via background scan
 - [ ] **STOR-06**: Blobs have configurable TTL (default 7 days / 604800s, TTL=0 = permanent)
@@ -50,7 +50,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 ### Sync
 
 - [ ] **SYNC-01**: Nodes exchange blob hash lists to identify missing blobs (hash-list diff)
-- [ ] **SYNC-02**: Sync is bidirectional — both nodes end up with the union of their data
+- [ ] **SYNC-02**: Sync is bidirectional -- both nodes end up with the union of their data
 - [ ] **SYNC-03**: Sync skips expired blobs (don't replicate dead data)
 
 ### Query
@@ -79,7 +79,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ### Sync v2
 
-- **SYNC-04**: Sync is resumable — per-peer sync state persisted, resume from last position on reconnect
+- **SYNC-04**: Sync is resumable -- per-peer sync state persisted, resume from last position on reconnect
 - **SYNC-05**: Sync uses XXH3 bucket fingerprints for faster negotiation before full hash-list exchange
 
 ### ACK v2
@@ -96,20 +96,20 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Feature | Reason |
 |---------|--------|
-| Application semantics (messages, profiles, nicknames) | Layer 2 Relay concern — database is intentionally dumb |
-| Human-readable namespaces | Layer 2/3 concern — requires naming authority or consensus |
+| Application semantics (messages, profiles, nicknames) | Layer 2 Relay concern -- database is intentionally dumb |
+| Human-readable namespaces | Layer 2/3 concern -- requires naming authority or consensus |
 | Client authentication | Layer 2 Relay concern |
 | Message routing | Layer 2 Relay concern |
-| Conflict resolution / LWW / HLC / CRDTs | Layer 2/app concern — different apps need different strategies |
-| Encrypted envelopes / E2E encryption | Layer 2/app concern — node stores opaque blobs, transport is already PQ-encrypted |
+| Conflict resolution / LWW / HLC / CRDTs | Layer 2/app concern -- different apps need different strategies |
+| Encrypted envelopes / E2E encryption | Layer 2/app concern -- node stores opaque blobs, transport is already PQ-encrypted |
 | DHT or gossip protocol | Proven unreliable in chromatin-protocol and DNA messenger |
-| Global consensus | No shared mutable state — single-writer namespaces eliminate contention |
-| Capability delegation / access grants | Layer 2 concern — node auth is simply SHA3(pubkey) == namespace |
+| Global consensus | No shared mutable state -- single-writer namespaces eliminate contention |
+| Capability delegation / access grants | Layer 2 concern -- node auth is simply SHA3(pubkey) == namespace |
 | Schema enforcement / typed data | Blobs are opaque by design |
-| HTTP/REST API | Adds attack surface and deps — binary protocol over PQ-encrypted TCP only |
+| HTTP/REST API | Adds attack surface and deps -- binary protocol over PQ-encrypted TCP only |
 | NAT traversal / hole punching | Server daemon assumes reachable address; outbound-only nodes still work |
 | Sharding / partitioned storage | Organic via selective namespace replication (future) |
-| OpenSSL | Prefer minimal deps — liboqs for PQ + small audited AEAD+KDF lib for symmetric |
+| OpenSSL | Prefer minimal deps -- liboqs for PQ + small audited AEAD+KDF lib for symmetric |
 
 ## Traceability
 
@@ -117,44 +117,44 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CRYP-01 | — | Pending |
-| CRYP-02 | — | Pending |
-| CRYP-03 | — | Pending |
-| CRYP-04 | — | Pending |
-| NSPC-01 | — | Pending |
-| NSPC-02 | — | Pending |
-| NSPC-03 | — | Pending |
-| STOR-01 | — | Pending |
-| STOR-02 | — | Pending |
-| STOR-03 | — | Pending |
-| STOR-04 | — | Pending |
-| STOR-05 | — | Pending |
-| STOR-06 | — | Pending |
-| WIRE-01 | — | Pending |
-| WIRE-02 | — | Pending |
-| TRNS-01 | — | Pending |
-| TRNS-02 | — | Pending |
-| TRNS-03 | — | Pending |
-| TRNS-04 | — | Pending |
-| TRNS-05 | — | Pending |
-| DISC-01 | — | Pending |
-| DISC-02 | — | Pending |
-| SYNC-01 | — | Pending |
-| SYNC-02 | — | Pending |
-| SYNC-03 | — | Pending |
-| QURY-01 | — | Pending |
-| QURY-02 | — | Pending |
-| ACKW-01 | — | Pending |
-| DAEM-01 | — | Pending |
-| DAEM-02 | — | Pending |
-| DAEM-03 | — | Pending |
-| DAEM-04 | — | Pending |
+| CRYP-01 | Phase 1: Foundation | Pending |
+| CRYP-02 | Phase 1: Foundation | Pending |
+| CRYP-03 | Phase 1: Foundation | Pending |
+| CRYP-04 | Phase 1: Foundation | Pending |
+| WIRE-01 | Phase 1: Foundation | Pending |
+| WIRE-02 | Phase 1: Foundation | Pending |
+| NSPC-01 | Phase 1: Foundation | Pending |
+| DAEM-01 | Phase 1: Foundation | Pending |
+| DAEM-02 | Phase 1: Foundation | Pending |
+| STOR-01 | Phase 2: Storage Engine | Pending |
+| STOR-02 | Phase 2: Storage Engine | Pending |
+| STOR-03 | Phase 2: Storage Engine | Pending |
+| STOR-04 | Phase 2: Storage Engine | Pending |
+| STOR-05 | Phase 2: Storage Engine | Pending |
+| STOR-06 | Phase 2: Storage Engine | Pending |
+| DAEM-04 | Phase 2: Storage Engine | Pending |
+| NSPC-02 | Phase 3: Blob Engine | Pending |
+| NSPC-03 | Phase 3: Blob Engine | Pending |
+| QURY-01 | Phase 3: Blob Engine | Pending |
+| QURY-02 | Phase 3: Blob Engine | Pending |
+| ACKW-01 | Phase 3: Blob Engine | Pending |
+| TRNS-01 | Phase 4: Networking | Pending |
+| TRNS-02 | Phase 4: Networking | Pending |
+| TRNS-03 | Phase 4: Networking | Pending |
+| TRNS-04 | Phase 4: Networking | Pending |
+| TRNS-05 | Phase 4: Networking | Pending |
+| DAEM-03 | Phase 4: Networking | Pending |
+| DISC-01 | Phase 5: Peer System | Pending |
+| DISC-02 | Phase 5: Peer System | Pending |
+| SYNC-01 | Phase 5: Peer System | Pending |
+| SYNC-02 | Phase 5: Peer System | Pending |
+| SYNC-03 | Phase 5: Peer System | Pending |
 
 **Coverage:**
 - v1 requirements: 32 total
-- Mapped to phases: 0
-- Unmapped: 32 (pending roadmap creation)
+- Mapped to phases: 32
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after initial definition*
+*Last updated: 2026-03-03 after roadmap creation*
