@@ -7,13 +7,15 @@
 
 namespace chromatin::config {
 
+/// Protocol constants (not user-configurable).
+constexpr uint32_t BLOB_TTL_SECONDS = 604800;  // 7 days
+
 /// Node configuration loaded from JSON file and/or CLI arguments.
 struct Config {
     std::string bind_address = "0.0.0.0:4200";
     std::string storage_path = "./data/blobs";
     std::string data_dir = "./data";
     std::vector<std::string> bootstrap_peers;
-    uint32_t default_ttl = 604800;  // 7 days in seconds
     std::string log_level = "info";
 };
 

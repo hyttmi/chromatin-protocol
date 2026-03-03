@@ -27,7 +27,6 @@ Config load_config(const std::filesystem::path& path) {
     cfg.bind_address = j.value("bind_address", cfg.bind_address);
     cfg.storage_path = j.value("storage_path", cfg.storage_path);
     cfg.data_dir = j.value("data_dir", cfg.data_dir);
-    cfg.default_ttl = j.value("default_ttl", cfg.default_ttl);
     cfg.log_level = j.value("log_level", cfg.log_level);
 
     if (j.contains("bootstrap_peers") && j["bootstrap_peers"].is_array()) {

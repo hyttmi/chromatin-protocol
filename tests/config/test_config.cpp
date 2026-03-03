@@ -12,8 +12,8 @@ TEST_CASE("Default config has sensible values", "[config]") {
     REQUIRE(cfg.storage_path == "./data/blobs");
     REQUIRE(cfg.data_dir == "./data");
     REQUIRE(cfg.bootstrap_peers.empty());
-    REQUIRE(cfg.default_ttl == 604800);  // 7 days
     REQUIRE(cfg.log_level == "info");
+    REQUIRE(chromatin::config::BLOB_TTL_SECONDS == 604800);
 }
 
 TEST_CASE("load_config with non-existent file returns defaults", "[config]") {
@@ -23,7 +23,6 @@ TEST_CASE("load_config with non-existent file returns defaults", "[config]") {
     REQUIRE(cfg.storage_path == "./data/blobs");
     REQUIRE(cfg.data_dir == "./data");
     REQUIRE(cfg.bootstrap_peers.empty());
-    REQUIRE(cfg.default_ttl == 604800);
     REQUIRE(cfg.log_level == "info");
 }
 
@@ -36,7 +35,6 @@ TEST_CASE("load_config with valid JSON populates all fields", "[config]") {
             "storage_path": "/var/lib/chromatindb/blobs",
             "data_dir": "/var/lib/chromatindb",
             "bootstrap_peers": ["10.0.0.1:4200", "10.0.0.2:4200"],
-            "default_ttl": 86400,
             "log_level": "debug"
         })";
     }
@@ -49,7 +47,6 @@ TEST_CASE("load_config with valid JSON populates all fields", "[config]") {
     REQUIRE(cfg.bootstrap_peers.size() == 2);
     REQUIRE(cfg.bootstrap_peers[0] == "10.0.0.1:4200");
     REQUIRE(cfg.bootstrap_peers[1] == "10.0.0.2:4200");
-    REQUIRE(cfg.default_ttl == 86400);
     REQUIRE(cfg.log_level == "debug");
 
     std::filesystem::remove(tmp);
@@ -70,7 +67,6 @@ TEST_CASE("load_config with partial JSON uses defaults for missing fields", "[co
     REQUIRE(cfg.storage_path == "./data/blobs");
     REQUIRE(cfg.data_dir == "./data");
     REQUIRE(cfg.bootstrap_peers.empty());
-    REQUIRE(cfg.default_ttl == 604800);
 
     std::filesystem::remove(tmp);
 }
@@ -91,14 +87,13 @@ TEST_CASE("parse_args with --config loads from file", "[config]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_args.json";
     {
         std::ofstream f(tmp);
-        f << R"({"bind_address": "192.168.1.1:4200", "default_ttl": 3600})";
+        f << R"({"bind_address": "192.168.1.1:4200"})";
     }
 
     const char* argv[] = {"chromatindb", "--config", tmp.c_str()};
     auto cfg = parse_args(3, argv);
 
     REQUIRE(cfg.bind_address == "192.168.1.1:4200");
-    REQUIRE(cfg.default_ttl == 3600);
 
     std::filesystem::remove(tmp);
 }
@@ -129,4 +124,10 @@ TEST_CASE("parse_args without --config uses base config", "[config]") {
 
     REQUIRE(cfg.bind_address == "base_address");
     REQUIRE(cfg.data_dir == "/override");
+}
+
+TEST_CASE("BLOB_TTL_SECONDS is a protocol constant", "[config]") {
+    REQUIRE(chromatin::config::BLOB_TTL_SECONDS == 604800);  // 7 days
+    // Verify it's not part of Config struct (compile-time guarantee)
+    // The fact that Config has no default_ttl field means it can't be overridden
 }
