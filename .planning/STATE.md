@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 1 of 5 (Foundation) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase 1 complete, ready for Phase 2
-Last activity: 2026-03-03 -- Phase 1 executed (all 3 plans)
+Plan: 4 of 4 in current phase
+Status: Phase 1 complete (including UAT gap closure), ready for Phase 2
+Last activity: 2026-03-03 -- Phase 1 Plan 4 executed (TTL protocol constant)
 
 Progress: [##........] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: ~8 min
-- Total execution time: ~25 min
+- Total plans completed: 4
+- Average duration: ~7 min
+- Total execution time: ~27 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Foundation | 3 | ~25 min | ~8 min |
+| 1. Foundation | 4 | ~27 min | ~7 min |
 
 **Recent Trend:**
-- Last 3 plans: 01-01 (~15m), 01-02 (~5m), 01-03 (~5m)
-- Trend: Accelerating (dependency setup was front-loaded)
+- Last 4 plans: 01-01 (~15m), 01-02 (~5m), 01-03 (~5m), 01-04 (~2m)
+- Trend: Accelerating (gap closure plans are fast)
 
 *Updated after each plan completion*
 
@@ -49,6 +49,7 @@ Recent decisions affecting current work:
 - [Phase 1]: SHA3 requires explicit `#include <oqs/sha3.h>` -- not in oqs/oqs.h
 - [Phase 1]: FlatBuffers requires ForceDefaults(true) for deterministic encoding
 - [Phase 1]: Key files stored as raw binary (not PEM, not base64)
+- [Phase 1]: TTL is a protocol invariant (constexpr), not user-configurable
 
 ### Pending Todos
 
@@ -61,5 +62,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Phase 1 complete, ready for Phase 2
+Stopped at: Completed 01-04-PLAN.md (TTL protocol constant)
 Resume file: None
