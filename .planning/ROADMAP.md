@@ -62,12 +62,11 @@ Plans:
   2. A valid blob is ingested (deduped, seq_num assigned, stored) and the caller receives a write ACK confirming acceptance
   3. Querying "namespace X since seq_num Y" returns exactly the blobs stored in that namespace after seq_num Y, in order
   4. Querying "list all namespaces" returns every namespace that has at least one stored blob
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
-- [ ] 03-03: TBD
+- [ ] 03-01: Storage StoreResult extension + BlobEngine ingest pipeline with fail-fast validation and write ACKs
+- [ ] 03-02: BlobEngine query methods (get_blobs_since, list_namespaces, get_blob) with comprehensive tests
 
 ### Phase 4: Networking
 **Goal**: Node can accept inbound and make outbound TCP connections over a PQ-encrypted, mutually authenticated channel, with async IO and graceful shutdown
@@ -110,6 +109,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation | 4/4 | Complete | 2026-03-03 |
 | 2. Storage Engine | 3/3 | Complete | 2026-03-03 |
-| 3. Blob Engine | 0/3 | Not started | - |
+| 3. Blob Engine | 0/2 | Not started | - |
 | 4. Networking | 0/3 | Not started | - |
 | 5. Peer System | 0/3 | Not started | - |
