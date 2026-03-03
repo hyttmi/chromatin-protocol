@@ -78,16 +78,16 @@ Storage model (libmdbx):
 
 ## Constraints
 
-- **Crypto**: All NIST Category 5 via liboqs 0.15.0 — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing)
-- **Symmetric encryption**: AES-256-GCM via OpenSSL 3.x
-- **Storage**: libmdbx 0.13.11 — LMDB-compatible, crash-safe
-- **Wire format**: FlatBuffers 25.12.19 — deterministic encoding required for signing
-- **Language**: C++20, CMake, FetchContent for all dependencies
-- **Sync fingerprints**: xxHash 0.8.3 (XXH3)
-- **Testing**: Catch2 3.13.0
-- **Logging**: spdlog 1.17.0
-- **Config**: nlohmann/json 3.12.0
+- **Crypto**: All NIST Category 5 via liboqs — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing), AES-256-GCM (symmetric). No OpenSSL — liboqs provides all crypto primitives.
+- **Storage**: libmdbx — LMDB-compatible, crash-safe
+- **Wire format**: FlatBuffers — deterministic encoding required for signing
+- **Language**: C++20, CMake, FetchContent for all dependencies (always use latest available version)
+- **Sync fingerprints**: xxHash (XXH3)
+- **Testing**: Catch2
+- **Logging**: spdlog
+- **Config**: nlohmann/json
 - **No DHT**: Explicit constraint from lessons learned
+- **No OpenSSL**: liboqs has everything built in, avoid unnecessary dependencies
 
 ## Key Decisions
 
@@ -97,6 +97,7 @@ Storage model (libmdbx):
 | libmdbx over SQLite for node storage | LMDB-style MVCC fits high-throughput concurrent reads; crash-safe | — Pending |
 | FlatBuffers over Protobuf | Deterministic encoding needed for signing; zero-copy deserialization | — Pending |
 | ML-DSA-87 + ML-KEM-1024 (NIST Cat 5) | Maximum PQ security; proven in PQCC project | — Pending |
+| No OpenSSL, liboqs only | liboqs provides AES-256-GCM, SHA3, and all PQ primitives — no need for external crypto dep | — Pending |
 | Database is intentionally dumb | Separation of concerns: db stores blobs, app layer interprets them | — Pending |
 
 ---
