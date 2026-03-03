@@ -1,5 +1,5 @@
 ---
-status: complete
+status: resolved
 phase: 01-foundation
 source: 01-01-SUMMARY.md, 01-02-SUMMARY.md, 01-03-SUMMARY.md
 started: 2026-03-03T11:51:35Z
@@ -51,11 +51,21 @@ skipped: 2
 ## Gaps
 
 - truth: "Config exposes sensible defaults without config file"
-  status: failed
+  status: resolved
   reason: "User reported: TTL should be strict/enforced (7-day for data), not a user-configurable setting. Profiles may need different TTL in the future."
   severity: minor
   test: 5
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: "default_ttl is a public mutable field on Config struct, loaded from JSON config — should be a constexpr protocol constant"
+  artifacts:
+    - path: "src/config/config.h"
+      issue: "default_ttl as mutable Config field (line 16)"
+    - path: "src/config/config.cpp"
+      issue: "loads default_ttl from JSON (line 30)"
+    - path: "tests/config/test_config.cpp"
+      issue: "tests validate TTL override behavior (lines 39, 52, 94, 101)"
+  missing:
+    - "Remove default_ttl from Config struct"
+    - "Define constexpr BLOB_TTL_SECONDS = 604800 as protocol constant"
+    - "Remove JSON loading of default_ttl"
+    - "Update tests to remove TTL-override assertions"
+  debug_session: ".planning/debug/ttl-configurable-should-be-enforced.md"
