@@ -28,13 +28,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Node generates an ML-DSA-87 keypair and derives its namespace as SHA3-256(pubkey), and the derivation is deterministic and reproducible
   2. Node performs ML-KEM-1024 encapsulation/decapsulation producing a shared secret, and AES-256-GCM encrypt/decrypt round-trips correctly using that secret
   3. A blob serialized to FlatBuffers, deserialized, and re-serialized produces identical bytes (canonicality verified), and the signed content (namespace || data || ttl || timestamp) is a fixed-size concatenation independent of FlatBuffer encoding
-  4. Node loads configuration from a JSON file (bind address, storage path, bootstrap peers, default TTL) and logs startup via spdlog
-**Plans**: TBD
+  4. Node loads configuration from a JSON file (bind address, storage path, bootstrap peers) and logs startup via spdlog. TTL is a protocol constant (7-day), not configurable.
+**Plans**: 4 plans
 
 Plans:
 - [x] 01-01: CMake scaffold + crypto RAII wrappers (ML-DSA-87, ML-KEM-1024, SHA3-256, ChaCha20-Poly1305, HKDF-SHA256)
 - [x] 01-02: FlatBuffers wire format + canonical signing codec
 - [x] 01-03: Config loading, structured logging, and node identity
+- [ ] 01-04: Gap closure -- Make TTL a protocol constant (not user-configurable)
 
 ### Phase 2: Storage Engine
 **Goal**: Node can persistently store, retrieve, deduplicate, index, and expire blobs using libmdbx with crash-safe ACID guarantees
@@ -107,7 +108,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/3 | Complete | 2026-03-03 |
+| 1. Foundation | 3/4 | Gap closure | 2026-03-03 |
 | 2. Storage Engine | 0/3 | Not started | - |
 | 3. Blob Engine | 0/3 | Not started | - |
 | 4. Networking | 0/3 | Not started | - |
