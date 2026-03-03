@@ -1,195 +1,228 @@
 # Project Research Summary
 
-**Project:** CPUNK-DB (libcpunkdb)
-**Domain:** Decentralized replicated key-value database with post-quantum cryptography
+**Project:** chromatindb
+**Domain:** Decentralized post-quantum secure signed blob store daemon
 **Researched:** 2026-03-03
-**Confidence:** HIGH (crypto stack proven in production; storage, serialization, and sync patterns well-established)
+**Confidence:** HIGH (stack verified via git tags; architecture patterns are mature and stable; features validated against IPFS/Hypercore/Nostr/etcd precedent)
 
 ## Executive Summary
 
-CPUNK-DB is a signed, append-only operation log with materialized state and TTL-based expiry, designed as an embeddable C++ library. The system model draws from three proven patterns: event sourcing (operation log is source of truth, state is derived), the Nostr relay model (pubkey-owned data, dumb relays, client-side verification), and Negentropy (range-based set reconciliation for efficient sync). The distinguishing design choices are ephemeral-by-default data (TTL on all non-profile operations) and post-quantum cryptography throughout (ML-DSA-87 for signing, ML-KEM-1024 for encryption). No blockchain, no DHT, no global consensus — namespaces converge independently through deterministic last-write-wins conflict resolution.
+chromatindb is a standalone daemon that forms a peer-to-peer network of signed blob stores. Each node holds cryptographically-owned namespaces — namespace = SHA3-256(pubkey) — replicates blobs across peers over post-quantum encrypted transport, and auto-expires data via TTL. The model is close to a Nostr relay (dumb storage, signed data, no app semantics) but with built-in node-to-node replication, PQ crypto throughout, and a TTL-first data model rather than permanent storage. Unlike IPFS or Hypercore there is no DHT — a deliberate constraint from previous project failures (chromatin-protocol and DNA messenger). Bootstrap + peer exchange is simpler, more reliable at the target scale, and entirely sufficient for the use case.
 
-The recommended implementation path reuses the crypto stack proven in chromatin/PQCC (liboqs 0.15.0, OpenSSL 3.x, AES-256-GCM) and pairs it with libmdbx for storage (zero-copy mmap reads, automatic page reclamation critical for TTL-pruned logs) and FlatBuffers for wire format (zero-copy, deterministic encoding required for content-addressable signing). The architecture is transport-agnostic by design — the library produces and consumes sync messages; the caller provides the pipe. This keeps the library embeddable and avoids forcing WebSocket or TCP on users.
+The recommended approach builds bottom-up in strict dependency order: crypto and wire format first (leaf dependencies needed by everything), then storage, then blob ingest logic, then the networking layer (Asio event loop + PQ-encrypted connections), then the peer system (discovery and sync). This order lets each layer be tested independently before the next is added, and keeps the hardest integration work — multi-node sync over PQ-encrypted transport — until after the foundation is solid and tested. The full stack is C++20 with CMake FetchContent: liboqs for all PQ crypto, a small audited AEAD+KDF library (not OpenSSL) for symmetric crypto, libmdbx for storage, FlatBuffers (or hand-packed binary if canonicality issues arise) for wire format, and standalone Asio for async TCP.
 
-The primary technical risks are ML-DSA-87 signature verification throughput on mobile (1-3ms per op, 10k ops = 10-30 seconds), HLC clock skew causing silent LWW data loss, and reconciliation ordering bugs causing silent sync failures. All three are well-understood and mitigated through: verification caching, bounded skew rejection on HLC merge, and strict canonical sort ordering for set reconciliation. TTL-first design structurally prevents the append-only log growth problem that kills every comparable system. The MVP should defer Negentropy (start with hash-list diff), encrypted envelopes, anti-spam PoW, and log compaction/snapshots.
+The dominant risks are: signing over non-deterministic FlatBuffers bytes (day-one design decision, protocol-breaking to fix), unauthenticated PQ transport (ML-KEM encrypts but does not authenticate — requires post-handshake ML-DSA-87 signed challenge, must be in v0.1), and ML-DSA-87 verification cost (~0.3ms/op) dominating sync throughput (requires a worker thread pool and verification result cache before any multi-peer testing). All three are well-understood, have clear mitigations, and are addressable if caught at the right phase.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The crypto stack carries over directly from chromatin/PQCC: liboqs 0.15.0 (with the known FetchContent include path fix for generated headers), OpenSSL 3.x for AES-256-GCM, and all algorithms at NIST Category 5 (ML-DSA-87, ML-KEM-1024, SHA3-256). For storage, libmdbx 0.13.11 is recommended over LMDB or RocksDB — its zero-copy mmap reads pair naturally with FlatBuffers zero-copy access, its native CMake support makes FetchContent straightforward, and its automatic page reclamation is essential for append-only logs with TTL-based pruning. FlatBuffers is required (not optional) because deterministic byte representation is needed for content-addressed signing — Protocol Buffers are explicitly ruled out for this reason.
-
-For the sync fingerprint computation, xxHash (XXH3) provides the needed speed for bucket hashing. HLC is approximately 100 lines of C++ from Kulkarni et al. (2014) — too small to be a dependency. Development tooling (Catch2, spdlog, nlohmann/json) carries over from chromatin/PQCC.
+The stack is narrow and well-justified. Every choice has a specific rationale; nothing is included for convenience. C++20 provides the language features needed (Asio coroutines via `co_await`, `std::span`, constexpr) without Boost. liboqs is the only production-grade NIST-compliant PQ crypto library, proven in the PQCC project. OpenSSL is explicitly excluded — symmetric crypto (AES-256-GCM, key derivation from shared secrets) comes from a small, audited AEAD+KDF library yet to be selected. libmdbx provides single-writer/multi-reader MVCC with zero-copy mmap reads and automatic page reclamation (critical for TTL blob pruning), and is strictly better than LMDB for this use case. FlatBuffers is retained for zero-copy deserialization and schema evolution but is flagged as potentially replaceable with hand-packed binary if canonicality causes signing problems. Standalone Asio (not Boost.Asio) is header-only, provides async TCP with C++20 coroutine support, and handles sockets, timers, and signals in a single `io_context`. Always fetch the latest available versions via FetchContent.
 
 **Core technologies:**
-- **C++20 / CMake 3.24+**: Language and build system — already proven, FetchContent manages all deps
-- **liboqs 0.15.0**: ML-DSA-87, ML-KEM-1024, SHA3-256 — only production-grade PQ library, already used in PQCC
-- **OpenSSL 3.x**: AES-256-GCM only — hardware-accelerated, liboqs uses it as backend
-- **libmdbx 0.13.11**: Embedded KV storage — zero-copy mmap, ACID, automatic page reclamation for pruned logs
-- **FlatBuffers 25.12.19**: Binary serialization — deterministic encoding required for signing; zero-copy pairs with libmdbx
-- **xxHash 0.8.3 (XXH3)**: Sync fingerprints — fast non-crypto hashing for range buckets
-- **Custom HLC (~100 LOC)**: Hybrid logical clock — not a dependency, implement directly from Kulkarni et al.
+- **C++20 / CMake + FetchContent**: Language and build — coroutines, concepts, no Boost. All deps pulled at configure time.
+- **liboqs (latest)**: PQ crypto — ML-DSA-87 signing/verification, ML-KEM-1024 key encapsulation, SHA3-256 hashing. No credible alternative.
+- **Small audited AEAD+KDF library (TBD, not OpenSSL)**: Symmetric crypto — AES-256-GCM channel encryption, session key derivation from ML-KEM shared secret. Minimal dep surface. Candidates: libsodium, monocypher.
+- **libmdbx (latest)**: Embedded storage — MVCC, zero-copy mmap reads, automatic page reclamation. Better than LMDB for TTL-heavy append-mostly workloads.
+- **FlatBuffers (latest)**: Wire format — zero-copy deserialization, schema evolution, deterministic encoding (with `ForceDefaults(true)`). Flagged as replaceable with hand-packed binary if issues arise.
+- **Standalone Asio (latest)**: Async TCP — C++20 `co_await` coroutines, single `io_context` for sockets, timers, and signals.
+- **xxHash/XXH3 (latest)**: Sync fingerprints — fast non-crypto hashing for O(1) "already in sync" check before hash-list exchange.
+- **Catch2, spdlog, nlohmann/json (latest)**: Testing, logging, config — standard, proven in previous projects.
 
 ### Expected Features
 
-CPUNK-DB v0.1 must ship 12 table-stakes features. The dependency chain is strict: crypto and HLC are the foundation, everything else builds upward through operation log, storage, and namespace/authz before reaching the sync engine and public API.
+The feature set is intentionally narrow. The node stores, verifies, replicates, and expires signed blobs. It has no knowledge of what blobs contain. Application semantics (messages, profiles, nicknames, conflict resolution) live in Layer 2 (Relay) and are out of scope for the database node.
 
-**Must have (table stakes for v0.1):**
-- Cryptographic identity (ML-DSA-87 pubkey owns namespace) — trust foundation
-- Signed append-only operation log (SET, DELETE, GRANT, REVOKE) — source of truth
-- Local-first storage (full replica of subscribed namespaces via libmdbx) — offline-first requirement
-- Deterministic LWW conflict resolution (HLC + hash tiebreak) — convergence guarantee
-- Causal ordering via HLC — bounded skew detection built in
-- Namespace read/write API (get/set/delete) — basic usability
-- Multi-relay connectivity — no single point of censorship
-- Operation deduplication (SHA3-256 content-addressed IDs) — free dedup via hash identity
-- Signature verification on ingest (reject invalid ops at door) — relay is untrusted
-- Capability grants (prefix-scoped, TTL-bounded delegation) — multi-author namespaces
-- TTL on all operations (profile/ keys only may use TTL=0) — ephemeral-by-default
-- Profile namespace (permanent identity anchor: pubkeys, bio, relay hints) — key discovery
+**Must have (table stakes — v0.1):**
+- Namespace model: SHA3-256(pubkey) = namespace, verified on every ingest — trust foundation
+- Blob storage with content-addressed dedup (SHA3-256 hash as blob ID)
+- ML-DSA-87 signature verification on every blob before storage
+- Sequence index per namespace (monotonic seq_num: "give me namespace X since seq Y")
+- TTL-based expiry with automatic background pruning (7-day default, TTL=0 permanent)
+- PQ-encrypted transport: ML-KEM-1024 key exchange + AEAD session, with ML-DSA-87 mutual authentication
+- TCP listener + outbound peer connections via Asio
+- Bootstrap peer discovery from JSON config
+- Hash-list diff sync (bidirectional) with seq_num incremental exchange
+- Write ACK (local confirmation)
+- JSON config, spdlog logging, signal handling, graceful shutdown
 
-**Should have (differentiators, defer to v0.2):**
-- Negentropy range-based set reconciliation (O(diff) sync — start with hash-list diff in v0.1)
-- Encrypted envelopes (ML-KEM key wrapping + AES-256-GCM — relay stays blind to values)
-- Anti-spam PoW for open-write namespaces (capability-only in v0.1)
-- Log compaction via snapshots (TTL expiry keeps storage bounded; snapshots compress further)
-- Equivocation detection (LWW handles the data; flagging is application-layer)
+**Should have (competitive — v0.2):**
+- Peer exchange (PEX): learn about peers from peers, beyond just bootstrap
+- Resumable sync: persist per-peer sync progress, only exchange new blobs on reconnect
+- Write ACK with replication count: report how many peers confirmed a blob
+- XXH3 fingerprint fast-path: skip hash-list exchange when already in sync (O(1))
+- Rate limiting and blob size limits: per-peer and per-namespace abuse prevention
+- Storage statistics: namespace count, blob count, disk usage via query interface
 
-**Defer (v2+):**
-- Multi-device conflict UI / key-per-device patterns
-- Relay discovery and reputation tracking
-- Batch operations (multiple SET/DELETE per signed op)
-- Federation / cross-deployment sync
+**Defer (v1.0+):**
+- Negentropy set reconciliation (O(diff) sync — verify C++ availability before committing)
+- Selective namespace replication (nodes choose which namespaces to mirror)
+- Admin interface for runtime peer management and config reload
+- Prometheus metrics endpoint
+
+**Anti-features (never build in the database node):**
+- DHT of any kind — proven unreliable in previous projects
+- Application semantics: messages, profiles, nicknames — Layer 2 concern
+- Conflict resolution or CRDT — Layer 2 concern
+- Human-readable namespaces — Layer 2/3 concern
+- Rich query language — blobs are opaque
+- Encrypted envelopes — payload encryption is Layer 2's job
+- Global consensus — single-writer namespaces need none
+- Capability delegation / access grants — Layer 2 concern
+- Built-in HTTP/REST API — wrong transport for a binary peer protocol
 
 ### Architecture Approach
 
-CPUNK-DB has eight components arranged in a strict dependency hierarchy. The public API sits on top and orchestrates everything below it. Transport is explicitly not owned by the library — sync messages are produced/consumed as byte blobs; callers connect to relays. This design enables embedding in any context (CLI, daemon, mobile app) without forcing a transport choice. The operation log is the canonical source of truth; the materialized state table (libmdbx sub-database) is a derived view used for fast reads and LWW resolution. Storage uses seven libmdbx sub-databases: operations (sorted namespace→HLC→hash), state (materialized KV), expiry (secondary TTL index), grants, profiles, meta (per-namespace HLC ceiling), and sync_state (per-relay sync progress).
+The architecture is a single-process daemon: one Asio `io_context` on the main thread handles all socket IO, while CPU-heavy work (ML-DSA-87 verification, SHA3 hashing, storage writes) is dispatched to a fixed-size worker thread pool with results posted back via eventfd. This pattern keeps the event loop responsive under burst ingest — ML-DSA-87 verify takes ~0.3ms per op and cannot block the network thread. libmdbx enforces single-writer internally; a write queue accumulates incoming blobs and flushes them in batches to maximize transaction efficiency. Six build phases map directly to the dependency-ordered component hierarchy.
 
 **Major components:**
-1. **Crypto Layer** — ML-DSA-87 sign/verify, ML-KEM-1024 encaps/decaps, AES-256-GCM, SHA3-256
-2. **HLC** — timestamp generation, merge on receive, bounded skew detection (MAX_SKEW ~5 min)
-3. **Operation Log** — create, validate, persist signed operations; content-addressed by SHA3-256 hash; TTL field on every op
-4. **Local Storage (libmdbx)** — persist ops and materialized state; expiry index for TTL scanning
-5. **Namespace/AuthZ** — verify write permission, check grants, enforce profile namespace rules (TTL=0 only for profile/ keys)
-6. **State Engine** — materialize current KV from log; LWW conflict resolution; TTL checks at read time
-7. **Sync Engine** — set reconciliation; produce/consume HAVE/WANT/RANGE/OPS messages; skip expired ops
-8. **Public API** — orchestrate all components; expose clean C++ interface
+1. **Crypto Layer** — liboqs + AEAD/KDF wrappers. Pure functions (bytes in, bytes out). Leaf dependency; no network or storage awareness.
+2. **Wire Format** — FlatBuffers schemas for Blob, ClientMessage, PeerMessage. Build-time artifact. Defines the wire contract.
+3. **Storage Layer** — libmdbx wrapper owning all four sub-databases (blobs, sequence, expiry, peers). Single component controls all transactions. Background expiry scanner runs on timer.
+4. **Blob Engine** — Ingest pipeline: namespace verification, signature verification (via worker pool), content-address dedup, seq_num assignment, store, query. No networking awareness.
+5. **Networking Layer** — Asio event loop, PQ-encrypted TCP connection (ML-KEM handshake + AEAD + ML-DSA-87 mutual auth), client listener, peer manager (bootstrap, connection pool, reconnect with backoff), worker thread pool.
+6. **Sync Engine** — Hash-list diff protocol, bidirectional. Reads per-peer sync state from storage, queries local seq index, sends SYNC_REQUEST / HASH_LIST / WANT / BLOBS. Resumable via persisted per-peer seq_num progress.
+
+**Storage schema (4 sub-databases):**
+- `blobs`: key = [namespace:32][hash:32], value = FlatBuffers Blob. Primary store.
+- `sequence`: key = [namespace:32][seq_num:8], value = [hash:32]. Per-namespace efficient polling.
+- `expiry`: key = [expiry_timestamp:8][hash:32], value = [namespace:32]. Sorted for efficient batch pruning.
+- `peers`: key = [peer_id:32][namespace:32], value = [last_synced_seq:8][last_sync_time:8]. Resumable sync state.
+
+**Blob format on wire:**
+```
+Blob {
+  namespace:  [32B]     SHA3-256(pubkey)
+  pubkey:     [2592B]   ML-DSA-87 public key
+  data:       [bytes]   opaque payload
+  ttl:        u32       seconds until expiry (0 = permanent, default 604800)
+  timestamp:  u64       wall clock time of creation (unix seconds)
+  signature:  [4627B]   ML-DSA-87 sig over (namespace || data || ttl || timestamp)
+}
+Computed by node: hash = SHA3-256(blob content), seq_num = local monotonic per namespace
+```
 
 ### Critical Pitfalls
 
-1. **HLC clock skew causes silent LWW data loss** — On HLC merge, reject remote timestamps more than MAX_SKEW (5 min) ahead of local wall clock. Accept the operation but do not advance local HLC. Track per-namespace HLC ceiling. Must be in Phase 1 — retrofitting skew detection is hard and data loss is permanent.
+1. **FlatBuffers non-determinism breaks signature verification** — Sign over a canonical byte string (`SHA3-256(namespace || data || ttl || timestamp)` as a fixed-size raw concatenation), NOT over the raw FlatBuffer bytes. The FlatBuffer is the transport envelope that carries the signature; it is not the signed content. Set `ForceDefaults(true)` on every FlatBufferBuilder always. Write a round-trip test: serialize, deserialize, re-serialize, compare bytes. Run in CI across platforms. This is a day-one design decision; retrofitting it requires a protocol version bump and breaks verification of all existing blobs.
 
-2. **ML-DSA-87 verification throughput on mobile** — 1-3ms per op on ARM; 10k ops = 10-30 seconds blocking CPU. Mitigate with: verification result cache in libmdbx (verify-once), async background verification pipeline, TTL reducing active op count. Batch verification (check liboqs support) and signed snapshots (future) reduce O(n) to O(1).
+2. **PQ transport encrypts but does not authenticate — MITM-trivial without post-handshake auth** — ML-KEM-1024 establishes a shared secret but does not prove who you are talking to. After the key exchange, both sides must sign the session fingerprint (`SHA3-256("chromatindb-v1" || shared_secret)`) with their ML-DSA-87 identity key, and each side verifies the peer's signature against a known or TOFU-pinned key. No plaintext fallback — not even behind a debug flag. Must be in v0.1; adding it later is protocol-breaking.
 
-3. **Append-only log growth without pruning** — ML-DSA-87 sigs are 4627 bytes each; 10k ops = ~50MB signatures alone. Structurally solved by TTL-first design (storage bounded by write_rate x average_TTL). Reserve SNAPSHOT op_type in format from day one even if deferred.
+3. **ML-DSA-87 verification cost stalls sync without a worker pool and cache** — Never verify signatures on the event loop thread. Dispatch to a worker thread pool (sized to `hardware_concurrency`). Add a verification result cache keyed by blob hash: once a blob is verified, never re-verify the same hash (blobs are immutable, content-addressed). Without the cache, syncing 10K blobs takes 3-30 seconds of CPU. The cache is ~50 LOC (in-memory LRU or small libmdbx sub-database).
 
-4. **Reconciliation ordering bugs causing silent sync failure** — Both peers must sort operations identically. Strict canonical sort key: (HLC: uint64, SHA3_hash: bytes[32]). Ambiguity = fingerprint mismatch = ops silently never sync. Use property-based testing: random op sets split across peers, verify convergence.
+4. **libmdbx single-writer serialization bottlenecks concurrent ingest** — Never issue one write transaction per blob. Accumulate blobs in a write queue, flush in batches (every 100ms or N blobs). One transaction with 100 puts is an order of magnitude faster than 100 single-put transactions. Design the write pipeline before writing storage code; retrofitting batch writes changes the concurrency model.
 
-5. **Capability revocation timing gap** — Revoked grantee can still write to relays that haven't seen the REVOKE. Mitigation: mandatory TTL on all grants (access is time-bounded even without explicit revoke); validate grantee permission against grant state at operation's HLC timestamp (retroactive revocation); short-lived grants with auto-renewal.
+5. **Timestamp-based TTL without clock validation enables abuse** — Reject blobs where `timestamp > now + 10 minutes` (prevents future-timestamp bypass of TTL). Apply an expiry grace period when pruning: `expiry_timestamp + 5 minutes < now` (absorbs NTP skew between nodes). Both validations belong in the ingest path from day one.
+
+6. **Permissionless namespace creation enables storage spam** — Anyone can generate keypairs and flood the node with valid-signature blobs. Mitigate with: configurable per-node storage quota (evict nearest-expiry first when approaching limit), per-namespace byte cap, configurable TTL ceiling (reject blobs with TTL above configured maximum), configurable namespace blocklist for node operators.
 
 ## Implications for Roadmap
 
-Research reveals a strict dependency chain that should map directly to phases. Each phase has a clear prerequisite from the phase before it — there is no productive reordering.
+Research is explicit about build order: crypto and wire format are leaf dependencies everything else requires, so they come first. Storage precedes the blob engine. The blob engine must be testable without a network, so it precedes networking. Networking must exist before the peer system. Peer system and multi-node sync are the last and most complex integration. This order is not negotiable — it matches the dependency graph from ARCHITECTURE.md.
 
-### Phase 1: Foundation — Crypto and Clock
+### Phase 1: Foundation (Crypto, Wire Format, Config)
 
-**Rationale:** Everything in the system depends on the crypto layer and HLC. These have zero dependencies on each other and zero dependencies on storage or serialization. HLC skew detection must be implemented here — retrofitting later risks permanent data loss bugs.
-**Delivers:** Reusable liboqs wrapper (sign, verify, hash, encaps/decaps, AES-GCM) + HLC with bounded skew rejection
-**Addresses:** Table stakes #1 (cryptographic identity), #5 (causal ordering)
-**Avoids:** Pitfall #1 (HLC clock skew data loss — must be first)
-**Notes:** Crypto patterns proven in chromatin/PQCC. Reuse liberally. HLC is ~100 LOC. Phase is fast.
+**Rationale:** Every other component depends on hashing (SHA3-256), signing (ML-DSA-87), or serialization (FlatBuffers). These have zero dependencies on anything else. Build and test them in isolation, get them right, and then treat them as stable. The canonical signing approach (sign a fixed byte concatenation, not FlatBuffer bytes) must be decided here — it is a protocol-breaking decision to change later.
+**Delivers:** liboqs C++ RAII wrappers (sign, verify, hash, kem_encaps, kem_decaps), AEAD+KDF wrappers for AES-256-GCM and key derivation, FlatBuffers schemas (Blob, ClientMessage, PeerMessage) with canonicality-verified blob format, nlohmann/json config parsing, spdlog setup, node identity (keypair + namespace derivation).
+**Addresses:** Namespace ownership model, blob format, wire contract, configuration.
+**Avoids (pitfall):** FlatBuffers non-determinism — canonical signing approach locked in, round-trip test written.
+**Research flag:** AEAD+KDF library selection is a concrete gap. Must choose (libsodium, monocypher, or other) before coding begins.
 
-### Phase 2: Core Data — Operation Format, Storage, AuthZ
+### Phase 2: Storage Engine
 
-**Rationale:** Operation format is the schema everything signs and syncs. Once operations are distributed, the format is frozen — version byte and canonical serialization spec must be locked here. libmdbx storage and namespace/AuthZ build on the format.
-**Delivers:** FlatBuffers operation schema (with version byte, TTL field, SNAPSHOT type reserved), libmdbx wrapper (7 sub-databases), TTL expiry index and scan, namespace ownership, capability grants with TTL, profile namespace rules
-**Addresses:** Table stakes #2 (signed log), #3 (local storage), #8 (deduplication), #9 (verify on ingest), #10 (capability grants), #11 (TTL), #12 (profile namespace)
-**Avoids:** Pitfall #2 (verification cache goes here), Pitfall #3 (TTL-first design), Pitfall #5 (grant TTL mandatory from day one), Pitfall #13 (serialization lock-in — version byte now)
-**Uses:** FlatBuffers 25.12.19, libmdbx 0.13.11
+**Rationale:** The blob engine needs storage to be complete, but storage can be tested with raw byte operations before the blob engine exists. libmdbx transaction discipline is subtle — getting it right in isolation prevents hard-to-diagnose bugs later. Per-node quotas and timestamp validation also live here.
+**Delivers:** libmdbx wrapper with all 4 sub-databases, typed CRUD for blobs/sequence/expiry/peers, write batch queue, timer-driven TTL expiry scanner, libmdbx geometry configuration (large upper bound), timestamp validation on ingest, per-node storage quota enforcement.
+**Addresses:** Blob storage, sequence index, TTL expiry, per-peer sync state, storage spam limits.
+**Avoids (pitfalls):** libmdbx write bottleneck (batch writes from the start), stale read transaction anti-pattern (RAII wrappers), geometry misconfiguration, timestamp abuse, storage spam.
+**Research flag:** Standard LMDB-style patterns, no research needed.
 
-### Phase 3: State Engine — LWW and Conflict Resolution
+### Phase 3: Blob Engine
 
-**Rationale:** State materialization and conflict resolution require a complete operation log and storage layer. This phase produces fast reads (query materialized state, not log) and deterministic convergence.
-**Delivers:** LWW conflict resolution with HLC + hash tiebreak, materialized state table, TTL checks at read time, equivocation detection (two ops same author/seq/namespace, different hash)
-**Addresses:** Table stakes #4 (deterministic conflict resolution), #6 (namespace read/write API)
-**Avoids:** Pitfall #4 (equivocation — LWW + content-addressing handles naturally), Pitfall #10 (split-brain — document LWW tradeoff, expose losing ops in API)
+**Rationale:** Core business logic. Can be fully tested without sockets — feed blobs directly in unit tests. This validates the entire ingest pipeline (namespace check, sig verify, dedup, seq assign, store, query) before network complexity is introduced. Verification cache and worker thread pool design are established here.
+**Delivers:** Namespace verification (SHA3(pubkey) == namespace check — first validation, before sig verify), ML-DSA-87 signature verification dispatched to worker pool, verification result cache, content-addressed dedup, seq_num assignment, query interface (namespace + seq range, namespace listing).
+**Addresses:** Signature verification, dedup, sequence index queries, write ACK.
+**Avoids (pitfalls):** Sig verification on event loop thread (worker pool), missing verification cache.
+**Research flag:** Standard patterns, no research needed.
 
-### Phase 4: Sync Engine — Set Reconciliation
+### Phase 4: Networking Layer (Event Loop + PQ-Encrypted Connections)
 
-**Rationale:** Sync requires a complete, working local store and state engine. Start with hash-list diff (simpler, correct) and plan Negentropy upgrade in v0.2. Property-based testing critical here — sync bugs are silent data loss.
-**Delivers:** Sync message protocol (HAVE/WANT/RANGE/OPS), hash-list diff sync for v0.1, per-relay sync state (resume on reconnect), sync of expired-op exclusion, multi-relay connectivity
-**Addresses:** Table stakes #7 (multi-relay), differentiator #3 (Negentropy — v0.2 upgrade path)
-**Avoids:** Pitfall #5 (strict canonical sort order from day one), Pitfall #8 (client-server model, sync timeout/fallback), Pitfall #12 (property-based tests, multi-client from day one)
+**Rationale:** The peer system requires encrypted connections and the event loop. The transport layer is independently testable (loopback echo, single-connection tests) before peer logic is added. The PQ handshake + mutual authentication is the security-critical component and must be correct before any real peer connections.
+**Delivers:** Asio `io_context` event loop, PQ-encrypted TCP connection (ML-KEM-1024 key exchange + AEAD channel + ML-DSA-87 mutual authentication), TCP listener for inbound connections, outbound connection initiation, worker thread pool integration, length-prefix message framing, per-IP connection limits.
+**Addresses:** PQ-encrypted transport, mutual authentication, concurrent connections, message framing, graceful shutdown, signal handling.
+**Avoids (pitfalls):** Unauthenticated transport (authentication built in from the start), no plaintext fallback, missing message framing.
+**Research flag:** Verify Asio C++20 coroutine API (`asio::co_spawn`, `asio::use_awaitable`, strand-based per-connection serialization) against current docs before implementation. MEDIUM confidence from research — the API details were not web-verified.
 
-### Phase 5: Public API and Integration Testing
+### Phase 5: Peer System (Discovery + Sync)
 
-**Rationale:** Public API is the integration point for all components. Integration tests here exercise the full stack end-to-end with real libmdbx instances, real signatures, and simulated multi-relay scenarios.
-**Delivers:** Clean C++ library interface (get/set/delete/grant/subscribe/sync_msg), library packaging (libcpunkdb), integration test suite with simulated relays and partitions
-**Addresses:** Full feature set from table stakes; validates all pitfall mitigations under realistic conditions
+**Rationale:** Integrates everything: networking + blob engine + storage + crypto. Multi-node sync is the most complex component and the last to be added. Peer discovery (bootstrap) is simpler and comes first within this phase. Two-node loopback tests become possible here.
+**Delivers:** Peer manager (bootstrap from config, connection pool, reconnect with backoff), hash-list diff sync protocol (bidirectional, seq_num incremental — only exchange hashes since last sync checkpoint), per-peer sync state persistence (resumable), XXH3 fingerprint O(1) fast-path (skip hash exchange when fingerprints match).
+**Addresses:** Peer discovery, node-to-node sync, resumable sync (core).
+**Avoids (pitfalls):** Full hash-list exchange (seq_num incremental from the start), sync scaling, global sync anti-pattern (namespace-scoped, per-peer progress tracking).
+**Research flag:** Hash-list diff is well-understood, no research needed. Negentropy C++ availability needs verification before v1.0 upgrade decision — defer to v1.0 planning.
 
-### Phase 6: v0.2 Hardening (Post-MVP)
+### Phase 6: Integration and Hardening
 
-**Rationale:** Defer complexity that doesn't block correctness. These features improve performance and capability without being required for a functional library.
-**Delivers:** Negentropy range-based reconciliation (O(diff) sync), encrypted envelopes (ML-KEM + AES-GCM), anti-spam PoW for open-write namespaces, log compaction via signed snapshots
-**Notes:** Negentropy C++ availability must be verified before planning this phase — may require porting from reference implementation.
+**Rationale:** Main daemon binary wiring, end-to-end multi-node integration tests, and hardening items (rate limiting, blob size limits, namespace blocklist) that require the full system to be meaningful.
+**Delivers:** `main.cpp` wiring all components, two-node loopback integration tests, multi-node sync convergence tests, TTL expiry integration test, rate limiting (per-peer and per-namespace), per-namespace storage quotas, namespace blocklist, peer exchange (v0.2), write ACK with replication count (v0.2).
+**Addresses:** Daemon lifecycle, graceful shutdown, storage spam mitigations, abuse prevention, v0.2 features.
+**Avoids (pitfalls):** Storage spam (quotas and limits enforced), per-IP connection limits.
+**Research flag:** Standard integration and hardening patterns, no research needed.
 
 ### Phase Ordering Rationale
 
-- Crypto and HLC before everything (Phase 1) because every subsequent component depends on both, and HLC skew detection cannot be retrofitted.
-- Operation format before storage (Phase 2) because libmdbx schema is derived from the format; changing format after signing begins is a breaking change.
-- State engine before sync (Phase 3 before Phase 4) because the sync engine's inbound path writes to materialized state — it needs the LWW resolver.
-- Hash-list sync before Negentropy (Phase 4 then v0.2) because Negentropy is an optimization on correct sync, not a correctness requirement. Shipping simple-and-correct faster is better than shipping Negentropy late.
-- Public API last (Phase 5) because it is the integration point; premature API design locks in internal choices that may need to change.
+- **Dependency-driven bottom-up**: Each phase only adds components that depend on all prior phases. No phase builds something requiring components not yet tested. This matches the explicit build order from ARCHITECTURE.md.
+- **Testability at every phase**: Phases 1-3 are fully testable without network sockets. Phase 4 is testable with loopback connections. Phase 5 requires two nodes (localhost). Phase 6 requires the complete daemon.
+- **Security-critical paths in early phases**: The canonical signing approach (Phase 1) and transport authentication (Phase 4) are the two highest-cost pitfalls to retrofit. Both are addressed before any complex logic is layered on top.
+- **No scope creep**: The anti-features list is long and explicit. Nothing from that list appears in any phase.
 
 ### Research Flags
 
 Phases likely needing deeper research during planning:
-- **Phase 4 (Sync Engine):** Negentropy C++ implementation availability is unverified — may need porting from JavaScript reference. Determine before planning Phase 4 whether to implement Negentropy in v0.1 or confirmed v0.2. Property-based test tooling choices (rapidcheck vs custom) need evaluation.
-- **Phase 6 (Encrypted Envelopes):** ML-KEM key wrapping protocol (ephemeral vs static sender key, nonce handling) needs detailed spec. No reference implementation to steal from.
+- **Phase 1:** AEAD+KDF library selection — need to identify a small, audited, FetchContent-compatible library for AES-256-GCM and HKDF/key-derivation that is not OpenSSL. Options to evaluate: libsodium (AES-256-GCM available, HKDF included, widely audited), monocypher (public domain, no deps, ChaCha20-Poly1305 natively, AES-256-GCM not native), or a header-only AEAD library. This is a concrete gap in the current research.
+- **Phase 4:** Asio C++20 coroutine API — MEDIUM confidence from research. Verify `asio::co_spawn`, `asio::use_awaitable`, and strand-based per-connection serialization against current Asio docs before coding.
 
-Phases with standard patterns (skip additional research):
-- **Phase 1 (Crypto + HLC):** Both are thoroughly documented. liboqs patterns proven in chromatin/PQCC. HLC from published paper. No unknowns.
-- **Phase 2 (Operation Format + Storage):** FlatBuffers schema design and libmdbx usage are well-documented. TTL index pattern (sorted by expiry timestamp) is standard.
-- **Phase 3 (State Engine):** LWW with HLC is standard distributed systems pattern. No research needed.
-- **Phase 5 (Public API):** C++ library API design is standard. No novel decisions.
+Phases with well-documented patterns (skip dedicated research):
+- **Phase 2:** libmdbx patterns are well-documented. Transaction discipline, geometry config, and RAII wrappers are standard LMDB-style usage.
+- **Phase 3:** Blob ingest is deterministic logic with known patterns from PQCC.
+- **Phase 5 (hash-list diff):** Set difference sync is a well-understood algorithm; implementation is mechanical.
+- **Phase 6:** Integration testing and hardening are standard practices.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Crypto stack proven in chromatin/PQCC. libmdbx used by Erigon at scale. FlatBuffers from Google with production usage. All version pins verified. |
-| Features | MEDIUM-HIGH | Derived from analysis of Nostr, Automerge, Hypercore, OrbitDB, GUN.js. Feature set is well-motivated. Anti-spam PoW scope and grant rate-limiting fields need detailed spec during Phase 2. |
-| Architecture | MEDIUM-HIGH | Component boundaries clear. Storage schema detailed. Data flows specified. One open question: Negentropy C++ availability (unverified — may be JS-only reference). |
-| Pitfalls | MEDIUM-HIGH | All 6 critical pitfalls have documented mitigations from distributed systems literature and real incidents. ML-DSA-87 batch verification support in liboqs needs confirmation before Phase 4 optimization work. |
+| Stack | HIGH | All library categories verified. liboqs proven in PQCC. libmdbx, FlatBuffers, Asio are mature. One gap: AEAD+KDF library not yet selected — no OpenSSL. |
+| Features | MEDIUM-HIGH | Feature set informed by strong analogies (Nostr relay model, Hypercore seq_num, etcd TTL/ACK, BitTorrent PEX). Scope is narrow and well-defined by PROJECT.md constraints. |
+| Architecture | HIGH | All patterns described (Asio + worker pool, libmdbx single-writer, hash-list diff) are mature and stable. Build order follows a strict dependency graph. Specific Asio coroutine API details are MEDIUM confidence. |
+| Pitfalls | MEDIUM-HIGH | Most pitfalls are well-documented problems in libmdbx/liboqs/FlatBuffers ecosystems. ML-DSA-87 timing (~0.3ms on x86) is an estimate that needs hardware validation. |
 
-**Overall confidence:** HIGH for v0.1 scope. MEDIUM for v0.2 features (Negentropy port, encrypted envelope protocol design).
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Negentropy C++ availability**: Before Phase 4 planning, verify whether a C++ implementation exists or if the Rust/JS reference must be ported. This affects whether Negentropy is in v0.1 or v0.2.
-- **Default TTL values**: What are sensible defaults for messages, presence, inbox items? Needs product decision before Phase 2 (operation format) — influences storage sizing and UX guidance.
-- **Profile namespace key structure**: What keys live under `profile/` besides pubkeys, bio, and relay hints? Define the full profile schema before Phase 2.
-- **ML-DSA-87 batch verification in liboqs**: Verify support before Phase 4 optimization work. If not supported, bulk ingest performance path requires a different approach.
-- **Anti-spam PoW fields**: If PoW stamps are reserved in the operation format (even for v0.2), the format needs a `pow_nonce` field. Decide in Phase 2 whether to reserve the field.
-- **SNAPSHOT op_type value**: Reserve the op_type byte value in Phase 2 even if implementation is deferred. Lock in the constants table early.
+- **AEAD+KDF library selection**: PROJECT.md explicitly excludes OpenSSL. No specific library is named. Must be decided before Phase 1 coding begins. Candidates: libsodium (widely audited, AES-256-GCM + HKDF, larger footprint), monocypher (public domain, minimal, ChaCha20-Poly1305 natively — evaluate whether ChaCha20 is acceptable in place of AES-256-GCM). A concrete choice with rationale is needed before Phase 1 planning.
+- **FlatBuffers vs hand-packed binary**: If the canonical signing approach (sign a fixed-size byte concatenation, not the FlatBuffer bytes) is correctly implemented in Phase 1, FlatBuffers non-determinism becomes irrelevant for correctness. The question then becomes whether FlatBuffers is worth the dependency. Decision can be deferred to Phase 1 implementation — but must be decided then, not later.
+- **Asio coroutine API verification**: Training-data confidence on `asio::co_spawn` / `co_await` integration. Verify against current Asio docs before Phase 4.
+- **ML-DSA-87 timing on target hardware**: The ~0.3ms figure is a community x86 benchmark. Measure on actual deployment hardware to size the worker thread pool correctly.
+- **Negentropy C++ availability**: A C++ implementation exists (github.com/hoytech/negentropy) but maturity and FetchContent compatibility need verification before committing to it for the v1.0 sync upgrade.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- liboqs 0.15.0 documentation and chromatin/PQCC project direct experience — crypto layer, FetchContent integration, include path fix
-- libmdbx documentation (erthink/libmdbx) — storage schema, page reclamation, sub-database model
-- Erigon project — libmdbx at scale in production
-- FlatBuffers documentation (Google) — deterministic encoding, zero-copy access, schema evolution
-- Kulkarni et al. "Logical Physical Clocks and Consistent Snapshots in Globally Distributed Databases" (2014) — HLC design
+- liboqs, libmdbx, FlatBuffers, Asio, xxHash, Catch2, spdlog, nlohmann/json git repositories — all library versions verified via `git ls-remote --tags` on 2026-03-03
+- `.planning/PROJECT.md` — direct project requirements and constraints (including no-OpenSSL constraint, FlatBuffers-as-potentially-replaceable flag)
+- PQCC project experience — liboqs integration patterns proven in production, documented in project memory
+- ARCHITECTURE.md — libmdbx MVCC semantics from library header/docs; epoll/Asio patterns from Stevens/Kerrisk and Asio documentation; ML-KEM/ML-DSA parameters from NIST FIPS 203/204
 
 ### Secondary (MEDIUM confidence)
-- Negentropy protocol specification (Nostr NIPs) — set reconciliation design; C++ availability unverified
-- Nostr NIP-77, event sourcing patterns — relay model, subscription design, anti-spam
-- Automerge, Hypercore, OrbitDB documentation — feature comparison, transport-agnostic design patterns
+- IPFS, Hypercore, GunDB, Nostr, etcd, BitTorrent architectures — training data analysis informing feature prioritization and anti-pattern identification
+- FlatBuffers deterministic encoding limitations — training data, well-documented community issue
+- P2P networking patterns (bootstrap, PEX, hash-list diff) — training data from Bitcoin, Nostr, IPFS documentation
+- ML-DSA-87 ~0.3ms verification timing — community benchmarks, needs hardware validation
 
 ### Tertiary (LOW confidence)
-- ML-DSA-87 mobile performance estimates (1-3ms/op on ARM) — from community benchmarks, needs validation on target hardware
-- FoundationDB simulation testing approach — referenced as inspiration, not directly applicable
+- Negentropy C++ implementation (hoytech/negentropy) maturity — needs direct verification before v1.0 planning
+- AEAD+KDF library landscape (libsodium vs monocypher vs alternatives) — gap in current research, needs dedicated evaluation
 
 ---
 *Research completed: 2026-03-03*
