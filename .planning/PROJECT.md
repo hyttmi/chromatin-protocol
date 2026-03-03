@@ -78,7 +78,8 @@ Storage model (libmdbx):
 
 ## Constraints
 
-- **Crypto**: All NIST Category 5 via liboqs — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing), AES-256-GCM (symmetric). No OpenSSL — liboqs provides all crypto primitives.
+- **Crypto (PQ)**: liboqs — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing)
+- **Crypto (symmetric)**: Small, audited AEAD+KDF library for AES-256-GCM and key derivation (TBD — no OpenSSL)
 - **Storage**: libmdbx — LMDB-compatible, crash-safe
 - **Wire format**: FlatBuffers — deterministic encoding required for signing
 - **Language**: C++20, CMake, FetchContent for all dependencies (always use latest available version)
@@ -87,7 +88,7 @@ Storage model (libmdbx):
 - **Logging**: spdlog
 - **Config**: nlohmann/json
 - **No DHT**: Explicit constraint from lessons learned
-- **No OpenSSL**: liboqs has everything built in, avoid unnecessary dependencies
+- **No OpenSSL**: Prefer minimal deps — liboqs for PQ, small audited lib for symmetric
 
 ## Key Decisions
 
@@ -97,7 +98,7 @@ Storage model (libmdbx):
 | libmdbx over SQLite for node storage | LMDB-style MVCC fits high-throughput concurrent reads; crash-safe | — Pending |
 | FlatBuffers over Protobuf | Deterministic encoding needed for signing; zero-copy deserialization | — Pending |
 | ML-DSA-87 + ML-KEM-1024 (NIST Cat 5) | Maximum PQ security; proven in PQCC project | — Pending |
-| No OpenSSL, liboqs only | liboqs provides AES-256-GCM, SHA3, and all PQ primitives — no need for external crypto dep | — Pending |
+| No OpenSSL (prefer minimal deps) | Use liboqs for PQ (ML-KEM/ML-DSA) + a small, audited AEAD+KDF library for symmetric crypto | — Pending |
 | Database is intentionally dumb | Separation of concerns: db stores blobs, app layer interprets them | — Pending |
 
 ---
