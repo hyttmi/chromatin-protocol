@@ -94,6 +94,9 @@ add_library(chromatindb_lib STATIC
   src/crypto/aead.cpp
   src/crypto/kdf.cpp
   src/wire/codec.cpp
+  src/config/config.cpp
+  src/logging/logging.cpp
+  src/identity/identity.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -118,6 +121,8 @@ add_executable(chromatindb_tests
   tests/crypto/test_aead.cpp
   tests/crypto/test_kdf.cpp
   tests/wire/test_codec.cpp
+  tests/config/test_config.cpp
+  tests/identity/test_identity.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE
