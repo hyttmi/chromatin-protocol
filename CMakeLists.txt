@@ -57,7 +57,19 @@ FetchContent_Declare(json
   URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
 )
 
-FetchContent_MakeAvailable(liboqs sodium flatbuffers Catch2 spdlog json)
+# -- libmdbx v0.13.11 (persistent key-value storage)
+set(MDBX_BUILD_CXX ON CACHE BOOL "" FORCE)
+set(MDBX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(MDBX_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(MDBX_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(MDBX_INSTALL_STATIC OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(libmdbx
+  GIT_REPOSITORY https://github.com/erthink/libmdbx.git
+  GIT_TAG        v0.13.11
+  GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(liboqs sodium flatbuffers Catch2 spdlog json libmdbx)
 
 # liboqs copies headers to its build dir; expose that path for oqs/sha3.h etc.
 FetchContent_GetProperties(liboqs)
@@ -97,6 +109,7 @@ add_library(chromatindb_lib STATIC
   src/config/config.cpp
   src/logging/logging.cpp
   src/identity/identity.cpp
+  src/storage/storage.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -109,6 +122,7 @@ target_link_libraries(chromatindb_lib PUBLIC
   flatbuffers
   spdlog::spdlog
   nlohmann_json::nlohmann_json
+  mdbx-static
 )
 
 # =============================================================================
@@ -123,6 +137,7 @@ add_executable(chromatindb_tests
   tests/wire/test_codec.cpp
   tests/config/test_config.cpp
   tests/identity/test_identity.cpp
+  tests/storage/test_storage.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE
