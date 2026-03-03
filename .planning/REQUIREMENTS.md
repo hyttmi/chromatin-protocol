@@ -12,7 +12,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 - [ ] **CRYP-01**: Node can generate ML-DSA-87 keypairs for signing/verification
 - [ ] **CRYP-02**: Node can perform ML-KEM-1024 key encapsulation/decapsulation for PQ key exchange
 - [ ] **CRYP-03**: Node can compute SHA3-256 hashes for namespace derivation and blob IDs
-- [ ] **CRYP-04**: Node can perform AES-256-GCM encryption/decryption for transport channel (via small audited AEAD library, not OpenSSL)
+- [ ] **CRYP-04**: Node can perform ChaCha20-Poly1305 encryption/decryption for transport channel (via libsodium)
 
 ### Namespace
 
