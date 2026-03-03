@@ -12,7 +12,7 @@ chromatindb builds bottom-up along its dependency graph: crypto primitives and w
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Crypto primitives, wire format schemas, config, logging, and node identity
+- [x] **Phase 1: Foundation** - Crypto primitives, wire format schemas, config, logging, and node identity
 - [ ] **Phase 2: Storage Engine** - libmdbx wrapper with all four sub-databases, batch writes, TTL expiry, and crash recovery
 - [ ] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
 - [ ] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
@@ -32,9 +32,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: TBD
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [x] 01-01: CMake scaffold + crypto RAII wrappers (ML-DSA-87, ML-KEM-1024, SHA3-256, ChaCha20-Poly1305, HKDF-SHA256)
+- [x] 01-02: FlatBuffers wire format + canonical signing codec
+- [x] 01-03: Config loading, structured logging, and node identity
 
 ### Phase 2: Storage Engine
 **Goal**: Node can persistently store, retrieve, deduplicate, index, and expire blobs using libmdbx with crash-safe ACID guarantees
@@ -107,7 +107,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Not started | - |
+| 1. Foundation | 3/3 | Complete | 2026-03-03 |
 | 2. Storage Engine | 0/3 | Not started | - |
 | 3. Blob Engine | 0/3 | Not started | - |
 | 4. Networking | 0/3 | Not started | - |

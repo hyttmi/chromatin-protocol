@@ -16,7 +16,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Namespace
 
-- [ ] **NSPC-01**: Namespace is derived as SHA3-256(pubkey) with no registration or authority
+- [x] **NSPC-01**: Namespace is derived as SHA3-256(pubkey) with no registration or authority
 - [ ] **NSPC-02**: Node verifies SHA3-256(pubkey) == claimed namespace on every write, rejects mismatches
 - [ ] **NSPC-03**: Node verifies ML-DSA-87 signature over (namespace || data || ttl || timestamp) on every write, rejects invalid
 
@@ -31,8 +31,8 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Wire Format
 
-- [ ] **WIRE-01**: All messages use FlatBuffers with deterministic encoding
-- [ ] **WIRE-02**: Blob wire format includes: namespace (32B), pubkey (2592B), data (variable), ttl (u32), timestamp (u64), signature (4627B)
+- [x] **WIRE-01**: All messages use FlatBuffers with deterministic encoding
+- [x] **WIRE-02**: Blob wire format includes: namespace (32B), pubkey (2592B), data (variable), ttl (u32), timestamp (u64), signature (4627B)
 
 ### Transport
 
@@ -64,8 +64,8 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Daemon
 
-- [ ] **DAEM-01**: Node reads configuration from JSON file (bind address, storage path, bootstrap peers, default TTL)
-- [ ] **DAEM-02**: Node logs all operations via structured logging (spdlog)
+- [x] **DAEM-01**: Node reads configuration from JSON file (bind address, storage path, bootstrap peers, default TTL)
+- [x] **DAEM-02**: Node logs all operations via structured logging (spdlog)
 - [ ] **DAEM-03**: Node handles signals for graceful shutdown (drain connections, flush storage)
 - [ ] **DAEM-04**: Node recovers cleanly from crashes (libmdbx ACID guarantees)
 
@@ -121,11 +121,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CRYP-02 | Phase 1: Foundation | Complete |
 | CRYP-03 | Phase 1: Foundation | Complete |
 | CRYP-04 | Phase 1: Foundation | Complete |
-| WIRE-01 | Phase 1: Foundation | Pending |
-| WIRE-02 | Phase 1: Foundation | Pending |
-| NSPC-01 | Phase 1: Foundation | Pending |
-| DAEM-01 | Phase 1: Foundation | Pending |
-| DAEM-02 | Phase 1: Foundation | Pending |
+| WIRE-01 | Phase 1: Foundation | Complete |
+| WIRE-02 | Phase 1: Foundation | Complete |
+| NSPC-01 | Phase 1: Foundation | Complete |
+| DAEM-01 | Phase 1: Foundation | Complete |
+| DAEM-02 | Phase 1: Foundation | Complete |
 | STOR-01 | Phase 2: Storage Engine | Pending |
 | STOR-02 | Phase 2: Storage Engine | Pending |
 | STOR-03 | Phase 2: Storage Engine | Pending |
@@ -157,4 +157,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after roadmap creation*
+*Last updated: 2026-03-03 after Phase 1 completion*
