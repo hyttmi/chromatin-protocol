@@ -1,0 +1,20 @@
+namespace chromatin.wire;
+
+enum TransportMsgType : byte {
+    None = 0,
+    KemPubkey = 1,
+    KemCiphertext = 2,
+    AuthSignature = 3,
+    AuthPubkey = 4,
+    Ping = 5,
+    Pong = 6,
+    Goodbye = 7,
+    Data = 8
+}
+
+table TransportMessage {
+    type: TransportMsgType;
+    payload: [ubyte];
+}
+
+root_type TransportMessage;

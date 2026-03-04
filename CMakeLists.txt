@@ -69,7 +69,15 @@ FetchContent_Declare(libmdbx
   GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(liboqs sodium flatbuffers Catch2 spdlog json libmdbx)
+# -- Standalone Asio 1.38.0 (async networking, C++20 coroutines)
+set(ASIO_TAG "asio-1-38-0" CACHE STRING "" FORCE)
+FetchContent_Declare(asiocmake
+  GIT_REPOSITORY https://github.com/OlivierLDff/asio.cmake
+  GIT_TAG        main
+  GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(liboqs sodium flatbuffers Catch2 spdlog json libmdbx asiocmake)
 
 # liboqs copies headers to its build dir; expose that path for oqs/sha3.h etc.
 FetchContent_GetProperties(liboqs)
@@ -93,7 +101,19 @@ if(EXISTS ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs)
     DEPENDS ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs flatc
     COMMENT "Generating FlatBuffers blob header"
   )
-  add_custom_target(flatbuffers_generated DEPENDS ${FLATBUFFERS_GENERATED_DIR}/blob_generated.h)
+  add_custom_target(flatbuffers_blob_generated DEPENDS ${FLATBUFFERS_GENERATED_DIR}/blob_generated.h)
+endif()
+
+if(EXISTS ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs)
+  add_custom_command(
+    OUTPUT ${FLATBUFFERS_GENERATED_DIR}/transport_generated.h
+    COMMAND flatc --cpp --gen-object-api
+            -o ${FLATBUFFERS_GENERATED_DIR}
+            ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs
+    DEPENDS ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs flatc
+    COMMENT "Generating FlatBuffers transport header"
+  )
+  add_custom_target(flatbuffers_transport_generated DEPENDS ${FLATBUFFERS_GENERATED_DIR}/transport_generated.h)
 endif()
 
 # =============================================================================
@@ -111,6 +131,8 @@ add_library(chromatindb_lib STATIC
   src/identity/identity.cpp
   src/storage/storage.cpp
   src/engine/engine.cpp
+  src/net/framing.cpp
+  src/net/protocol.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -124,6 +146,7 @@ target_link_libraries(chromatindb_lib PUBLIC
   spdlog::spdlog
   nlohmann_json::nlohmann_json
   mdbx-static
+  asio::asio
 )
 
 # =============================================================================
@@ -140,6 +163,8 @@ add_executable(chromatindb_tests
   tests/identity/test_identity.cpp
   tests/storage/test_storage.cpp
   tests/engine/test_engine.cpp
+  tests/net/test_framing.cpp
+  tests/net/test_protocol.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE
