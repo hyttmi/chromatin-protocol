@@ -110,6 +110,7 @@ add_library(chromatindb_lib STATIC
   src/logging/logging.cpp
   src/identity/identity.cpp
   src/storage/storage.cpp
+  src/engine/engine.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -138,6 +139,7 @@ add_executable(chromatindb_tests
   tests/config/test_config.cpp
   tests/identity/test_identity.cpp
   tests/storage/test_storage.cpp
+  tests/engine/test_engine.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE
