@@ -101,4 +101,33 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
     return IngestResult::rejection(IngestError::storage_error, "unknown status");
 }
 
+// =============================================================================
+// Query methods
+// =============================================================================
+
+std::vector<wire::BlobData> BlobEngine::get_blobs_since(
+    std::span<const uint8_t, 32> namespace_id,
+    uint64_t since_seq,
+    uint32_t max_count)
+{
+    auto results = storage_.get_blobs_by_seq(namespace_id, since_seq);
+
+    if (max_count > 0 && results.size() > max_count) {
+        results.resize(max_count);
+    }
+
+    return results;
+}
+
+std::optional<wire::BlobData> BlobEngine::get_blob(
+    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> blob_hash)
+{
+    return storage_.get_blob(namespace_id, blob_hash);
+}
+
+std::vector<storage::NamespaceInfo> BlobEngine::list_namespaces() {
+    return storage_.list_namespaces();
+}
+
 } // namespace chromatin::engine
