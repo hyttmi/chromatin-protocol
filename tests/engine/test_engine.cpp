@@ -189,46 +189,169 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
 }
 
 // ============================================================================
-// Plan 03-02 Task 1: BlobEngine query methods
+// Plan 03-02: BlobEngine query methods
 // ============================================================================
 
-TEST_CASE("BlobEngine get_blobs_since returns blobs after seq_num", "[engine][query]") {
+// --- get_blobs_since tests (QURY-01) ---
+
+TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
     auto id = chromatin::identity::NodeIdentity::generate();
-    auto blob1 = make_signed_blob(id, "query-blob-1", 604800, 1000);
-    auto blob2 = make_signed_blob(id, "query-blob-2", 604800, 1001);
 
-    engine.ingest(blob1);
-    engine.ingest(blob2);
+    // Ingest 3 blobs with different data (unique timestamps make unique blobs)
+    auto blob1 = make_signed_blob(id, "seq-range-1", 604800, 1000);
+    auto blob2 = make_signed_blob(id, "seq-range-2", 604800, 1001);
+    auto blob3 = make_signed_blob(id, "seq-range-3", 604800, 1002);
 
-    auto results = engine.get_blobs_since(id.namespace_id(), 0);
-    REQUIRE(results.size() == 2);
+    auto r1 = engine.ingest(blob1);
+    auto r2 = engine.ingest(blob2);
+    auto r3 = engine.ingest(blob3);
+    REQUIRE(r1.accepted);
+    REQUIRE(r2.accepted);
+    REQUIRE(r3.accepted);
 
-    auto results_after_1 = engine.get_blobs_since(id.namespace_id(), 1);
-    REQUIRE(results_after_1.size() == 1);
+    // since_seq=0 -> all 3 blobs
+    auto all = engine.get_blobs_since(id.namespace_id(), 0);
+    REQUIRE(all.size() == 3);
+
+    // since_seq=1 -> blobs with seq 2,3
+    auto after_1 = engine.get_blobs_since(id.namespace_id(), 1);
+    REQUIRE(after_1.size() == 2);
+
+    // since_seq=3 -> no blobs (nothing after seq 3)
+    auto after_3 = engine.get_blobs_since(id.namespace_id(), 3);
+    REQUIRE(after_3.size() == 0);
 }
 
-TEST_CASE("BlobEngine list_namespaces returns stored namespaces", "[engine][query]") {
+TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
     auto id = chromatin::identity::NodeIdentity::generate();
-    auto blob = make_signed_blob(id, "ns-list-blob");
-    engine.ingest(blob);
+
+    // Ingest 5 blobs
+    for (int i = 0; i < 5; ++i) {
+        auto blob = make_signed_blob(id,
+            "max-count-" + std::to_string(i), 604800,
+            static_cast<uint64_t>(2000 + i));
+        auto r = engine.ingest(blob);
+        REQUIRE(r.accepted);
+    }
+
+    // max_count=2 should return exactly 2 blobs (the first two by seq order)
+    auto limited = engine.get_blobs_since(id.namespace_id(), 0, 2);
+    REQUIRE(limited.size() == 2);
+
+    // max_count=0 should return all 5
+    auto unlimited = engine.get_blobs_since(id.namespace_id(), 0, 0);
+    REQUIRE(unlimited.size() == 5);
+
+    // max_count larger than available returns all available
+    auto over = engine.get_blobs_since(id.namespace_id(), 0, 100);
+    REQUIRE(over.size() == 5);
+}
+
+TEST_CASE("get_blobs_since for unknown namespace returns empty", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    // Query a namespace that has no blobs stored
+    std::array<uint8_t, 32> fake_ns{};
+    fake_ns.fill(0xAB);
+
+    auto results = engine.get_blobs_since(fake_ns, 0);
+    REQUIRE(results.empty());
+}
+
+// --- list_namespaces tests (QURY-02) ---
+
+TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    // Generate 3 identities, ingest 1 blob each
+    auto id1 = chromatin::identity::NodeIdentity::generate();
+    auto id2 = chromatin::identity::NodeIdentity::generate();
+    auto id3 = chromatin::identity::NodeIdentity::generate();
+
+    auto r1 = engine.ingest(make_signed_blob(id1, "ns-list-1"));
+    auto r2 = engine.ingest(make_signed_blob(id2, "ns-list-2"));
+    auto r3 = engine.ingest(make_signed_blob(id3, "ns-list-3"));
+    REQUIRE(r1.accepted);
+    REQUIRE(r2.accepted);
+    REQUIRE(r3.accepted);
 
     auto namespaces = engine.list_namespaces();
-    REQUIRE(namespaces.size() == 1);
-    auto ns_span = id.namespace_id();
-    REQUIRE(std::equal(namespaces[0].namespace_id.begin(),
-                       namespaces[0].namespace_id.end(),
-                       ns_span.begin()));
+    REQUIRE(namespaces.size() == 3);
+
+    // Each should have latest_seq_num=1
+    for (const auto& ns_info : namespaces) {
+        REQUIRE(ns_info.latest_seq_num == 1);
+    }
 }
 
-TEST_CASE("BlobEngine get_blob returns stored blob by hash", "[engine][query]") {
+TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto idA = chromatin::identity::NodeIdentity::generate();
+    auto idB = chromatin::identity::NodeIdentity::generate();
+
+    // Ingest 4 blobs in namespace A
+    for (int i = 0; i < 4; ++i) {
+        auto blob = make_signed_blob(idA,
+            "nsA-" + std::to_string(i), 604800,
+            static_cast<uint64_t>(3000 + i));
+        REQUIRE(engine.ingest(blob).accepted);
+    }
+
+    // Ingest 2 blobs in namespace B
+    for (int i = 0; i < 2; ++i) {
+        auto blob = make_signed_blob(idB,
+            "nsB-" + std::to_string(i), 604800,
+            static_cast<uint64_t>(4000 + i));
+        REQUIRE(engine.ingest(blob).accepted);
+    }
+
+    auto namespaces = engine.list_namespaces();
+    REQUIRE(namespaces.size() == 2);
+
+    // Find each namespace and check seq_num
+    for (const auto& ns_info : namespaces) {
+        auto nsA_span = idA.namespace_id();
+        auto nsB_span = idB.namespace_id();
+
+        if (std::equal(ns_info.namespace_id.begin(), ns_info.namespace_id.end(),
+                       nsA_span.begin())) {
+            REQUIRE(ns_info.latest_seq_num == 4);
+        } else if (std::equal(ns_info.namespace_id.begin(), ns_info.namespace_id.end(),
+                              nsB_span.begin())) {
+            REQUIRE(ns_info.latest_seq_num == 2);
+        } else {
+            FAIL("Unexpected namespace in list_namespaces");
+        }
+    }
+}
+
+TEST_CASE("list_namespaces empty storage returns empty", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto namespaces = engine.list_namespaces();
+    REQUIRE(namespaces.empty());
+}
+
+// --- get_blob tests ---
+
+TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     BlobEngine engine(store);
@@ -241,6 +364,101 @@ TEST_CASE("BlobEngine get_blob returns stored blob by hash", "[engine][query]") 
     auto found = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
     REQUIRE(found.has_value());
     REQUIRE(found->data == blob.data);
+    REQUIRE(found->ttl == blob.ttl);
+    REQUIRE(found->timestamp == blob.timestamp);
+}
+
+TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatin::identity::NodeIdentity::generate();
+    // Don't ingest anything -- query a fake hash
+    std::array<uint8_t, 32> fake_hash{};
+    fake_hash.fill(0xDE);
+
+    auto found = engine.get_blob(id.namespace_id(), fake_hash);
+    REQUIRE_FALSE(found.has_value());
+}
+
+// --- End-to-end integration test ---
+
+TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integration]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    // Generate 2 identities
+    auto idA = chromatin::identity::NodeIdentity::generate();
+    auto idB = chromatin::identity::NodeIdentity::generate();
+
+    // Ingest 3 blobs for identity A
+    std::vector<chromatin::engine::WriteAck> acksA;
+    for (int i = 0; i < 3; ++i) {
+        auto blob = make_signed_blob(idA,
+            "e2e-A-" + std::to_string(i), 604800,
+            static_cast<uint64_t>(5000 + i));
+        auto r = engine.ingest(blob);
+        REQUIRE(r.accepted);
+        REQUIRE(r.ack->status == IngestStatus::stored);
+        acksA.push_back(r.ack.value());
+    }
+
+    // Ingest 2 blobs for identity B
+    std::vector<chromatin::engine::WriteAck> acksB;
+    for (int i = 0; i < 2; ++i) {
+        auto blob = make_signed_blob(idB,
+            "e2e-B-" + std::to_string(i), 604800,
+            static_cast<uint64_t>(6000 + i));
+        auto r = engine.ingest(blob);
+        REQUIRE(r.accepted);
+        REQUIRE(r.ack->status == IngestStatus::stored);
+        acksB.push_back(r.ack.value());
+    }
+
+    // Verify list_namespaces returns 2 entries with correct seq_nums
+    auto namespaces = engine.list_namespaces();
+    REQUIRE(namespaces.size() == 2);
+
+    for (const auto& ns_info : namespaces) {
+        auto nsA_span = idA.namespace_id();
+        auto nsB_span = idB.namespace_id();
+
+        if (std::equal(ns_info.namespace_id.begin(), ns_info.namespace_id.end(),
+                       nsA_span.begin())) {
+            REQUIRE(ns_info.latest_seq_num == 3);
+        } else if (std::equal(ns_info.namespace_id.begin(), ns_info.namespace_id.end(),
+                              nsB_span.begin())) {
+            REQUIRE(ns_info.latest_seq_num == 2);
+        } else {
+            FAIL("Unexpected namespace in e2e test");
+        }
+    }
+
+    // Verify get_blobs_since for A since 0 returns 3 blobs
+    auto blobsA = engine.get_blobs_since(idA.namespace_id(), 0);
+    REQUIRE(blobsA.size() == 3);
+
+    // Verify get_blobs_since for B since 1 returns 1 blob (seq 2 only)
+    auto blobsB = engine.get_blobs_since(idB.namespace_id(), 1);
+    REQUIRE(blobsB.size() == 1);
+
+    // Verify get_blob for A's first blob returns correct data
+    auto firstA = engine.get_blob(idA.namespace_id(), acksA[0].blob_hash);
+    REQUIRE(firstA.has_value());
+    std::string expected_data = "e2e-A-0";
+    std::vector<uint8_t> expected_vec(expected_data.begin(), expected_data.end());
+    REQUIRE(firstA->data == expected_vec);
+
+    // Verify namespace mismatch still works: try ingesting with wrong namespace for B's pubkey
+    auto bad_blob = make_signed_blob(idB, "should-fail");
+    // Set namespace to A's namespace (wrong for B's pubkey)
+    std::memcpy(bad_blob.namespace_id.data(), idA.namespace_id().data(), 32);
+
+    auto bad_result = engine.ingest(bad_blob);
+    REQUIRE_FALSE(bad_result.accepted);
+    REQUIRE(bad_result.error.value() == IngestError::namespace_mismatch);
 }
 
 TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]") {
