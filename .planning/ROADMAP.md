@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation** - Crypto primitives, wire format schemas, config, logging, and node identity
 - [x] **Phase 2: Storage Engine** - libmdbx wrapper with all four sub-databases, batch writes, TTL expiry, and crash recovery
 - [ ] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
-- [ ] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
+- [x] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
 - [ ] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
 
 ## Phase Details
@@ -77,12 +77,12 @@ Plans:
   2. After key exchange, both nodes perform ML-DSA-87 mutual authentication by signing the session fingerprint, and a node with an invalid identity is rejected
   3. Node listens on a configurable bind address for inbound connections and initiates outbound connections to configured peer addresses
   4. Node handles SIGTERM/SIGINT by draining active connections and flushing storage before exiting cleanly
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
-- [ ] 04-03: TBD
+- [x] 04-01: Asio + transport schema + encrypted framing layer
+- [x] 04-02: PQ handshake with ML-KEM key exchange and ML-DSA mutual auth
+- [x] 04-03: TCP connection lifecycle, server, and graceful shutdown
 
 ### Phase 5: Peer System
 **Goal**: Nodes discover each other via bootstrap, synchronize their blob stores bidirectionally via hash-list diff, and operate as a running daemon
@@ -110,5 +110,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 4/4 | Complete | 2026-03-03 |
 | 2. Storage Engine | 3/3 | Complete | 2026-03-03 |
 | 3. Blob Engine | 0/2 | Not started | - |
-| 4. Networking | 0/3 | Not started | - |
+| 4. Networking | 3/3 | Complete | 2026-03-04 |
 | 5. Peer System | 0/3 | Not started | - |

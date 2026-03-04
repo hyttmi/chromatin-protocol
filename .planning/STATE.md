@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-04T03:34:00.206Z"
+last_updated: "2026-03-04T18:23:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 12
+  completed_plans: 12
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 3: Blob Engine -- COMPLETE
+**Current focus:** Phase 4: Networking -- COMPLETE
 
 ## Current Position
 
-Phase: 3 of 5 (Blob Engine) -- COMPLETE
-Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 3 complete, ready for Phase 4 (Networking)
-Last activity: 2026-03-04 -- Phase 3 Plan 02 executed (blob engine query methods)
+Phase: 4 of 5 (Networking) -- COMPLETE
+Plan: 3 of 3 in current phase -- COMPLETE
+Status: Phase 4 complete, ready for Phase 5 (Peer System)
+Last activity: 2026-03-04 -- Phase 4 Plans 01-03 executed (Asio + framing, PQ handshake, TCP server)
 
-Progress: [#########.] 90%
+Progress: [#########.] 95%
 
 ## Performance Metrics
 
@@ -43,10 +43,11 @@ Progress: [#########.] 90%
 | 1. Foundation | 4 | ~27 min | ~7 min |
 | 2. Storage Engine | 3 | ~25 min | ~8 min |
 | 3. Blob Engine | 2/2 | ~21 min | ~11 min |
+| 4. Networking | 3/3 | ~35 min | ~12 min |
 
 **Recent Trend:**
-- Last 3 plans: 02-03 (~5m), 03-01 (~17m), 03-02 (~4m)
-- 03-02 fast: thin delegation methods + no FetchContent rebuild
+- Last 3 plans: 04-01 (~10m), 04-02 (~10m), 04-03 (~15m)
+- 04-03 slowest: TCP integration required fixing framing layer mismatch
 
 *Updated after each plan completion*
 
@@ -75,6 +76,13 @@ Recent decisions affecting current work:
 - [Phase 3]: Fail-fast validation order: structural -> namespace -> signature (cheapest first)
 - [Phase 3]: Query methods are thin delegations to Storage -- no caching layer needed
 - [Phase 3]: max_count truncation at engine level via vector resize
+- [Phase 4]: Standalone Asio 1.38.0 via asio.cmake FetchContent wrapper
+- [Phase 4]: asio::as_tuple(asio::use_awaitable) for non-throwing async ops
+- [Phase 4]: asio::ip::make_address() not from_string() in modern Asio
+- [Phase 4]: write_frame/read_frame for in-memory framing, send_raw/recv_raw for TCP framing (don't mix)
+- [Phase 4]: Connection does handshake inline (not via HandshakeInitiator/Responder classes)
+- [Phase 4]: Session keys directional: HKDF context "chromatin-init-to-resp-v1" / "chromatin-resp-to-init-v1"
+- [Phase 4]: Both sides include signing pubkey in KEM exchange for session fingerprint computation
 
 ### Pending Todos
 
@@ -82,10 +90,10 @@ None.
 
 ### Blockers/Concerns
 
-- [Phase 4]: Asio C++20 coroutine API needs verification against current docs
+None.
 
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed 03-02-PLAN.md (BlobEngine query methods -- Phase 3 complete)
+Stopped at: Completed Phase 4 (Networking -- all 3 plans executed)
 Resume file: None
