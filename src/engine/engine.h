@@ -3,13 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
+#include "storage/storage.h"
 #include "wire/codec.h"
-
-namespace chromatin::storage {
-class Storage;
-}
 
 namespace chromatin::engine {
 
@@ -69,7 +68,25 @@ public:
     /// @return IngestResult with WriteAck on success or error on rejection.
     IngestResult ingest(const wire::BlobData& blob);
 
-    // Query methods in Plan 02
+    /// Query blobs in a namespace since a given seq_num.
+    /// Returns blobs with seq_num > since_seq in ascending order.
+    /// @param namespace_id The 32-byte namespace to query.
+    /// @param since_seq Return blobs with seq_num strictly greater than this.
+    /// @param max_count Maximum number of blobs to return (0 = no limit).
+    std::vector<wire::BlobData> get_blobs_since(
+        std::span<const uint8_t, 32> namespace_id,
+        uint64_t since_seq,
+        uint32_t max_count = 0);
+
+    /// Query a single blob by namespace + content hash.
+    /// @return The blob data if found, nullopt otherwise.
+    std::optional<wire::BlobData> get_blob(
+        std::span<const uint8_t, 32> namespace_id,
+        std::span<const uint8_t, 32> blob_hash);
+
+    /// List all namespaces with at least one stored blob.
+    /// @return Namespace IDs with their latest seq_num.
+    std::vector<storage::NamespaceInfo> list_namespaces();
 
 private:
     storage::Storage& storage_;

@@ -188,6 +188,61 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
     REQUIRE(result2.accepted);
 }
 
+// ============================================================================
+// Plan 03-02 Task 1: BlobEngine query methods
+// ============================================================================
+
+TEST_CASE("BlobEngine get_blobs_since returns blobs after seq_num", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatin::identity::NodeIdentity::generate();
+    auto blob1 = make_signed_blob(id, "query-blob-1", 604800, 1000);
+    auto blob2 = make_signed_blob(id, "query-blob-2", 604800, 1001);
+
+    engine.ingest(blob1);
+    engine.ingest(blob2);
+
+    auto results = engine.get_blobs_since(id.namespace_id(), 0);
+    REQUIRE(results.size() == 2);
+
+    auto results_after_1 = engine.get_blobs_since(id.namespace_id(), 1);
+    REQUIRE(results_after_1.size() == 1);
+}
+
+TEST_CASE("BlobEngine list_namespaces returns stored namespaces", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatin::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "ns-list-blob");
+    engine.ingest(blob);
+
+    auto namespaces = engine.list_namespaces();
+    REQUIRE(namespaces.size() == 1);
+    auto ns_span = id.namespace_id();
+    REQUIRE(std::equal(namespaces[0].namespace_id.begin(),
+                       namespaces[0].namespace_id.end(),
+                       ns_span.begin()));
+}
+
+TEST_CASE("BlobEngine get_blob returns stored blob by hash", "[engine][query]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatin::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "get-by-hash");
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+
+    auto found = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(found.has_value());
+    REQUIRE(found->data == blob.data);
+}
+
 TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
