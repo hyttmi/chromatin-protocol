@@ -1,0 +1,116 @@
+#pragma once
+
+#include "identity/identity.h"
+#include "net/framing.h"
+#include "net/handshake.h"
+#include "net/protocol.h"
+
+#include <asio.hpp>
+#include <asio/awaitable.hpp>
+#include <asio/use_awaitable.hpp>
+#include <asio/as_tuple.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace chromatin::net {
+
+/// Completion token for non-throwing async operations.
+constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
+
+/// A single peer connection: handles handshake, encrypted IO, heartbeat.
+class Connection : public std::enable_shared_from_this<Connection> {
+public:
+    using Ptr = std::shared_ptr<Connection>;
+
+    /// Callback for received data messages.
+    using MessageCallback = std::function<void(
+        Connection::Ptr, wire::TransportMsgType, std::vector<uint8_t>)>;
+
+    /// Callback for connection close/error.
+    using CloseCallback = std::function<void(Connection::Ptr, bool /*graceful*/)>;
+
+    /// Create a connection from an accepted inbound socket (responder role).
+    static Ptr create_inbound(asio::ip::tcp::socket socket,
+                               const identity::NodeIdentity& identity);
+
+    /// Create a connection for outbound (initiator role).
+    /// Socket must already be connected.
+    static Ptr create_outbound(asio::ip::tcp::socket socket,
+                                const identity::NodeIdentity& identity);
+
+    ~Connection();
+
+    /// Run the connection lifecycle: handshake -> message loop -> cleanup.
+    asio::awaitable<bool> run();
+
+    /// Send a transport message (encrypted).
+    asio::awaitable<bool> send_message(wire::TransportMsgType type,
+                                        std::span<const uint8_t> payload);
+
+    /// Send goodbye and close gracefully.
+    asio::awaitable<void> close_gracefully();
+
+    /// Force close (cancel all pending ops).
+    void close();
+
+    /// Whether handshake has completed successfully.
+    bool is_authenticated() const { return authenticated_; }
+
+    /// Peer's signing public key (available after auth).
+    const std::vector<uint8_t>& peer_pubkey() const { return peer_pubkey_; }
+
+    /// Set message callback.
+    void on_message(MessageCallback cb) { message_cb_ = std::move(cb); }
+
+    /// Set close callback.
+    void on_close(CloseCallback cb) { close_cb_ = std::move(cb); }
+
+    /// Whether this connection was received as goodbye (graceful peer shutdown).
+    bool received_goodbye() const { return received_goodbye_; }
+
+private:
+    Connection(asio::ip::tcp::socket socket,
+               const identity::NodeIdentity& identity,
+               bool is_initiator);
+
+    /// Perform the full handshake (KEM + auth).
+    asio::awaitable<bool> do_handshake();
+
+    /// Run the message read loop after handshake.
+    asio::awaitable<void> message_loop();
+
+    /// Send a single encrypted frame over the socket.
+    asio::awaitable<bool> send_raw(std::span<const uint8_t> data);
+
+    /// Read a single raw message from the socket (length-prefixed).
+    asio::awaitable<std::optional<std::vector<uint8_t>>> recv_raw();
+
+    /// Send an encrypted frame.
+    asio::awaitable<bool> send_encrypted(std::span<const uint8_t> plaintext);
+
+    /// Receive and decrypt a frame.
+    asio::awaitable<std::optional<std::vector<uint8_t>>> recv_encrypted();
+
+    asio::ip::tcp::socket socket_;
+    const identity::NodeIdentity& identity_;
+    bool is_initiator_;
+    bool authenticated_ = false;
+    bool closed_ = false;
+    bool received_goodbye_ = false;
+
+    SessionKeys session_keys_;
+    uint64_t send_counter_ = 0;
+    uint64_t recv_counter_ = 0;
+    std::vector<uint8_t> peer_pubkey_;
+
+    MessageCallback message_cb_;
+    CloseCallback close_cb_;
+};
+
+} // namespace chromatin::net
