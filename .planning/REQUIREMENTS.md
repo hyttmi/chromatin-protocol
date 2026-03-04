@@ -55,8 +55,8 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Query
 
-- [ ] **QURY-01**: Client can request "give me namespace X since seq_num Y" and receive matching blobs
-- [ ] **QURY-02**: Client can request "list all namespaces" and receive namespace list
+- [x] **QURY-01**: Client can request "give me namespace X since seq_num Y" and receive matching blobs
+- [x] **QURY-02**: Client can request "list all namespaces" and receive namespace list
 
 ### ACK
 
@@ -135,8 +135,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DAEM-04 | Phase 2: Storage Engine | Complete |
 | NSPC-02 | Phase 3: Blob Engine | Complete |
 | NSPC-03 | Phase 3: Blob Engine | Complete |
-| QURY-01 | Phase 3: Blob Engine | Pending |
-| QURY-02 | Phase 3: Blob Engine | Pending |
+| QURY-01 | Phase 3: Blob Engine | Complete |
+| QURY-02 | Phase 3: Blob Engine | Complete |
 | ACKW-01 | Phase 3: Blob Engine | Complete |
 | TRNS-01 | Phase 4: Networking | Pending |
 | TRNS-02 | Phase 4: Networking | Pending |
