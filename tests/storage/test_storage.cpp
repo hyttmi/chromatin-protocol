@@ -5,6 +5,7 @@
 #include "storage/storage.h"
 #include "wire/codec.h"
 #include "crypto/hash.h"
+#include "identity/identity.h"
 
 namespace fs = std::filesystem;
 
@@ -87,7 +88,7 @@ TEST_CASE("Storage store and retrieve blob round-trip", "[storage]") {
     auto hash = compute_hash(blob);
 
     auto result = store.store_blob(blob);
-    REQUIRE(result == StoreResult::Stored);
+    REQUIRE(result.status == StoreResult::Status::Stored);
 
     auto retrieved = store.get_blob(
         std::span<const uint8_t, 32>(blob.namespace_id),
@@ -108,8 +109,8 @@ TEST_CASE("Storage deduplicates by content hash", "[storage]") {
 
     auto blob = make_test_blob(0x01, "duplicate me");
 
-    REQUIRE(store.store_blob(blob) == StoreResult::Stored);
-    REQUIRE(store.store_blob(blob) == StoreResult::Duplicate);
+    REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob).status == StoreResult::Status::Duplicate);
 }
 
 TEST_CASE("Storage has_blob returns correct results", "[storage]") {
@@ -153,7 +154,7 @@ TEST_CASE("Storage crash recovery -- data persists across close/reopen", "[stora
     // Store and close (destroy without explicit close)
     {
         Storage store(tmp.path.string());
-        REQUIRE(store.store_blob(blob) == StoreResult::Stored);
+        REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
     }
 
     // Reopen from same path -- data should be intact
@@ -197,9 +198,9 @@ TEST_CASE("Storage assigns monotonic seq_nums per namespace", "[storage][seq]") 
     auto blob2 = make_test_blob(0x01, "seq-2");
     auto blob3 = make_test_blob(0x01, "seq-3");
 
-    REQUIRE(store.store_blob(blob1) == StoreResult::Stored);
-    REQUIRE(store.store_blob(blob2) == StoreResult::Stored);
-    REQUIRE(store.store_blob(blob3) == StoreResult::Stored);
+    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
 
     // All 3 blobs retrievable via seq range query from 0
     auto results = store.get_blobs_by_seq(
@@ -454,4 +455,101 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
         std::span<const uint8_t, 32>(blob1.namespace_id), 0);
     REQUIRE(results.size() == 1);
     REQUIRE(results[0].data == blob2.data);
+}
+
+// ============================================================================
+// Plan 03-01: StoreResult struct, list_namespaces, duplicate seq_num
+// ============================================================================
+
+TEST_CASE("Storage store_blob returns seq_num and hash", "[storage][plan03]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x01, "seq-hash-test");
+    auto result = store.store_blob(blob);
+
+    REQUIRE(result.status == StoreResult::Status::Stored);
+    REQUIRE(result.seq_num == 1);
+
+    // blob_hash should be non-zero
+    std::array<uint8_t, 32> zero{};
+    REQUIRE(result.blob_hash != zero);
+}
+
+TEST_CASE("Storage duplicate returns existing seq_num", "[storage][plan03]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x01, "dup-seq-test");
+    auto first = store.store_blob(blob);
+    auto second = store.store_blob(blob);
+
+    REQUIRE(first.status == StoreResult::Status::Stored);
+    REQUIRE(second.status == StoreResult::Status::Duplicate);
+    REQUIRE(second.seq_num == first.seq_num);
+    REQUIRE(second.blob_hash == first.blob_hash);
+}
+
+TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Use two distinct identities for proper namespace_ids
+    auto id1 = chromatin::identity::NodeIdentity::generate();
+    auto id2 = chromatin::identity::NodeIdentity::generate();
+
+    // Create blobs with proper namespace IDs
+    chromatin::wire::BlobData blob1;
+    std::memcpy(blob1.namespace_id.data(), id1.namespace_id().data(), 32);
+    blob1.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
+    blob1.data = {'a', 'b', 'c'};
+    blob1.ttl = 604800;
+    blob1.timestamp = 1000;
+    blob1.signature.resize(4627, 0x42);
+
+    chromatin::wire::BlobData blob1b;
+    std::memcpy(blob1b.namespace_id.data(), id1.namespace_id().data(), 32);
+    blob1b.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
+    blob1b.data = {'d', 'e', 'f'};
+    blob1b.ttl = 604800;
+    blob1b.timestamp = 1001;
+    blob1b.signature.resize(4627, 0x42);
+
+    chromatin::wire::BlobData blob2;
+    std::memcpy(blob2.namespace_id.data(), id2.namespace_id().data(), 32);
+    blob2.pubkey.assign(id2.public_key().begin(), id2.public_key().end());
+    blob2.data = {'x', 'y', 'z'};
+    blob2.ttl = 604800;
+    blob2.timestamp = 1000;
+    blob2.signature.resize(4627, 0x42);
+
+    store.store_blob(blob1);
+    store.store_blob(blob1b);
+    store.store_blob(blob2);
+
+    auto namespaces = store.list_namespaces();
+    REQUIRE(namespaces.size() == 2);
+
+    // Find each namespace in the result
+    bool found_ns1 = false, found_ns2 = false;
+    for (const auto& ns_info : namespaces) {
+        if (ns_info.namespace_id == blob1.namespace_id) {
+            found_ns1 = true;
+            REQUIRE(ns_info.latest_seq_num == 2);  // 2 blobs stored
+        }
+        if (ns_info.namespace_id == blob2.namespace_id) {
+            found_ns2 = true;
+            REQUIRE(ns_info.latest_seq_num == 1);  // 1 blob stored
+        }
+    }
+    REQUIRE(found_ns1);
+    REQUIRE(found_ns2);
+}
+
+TEST_CASE("Storage list_namespaces empty on fresh storage", "[storage][plan03]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto namespaces = store.list_namespaces();
+    REQUIRE(namespaces.empty());
 }

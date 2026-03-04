@@ -14,10 +14,22 @@
 namespace chromatin::storage {
 
 /// Result of a store_blob operation.
-enum class StoreResult {
-    Stored,     ///< Blob successfully stored (new entry).
-    Duplicate,  ///< Blob already exists (content-addressed dedup).
-    Error       ///< Storage error occurred.
+struct StoreResult {
+    enum class Status {
+        Stored,     ///< Blob successfully stored (new entry).
+        Duplicate,  ///< Blob already exists (content-addressed dedup).
+        Error       ///< Storage error occurred.
+    };
+
+    Status status = Status::Error;
+    uint64_t seq_num = 0;
+    std::array<uint8_t, 32> blob_hash{};
+};
+
+/// Info about a namespace in storage.
+struct NamespaceInfo {
+    std::array<uint8_t, 32> namespace_id{};
+    uint64_t latest_seq_num = 0;
 };
 
 /// Clock function type for injectable time. Returns Unix timestamp in seconds.
@@ -76,6 +88,11 @@ public:
     std::vector<wire::BlobData> get_blobs_by_seq(
         std::span<const uint8_t, 32> ns,
         uint64_t since_seq);
+
+    /// List all namespaces in storage with their latest seq_num.
+    /// Scans the sequence sub-database using cursor jumps.
+    /// @return Vector of NamespaceInfo with namespace_id and latest_seq_num.
+    std::vector<NamespaceInfo> list_namespaces();
 
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.

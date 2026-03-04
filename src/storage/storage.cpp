@@ -190,13 +190,36 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
 
         // Check dedup: use 3-arg get with sentinel for not-found
         auto existing = txn.get(impl_->blobs_map, key_slice, not_found_sentinel);
-        if (existing.data() != not_found_sentinel.data() || existing.length() != 0 || existing.data() != nullptr) {
-            // Need a better check. The sentinel is an empty slice (null, 0).
-            // If get returns a non-null slice, the key was found.
-            if (existing.data() != nullptr) {
-                txn.abort();
-                return StoreResult::Duplicate;
+        if (existing.data() != nullptr) {
+            // Blob already exists -- find existing seq_num by scanning
+            uint64_t existing_seq = 0;
+            auto cursor = txn.open_cursor(impl_->seq_map);
+
+            // Scan from first entry for this namespace
+            auto lower = make_seq_key(blob.namespace_id.data(), 1);
+            auto seek = cursor.lower_bound(to_slice(lower));
+            while (seek.done) {
+                auto k = cursor.current(false).key;
+                if (k.length() != 40 ||
+                    std::memcmp(k.data(), blob.namespace_id.data(), 32) != 0) {
+                    break;
+                }
+                auto v = cursor.current(false).value;
+                if (v.length() == 32 &&
+                    std::memcmp(v.data(), hash.data(), 32) == 0) {
+                    existing_seq = decode_be_u64(
+                        static_cast<const uint8_t*>(k.data()) + 32);
+                    break;
+                }
+                seek = cursor.to_next(false);
             }
+
+            txn.abort();
+            StoreResult result;
+            result.status = StoreResult::Status::Duplicate;
+            result.seq_num = existing_seq;
+            result.blob_hash = hash;
+            return result;
         }
 
         // Store blob
@@ -221,11 +244,18 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
 
         txn.commit();
         spdlog::debug("Stored blob in namespace (seq={})", seq);
-        return StoreResult::Stored;
+
+        StoreResult result;
+        result.status = StoreResult::Status::Stored;
+        result.seq_num = seq;
+        result.blob_hash = hash;
+        return result;
 
     } catch (const std::exception& e) {
         spdlog::error("Storage error in store_blob: {}", e.what());
-        return StoreResult::Error;
+        StoreResult result;
+        result.status = StoreResult::Status::Error;
+        return result;
     }
 }
 
@@ -320,6 +350,95 @@ std::vector<wire::BlobData> Storage::get_blobs_by_seq(
     }
 
     return results;
+}
+
+std::vector<NamespaceInfo> Storage::list_namespaces() {
+    std::vector<NamespaceInfo> result;
+
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->seq_map);
+
+        auto first = cursor.to_first(false);
+        if (!first.done) {
+            return result;  // Empty database
+        }
+
+        while (true) {
+            auto key_data = cursor.current(false).key;
+            if (key_data.length() != 40) break;
+
+            // Extract namespace from key (first 32 bytes)
+            NamespaceInfo info;
+            std::memcpy(info.namespace_id.data(), key_data.data(), 32);
+
+            // Find the latest seq_num for this namespace:
+            // Seek to [namespace][0xFF..FF] -- the upper bound
+            auto upper_key = make_seq_key(info.namespace_id.data(), UINT64_MAX);
+            auto upper_result = cursor.lower_bound(to_slice(upper_key));
+
+            if (upper_result.done) {
+                // Check if this key is still in our namespace
+                auto k = cursor.current(false).key;
+                if (k.length() == 40 &&
+                    std::memcmp(k.data(), info.namespace_id.data(), 32) == 0) {
+                    info.latest_seq_num = decode_be_u64(
+                        static_cast<const uint8_t*>(k.data()) + 32);
+                } else {
+                    // It's in the next namespace; go back one
+                    auto prev = cursor.to_previous(false);
+                    if (prev.done) {
+                        auto pk = prev.key;
+                        if (pk.length() == 40 &&
+                            std::memcmp(pk.data(), info.namespace_id.data(), 32) == 0) {
+                            info.latest_seq_num = decode_be_u64(
+                                static_cast<const uint8_t*>(pk.data()) + 32);
+                        }
+                    }
+                }
+            } else {
+                // Past end of database -- last entry must be ours
+                auto last = cursor.to_last(false);
+                if (last.done) {
+                    auto lk = last.key;
+                    if (lk.length() == 40 &&
+                        std::memcmp(lk.data(), info.namespace_id.data(), 32) == 0) {
+                        info.latest_seq_num = decode_be_u64(
+                            static_cast<const uint8_t*>(lk.data()) + 32);
+                    }
+                }
+            }
+
+            result.push_back(info);
+
+            // Jump to next namespace: increment last byte of namespace_id
+            // Find next namespace by seeking to [namespace+1][0x00..00]
+            std::array<uint8_t, 32> next_ns = info.namespace_id;
+            bool carry = true;
+            for (int i = 31; i >= 0 && carry; --i) {
+                if (next_ns[i] < 0xFF) {
+                    next_ns[i]++;
+                    carry = false;
+                } else {
+                    next_ns[i] = 0;
+                }
+            }
+            if (carry) {
+                break;  // All 0xFF namespace -- no more possible
+            }
+
+            auto next_key = make_seq_key(next_ns.data(), 0);
+            auto next_result = cursor.lower_bound(to_slice(next_key));
+            if (!next_result.done) {
+                break;  // No more entries
+            }
+        }
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in list_namespaces: {}", e.what());
+    }
+
+    return result;
 }
 
 size_t Storage::run_expiry_scan() {
