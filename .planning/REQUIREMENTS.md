@@ -17,8 +17,8 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 ### Namespace
 
 - [x] **NSPC-01**: Namespace is derived as SHA3-256(pubkey) with no registration or authority
-- [ ] **NSPC-02**: Node verifies SHA3-256(pubkey) == claimed namespace on every write, rejects mismatches
-- [ ] **NSPC-03**: Node verifies ML-DSA-87 signature over (namespace || data || ttl || timestamp) on every write, rejects invalid
+- [x] **NSPC-02**: Node verifies SHA3-256(pubkey) == claimed namespace on every write, rejects mismatches
+- [x] **NSPC-03**: Node verifies ML-DSA-87 signature over (namespace || data || ttl || timestamp) on every write, rejects invalid
 
 ### Storage
 
@@ -60,7 +60,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### ACK
 
-- [ ] **ACKW-01**: Node acknowledges blob acceptance after local storage (write ACK)
+- [x] **ACKW-01**: Node acknowledges blob acceptance after local storage (write ACK)
 
 ### Daemon
 
@@ -133,11 +133,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STOR-05 | Phase 2: Storage Engine | Complete |
 | STOR-06 | Phase 2: Storage Engine | Complete |
 | DAEM-04 | Phase 2: Storage Engine | Complete |
-| NSPC-02 | Phase 3: Blob Engine | Pending |
-| NSPC-03 | Phase 3: Blob Engine | Pending |
+| NSPC-02 | Phase 3: Blob Engine | Complete |
+| NSPC-03 | Phase 3: Blob Engine | Complete |
 | QURY-01 | Phase 3: Blob Engine | Pending |
 | QURY-02 | Phase 3: Blob Engine | Pending |
-| ACKW-01 | Phase 3: Blob Engine | Pending |
+| ACKW-01 | Phase 3: Blob Engine | Complete |
 | TRNS-01 | Phase 4: Networking | Pending |
 | TRNS-02 | Phase 4: Networking | Pending |
 | TRNS-03 | Phase 4: Networking | Pending |
