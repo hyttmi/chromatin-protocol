@@ -133,6 +133,7 @@ add_library(chromatindb_lib STATIC
   src/engine/engine.cpp
   src/net/framing.cpp
   src/net/protocol.cpp
+  src/net/handshake.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -165,6 +166,7 @@ add_executable(chromatindb_tests
   tests/engine/test_engine.cpp
   tests/net/test_framing.cpp
   tests/net/test_protocol.cpp
+  tests/net/test_handshake.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE
