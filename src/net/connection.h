@@ -62,6 +62,9 @@ public:
     /// Whether handshake has completed successfully.
     bool is_authenticated() const { return authenticated_; }
 
+    /// Whether this is the initiator (outbound) side of the connection.
+    bool is_initiator() const { return is_initiator_; }
+
     /// Peer's signing public key (available after auth).
     const std::vector<uint8_t>& peer_pubkey() const { return peer_pubkey_; }
 
@@ -71,8 +74,18 @@ public:
     /// Set close callback.
     void on_close(CloseCallback cb) { close_cb_ = std::move(cb); }
 
+    /// Callback for post-handshake (before message loop starts).
+    using ReadyCallback = std::function<void(Connection::Ptr)>;
+
+    /// Set callback fired after handshake succeeds, before message loop.
+    /// This is where PeerManager should set up message routing and start sync.
+    void on_ready(ReadyCallback cb) { ready_cb_ = std::move(cb); }
+
     /// Whether this connection was received as goodbye (graceful peer shutdown).
     bool received_goodbye() const { return received_goodbye_; }
+
+    /// Remote peer address string (set at construction time).
+    const std::string& remote_address() const { return remote_addr_; }
 
 private:
     Connection(asio::ip::tcp::socket socket,
@@ -109,8 +122,11 @@ private:
     uint64_t recv_counter_ = 0;
     std::vector<uint8_t> peer_pubkey_;
 
+    std::string remote_addr_;
+
     MessageCallback message_cb_;
     CloseCallback close_cb_;
+    ReadyCallback ready_cb_;
 };
 
 } // namespace chromatin::net

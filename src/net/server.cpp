@@ -94,17 +94,35 @@ asio::awaitable<void> Server::accept_loop() {
             continue;
         }
 
+        // Check accept filter (PeerManager connection limit)
+        if (accept_filter_ && !accept_filter_()) {
+            spdlog::info("rejected inbound connection (max peers reached) from {}",
+                socket.remote_endpoint().address().to_string());
+            asio::error_code close_ec;
+            socket.close(close_ec);
+            continue;
+        }
+
         spdlog::info("accepted connection from {}",
             socket.remote_endpoint().address().to_string());
 
         auto conn = Connection::create_inbound(std::move(socket), identity_);
         connections_.push_back(conn);
 
-        conn->on_close([this](Connection::Ptr c, bool /*graceful*/) {
+        conn->on_close([this](Connection::Ptr c, bool graceful) {
             remove_connection(c);
+            if (on_disconnected_) on_disconnected_(c);
         });
 
-        asio::co_spawn(ioc_, conn->run(), asio::detached);
+        // Notify on_connected after handshake succeeds (before message loop)
+        conn->on_ready([this](Connection::Ptr c) {
+            if (on_connected_) on_connected_(c);
+        });
+
+        // Spawn run coroutine
+        asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+            co_await conn->run();
+        }, asio::detached);
     }
 }
 
@@ -139,16 +157,26 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
     auto conn = Connection::create_outbound(std::move(socket), identity_);
     connections_.push_back(conn);
 
-    conn->on_close([this, address](Connection::Ptr c, bool graceful) {
+    // Set on_close WITHOUT reconnect -- we handle reconnect after run() returns
+    conn->on_close([this](Connection::Ptr c, bool graceful) {
         remove_connection(c);
-        if (!draining_) {
-            // Reconnect (skip initial delay if peer sent goodbye)
-            asio::co_spawn(ioc_, reconnect_loop(address), asio::detached);
-        }
+        if (on_disconnected_) on_disconnected_(c);
+    });
+
+    // Notify on_connected after handshake succeeds (before message loop)
+    bool handshake_ok = false;
+    conn->on_ready([this, &handshake_ok](Connection::Ptr c) {
+        handshake_ok = true;
+        if (on_connected_) on_connected_(c);
     });
 
     auto ok = co_await conn->run();
-    if (!ok && !draining_) {
+    if (ok) {
+        // Connection ran and closed normally. Set up reconnect for bootstrap peers.
+        if (!draining_) {
+            asio::co_spawn(ioc_, reconnect_loop(address), asio::detached);
+        }
+    } else if (!handshake_ok && !draining_) {
         // Handshake failed -- reconnect
         remove_connection(conn);
         co_await reconnect_loop(address);
@@ -190,16 +218,23 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
         auto conn = Connection::create_outbound(std::move(socket), identity_);
         connections_.push_back(conn);
 
-        conn->on_close([this, address](Connection::Ptr c, bool graceful) {
+        conn->on_close([this](Connection::Ptr c, bool /*graceful*/) {
             remove_connection(c);
-            if (!draining_) {
-                asio::co_spawn(ioc_, reconnect_loop(address), asio::detached);
-            }
+            if (on_disconnected_) on_disconnected_(c);
+        });
+
+        // Notify on_connected after handshake succeeds (before message loop)
+        bool handshake_ok = false;
+        conn->on_ready([this, &handshake_ok](Connection::Ptr c) {
+            handshake_ok = true;
+            if (on_connected_) on_connected_(c);
         });
 
         auto ok = co_await conn->run();
-        if (ok) {
-            co_return; // Connection established and ran; on_close handles reconnect
+        if (ok || handshake_ok) {
+            // Connection ran and closed. Loop to reconnect.
+            delay_sec = 1;
+            continue;
         }
 
         remove_connection(conn);
@@ -214,8 +249,12 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
 asio::awaitable<void> Server::drain(std::chrono::seconds timeout) {
     spdlog::info("draining {} connections...", connections_.size());
 
+    // Take a snapshot of connections to avoid iterator invalidation
+    // (close_cb_ may call remove_connection() during iteration)
+    auto snapshot = connections_;
+
     // Send goodbye to all connections
-    for (auto& conn : connections_) {
+    for (auto& conn : snapshot) {
         if (conn->is_authenticated()) {
             co_await conn->close_gracefully();
         } else {

@@ -126,10 +126,14 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     peers_.push_back(info);
     peers_.back().sync_inbox.clear();
 
-    // Trigger sync on connect
-    asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-        co_await run_sync_with_peer(conn);
-    }, asio::detached);
+    // Only the initiator (outbound) side triggers sync on connect.
+    // The responder (inbound) side waits for SyncRequest from the peer.
+    // This avoids both sides sending SyncRequest simultaneously.
+    if (conn->is_initiator()) {
+        asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
+            co_await run_sync_with_peer(conn);
+        }, asio::detached);
+    }
 }
 
 void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
@@ -158,7 +162,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     if (type == wire::TransportMsgType_SyncRequest) {
         // Peer wants to sync with us -- handle as responder
         auto* peer = find_peer(conn);
-        if (peer) {
+        if (peer && !peer->syncing) {
             peer->sync_inbox.clear();  // Fresh sync session
             asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
                 co_await handle_sync_as_responder(conn);
@@ -311,7 +315,12 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     }
 
     // Phase C: Compute diffs and exchange blobs
-    // C1: Request blobs we're missing from peer
+    // First, compute all our missing hashes and send all BlobRequests.
+    // Then handle all incoming messages (both BlobTransfer responses and BlobRequests from peer).
+    // This avoids deadlock when both sides send BlobRequest simultaneously.
+
+    // C1: Send all BlobRequests up front
+    uint32_t pending_responses = 0;
     for (const auto& [ns, their_hashes] : peer_hashes) {
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
@@ -320,30 +329,28 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             continue;
         }
 
-        // Send BlobRequest (reuse hash_list encoding -- same wire format)
         auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
         if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
             peer->syncing = false;
             co_return;
         }
-
-        // Wait for BlobTransfer response
-        auto bt_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
-        if (bt_msg && bt_msg->type == wire::TransportMsgType_BlobTransfer) {
-            auto blobs = sync::SyncProtocol::decode_blob_transfer(bt_msg->payload);
-            auto s = sync_proto_.ingest_blobs(blobs);
-            total_stats.blobs_received += s.blobs_received;
-        }
+        pending_responses++;
         total_stats.namespaces_synced++;
     }
 
-    // C2: Handle incoming BlobRequests from peer (they may need our blobs)
-    // Drain any remaining messages in the inbox (BlobRequests from peer)
-    while (!peer->sync_inbox.empty()) {
-        auto msg = std::move(peer->sync_inbox.front());
-        peer->sync_inbox.pop_front();
-        if (msg.type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg.payload);
+    // C2: Process incoming messages (BlobTransfer responses + BlobRequests from peer)
+    // Loop until we've received all expected BlobTransfer responses and no more BlobRequests arrive
+    while (pending_responses > 0) {
+        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (!msg) break;
+
+        if (msg->type == wire::TransportMsgType_BlobTransfer) {
+            auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+            auto s = sync_proto_.ingest_blobs(blobs);
+            total_stats.blobs_received += s.blobs_received;
+            pending_responses--;
+        } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
             auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
             auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
             co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
@@ -351,10 +358,10 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         }
     }
 
-    // Also poll briefly for late-arriving BlobRequests
+    // C3: Handle any remaining BlobRequests from peer (they may still need our blobs)
     while (true) {
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
-        if (!msg) break;  // No more messages
+        if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
             auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
             auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
@@ -362,7 +369,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
             total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
         } else {
-            break;  // Unexpected message type, done
+            break;
         }
     }
 
@@ -425,6 +432,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
 
     // Phase C: Compute diffs, exchange blobs
+    // Same as initiator: send all BlobRequests first, then process responses + requests.
+    uint32_t pending_responses = 0;
     for (const auto& [ns, their_hashes] : peer_hashes) {
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
@@ -435,22 +444,22 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
         auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
         co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
-
-        auto bt_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
-        if (bt_msg && bt_msg->type == wire::TransportMsgType_BlobTransfer) {
-            auto blobs = sync::SyncProtocol::decode_blob_transfer(bt_msg->payload);
-            auto s = sync_proto_.ingest_blobs(blobs);
-            total_stats.blobs_received += s.blobs_received;
-        }
+        pending_responses++;
         total_stats.namespaces_synced++;
     }
 
-    // Handle incoming BlobRequests from peer
-    while (!peer->sync_inbox.empty()) {
-        auto msg = std::move(peer->sync_inbox.front());
-        peer->sync_inbox.pop_front();
-        if (msg.type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg.payload);
+    // Process incoming messages (BlobTransfer responses + BlobRequests from peer)
+    while (pending_responses > 0) {
+        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (!msg) break;
+
+        if (msg->type == wire::TransportMsgType_BlobTransfer) {
+            auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+            auto s = sync_proto_.ingest_blobs(blobs);
+            total_stats.blobs_received += s.blobs_received;
+            pending_responses--;
+        } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
             auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
             auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
             co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
@@ -458,6 +467,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         }
     }
 
+    // Handle any remaining BlobRequests from peer
     while (true) {
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;

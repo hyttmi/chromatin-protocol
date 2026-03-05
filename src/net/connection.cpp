@@ -10,7 +10,14 @@ Connection::Connection(asio::ip::tcp::socket socket,
                        bool is_initiator)
     : socket_(std::move(socket))
     , identity_(identity)
-    , is_initiator_(is_initiator) {}
+    , is_initiator_(is_initiator) {
+    // Capture remote address before any socket operations
+    asio::error_code ec;
+    auto ep = socket_.remote_endpoint(ec);
+    if (!ec) {
+        remote_addr_ = ep.address().to_string() + ":" + std::to_string(ep.port());
+    }
+}
 
 Connection::~Connection() {
     close();
@@ -373,6 +380,10 @@ asio::awaitable<bool> Connection::run() {
         if (close_cb_) close_cb_(self, false);
         co_return false;
     }
+
+    // Notify that handshake succeeded (before message loop).
+    // This allows PeerManager to set up message routing and start sync.
+    if (ready_cb_) ready_cb_(self);
 
     co_await message_loop();
 
