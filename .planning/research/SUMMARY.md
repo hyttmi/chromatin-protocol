@@ -1,229 +1,165 @@
 # Project Research Summary
 
-**Project:** chromatindb
-**Domain:** Decentralized post-quantum secure signed blob store daemon
-**Researched:** 2026-03-03
-**Confidence:** HIGH (stack verified via git tags; architecture patterns are mature and stable; features validated against IPFS/Hypercore/Nostr/etcd precedent)
+**Project:** chromatindb v2.0
+**Domain:** Closed node access control + larger blob support for decentralized PQ-secure database node
+**Researched:** 2026-03-05
+**Confidence:** HIGH
 
 ## Executive Summary
 
-chromatindb is a standalone daemon that forms a peer-to-peer network of signed blob stores. Each node holds cryptographically-owned namespaces — namespace = SHA3-256(pubkey) — replicates blobs across peers over post-quantum encrypted transport, and auto-expires data via TTL. The model is close to a Nostr relay (dumb storage, signed data, no app semantics) but with built-in node-to-node replication, PQ crypto throughout, and a TTL-first data model rather than permanent storage. Unlike IPFS or Hypercore there is no DHT — a deliberate constraint from previous project failures (chromatin-protocol and DNA messenger). Bootstrap + peer exchange is simpler, more reliable at the target scale, and entirely sufficient for the use case.
+chromatindb v2.0 is a focused extension of the v1.0 PQ-secure blob store daemon. The two core deliverables are a closed node model (pubkey whitelist) and support for blobs up to 100 MiB. Research confirms that both are achievable with zero new dependencies — every existing library handles the v2.0 requirements within its documented limits. The implementation is mechanical changes to a well-understood codebase, not greenfield work. libmdbx supports values up to ~2 GiB, FlatBuffers handles buffers up to ~2 GiB, ChaCha20-Poly1305 supports messages up to ~256 GiB, and the existing 4-byte frame length prefix supports frames up to ~4 GiB. All changes are constant bumps, config additions, and targeted logic changes in existing files.
 
-The recommended approach builds bottom-up in strict dependency order: crypto and wire format first (leaf dependencies needed by everything), then storage, then blob ingest logic, then the networking layer (Asio event loop + PQ-encrypted connections), then the peer system (discovery and sync). This order lets each layer be tested independently before the next is added, and keeps the hardest integration work — multi-node sync over PQ-encrypted transport — until after the foundation is solid and tested. The full stack is C++20 with CMake FetchContent: liboqs for all PQ crypto, a small audited AEAD+KDF library (not OpenSSL) for symmetric crypto, libmdbx for storage, FlatBuffers (or hand-packed binary if canonicality issues arise) for wire format, and standalone Asio for async TCP.
+The recommended approach is three sequential phases: source restructure first (namespace rename + move to /db), then access control, then larger blob support. The ordering is non-negotiable. The namespace rename touches every file mechanically and must precede feature work to avoid merge conflicts. Access control is architecturally simpler and higher-value, so it goes before blob size changes. Blob support has the most subtle changes (sync batching, potential storage architecture pivot) and benefits from a clean, already-restructured codebase.
 
-The dominant risks are: signing over non-deterministic FlatBuffers bytes (day-one design decision, protocol-breaking to fix), unauthenticated PQ transport (ML-KEM encrypts but does not authenticate — requires post-handshake ML-DSA-87 signed challenge, must be in v0.1), and ML-DSA-87 verification cost (~0.3ms/op) dominating sync throughput (requires a worker thread pool and verification result cache before any multi-peer testing). All three are well-understood, have clear mitigations, and are addressable if caught at the right phase.
+The primary risk is the storage architecture decision for large blobs: whether to keep blobs inline in libmdbx (simpler code, ACID) or move to external filesystem storage (avoids overflow page fragmentation and write amplification). This decision cascades into the sync protocol and expiry scan design. The secondary risk is the sync protocol memory budget — the current hash collection implementation loads full blob data just to compute hashes, which would cause OOM with 100 MiB blobs. Both must be resolved before any large blob implementation begins.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack is narrow and well-justified. Every choice has a specific rationale; nothing is included for convenience. C++20 provides the language features needed (Asio coroutines via `co_await`, `std::span`, constexpr) without Boost. liboqs is the only production-grade NIST-compliant PQ crypto library, proven in the PQCC project. OpenSSL is explicitly excluded — symmetric crypto (AES-256-GCM, key derivation from shared secrets) comes from a small, audited AEAD+KDF library yet to be selected. libmdbx provides single-writer/multi-reader MVCC with zero-copy mmap reads and automatic page reclamation (critical for TTL blob pruning), and is strictly better than LMDB for this use case. FlatBuffers is retained for zero-copy deserialization and schema evolution but is flagged as potentially replaceable with hand-packed binary if canonicality causes signing problems. Standalone Asio (not Boost.Asio) is header-only, provides async TCP with C++20 coroutine support, and handles sockets, timers, and signals in a single `io_context`. Always fetch the latest available versions via FetchContent.
+No new dependencies are required. The v1.0 stack handles v2.0 requirements natively. All changes are constant bumps and targeted code modifications in existing files. The build process is unchanged.
 
-**Core technologies:**
-- **C++20 / CMake + FetchContent**: Language and build — coroutines, concepts, no Boost. All deps pulled at configure time.
-- **liboqs (latest)**: PQ crypto — ML-DSA-87 signing/verification, ML-KEM-1024 key encapsulation, SHA3-256 hashing. No credible alternative.
-- **Small audited AEAD+KDF library (TBD, not OpenSSL)**: Symmetric crypto — AES-256-GCM channel encryption, session key derivation from ML-KEM shared secret. Minimal dep surface. Candidates: libsodium, monocypher.
-- **libmdbx (latest)**: Embedded storage — MVCC, zero-copy mmap reads, automatic page reclamation. Better than LMDB for TTL-heavy append-mostly workloads.
-- **FlatBuffers (latest)**: Wire format — zero-copy deserialization, schema evolution, deterministic encoding (with `ForceDefaults(true)`). Flagged as replaceable with hand-packed binary if issues arise.
-- **Standalone Asio (latest)**: Async TCP — C++20 `co_await` coroutines, single `io_context` for sockets, timers, and signals.
-- **xxHash/XXH3 (latest)**: Sync fingerprints — fast non-crypto hashing for O(1) "already in sync" check before hash-list exchange.
-- **Catch2, spdlog, nlohmann/json (latest)**: Testing, logging, config — standard, proven in previous projects.
+**Core technologies (unchanged from v1.0):**
+- `libmdbx`: blob storage — handles 100 MiB values natively via overflow pages; no changes to storage.cpp API
+- `libsodium` (ChaCha20-Poly1305): transport encryption — supports 100 MiB messages with no modification (~256 GiB max)
+- `FlatBuffers`: wire format — 32-bit offsets handle 100 MiB blobs; `FlatBufferBuilder` initial size needs dynamic sizing to avoid ~14 reallocation copies for large data
+- `liboqs` (ML-DSA-87, ML-KEM-1024): PQ handshake — already exposes `peer_pubkey_` after handshake; access control hooks naturally here
+- `nlohmann/json`: config — already parses arrays; `allowed_keys` is a new JSON array field, no new parser needed
+- `Asio`: networking — `async_read` handles variable-size payloads without changes; `asio::signal_set` (already in codebase) used for SIGHUP config reload
+
+**Critical constant changes:**
+- `MAX_FRAME_SIZE`: 16 MiB -> 110 MiB (100 MiB data + ~7.3 KiB PQ overhead + 16 B AEAD tag + ~10% headroom)
+- `FlatBufferBuilder` initial size: dynamic — `std::max(size_t(8192), blob.data.size() + 16384)`
+- New: `MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024` (constexpr protocol invariant, like TTL)
+- New: `MAX_HASHES_PER_REQUEST` (caps BlobRequest batch size in sync to bound responder memory)
 
 ### Expected Features
 
-The feature set is intentionally narrow. The node stores, verifies, replicates, and expires signed blobs. It has no knowledge of what blobs contain. Application semantics (messages, profiles, nicknames, conflict resolution) live in Layer 2 (Relay) and are out of scope for the database node.
+**Must have (table stakes — v2.0 core):**
+- `allowed_keys` config — JSON array of hex-encoded namespace IDs (SHA3-256 of pubkey, 64 hex chars); non-empty = closed mode, empty = open (backward compatible with v1.0)
+- Connection-level auth gating — reject unauthorized peers immediately after handshake in `Connection::run()`, before `on_ready` fires; denied peers never enter PeerManager state
+- Blob size limit enforcement — `MAX_BLOB_DATA_SIZE` checked as Step 0 in `BlobEngine::ingest()`, before signature verification (cheapest rejection)
+- Frame size increase — `MAX_FRAME_SIZE` bumped to 110 MiB to fit 100 MiB blob + protocol overhead
+- Sync blob transfer batching — split BlobRequests by `MAX_HASHES_PER_REQUEST` to prevent multi-hundred-MiB single-allocation sync messages; fix hash collection to not load blob data
 
-**Must have (table stakes — v0.1):**
-- Namespace model: SHA3-256(pubkey) = namespace, verified on every ingest — trust foundation
-- Blob storage with content-addressed dedup (SHA3-256 hash as blob ID)
-- ML-DSA-87 signature verification on every blob before storage
-- Sequence index per namespace (monotonic seq_num: "give me namespace X since seq Y")
-- TTL-based expiry with automatic background pruning (7-day default, TTL=0 permanent)
-- PQ-encrypted transport: ML-KEM-1024 key exchange + AEAD session, with ML-DSA-87 mutual authentication
-- TCP listener + outbound peer connections via Asio
-- Bootstrap peer discovery from JSON config
-- Hash-list diff sync (bidirectional) with seq_num incremental exchange
-- Write ACK (local confirmation)
-- JSON config, spdlog logging, signal handling, graceful shutdown
+**Should have (differentiators worth building):**
+- SIGHUP config reload — hot-reload `allowed_keys` without daemon restart; use `asio::signal_set` (already in codebase), not raw signal handlers (which would create thread safety issues)
+- Disconnect revoked peers — on config reload, iterate connected peers and close connections whose pubkey is no longer in `allowed_keys`; `close_gracefully()` pattern already exists
+- Memory-aware blob reception — validate declared frame length against `MAX_BLOB_DATA_SIZE + overhead` before allocating recv buffer; prevents forced 4 GiB allocation from malformed frame headers
 
-**Should have (competitive — v0.2):**
-- Peer exchange (PEX): learn about peers from peers, beyond just bootstrap
-- Resumable sync: persist per-peer sync progress, only exchange new blobs on reconnect
-- Write ACK with replication count: report how many peers confirmed a blob
-- XXH3 fingerprint fast-path: skip hash-list exchange when already in sync (O(1))
-- Rate limiting and blob size limits: per-peer and per-namespace abuse prevention
-- Storage statistics: namespace count, blob count, disk usage via query interface
-
-**Defer (v1.0+):**
-- Negentropy set reconciliation (O(diff) sync — verify C++ availability before committing)
-- Selective namespace replication (nodes choose which namespaces to mirror)
-- Admin interface for runtime peer management and config reload
-- Prometheus metrics endpoint
-
-**Anti-features (never build in the database node):**
-- DHT of any kind — proven unreliable in previous projects
-- Application semantics: messages, profiles, nicknames — Layer 2 concern
-- Conflict resolution or CRDT — Layer 2 concern
-- Human-readable namespaces — Layer 2/3 concern
-- Rich query language — blobs are opaque
-- Encrypted envelopes — payload encryption is Layer 2's job
-- Global consensus — single-writer namespaces need none
-- Capability delegation / access grants — Layer 2 concern
-- Built-in HTTP/REST API — wrong transport for a binary peer protocol
+**Defer (post-v2.0):**
+- Per-peer write restriction (read-only vs read+write) — adds config schema complexity; YAGNI for initial closed model
+- Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data in memory for signing regardless
+- Namespace-level ACLs — belongs in Layer 2 (Relay), not the database node
+- inotify-based config watching — SIGHUP is the correct Unix convention
 
 ### Architecture Approach
 
-The architecture is a single-process daemon: one Asio `io_context` on the main thread handles all socket IO, while CPU-heavy work (ML-DSA-87 verification, SHA3 hashing, storage writes) is dispatched to a fixed-size worker thread pool with results posted back via eventfd. This pattern keeps the event loop responsive under burst ingest — ML-DSA-87 verify takes ~0.3ms per op and cannot block the network thread. libmdbx enforces single-writer internally; a write queue accumulates incoming blobs and flushes them in batches to maximize transaction efficiency. Six build phases map directly to the dependency-ordered component hierarchy.
+The v1.0 architecture has exactly the right hooks for both features. The ML-DSA-87 handshake already sets `peer_pubkey_` before `on_ready` fires, making `Connection::run()` the correct access control check point. BlobEngine's 4-stage ingest pipeline accepts a size check as Step 0 with no structural changes. The sync protocol's existing `pending_responses` counter and BlobTransfer message type support the batching change without wire format modifications.
 
-**Major components:**
-1. **Crypto Layer** — liboqs + AEAD/KDF wrappers. Pure functions (bytes in, bytes out). Leaf dependency; no network or storage awareness.
-2. **Wire Format** — FlatBuffers schemas for Blob, ClientMessage, PeerMessage. Build-time artifact. Defines the wire contract.
-3. **Storage Layer** — libmdbx wrapper owning all four sub-databases (blobs, sequence, expiry, peers). Single component controls all transactions. Background expiry scanner runs on timer.
-4. **Blob Engine** — Ingest pipeline: namespace verification, signature verification (via worker pool), content-address dedup, seq_num assignment, store, query. No networking awareness.
-5. **Networking Layer** — Asio event loop, PQ-encrypted TCP connection (ML-KEM handshake + AEAD + ML-DSA-87 mutual auth), client listener, peer manager (bootstrap, connection pool, reconnect with backoff), worker thread pool.
-6. **Sync Engine** — Hash-list diff protocol, bidirectional. Reads per-peer sync state from storage, queries local seq index, sends SYNC_REQUEST / HASH_LIST / WANT / BLOBS. Resumable via persisted per-peer seq_num progress.
+**Major components and v2.0 changes:**
+1. `config::Config` — add `allowed_keys` (vector<string> of hex-encoded namespace IDs), parse from JSON array
+2. `net::Connection` — add `AccessPolicy` callback type, check after handshake in `run()` before `on_ready`; if not allowed, call `close()` and `close_cb_`, never fire `on_ready`
+3. `net::Server` — propagate access policy to each Connection on creation
+4. `peer::PeerManager` — build AccessPolicy lambda from config (O(1) unordered_set lookup); disable PEX when in closed mode (2-line change); handle SIGHUP via `asio::signal_set`; disconnect revoked peers on reload
+5. `engine::BlobEngine` — add `IngestError::too_large`, check `data.size()` as Step 0 in `ingest()`
+6. `net/framing.h` — bump `MAX_FRAME_SIZE` to 110 MiB
+7. `sync/sync_protocol.cpp` — fix hash collection to iterate seq_map cursor directly (no blob data load); send one BlobTransfer per blob (not batch); add `MAX_HASHES_PER_REQUEST` constant
 
-**Storage schema (4 sub-databases):**
-- `blobs`: key = [namespace:32][hash:32], value = FlatBuffers Blob. Primary store.
-- `sequence`: key = [namespace:32][seq_num:8], value = [hash:32]. Per-namespace efficient polling.
-- `expiry`: key = [expiry_timestamp:8][hash:32], value = [namespace:32]. Sorted for efficient batch pruning.
-- `peers`: key = [peer_id:32][namespace:32], value = [last_synced_seq:8][last_sync_time:8]. Resumable sync state.
-
-**Blob format on wire:**
-```
-Blob {
-  namespace:  [32B]     SHA3-256(pubkey)
-  pubkey:     [2592B]   ML-DSA-87 public key
-  data:       [bytes]   opaque payload
-  ttl:        u32       seconds until expiry (0 = permanent, default 604800)
-  timestamp:  u64       wall clock time of creation (unix seconds)
-  signature:  [4627B]   ML-DSA-87 sig over (namespace || data || ttl || timestamp)
-}
-Computed by node: hash = SHA3-256(blob content), seq_num = local monotonic per namespace
-```
+**Source restructure (prerequisite to all features):**
+- Move to `db/` directory layout; move `src/`, `tests/`, `schemas/`, `CMakeLists.txt`
+- Rename `chromatin::` namespace to `chromatindb::` across all ~73 files + FlatBuffers schemas + regenerate headers
+- Must be a single atomic commit, followed by clean build (`rm -rf build`) + full test run (155 tests)
 
 ### Critical Pitfalls
 
-1. **FlatBuffers non-determinism breaks signature verification** — Sign over a canonical byte string (`SHA3-256(namespace || data || ttl || timestamp)` as a fixed-size raw concatenation), NOT over the raw FlatBuffer bytes. The FlatBuffer is the transport envelope that carries the signature; it is not the signed content. Set `ForceDefaults(true)` on every FlatBufferBuilder always. Write a round-trip test: serialize, deserialize, re-serialize, compare bytes. Run in CI across platforms. This is a day-one design decision; retrofitting it requires a protocol version bump and breaks verification of all existing blobs.
+1. **Access control at the wrong layer** — Checking `allowed_keys` in `BlobEngine::ingest()` allows unauthorized peers to freely read all data (no access checks on get/list operations) and creates a DoS vector (full ML-KEM handshake CPU cost before rejection). Enforce in `Connection::run()` after `do_handshake()` sets `peer_pubkey_`, before `on_ready` fires. Never add access checks to the engine layer.
 
-2. **PQ transport encrypts but does not authenticate — MITM-trivial without post-handshake auth** — ML-KEM-1024 establishes a shared secret but does not prove who you are talking to. After the key exchange, both sides must sign the session fingerprint (`SHA3-256("chromatindb-v1" || shared_secret)`) with their ML-DSA-87 identity key, and each side verifies the peer's signature against a known or TOFU-pinned key. No plaintext fallback — not even behind a debug flag. Must be in v0.1; adding it later is protocol-breaking.
+2. **Memory exhaustion from sync hash collection** — `SyncProtocol::collect_namespace_hashes()` currently calls `get_blobs_since()` which loads full blob data just to compute 32-byte hashes. With ten 100 MiB blobs, this allocates ~2 GiB. Fix: rewrite to iterate the seq_map cursor directly and read only hash values, never loading blob data. This is a prerequisite that must be completed before bumping the blob size limit.
 
-3. **ML-DSA-87 verification cost stalls sync without a worker pool and cache** — Never verify signatures on the event loop thread. Dispatch to a worker thread pool (sized to `hardware_concurrency`). Add a verification result cache keyed by blob hash: once a blob is verified, never re-verify the same hash (blobs are immutable, content-addressed). Without the cache, syncing 10K blobs takes 3-30 seconds of CPU. The cache is ~50 LOC (in-memory LRU or small libmdbx sub-database).
+3. **libmdbx overflow page fragmentation** — 100 MiB values consume ~25,600 contiguous overflow pages. Allocating contiguous pages in a fragmented database is slow; expiry scanning many large blobs in one transaction can stress freelist management. Options: (a) store blob data externally on filesystem using content hash as filename (standard pattern in Git, IPFS, container registries), keeping only metadata in libmdbx; or (b) keep blobs in libmdbx and increase page size to 65536 bytes (16x fewer overflow pages, but requires database migration). This architectural decision must be made before Phase 3 implementation.
 
-4. **libmdbx single-writer serialization bottlenecks concurrent ingest** — Never issue one write transaction per blob. Accumulate blobs in a write queue, flush in batches (every 100ms or N blobs). One transaction with 100 puts is an order of magnitude faster than 100 single-put transactions. Design the write pipeline before writing storage code; retrofitting batch writes changes the concurrency model.
+4. **Sync timeout too short for large blobs** — The 30-second `SYNC_TIMEOUT` assumes small blobs. At 10 MB/s, three 100 MiB blobs hit the timeout exactly and sync permanently fails. Make the timeout adaptive based on estimated transfer size, or implement per-blob transfer with acknowledgments that create a natural progress heartbeat.
 
-5. **Timestamp-based TTL without clock validation enables abuse** — Reject blobs where `timestamp > now + 10 minutes` (prevents future-timestamp bypass of TTL). Apply an expiry grace period when pruning: `expiry_timestamp + 5 minutes < now` (absorbs NTP skew between nodes). Both validations belong in the ingest path from day one.
-
-6. **Permissionless namespace creation enables storage spam** — Anyone can generate keypairs and flood the node with valid-signature blobs. Mitigate with: configurable per-node storage quota (evict nearest-expiry first when approaching limit), per-namespace byte cap, configurable TTL ceiling (reject blobs with TTL above configured maximum), configurable namespace blocklist for node operators.
+5. **Source restructure build breakage** — CMakeLists.txt has hardcoded source file lists and FlatBuffers output paths. Moving files without updating all references causes linker errors. FlatBuffers schema namespace (`chromatin.wire`) must match C++ namespace or generated headers will be in the wrong namespace. Always do a clean build after restructuring, not incremental.
 
 ## Implications for Roadmap
 
-Research is explicit about build order: crypto and wire format are leaf dependencies everything else requires, so they come first. Storage precedes the blob engine. The blob engine must be testable without a network, so it precedes networking. Networking must exist before the peer system. Peer system and multi-node sync are the last and most complex integration. This order is not negotiable — it matches the dependency graph from ARCHITECTURE.md.
+Three phases are clearly implied by the architecture and dependency chain. The ordering reflects hard technical dependencies and risk minimization, not preference.
 
-### Phase 1: Foundation (Crypto, Wire Format, Config)
+### Phase 1: Source Restructure
+**Rationale:** Mechanical rename touches every file. Doing it first eliminates merge conflicts with all feature work. Zero functional risk — testable immediately against the existing 155-test suite. Must be a single atomic commit.
+**Delivers:** `db/` directory layout, `chromatindb::` namespace throughout all source files, regenerated FlatBuffers headers, all 155 tests passing after clean rebuild.
+**Avoids:** Pitfall 7 (CMakeLists stale builds from stale objects), Pitfall 11 (namespace cascade causing FlatBuffers schema mismatch)
+**Note:** If the namespace rename is not required by the milestone spec, skip it. Phase 1 becomes directory restructure only — much smaller scope.
 
-**Rationale:** Every other component depends on hashing (SHA3-256), signing (ML-DSA-87), or serialization (FlatBuffers). These have zero dependencies on anything else. Build and test them in isolation, get them right, and then treat them as stable. The canonical signing approach (sign a fixed byte concatenation, not FlatBuffer bytes) must be decided here — it is a protocol-breaking decision to change later.
-**Delivers:** liboqs C++ RAII wrappers (sign, verify, hash, kem_encaps, kem_decaps), AEAD+KDF wrappers for AES-256-GCM and key derivation, FlatBuffers schemas (Blob, ClientMessage, PeerMessage) with canonicality-verified blob format, nlohmann/json config parsing, spdlog setup, node identity (keypair + namespace derivation).
-**Addresses:** Namespace ownership model, blob format, wire contract, configuration.
-**Avoids (pitfall):** FlatBuffers non-determinism — canonical signing approach locked in, round-trip test written.
-**Research flag:** AEAD+KDF library selection is a concrete gap. Must choose (libsodium, monocypher, or other) before coding begins.
+### Phase 2: Access Control (Closed Node Model)
+**Rationale:** Higher-value primary deliverable; lower risk than blob size changes; modifies fewer files; establishes the `AccessPolicy` callback pattern cleanly before sync changes add complexity to PeerManager. Access control and blob support are functionally independent — doing access control first keeps each phase focused.
+**Delivers:** `allowed_keys` config field, connection-level gating in `Connection::run()`, PEX disabled in closed mode, SIGHUP reload via `asio::signal_set`, disconnect of revoked peers on reload.
+**Implements:** `config::Config` + `net::Connection` + `net::Server` + `peer::PeerManager` changes
+**Avoids:** Pitfall 1 (wrong layer), Pitfall 6 (SIGHUP raw signal handler thread safety), Pitfall 8 (TOCTOU — revoked peers disconnected promptly on reload)
 
-### Phase 2: Storage Engine
-
-**Rationale:** The blob engine needs storage to be complete, but storage can be tested with raw byte operations before the blob engine exists. libmdbx transaction discipline is subtle — getting it right in isolation prevents hard-to-diagnose bugs later. Per-node quotas and timestamp validation also live here.
-**Delivers:** libmdbx wrapper with all 4 sub-databases, typed CRUD for blobs/sequence/expiry/peers, write batch queue, timer-driven TTL expiry scanner, libmdbx geometry configuration (large upper bound), timestamp validation on ingest, per-node storage quota enforcement.
-**Addresses:** Blob storage, sequence index, TTL expiry, per-peer sync state, storage spam limits.
-**Avoids (pitfalls):** libmdbx write bottleneck (batch writes from the start), stale read transaction anti-pattern (RAII wrappers), geometry misconfiguration, timestamp abuse, storage spam.
-**Research flag:** Standard LMDB-style patterns, no research needed.
-
-### Phase 3: Blob Engine
-
-**Rationale:** Core business logic. Can be fully tested without sockets — feed blobs directly in unit tests. This validates the entire ingest pipeline (namespace check, sig verify, dedup, seq assign, store, query) before network complexity is introduced. Verification cache and worker thread pool design are established here.
-**Delivers:** Namespace verification (SHA3(pubkey) == namespace check — first validation, before sig verify), ML-DSA-87 signature verification dispatched to worker pool, verification result cache, content-addressed dedup, seq_num assignment, query interface (namespace + seq range, namespace listing).
-**Addresses:** Signature verification, dedup, sequence index queries, write ACK.
-**Avoids (pitfalls):** Sig verification on event loop thread (worker pool), missing verification cache.
-**Research flag:** Standard patterns, no research needed.
-
-### Phase 4: Networking Layer (Event Loop + PQ-Encrypted Connections)
-
-**Rationale:** The peer system requires encrypted connections and the event loop. The transport layer is independently testable (loopback echo, single-connection tests) before peer logic is added. The PQ handshake + mutual authentication is the security-critical component and must be correct before any real peer connections.
-**Delivers:** Asio `io_context` event loop, PQ-encrypted TCP connection (ML-KEM-1024 key exchange + AEAD channel + ML-DSA-87 mutual authentication), TCP listener for inbound connections, outbound connection initiation, worker thread pool integration, length-prefix message framing, per-IP connection limits.
-**Addresses:** PQ-encrypted transport, mutual authentication, concurrent connections, message framing, graceful shutdown, signal handling.
-**Avoids (pitfalls):** Unauthenticated transport (authentication built in from the start), no plaintext fallback, missing message framing.
-**Research flag:** Verify Asio C++20 coroutine API (`asio::co_spawn`, `asio::use_awaitable`, strand-based per-connection serialization) against current docs before implementation. MEDIUM confidence from research — the API details were not web-verified.
-
-### Phase 5: Peer System (Discovery + Sync)
-
-**Rationale:** Integrates everything: networking + blob engine + storage + crypto. Multi-node sync is the most complex component and the last to be added. Peer discovery (bootstrap) is simpler and comes first within this phase. Two-node loopback tests become possible here.
-**Delivers:** Peer manager (bootstrap from config, connection pool, reconnect with backoff), hash-list diff sync protocol (bidirectional, seq_num incremental — only exchange hashes since last sync checkpoint), per-peer sync state persistence (resumable), XXH3 fingerprint O(1) fast-path (skip hash exchange when fingerprints match).
-**Addresses:** Peer discovery, node-to-node sync, resumable sync (core).
-**Avoids (pitfalls):** Full hash-list exchange (seq_num incremental from the start), sync scaling, global sync anti-pattern (namespace-scoped, per-peer progress tracking).
-**Research flag:** Hash-list diff is well-understood, no research needed. Negentropy C++ availability needs verification before v1.0 upgrade decision — defer to v1.0 planning.
-
-### Phase 6: Integration and Hardening
-
-**Rationale:** Main daemon binary wiring, end-to-end multi-node integration tests, and hardening items (rate limiting, blob size limits, namespace blocklist) that require the full system to be meaningful.
-**Delivers:** `main.cpp` wiring all components, two-node loopback integration tests, multi-node sync convergence tests, TTL expiry integration test, rate limiting (per-peer and per-namespace), per-namespace storage quotas, namespace blocklist, peer exchange (v0.2), write ACK with replication count (v0.2).
-**Addresses:** Daemon lifecycle, graceful shutdown, storage spam mitigations, abuse prevention, v0.2 features.
-**Avoids (pitfalls):** Storage spam (quotas and limits enforced), per-IP connection limits.
-**Research flag:** Standard integration and hardening patterns, no research needed.
+### Phase 3: Larger Blob Support
+**Rationale:** Depends on Phase 1 for the clean namespace. Contains the highest-risk change (sync batching + storage architecture decision). Benefits from Phase 2 being complete so PeerManager changes don't conflict.
+**Delivers:** `MAX_FRAME_SIZE` = 110 MiB, `MAX_BLOB_DATA_SIZE` = 100 MiB constexpr, size check as Step 0 in `BlobEngine::ingest()`, fixed hash collection (seq_map cursor iteration, no blob data load), one-blob-per-transfer sync, adaptive sync timeout, dynamic `FlatBufferBuilder` initial sizing.
+**Uses:** libmdbx overflow pages or external filesystem storage (decision required before coding)
+**Avoids:** Pitfall 2 (sync OOM from hash collection and batch transfer), Pitfall 3 (libmdbx fragmentation), Pitfall 4 (sync timeout), Pitfall 5 (frame/blob size constant mismatch), Pitfall 9 (missing size validation in ingest)
 
 ### Phase Ordering Rationale
 
-- **Dependency-driven bottom-up**: Each phase only adds components that depend on all prior phases. No phase builds something requiring components not yet tested. This matches the explicit build order from ARCHITECTURE.md.
-- **Testability at every phase**: Phases 1-3 are fully testable without network sockets. Phase 4 is testable with loopback connections. Phase 5 requires two nodes (localhost). Phase 6 requires the complete daemon.
-- **Security-critical paths in early phases**: The canonical signing approach (Phase 1) and transport authentication (Phase 4) are the two highest-cost pitfalls to retrofit. Both are addressed before any complex logic is layered on top.
-- **No scope creep**: The anti-features list is long and explicit. Nothing from that list appears in any phase.
+- Phase 1 must be first: touching 73+ files for a mechanical rename while simultaneously adding features makes code review impossible and guarantees conflicts.
+- Phase 2 before Phase 3: access control modifies the handshake/connection layer; blob support modifies the engine/sync layer. Keeping them separate ensures each is auditable. Access control is also the primary v2.0 goal.
+- Phase 3 last: the sync protocol changes have the most subtle correctness requirements (pending_responses counter, one-blob-per-transfer invariant, adaptive timeouts). A clean, tested codebase reduces debugging burden.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 1:** AEAD+KDF library selection — need to identify a small, audited, FetchContent-compatible library for AES-256-GCM and HKDF/key-derivation that is not OpenSSL. Options to evaluate: libsodium (AES-256-GCM available, HKDF included, widely audited), monocypher (public domain, no deps, ChaCha20-Poly1305 natively, AES-256-GCM not native), or a header-only AEAD library. This is a concrete gap in the current research.
-- **Phase 4:** Asio C++20 coroutine API — MEDIUM confidence from research. Verify `asio::co_spawn`, `asio::use_awaitable`, and strand-based per-connection serialization against current Asio docs before coding.
+Needs resolution before coding Phase 3:
+- **Phase 3 — storage architecture:** Inline libmdbx (simpler code, ACID, ~25,600 overflow pages per 100 MiB blob, fragmentation risk) vs external filesystem (standard blob store pattern, eliminates overflow issues, adds two consistency domains). Must decide at phase planning time. Recommendation: if YAGNI applies, stay in libmdbx with page size increased to 65536; if correctness of expiry and fragmentation concern the operator, use external storage. This is the only open architectural question in the milestone.
 
-Phases with well-documented patterns (skip dedicated research):
-- **Phase 2:** libmdbx patterns are well-documented. Transaction discipline, geometry config, and RAII wrappers are standard LMDB-style usage.
-- **Phase 3:** Blob ingest is deterministic logic with known patterns from PQCC.
-- **Phase 5 (hash-list diff):** Set difference sync is a well-understood algorithm; implementation is mechanical.
-- **Phase 6:** Integration testing and hardening are standard practices.
+Standard patterns (no additional research needed):
+- **Phase 1:** Mechanical find-and-replace + CMake path updates. Well-understood.
+- **Phase 2:** Connection-gated access control after handshake is an established pattern (Quorum, Tendermint, strfry). All integration points are identified with specific file and function references. Config reload via `asio::signal_set` is already in the codebase.
+- **Phase 3 (except storage decision):** Frame size bump, engine size check, sync batching — all changes are identified with specific files, functions, and line-level rationale. No library unknowns.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All library categories verified. liboqs proven in PQCC. libmdbx, FlatBuffers, Asio are mature. One gap: AEAD+KDF library not yet selected — no OpenSSL. |
-| Features | MEDIUM-HIGH | Feature set informed by strong analogies (Nostr relay model, Hypercore seq_num, etcd TTL/ACK, BitTorrent PEX). Scope is narrow and well-defined by PROJECT.md constraints. |
-| Architecture | HIGH | All patterns described (Asio + worker pool, libmdbx single-writer, hash-list diff) are mature and stable. Build order follows a strict dependency graph. Specific Asio coroutine API details are MEDIUM confidence. |
-| Pitfalls | MEDIUM-HIGH | Most pitfalls are well-documented problems in libmdbx/liboqs/FlatBuffers ecosystems. ML-DSA-87 timing (~0.3ms on x86) is an estimate that needs hardware validation. |
+| Stack | HIGH | All constants verified against official docs and v1.0 source. libmdbx ~2 GiB limit, FlatBuffers ~2 GiB limit, ChaCha20 ~256 GiB limit — all confirmed. Zero new dependencies. |
+| Features | HIGH | Table stakes are direct analogs of patterns from strfry (pubkey whitelist), Quorum (disconnect after handshake), standard Unix daemons (SIGHUP). Anti-features are well-reasoned exclusions. |
+| Architecture | HIGH | Based on direct analysis of v1.0 source with line-level references. Integration points are specific file+function references, not estimates. |
+| Pitfalls | HIGH | Critical pitfalls derived from codebase analysis with specific line numbers (e.g., sync_protocol.cpp:26-44, connection.cpp:66-89). Hash collection OOM is a verifiable bug in current code. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **AEAD+KDF library selection**: PROJECT.md explicitly excludes OpenSSL. No specific library is named. Must be decided before Phase 1 coding begins. Candidates: libsodium (widely audited, AES-256-GCM + HKDF, larger footprint), monocypher (public domain, minimal, ChaCha20-Poly1305 natively — evaluate whether ChaCha20 is acceptable in place of AES-256-GCM). A concrete choice with rationale is needed before Phase 1 planning.
-- **FlatBuffers vs hand-packed binary**: If the canonical signing approach (sign a fixed-size byte concatenation, not the FlatBuffer bytes) is correctly implemented in Phase 1, FlatBuffers non-determinism becomes irrelevant for correctness. The question then becomes whether FlatBuffers is worth the dependency. Decision can be deferred to Phase 1 implementation — but must be decided then, not later.
-- **Asio coroutine API verification**: Training-data confidence on `asio::co_spawn` / `co_await` integration. Verify against current Asio docs before Phase 4.
-- **ML-DSA-87 timing on target hardware**: The ~0.3ms figure is a community x86 benchmark. Measure on actual deployment hardware to size the worker thread pool correctly.
-- **Negentropy C++ availability**: A C++ implementation exists (github.com/hoytech/negentropy) but maturity and FetchContent compatibility need verification before committing to it for the v1.0 sync upgrade.
+- **Storage architecture decision (Phase 3):** Research identifies the tradeoffs clearly but does not prescribe the final answer. The v1.0 YAGNI principle favors staying in libmdbx; correct large-blob engineering favors external storage. Decide explicitly before Phase 3 planning.
+
+- **Memory budget validation:** Peak memory with 100 MiB blobs is ~300-500 MiB per connection (4 copies of blob in flight during ingest). Research recommends documenting 4 GiB RAM minimum for nodes handling large blobs. Validate during Phase 3 integration testing.
+
+- **Namespace rename necessity:** Research flags the `chromatin::` -> `chromatindb::` rename as optional. If not required by milestone spec, skip it. Phase 1 scope drops from ~73 files to directory move + CMakeLists.txt updates only.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- liboqs, libmdbx, FlatBuffers, Asio, xxHash, Catch2, spdlog, nlohmann/json git repositories — all library versions verified via `git ls-remote --tags` on 2026-03-03
-- `.planning/PROJECT.md` — direct project requirements and constraints (including no-OpenSSL constraint, FlatBuffers-as-potentially-replaceable flag)
-- PQCC project experience — liboqs integration patterns proven in production, documented in project memory
-- ARCHITECTURE.md — libmdbx MVCC semantics from library header/docs; epoll/Asio patterns from Stevens/Kerrisk and Asio documentation; ML-KEM/ML-DSA parameters from NIST FIPS 203/204
+- [libmdbx C API docs](https://libmdbx.dqdkfa.ru/group__c__api.html) — `MDBX_MAXDATASIZE = 0x7FFF0000`, overflow page handling
+- [libmdbx GitHub](https://github.com/erthink/libmdbx) — page size defaults, geometry configuration, overflow page issue #192
+- [FlatBuffers Internals](https://flatbuffers.dev/internals/) — 32-bit offset limit ~2 GiB; FlatBuffers issues #7537, #7391 confirm limit
+- [libsodium ChaCha20-Poly1305 docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305) — IETF variant ~256 GiB per-message limit
+- [RFC 7539](https://datatracker.ietf.org/doc/html/rfc7539) — IETF AEAD construction, 32-bit block counter
+- [TOCTOU CWE-367](https://cwe.mitre.org/data/definitions/367.html) — revocation timing analysis
+- chromatindb v1.0 source code — direct analysis of all 40+ source/header files with line-level references
 
 ### Secondary (MEDIUM confidence)
-- IPFS, Hypercore, GunDB, Nostr, etcd, BitTorrent architectures — training data analysis informing feature prioritization and anti-pattern identification
-- FlatBuffers deterministic encoding limitations — training data, well-documented community issue
-- P2P networking patterns (bootstrap, PEX, hash-list diff) — training data from Bitcoin, Nostr, IPFS documentation
-- ML-DSA-87 ~0.3ms verification timing — community benchmarks, needs hardware validation
+- [strfry Nostr relay](https://github.com/hoytech/strfry) — pubkey whitelist and connection-level gating patterns
+- [Quorum p2p auth](https://github.com/ConsenSys/quorum/pull/897/files) — disconnect unauthorized peers after handshake
+- [SIGHUP convention](https://blog.devtrovert.com/p/sighup-signal-for-configuration-reloads) — Unix daemon reload pattern
+- [Reth libmdbx large value discussion](https://github.com/paradigmxyz/reth/issues/19546) — real-world large value usage (third-party, not official)
 
 ### Tertiary (LOW confidence)
-- Negentropy C++ implementation (hoytech/negentropy) maturity — needs direct verification before v1.0 planning
-- AEAD+KDF library landscape (libsodium vs monocypher vs alternatives) — gap in current research, needs dedicated evaluation
+- [p2panda access control](https://p2panda.org/2025/07/28/access-control.html) — CRDT-based ACL design, referenced as anti-pattern only
 
 ---
-*Research completed: 2026-03-03*
+*Research completed: 2026-03-05*
 *Ready for roadmap: yes*

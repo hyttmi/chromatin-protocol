@@ -1,248 +1,172 @@
-# Feature Research
+# Feature Landscape
 
-**Domain:** Decentralized post-quantum secure database node (signed blob store with replication)
-**Researched:** 2026-03-03 (revised from earlier libcpunkdb research, rescoped to chromatindb daemon)
-**Confidence:** MEDIUM (based on training data analysis of IPFS, Hypercore, GunDB, etcd, CockroachDB, BitTorrent, Nostr relay implementations; no web verification available)
+**Domain:** Closed node access control + larger blob support for decentralized PQ-secure database node
+**Researched:** 2026-03-05
+**Milestone:** v2.0
 
-**IMPORTANT SCOPE NOTE:** This research replaces the earlier FEATURES.md which was written for "libcpunkdb" -- an embeddable library with HLC, LWW conflict resolution, capability grants, profile namespaces, and encrypted envelopes. The project scope has narrowed to **chromatindb: an intentionally dumb database node daemon**. Application semantics (conflict resolution, messaging, profiles, encrypted envelopes) live in the future Relay layer (Layer 2), NOT in the database node. This file is scoped to Layer 1 only.
+## Table Stakes
 
-## Feature Landscape
+Features that are baseline expectations for a closed/private node model and larger blob support. Missing any of these makes the feature set feel broken or half-implemented.
 
-### Table Stakes (Users Expect These)
+| Feature | Why Expected | Complexity | Dependencies on Existing | Notes |
+|---------|--------------|------------|--------------------------|-------|
+| **Allowed-keys config** | Core of the closed node model. Without a pubkey whitelist there is no access control. Standard pattern in Nostr relays (strfry, nostr-rs-relay) and private p2p nodes (Quorum, Tendermint). | LOW | `config::Config` struct, `config::load_config()`, `config::parse_args()` | Add `std::vector<std::string> allowed_keys` to Config, parse from JSON config file. Hex-encoded pubkey strings (ML-DSA-87 pubkeys are 2592 bytes = 5184 hex chars). |
+| **Connection-level auth gating** | After handshake completes, `peer_pubkey()` is available. Check it against the allowed-keys list. Reject unauthorized peers immediately -- do not let them send blobs or query data. This is how every private p2p network works (Quorum, Tendermint, Bitcoin permissioned forks). | LOW | `Connection::run()` -> `do_handshake()` -> `ready_cb_`, `Server::set_accept_filter()`, `PeerManager::on_peer_connected()` | The handshake already reveals the peer's ML-DSA-87 pubkey. After auth succeeds, check against allowed_keys. If not allowed, send Goodbye and close. No protocol changes needed. |
+| **Open mode preservation** | If allowed_keys is empty/absent, node operates exactly as v1.0 (permissionless). Users who don't want access control should not be forced into it. | LOW | `config::Config` | Empty allowed_keys = open mode. Only enforce when list is non-empty. Zero behavior change for existing deployments. |
+| **Blob size limit enforcement** | Currently NO blob size check exists in the engine ingest path. The only limit is `MAX_FRAME_SIZE` (16 MiB) in the framing layer. For larger blobs (50-100 MiB), an explicit, configurable limit must exist in the engine, checked before expensive signature verification. | LOW | `engine::BlobEngine::ingest()`, `config::Config` | Add `max_blob_size` to Config (default 100 MiB). Check `blob.data.size()` as first step in ingest, before pubkey size check. Add `IngestError::too_large`. |
+| **Frame size increase** | `MAX_FRAME_SIZE` is currently 16 MiB. A 100 MiB blob with overhead (2592B pubkey + 4627B sig + 32B namespace + 12B ttl/timestamp) produces a FlatBuffer ~100 MiB. After AEAD encryption + FlatBuffer transport wrapping, the frame will exceed 16 MiB. Must increase to at least 128 MiB. | LOW | `net::MAX_FRAME_SIZE` in `framing.h`, `Connection::recv_raw()` | Single constexpr change. But must be coordinated with memory allocation strategy. |
+| **Blob transfer batching for sync** | `encode_blob_transfer()` currently packs ALL requested blobs into a single message. With 100 MiB blobs, a batch of even 2 blobs would be 200 MiB in a single allocation. Must send blobs one-at-a-time during sync for larger sizes. | MED | `sync::SyncProtocol::encode_blob_transfer()`, `PeerManager::run_sync_with_peer()`, `PeerManager::handle_sync_as_responder()` | Change sync protocol to send one BlobTransfer message per blob instead of batching all into one message. The receiver already has the hash list so it knows how many to expect. |
 
-"Users" here means relay operators and developers building Layer 2 on top of chromatindb. A node that lacks any of these is fundamentally broken as a decentralized blob store.
+## Differentiators
 
-| # | Feature | Why Expected | Complexity | Notes |
-|---|---------|--------------|------------|-------|
-| 1 | **Cryptographic namespace ownership** -- SHA3-256(pubkey) = namespace, verified on every write | Every comparable system (IPFS, Hypercore, Nostr) has some form of content/author verification. Without this, any peer can forge data and the entire trust model collapses | MEDIUM | Already designed. ML-DSA-87 sig check on every ingest. The pubkey is included in the blob so any node can verify independently |
-| 2 | **Blob storage and retrieval** -- store opaque signed blobs keyed by namespace + hash | This IS the product. IPFS stores content-addressed blocks, Hypercore stores append-only entries, etcd stores KV pairs. A storage node that cannot reliably store and retrieve data is not a storage node | LOW | libmdbx with namespace+hash as key. Content-addressed via SHA3-256. Deduplication is free from content addressing |
-| 3 | **Sequence index per namespace** -- monotonic seq_num for efficient polling | Every replication system needs a cursor mechanism. etcd has revision numbers, Kafka has offsets, Hypercore has seq numbers, Nostr relays track event timestamps. Without this, clients must re-fetch everything on every poll | LOW | Per-namespace counter assigned by receiving node. Enables "give me everything since seq N" queries |
-| 4 | **TTL and automatic expiry** -- blobs expire after TTL seconds, automatic pruning | Without expiry, append-only storage grows unboundedly. IPFS requires manual garbage collection + pinning. Hypercore never deletes. This is a known pain point in every persistent P2P system. TTL makes the system self-cleaning | MEDIUM | 7-day default, TTL=0 for permanent. Expiry index in libmdbx sorted by expiry timestamp. Background pruning thread |
-| 5 | **Peer discovery** -- bootstrap nodes + peer exchange | Every P2P system needs initial peer discovery. BitTorrent uses trackers + DHT + PEX, IPFS uses bootstrap + DHT, Hypercore uses DHT. Bootstrap + peer exchange is the simplest viable approach (no DHT complexity) | MEDIUM | Bootstrap list in config. Active peers exchanged periodically. Explicit design choice: no DHT (proven unreliable in previous projects) |
-| 6 | **Node-to-node sync** -- hash-list diff, bidirectional | The core replication mechanism. Without sync, nodes are isolated storage silos. IPFS uses Bitswap, Hypercore uses Merkle tree exchange, CockroachDB uses Raft log replication. Hash-list diff is the simplest correct approach | HIGH | Compare namespace hash-lists between peers, exchange missing blobs. Must handle: partial sync, resumption, TTL-expired blob exclusion. This is the most complex table-stakes feature |
-| 7 | **PQ-encrypted transport** -- ML-KEM-1024 key exchange + AES-256-GCM channel | Transport encryption is table stakes for any network daemon in 2026. TLS is the baseline; PQ-encryption is the project's raison d'etre. Without this, the "PQ-secure" claim is hollow | HIGH | Full handshake protocol: ML-KEM-1024 key encapsulation, derive AES-256-GCM session key, encrypted framing. Proven patterns from PQCC project |
-| 8 | **Write acknowledgement with replication count** -- confirm write, report how many nodes have it | Clients need confirmation that data was accepted and is being replicated. etcd returns write confirmation with quorum status. Without ACKs, writers are blind to whether their data persists | LOW | Immediate ACK on local store, async replication count updates. Simple: "stored locally, replicated to N peers" |
-| 9 | **Query interface** -- "give me namespace X since seq Y", "list namespaces" | The read API. Without a query interface, stored data is inaccessible. IPFS has the gateway API, etcd has range queries, Nostr relays have subscription filters. The query set is intentionally minimal (namespace + seq range) | LOW | Two primary queries: (1) fetch blobs by namespace since seq_num, (2) list known namespaces. No rich query language -- the database is intentionally dumb |
-| 10 | **Wire format with deterministic encoding** -- FlatBuffers for all messages | Blobs must be signed over a deterministic byte representation. If encoding is non-deterministic, the same logical blob produces different bytes and signatures fail to verify on other nodes. Protocol Buffers are explicitly ruled out for this reason | MEDIUM | FlatBuffers 25.12.19 with deterministic encoding. Wire format covers: blob submission, sync messages, query requests/responses, peer exchange |
-| 11 | **Graceful shutdown and crash recovery** -- clean state on restart | Any daemon must survive crashes without data corruption. libmdbx provides ACID transactions and crash safety, but the daemon must handle in-flight operations, partial syncs, and clean connection teardown | LOW | libmdbx handles storage crash safety. Daemon needs signal handling, connection draining, sync state persistence |
-| 12 | **Logging and observability** -- structured logging, basic health metrics | Operators need to know what their node is doing. Every production daemon (etcd, CockroachDB, IPFS) ships with logging and metrics. Without this, debugging production issues is impossible | LOW | spdlog for structured logging. At minimum: peer connections, sync events, storage stats, error rates. Metrics endpoint deferred but log everything |
-| 13 | **Configuration** -- bootstrap peers, storage path, bind address, TTL defaults | A daemon must be configurable. Hard-coded values are unacceptable for anything beyond a prototype | LOW | JSON config file (nlohmann/json). CLI flags for overrides. Sensible defaults for everything |
+Features that add real value beyond the minimum. Not expected but make the system notably better.
 
-### Differentiators (Competitive Advantage)
+| Feature | Value Proposition | Complexity | Dependencies on Existing | Notes |
+|---------|-------------------|------------|--------------------------|-------|
+| **SIGHUP config reload for allowed_keys** | Hot-reload the pubkey whitelist without restarting the daemon. Standard Unix daemon convention. Allows adding/removing authorized peers without downtime. Nostr relays (strfry) support plugin reloading; production daemons (nginx, HAProxy, sshd) all support SIGHUP reload. | MED | `config::load_config()`, `PeerManager`, Asio signal handling | Register SIGHUP handler via `asio::signal_set`. On signal, re-read config file, update allowed_keys atomically. Optionally disconnect peers whose keys were removed. The `Server` already has `asio::signal_set signals_` for SIGINT/SIGTERM -- extend it. |
+| **Disconnect revoked peers** | When allowed_keys changes via SIGHUP reload, actively disconnect peers whose pubkeys were removed from the list. Without this, revoked peers remain connected until they disconnect naturally. | MED | `PeerManager::peers_` (the connected peer list), SIGHUP reload | After reloading config, iterate `peers_`, compare each `connection->peer_pubkey()` against new allowed_keys. Send Goodbye to revoked peers. |
+| **Per-peer write restriction** | In closed mode, only peers in allowed_keys can write blobs. But a variant: allow some peers to read-only (sync/query) while others can read+write. Useful for relay nodes that should mirror data but not inject new blobs. | MED | `engine::BlobEngine::ingest()`, allowed_keys config | Extend allowed_keys config to specify permissions per key: `{"key": "...", "write": true}` vs `{"key": "...", "write": false}`. Engine checks before ingest. Adds config complexity. |
+| **Configurable max blob size via config** | Make `max_blob_size` a runtime config parameter rather than a compile-time constant. Different deployments have different needs (a relay-backing node might want 100 MiB, a lightweight mirror might want 10 MiB). | LOW | `config::Config`, `engine::BlobEngine` | Already planned in table stakes, but making it truly configurable (not just a new constexpr) is the differentiator. |
+| **Memory-aware blob reception** | For 100 MiB blobs, `recv_raw()` allocates `std::vector<uint8_t>(len)` where `len` could be 100+ MiB. On a memory-constrained node, this could cause allocation failure or OOM. Check available memory or use a capped allocation before reading the frame body. | MED | `Connection::recv_raw()` | Check declared frame length against `max_blob_size + overhead` before allocating the receive buffer. Reject with close if too large. This prevents a malicious peer from forcing a 4 GiB allocation (the frame length is uint32_t, max ~4 GiB). Currently only `MAX_FRAME_SIZE` caps this. |
 
-Features that set chromatindb apart from comparable systems. These are not expected, but they create real value.
+## Anti-Features
 
-| # | Feature | Value Proposition | Complexity | Notes |
-|---|---------|-------------------|------------|-------|
-| 1 | **Post-quantum cryptography throughout** -- ML-DSA-87 signing, ML-KEM-1024 transport, SHA3-256 hashing | No other decentralized storage system uses PQ crypto. IPFS uses Ed25519/RSA, Hypercore uses Ed25519, Nostr uses secp256k1. chromatindb is future-proof against quantum attacks. This is THE differentiator | Already scoped in table stakes | This is baked into the system at every level, not a bolt-on. The PQ overhead (large signatures: 4627 bytes; large pubkeys: 2592 bytes) is a deliberate tradeoff for quantum resistance |
-| 2 | **Ephemeral-by-default data model** -- TTL on all blobs | Every comparable system assumes data permanence. IPFS pins forever, Hypercore appends forever, CockroachDB stores forever. chromatindb's TTL-first design means storage is naturally bounded (write_rate x avg_TTL), nodes self-clean, and privacy improves (data doesn't persist indefinitely) | Already scoped in table stakes | Unique among decentralized storage. The "permanent" option (TTL=0) exists but is opt-in, not default |
-| 3 | **Intentionally dumb storage** -- no application semantics in the node | Most comparable systems leak application concerns into the storage layer: IPFS has IPNS/IPLD/DAGs, Hypercore has Hyperbee/Hyperdrive, GunDB has SEA/user system. chromatindb stores signed opaque blobs and nothing else. This makes it a clean foundation for any application layer | LOW (it's the absence of complexity) | The discipline is in what you do NOT build. The node has no knowledge of what blobs contain. This is a feature, not a limitation |
-| 4 | **Cryptographic namespace isolation** -- namespaces are mathematically derived, not registered | IPFS uses content addressing (no ownership), Nostr events are signed but stored globally (no namespace isolation), etcd has no namespace concept. chromatindb's SHA3-256(pubkey) namespace model means: no registration authority, no name collisions, cryptographic proof of ownership, and natural data partitioning for sync | Already scoped in table stakes | The elegance is that namespace = hash(pubkey) requires zero coordination between nodes. Any keypair creates a namespace immediately |
-| 5 | **Resumable bidirectional sync** -- pick up where you left off | Many P2P systems require full re-sync on reconnect (GunDB, older IPFS Bitswap). Per-peer sync state persistence means reconnecting peers only exchange what changed since last sync. Critical for bandwidth-constrained or intermittent connections | MEDIUM | Requires persisting per-peer sync progress (which namespace, which seq_num). Adds complexity to sync engine but massive efficiency gain |
-| 6 | **Simple peer model (no DHT)** -- bootstrap + peer exchange only | IPFS's Kademlia DHT is a major source of complexity and unreliability. BitTorrent's DHT works but adds enormous code. chromatindb's bootstrap + PEX model is radically simpler: connect to known peers, learn about new peers from them. Less resilient than DHT in theory, much more reliable in practice for small-to-medium networks | Already scoped in table stakes | Proven lesson from previous projects. DHT is an anti-feature (see below) |
+Features to explicitly NOT build for v2.0. Either YAGNI, wrong layer, or add too much complexity for the value.
 
-### Anti-Features (Deliberately NOT Building)
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Namespace-level ACLs** | The node already has namespace ownership via SHA3-256(pubkey). Adding a separate ACL per namespace is relay-layer logic. The database is intentionally dumb -- it stores blobs and verifies ownership. Namespace-level access decisions belong in Layer 2 (Relay). | Connection-level allowed_keys covers the actual use case: controlling WHO can talk to this node. |
+| **Streaming/chunked blob transfer** | Chunking a blob across multiple frames adds enormous protocol complexity (reassembly, partial failure, out-of-order chunks, resume). For 50-100 MiB files, single-frame transfer with adequate frame size works fine. Streaming makes sense at 1+ GiB; that is not this milestone. libmdbx supports values up to 1 GiB via overflow pages. | Increase `MAX_FRAME_SIZE` to 128 MiB. Send one blob per sync transfer message. If future needs exceed this, chunking is a separate milestone. |
+| **inotify-based config watching** | inotify fires on every file save, catching half-written config files. The standard Unix approach is explicit SIGHUP. Every production daemon uses SIGHUP, not inotify. | SIGHUP signal handler to reload config on demand. |
+| **Certificate-based auth / TLS** | Adding TLS or X.509 certificates would duplicate the existing PQ-encrypted transport. The handshake already does KEM key exchange + ML-DSA-87 mutual auth. Adding TLS means OpenSSL (explicitly out of scope) and redundant crypto layers. | The existing handshake IS the auth layer. Use `peer_pubkey()` from the handshake result. |
+| **Rate limiting per blob size** | Adds complexity for minimal gain in a closed node model. If you control who connects (allowed_keys), you trust those peers not to spam. Rate limiting is a hardening feature for open nodes -- not relevant for closed mode. | For v2.0, access control IS the rate limiting. If needed later, rate limiting is a separate hardening milestone. |
+| **Encrypted-at-rest blobs** | The data field is opaque to the node. If the relay/app layer wants encrypted payloads, it encrypts before writing to the node. The node does not need to know. Adding encryption-at-rest adds key management complexity to the database layer. | Relay encrypts data before writing blobs. Node stores them as-is. |
+| **Blob compression** | Compression before storage saves disk but adds CPU overhead on every ingest/retrieve. For a signed blob store, the data is opaque -- the node does not know if it is already compressed. Compressing encrypted data (from relay layer) yields zero savings. | Leave compression to the application layer. The node stores raw blobs. |
+| **Dynamic peer permissions (CRDT-based ACL)** | p2panda and similar projects use CRDTs for collaborative ACL management. This is massively complex and only makes sense for fully decentralized group management. chromatindb's closed node model is operator-controlled -- the node operator decides who connects, period. | Static config file with SIGHUP reload. The operator manages the list. |
 
-These are features that seem valuable but would damage the project. Each is a conscious decision informed by previous project failures or analysis of comparable systems.
-
-| # | Anti-Feature | Why Requested | Why Problematic | What to Do Instead |
-|---|-------------|---------------|-----------------|-------------------|
-| 1 | **DHT (Distributed Hash Table)** | Standard approach for P2P peer/content discovery (IPFS Kademlia, BitTorrent Mainline DHT) | Proven unreliable in previous projects (chromatin-protocol, DNA messenger). Requires routing tables, churn handling, NAT traversal, iterative lookups. Adds 5-10x complexity to peer layer. Small networks (<1000 nodes) don't benefit | Bootstrap nodes + peer exchange. Simpler, more reliable for target scale. If the network grows to need DHT, it can be added later without protocol changes |
-| 2 | **Application semantics** -- messages, profiles, nicknames, user accounts | Seems natural to add "just a little" app logic to the storage layer | Violates separation of concerns. Every app-level feature in the node makes it harder to use for different applications. GunDB's SEA user system, IPFS's IPLD, OrbitDB's access controllers all couple storage to specific use cases | Keep the node dumb. Application semantics belong in Layer 2 (Relay). The node stores blobs. Period |
-| 3 | **Conflict resolution / CRDT / LWW** | Multiple writers to same key need resolution | This is application-layer logic. Different applications need different resolution strategies (LWW, CRDT merge, manual resolution). Baking one strategy into the node limits all applications. The node stores ALL blobs; the application decides what they mean | Store all signed blobs. Let Layer 2 implement whatever conflict resolution it needs. The node has no concept of "conflicting" blobs |
-| 4 | **Human-readable namespaces** | Users want "alice" not "a3f8b2c1..." | Requires a naming authority or consensus mechanism (both add massive complexity). Petname/Zooko's triangle is unsolvable at the storage layer | Namespaces are SHA3-256(pubkey). Human-readable mapping is Layer 2/3 concern. Could be implemented as a well-known namespace that maps names to pubkeys |
-| 5 | **Rich query language** -- SQL, GraphQL, range queries on blob contents | Operators and developers want to query data | Blobs are opaque. The node has no schema knowledge. Adding a query language means: parsing blob contents (breaks opacity), indexing (storage overhead), schema management (complexity). This is exactly how scope creep kills projects | Two queries: (1) namespace X since seq Y, (2) list namespaces. Applications that need rich queries should build their own indexes in Layer 2 |
-| 6 | **Encrypted envelopes / E2E encryption** | Privacy: relay should not see blob contents | This is application-layer encryption. The node stores opaque bytes -- it already cannot interpret contents. Layer 2 can encrypt blob payloads before submitting to the node. Building envelope crypto into the node couples it to specific key exchange patterns | Transport is PQ-encrypted (ML-KEM-1024 + AES-256-GCM). Payload encryption is Layer 2's job. The node never looks inside blobs |
-| 7 | **Global consensus** | Consistency guarantees across the network | No shared mutable state to agree on. Each namespace is independently owned by one keypair. CockroachDB/etcd need consensus because multiple writers contend on shared state. chromatindb has single-writer namespaces (the owner's keypair) -- no contention, no consensus needed | Per-namespace ownership via cryptographic proof. Replication is eventual, not strongly consistent. This is simpler AND more correct for the use case |
-| 8 | **Capability delegation / access grants** | Let other keys write to your namespace | Adds complexity to the authorization layer: grant format, revocation, timing issues, chain-of-trust validation. This is application semantics. The node's auth model is simple: SHA3(pubkey) == namespace means you can write. That's it | Capability delegation is a Layer 2 feature. If a relay wants to let multiple keys write to a logical "space," it can manage that in its own namespace and the application layer interprets it |
-| 9 | **Schema enforcement / typed data** | Ensure blobs conform to expected structure | Blobs are opaque by design. Schema enforcement means the node must understand blob contents, which breaks the entire "intentionally dumb" architecture. Different applications will have different schemas | Blobs are bytes. Applications validate their own data. The node verifies signatures, not contents |
-| 10 | **Built-in HTTP/REST API** | Easy integration for web applications | HTTP adds a dependency (HTTP server library), attack surface (HTTP parsing vulnerabilities), and design constraints (request/response doesn't fit streaming sync well). The daemon speaks its own binary protocol over PQ-encrypted TCP | The wire protocol is FlatBuffers over PQ-encrypted TCP. If HTTP access is needed, a separate proxy/gateway (potentially part of Layer 2 Relay) can translate. Keep the node protocol clean |
-| 11 | **Automatic NAT traversal / hole punching** | Nodes behind NATs can't receive connections | NAT traversal (STUN/TURN/ICE) is enormously complex and unreliable. IPFS spends significant effort on this. For a server daemon, the assumption is: you have a reachable address, or you connect outbound to bootstrap nodes | Nodes that can't accept inbound connections still work: they connect outbound to peers and sync bidirectionally over those connections. Relay nodes with public IPs serve as meeting points |
-| 12 | **Sharding / partitioned storage** | Scale beyond single-node capacity | Sharding adds massive complexity: partition assignment, rebalancing, routing, partial failures. chromatindb nodes store what they choose to replicate. Selective replication by namespace IS the partitioning strategy, emergent rather than coordinated | Nodes choose which namespaces to replicate. Popular namespaces end up on more nodes. This is organic partitioning without coordination overhead |
-
-## Feature Dependencies (Build Order)
+## Feature Dependencies
 
 ```
-[PQ Crypto Layer] (ML-DSA-87, ML-KEM-1024, SHA3-256, AES-256-GCM)
-    |
-    +---> [Blob Format] (FlatBuffers schema, signing, verification)
-    |         |
-    |         +---> [Storage Engine] (libmdbx, namespace+hash keys, seq index, expiry index)
-    |         |         |
-    |         |         +---> [TTL Pruning] (background expiry scanner)
-    |         |         |
-    |         |         +---> [Query Interface] (namespace+seq queries, namespace listing)
-    |         |
-    |         +---> [Signature Verification] (verify-on-ingest pipeline)
-    |
-    +---> [PQ Transport] (ML-KEM-1024 handshake, AES-256-GCM framing)
-              |
-              +---> [Peer Connections] (TCP listener, outbound connections)
-                        |
-                        +---> [Peer Discovery] (bootstrap, peer exchange)
-                        |
-                        +---> [Sync Engine] (hash-list diff, bidirectional, resumable)
-                        |         |
-                        |         +---> [Write ACKs] (local + replication count)
-                        |
-                        +---> [Wire Protocol] (FlatBuffers messages over PQ-encrypted TCP)
+Allowed-keys config
+    -> Connection-level auth gating (needs the list to check against)
+    -> Open mode preservation (empty list = open)
+    -> SIGHUP config reload (needs the config to reload)
+        -> Disconnect revoked peers (needs SIGHUP + peer tracking)
 
-[Configuration] (JSON config, CLI flags) -- independent, needed by everything
-[Logging] (spdlog) -- independent, needed by everything
-[Daemon Lifecycle] (signal handling, graceful shutdown) -- independent, wraps everything
+Frame size increase
+    -> Blob size limit enforcement (must be checked before frame allocation)
+    -> Blob transfer batching (one-per-message instead of batch)
+
+Config max_blob_size
+    -> Blob size limit enforcement (engine uses the config value)
+    -> Memory-aware blob reception (connection uses the config value)
 ```
 
-### Dependency Notes
+## MVP Recommendation
 
-- **PQ Crypto before everything:** Every component depends on hashing (SHA3-256), signing (ML-DSA-87), or encryption (ML-KEM-1024/AES-256-GCM). This is the absolute foundation.
-- **Blob Format before Storage:** The storage schema (key layout, indexes) is derived from the blob format. Changing the blob format after data is stored is a breaking change.
-- **PQ Transport before Peer Connections:** All node-to-node communication is encrypted. No plaintext mode.
-- **Storage before Sync:** The sync engine reads from and writes to the local store. It needs the storage engine operational.
-- **Peer Discovery before Sync:** You need peers before you can sync with them.
-- **Sync before Write ACKs with replication count:** Replication count comes from sync confirmations.
-- **Configuration and Logging are cross-cutting:** Needed by every component from day one.
+**Priority 1 -- Access Control (core deliverable):**
+1. Allowed-keys config -- add to Config struct, parse from JSON
+2. Connection-level auth gating -- check peer_pubkey() after handshake, reject unauthorized
+3. Open mode preservation -- empty list = no enforcement
 
-## MVP Definition
+**Priority 2 -- Larger Blob Support (core deliverable):**
+4. Blob size limit enforcement -- add max_blob_size to Config, check in engine
+5. Frame size increase -- bump MAX_FRAME_SIZE to 128 MiB
+6. Blob transfer batching -- one blob per sync transfer message
 
-### Launch With (v0.1)
+**Priority 3 -- Polish (differentiators worth building):**
+7. SIGHUP config reload -- hot-reload allowed_keys without restart
+8. Disconnect revoked peers -- clean up connections after key revocation
+9. Memory-aware blob reception -- validate frame length before allocating
 
-Minimum viable database node -- what's needed to validate the concept of a working PQ-secure decentralized blob store.
+**Defer:**
+- Per-peer write restriction: adds config schema complexity, YAGNI for initial closed node model. Can be added later if relay nodes need read-only access.
+- Everything in anti-features: wrong layer, wrong time, or wrong approach.
 
-- [ ] **PQ Crypto layer** -- ML-DSA-87 sign/verify, SHA3-256, ML-KEM-1024 encaps/decaps, AES-256-GCM. Reuse patterns from PQCC project
-- [ ] **Blob format** -- FlatBuffers schema with: namespace, pubkey, data, ttl, timestamp, signature. Deterministic encoding for signing
-- [ ] **Signature verification on ingest** -- reject blobs where SHA3(pubkey) != namespace or signature is invalid
-- [ ] **Storage engine** -- libmdbx with blob storage (namespace+hash key), sequence index (namespace+seq -> hash), expiry index
-- [ ] **TTL expiry** -- background thread scans expiry index, removes expired blobs
-- [ ] **Query interface** -- fetch blobs by namespace since seq_num, list known namespaces
-- [ ] **PQ-encrypted transport** -- ML-KEM-1024 handshake, AES-256-GCM session, encrypted framing
-- [ ] **Peer connections** -- TCP listener for inbound, outbound connections to configured peers
-- [ ] **Bootstrap discovery** -- connect to configured bootstrap nodes on startup
-- [ ] **Basic sync** -- hash-list diff between connected peers, exchange missing blobs
-- [ ] **Write ACK** -- acknowledge blob acceptance (local store confirmation)
-- [ ] **Configuration** -- JSON config file for: bind address, storage path, bootstrap peers, default TTL
-- [ ] **Logging** -- spdlog structured logging for all operations
-- [ ] **Daemon lifecycle** -- signal handling, graceful shutdown, crash recovery via libmdbx ACID
+## Implementation Notes
 
-### Add After Validation (v0.2)
+### Access Control Integration Points
 
-Features to add once the core is working and validated with real usage.
+The existing code already has the perfect hook for connection-level auth gating. In `connection.cpp`, after `do_handshake()` succeeds and `peer_pubkey_` is populated, the `ready_cb_` fires. In `PeerManager::on_peer_connected()`, this is where the allowed_keys check belongs:
 
-- [ ] **Peer exchange (PEX)** -- learn about new peers from connected peers (beyond just bootstrap)
-- [ ] **Resumable sync** -- persist per-peer sync state, resume from last known position on reconnect
-- [ ] **Write ACK with replication count** -- track and report how many peers have confirmed a blob
-- [ ] **Sync fingerprinting** -- xxHash (XXH3) bucket fingerprints for faster sync negotiation before full hash-list exchange
-- [ ] **Storage statistics** -- namespace count, blob count, storage size, expiry rate. Expose via query interface
-- [ ] **Rate limiting** -- per-peer and per-namespace write rate limits to prevent abuse
-- [ ] **Blob size limits** -- configurable maximum blob size, reject oversized writes
+```
+Connection::run()
+  -> do_handshake() succeeds, peer_pubkey_ is set
+  -> ready_cb_(self) fires
+  -> PeerManager::on_peer_connected(conn)
+     -> NEW: if allowed_keys non-empty && conn->peer_pubkey() not in allowed_keys
+        -> conn->close_gracefully() (sends Goodbye)
+        -> return (don't add to peers_)
+```
 
-### Future Consideration (v1.0+)
+No protocol changes. No new wire messages. No changes to the handshake. The ML-DSA-87 pubkey from the handshake IS the identity check.
 
-Features to defer until the system is proven in production.
+### Larger Blob Size Considerations
 
-- [ ] **Negentropy set reconciliation** -- upgrade hash-list diff to O(diff) sync. Evaluate C++ availability first
-- [ ] **Selective namespace replication** -- configure which namespaces a node stores (currently: store everything you receive)
-- [ ] **Admin interface** -- runtime peer management, storage inspection, config reload without restart
-- [ ] **Metrics endpoint** -- Prometheus-style metrics export for production monitoring
-- [ ] **Pluggable storage backends** -- abstract storage interface beyond libmdbx (for testing, alternative deployments)
-- [ ] **Multi-listener** -- bind to multiple addresses/ports simultaneously
+**Current frame path:** Blob -> FlatBuffer encode -> TransportMessage wrap -> AEAD encrypt -> length-prefix frame
 
-## Feature Prioritization Matrix
+A 100 MiB blob produces approximately:
+- BlobData.data: 100 MiB
+- FlatBuffer overhead: ~7.3 KiB (pubkey 2592B + sig 4627B + namespace 32B + ttl 4B + timestamp 8B + FlatBuffer framing)
+- TransportMessage wrap: minimal (type byte + payload vector)
+- AEAD tag: 16 bytes
+- Frame header: 4 bytes
 
-| Feature | User Value | Implementation Cost | Priority | Phase |
-|---------|------------|---------------------|----------|-------|
-| PQ Crypto layer | HIGH | MEDIUM (reuse from PQCC) | P1 | v0.1 |
-| Blob format (FlatBuffers) | HIGH | MEDIUM | P1 | v0.1 |
-| Signature verification | HIGH | LOW | P1 | v0.1 |
-| Storage engine (libmdbx) | HIGH | MEDIUM | P1 | v0.1 |
-| TTL expiry | HIGH | LOW | P1 | v0.1 |
-| Query interface | HIGH | LOW | P1 | v0.1 |
-| PQ-encrypted transport | HIGH | HIGH | P1 | v0.1 |
-| Peer connections (TCP) | HIGH | MEDIUM | P1 | v0.1 |
-| Bootstrap discovery | HIGH | LOW | P1 | v0.1 |
-| Basic sync (hash-list diff) | HIGH | HIGH | P1 | v0.1 |
-| Write ACK (local) | MEDIUM | LOW | P1 | v0.1 |
-| Configuration (JSON) | MEDIUM | LOW | P1 | v0.1 |
-| Logging (spdlog) | MEDIUM | LOW | P1 | v0.1 |
-| Daemon lifecycle | MEDIUM | LOW | P1 | v0.1 |
-| Peer exchange (PEX) | MEDIUM | MEDIUM | P2 | v0.2 |
-| Resumable sync | MEDIUM | MEDIUM | P2 | v0.2 |
-| Replication count ACK | LOW | MEDIUM | P2 | v0.2 |
-| Sync fingerprinting (XXH3) | MEDIUM | MEDIUM | P2 | v0.2 |
-| Storage statistics | LOW | LOW | P2 | v0.2 |
-| Rate limiting | MEDIUM | LOW | P2 | v0.2 |
-| Blob size limits | MEDIUM | LOW | P2 | v0.2 |
-| Negentropy sync | MEDIUM | HIGH | P3 | v1.0+ |
-| Selective namespace replication | MEDIUM | MEDIUM | P3 | v1.0+ |
-| Admin interface | LOW | MEDIUM | P3 | v1.0+ |
-| Metrics endpoint | LOW | MEDIUM | P3 | v1.0+ |
+Total frame size: ~100.007 MiB. Well within a 128 MiB MAX_FRAME_SIZE.
 
-## Competitor Feature Analysis
+**libmdbx:** Supports values up to 1 GiB. Values larger than ~2 KiB use overflow pages (contiguous page sequences). A 100 MiB blob will occupy ~25,000 overflow pages (at 4 KiB page size). This is within libmdbx's design parameters but increases write amplification. The mmap geometry is already set to 64 GB upper bound.
 
-Analysis of how comparable systems handle the features chromatindb needs.
+**Memory pressure:** A single 100 MiB blob ingest path touches:
+1. `recv_raw()`: allocates vector<uint8_t>(~100 MiB) for ciphertext
+2. AEAD decrypt: allocates another ~100 MiB for plaintext
+3. TransportCodec::decode: parses in-place (FlatBuffers zero-copy)
+4. BlobData construction: copies data field (~100 MiB)
+5. Signature verification: reads from BlobData
+6. Storage: serializes to FlatBuffer again (~100 MiB) for storage
 
-| Feature | IPFS | Hypercore | GunDB | Nostr Relays | etcd | BitTorrent | chromatindb |
-|---------|------|-----------|-------|--------------|------|------------|-------------|
-| **Data model** | Content-addressed blocks (DAG) | Append-only log per feed | JSON graph | Signed events | Ordered KV pairs | Content-addressed pieces | Signed blobs in namespaces |
-| **Identity/ownership** | PeerID (Ed25519/RSA) | Feed keypair (Ed25519) | SEA user system | secp256k1 pubkey | None (cluster auth) | None | ML-DSA-87 pubkey -> namespace |
-| **Write verification** | Content hash check | Signature per entry | SEA signature | Signature per event | Raft consensus | Piece hash check | ML-DSA-87 sig + namespace check |
-| **Data expiry** | Manual GC + pinning | Never (append-only) | Never (persistent) | Relay-specific policy | TTL per key | Seeding-dependent | TTL on every blob (7d default) |
-| **Peer discovery** | Bootstrap + Kademlia DHT | Bootstrap + DHT | WebRTC signaling | Hardcoded relay URLs | Static cluster config | Tracker + DHT + PEX | Bootstrap + PEX |
-| **Sync/replication** | Bitswap (want/have) | Merkle tree diff | HAM gossip | REQ/EVENT subscription | Raft log replication | Piece exchange | Hash-list diff |
-| **Transport encryption** | TLS 1.3 / Noise | Noise protocol | None (WebRTC DTLS) | WSS (TLS) | TLS | None standard | ML-KEM-1024 + AES-256-GCM |
-| **Query model** | CID lookup, IPLD selectors | seq range per feed | Graph traversal | Filter subscriptions | Range queries on keys | Piece/file request | Namespace + seq range |
-| **Storage backend** | Badger/FlatFS | Random-access-storage | RAD (radix tree) | Varies (SQLite, etc) | bbolt (B+ tree) | Filesystem | libmdbx |
-| **Wire format** | Protobuf + CBOR | Custom binary | JSON | JSON (NIP-01) | Protobuf (gRPC) | Bencoded | FlatBuffers |
+Peak memory for one blob ingest: ~400 MiB (4 copies in flight). This is acceptable for a server daemon but worth documenting. The key mitigation is: only one blob is in-flight per connection at a time (sequential protocol), and the sync protocol sends one blob per transfer message.
 
-### Key Lessons from Comparable Systems
+### Config Schema for Allowed Keys
 
-**From IPFS:**
-- Content addressing is proven and reliable (adopt: SHA3-256 blob hashing)
-- DHT is the biggest source of complexity and reliability issues (avoid: no DHT)
-- Manual garbage collection + pinning is a terrible UX (adopt: automatic TTL expiry)
-- Bitswap's want/have protocol is effective for exchange (inform: hash-list diff design)
-- Multiple storage backends create maintenance burden (avoid: libmdbx only)
+```json
+{
+    "allowed_keys": [
+        "abcdef1234...",
+        "567890abcd..."
+    ],
+    "max_blob_size_mib": 100
+}
+```
 
-**From Hypercore:**
-- Per-feed append-only logs with sequence numbers work well (adopt: per-namespace seq_num)
-- Merkle tree verification provides integrity guarantees (consider: not needed when every blob is individually signed)
-- Never-delete policy causes unbounded growth (avoid: TTL-first design)
-- Sparse replication (only sync what you need) is valuable (future: selective namespace replication)
+Hex-encoded ML-DSA-87 public keys (5184 hex characters each). The config parser should validate key format (correct length, valid hex) at load time and reject the config if any key is malformed.
 
-**From GunDB:**
-- HAM (Hypothetical Amnesia Machine) conflict resolution is clever but complex (avoid: no conflict resolution in node)
-- WebRTC peer-to-peer works but is unreliable for server daemons (avoid: use TCP)
-- Offline-first with eventual sync is a good model (adopt: local-first with peer sync)
+Alternative considered and rejected: using SHA3-256(pubkey) as the namespace ID instead of the raw pubkey. The pubkey is what comes out of the handshake, so comparing against the raw pubkey avoids an extra hash operation per connection. Also, the operator who adds keys to the config will get them from the identity file, which stores the raw pubkey.
 
-**From Nostr Relays:**
-- Dumb relay model works: relays store events, clients interpret them (adopt: intentionally dumb node)
-- Subscription-based querying (REQ with filters) is effective (inform: query interface design)
-- No built-in replication between relays is a weakness (differentiate: built-in peer sync)
-- WebSocket-only transport limits deployment options (avoid: binary protocol over TCP)
-- NIP-77 Negentropy sync is the state of the art for set reconciliation (future: evaluate for v1.0+)
+## Complexity Assessment
 
-**From etcd:**
-- Write acknowledgement with quorum status is valuable (adopt: write ACK with replication count)
-- TTL/lease mechanism for key expiry is well-proven (adopt: TTL model)
-- Watch/subscribe for changes is useful (future: could add namespace change notifications)
+| Feature | Lines of Code (est.) | Risk | Touches |
+|---------|---------------------|------|---------|
+| Allowed-keys config | ~30 | LOW | config.h, config.cpp |
+| Connection-level auth gating | ~20 | LOW | peer_manager.cpp |
+| Open mode preservation | ~5 | LOW | peer_manager.cpp (conditional) |
+| Blob size limit enforcement | ~25 | LOW | engine.h, engine.cpp, config.h |
+| Frame size increase | ~5 | LOW | framing.h |
+| Blob transfer batching | ~60 | MED | sync_protocol.cpp, peer_manager.cpp |
+| SIGHUP config reload | ~40 | MED | server.cpp or main.cpp, peer_manager.cpp |
+| Disconnect revoked peers | ~25 | MED | peer_manager.cpp |
+| Memory-aware reception | ~15 | LOW | connection.cpp |
+| **Total (all features)** | **~225** | | |
 
-**From BitTorrent:**
-- PEX (Peer Exchange) is simple and effective (adopt: for v0.2)
-- Tracker + DHT + PEX layered discovery is resilient (adopt simplified: bootstrap + PEX)
-- Content-addressed pieces with hash verification work at massive scale (validates: content-addressed blob model)
+This is a small, focused milestone. The codebase hooks are already in place. The main risk is in blob transfer batching, which changes the sync protocol flow.
 
 ## Sources
 
-- IPFS documentation and architecture (ipfs.tech/docs) -- MEDIUM confidence (training data, not live-verified)
-- Hypercore protocol specification (docs.holepunch.to) -- MEDIUM confidence (training data)
-- GunDB documentation (gun.eco/docs) -- LOW confidence (training data, less familiar)
-- Nostr NIP specifications (github.com/nostr-protocol/nips) -- MEDIUM confidence (training data, well-studied)
-- etcd documentation (etcd.io/docs) -- MEDIUM confidence (training data, well-established system)
-- BitTorrent protocol specification (bittorrent.org/beps) -- MEDIUM confidence (training data, mature protocol)
-- CockroachDB architecture docs (cockroachlabs.com/docs) -- MEDIUM confidence (training data)
-- Project memory and PROJECT.md -- HIGH confidence (direct project context)
-- Previous project lessons (chromatin-protocol, DNA messenger, PQCC) -- HIGH confidence (documented in project memory)
-
----
-*Features research for: chromatindb -- decentralized PQ-secure database node (signed blob store with replication)*
-*Researched: 2026-03-03*
-*Scope: Layer 1 (database node) only. Application semantics are Layer 2 (Relay).*
+- [strfry Nostr relay](https://github.com/hoytech/strfry) -- write policy plugin architecture, pubkey whitelist patterns
+- [strfry plugins documentation](https://github.com/hoytech/strfry/blob/master/docs/plugins.md) -- event-level vs connection-level policy
+- [Nostr RS Relay (Start9)](https://docs.start9.com/0.3.5.x/service-guides/nostr/nostr-rs-relay.html) -- whitelist config requiring at least one pubkey
+- [Quorum p2p auth fix](https://github.com/ConsenSys/quorum/pull/897/files) -- disconnect unauthorized peers after handshake
+- [p2panda access control](https://p2panda.org/2025/07/28/access-control.html) -- CRDT-based ACL design (too complex for our use case)
+- [libmdbx README](https://github.com/erthink/libmdbx/blob/master/README.md) -- overflow pages, max value 1 GiB, performance characteristics
+- [SIGHUP convention](https://blog.devtrovert.com/p/sighup-signal-for-configuration-reloads) -- standard Unix daemon reload pattern
+- [Azure Blob Storage performance](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-performance-checklist) -- chunked transfer best practices
+- Existing codebase: connection.cpp (handshake exposes peer_pubkey_), framing.h (MAX_FRAME_SIZE), engine.cpp (no blob size check), sync_protocol.cpp (batch encoding)

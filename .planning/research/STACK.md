@@ -1,283 +1,265 @@
-# Stack Research
+# Technology Stack: v2.0 Closed Node Model + Larger Blobs
 
-**Domain:** Decentralized PQ-secure database node (standalone daemon)
-**Researched:** 2026-03-03
-**Confidence:** HIGH (versions verified via git tags, crypto stack proven in PQCC, storage/serialization well-established)
+**Project:** chromatindb v2.0
+**Researched:** 2026-03-05
+**Confidence:** HIGH (all claims verified against source code, official docs, and library limits)
 
-## Recommended Stack
+## Executive Summary
 
-### Core Technologies
+No new dependencies are needed. Both features (access control and larger blob support) are achievable through configuration changes and code modifications to the existing stack. The v1.0 architecture was well-chosen -- every existing library handles the v2.0 requirements natively.
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| C++20 | GCC 13+ / Clang 16+ | Language standard | Concepts, coroutines, ranges, std::span, constexpr improvements. C++20 is the sweet spot -- C++23 support still spotty on older compilers. User's system has GCC 15.2 and Clang 21.1, both fully C++20-capable |
-| CMake | 3.24+ | Build system | FetchContent improvements (FIND_PACKAGE_ARGS, OVERRIDE_FIND_PACKAGE), presets support. User has CMake 4.2.3. Already proven in previous projects |
-| liboqs | 0.15.0 | PQ crypto: ML-DSA-87, ML-KEM-1024, SHA3-256 | The only production-grade, NIST-compliant PQ crypto library. Implements all FIPS 203/204/205 algorithms. Already proven in PQCC project. No credible alternative exists |
-| OpenSSL | 3.x | AES-256-GCM symmetric encryption only | Hardware-accelerated AES-NI on x86. Only used for symmetric crypto -- PQ algorithms come from liboqs. System has 3.6.1 |
-| libmdbx | 0.13.11 | Embedded key-value storage engine | Zero-copy reads via mmap, ACID transactions, single-writer/multi-reader MVCC. Automatic page reclamation (critical for TTL-based blob pruning). Better crash recovery than LMDB. Native CMake support. Used by Erigon (Ethereum client) at scale |
-| FlatBuffers | v25.12.19 | Binary wire format and storage serialization | Zero-copy deserialization (pairs perfectly with libmdbx mmap reads), deterministic byte representation required for signing verification, native large byte vector support (4627-byte ML-DSA-87 signatures). Schema evolution for future compatibility |
-| Standalone Asio | 1.36.0 | Async TCP networking and event loop | Header-only, no Boost dependency. C++20 coroutine support via co_await. Proven TCP server/client with io_context event loop. Handles timers, signals, and socket I/O in a single event loop. The standard choice for C++ network daemons |
+## Recommended Stack Changes
 
-### Supporting Libraries
+### Zero New Dependencies
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| xxHash (XXH3) | 0.8.3 | Fast non-crypto hashing | Sync fingerprints for hash-list diff reconciliation. Speed matters here, not cryptographic strength. SHA3 remains the security hash |
-| Catch2 | v3.13.0 | Testing framework | Unit and integration tests. Mature, well-documented, supports BDD-style and data-driven tests |
-| spdlog | v1.17.0 | Structured logging | Operational and debug logging for a daemon. Fast, header-only option available, fmt-based formatting. Already used in previous projects |
-| nlohmann/json | v3.12.0 | JSON parsing | Config file parsing, debug/admin output. NOT for wire format (FlatBuffers handles that) |
+| Category | Decision | Rationale |
+|----------|----------|-----------|
+| Access control | Pure code change | Pubkey whitelist is a config array + one check after handshake. nlohmann/json already parses arrays (see `bootstrap_peers` pattern in config.cpp). |
+| Larger blobs | Constant + buffer changes | libmdbx supports values up to ~2 GiB. FlatBuffers supports buffers up to ~2 GiB. ChaCha20-Poly1305 supports messages up to ~256 GiB. Only frame size caps and buffer allocation hints need bumping. |
+| Config format | Keep nlohmann/json | Already handles string arrays. No reason to add TOML/YAML for one new field. |
 
-### Development Tools
+### Existing Components: What Changes
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| CMake FetchContent | Dependency management | All deps pulled at configure time. Pin exact versions via GIT_TAG. No system package dependencies |
-| clang-format / clang-tidy | Code quality | Enforce consistent style. clang-tidy catches C++20 anti-patterns, unused includes, modernization opportunities |
-| ASan + UBSan | Memory and undefined behavior safety | Compile with -fsanitize=address,undefined in debug builds. Memory bugs in crypto/database code are security vulnerabilities |
-| Valgrind | Heap analysis | Complement to ASan for leak detection. Cannot run simultaneously with ASan |
-| ctest | Test runner | CMake-integrated, runs Catch2 tests. Use `ctest --output-on-failure` |
+| Component | Current | Change To | Why |
+|-----------|---------|-----------|-----|
+| `MAX_FRAME_SIZE` (framing.h) | `16 * 1024 * 1024` (16 MiB) | `110 * 1024 * 1024` (110 MiB) | Must fit 100 MiB blob data + FlatBuffer overhead (~7.3 KiB) + AEAD tag (16 B). 110 MiB gives ~10% headroom. |
+| `FlatBufferBuilder` initial size (codec.cpp) | Fixed 8192 bytes | `std::max(size_t(8192), blob.data.size() + 16384)` | Avoids ~17 reallocations (each copying the full buffer) when encoding a 100 MiB blob. Builder doubles on overflow. |
+| `Config` struct (config.h) | No access control fields | Add `std::vector<std::string> allowed_keys`, `bool closed_mode = false` | Stores hex-encoded 32-byte namespace IDs (64 hex chars each). Empty vector = open mode (backward compatible). |
+| Blob size limit | No explicit limit (implicit 16 MiB from frame size) | Add `constexpr uint32_t MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024` | Checked in `BlobEngine::ingest()` before expensive ML-DSA-87 signature verification. |
+| Sync blob transfer (sync_protocol.cpp) | Packs all requested blobs into one message | Send one blob per `BlobTransfer` message when blob exceeds 1 MiB | Prevents multi-hundred-MiB messages that would exceed frame size and spike memory. |
 
-## Networking Deep Dive
+### Existing Components: No Changes Needed
 
-The biggest gap in previous research. chromatindb is now a standalone daemon, not a library. It needs:
-- TCP server: accept incoming peer connections
-- TCP client: initiate outbound connections to peers
-- Custom PQ handshake: ML-KEM-1024 key exchange, then AES-256-GCM encrypted channel
-- Concurrent connections: multiple peers simultaneously
-- Timers: TTL pruning, sync scheduling, connection keepalive
-- Signal handling: clean shutdown on SIGTERM/SIGINT
+| Component | Current Value | Why No Change |
+|-----------|---------------|---------------|
+| libmdbx geometry `size_upper` | 64 GiB | Max value size is ~2 GiB (`MDBX_MAXDATASIZE = 0x7FFF0000`). 100 MiB values use overflow pages automatically. 64 GiB holds ~640 max-size blobs -- sufficient for a closed node. |
+| libmdbx page size | Default 4096 | Overflow pages handle large values transparently. No page size tuning needed. |
+| Frame header format | 4-byte BE uint32 length prefix | Supports up to ~4 GiB frames. Well above 110 MiB max. |
+| ChaCha20-Poly1305 AEAD | IETF variant, max msg ~256 GiB | 100 MiB is trivial. No changes. |
+| AEAD nonce counter | uint64, per direction | At 100 MiB per frame, even 2^32 frames per session is safe. |
+| Asio recv_raw buffer | `std::vector<uint8_t> data(len)` | Single allocation up to 110 MiB. Acceptable for server daemon. |
+| nlohmann/json | v3.11.3 | Already supports array parsing. |
+| libmdbx | v0.13.11 | No new features needed. |
+| FlatBuffers | v25.2.10 | 32-bit offsets support up to ~2 GiB buffers. |
+| Asio | 1.38.0 | No new features needed. |
 
-### Why Standalone Asio
+## Detailed Technical Analysis
 
-**Use standalone Asio (not Boost.Asio).** The standalone version is header-only, no Boost dependency, identical API. Version 1.36.0 is current (verified via git tags).
+### 1. Access Control: Config and Check Point
 
-Rationale:
-1. **C++20 coroutines**: `asio::co_spawn` + `co_await` makes async TCP code readable without callback hell. The PQ handshake sequence (send KEM ciphertext, receive shared secret, derive session keys, switch to encrypted channel) maps cleanly to sequential coroutine code
-2. **Single event loop**: `asio::io_context` handles sockets, timers, and signals in one thread or a thread pool. No separate event loop library needed
-3. **Raw TCP**: Asio gives raw `tcp::socket` and `tcp::acceptor` -- no HTTP/WebSocket overhead. chromatindb needs a custom binary protocol (FlatBuffers over TCP), not HTTP
-4. **Mature and proven**: Used by virtually every non-trivial C++ network application. Beast (HTTP) and gRPC both build on Asio
-5. **Timer support**: `asio::steady_timer` for scheduling sync rounds, TTL pruning, and keepalive pings
-6. **Strand-based concurrency**: `asio::strand` serializes handlers per-connection without manual locking
+**No new libraries.** This is a config struct addition + one conditional check.
 
-### Why NOT the alternatives
+**Config format -- use namespace IDs, not full pubkeys:**
 
-| Alternative | Why Not For This Project |
-|-------------|--------------------------|
-| libuv | C library, not C++. Would need manual C++ wrapper. No coroutine support. More boilerplate for the same functionality |
-| liburing / io_uring directly | Linux-only. Maximum performance but chromatindb doesn't need millions of connections -- tens to hundreds of peers. Asio can use io_uring as a backend on Linux anyway |
-| Raw epoll + POSIX sockets | More code, more bugs, reinventing what Asio already provides. No timer/signal integration |
-| Boost.Beast | HTTP/WebSocket library built on Boost.Asio. chromatindb doesn't need HTTP at Layer 1 |
-| gRPC | Forces HTTP/2 + Protobuf. Wrong fit for custom PQ-encrypted binary protocol |
-| libp2p | DHT-centric P2P framework. Project explicitly avoids DHT. Too much irrelevant complexity |
-| ZeroMQ | Message queue patterns (pub/sub, req/rep). Not a raw TCP library. Wrong abstraction level |
-
-### Asio Integration Pattern
-
-```cmake
-FetchContent_Declare(asio
-  GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-  GIT_TAG asio-1-36-0)
-FetchContent_MakeAvailable(asio)
-
-# Asio is header-only, create interface target
-add_library(asio INTERFACE)
-target_include_directories(asio INTERFACE ${asio_SOURCE_DIR}/asio/include)
-target_compile_definitions(asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
-# Enable C++20 coroutine support
-target_compile_definitions(asio INTERFACE ASIO_HAS_CO_AWAIT)
+```json
+{
+  "closed_mode": true,
+  "allowed_keys": [
+    "a1b2c3d4e5f6...64-hex-chars...namespace-id-1",
+    "f0e1d2c3b4a5...64-hex-chars...namespace-id-2"
+  ]
+}
 ```
 
-### Coroutine-Based Connection Pattern
+ML-DSA-87 public keys are 2,592 bytes = 5,184 hex characters. Namespace IDs (SHA3-256 of pubkey) are 32 bytes = 64 hex characters. Using namespace IDs because:
+- 64 chars per entry vs 5,184 -- manageable in a config file
+- The namespace IS the canonical identity in chromatindb
+- The handshake already verifies the pubkey; config just gates which identities are allowed
+- The check is: `SHA3-256(peer_pubkey) in allowed_set?` -- computed at runtime
+
+**Check point:** `PeerManager::on_peer_connected()`. This fires after the PQ handshake succeeds (via `ready_cb_`), when `peer_pubkey_` is available. If the peer's derived namespace is not in the allowed set, call `close_gracefully()` immediately.
+
+Why NOT check during handshake:
+- Handshake code (`Connection::do_handshake()`) is untouched -- clean separation
+- The handshake must complete to learn the peer's pubkey
+- Access control is a policy decision (PeerManager), not a protocol decision (Connection)
+
+**Data structure for lookup:** `std::unordered_set<std::string>` of hex-encoded namespace IDs. Parsed once at config load. O(1) lookup per connection attempt.
+
+### 2. libmdbx: Large Value Storage
+
+**Confidence: HIGH** -- verified via [libmdbx C API docs](https://libmdbx.dqdkfa.ru/group__c__api.html) and [source](https://github.com/erthink/libmdbx/blob/master/mdbx.h).
+
+**Max value size:** `MDBX_MAXDATASIZE = 0x7FFF0000` = 2,147,418,112 bytes (~2 GiB). A 100 MiB value is 4.7% of this limit.
+
+**How it works:** Values larger than one page (4,096 bytes) are stored using "overflow pages" -- contiguous sequences of pages allocated for a single value. This is transparent to the application; `txn.upsert()` and `txn.get()` work identically for 1 KiB and 100 MiB values.
+
+**Performance characteristics for 100 MiB values:**
+- **Write:** Allocates ~25,600 contiguous overflow pages, writes in a single ACID transaction. Slower than small writes but transactional.
+- **Read:** Returns an `mdbx::slice` pointing into the mmap'd file. Zero-copy read. OS pages in the 100 MiB range on demand.
+- **Expiry/delete:** Frees the overflow pages. libmdbx's page reclamation (GC) handles this automatically.
+
+**No code changes to storage.cpp.** The existing `txn.upsert()` / `txn.get()` calls handle 100 MiB values without modification.
+
+**Database size consideration:** With `size_upper = 64 GiB` and 100 MiB blobs, the database holds ~640 max-size blobs. For a closed node (private data), this is likely sufficient. If more capacity is needed, bump `size_upper` -- this is a runtime parameter, no recompile needed.
+
+### 3. FlatBuffers: Large Buffer Encoding
+
+**Confidence: HIGH** -- verified via [FlatBuffers internals docs](https://flatbuffers.dev/internals/).
+
+FlatBuffers uses 32-bit offsets (`uoffset_t = uint32_t`). Maximum buffer size is `2^31 - 1` bytes (~2 GiB). A 100 MiB blob is 4.7% of this limit.
+
+**`CreateVector` for large data:** `builder.CreateVector(data.data(), data.size())` copies the data into the builder's internal buffer. For 100 MiB:
+
+1. Builder starts with `initial_size` bytes (currently 8,192)
+2. On overflow, doubles the buffer and copies everything
+3. With 8 KiB initial: 8K -> 16K -> 32K -> ... -> 128M = 14 reallocations, each copying increasing amounts
+
+**Fix:** Set initial buffer size dynamically:
+```cpp
+size_t initial = std::max(size_t(8192), blob.data.size() + 16384);
+flatbuffers::FlatBufferBuilder builder(initial);
+```
+
+This eliminates all reallocations for the data vector. The 16 KiB headroom covers FlatBuffer metadata, pubkey (2,592 B), signature (up to 4,627 B), and alignment padding.
+
+**Memory during encode:** Peak is ~2x blob size (builder buffer + returned `std::vector<uint8_t>`). For 100 MiB: ~200 MiB peak. Acceptable for a server daemon.
+
+**Decode side:** `decode_blob` receives a `std::span<const uint8_t>` pointing to the FlatBuffer data. FlatBuffers verification (`VerifyBlobBuffer`) is O(n) in buffer size. For 100 MiB this takes a few milliseconds -- negligible compared to ML-DSA-87 signature verification.
+
+### 4. Network Framing: MAX_FRAME_SIZE
+
+**Confidence: HIGH** -- verified via code review of framing.h/framing.cpp.
+
+The 4-byte big-endian uint32 length prefix supports frames up to ~4 GiB. The `MAX_FRAME_SIZE` constant is a policy limit, not a protocol limit.
+
+**New value: 110 MiB.** Calculation:
+- 100 MiB blob data (user payload)
+- 2,592 bytes ML-DSA-87 pubkey
+- up to 4,627 bytes ML-DSA-87 signature
+- 32 bytes namespace ID
+- 12 bytes TTL + timestamp
+- ~100 bytes FlatBuffer framing (blob + transport wrapper)
+- 16 bytes AEAD tag
+- Total: ~100.007 MiB + AEAD tag
+
+110 MiB provides ~10% headroom. This is a single `constexpr` change.
+
+**recv_raw impact:** `Connection::recv_raw()` allocates `std::vector<uint8_t>(len)` for each frame. A 100 MiB frame means a single 100 MiB heap allocation. This is fine because:
+- Sequential sync protocol: only one blob in flight per connection at a time
+- Server daemon: not memory-constrained like embedded systems
+- At max 32 peers: worst-case ~3.5 GiB if all peers send max frames simultaneously (extremely unlikely; TCP flow control throttles this)
+
+### 5. ChaCha20-Poly1305 AEAD Limits
+
+**Confidence: HIGH** -- verified via [libsodium AEAD docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305).
+
+The IETF ChaCha20-Poly1305 variant (used by libsodium) has a maximum message size of `64 * (2^32) - 64` bytes = ~256 GiB. A 100 MiB message is 0.04% of this limit. No changes needed.
+
+Nonce counter: the codebase uses `uint64_t` counters per direction. Even with maximum-size frames (110 MiB), the counter would overflow after ~1.7 exabytes transferred on a single connection session. No risk.
+
+### 6. Sync Protocol: Large Blob Transfer
+
+**Current problem:** `encode_blob_transfer` packs ALL requested blobs into a single message:
+```cpp
+for (const auto& blob : blobs) {
+    auto encoded = wire::encode_blob(blob);
+    buf.insert(buf.end(), encoded.begin(), encoded.end());
+}
+```
+
+If 5 blobs of 100 MiB are requested, this creates a ~500 MiB message -- exceeding `MAX_FRAME_SIZE` and spiking memory.
+
+**Solution:** When any blob in the transfer set exceeds a threshold (e.g., 1 MiB), send each blob as a separate `BlobTransfer` message. The responder sends N `BlobTransfer` messages instead of 1, and the initiator's `pending_responses` count tracks them.
+
+This is a code change in `peer_manager.cpp` (sync orchestration), not a library change. The existing `BlobTransfer` message type and wire format are reused.
+
+### 7. Blob Size Validation in Engine
+
+**New constant** in config.h or a dedicated constants header:
+```cpp
+constexpr uint32_t MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024;  // 100 MiB
+```
+
+Checked in `BlobEngine::ingest()` after structural checks but BEFORE namespace verification and signature verification. This prevents a 1 GiB rogue blob from consuming CPU time on SHA3-256 hashing and ML-DSA-87 verification.
 
 ```cpp
-// Example: PQ handshake as a coroutine
-asio::awaitable<void> handle_peer(tcp::socket socket) {
-    // 1. Read ML-KEM-1024 ciphertext from peer
-    auto kem_ct = co_await async_read_message(socket);
-
-    // 2. Decapsulate to get shared secret
-    auto shared_secret = ml_kem_decaps(kem_ct, our_sk);
-
-    // 3. Derive AES-256-GCM session keys from shared secret
-    auto session = derive_session_keys(shared_secret);
-
-    // 4. Now all communication is encrypted
-    while (true) {
-        auto msg = co_await async_read_encrypted(socket, session);
-        co_await process_message(msg, socket, session);
-    }
-}
-
-// Accept loop
-asio::awaitable<void> listener(tcp::acceptor& acceptor) {
-    while (true) {
-        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
-        asio::co_spawn(acceptor.get_executor(),
-                       handle_peer(std::move(socket)),
-                       asio::detached);
-    }
+// In engine.cpp, after pubkey size check:
+if (blob.data.size() > MAX_BLOB_DATA_SIZE) {
+    return IngestResult::rejection(IngestError::malformed_blob,
+        "blob data exceeds max size");
 }
 ```
 
-## Installation (CMake FetchContent)
+### 8. Memory Budget for v2.0
 
-```cmake
-cmake_minimum_required(VERSION 3.24)
-project(chromatindb CXX)
+| Scenario | Peak Memory | Notes |
+|----------|------------|-------|
+| Idle (no blobs in flight) | ~50 MiB | libmdbx mmap, process overhead |
+| Single 100 MiB blob ingest | ~300 MiB | recv buffer + FlatBuffer decode + signing input copy + storage write |
+| Sync: 10 large blobs, one-at-a-time | ~350 MiB | Sequential transfer, one blob decoded/ingested at a time |
+| Worst case: 32 peers, all sending 100 MiB | ~3.5 GiB | Extremely unlikely; TCP backpressure limits concurrent large transfers |
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-include(FetchContent)
-
-# ---- Core Dependencies ----
-
-# PQ Crypto
-FetchContent_Declare(liboqs
-  GIT_REPOSITORY https://github.com/open-quantum-safe/liboqs.git
-  GIT_TAG 0.15.0)
-
-# Embedded Database
-FetchContent_Declare(libmdbx
-  GIT_REPOSITORY https://github.com/erthink/libmdbx.git
-  GIT_TAG v0.13.11)
-
-# Wire Format
-FetchContent_Declare(flatbuffers
-  GIT_REPOSITORY https://github.com/google/flatbuffers.git
-  GIT_TAG v25.12.19)
-
-# Async Networking
-FetchContent_Declare(asio
-  GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-  GIT_TAG asio-1-36-0)
-
-# ---- Supporting Dependencies ----
-
-# Fast Hashing (sync fingerprints)
-FetchContent_Declare(xxhash
-  GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git
-  GIT_TAG v0.8.3
-  SOURCE_SUBDIR cmake_unofficial)
-
-# Testing
-FetchContent_Declare(catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG v3.13.0)
-
-# Logging
-FetchContent_Declare(spdlog
-  GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG v1.17.0)
-
-# Config Parsing
-FetchContent_Declare(nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.12.0)
-
-# ---- Notes ----
-# liboqs: Needs explicit include path fix for generated headers in build dir
-# libmdbx: Native CMake support -- FetchContent just works
-# Asio: Header-only, needs INTERFACE target with ASIO_STANDALONE define
-# xxHash: Use cmake_unofficial subdirectory for proper CMake target
-# FlatBuffers: Pin flatc codegen version in CI to match library version
-```
+**Recommendation:** Document minimum 4 GiB RAM for nodes handling large blobs. 1 GiB sufficient for typical small-blob usage.
 
 ## Alternatives Considered
 
-| Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|-------------------------|
-| Standalone Asio | libuv | If you need a C-compatible event loop or are building a polyglot system. libuv is battle-tested (Node.js) but C, not C++ |
-| Standalone Asio | Raw epoll + io_uring | If you need maximum Linux-specific performance at millions of connections. Overkill for chromatindb's peer count |
-| libmdbx | LMDB | If you want maximum battle-testedness and don't care about page reclamation or CMake integration. LMDB is maintenance-mode but rock-solid |
-| libmdbx | RocksDB | If you have write-heavy LSM workloads. chromatindb is append-only with read-heavy sync -- mmap zero-copy wins over LSM compaction |
-| libmdbx | SQLite | If you need relational queries or complex indexing. KV operations don't need SQL overhead |
-| FlatBuffers | CBOR (RFC 8949) | If cross-language interop matters more than performance. CBOR has deterministic encoding mode (Section 4.2), wider language support. Fallback if FlatBuffers canonicality causes signing issues |
-| FlatBuffers | Cap'n Proto | Similar zero-copy design but smaller ecosystem, less tooling, no deterministic encoding guarantee |
-| liboqs | Vendored reference implementations | If you need only one or two algorithms and want to minimize dependency surface. But liboqs is maintained by a dedicated team and tracks NIST standards updates |
-| XXH3 | BLAKE3 | If you want a hash that's both fast AND cryptographic. Overkill for sync fingerprints where speed is the only concern |
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Access control identity | Namespace IDs (64 hex chars) | Full ML-DSA-87 pubkeys (5,184 hex chars) | Namespace ID is the canonical identity; 80x shorter in config |
+| Access control check point | After handshake in `on_peer_connected` | During handshake | Pubkey is only known after handshake completes; cleaner separation of concerns |
+| Large blob transport | One-per-message for blobs >1 MiB | Pack all into single BlobTransfer | Exceeds frame size; memory explosion |
+| FlatBufferBuilder sizing | Dynamic based on data size | Fixed 128 MiB initial | Wastes memory for small blobs (common case) |
+| Blob storage | Inline in libmdbx values | Separate filesystem files referenced by hash | libmdbx handles 100 MiB natively; filesystem adds consistency domain; YAGNI |
+| Transfer protocol | Single-frame per blob | Chunked/streaming protocol | ML-DSA-87 requires full data for signature verification; chunking means full buffering anyway, adds complexity for zero benefit |
 
-## What NOT to Use
+## What NOT to Add
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| Protocol Buffers | Non-deterministic serialization. Two serializations of the same message produce different bytes, breaking content-addressed hashing and signature verification | FlatBuffers (deterministic) or CBOR deterministic mode |
-| Boost | C++20 covers everything chromatindb needs. Boost adds massive compile times and dependency surface for no benefit | C++20 standard library + standalone Asio |
-| gRPC | Forces HTTP/2 + Protobuf. Wrong transport for a custom PQ-encrypted binary protocol between peers | FlatBuffers messages over Asio TCP |
-| libp2p | DHT-centric P2P framework. chromatindb explicitly avoids DHT. libp2p's NAT traversal and routing are irrelevant overhead | Standalone Asio + custom peer management |
-| JSON on wire | Too large for binary data (base64 overhead). ML-DSA-87 signatures are 4627 bytes -- JSON would bloat to ~6.2KB. No schema, slow parsing | FlatBuffers binary encoding |
-| MessagePack | No zero-copy, no schema, no deterministic encoding. Doesn't pair with libmdbx zero-copy reads | FlatBuffers |
-| RocksDB | LSM tree with background compaction -- wrong profile for append-only blobs with read-heavy sync. Compaction causes write amplification and unpredictable latency | libmdbx (B+ tree, zero-copy mmap, no background threads) |
-| Boost.Beast / WebSocket | HTTP/WebSocket belongs in Layer 2 (Relay), not Layer 1 (database node). The node-to-node protocol is raw TCP with PQ encryption | Standalone Asio raw TCP |
+| Technology | Why Not |
+|------------|---------|
+| Chunked transfer protocol | ML-DSA-87 signs `SHA3-256(namespace \|\| data \|\| ttl \|\| timestamp)`. The full `data` field must be in memory for both hashing and signature verification. Chunking still requires reassembly before verification. No benefit, added complexity. |
+| Filesystem blob storage | libmdbx stores 100 MiB values efficiently via overflow pages. Adding filesystem storage creates two consistency domains (DB + files), complicates backup/restore, and adds crash-recovery edge cases. |
+| Streaming AEAD | ChaCha20-Poly1305 handles 100 MiB messages trivially (~256 GiB max). The bottleneck is network bandwidth, not crypto throughput. |
+| TOML/YAML config parser | One new config field (`allowed_keys`) does not justify a new dependency. nlohmann/json handles it. |
+| Rate limiting library | Closed mode means only trusted nodes connect. Rate limiting is unnecessary when the peer set is explicitly authorized. |
+| Memory-mapped file I/O for blobs | libmdbx already uses mmap internally. Adding our own mmap layer is redundant. |
+| Config file watcher (inotify) | YAGNI. Restart the daemon to reload config. Config changes (adding/removing allowed keys) are rare operational events. |
 
-## Stack Patterns by Variant
+## Integration Point Summary
 
-**For the daemon (primary target):**
-- Asio io_context as the main event loop
-- C++20 coroutines for async connection handling
-- spdlog for operational logging (log levels, structured output)
-- nlohmann/json for config file parsing
-- Signal handling via Asio (SIGTERM, SIGINT for clean shutdown)
+```
+Config (no new deps):
+  config.h   -> Add: allowed_keys vector, closed_mode bool
+  config.cpp -> Parse "allowed_keys" JSON array, "closed_mode" bool
+               Validate: each entry is 64 hex characters
 
-**If adding admin/debug interface later:**
-- Add a Unix domain socket or secondary TCP port for admin commands
-- Still use Asio -- just another acceptor on the same io_context
-- JSON for admin protocol (human-readable, low volume)
+Access control (no new deps):
+  peer_manager.h   -> Add: std::unordered_set<std::string> allowed_set_
+  peer_manager.cpp -> In on_peer_connected(): derive namespace from
+                      peer_pubkey, check allowed_set_, disconnect if rejected
 
-**If cross-platform (macOS/Windows) needed later:**
-- Asio abstracts platform differences (epoll on Linux, kqueue on macOS, IOCP on Windows)
-- liboqs and libmdbx both support Linux/macOS/Windows
-- No Linux-specific APIs used in the recommended stack
+Larger blobs (no new deps):
+  framing.h         -> MAX_FRAME_SIZE = 110 * 1024 * 1024
+  config.h          -> MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024
+  codec.cpp         -> Dynamic FlatBufferBuilder initial size
+  engine.cpp        -> Add data size check in ingest() before sig verify
+  peer_manager.cpp  -> One-blob-per-transfer for large blobs during sync
+```
 
-## Version Compatibility
+## Installation
 
-| Package | Compatible With | Notes |
-|---------|-----------------|-------|
-| liboqs 0.15.0 | OpenSSL 3.x | liboqs can use OpenSSL as crypto backend for classical primitives. Keep both updated together |
-| liboqs 0.15.0 | C++20 | C library with C headers. Wrap in C++ RAII classes for safety |
-| libmdbx 0.13.11 | Any C++20 compiler | C library with optional C++ header wrapper. Native CMake. No compatibility concerns |
-| FlatBuffers v25.12.19 | flatc codegen | Generated C++ code is forward-compatible. Pin flatc version to match library version in CI |
-| Standalone Asio 1.36.0 | C++20 coroutines | Requires -std=c++20 and -fcoroutines (GCC). Clang 16+ and GCC 13+ both support this |
-| Standalone Asio 1.36.0 | OpenSSL 3.x | Asio has optional SSL support but chromatindb uses custom PQ crypto, not TLS. Define ASIO_STANDALONE only |
-| xxHash 0.8.3 | XXH3 stable API | XXH3 API marked stable since 0.8.0. Frozen, no breaking changes expected |
-| spdlog v1.17.0 | fmt library | spdlog bundles fmt internally. No separate fmt dependency needed |
+No changes to build process. No new dependencies.
 
-## Version Verification Method
-
-All versions verified on 2026-03-03 via `git ls-remote --tags` against official repositories:
-
-| Library | Repo | Latest Stable | Pinned |
-|---------|------|---------------|--------|
-| liboqs | open-quantum-safe/liboqs | 0.15.0 | 0.15.0 |
-| libmdbx | erthink/libmdbx | v0.13.11 | v0.13.11 |
-| FlatBuffers | google/flatbuffers | v25.12.19 | v25.12.19 |
-| Standalone Asio | chriskohlhoff/asio | asio-1-36-0 | asio-1-36-0 |
-| xxHash | Cyan4973/xxHash | v0.8.3 | v0.8.3 |
-| Catch2 | catchorg/Catch2 | v3.13.0 | v3.13.0 |
-| spdlog | gabime/spdlog | v1.17.0 | v1.17.0 |
-| nlohmann/json | nlohmann/json | v3.12.0 | v3.12.0 |
-
-System toolchain (Arch Linux):
-- GCC 15.2.1 (2026-02-09)
-- Clang 21.1.8
-- CMake 4.2.3
-- OpenSSL 3.6.1
+```bash
+# Same as v1.0
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
 
 ## Sources
 
-- liboqs releases (git ls-remote): 0.15.0 confirmed as latest stable -- **HIGH confidence**
-- libmdbx releases (git ls-remote): v0.13.11 confirmed as latest stable -- **HIGH confidence**
-- FlatBuffers releases (git ls-remote): v25.12.19 confirmed as latest -- **HIGH confidence**
-- Standalone Asio releases (git ls-remote): asio-1-36-0 confirmed as latest -- **HIGH confidence**
-- xxHash releases (git ls-remote): v0.8.3 confirmed as latest stable -- **HIGH confidence**
-- Catch2 releases (git ls-remote): v3.13.0 confirmed as latest -- **HIGH confidence**
-- spdlog releases (git ls-remote): v1.17.0 confirmed as latest -- **HIGH confidence**
-- nlohmann/json releases (git ls-remote): v3.12.0 confirmed as latest -- **HIGH confidence**
-- DNA Messenger CMakeLists.txt: reference for PQ crypto integration patterns -- **HIGH confidence**
-- PQCC project experience: liboqs + OpenSSL integration proven -- **HIGH confidence**
-- Asio C++20 coroutine support: based on training data knowledge of Asio's co_await integration. Verified Asio 1.36.0 exists but could not web-verify specific coroutine API details -- **MEDIUM confidence** (flag: verify coroutine API before implementation)
-- System package versions (pacman -Q): OpenSSL 3.6.1, Asio 1.36.0, libuv 1.52.0, xxHash 0.8.3 all confirmed installed -- **HIGH confidence**
+- [libmdbx C API documentation](https://libmdbx.dqdkfa.ru/group__c__api.html) -- `MDBX_MAXDATASIZE = 0x7FFF0000`, overflow page handling -- **HIGH confidence**
+- [libmdbx GitHub](https://github.com/erthink/libmdbx) -- page size defaults, geometry configuration -- **HIGH confidence**
+- [libmdbx overflow pages issue #192](https://github.com/erthink/libmdbx/issues/192) -- large value accounting and performance -- **HIGH confidence**
+- [FlatBuffers Internals](https://flatbuffers.dev/internals/) -- 32-bit offset design, ~2 GiB buffer limit -- **HIGH confidence**
+- [FlatBuffers 64-bit support discussion](https://github.com/google/flatbuffers/issues/7537) -- confirms 2 GiB limit for standard offsets -- **HIGH confidence**
+- [FlatBuffers 2 GiB limitation discussion](https://github.com/google/flatbuffers/issues/7391) -- confirms limit applies to total buffer, not individual vectors -- **HIGH confidence**
+- [libsodium ChaCha20-Poly1305 docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305) -- IETF variant max ~256 GiB per message -- **HIGH confidence**
+- [RFC 7539 ChaCha20-Poly1305](https://datatracker.ietf.org/doc/html/rfc7539) -- IETF AEAD construction, 32-bit block counter -- **HIGH confidence**
+- [Reth libmdbx page size discussion](https://github.com/paradigmxyz/reth/issues/19546) -- real-world usage of libmdbx with large values -- **MEDIUM confidence** (third-party usage, not official docs)
+- chromatindb v1.0 source code review (all files in src/) -- existing implementation details -- **HIGH confidence**
 
 ---
-*Stack research for: chromatindb -- decentralized PQ-secure database node*
-*Researched: 2026-03-03*
+*Stack research for: chromatindb v2.0 -- Closed Node Model + Larger Blobs*
+*Researched: 2026-03-05*

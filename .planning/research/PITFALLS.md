@@ -1,292 +1,294 @@
-# Pitfalls Research
+# Domain Pitfalls: v2.0 Closed Node Model + Larger Blobs
 
-**Domain:** Decentralized PQ-secure signed blob store (chromatindb daemon)
-**Researched:** 2026-03-03
-**Confidence:** MEDIUM-HIGH (training data for libmdbx/LMDB, liboqs, FlatBuffers, P2P networking patterns; no web verification available)
+**Domain:** Adding access control and larger blob support to an existing PQ-encrypted blob store (chromatindb v2.0)
+**Researched:** 2026-03-05
+**Confidence:** HIGH (based on direct codebase analysis + verified external sources)
+
+---
 
 ## Critical Pitfalls
 
-### 1. FlatBuffers Non-Determinism Breaking Signature Verification
+Mistakes that cause security vulnerabilities, data corruption, or require rewrites.
 
-**What goes wrong:**
-FlatBuffers does NOT guarantee deterministic byte output by default. Field ordering, padding, alignment, and vtable deduplication can produce different byte sequences for logically identical data across platforms, compiler versions, or FlatBuffers library versions. If you sign the serialized bytes, a blob serialized on one machine may fail verification when re-serialized on another.
+### Pitfall 1: Access Control Enforced at the Wrong Layer
 
-**Why it happens:**
-Developers assume "same input = same bytes." FlatBuffers optimizes for zero-copy speed, not canonical form. The `ForceDefaults` option helps (includes zero/default values) but does not solve vtable layout differences. The `object API` (Pack/UnPack) introduces another layer of non-determinism.
+**What goes wrong:** Access control is implemented in BlobEngine::ingest() or PeerManager::on_peer_message() instead of at the transport/handshake layer. An unauthorized peer connects, completes the full ML-KEM-1024 handshake (1568-byte pubkey exchange + encapsulation), exchanges ML-DSA-87 auth signatures (4627-byte signatures), and only gets rejected on first write. They can freely read (get_blob, list_namespaces have no access checks).
 
-**How to avoid:**
-- Sign over a **canonical hash input**, not the raw FlatBuffers bytes. Define the signed content explicitly: `SHA3-256(namespace || data || ttl || timestamp)` using a fixed byte concatenation, NOT the serialized FlatBuffer
-- The FlatBuffer is the **transport envelope** containing the signature. The signature covers a canonical byte string that is independent of serialization format
-- Write a round-trip test: serialize, deserialize, re-serialize, compare bytes. Run this across platforms in CI
-- Set `ForceDefaults(true)` on the FlatBufferBuilder always, even if you don't sign the raw bytes -- it prevents subtle field-omission bugs
-- If you ever need to verify that a blob is untampered in storage, compare the content hash (SHA3-256 of the canonical input), not the raw stored bytes
+**Why it happens:** BlobEngine::ingest() is the natural "validation" point in the current architecture -- it already does structural checks, namespace ownership, and signature verification. Developers add access control there because it's where other validation lives. But access control is a transport concern (who can connect), not an application concern (is this blob valid).
 
-**Warning signs:**
-- Signature verification failures that appear intermittently or only on certain platforms
-- Hash mismatches after deserialize/re-serialize round-trip
-- Tests passing on x86 but failing on ARM (different alignment/padding behavior)
+**Consequences:** (1) DoS vector: each unauthorized connection forces ~10ms of ML-KEM encapsulation + ML-DSA verification CPU. An attacker sending connection requests can peg the CPU with crypto operations that will all be rejected. (2) Read access is unguarded: a closed node that only checks writes still allows unauthorized reads of all data. (3) Unnecessary bandwidth: the handshake exchanges ~8 KiB of PQ keys before rejection.
 
-**Phase to address:**
-Phase 1 (blob format and crypto layer). This is a day-one design decision. If you sign raw FlatBuffer bytes, you are locked into a fragile path.
+**Prevention:**
+1. Enforce at the earliest possible point in the handshake. In the current code, the initiator's signing pubkey is embedded in the KemPubkey message payload (bytes 1568..4160 of the decoded payload in `HandshakeResponder::receive_kem_pubkey()`). The responder can check this pubkey against allowed_keys BEFORE calling `kem.encaps()` -- saving the entire encapsulation cost.
+2. For the responder side (inbound connections): check the initiator's signing pubkey against allowed_keys after decoding the KemPubkey message but before encapsulating. If not allowed, close the connection immediately.
+3. For the initiator side (outbound connections): the responder's signing pubkey is in the KemCiphertext message (bytes 1568..4160 of the decoded payload in `HandshakeInitiator::receive_kem_ciphertext()`). Check after decapsulation (KEM cost is unavoidable when initiating, but you can skip the expensive ML-DSA auth exchange).
+4. Do NOT add access checks to BlobEngine or Storage. The correct layering: transport gates who connects, engine validates blob correctness.
+
+**Detection:** Connect to a closed node with an unauthorized key and time the rejection. If it takes >1ms (KEM operation completed), the check is too late.
+
+**Phase to address:** First phase of access control implementation. This is an architectural decision that must be correct before code is written.
 
 ---
 
-### 2. libmdbx Single-Writer Bottleneck Under Concurrent Ingest
+### Pitfall 2: Memory Exhaustion from Large Blobs in Sync Protocol
 
-**What goes wrong:**
-libmdbx (like LMDB) uses a single-writer, multiple-reader model. Only one write transaction can be active at a time. If the daemon receives blobs from multiple peers simultaneously and each triggers a write transaction, they serialize on a global lock. Under high ingest load, write throughput is gated by one transaction at a time, while reader transactions (serving sync queries) can pile up if a long write holds the lock.
+**What goes wrong:** Three compounding memory issues when blob size increases from ~15 MiB to 100 MiB:
 
-**Why it happens:**
-Developers coming from RocksDB or SQLite-WAL expect concurrent writers. libmdbx's B+ tree with copy-on-write requires single-writer for consistency. This is a feature (simplicity, no write-ahead log corruption), but it constrains throughput patterns.
+**Issue A -- Hash collection loads all blob data:** `SyncProtocol::collect_namespace_hashes()` (sync_protocol.cpp:26-44) calls `engine_.get_blobs_since(namespace_id, 0)`, which calls `storage_.get_blobs_by_seq()`, which loads EVERY blob's full data (including the `std::vector<uint8_t> data` field) into memory. For a namespace with 20 x 100 MiB blobs, this allocates ~2 GiB just to compute 32-byte hashes. The blob data is loaded, the blob is re-encoded via `wire::encode_blob(blob)`, hashed, then discarded.
 
-**How to avoid:**
-- **Batch writes**: Accumulate incoming blobs in a memory buffer, then flush to libmdbx in a single write transaction at intervals (e.g., every 100ms or every N blobs). One transaction with 100 puts is far faster than 100 transactions with 1 put each
-- **Write thread**: Dedicate a single thread to all libmdbx writes. Other threads push to a lock-free queue (e.g., `std::atomic` ring buffer or `moodycamel::ConcurrentQueue`). The write thread drains the queue in batches
-- **Keep write transactions short**: Do signature verification BEFORE entering the write transaction. The write transaction should only do the actual put, index updates, and commit -- no crypto
-- **Separate read transactions for queries**: Reads never block on writes in libmdbx. Use explicit read transactions for sync/query serving
+**Issue B -- Batch blob transfer:** `SyncProtocol::encode_blob_transfer()` (sync_protocol.cpp:247-260) concatenates ALL requested blobs into a single `std::vector<uint8_t>`. Ten missing 100 MiB blobs = 1 GiB single allocation.
 
-**Warning signs:**
-- Write latency spikes under load (P99 jumps when multiple peers sync simultaneously)
-- CPU underutilization (one core busy, others idle) during heavy ingest
-- Write ACK latency increasing linearly with peer count
+**Issue C -- Receive buffer in coroutine frame:** `Connection::recv_raw()` (connection.cpp:66-89) allocates `std::vector<uint8_t> data(len)` which, for a 1 GiB batch transfer, allocates 1 GiB in the coroutine frame. With 32 peers syncing simultaneously, this compounds.
 
-**Phase to address:**
-Phase 2 (storage engine). Design the write pipeline before writing storage code. Retrofitting batch writes is painful because it changes the concurrency model.
+**Consequences:** OOM kills, node crashes during sync. Even without OOM, RSS spikes cause swap thrashing on systems without swap disabled.
 
----
+**Prevention:**
+1. **Fix Issue A immediately:** The sequence index (`seq_map`) already stores `[namespace:32][seq:8] -> hash:32`. Rewrite `collect_namespace_hashes()` to iterate the seq_map cursor directly and collect hash values, without loading any blob data. This is O(count * 32 bytes) instead of O(total_blob_data). The code for cursor iteration already exists in `Storage::get_blobs_by_seq()` -- adapt it to read only the value (hash) without fetching from blobs_map.
+2. **Fix Issue B:** Transfer blobs one at a time. Replace the batch pattern `[count][len1][blob1]...[lenN][blobN]` with individual BlobTransfer messages, one per blob. This bounds peak memory to one blob at a time.
+3. **Fix Issue C:** For a single 100 MiB blob, a 100 MiB receive buffer is acceptable. But add a per-connection memory budget: if total outstanding receive buffer memory across all connections exceeds a threshold (e.g., 512 MiB), back-pressure by pausing reads on low-priority connections.
 
-### 3. ML-DSA-87 Verification Cost Dominating Sync
+**Detection:** Run sync between two nodes where one has a namespace with ten 50 MiB blobs. Monitor RSS with `ps -o rss`. If RSS exceeds 2x the total blob data size, Issue A is active.
 
-**What goes wrong:**
-ML-DSA-87 signature verification is computationally expensive compared to classical signatures (Ed25519 verifies in ~50us; ML-DSA-87 is roughly 10-20x slower). When syncing thousands of blobs from a peer, each blob requires a full ML-DSA-87 verification. A sync of 10,000 blobs can take 10-30 seconds of pure CPU on a server, much longer on lower-end hardware. During this time, the node is unresponsive to other peers.
-
-**Why it happens:**
-PQ signatures are inherently larger and slower than classical ones. ML-DSA-87 is NIST Category 5 (maximum security). The cost is the tradeoff for quantum resistance.
-
-**How to avoid:**
-- **Verification result cache**: Store a `(blob_hash -> verified)` mapping. Once a blob's signature is verified, never verify it again. This is safe because blobs are content-addressed -- same hash means same content means same signature
-- **Async verification pipeline**: Accept blobs into a staging area, verify in a thread pool, promote to main storage on success. Don't block the network I/O thread on verification
-- **Rate-limit inbound sync**: Accept at most N blobs per sync round before yielding to serve other peers. Prevents one greedy sync from starving the node
-- **Skip expired on receive**: If `timestamp + ttl < now`, don't bother verifying. The blob is already dead
-- **Profile verification threads**: Use `std::thread::hardware_concurrency()` workers. Verification is CPU-bound and embarrassingly parallel -- each blob is independent
-
-**Warning signs:**
-- Node goes unresponsive during sync with a large peer
-- CPU pegged at 100% on one core (verification not parallelized)
-- Peer connections timing out while one peer's sync is being processed
-
-**Phase to address:**
-Phase 2 (storage/verification) for the cache. Phase 3 (sync engine) for the async pipeline and rate limiting.
+**Phase to address:** Must be fixed BEFORE bumping the blob size limit. This is a prerequisite, not a "nice to have."
 
 ---
 
-### 4. PQ-Encrypted Transport Key Exchange Without Authentication
+### Pitfall 3: libmdbx Overflow Pages and Write Amplification for Large Values
 
-**What goes wrong:**
-ML-KEM-1024 provides key encapsulation (Diffie-Hellman equivalent), but by itself does not authenticate peers. A man-in-the-middle can intercept the initial key exchange, establish separate ML-KEM sessions with both sides, and relay/modify all traffic. The channel is encrypted but to the wrong party.
+**What goes wrong:** libmdbx stores values in B-tree pages (default 4 KiB). Values larger than approximately 1/4 page size (~1 KiB with default 4 KiB pages) go into "overflow pages" -- contiguous runs of pages allocated just for that value. A 100 MiB blob consumes ~25,600 contiguous overflow pages. The copy-on-write MVCC model means ANY write transaction touching a large blob must allocate a fresh 25,600-page run, even for a simple re-ingest (dedup check requires reading the blob, and the write transaction locks the pages).
 
-**Why it happens:**
-Classical TLS solves this with certificate chains and CAs. In a decentralized system with no CA, authentication must be handled differently. Developers focus on getting encryption working and defer authentication, leaving a window where the transport is MITM-vulnerable.
+**Why it happens:** libmdbx/LMDB is designed as a key-value store for structured data, not a blob store. Large values are technically supported (up to ~2 GiB per the `mdbx.h` definition: `MDBX_val` with `size_t` length) but with significant overhead. The B-tree page model optimizes for values that fit in a page.
 
-**How to avoid:**
-- **Sign the key exchange**: After ML-KEM encapsulation, both sides sign their ephemeral public key with their ML-DSA-87 identity key. Each side verifies the peer's signature against a known or pinned public key
-- **Channel binding**: Derive a "session fingerprint" from the ML-KEM shared secret (e.g., `SHA3-256("session" || shared_secret)`). Both sides sign this fingerprint. This proves the signing key holder is the same party that performed the key exchange
-- **Trust-on-first-use (TOFU)**: For bootstrap connections where you don't know the peer's key, pin the key on first successful connection. Alert on key change (SSH model)
-- **Mutual authentication is mandatory**: Do not ship a transport layer that only encrypts without authenticating. Even for v0.1.
+**Consequences:**
+- Database file bloat: fragmentation from freed overflow page runs leaves gaps that may not be reusable for different-sized blobs.
+- Slow writes: allocating 25,600 contiguous pages in a fragmented database requires searching the freelist.
+- Slow expiry: `run_expiry_scan()` deleting a 100 MiB blob frees 25,600 pages in one transaction. With many expired large blobs, the freelist management itself becomes expensive.
+- The mmap region must be large enough to hold all active data. With 64 GiB upper geometry (current setting), you can store ~640 x 100 MiB blobs before hitting the limit.
 
-**Warning signs:**
-- Encrypted connections succeed to any endpoint (including adversarial ones) without verification failure
-- No peer identity validation after key exchange completes
-- Tests that only check "connection encrypted" without checking "connection authenticated"
+**Prevention:**
+1. **Store blob data externally on the filesystem.** Use the content hash as the filename: `data_dir/blobs/<hex_sha3_256>`. Store only metadata in libmdbx: `[namespace:hash] -> {pubkey, ttl, timestamp, signature, data_size, file_path}`. This is the standard pattern for blob stores (Git, IPFS, container registries all do this).
+2. External storage eliminates overflow page fragmentation, mmap pressure, and write amplification. Deletion is just `unlink()` -- no transaction overhead.
+3. If keeping blobs in libmdbx (simpler code, ACID guarantees): increase page size to 65536 bytes via `geometry.pagesize`. This reduces overflow page count by 16x (25,600 pages -> 1,600 pages for 100 MiB). BUT: this is a database-wide setting -- all small metadata values also use 64 KiB pages, wasting space. And it's a migration: existing databases cannot change page size without dump/reload.
+4. If using external storage: ensure atomic write (write to temp file, fsync, rename) to prevent partial blobs on crash. Content-addressing makes this safe -- if the file is corrupt, re-derive the hash to detect it.
 
-**Phase to address:**
-Phase 3 (transport). Must be designed into the transport protocol from the start. Adding authentication to an unauthenticated protocol is a protocol-breaking change.
+**Detection:** After storing ten 100 MiB blobs, check `ls -la data_dir/blobs.mdbx`. If the file is >1.5x the total blob data, overflow fragmentation is the cause.
 
----
-
-### 5. Unbounded Blob Storage from Malicious Namespace Spam
-
-**What goes wrong:**
-Any entity can generate a keypair and start writing blobs to its own namespace. The node must accept and store these blobs (valid signature, valid namespace ownership). An attacker generates thousands of keypairs, each writing max-size blobs with long TTLs. The node's disk fills with valid-but-worthless data. Unlike traditional DoS, these blobs pass all cryptographic verification.
-
-**Why it happens:**
-The system is permissionless by design -- anyone can write. There is no concept of "authorized namespaces" at the database layer. The same property that makes the system censorship-resistant also makes it spam-vulnerable.
-
-**How to avoid:**
-- **Per-node storage quotas**: Set a maximum database size (e.g., 10GB). When approaching the limit, evict blobs with the nearest expiry first (they would die soonest anyway)
-- **Per-namespace storage limits**: Cap the total bytes any single namespace can consume on this node (e.g., 50MB). Reject new blobs from that namespace once exceeded. Legitimate namespaces are small; spam namespaces hit the cap quickly
-- **Configurable namespace allowlist/blocklist**: Node operators can configure which namespaces to replicate. Default: replicate all. Operators who see abuse can blocklist specific namespaces
-- **TTL ceiling enforcement**: Node can reject blobs with TTL above a configured maximum (e.g., 30 days). Prevents "permanent spam" even when TTL=0 is technically valid
-- **Short default TTL is a feature**: 7-day default TTL means spam self-cleans. Attacker must continuously write to maintain presence
-
-**Warning signs:**
-- Disk usage growing faster than expected for legitimate traffic
-- Many namespaces with very few, very large blobs
-- Storage dominated by a small number of namespaces
-
-**Phase to address:**
-Phase 2 (storage engine) for per-node limits. Phase 4 (peer management) for namespace allowlist/blocklist.
+**Phase to address:** Architectural decision needed in the first phase of larger blob support. This affects storage, sync, and the wire format (blob transfer may send file contents directly instead of FlatBuffer-encoded values).
 
 ---
 
-### 6. Hash-List Diff Sync Not Scaling Beyond Small Networks
+### Pitfall 4: Sync Protocol Timeout with Large Blob Transfers
 
-**What goes wrong:**
-Hash-list diff sync works by both peers exchanging their complete list of blob hashes, then computing the set difference. With 100,000 blobs at 32 bytes each, that is 3.2MB per sync exchange. With 10 peers syncing every 30 seconds, that is 64MB/minute of just hash lists, before any actual blob data. The hash exchange itself becomes the bandwidth bottleneck.
+**What goes wrong:** The sync protocol uses a 30-second timeout (`SYNC_TIMEOUT` in peer_manager.cpp:299,453). With 100 MiB blobs, transferring even a few blobs takes much longer. At 10 MB/s (typical VPS upload): one 100 MiB blob takes 10 seconds, three take 30 seconds -- hitting the timeout exactly. The peer considers the sync failed and disconnects.
 
-**Why it happens:**
-Hash-list diff is the simplest possible sync algorithm: "here is everything I have, what do you need?" It works perfectly for small sets but is O(n) in the total number of blobs, not O(diff) in the number of missing blobs.
+**Why it happens:** The sync timeout was designed for small blobs. The timeout applies to waiting for the next message (`recv_sync_msg` calls), and during large blob transfer, the sender is busy writing data and cannot send the next sync message until the transfer completes. The sequential protocol design means the entire connection is blocked during sync.
 
-**How to avoid:**
-- **Start with hash-list diff, but design for upgrade**: The sync protocol should have a version/method negotiation. v1 = hash-list diff. v2 = range-based reconciliation (Negentropy-style). Peers negotiate the best method both support
-- **Incremental sync with seq_num**: Instead of exchanging ALL hashes, use per-namespace seq_num to bound the exchange: "give me namespace X, hashes since seq_num Y." This turns O(total_blobs) into O(new_blobs_since_last_sync)
-- **Fingerprint-first optimization**: Before exchanging hash lists, exchange a single fingerprint (XXH3 of all blob hashes in sorted order). If fingerprints match, skip the exchange entirely. This makes the "already in sync" case O(1)
-- **Plan for Negentropy**: Range-based set reconciliation is O(diff) regardless of total set size. Research Negentropy C/C++ implementations before Phase 3. Even if you start with hash-list diff, the protocol framing should accommodate range messages
+**Consequences:** Sync consistently fails for large blobs. The node retries on the next sync interval, fails again, and large blobs never sync. The 60-second sync interval (config_.sync_interval_seconds) means the node tries and fails every minute.
 
-**Warning signs:**
-- Sync bandwidth growing with total blob count rather than new blob count
-- Network utilization high even when nodes are fully synced
-- Sync taking longer as the database grows, even with few changes
+**Prevention:**
+1. Make sync timeout adaptive based on expected transfer size. After computing the diff, estimate total bytes to transfer and set timeout = max(30s, estimated_bytes / MIN_EXPECTED_BANDWIDTH).
+2. Better: use per-blob transfer with acknowledgments. After sending each blob, wait for an ack before sending the next. This creates a natural heartbeat and allows the receiver to signal progress.
+3. The remaining BlobRequest loop (peer_manager.cpp:409-421, 534-546) already has a short 2-second timeout for "any remaining" messages. This is fine for small blobs but must be increased or made adaptive for large ones.
 
-**Phase to address:**
-Phase 3 (sync engine). seq_num-based incremental sync from the start. Negentropy upgrade path designed but deferred.
+**Detection:** Test sync between two nodes with 100 MiB blobs over a bandwidth-limited connection (e.g., `tc qdisc` to limit to 10 MB/s). If sync times out, this is the cause.
+
+**Phase to address:** Must be addressed in the sync protocol changes for larger blob support.
 
 ---
 
-### 7. Timestamp-Based TTL Expiry Without Clock Agreement
+## Moderate Pitfalls
 
-**What goes wrong:**
-Blob expiry is computed as `timestamp + ttl`. The `timestamp` is set by the blob creator (wall clock time of creation). If the creator's clock is ahead by 1 hour, blobs appear to have 1 hour more life than intended. If a receiving node's clock is behind, it may prune blobs that the creator considers still alive. Nodes with different wall clocks disagree on which blobs are expired.
+### Pitfall 5: Frame Size Limit vs Blob Size Limit Inconsistency
 
-**Why it happens:**
-There is no HLC or logical clock in the design -- timestamps are wall clock. In a decentralized system, wall clocks are never perfectly synchronized. NTP helps but does not guarantee sub-second accuracy across all nodes.
+**What goes wrong:** The current `MAX_FRAME_SIZE` is 16 MiB (framing.h:13). If the blob limit is bumped to 100 MiB but MAX_FRAME_SIZE isn't updated, blobs larger than ~16 MiB minus AEAD tag minus framing overhead cannot be transmitted. The `recv_raw()` function rejects frames exceeding MAX_FRAME_SIZE (connection.cpp:78-80). The `read_frame()` function throws on frames exceeding MAX_FRAME_SIZE (framing.cpp:56-57).
 
-**How to avoid:**
-- **Generous expiry grace period**: When checking expiry, add a grace period (e.g., 5 minutes). Don't prune a blob until `timestamp + ttl + grace < now`. This absorbs typical clock skew
-- **Don't rely on timestamp for ordering**: Timestamp is for TTL computation only. Blob ordering within a namespace uses seq_num (assigned by the receiving node, always monotonic). This separates the "ordering" concern (local, reliable) from the "expiry" concern (approximate, clock-dependent)
-- **Reject far-future timestamps**: If `timestamp > now + MAX_FUTURE_SKEW` (e.g., 10 minutes), reject the blob. Prevents attackers from setting timestamps years in the future to create effectively permanent blobs that bypass TTL
-- **Log clock skew**: When receiving blobs, log `abs(blob_timestamp - now)`. Alert if median skew exceeds a threshold. Helps detect nodes with bad clocks
+The subtler issue: a 100 MiB blob, after FlatBuffer encoding (adds pubkey, signature, namespace, ttl, timestamp overhead -- ~7 KiB for ML-DSA-87), is ~100.007 MiB. After AEAD encryption (adds 16-byte Poly1305 tag), it's ~100.007 MiB + 16 bytes. The length prefix is 4 bytes. So MAX_FRAME_SIZE must be at least 100.007 MiB + some margin.
 
-**Warning signs:**
-- Blobs disappearing on some nodes before others
-- Blob counts diverging between nodes that should be in sync
-- Blobs arriving with timestamps significantly ahead of the receiving node's clock
+**Why it happens:** MAX_FRAME_SIZE was set as a reasonable limit for v1.0's use case. It's a `constexpr` in a header file with no relationship to MAX_BLOB_SIZE (which doesn't exist as a constant yet).
 
-**Phase to address:**
-Phase 2 (storage and ingest). Timestamp validation must be in the ingest path from day one.
+**Prevention:**
+1. Define both constants in a shared location: `MAX_BLOB_DATA_SIZE` (the user-facing limit on blob.data.size()) and `MAX_FRAME_SIZE` (which must be >= MAX_BLOB_DATA_SIZE + max_overhead). Calculate MAX_FRAME_SIZE from MAX_BLOB_DATA_SIZE with explicit overhead accounting.
+2. Better: implement chunked blob transfer so MAX_FRAME_SIZE doesn't need to equal MAX_BLOB_SIZE. Keep MAX_FRAME_SIZE at 16 MiB, chunk larger blobs across multiple frames. This also solves the memory pressure issue.
+3. If increasing MAX_FRAME_SIZE: use it as a hard limit, not a suggestion. The receive side must reject frames exceeding the limit BEFORE allocating the buffer (which it already does in `recv_raw` -- good).
 
-## Technical Debt Patterns
+**Detection:** Attempt to ingest and sync a blob larger than MAX_FRAME_SIZE. If the sync fails with "frame exceeds maximum size," this is the cause.
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Single-threaded event loop | Simpler to reason about, no mutex bugs | Cannot use multiple cores for verification/sync | Pre-MVP only. Replace with thread pool before any perf testing |
-| No write batching | Simpler storage code, immediate durability | Write throughput limited to ~1000 tx/sec on SSD | MVP if write rates are low. Must fix before multi-peer sync |
-| Raw TCP without framing | Faster to prototype | Message boundaries lost, partial reads cause parsing failures | Never. Frame messages from day one (length-prefix or FlatBuffers size-prefix) |
-| Hardcoded config values | No config parsing code needed | Cannot tune per-deployment, requires recompile | Pre-MVP only. Must be configurable before deploying multiple nodes |
-| No verification cache | Simpler ingest path | Redundant verification on blobs received from multiple peers, during restart | MVP is acceptable. Must add before any sync testing with real data volumes |
-| Skipping peer authentication | Transport "works" faster, fewer moving parts | MITM vulnerability on every connection | Never. Authenticate from the first version that accepts peer connections |
+**Phase to address:** Early in the larger blob support phase. Must be resolved before any large blob testing.
 
-## Integration Gotchas
+---
 
-### libmdbx
+### Pitfall 6: Config Reload Without Coroutine Safety
 
-| Common Mistake | Correct Approach |
-|----------------|------------------|
-| Opening the database with default map size, hitting `MDBX_MAP_FULL` when it grows | Set `mdbx_env_set_geometry()` with a large upper bound (e.g., 64GB). libmdbx grows the file dynamically but respects the upper limit. The file does not consume disk until data is written |
-| Using `mdbx_env_open()` without `MDBX_WRITEMAP` and expecting good write performance | Use `MDBX_WRITEMAP` for significantly better write performance (avoids double-buffering). Acceptable risk: process crash during write can leave partially written page, but libmdbx's crash recovery handles this |
-| Holding read transactions open for a long time | Stale read transactions prevent libmdbx from reclaiming old pages. This causes the database file to grow without bound. Always close read transactions promptly. Use RAII wrappers (transaction object with destructor) |
-| Calling `mdbx_dbi_open()` inside a normal transaction | DBI handles should be opened once (in a dedicated transaction at startup) and reused for the lifetime of the environment. Opening inside a data transaction can cause subtle locking issues |
-| Storing large values (>page size) without considering overflow pages | Values larger than ~4000 bytes (depending on page size) use overflow pages. ML-DSA-87 signatures are 4627 bytes and pubkeys are 2592 bytes -- each blob value will likely overflow. This is fine for reads (zero-copy still works) but impacts write amplification. Consider storing signature and pubkey separately from data if write perf matters |
+**What goes wrong:** Adding `allowed_keys` to the config and supporting runtime reload (SIGHUP) introduces mutable state that coroutines read. The current Config is `const config::Config&` everywhere (PeerManager, Server, SyncProtocol). Making it mutable or adding a reload mechanism risks data races.
 
-### liboqs (ML-DSA-87 / ML-KEM-1024)
+However, the codebase runs on a single `io_context` thread. Asio signal handling via `asio::signal_set` (already used in server.h:77) posts the handler to the io_context, so it runs on the same thread as coroutines. This means there is NO data race IF the reload handler is an Asio-dispatched callback, not a raw signal handler.
 
-| Common Mistake | Correct Approach |
-|----------------|------------------|
-| Not checking return codes from `OQS_SIG_verify()` | `OQS_SIG_verify()` returns `OQS_SUCCESS` or `OQS_ERROR`. A common C mistake is treating the return as boolean (nonzero = true = success). `OQS_SUCCESS` is `0`. Always check `== OQS_SUCCESS` explicitly |
-| Reusing ML-KEM decapsulation keys | ML-KEM is designed for ephemeral key exchange. Generate a fresh keypair for each connection. Reusing decapsulation keys across sessions reduces security and can enable certain attacks |
-| Not calling `OQS_SIG_free()` / `OQS_KEM_free()` | liboqs allocates internal state. Leaking these in a long-running daemon means unbounded memory growth |
-| Assuming constant-time operations | liboqs aims for constant-time crypto but this depends on the backend (internal, OpenSSL, etc.). Verify which backend is active. Side-channel resistance is only as good as the weakest link |
-| Using liboqs SHA3 for all hashing | liboqs's SHA3 implementation may not be optimized for bulk hashing. For content-addressing thousands of blobs, consider using OpenSSL's SHA3 (which uses hardware acceleration where available). Use liboqs for signature/KEM operations only |
+**The real danger:** A developer implements SIGHUP by calling `signal(SIGHUP, handler)` with a raw C signal handler that modifies the config directly. This runs on the signal delivery thread (any thread), not the io_context thread, creating a data race with any coroutine reading config values.
 
-### FlatBuffers
+**Prevention:**
+1. Use `asio::signal_set` (already in the codebase) to register SIGHUP. The handler runs on the io_context thread -- no race.
+2. On reload: parse the new config file into a fresh Config struct, then swap the reference. Since all code runs on one thread, a synchronous swap is safe.
+3. For `allowed_keys`: cache the set at connection acceptance time. Don't re-read it during the message loop.
+4. For existing connections after key revocation: iterate `peers_` (which is safe -- single thread) and close connections whose pubkey is no longer in allowed_keys. This uses the existing `close_gracefully()` coroutine pattern.
 
-| Common Mistake | Correct Approach |
-|----------------|------------------|
-| Using default `CreateString`/`CreateVector` inside a table creation | All child objects (strings, vectors, nested tables) must be created BEFORE `Start`/`End` of the parent table. FlatBuffers builds bottom-up. Creating children mid-table is undefined behavior |
-| Assuming field order in the buffer matches schema order | FlatBuffers uses vtables for field access. The physical byte layout depends on creation order and vtable deduplication. Never parse FlatBuffers by byte offset manually -- always use generated accessors |
-| Not calling `builder.ForceDefaults(true)` | By default, fields with default values are omitted from the buffer. This saves space but means two buffers for "the same" data can have different bytes (one omits the field, one includes it). Always force defaults when deterministic bytes matter |
-| Trusting FlatBuffers input without verification | `flatbuffers::Verifier` checks bounds and internal consistency. Always verify untrusted input before accessing. Unverified malicious buffers can cause out-of-bounds reads |
-| Schema evolution breaking existing signed data | Adding/removing fields changes the serialization. If signatures cover raw FlatBuffer bytes, schema evolution breaks verification of old blobs. Sign a canonical hash input instead |
+**Detection:** After implementing config reload, add a log line in the reload handler that prints `std::this_thread::get_id()` and compare with the id printed at io_context startup. If they differ, you have a thread safety issue.
 
-## Performance Traps
+**Phase to address:** When implementing the config-based access control.
 
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Verifying every blob on every sync | CPU pegged during sync, sync takes minutes | Verification cache keyed by blob hash. Verify once, cache forever (blob is immutable) | >1,000 blobs per sync round |
-| Expiry scan on every write | Write latency spikes periodically, jittery ACKs | Run expiry scan on a timer (e.g., every 60 seconds) in a separate read+write transaction, not inline with ingest | >10,000 stored blobs |
-| Full hash-list exchange for sync | Bandwidth dominated by sync overhead, not blob data | Incremental sync via seq_num: only exchange hashes for blobs since last sync checkpoint | >10,000 total blobs per node |
-| String comparison for namespace matching | CPU overhead on hot path | Namespaces are 32 bytes. Use `memcmp` or compare as `uint64_t[4]`. Never convert to hex string for comparison | Any load -- this is the hot path |
-| Allocating per-blob during sync | GC pressure (in managed languages) or heap fragmentation (in C++) | Pre-allocate blob buffers, use arena allocators for FlatBuffers (`FlatBufferBuilder` reuse), pool verification contexts | >100 blobs/second sustained ingest |
-| libmdbx read transaction per query | Transaction overhead for high-frequency reads | Use a long-lived read transaction for burst reads (e.g., during sync serving), refresh periodically with `mdbx_txn_renew()`. But don't hold too long (see stale read transaction gotcha) | >1,000 reads/second |
+---
 
-## Security Mistakes
+### Pitfall 7: Source Restructure Breaking FlatBuffers Generated Headers
 
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Signing the FlatBuffer bytes instead of a canonical hash | Platform-dependent serialization differences cause signature failures or allow signature malleability | Define canonical signed content as a fixed byte concatenation, independent of serialization format |
-| Not validating `SHA3-256(pubkey) == namespace` on ingest | Accepting blobs where namespace does not match the public key. Attacker writes to any namespace | This check is the FIRST thing in the ingest path. Before sig verification, before storage. Reject immediately on mismatch |
-| Accepting blobs with future timestamps without bounds | Attacker sets timestamp to year 2100, creating effectively permanent blobs that ignore TTL | Reject blobs where `timestamp > now + MAX_FUTURE_SKEW`. Suggested: 10 minutes |
-| Not zeroing private key memory after use | Key material persists in memory, vulnerable to cold boot attacks or memory dumps | Use `OPENSSL_cleanse()` or `explicit_bzero()` on key buffers. Consider `mlock()` for key material pages to prevent swapping to disk |
-| TCP connection without encryption as fallback | "Plaintext fallback" for debugging leaks into production. Blob content, signatures, and peer topology exposed | No plaintext mode. Not even behind a flag. If PQ handshake fails, connection fails. Period |
-| Accepting arbitrarily large blobs | Memory exhaustion via a single oversized blob. Attacker sends a "blob" claiming 4GB data field | Enforce max blob size (e.g., 64KB data + overhead). Reject before reading the full blob into memory. Check the size field in the FlatBuffer header first |
-| Not rate-limiting connections per IP | Single IP opens thousands of connections, exhausting file descriptors | Per-IP connection limit (e.g., 10). Per-IP ingest rate limit (e.g., 100 blobs/minute) |
+**What goes wrong:** The CMakeLists.txt has hardcoded paths for FlatBuffers schema compilation (lines 91-117):
+```cmake
+set(FLATBUFFERS_SCHEMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/schemas)
+set(FLATBUFFERS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/wire)
+```
+If the source tree is restructured (e.g., `src/wire/` moves to `src/protocol/wire/`), the generated headers output to the wrong location. The `#include "wire/blob_generated.h"` in other files fails.
 
-## "Looks Done But Isn't" Checklist
+Additionally, every source file is explicitly listed in `add_library(chromatindb_lib ...)` (lines 122-141) and `add_executable(chromatindb_tests ...)` (lines 166-185). Moving any file requires updating both lists.
 
-- [ ] **Blob ingest:** Often missing namespace-pubkey validation -- verify `SHA3-256(pubkey) == namespace` is checked before signature verification
-- [ ] **Signature verification:** Often missing return code check -- verify `OQS_SIG_verify()` result is compared with `== OQS_SUCCESS`, not boolean truthiness
-- [ ] **PQ transport:** Often missing authentication -- verify post-handshake authentication (signed key exchange) is implemented, not just encryption
-- [ ] **Expiry:** Often missing the grace period -- verify nodes don't prune blobs that other nodes consider alive (clock skew handling)
-- [ ] **Sync:** Often missing "already in sync" fast path -- verify that two synced nodes exchange O(1) data (fingerprint comparison), not O(n) hash lists
-- [ ] **Storage:** Often missing geometry configuration -- verify `mdbx_env_set_geometry()` is called with appropriate upper bounds, not relying on defaults
-- [ ] **Wire protocol:** Often missing message framing -- verify TCP stream has length-prefix framing, not relying on "one send = one message"
-- [ ] **Peer management:** Often missing connection limits -- verify per-IP limits prevent resource exhaustion
-- [ ] **Config:** Often missing runtime tunability -- verify max blob size, TTL ceiling, storage limits, peer limits are configurable, not compiled in
-- [ ] **Graceful shutdown:** Often missing transaction cleanup -- verify all libmdbx transactions are committed/aborted and environment is closed on SIGTERM
+**Why it happens:** CMake with explicit source lists is correct practice (avoids glob() pitfalls) but fragile under restructuring. FetchContent cached builds in `build/_deps/` add complexity -- stale object files from pre-restructure builds cause confusing linker errors.
 
-## Recovery Strategies
+**Prevention:**
+1. If restructuring: do it in a single atomic commit. Move files AND update ALL of: CMakeLists.txt source lists, FlatBuffers output paths, include paths in `target_include_directories`, and all `#include` directives.
+2. After restructuring, ALWAYS do a clean build: `rm -rf build && cmake -B build && cmake --build build`. Do not trust incremental builds.
+3. Verify test discovery still works: `cmake --build build --target test` should find all tests.
+4. Check FlatBuffers schema namespace: if the `.fbs` file has `namespace chromatin.wire;`, this generates C++ code in `namespace chromatin::wire`. If the C++ namespace is renamed, update the `.fbs` file too and regenerate.
+5. Strongly recommend: restructure FIRST, in isolation, before adding any new features. Verify all 155 tests pass. Then start feature work on the clean structure.
 
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| FlatBuffers signing (non-deterministic bytes) | HIGH | Requires protocol version bump. Old blobs become unverifiable if canonical form changes. Must support both old and new verification paths during migration |
-| libmdbx write bottleneck | MEDIUM | Refactor ingest to batch writes. Requires adding a write queue and changing the concurrency model, but does not change the protocol |
-| Verification CPU bottleneck | LOW | Add verification cache (new libmdbx sub-database, ~50 LOC). Add thread pool. No protocol changes needed |
-| Unauthenticated transport | HIGH | Protocol-breaking change. All existing connections must be re-established. Peers running old version cannot connect to new version |
-| Storage spam from malicious namespaces | MEDIUM | Add per-namespace quotas and blocklist. Existing spam blobs expire naturally via TTL. Manual intervention: wipe and re-sync from trusted peer |
-| Hash-list sync scaling | MEDIUM | Upgrade to incremental (seq_num-based) sync. Protocol change but additive -- new method alongside old. Negotiate on connection |
-| Clock skew causing expiry disagreement | LOW | Add grace period to expiry checks. Retroactive: blobs that were prematurely pruned will be re-synced from peers that still have them |
+**Detection:** Build failure after restructure. Linker errors (undefined reference) = missing source in CMakeLists.txt. Compile errors (file not found) = missing include path update. Compile errors (namespace not found) = FlatBuffers schema namespace mismatch.
 
-## Pitfall-to-Phase Mapping
+**Phase to address:** First phase of the milestone, before any feature work.
 
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| FlatBuffers non-determinism | Phase 1 (blob format) | Round-trip test: serialize, deserialize, re-serialize, compare bytes. Cross-platform CI (x86 + ARM) |
-| libmdbx write bottleneck | Phase 2 (storage engine) | Benchmark: sustained 1000 blob/sec ingest with 5 concurrent peers. Measure P99 write latency |
-| ML-DSA-87 verification cost | Phase 2 (verification cache), Phase 3 (async pipeline) | Benchmark: sync 10,000 blobs. Time must be <5 seconds with cache warm, <30 seconds cold |
-| Transport authentication | Phase 3 (transport layer) | Test: MITM proxy between two nodes. Connection must fail or be detected |
-| Storage spam | Phase 2 (storage limits), Phase 4 (blocklist) | Test: generate 10,000 namespaces with max-size blobs. Node must reject when quota exceeded, not crash or OOM |
-| Sync scaling | Phase 3 (sync engine) | Benchmark: two nodes with 100K blobs, 10 blobs different. Sync must transfer O(diff) data, not O(total) |
-| Timestamp/clock skew | Phase 2 (ingest validation) | Test: submit blob with timestamp 1 hour in future. Must be rejected. Submit with timestamp 5 seconds in future. Must be accepted |
+---
+
+### Pitfall 8: TOCTOU Between Handshake Auth Check and Connection Lifetime
+
+**What goes wrong:** In a closed node, the access check happens at handshake time: peer's signing pubkey is compared against `allowed_keys`. The handshake succeeds, the connection enters `message_loop()`, and the peer has full access for the lifetime of the connection. If the operator removes the peer's key from `allowed_keys` and reloads config, the peer retains access until disconnect.
+
+**Why it happens:** This is inherent to connection-based protocols. The authentication happens once (at connect), not on every message. It's the same model as SSH, TLS client auth, and WireGuard -- auth at handshake, access for session lifetime.
+
+**Consequences:** Key revocation has delayed effect. The severity depends on the deployment: for a private node with 2-3 known peers and infrequent key changes, this is acceptable. For a node with many peers and frequent access changes, it's a gap.
+
+**Prevention:**
+1. Accept the per-connection model. Auth at handshake, access for session lifetime. This is the standard approach and the simplest to implement correctly.
+2. On config reload: iterate connected peers, disconnect any whose pubkey is no longer in `allowed_keys`. This gives "eventual" revocation (within seconds of reload, not instant mid-message).
+3. Do NOT add per-message access checks. This adds O(n) lookup on every message on the hot path, complicates the coroutine flow, and the single-threaded model means the disconnect-on-reload approach is effectively instant anyway.
+4. Log when a connected peer's key is revoked but they remain connected, so the operator knows revocation is pending disconnect.
+
+**Detection:** Remove a connected peer's key from config, reload, and verify the peer gets disconnected within seconds (not at next sync interval or next restart).
+
+**Phase to address:** Access control phase, specifically in the config reload handler.
+
+---
+
+### Pitfall 9: Blob Size Validation Missing from Ingest Pipeline
+
+**What goes wrong:** The current `BlobEngine::ingest()` validates pubkey size, signature presence, namespace ownership, and signature correctness (engine.cpp:39-73). It does NOT validate `blob.data.size()`. If MAX_BLOB_DATA_SIZE is defined but not checked in the ingest path, a peer can send an oversized blob that passes all crypto validation and gets stored.
+
+The frame size check in `recv_raw()` (connection.cpp:78) provides a coarse guard, but MAX_FRAME_SIZE may be larger than MAX_BLOB_DATA_SIZE (it includes protocol overhead). And during sync, `SyncProtocol::ingest_blobs()` calls `engine_.ingest()` -- the blob was already received and parsed from a valid frame.
+
+**Consequences:** An oversized blob is stored, consuming excessive storage. It then replicates to other nodes via sync, amplifying the damage.
+
+**Prevention:**
+1. Add `blob.data.size() > MAX_BLOB_DATA_SIZE` as the FIRST check in `BlobEngine::ingest()`, before the pubkey size check. This is the cheapest possible rejection (size_t comparison).
+2. Also add the check in `SyncProtocol::ingest_blobs()` before calling `engine_.ingest()`, as a defense-in-depth measure.
+3. Define `MAX_BLOB_DATA_SIZE` as a constexpr alongside `BLOB_TTL_SECONDS` in the protocol constants.
+
+**Detection:** Attempt to ingest a blob with data larger than the limit. If it succeeds, the check is missing.
+
+**Phase to address:** When defining the new blob size limit. Trivial to implement but easy to forget.
+
+---
+
+## Minor Pitfalls
+
+### Pitfall 10: Hardcoded Protocol Constants in Multiple Files
+
+**What goes wrong:** Protocol constants are scattered: `MAX_FRAME_SIZE` in framing.h, `BLOB_TTL_SECONDS` in config.h, `STRIKE_THRESHOLD` and `PEX_INTERVAL_SEC` in peer_manager.h. There is no `MAX_BLOB_DATA_SIZE`. When bumping limits for v2.0, each constant must be found and updated independently. Missing one creates silent inconsistencies.
+
+**Prevention:** Consolidate all protocol constants into a single header (e.g., `src/protocol_constants.h` or `src/config/protocol.h`). Include: MAX_BLOB_DATA_SIZE, MAX_FRAME_SIZE (derived from MAX_BLOB_DATA_SIZE), BLOB_TTL_SECONDS, SYNC_TIMEOUT_BASE, etc. Individual modules can still define module-specific constants locally, but protocol-wide constants belong in one place.
+
+**Phase to address:** Early in the milestone, before adding new constants.
+
+---
+
+### Pitfall 11: Namespace Rename Cascading Through 40+ Files
+
+**What goes wrong:** If the C++ namespace `chromatin::` is renamed, every `namespace chromatin {` block, every `chromatin::` qualified name, and the FlatBuffers schema `namespace` declarations must be updated. The codebase has nested namespaces across 19 source files and 21 header files (40+ total). The FlatBuffers generated headers (`blob_generated.h`, `transport_generated.h`) use the namespace from the `.fbs` schema -- updating C++ files without the schema leaves the generated code in the old namespace.
+
+**Prevention:**
+1. Question whether the rename is necessary. The existing `chromatin::` namespace works. YAGNI.
+2. If renaming: use `grep -rn "chromatin::" src/ tests/` and `grep -rn "namespace chromatin" src/ tests/` to find all occurrences. Update `.fbs` schema files. Regenerate FlatBuffers headers. Clean build.
+3. Do not attempt a partial rename or gradual migration. Do it all at once.
+
+**Phase to address:** Only if explicitly planned. Recommend against unless there's a strong reason.
+
+---
+
+### Pitfall 12: Expiry Scan Transaction Size with Large Blobs
+
+**What goes wrong:** `run_expiry_scan()` (storage.cpp:444-507) deletes all expired blobs in a SINGLE write transaction. If blobs are stored in libmdbx (not externally), deleting a 100 MiB blob frees ~25,600 overflow pages. Deleting 10 expired 100 MiB blobs frees ~256,000 pages in one transaction. The freelist management for this many pages can cause the transaction to run slowly or even exceed internal limits.
+
+**Prevention:**
+1. If using external blob storage (recommended, see Pitfall 3): expiry just deletes index entries + unlinks files. Transaction size is tiny. This pitfall becomes a non-issue.
+2. If keeping blobs in libmdbx: batch the expiry scan. Delete N blobs per transaction (e.g., 5 large blobs), commit, then start a new transaction. This bounds the freelist work per transaction.
+
+**Phase to address:** Relevant only if large blobs are stored in libmdbx. If external storage is used, this is moot.
+
+---
+
+### Pitfall 13: AEAD Nonce Counter Not a Concern (But Looks Like One)
+
+**What goes wrong:** Nothing, actually. This is a "looks dangerous but isn't" entry. The codebase uses IETF ChaCha20-Poly1305 with a 64-bit counter in the nonce (4 zero bytes + 8-byte big-endian counter). The IETF variant supports messages up to 64*(2^32)-64 bytes (~256 GiB) per encryption call. A 100 MiB blob is 0.04% of this limit. The 64-bit counter allows 2^64 frames per direction per connection, which at 1 million frames/second would take 584,542 years to exhaust.
+
+**Why this matters:** When reviewing the code for large blob support, someone will look at the nonce construction in `make_nonce()` (framing.cpp:8-17) and wonder if larger messages cause problems. They don't. The per-message size limit is ~256 GiB. The counter space is effectively infinite.
+
+**Prevention:** No code changes needed. Document this in a comment near `make_nonce()` so future reviewers don't waste time investigating.
+
+**Phase to address:** No action needed. Include in code review notes.
+
+---
+
+## Phase-Specific Warnings
+
+| Phase Topic | Likely Pitfall | Severity | Mitigation |
+|-------------|---------------|----------|------------|
+| Source restructure | Build breakage from stale objects (Pitfall 7) | Moderate | Single atomic commit, clean build, verify all 155 tests |
+| Source restructure | Namespace rename cascading (Pitfall 11) | Moderate | Avoid rename unless necessary. If needed, update .fbs schemas too |
+| Access control | Auth at wrong layer (Pitfall 1) | **Critical** | Enforce in handshake before KEM encapsulation, not in engine |
+| Access control | TOCTOU on key revocation (Pitfall 8) | Moderate | Disconnect revoked peers on config reload |
+| Access control | Config reload thread safety (Pitfall 6) | Moderate | Use asio::signal_set, not raw signal handler |
+| Larger blob support | Memory exhaustion in sync (Pitfall 2) | **Critical** | Fix hash collection to use index, transfer blobs individually |
+| Larger blob support | libmdbx overflow pages (Pitfall 3) | **Critical** | External blob storage or larger page size |
+| Larger blob support | Sync timeout too short (Pitfall 4) | **Critical** | Adaptive timeout or per-blob transfer with acks |
+| Larger blob support | Frame/blob size mismatch (Pitfall 5) | Moderate | Define constants together, derive MAX_FRAME from MAX_BLOB |
+| Larger blob support | Missing blob size validation (Pitfall 9) | Moderate | Add size check as first ingest validation |
+| Larger blob support | Expiry scan transaction size (Pitfall 12) | Minor | Batch deletions or use external storage |
+| Protocol constants | Scattered constants (Pitfall 10) | Minor | Consolidate to single header early |
+
+## Key Insight: Ordering Matters
+
+The critical pitfalls have a dependency chain:
+
+1. **Source restructure** (Pitfall 7) should happen FIRST because it's mechanical, testable, and gives a clean foundation. Do not restructure while simultaneously adding features.
+2. **Storage architecture decision** (Pitfall 3: external vs libmdbx) must be decided BEFORE larger blob implementation because it affects sync protocol, ingest pipeline, and expiry. This is the hardest decision in the milestone.
+3. **Access control** (Pitfall 1) can be implemented independently of blob size changes. It modifies the handshake, not the storage or sync layers. Can be done in parallel with or before larger blob work.
+4. **Sync protocol changes** (Pitfalls 2, 4, 5) depend on the storage decision. If blobs are external, sync transfers file contents. If blobs are in libmdbx, sync transfers FlatBuffer-encoded values.
 
 ## Sources
 
-- libmdbx documentation and LMDB architecture knowledge -- MEDIUM confidence (training data, no web verification)
-- liboqs API patterns from PQCC project experience documented in project memory -- HIGH confidence (project history)
-- FlatBuffers deterministic encoding limitations -- MEDIUM confidence (training data, well-documented issue in FlatBuffers community)
-- P2P networking patterns (Bitcoin, Nostr, IPFS) -- MEDIUM confidence (training data, widely documented)
-- ML-DSA / ML-KEM NIST standards behavior -- MEDIUM confidence (training data from FIPS 204/203 specifications)
-- Previous chromatindb project failure modes (DHT complexity, dependency hell) -- HIGH confidence (project memory)
+- [libmdbx README - overflow pages, value size limits](https://github.com/erthink/libmdbx/blob/master/README.md) - HIGH confidence
+- [IETF ChaCha20-Poly1305 construction - libsodium docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/ietf_chacha20-poly1305_construction) - HIGH confidence (official docs, confirms ~256 GiB per-message limit)
+- [RFC 7539 - ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc7539) - HIGH confidence (IETF standard)
+- [C++20 coroutine memory allocation - Raymond Chen](https://devblogs.microsoft.com/oldnewthing/20231115-00/?p=109020) - HIGH confidence (Microsoft developer blog)
+- [C++20 coroutine downsides](https://reductor.dev/cpp/2023/08/10/the-downsides-of-coroutines.html) - MEDIUM confidence (independent analysis)
+- [TOCTOU race conditions - CWE-367](https://cwe.mitre.org/data/definitions/367.html) - HIGH confidence (MITRE standard)
+- [CMake FetchContent pitfalls](https://runebook.dev/en/docs/cmake/module/fetchcontent) - MEDIUM confidence
+- chromatindb v1.0 source code (direct analysis of all 19 source files + 21 headers) - HIGH confidence
+- chromatindb v1.0 RETROSPECTIVE.md - HIGH confidence (verified project history)
 
 ---
-*Pitfalls research for: chromatindb -- decentralized PQ-secure signed blob store daemon*
-*Researched: 2026-03-03*
+*Pitfalls research for: chromatindb v2.0 -- closed node model + larger blob support*
+*Researched: 2026-03-05*
