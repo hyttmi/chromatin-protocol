@@ -29,7 +29,10 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(None — define in next milestone with `/gsd:new-milestone`)
+<!-- v2.0 Closed Node Model -->
+- [ ] Access control: allowed_keys config restricts which pubkeys can connect
+- [ ] Fully closed node: only authorized pubkeys can read or write
+- [ ] Larger blob limit: bump from 15 MiB to ~50-100 MiB for medium files (documents, images, small archives)
 
 ### Out of Scope
 
@@ -47,13 +50,24 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
+## Current Milestone: v2.0 Closed Node Model
+
+**Goal:** Transform chromatindb from an open permissionless node into a hostable secure storage service with access control and larger blob support.
+
+**Target features:**
+- Closed node model with allowed_keys config (restrict who can connect)
+- Fully authenticated access — only authorized pubkeys can read or write
+- Larger blob limit for medium files (documents, images, small archives)
+
+## Context
+
 Shipped v1.0 with 9,449 LOC C++20, 155 tests, 586 assertions.
 Built in 3 days across 8 phases and 21 plans.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (SHIPPED): chromatindb** — database node network
+- **Layer 1 (v1.0 SHIPPED, v2.0 IN PROGRESS): chromatindb** — database node network
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
@@ -97,4 +111,4 @@ Previous projects inform design:
 | TTL as protocol invariant | constexpr, not user-configurable — simplifies protocol | ✓ Good — eliminated config complexity |
 
 ---
-*Last updated: 2026-03-05 after v1.0 milestone*
+*Last updated: 2026-03-05 after v2.0 milestone started*
