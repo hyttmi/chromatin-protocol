@@ -18,8 +18,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
 - [x] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
 - [x] **Phase 6: Complete Sync Receive Side** - Wire up receive-side sync orchestration in PeerManager (gap closure)
-- [ ] **Phase 7: Peer Discovery** - Peer exchange protocol so nodes discover peers beyond bootstrap (gap closure)
-- [ ] **Phase 8: Verification & Cleanup** - Missing verification docs, traceability updates, dead code cleanup (gap closure)
+- [x] **Phase 7: Peer Discovery** - Peer exchange protocol so nodes discover peers beyond bootstrap (gap closure)
+- [x] **Phase 8: Verification & Cleanup** - Missing verification docs, traceability updates, dead code cleanup (gap closure)
 
 ## Phase Details
 
@@ -128,6 +128,11 @@ Plans:
   1. After connecting to a bootstrap peer, node requests and receives a peer list
   2. Node connects to discovered peers that it doesn't already know about
   3. Node responds to peer list requests from other nodes
+**Plans**: 2 plans
+
+Plans:
+- [x] 07-01: PEX wire types + Server::connect_once + PEX protocol in PeerManager
+- [x] 07-02: Peer persistence (peers.json) + 3-node E2E peer discovery test
 
 ### Phase 8: Verification & Cleanup
 **Goal**: Close all verification gaps, update traceability, and clean up tech debt identified by milestone audit
@@ -139,6 +144,11 @@ Plans:
   2. 05-VERIFICATION.md exists and confirms all Phase 5 requirements satisfied (including gap closure phases)
   3. Dead handshake code removed from connection.cpp (HandshakeInitiator hs2, orphaned API)
   4. REQUIREMENTS.md traceability table fully up-to-date with all phases complete
+**Plans**: 2 plans
+
+Plans:
+- [x] 08-01: Verification documents for Phase 2 (Storage Engine) and Phase 5 (Peer System)
+- [x] 08-02: Dead code cleanup (connection.cpp hs2) and traceability finalization
 
 ## Progress
 
@@ -153,5 +163,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 4. Networking | 3/3 | Complete | 2026-03-04 |
 | 5. Peer System | 3/3 | Complete | 2026-03-04 |
 | 6. Complete Sync Receive Side | 2/2 | Complete | 2026-03-05 |
-| 7. Peer Discovery | 0/? | Pending | - |
-| 8. Verification & Cleanup | 0/? | Pending | - |
+| 7. Peer Discovery | 2/2 | Complete | 2026-03-05 |
+| 8. Verification & Cleanup | 2/2 | Complete | 2026-03-05 |
