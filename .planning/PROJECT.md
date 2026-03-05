@@ -90,6 +90,7 @@ Previous projects inform design:
 - **Config**: nlohmann/json
 - **No DHT**: Explicit constraint from lessons learned
 - **No OpenSSL**: Prefer minimal deps — liboqs for PQ, libsodium for symmetric
+- **No shortcuts**: No inefficient code, no lazy workarounds. Code must be correct and efficient — always.
 
 ## Key Decisions
 
