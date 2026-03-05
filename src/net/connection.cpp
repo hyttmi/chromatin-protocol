@@ -148,35 +148,7 @@ asio::awaitable<bool> Connection::do_handshake() {
         // Temporarily take the keys for auth phase
         auto temp_keys = hs.take_session_keys();
 
-        // Step 3: Send encrypted auth (using handshake's internal counters)
-        // The handshake creates the encrypted frame internally
-        HandshakeInitiator hs2(identity_);
-        // Actually, we can't re-derive keys. Let me restructure.
-        // The handshake class already encrypts auth messages internally.
-        // We just need to send the bytes it produces over the network.
-
-        // Re-approach: don't take_session_keys yet. Let the handshake manage counters.
-        // Problem: we already called take_session_keys...
-
-        // Simplest fix: recreate the handshake flow using raw keys directly.
-        // Actually, the cleaner approach: the handshake returns encrypted frames.
-        // We just send those frames as raw (they're already encrypted + framed).
-        // But the handshake's write_frame adds its own length-prefix framing inside the
-        // encrypted data. We need to be careful about framing layers.
-
-        // Let me reconsider: HandshakeInitiator.create_auth_message() returns:
-        // write_frame(TransportMessage, key, counter) which is:
-        //   [4B header][ciphertext]
-        // We send that as raw, which adds ANOTHER 4B header on top.
-        // The receiver calls recv_raw() which strips the outer header,
-        // giving them [4B header][ciphertext] which they pass to read_frame().
-
-        // Wait, that's double-framing. The issue: write_frame already creates
-        // [4B header][ciphertext]. If we send_raw() that, recv_raw() returns
-        // [4B header][ciphertext]. Then we'd call read_frame() on that which
-        // correctly parses the inner header + ciphertext. This actually works!
-
-        // Let's restart cleanly. Don't take keys early.
+        // Step 3: Send encrypted auth using the derived session keys
         session_keys_ = std::move(temp_keys);
 
         // Step 3: Send auth -- create the encrypted auth frame
