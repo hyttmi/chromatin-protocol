@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A decentralized, post-quantum secure database node. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network. Anyone can run a node. Anyone can generate a keypair and start writing. The system is designed to be technically unstoppable.
+A decentralized, post-quantum secure database node. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Anyone can run a node. Anyone can generate a keypair and start writing. The system is designed to be technically unstoppable.
 
 The database layer is intentionally dumb — it stores signed blobs, verifies ownership, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
 
@@ -14,22 +14,22 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ Namespace model: SHA3-256(pubkey) = namespace, verified on every write — v1.0
+- ✓ Blob storage: signed blobs stored in libmdbx keyed by namespace + hash — v1.0
+- ✓ Signature verification: ML-DSA-87 sig check on every ingest — v1.0
+- ✓ Content-addressed dedup: SHA3-256 hash as blob ID — v1.0
+- ✓ Sequence index: per-namespace monotonic seq_num for efficient polling — v1.0
+- ✓ TTL and expiry: 7-day default, TTL=0 permanent, automatic pruning — v1.0
+- ✓ Peer discovery: bootstrap nodes + peer exchange — v1.0
+- ✓ Node-to-node sync: hash-list diff, bidirectional — v1.0
+- ✓ PQ-encrypted transport: ML-KEM-1024 key exchange + ChaCha20-Poly1305 channel — v1.0
+- ✓ Write ACKs: confirmation after local storage — v1.0
+- ✓ Wire format: FlatBuffers with deterministic encoding for signing — v1.0
+- ✓ Query interface: "give me namespace X since seq_num Y", "list all namespaces" — v1.0
 
 ### Active
 
-- [ ] Namespace model: SHA3-256(pubkey) = namespace, verified on every write
-- [ ] Blob storage: signed blobs stored in libmdbx keyed by namespace + hash
-- [ ] Signature verification: ML-DSA-87 sig check on every ingest
-- [ ] Content-addressed dedup: SHA3-256 hash as blob ID
-- [ ] Sequence index: per-namespace monotonic seq_num for efficient polling
-- [ ] TTL and expiry: 7-day default, TTL=0 permanent, automatic pruning
-- [ ] Peer discovery: bootstrap nodes + peer exchange (no DHT)
-- [ ] Node-to-node sync: hash-list diff, bidirectional, resumable
-- [ ] PQ-encrypted transport: ML-KEM-1024 key exchange + AES-256-GCM channel
-- [ ] Write ACKs: confirmation with replication count
-- [ ] Wire format: FlatBuffers with deterministic encoding for signing
-- [ ] Query interface: "give me namespace X since seq_num Y", "give me all namespaces"
+(None — define in next milestone with `/gsd:new-milestone`)
 
 ### Out of Scope
 
@@ -41,11 +41,19 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - Encrypted envelopes — relay/app layer concern
 - DHT or gossip protocol — proven unreliable in previous projects
 - Layer 2 (Relay) and Layer 3 (Client) — future work
+- HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted TCP only
+- NAT traversal / hole punching — server daemon assumes reachable address
+- OpenSSL — prefer minimal deps (liboqs + libsodium)
 
 ## Context
 
+Shipped v1.0 with 9,449 LOC C++20, 155 tests, 586 assertions.
+Built in 3 days across 8 phases and 21 plans.
+
+Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
+
 Three-layer architecture (building bottom-up):
-- **Layer 1 (NOW): chromatindb** — database node network
+- **Layer 1 (SHIPPED): chromatindb** — database node network
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
@@ -54,54 +62,39 @@ Previous projects inform design:
 - **DNA messenger**: DHT storage unreliable. SQLite-as-cache on client worked.
 - **PQCC**: PQ crypto stack proven and production-ready. Reuse directly.
 
-Blob format on the wire:
-```
-Blob {
-  namespace:  [32B]     SHA3-256(pubkey)
-  pubkey:     [2592B]   ML-DSA-87 public key
-  data:       [bytes]   opaque payload
-  ttl:        u32       seconds until expiry (0 = permanent, default 604800)
-  timestamp:  u64       wall clock time of creation
-  signature:  [4627B]   ML-DSA-87 signature over (namespace || data || ttl || timestamp)
-}
-
-Computed:
-  hash    = SHA3-256(blob content) — blob ID, dedup key
-  seq_num = assigned by receiving node (local ordering per namespace)
-```
-
-Storage model (libmdbx):
-- **Blobs**: signed data, keyed by namespace + hash
-- **Sequence index**: per-namespace monotonic seq_num → blob hash
-- **Expiry index**: sorted by expiry timestamp for efficient pruning
-- **Peer state**: per-peer sync progress
-
 ## Constraints
 
 - **Crypto (PQ)**: liboqs — ML-DSA-87 (signing), ML-KEM-1024 (key exchange), SHA3-256 (hashing)
-- **Crypto (symmetric)**: libsodium — ChaCha20-Poly1305 (AEAD) + KDF. No OpenSSL.
+- **Crypto (symmetric)**: libsodium — ChaCha20-Poly1305 (AEAD) + HKDF-SHA256 (KDF). No OpenSSL.
 - **Storage**: libmdbx — LMDB-compatible, crash-safe
 - **Wire format**: FlatBuffers — deterministic encoding required for signing
 - **Language**: C++20, CMake, FetchContent for all dependencies (always use latest available version)
+- **Networking**: Standalone Asio with C++20 coroutines
 - **Sync fingerprints**: xxHash (XXH3)
 - **Testing**: Catch2
 - **Logging**: spdlog
 - **Config**: nlohmann/json
 - **No DHT**: Explicit constraint from lessons learned
-- **No OpenSSL**: Prefer minimal deps — liboqs for PQ, small audited lib for symmetric
+- **No OpenSSL**: Prefer minimal deps — liboqs for PQ, libsodium for symmetric
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| No DHT, use bootstrap + peer exchange | Kademlia proved too complex and unreliable in previous projects | — Pending |
-| libmdbx over SQLite for node storage | LMDB-style MVCC fits high-throughput concurrent reads; crash-safe | — Pending |
-| FlatBuffers over Protobuf | Deterministic encoding needed for signing; zero-copy deserialization | — Pending |
-| ML-DSA-87 + ML-KEM-1024 (NIST Cat 5) | Maximum PQ security; proven in PQCC project | — Pending |
-| No OpenSSL (prefer minimal deps) | Use liboqs for PQ (ML-KEM/ML-DSA) + libsodium for symmetric (ChaCha20-Poly1305, KDF) | — Pending |
-| ChaCha20-Poly1305 over AES-256-GCM | Software-fast, constant-time, no hardware dependency. Used by WireGuard, TLS 1.3 | — Pending |
-| Canonical signing (not raw FlatBuffer) | Sign SHA3-256(namespace\|\|data\|\|ttl\|\|timestamp), independent of wire format. Irreversible decision | — Pending |
-| Database is intentionally dumb | Separation of concerns: db stores blobs, app layer interprets them | — Pending |
+| No DHT, use bootstrap + peer exchange | Kademlia proved too complex and unreliable in previous projects | ✓ Good — PEX works cleanly, zero DHT complexity |
+| libmdbx over SQLite for node storage | LMDB-style MVCC fits high-throughput concurrent reads; crash-safe | ✓ Good — ACID guarantees proven, pimpl isolates header |
+| FlatBuffers over Protobuf | Deterministic encoding needed for signing; zero-copy deserialization | ✓ Good — ForceDefaults(true) makes it work |
+| ML-DSA-87 + ML-KEM-1024 (NIST Cat 5) | Maximum PQ security; proven in PQCC project | ✓ Good — large keys (2592B pub, 4896B sec) but acceptable |
+| No OpenSSL (prefer minimal deps) | Use liboqs for PQ + libsodium for symmetric | ✓ Good — clean separation, smaller attack surface |
+| ChaCha20-Poly1305 over AES-256-GCM | Software-fast, constant-time, no hardware dependency | ✓ Good — used by WireGuard, TLS 1.3 |
+| Canonical signing (not raw FlatBuffer) | Sign SHA3-256(namespace\|\|data\|\|ttl\|\|timestamp), independent of wire format | ✓ Good — stable across FlatBuffer changes |
+| Database is intentionally dumb | Separation of concerns: db stores blobs, app layer interprets them | ✓ Good — clean layer boundary |
+| Standalone Asio with C++20 coroutines | Lightweight async, no Boost dependency | ✓ Good — co_await pattern works well |
+| Sequential sync protocol (Phase A/B/C) | Avoids TCP deadlock from bidirectional sends | ✓ Good — simple and reliable |
+| Inline PEX after sync | Prevents AEAD nonce desync from concurrent message streams | ✓ Good — serialized per-connection |
+| Deque for peers_ container | Prevents pointer invalidation on push_back during coroutine suspension | ✓ Good — fixed nasty coroutine bug |
+| Timer-cancel pattern for sync inbox | steady_timer on stack, pointer in PeerInfo, cancel to wake | ✓ Good — clean async message queue |
+| TTL as protocol invariant | constexpr, not user-configurable — simplifies protocol | ✓ Good — eliminated config complexity |
 
 ---
-*Last updated: 2026-03-03 after Phase 1 context discussion*
+*Last updated: 2026-03-05 after v1.0 milestone*
