@@ -41,7 +41,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   1. All source files live under the /db directory layout with updated CMakeLists.txt
   2. Every C++ namespace reference and FlatBuffers schema uses chromatindb:: instead of chromatin::
   3. All 155 existing tests pass after a clean build (rm -rf build && cmake && make && ctest)
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 09-01-PLAN.md -- Move src/ to db/ directory layout and update all paths
+- [ ] 09-02-PLAN.md -- Rename namespace to chromatindb:: and verify clean build
 
 ### Phase 10: Access Control
 **Goal**: Node operators can restrict which pubkeys connect, creating a fully closed node that rejects unauthorized peers
@@ -80,6 +82,6 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 | 6. Complete Sync Receive Side | v1.0 | 2/2 | Complete | 2026-03-05 |
 | 7. Peer Discovery | v1.0 | 2/2 | Complete | 2026-03-05 |
 | 8. Verification & Cleanup | v1.0 | 2/2 | Complete | 2026-03-05 |
-| 9. Source Restructure | v2.0 | 0/? | Not started | - |
+| 9. Source Restructure | v2.0 | 0/2 | Planned | - |
 | 10. Access Control | v2.0 | 0/? | Not started | - |
 | 11. Larger Blob Support | v2.0 | 0/? | Not started | - |
