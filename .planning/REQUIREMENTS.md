@@ -58,26 +58,26 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STRUCT-01 | — | Pending |
-| STRUCT-02 | — | Pending |
-| STRUCT-03 | — | Pending |
-| ACL-01 | — | Pending |
-| ACL-02 | — | Pending |
-| ACL-03 | — | Pending |
-| ACL-04 | — | Pending |
-| ACL-05 | — | Pending |
-| BLOB-01 | — | Pending |
-| BLOB-02 | — | Pending |
-| BLOB-03 | — | Pending |
-| BLOB-04 | — | Pending |
-| BLOB-05 | — | Pending |
-| BLOB-06 | — | Pending |
+| STRUCT-01 | Phase 9 | Pending |
+| STRUCT-02 | Phase 9 | Pending |
+| STRUCT-03 | Phase 9 | Pending |
+| ACL-01 | Phase 10 | Pending |
+| ACL-02 | Phase 10 | Pending |
+| ACL-03 | Phase 10 | Pending |
+| ACL-04 | Phase 10 | Pending |
+| ACL-05 | Phase 10 | Pending |
+| BLOB-01 | Phase 11 | Pending |
+| BLOB-02 | Phase 11 | Pending |
+| BLOB-03 | Phase 11 | Pending |
+| BLOB-04 | Phase 11 | Pending |
+| BLOB-05 | Phase 11 | Pending |
+| BLOB-06 | Phase 11 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14/14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-05*
-*Last updated: 2026-03-05 after initial definition*
+*Last updated: 2026-03-05 after roadmap creation*
