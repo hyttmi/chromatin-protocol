@@ -45,7 +45,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 ### Discovery
 
 - [x] **DISC-01**: Node connects to hardcoded/configured bootstrap nodes on startup
-- [ ] **DISC-02**: Node receives peer lists from bootstrap nodes and connects to discovered peers
+- [x] **DISC-02**: Node receives peer lists from bootstrap nodes and connects to discovered peers
 
 ### Sync
 
@@ -145,7 +145,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TRNS-05 | Phase 4: Networking | Complete |
 | DAEM-03 | Phase 4: Networking | Complete |
 | DISC-01 | Phase 5: Peer System | Complete |
-| DISC-02 | Phase 7: Peer Discovery | Pending |
+| DISC-02 | Phase 7: Peer Discovery | Complete |
 | SYNC-01 | Phase 6: Complete Sync Receive Side | Complete |
 | SYNC-02 | Phase 6: Complete Sync Receive Side | Complete |
 | SYNC-03 | Phase 6: Complete Sync Receive Side | Complete |
