@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-05T15:19:17.529Z"
+last_updated: "2026-03-05T17:55:00.000Z"
 progress:
   total_phases: 8
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
+  completed_phases: 7
+  total_plans: 19
+  completed_plans: 19
 ---
 
 # Project State
@@ -18,23 +18,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 6 -- Complete sync receive side (gap closure)
+**Current focus:** Phase 7 -- Peer Discovery (gap closure) -- COMPLETE
 
 ## Current Position
 
-Phase: 6 of 8 (Complete Sync Receive Side) -- PHASE COMPLETE
+Phase: 7 of 8 (Peer Discovery) -- PHASE COMPLETE
 Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 6 complete. Sync fully verified E2E. Phase 7 next.
-Last activity: 2026-03-05 -- Phase 6 Plan 02 executed (E2E sync test strengthening + bug fixes)
+Status: Phase 7 complete. PEX protocol + peer persistence + 3-node E2E test. Phase 8 next.
+Last activity: 2026-03-05 -- Phase 7 Plans 01+02 executed (PEX protocol, persistence, 3-node E2E)
 
-Progress: [########=-] 86%
+Progress: [#########-] 93%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
+- Total plans completed: 19
 - Average duration: ~9 min
-- Total execution time: ~150 min
+- Total execution time: ~185 min
 
 **By Phase:**
 
@@ -46,10 +46,11 @@ Progress: [########=-] 86%
 | 4. Networking | 3/3 | ~35 min | ~12 min |
 | 5. Peer System | 3/3 | ~37 min | ~12 min |
 | 6. Sync Receive | 2/2 | ~16 min | ~8 min |
+| 7. Peer Discovery | 2/2 | ~35 min | ~18 min |
 
 **Recent Trend:**
-- Last 3 plans: 05-03 (~10m), 06-01 (~5m), 06-02 (~11m)
-- 06-02 slower: discovered 4 bugs in sync protocol (on_connected timing, dual SyncRequest race, Phase C deadlock, expired timestamps in tests)
+- Last 3 plans: 06-02 (~11m), 07-01 (~25m), 07-02 (~10m)
+- 07-01 slower: discovered 2 critical bugs (AEAD nonce desync from concurrent sends, segfault from vector invalidation)
 
 *Updated after each plan completion*
 
@@ -96,6 +97,12 @@ Recent decisions affecting current work:
 - [Phase 6]: on_ready callback fires between handshake and message_loop (not after run() returns)
 - [Phase 6]: Only TCP initiator triggers sync-on-connect (prevents dual SyncRequest race)
 - [Phase 6]: Phase C sends all BlobRequests upfront, then processes mixed BlobTransfer/BlobRequest responses
+- [Phase 7]: PEX exchange inline after sync completes (same coroutine) to prevent AEAD nonce desync
+- [Phase 7]: Never co_spawn(detached) for send_message -- all sends must be serialized per connection
+- [Phase 7]: std::deque for peers_ (not vector) to prevent pointer invalidation on push_back during coroutine suspension
+- [Phase 7]: Snapshot connection pointers before iterating peers across co_await points
+- [Phase 7]: Persist peers only on successful connection; fail_count incremented at load, reset on connect, prune at 3
+- [Phase 7]: PeerListRequest/PeerListResponse routed through sync_inbox when syncing, spawns standalone handler when not
 
 ### Pending Todos
 
@@ -108,5 +115,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 06-02-PLAN.md (E2E sync tests + bug fixes). Phase 6 complete. Phase 7 next.
+Stopped at: Completed Phase 7 (Peer Discovery). PEX protocol + peer persistence + 3-node E2E. Phase 8 next.
 Resume file: None
