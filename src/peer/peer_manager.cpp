@@ -241,10 +241,11 @@ PeerManager::recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout) {
 asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn) {
     auto* peer = find_peer(conn);
     if (!peer || peer->syncing) co_return;
-
     peer->syncing = true;
+    peer->sync_inbox.clear();  // Fresh sync session -- set up BEFORE sending
 
     sync::SyncStats total_stats;
+    constexpr auto SYNC_TIMEOUT = std::chrono::seconds(30);
 
     // Send SyncRequest
     std::span<const uint8_t> empty{};
@@ -253,10 +254,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_return;
     }
 
-    // Wait for SyncAccept (handled via message loop -- for now we proceed directly
-    // as both sides can initiate independently)
+    // Wait for SyncAccept
+    auto accept_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+    if (!accept_msg || accept_msg->type != wire::TransportMsgType_SyncAccept) {
+        spdlog::warn("sync with {}: no SyncAccept received", conn->remote_address());
+        peer->syncing = false;
+        co_return;
+    }
 
-    // Exchange namespace lists
+    // Phase A: Send our data
     auto our_namespaces = engine_.list_namespaces();
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     if (!co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload)) {
@@ -264,7 +270,6 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_return;
     }
 
-    // For each of our namespaces, send hash lists
     for (const auto& ns_info : our_namespaces) {
         auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
         auto hl_payload = sync::SyncProtocol::encode_hash_list(ns_info.namespace_id, hashes);
@@ -274,15 +279,97 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         }
     }
 
-    // Send SyncComplete
     if (!co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty)) {
         peer->syncing = false;
         co_return;
     }
 
-    spdlog::info("Synced with peer {}: received {} blobs, sent {} blobs",
+    // Phase B: Receive peer's data
+    auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+    if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
+        spdlog::warn("sync with {}: expected NamespaceList", conn->remote_address());
+        peer->syncing = false;
+        co_return;
+    }
+    auto peer_namespaces = sync::SyncProtocol::decode_namespace_list(ns_msg->payload);
+
+    // Collect peer's hash lists
+    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
+    while (true) {
+        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (!msg) {
+            spdlog::warn("sync with {}: timeout waiting for HashList/SyncComplete",
+                         conn->remote_address());
+            peer->syncing = false;
+            co_return;
+        }
+        if (msg->type == wire::TransportMsgType_SyncComplete) break;
+        if (msg->type == wire::TransportMsgType_HashList) {
+            auto [ns, hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+            peer_hashes[ns] = std::move(hashes);
+        }
+    }
+
+    // Phase C: Compute diffs and exchange blobs
+    // C1: Request blobs we're missing from peer
+    for (const auto& [ns, their_hashes] : peer_hashes) {
+        auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
+        auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
+        if (missing.empty()) {
+            total_stats.namespaces_synced++;
+            continue;
+        }
+
+        // Send BlobRequest (reuse hash_list encoding -- same wire format)
+        auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
+        if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
+            peer->syncing = false;
+            co_return;
+        }
+
+        // Wait for BlobTransfer response
+        auto bt_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (bt_msg && bt_msg->type == wire::TransportMsgType_BlobTransfer) {
+            auto blobs = sync::SyncProtocol::decode_blob_transfer(bt_msg->payload);
+            auto s = sync_proto_.ingest_blobs(blobs);
+            total_stats.blobs_received += s.blobs_received;
+        }
+        total_stats.namespaces_synced++;
+    }
+
+    // C2: Handle incoming BlobRequests from peer (they may need our blobs)
+    // Drain any remaining messages in the inbox (BlobRequests from peer)
+    while (!peer->sync_inbox.empty()) {
+        auto msg = std::move(peer->sync_inbox.front());
+        peer->sync_inbox.pop_front();
+        if (msg.type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg.payload);
+            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
+            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
+            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
+            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+        }
+    }
+
+    // Also poll briefly for late-arriving BlobRequests
+    while (true) {
+        auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
+        if (!msg) break;  // No more messages
+        if (msg->type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
+            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
+            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
+            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+        } else {
+            break;  // Unexpected message type, done
+        }
+    }
+
+    spdlog::info("Synced with peer {}: received {} blobs, sent {} blobs, {} namespaces",
                  conn->remote_address(),
-                 total_stats.blobs_received, total_stats.blobs_sent);
+                 total_stats.blobs_received, total_stats.blobs_sent,
+                 total_stats.namespaces_synced);
 
     peer->syncing = false;
 }
@@ -290,17 +377,20 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr conn) {
     auto* peer = find_peer(conn);
     if (!peer) co_return;
+    peer->syncing = true;
+
+    sync::SyncStats total_stats;
+    constexpr auto SYNC_TIMEOUT = std::chrono::seconds(30);
 
     // Send SyncAccept
     std::span<const uint8_t> empty{};
     co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty);
 
-    // Our namespace list
+    // Phase A: Send our data
     auto our_namespaces = engine_.list_namespaces();
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
 
-    // Send our hash lists
     for (const auto& ns_info : our_namespaces) {
         auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
         auto hl_payload = sync::SyncProtocol::encode_hash_list(ns_info.namespace_id, hashes);
@@ -308,6 +398,86 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
 
     co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty);
+
+    // Phase B: Receive peer's data
+    auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+    if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
+        spdlog::warn("sync responder {}: expected NamespaceList", conn->remote_address());
+        peer->syncing = false;
+        co_return;
+    }
+    auto peer_namespaces = sync::SyncProtocol::decode_namespace_list(ns_msg->payload);
+
+    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
+    while (true) {
+        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (!msg) {
+            spdlog::warn("sync responder {}: timeout waiting for HashList/SyncComplete",
+                         conn->remote_address());
+            peer->syncing = false;
+            co_return;
+        }
+        if (msg->type == wire::TransportMsgType_SyncComplete) break;
+        if (msg->type == wire::TransportMsgType_HashList) {
+            auto [ns, hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+            peer_hashes[ns] = std::move(hashes);
+        }
+    }
+
+    // Phase C: Compute diffs, exchange blobs
+    for (const auto& [ns, their_hashes] : peer_hashes) {
+        auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
+        auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
+        if (missing.empty()) {
+            total_stats.namespaces_synced++;
+            continue;
+        }
+
+        auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
+        co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
+
+        auto bt_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        if (bt_msg && bt_msg->type == wire::TransportMsgType_BlobTransfer) {
+            auto blobs = sync::SyncProtocol::decode_blob_transfer(bt_msg->payload);
+            auto s = sync_proto_.ingest_blobs(blobs);
+            total_stats.blobs_received += s.blobs_received;
+        }
+        total_stats.namespaces_synced++;
+    }
+
+    // Handle incoming BlobRequests from peer
+    while (!peer->sync_inbox.empty()) {
+        auto msg = std::move(peer->sync_inbox.front());
+        peer->sync_inbox.pop_front();
+        if (msg.type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg.payload);
+            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
+            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
+            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
+            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+        }
+    }
+
+    while (true) {
+        auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
+        if (!msg) break;
+        if (msg->type == wire::TransportMsgType_BlobRequest) {
+            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
+            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
+            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
+            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+        } else {
+            break;
+        }
+    }
+
+    spdlog::info("Sync responder {}: received {} blobs, sent {} blobs, {} namespaces",
+                 conn->remote_address(),
+                 total_stats.blobs_received, total_stats.blobs_sent,
+                 total_stats.namespaces_synced);
+
+    peer->syncing = false;
 }
 
 asio::awaitable<void> PeerManager::sync_all_peers() {
