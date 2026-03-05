@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
 - [x] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
 - [x] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
-- [ ] **Phase 6: Complete Sync Receive Side** - Wire up receive-side sync orchestration in PeerManager (gap closure)
+- [x] **Phase 6: Complete Sync Receive Side** - Wire up receive-side sync orchestration in PeerManager (gap closure)
 - [ ] **Phase 7: Peer Discovery** - Peer exchange protocol so nodes discover peers beyond bootstrap (gap closure)
 - [ ] **Phase 8: Verification & Cleanup** - Missing verification docs, traceability updates, dead code cleanup (gap closure)
 
@@ -116,8 +116,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: Sync message queue + full bidirectional sync flow in PeerManager
-- [ ] 06-02: Strengthen E2E sync tests with strict blob verification
+- [x] 06-01: Sync message queue + full bidirectional sync flow in PeerManager
+- [x] 06-02: Strengthen E2E sync tests with strict blob verification
 
 ### Phase 7: Peer Discovery
 **Goal**: Nodes discover peers beyond their bootstrap list via peer exchange, expanding network connectivity
@@ -152,6 +152,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 3. Blob Engine | 2/2 | Complete | 2026-03-03 |
 | 4. Networking | 3/3 | Complete | 2026-03-04 |
 | 5. Peer System | 3/3 | Complete | 2026-03-04 |
-| 6. Complete Sync Receive Side | 0/2 | Pending | - |
+| 6. Complete Sync Receive Side | 2/2 | Complete | 2026-03-05 |
 | 7. Peer Discovery | 0/? | Pending | - |
 | 8. Verification & Cleanup | 0/? | Pending | - |

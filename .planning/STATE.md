@@ -8,7 +8,7 @@ progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 21
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 6 of 8 (Complete Sync Receive Side)
-Plan: 1 of 2 in current phase -- COMPLETE
-Status: Plan 06-01 complete. Bidirectional sync wired up. Plan 06-02 next.
-Last activity: 2026-03-05 -- Phase 6 Plan 01 executed (sync message queue + bidirectional sync flow)
+Phase: 6 of 8 (Complete Sync Receive Side) -- PHASE COMPLETE
+Plan: 2 of 2 in current phase -- COMPLETE
+Status: Phase 6 complete. Sync fully verified E2E. Phase 7 next.
+Last activity: 2026-03-05 -- Phase 6 Plan 02 executed (E2E sync test strengthening + bug fixes)
 
-Progress: [########--] 76%
+Progress: [########=-] 86%
 
 ## Performance Metrics
 
@@ -45,11 +45,11 @@ Progress: [########--] 76%
 | 3. Blob Engine | 2/2 | ~21 min | ~11 min |
 | 4. Networking | 3/3 | ~35 min | ~12 min |
 | 5. Peer System | 3/3 | ~37 min | ~12 min |
-| 6. Sync Receive | 1/2 | ~5 min | ~5 min |
+| 6. Sync Receive | 2/2 | ~16 min | ~8 min |
 
 **Recent Trend:**
-- Last 3 plans: 05-02 (~15m), 05-03 (~10m), 06-01 (~5m)
-- 06-01 fastest: clean plan with no deviations, timer-cancel pattern straightforward
+- Last 3 plans: 05-03 (~10m), 06-01 (~5m), 06-02 (~11m)
+- 06-02 slower: discovered 4 bugs in sync protocol (on_connected timing, dual SyncRequest race, Phase C deadlock, expired timestamps in tests)
 
 *Updated after each plan completion*
 
@@ -93,6 +93,9 @@ Recent decisions affecting current work:
 - [Phase 6]: Timer-cancel pattern for sync message queue (steady_timer on stack, pointer in PeerInfo, cancel to wake)
 - [Phase 6]: Sequential Phase A/B/C sync protocol to avoid TCP deadlock (send all, receive all, exchange blobs)
 - [Phase 6]: BlobRequest reuses hash_list wire encoding (encode_hash_list/decode_hash_list)
+- [Phase 6]: on_ready callback fires between handshake and message_loop (not after run() returns)
+- [Phase 6]: Only TCP initiator triggers sync-on-connect (prevents dual SyncRequest race)
+- [Phase 6]: Phase C sends all BlobRequests upfront, then processes mixed BlobTransfer/BlobRequest responses
 
 ### Pending Todos
 
@@ -105,5 +108,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 06-01-PLAN.md (sync message queue + bidirectional sync flow). Plan 06-02 next.
+Stopped at: Completed 06-02-PLAN.md (E2E sync tests + bug fixes). Phase 6 complete. Phase 7 next.
 Resume file: None
