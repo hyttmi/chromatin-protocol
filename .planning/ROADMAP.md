@@ -113,6 +113,11 @@ Plans:
   2. PeerManager calls SyncProtocol::diff_hashes() to identify missing blobs and sends BlobRequest
   3. PeerManager handles incoming BlobTransfer messages and calls SyncProtocol::ingest_blobs()
   4. Two nodes with different blob sets end up with the union of both sets after a sync cycle
+**Plans**: 2 plans
+
+Plans:
+- [ ] 06-01: Sync message queue + full bidirectional sync flow in PeerManager
+- [ ] 06-02: Strengthen E2E sync tests with strict blob verification
 
 ### Phase 7: Peer Discovery
 **Goal**: Nodes discover peers beyond their bootstrap list via peer exchange, expanding network connectivity
@@ -147,6 +152,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 3. Blob Engine | 2/2 | Complete | 2026-03-03 |
 | 4. Networking | 3/3 | Complete | 2026-03-04 |
 | 5. Peer System | 3/3 | Complete | 2026-03-04 |
-| 6. Complete Sync Receive Side | 0/? | Pending | - |
+| 6. Complete Sync Receive Side | 0/2 | Pending | - |
 | 7. Peer Discovery | 0/? | Pending | - |
 | 8. Verification & Cleanup | 0/? | Pending | - |
