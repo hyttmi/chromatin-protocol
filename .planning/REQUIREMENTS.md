@@ -36,15 +36,15 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Transport
 
-- [ ] **TRNS-01**: Node-to-node connections use ML-KEM-1024 key exchange to establish shared secret
-- [ ] **TRNS-02**: After key exchange, channel is encrypted with AES-256-GCM
-- [ ] **TRNS-03**: Transport includes mutual authentication via ML-DSA-87 signed key exchange
-- [ ] **TRNS-04**: Node listens for inbound TCP connections on configurable bind address
-- [ ] **TRNS-05**: Node makes outbound TCP connections to configured peers
+- [x] **TRNS-01**: Node-to-node connections use ML-KEM-1024 key exchange to establish shared secret
+- [x] **TRNS-02**: After key exchange, channel is encrypted with ChaCha20-Poly1305
+- [x] **TRNS-03**: Transport includes mutual authentication via ML-DSA-87 signed key exchange
+- [x] **TRNS-04**: Node listens for inbound TCP connections on configurable bind address
+- [x] **TRNS-05**: Node makes outbound TCP connections to configured peers
 
 ### Discovery
 
-- [ ] **DISC-01**: Node connects to hardcoded/configured bootstrap nodes on startup
+- [x] **DISC-01**: Node connects to hardcoded/configured bootstrap nodes on startup
 - [ ] **DISC-02**: Node receives peer lists from bootstrap nodes and connects to discovered peers
 
 ### Sync
@@ -66,7 +66,7 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 - [x] **DAEM-01**: Node reads configuration from JSON file (bind address, storage path, bootstrap peers, default TTL)
 - [x] **DAEM-02**: Node logs all operations via structured logging (spdlog)
-- [ ] **DAEM-03**: Node handles signals for graceful shutdown (drain connections, flush storage)
+- [x] **DAEM-03**: Node handles signals for graceful shutdown (drain connections, flush storage)
 - [x] **DAEM-04**: Node recovers cleanly from crashes (libmdbx ACID guarantees)
 
 ## v2 Requirements
@@ -138,17 +138,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QURY-01 | Phase 3: Blob Engine | Complete |
 | QURY-02 | Phase 3: Blob Engine | Complete |
 | ACKW-01 | Phase 3: Blob Engine | Complete |
-| TRNS-01 | Phase 4: Networking | Pending |
-| TRNS-02 | Phase 4: Networking | Pending |
-| TRNS-03 | Phase 4: Networking | Pending |
-| TRNS-04 | Phase 4: Networking | Pending |
-| TRNS-05 | Phase 4: Networking | Pending |
-| DAEM-03 | Phase 4: Networking | Pending |
-| DISC-01 | Phase 5: Peer System | Pending |
-| DISC-02 | Phase 5: Peer System | Pending |
-| SYNC-01 | Phase 5: Peer System | Pending |
-| SYNC-02 | Phase 5: Peer System | Pending |
-| SYNC-03 | Phase 5: Peer System | Pending |
+| TRNS-01 | Phase 4: Networking | Complete |
+| TRNS-02 | Phase 4: Networking | Complete |
+| TRNS-03 | Phase 4: Networking | Complete |
+| TRNS-04 | Phase 4: Networking | Complete |
+| TRNS-05 | Phase 4: Networking | Complete |
+| DAEM-03 | Phase 4: Networking | Complete |
+| DISC-01 | Phase 5: Peer System | Complete |
+| DISC-02 | Phase 7: Peer Discovery | Pending |
+| SYNC-01 | Phase 6: Complete Sync Receive Side | Pending |
+| SYNC-02 | Phase 6: Complete Sync Receive Side | Pending |
+| SYNC-03 | Phase 6: Complete Sync Receive Side | Pending |
 
 **Coverage:**
 - v1 requirements: 32 total
@@ -157,4 +157,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after Phase 2 completion*
+*Last updated: 2026-03-05 after milestone audit gap closure*

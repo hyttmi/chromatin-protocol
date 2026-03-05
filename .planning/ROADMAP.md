@@ -14,9 +14,12 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Crypto primitives, wire format schemas, config, logging, and node identity
 - [x] **Phase 2: Storage Engine** - libmdbx wrapper with all four sub-databases, batch writes, TTL expiry, and crash recovery
-- [ ] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
+- [x] **Phase 3: Blob Engine** - Ingest pipeline (verify, dedup, store), query interface, and write ACKs
 - [x] **Phase 4: Networking** - Asio event loop, PQ-encrypted transport with mutual auth, signal handling
-- [ ] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
+- [x] **Phase 5: Peer System** - Bootstrap discovery, hash-list diff sync, and daemon integration
+- [ ] **Phase 6: Complete Sync Receive Side** - Wire up receive-side sync orchestration in PeerManager (gap closure)
+- [ ] **Phase 7: Peer Discovery** - Peer exchange protocol so nodes discover peers beyond bootstrap (gap closure)
+- [ ] **Phase 8: Verification & Cleanup** - Missing verification docs, traceability updates, dead code cleanup (gap closure)
 
 ## Phase Details
 
@@ -65,8 +68,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: Storage StoreResult extension + BlobEngine ingest pipeline with fail-fast validation and write ACKs
-- [ ] 03-02: BlobEngine query methods (get_blobs_since, list_namespaces, get_blob) with comprehensive tests
+- [x] 03-01: Storage StoreResult extension + BlobEngine ingest pipeline with fail-fast validation and write ACKs
+- [x] 03-02: BlobEngine query methods (get_blobs_since, list_namespaces, get_blob) with comprehensive tests
 
 ### Phase 4: Networking
 **Goal**: Node can accept inbound and make outbound TCP connections over a PQ-encrypted, mutually authenticated channel, with async IO and graceful shutdown
@@ -93,22 +96,57 @@ Plans:
   2. Two nodes with different blob sets exchange hash lists and end up with the union of both sets (bidirectional sync)
   3. Expired blobs are not replicated during sync (dead data stays dead)
   4. A complete chromatindb daemon starts from config, joins the network, accepts blobs, replicates them to peers, and answers queries -- end to end
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
-- [ ] 05-03: TBD
+- [x] 05-01: Sync protocol + hash-list diff + config extensions
+- [x] 05-02: PeerManager with sync orchestration
+- [x] 05-03: Daemon CLI with E2E tests
+
+### Phase 6: Complete Sync Receive Side
+**Goal**: PeerManager orchestrates the full sync loop — receive peer's namespace/hash lists, compute diff, request missing blobs, receive and ingest them — completing bidirectional sync
+**Depends on**: Phase 5
+**Requirements**: SYNC-01, SYNC-02, SYNC-03
+**Gap Closure**: Closes sync receive-side gaps from audit
+**Success Criteria** (what must be TRUE):
+  1. PeerManager receives and parses peer's NamespaceList and HashList messages
+  2. PeerManager calls SyncProtocol::diff_hashes() to identify missing blobs and sends BlobRequest
+  3. PeerManager handles incoming BlobTransfer messages and calls SyncProtocol::ingest_blobs()
+  4. Two nodes with different blob sets end up with the union of both sets after a sync cycle
+
+### Phase 7: Peer Discovery
+**Goal**: Nodes discover peers beyond their bootstrap list via peer exchange, expanding network connectivity
+**Depends on**: Phase 5
+**Requirements**: DISC-02
+**Gap Closure**: Closes peer discovery gap from audit
+**Success Criteria** (what must be TRUE):
+  1. After connecting to a bootstrap peer, node requests and receives a peer list
+  2. Node connects to discovered peers that it doesn't already know about
+  3. Node responds to peer list requests from other nodes
+
+### Phase 8: Verification & Cleanup
+**Goal**: Close all verification gaps, update traceability, and clean up tech debt identified by milestone audit
+**Depends on**: Phase 6, Phase 7
+**Requirements**: STOR-01, STOR-02, STOR-03, STOR-04, STOR-05, STOR-06, DAEM-04, DISC-01
+**Gap Closure**: Closes verification gaps and tech debt from audit
+**Success Criteria** (what must be TRUE):
+  1. 02-VERIFICATION.md exists and confirms all Phase 2 requirements satisfied
+  2. 05-VERIFICATION.md exists and confirms all Phase 5 requirements satisfied (including gap closure phases)
+  3. Dead handshake code removed from connection.cpp (HandshakeInitiator hs2, orphaned API)
+  4. REQUIREMENTS.md traceability table fully up-to-date with all phases complete
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 4/4 | Complete | 2026-03-03 |
 | 2. Storage Engine | 3/3 | Complete | 2026-03-03 |
-| 3. Blob Engine | 0/2 | Not started | - |
+| 3. Blob Engine | 2/2 | Complete | 2026-03-03 |
 | 4. Networking | 3/3 | Complete | 2026-03-04 |
-| 5. Peer System | 0/3 | Not started | - |
+| 5. Peer System | 3/3 | Complete | 2026-03-04 |
+| 6. Complete Sync Receive Side | 0/? | Pending | - |
+| 7. Peer Discovery | 0/? | Pending | - |
+| 8. Verification & Cleanup | 0/? | Pending | - |
