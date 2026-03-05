@@ -49,9 +49,9 @@ Requirements for initial release (v0.1). Each maps to roadmap phases.
 
 ### Sync
 
-- [ ] **SYNC-01**: Nodes exchange blob hash lists to identify missing blobs (hash-list diff)
-- [ ] **SYNC-02**: Sync is bidirectional -- both nodes end up with the union of their data
-- [ ] **SYNC-03**: Sync skips expired blobs (don't replicate dead data)
+- [x] **SYNC-01**: Nodes exchange blob hash lists to identify missing blobs (hash-list diff)
+- [x] **SYNC-02**: Sync is bidirectional -- both nodes end up with the union of their data
+- [x] **SYNC-03**: Sync skips expired blobs (don't replicate dead data)
 
 ### Query
 
@@ -146,9 +146,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DAEM-03 | Phase 4: Networking | Complete |
 | DISC-01 | Phase 5: Peer System | Complete |
 | DISC-02 | Phase 7: Peer Discovery | Pending |
-| SYNC-01 | Phase 6: Complete Sync Receive Side | Pending |
-| SYNC-02 | Phase 6: Complete Sync Receive Side | Pending |
-| SYNC-03 | Phase 6: Complete Sync Receive Side | Pending |
+| SYNC-01 | Phase 6: Complete Sync Receive Side | Complete |
+| SYNC-02 | Phase 6: Complete Sync Receive Side | Complete |
+| SYNC-03 | Phase 6: Complete Sync Receive Side | Complete |
 
 **Coverage:**
 - v1 requirements: 32 total

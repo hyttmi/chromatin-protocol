@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-04T18:23:00.000Z"
+status: in-progress
+last_updated: "2026-03-05T14:57:36.000Z"
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 8
+  completed_phases: 5
+  total_plans: 21
+  completed_plans: 16
 ---
 
 # Project State
@@ -18,23 +18,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 4: Networking -- COMPLETE
+**Current focus:** Phase 6 -- Complete sync receive side (gap closure)
 
 ## Current Position
 
-Phase: 4 of 5 (Networking) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Phase 4 complete, ready for Phase 5 (Peer System)
-Last activity: 2026-03-04 -- Phase 4 Plans 01-03 executed (Asio + framing, PQ handshake, TCP server)
+Phase: 6 of 8 (Complete Sync Receive Side)
+Plan: 1 of 2 in current phase -- COMPLETE
+Status: Plan 06-01 complete. Bidirectional sync wired up. Plan 06-02 next.
+Last activity: 2026-03-05 -- Phase 6 Plan 01 executed (sync message queue + bidirectional sync flow)
 
-Progress: [#########.] 95%
+Progress: [########--] 76%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: ~8 min
-- Total execution time: ~73 min
+- Total plans completed: 16
+- Average duration: ~9 min
+- Total execution time: ~150 min
 
 **By Phase:**
 
@@ -44,10 +44,12 @@ Progress: [#########.] 95%
 | 2. Storage Engine | 3 | ~25 min | ~8 min |
 | 3. Blob Engine | 2/2 | ~21 min | ~11 min |
 | 4. Networking | 3/3 | ~35 min | ~12 min |
+| 5. Peer System | 3/3 | ~37 min | ~12 min |
+| 6. Sync Receive | 1/2 | ~5 min | ~5 min |
 
 **Recent Trend:**
-- Last 3 plans: 04-01 (~10m), 04-02 (~10m), 04-03 (~15m)
-- 04-03 slowest: TCP integration required fixing framing layer mismatch
+- Last 3 plans: 05-02 (~15m), 05-03 (~10m), 06-01 (~5m)
+- 06-01 fastest: clean plan with no deviations, timer-cancel pattern straightforward
 
 *Updated after each plan completion*
 
@@ -83,6 +85,14 @@ Recent decisions affecting current work:
 - [Phase 4]: Connection does handshake inline (not via HandshakeInitiator/Responder classes)
 - [Phase 4]: Session keys directional: HKDF context "chromatin-init-to-resp-v1" / "chromatin-resp-to-init-v1"
 - [Phase 4]: Both sides include signing pubkey in KEM exchange for session fingerprint computation
+- [Phase 5]: SyncProtocol is synchronous for testability -- async orchestration in PeerManager
+- [Phase 5]: Binary wire format for sync payloads (big-endian, matches framing pattern)
+- [Phase 5]: Pass lambda as callable to co_spawn (never invoke with trailing `()` -- coroutine lifetime bug)
+- [Phase 5]: Snapshot connections vector before iterating in drain() to avoid iterator invalidation
+- [Phase 5]: Only set reconnect in on_close after handshake succeeds (prevents double reconnect)
+- [Phase 6]: Timer-cancel pattern for sync message queue (steady_timer on stack, pointer in PeerInfo, cancel to wake)
+- [Phase 6]: Sequential Phase A/B/C sync protocol to avoid TCP deadlock (send all, receive all, exchange blobs)
+- [Phase 6]: BlobRequest reuses hash_list wire encoding (encode_hash_list/decode_hash_list)
 
 ### Pending Todos
 
@@ -94,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-04
-Stopped at: Completed Phase 4 (Networking -- all 3 plans executed)
+Last session: 2026-03-05
+Stopped at: Completed 06-01-PLAN.md (sync message queue + bidirectional sync flow). Plan 06-02 next.
 Resume file: None
