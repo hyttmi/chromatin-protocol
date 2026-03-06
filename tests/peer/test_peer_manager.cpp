@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <random>
 #include <cstring>
+#include <ctime>
 
 #include "db/acl/access_control.h"
 #include "db/peer/peer_manager.h"
@@ -36,6 +37,18 @@ struct TempDir {
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
 };
+
+/// Convert a 32-byte namespace hash to 64-char hex string (for allowed_keys config).
+std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
+    static constexpr char hex_chars[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (auto b : ns) {
+        result += hex_chars[(b >> 4) & 0xF];
+        result += hex_chars[b & 0xF];
+    }
+    return result;
+}
 
 /// Build a properly signed BlobData using a NodeIdentity.
 chromatindb::wire::BlobData make_signed_blob(
@@ -172,4 +185,231 @@ TEST_CASE("PEX constants", "[peer][pex]") {
     REQUIRE(PeerManager::MAX_DISCOVERED_PER_ROUND == 3);
     REQUIRE(PeerManager::MAX_PERSISTED_PEERS == 100);
     REQUIRE(PeerManager::MAX_PERSIST_FAILURES == 3);
+}
+
+// ============================================================================
+// ACL integration tests (ACL-02, ACL-03)
+// ============================================================================
+
+TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    // Node1 is in closed mode with a random allowed key (NOT id2's namespace)
+    // Use a dummy key that won't match any real peer
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14250";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 1;
+    cfg1.max_peers = 32;
+    cfg1.allowed_keys = {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
+
+    // Node2 is open mode, bootstraps to node1
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14251";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14250"};
+    cfg2.sync_interval_seconds = 1;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob in node1 -- should NOT reach node2 because node2 is unauthorized
+    auto blob1 = make_signed_blob(id1, "closed-secret", 604800, now);
+    auto r1 = eng1.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    REQUIRE(acl1.is_closed_mode());
+    REQUIRE_FALSE(acl2.is_closed_mode());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Run long enough for connection attempt + rejection
+    ioc.run_for(std::chrono::seconds(5));
+
+    // Node1 should have 0 peers (rejected node2)
+    REQUIRE(pm1.peer_count() == 0);
+
+    // Node2 should NOT have node1's blob (sync never happened)
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.empty());
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    // Node1 is in closed mode but allows id2's namespace
+    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14252";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 1;
+    cfg1.max_peers = 32;
+    cfg1.allowed_keys = {id2_ns_hex};
+
+    // Node2 is also in closed mode and allows id1's namespace
+    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14253";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14252"};
+    cfg2.sync_interval_seconds = 1;
+    cfg2.max_peers = 32;
+    cfg2.allowed_keys = {id1_ns_hex};
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob in node1
+    auto blob1 = make_signed_blob(id1, "closed-authorized", 604800, now);
+    auto r1 = eng1.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    REQUIRE(acl1.is_closed_mode());
+    REQUIRE(acl2.is_closed_mode());
+    REQUIRE(acl1.is_allowed(id2.namespace_id()));
+    REQUIRE(acl2.is_allowed(id1.namespace_id()));
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Run long enough for handshake + ACL check + sync
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Both nodes should have 1 peer (each other)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // Node2 should have node1's blob (sync worked despite closed mode)
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+    REQUIRE(n2_blobs[0].data == blob1.data);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
+    TempDir tmp1, tmp2, tmp3;
+
+    auto id_a = NodeIdentity::load_or_generate(tmp1.path);
+    auto id_b = NodeIdentity::load_or_generate(tmp2.path);
+    auto id_c = NodeIdentity::load_or_generate(tmp3.path);
+
+    auto ns_a = ns_to_hex(id_a.namespace_id());
+    auto ns_b = ns_to_hex(id_b.namespace_id());
+    auto ns_c = ns_to_hex(id_c.namespace_id());
+
+    // All three nodes in closed mode, each allowing the other two
+    Config cfg_a;
+    cfg_a.bind_address = "127.0.0.1:14254";
+    cfg_a.data_dir = tmp1.path.string();
+    cfg_a.sync_interval_seconds = 1;
+    cfg_a.max_peers = 32;
+    cfg_a.allowed_keys = {ns_b, ns_c};
+
+    Config cfg_b;
+    cfg_b.bind_address = "127.0.0.1:14255";
+    cfg_b.data_dir = tmp2.path.string();
+    cfg_b.bootstrap_peers = {"127.0.0.1:14254"};
+    cfg_b.sync_interval_seconds = 1;
+    cfg_b.max_peers = 32;
+    cfg_b.allowed_keys = {ns_a, ns_c};
+
+    // Node C only knows B (not A). In open mode it would discover A via PEX.
+    // In closed mode, PEX is disabled, so C should NOT discover A.
+    Config cfg_c;
+    cfg_c.bind_address = "127.0.0.1:14256";
+    cfg_c.data_dir = tmp3.path.string();
+    cfg_c.bootstrap_peers = {"127.0.0.1:14255"};
+    cfg_c.sync_interval_seconds = 1;
+    cfg_c.max_peers = 32;
+    cfg_c.allowed_keys = {ns_a, ns_b};
+
+    Storage store_a(tmp1.path.string());
+    Storage store_b(tmp2.path.string());
+    Storage store_c(tmp3.path.string());
+    BlobEngine eng_a(store_a);
+    BlobEngine eng_b(store_b);
+    BlobEngine eng_c(store_c);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob in A -- C should NOT get it via PEX discovery
+    auto blob_a = make_signed_blob(id_a, "closed-pex-test", 604800, now);
+    auto r_a = eng_a.ingest(blob_a);
+    REQUIRE(r_a.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl_a(cfg_a.allowed_keys, id_a.namespace_id());
+    AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
+    AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
+
+    PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, acl_a);
+    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, acl_b);
+    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, acl_c);
+
+    pm_a.start();
+    pm_b.start();
+
+    // Let A and B connect
+    ioc.run_for(std::chrono::seconds(5));
+
+    pm_c.start();
+
+    // Run long enough that PEX would have happened in open mode
+    ioc.run_for(std::chrono::seconds(12));
+
+    // B synced with A (direct bootstrap connection)
+    auto b_has_a = eng_b.get_blobs_since(id_a.namespace_id(), 0);
+    REQUIRE(b_has_a.size() == 1);
+
+    // C should have exactly 1 peer (B only) -- PEX was disabled, so no discovery of A.
+    // In open mode (see test_daemon.cpp "three nodes: peer discovery via PEX"),
+    // C would have peer_count >= 2 after PEX discovery. In closed mode, C stays at 1.
+    REQUIRE(pm_c.peer_count() == 1);
+
+    // C MAY have A's blob via transitive sync through B -- that's expected.
+    // The key assertion is that C did NOT discover A as a peer (peer_count == 1 above).
+
+    pm_a.stop();
+    pm_b.stop();
+    pm_c.stop();
+    ioc.run_for(std::chrono::seconds(2));
 }
