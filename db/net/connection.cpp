@@ -3,7 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <cstring>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 Connection::Connection(asio::ip::tcp::socket socket,
                        const identity::NodeIdentity& identity,
@@ -383,4 +383,4 @@ asio::awaitable<void> Connection::close_gracefully() {
     close();
 }
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

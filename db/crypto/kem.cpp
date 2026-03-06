@@ -1,7 +1,7 @@
 #include "db/crypto/kem.h"
 #include <oqs/oqs.h>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 KEM::KEM() {
     kem_ = OQS_KEM_new(OQS_KEM_alg_ml_kem_1024);
@@ -93,4 +93,4 @@ std::span<const uint8_t> KEM::export_secret_key() const {
     return secret_key_.span();
 }
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

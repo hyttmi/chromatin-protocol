@@ -6,12 +6,12 @@
 #include <thread>
 #include <chrono>
 
-using namespace chromatin::net;
-using namespace chromatin::wire;
+using namespace chromatindb::net;
+using namespace chromatindb::wire;
 
 TEST_CASE("Two connections complete handshake over loopback", "[connection]") {
-    auto initiator_id = chromatin::identity::NodeIdentity::generate();
-    auto responder_id = chromatin::identity::NodeIdentity::generate();
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
 
     asio::io_context ioc;
 
@@ -67,8 +67,8 @@ TEST_CASE("Two connections complete handshake over loopback", "[connection]") {
 }
 
 TEST_CASE("Connection handshake succeeds over loopback", "[connection]") {
-    auto init_id = chromatin::identity::NodeIdentity::generate();
-    auto resp_id = chromatin::identity::NodeIdentity::generate();
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
 
     asio::io_context ioc;
 
@@ -121,8 +121,8 @@ TEST_CASE("Connection handshake succeeds over loopback", "[connection]") {
 }
 
 TEST_CASE("Connection sends and receives encrypted data", "[connection]") {
-    auto init_id = chromatin::identity::NodeIdentity::generate();
-    auto resp_id = chromatin::identity::NodeIdentity::generate();
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
 
     asio::io_context ioc;
 
@@ -198,8 +198,8 @@ TEST_CASE("Connection sends and receives encrypted data", "[connection]") {
 }
 
 TEST_CASE("Connection goodbye sends properly", "[connection]") {
-    auto init_id = chromatin::identity::NodeIdentity::generate();
-    auto resp_id = chromatin::identity::NodeIdentity::generate();
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
 
     asio::io_context ioc;
 

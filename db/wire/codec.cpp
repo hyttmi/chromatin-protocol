@@ -5,7 +5,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace chromatin::wire {
+namespace chromatindb::wire {
 
 std::vector<uint8_t> encode_blob(const BlobData& blob) {
     flatbuffers::FlatBufferBuilder builder(8192);
@@ -16,7 +16,7 @@ std::vector<uint8_t> encode_blob(const BlobData& blob) {
     auto dt = builder.CreateVector(blob.data.data(), blob.data.size());
     auto sg = builder.CreateVector(blob.signature.data(), blob.signature.size());
 
-    auto fb_blob = chromatin::wire::CreateBlob(builder, ns, pk, dt, blob.ttl, blob.timestamp, sg);
+    auto fb_blob = chromatindb::wire::CreateBlob(builder, ns, pk, dt, blob.ttl, blob.timestamp, sg);
     builder.Finish(fb_blob);
 
     auto* ptr = builder.GetBufferPointer();
@@ -26,11 +26,11 @@ std::vector<uint8_t> encode_blob(const BlobData& blob) {
 
 BlobData decode_blob(std::span<const uint8_t> buffer) {
     auto verifier = flatbuffers::Verifier(buffer.data(), buffer.size());
-    if (!chromatin::wire::VerifyBlobBuffer(verifier)) {
+    if (!chromatindb::wire::VerifyBlobBuffer(verifier)) {
         throw std::runtime_error("Invalid FlatBuffer blob data");
     }
 
-    auto fb_blob = chromatin::wire::GetBlob(buffer.data());
+    auto fb_blob = chromatindb::wire::GetBlob(buffer.data());
     BlobData result;
 
     if (fb_blob->namespace_id() && fb_blob->namespace_id()->size() == 32) {
@@ -94,4 +94,4 @@ std::array<uint8_t, 32> blob_hash(std::span<const uint8_t> encoded_blob) {
     return crypto::sha3_256(encoded_blob);
 }
 
-} // namespace chromatin::wire
+} // namespace chromatindb::wire

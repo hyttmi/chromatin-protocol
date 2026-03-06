@@ -37,13 +37,13 @@ struct TempDir {
 };
 
 /// Build a properly signed BlobData using a NodeIdentity.
-chromatin::wire::BlobData make_signed_blob(
-    const chromatin::identity::NodeIdentity& id,
+chromatindb::wire::BlobData make_signed_blob(
+    const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
     uint64_t timestamp = 1000)
 {
-    chromatin::wire::BlobData blob;
+    chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
@@ -51,7 +51,7 @@ chromatin::wire::BlobData make_signed_blob(
     blob.timestamp = timestamp;
 
     // Build canonical signing input and sign it
-    auto signing_input = chromatin::wire::build_signing_input(
+    auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
 
@@ -64,12 +64,12 @@ uint64_t test_clock() { return test_clock_value; }
 
 } // anonymous namespace
 
-using chromatin::config::Config;
-using chromatin::engine::BlobEngine;
-using chromatin::storage::Storage;
-using chromatin::storage::NamespaceInfo;
-using chromatin::sync::SyncProtocol;
-using chromatin::sync::SyncStats;
+using chromatindb::config::Config;
+using chromatindb::engine::BlobEngine;
+using chromatindb::storage::Storage;
+using chromatindb::storage::NamespaceInfo;
+using chromatindb::sync::SyncProtocol;
+using chromatindb::sync::SyncStats;
 
 // ============================================================================
 // Config Phase 5 fields
@@ -92,7 +92,7 @@ TEST_CASE("Config Phase 5 custom values from JSON", "[sync][config]") {
         f << R"({"max_peers": 64, "sync_interval_seconds": 30})";
     }
 
-    auto cfg = chromatin::config::load_config(config_file);
+    auto cfg = chromatindb::config::load_config(config_file);
     REQUIRE(cfg.max_peers == 64);
     REQUIRE(cfg.sync_interval_seconds == 30);
 }
@@ -102,7 +102,7 @@ TEST_CASE("Config Phase 5 custom values from JSON", "[sync][config]") {
 // ============================================================================
 
 TEST_CASE("is_blob_expired", "[sync]") {
-    chromatin::wire::BlobData blob;
+    chromatindb::wire::BlobData blob;
 
     SECTION("permanent blob is never expired") {
         blob.ttl = 0;
@@ -141,7 +141,7 @@ TEST_CASE("collect_namespace_hashes returns non-expired hashes", "[sync]") {
     Storage store(tmp.path.string(), test_clock);
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Set clock to 10000
     test_clock_value = 10000;
@@ -222,8 +222,8 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     BlobEngine engine1(store1);
     BlobEngine engine2(store2);
 
-    auto id1 = chromatin::identity::NodeIdentity::generate();
-    auto id2 = chromatin::identity::NodeIdentity::generate();
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+    auto id2 = chromatindb::identity::NodeIdentity::generate();
 
     // Store blobs in engine1 (from id1)
     auto blob_a = make_signed_blob(id1, "blob-A", 604800, 9000);
@@ -287,7 +287,7 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     BlobEngine engine1(store1);
     BlobEngine engine2(store2);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Store a non-expired blob
     auto blob_ok = make_signed_blob(id, "not-expired", 604800, 9000);
@@ -318,7 +318,7 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     BlobEngine engine1(store1);
     BlobEngine engine2(store2);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Both engines have the same blob
     auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
@@ -345,7 +345,7 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     BlobEngine engine1(store1);
     BlobEngine engine2(store2);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Engine1 has data, engine2 has nothing
     auto blob = make_signed_blob(id, "only-on-one-side", 604800, 9000);
@@ -419,12 +419,12 @@ TEST_CASE("hash list encode/decode round-trip", "[sync][codec]") {
 }
 
 TEST_CASE("blob transfer encode/decode round-trip", "[sync][codec]") {
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     auto blob1 = make_signed_blob(id, "transfer-1", 604800, 9000);
     auto blob2 = make_signed_blob(id, "transfer-2", 604800, 9001);
 
-    std::vector<chromatin::wire::BlobData> blobs = {blob1, blob2};
+    std::vector<chromatindb::wire::BlobData> blobs = {blob1, blob2};
 
     auto encoded = SyncProtocol::encode_blob_transfer(blobs);
     auto decoded = SyncProtocol::decode_blob_transfer(encoded);

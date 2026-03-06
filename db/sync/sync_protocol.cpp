@@ -5,7 +5,7 @@
 #include <cstring>
 #include <unordered_set>
 
-namespace chromatin::sync {
+namespace chromatindb::sync {
 
 SyncProtocol::SyncProtocol(engine::BlobEngine& engine, storage::Clock clock)
     : engine_(engine), clock_(clock) {}
@@ -282,4 +282,4 @@ std::vector<wire::BlobData> SyncProtocol::decode_blob_transfer(
     return blobs;
 }
 
-} // namespace chromatin::sync
+} // namespace chromatindb::sync

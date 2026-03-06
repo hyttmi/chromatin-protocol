@@ -2,7 +2,7 @@
 #include <sodium.h>
 #include <stdexcept>
 
-namespace chromatin::crypto::KDF {
+namespace chromatindb::crypto::KDF {
 
 SecureBytes extract(std::span<const uint8_t> salt,
                     std::span<const uint8_t> ikm) {
@@ -53,4 +53,4 @@ SecureBytes derive(std::span<const uint8_t> salt,
     return expand(prk.span(), context, output_len);
 }
 
-} // namespace chromatin::crypto::KDF
+} // namespace chromatindb::crypto::KDF

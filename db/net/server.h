@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 /// TCP server: accepts inbound connections, connects to peers, manages lifecycles.
 class Server {
@@ -86,4 +86,4 @@ private:
     AcceptFilter accept_filter_;
 };
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

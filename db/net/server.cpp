@@ -3,7 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <algorithm>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 Server::Server(const config::Config& config,
                const identity::NodeIdentity& identity,
@@ -322,4 +322,4 @@ asio::awaitable<void> Server::drain(std::chrono::seconds timeout) {
     ioc_.stop();
 }
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

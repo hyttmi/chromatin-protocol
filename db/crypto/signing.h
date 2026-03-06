@@ -8,7 +8,7 @@
 
 struct OQS_SIG;
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 /// ML-DSA-87 digital signature RAII wrapper.
 /// Owns a keypair and provides sign/verify operations.
@@ -62,4 +62,4 @@ private:
     SecureBytes secret_key_;
 };
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

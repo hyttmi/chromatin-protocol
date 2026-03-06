@@ -35,13 +35,13 @@ struct TempDir {
 
 /// Create a test BlobData with specified TTL and timestamp.
 /// Uses deterministic namespace derived from a counter for test isolation.
-chromatin::wire::BlobData make_test_blob(
+chromatindb::wire::BlobData make_test_blob(
     uint8_t ns_byte,
     const std::string& payload,
     uint32_t ttl = 604800,
     uint64_t timestamp = 1000)
 {
-    chromatin::wire::BlobData blob;
+    chromatindb::wire::BlobData blob;
     blob.namespace_id.fill(ns_byte);
     blob.pubkey.resize(2592, ns_byte);
     blob.data.assign(payload.begin(), payload.end());
@@ -52,15 +52,15 @@ chromatin::wire::BlobData make_test_blob(
 }
 
 /// Compute the blob hash for a given BlobData.
-std::array<uint8_t, 32> compute_hash(const chromatin::wire::BlobData& blob) {
-    auto encoded = chromatin::wire::encode_blob(blob);
-    return chromatin::wire::blob_hash(encoded);
+std::array<uint8_t, 32> compute_hash(const chromatindb::wire::BlobData& blob) {
+    auto encoded = chromatindb::wire::encode_blob(blob);
+    return chromatindb::wire::blob_hash(encoded);
 }
 
 } // anonymous namespace
 
-using chromatin::storage::Storage;
-using chromatin::storage::StoreResult;
+using chromatindb::storage::Storage;
+using chromatindb::storage::StoreResult;
 
 // ============================================================================
 // Plan 02-01: Basic storage operations
@@ -495,11 +495,11 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
     Storage store(tmp.path.string());
 
     // Use two distinct identities for proper namespace_ids
-    auto id1 = chromatin::identity::NodeIdentity::generate();
-    auto id2 = chromatin::identity::NodeIdentity::generate();
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+    auto id2 = chromatindb::identity::NodeIdentity::generate();
 
     // Create blobs with proper namespace IDs
-    chromatin::wire::BlobData blob1;
+    chromatindb::wire::BlobData blob1;
     std::memcpy(blob1.namespace_id.data(), id1.namespace_id().data(), 32);
     blob1.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
     blob1.data = {'a', 'b', 'c'};
@@ -507,7 +507,7 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
     blob1.timestamp = 1000;
     blob1.signature.resize(4627, 0x42);
 
-    chromatin::wire::BlobData blob1b;
+    chromatindb::wire::BlobData blob1b;
     std::memcpy(blob1b.namespace_id.data(), id1.namespace_id().data(), 32);
     blob1b.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
     blob1b.data = {'d', 'e', 'f'};
@@ -515,7 +515,7 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
     blob1b.timestamp = 1001;
     blob1b.signature.resize(4627, 0x42);
 
-    chromatin::wire::BlobData blob2;
+    chromatindb::wire::BlobData blob2;
     std::memcpy(blob2.namespace_id.data(), id2.namespace_id().data(), 32);
     blob2.pubkey.assign(id2.public_key().begin(), id2.public_key().end());
     blob2.data = {'x', 'y', 'z'};

@@ -11,7 +11,7 @@
 
 #include "db/wire/codec.h"
 
-namespace chromatin::storage {
+namespace chromatindb::storage {
 
 /// Result of a store_blob operation.
 struct StoreResult {
@@ -105,4 +105,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace chromatin::storage
+} // namespace chromatindb::storage

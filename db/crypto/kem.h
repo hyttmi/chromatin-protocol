@@ -9,7 +9,7 @@
 
 struct OQS_KEM;
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 /// ML-KEM-1024 key encapsulation mechanism RAII wrapper.
 /// Provides key exchange via encapsulation/decapsulation.
@@ -59,4 +59,4 @@ private:
     SecureBytes secret_key_;
 };
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

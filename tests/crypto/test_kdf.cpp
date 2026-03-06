@@ -4,7 +4,7 @@
 #include "db/crypto/aead.h"
 #include <cstring>
 
-using namespace chromatin::crypto;
+using namespace chromatindb::crypto;
 
 TEST_CASE("KDF extract produces PRK of correct size", "[kdf]") {
     std::vector<uint8_t> salt = {1, 2, 3, 4};

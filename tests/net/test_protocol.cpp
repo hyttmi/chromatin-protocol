@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "db/net/protocol.h"
 
-using namespace chromatin::net;
-using namespace chromatin::wire;
+using namespace chromatindb::net;
+using namespace chromatindb::wire;
 
 TEST_CASE("TransportCodec encode/decode round-trip", "[protocol]") {
     SECTION("KemPubkey round-trips") {

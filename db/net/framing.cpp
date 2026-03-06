@@ -3,7 +3,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 std::array<uint8_t, crypto::AEAD::NONCE_SIZE> make_nonce(uint64_t counter) {
     std::array<uint8_t, crypto::AEAD::NONCE_SIZE> nonce{};
@@ -76,4 +76,4 @@ std::optional<FrameResult> read_frame(
     };
 }
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

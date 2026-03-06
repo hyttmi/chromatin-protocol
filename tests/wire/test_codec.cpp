@@ -4,7 +4,7 @@
 #include <cstring>
 #include <vector>
 
-using namespace chromatin::wire;
+using namespace chromatindb::wire;
 
 static BlobData make_test_blob() {
     BlobData blob;
@@ -138,7 +138,7 @@ TEST_CASE("blob_hash produces SHA3-256 of full encoded blob", "[codec]") {
     auto encoded = encode_blob(blob);
 
     auto hash = blob_hash(encoded);
-    auto expected = chromatin::crypto::sha3_256(std::span<const uint8_t>(encoded));
+    auto expected = chromatindb::crypto::sha3_256(std::span<const uint8_t>(encoded));
 
     REQUIRE(hash == expected);
 }

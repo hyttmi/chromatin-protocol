@@ -4,16 +4,16 @@
 #include "db/crypto/kem.h"
 #include "db/crypto/aead.h"
 
-using namespace chromatin::net;
-using namespace chromatin::crypto;
+using namespace chromatindb::net;
+using namespace chromatindb::crypto;
 
 TEST_CASE("derive_session_keys produces correct directional keys", "[handshake][keys]") {
     // Simulate a shared secret from KEM
     auto shared_secret = AEAD::keygen(); // 32 bytes, just for testing
 
     // Create two identities
-    auto initiator = chromatin::identity::NodeIdentity::generate();
-    auto responder = chromatin::identity::NodeIdentity::generate();
+    auto initiator = chromatindb::identity::NodeIdentity::generate();
+    auto responder = chromatindb::identity::NodeIdentity::generate();
 
     auto init_keys = derive_session_keys(
         shared_secret.span(),
@@ -82,8 +82,8 @@ TEST_CASE("derive_session_keys produces correct directional keys", "[handshake][
 }
 
 TEST_CASE("Full handshake happy path", "[handshake]") {
-    auto initiator_id = chromatin::identity::NodeIdentity::generate();
-    auto responder_id = chromatin::identity::NodeIdentity::generate();
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
 
     HandshakeInitiator initiator(initiator_id);
     HandshakeResponder responder(responder_id);
@@ -144,7 +144,7 @@ TEST_CASE("Full handshake happy path", "[handshake]") {
 }
 
 TEST_CASE("Handshake with self (same identity) succeeds", "[handshake]") {
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     HandshakeInitiator initiator(id);
     HandshakeResponder responder(id);
@@ -166,9 +166,9 @@ TEST_CASE("Handshake with self (same identity) succeeds", "[handshake]") {
 }
 
 TEST_CASE("Handshake auth failure with wrong identity", "[handshake]") {
-    auto initiator_id = chromatin::identity::NodeIdentity::generate();
-    auto responder_id = chromatin::identity::NodeIdentity::generate();
-    auto imposter_id = chromatin::identity::NodeIdentity::generate();
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
+    auto imposter_id = chromatindb::identity::NodeIdentity::generate();
 
     // Setup: initiator and responder complete KEM exchange
     HandshakeInitiator initiator(initiator_id);
@@ -204,37 +204,37 @@ TEST_CASE("Handshake auth failure with wrong identity", "[handshake]") {
 
 TEST_CASE("Handshake rejects invalid KEM messages", "[handshake]") {
     SECTION("responder rejects wrong message type") {
-        auto id = chromatin::identity::NodeIdentity::generate();
+        auto id = chromatindb::identity::NodeIdentity::generate();
         HandshakeResponder responder(id);
 
         // Send a Ping message instead of KemPubkey
         std::span<const uint8_t> empty{};
         auto wrong_msg = TransportCodec::encode(
-            chromatin::wire::TransportMsgType_Ping, empty);
+            chromatindb::wire::TransportMsgType_Ping, empty);
         auto [err, _] = responder.receive_kem_pubkey(wrong_msg);
         REQUIRE(err == HandshakeError::InvalidMessage);
     }
 
     SECTION("responder rejects wrong payload size") {
-        auto id = chromatin::identity::NodeIdentity::generate();
+        auto id = chromatindb::identity::NodeIdentity::generate();
         HandshakeResponder responder(id);
 
         // Send KemPubkey with wrong size payload
         std::vector<uint8_t> bad_payload(100, 0x42);
         auto bad_msg = TransportCodec::encode(
-            chromatin::wire::TransportMsgType_KemPubkey, bad_payload);
+            chromatindb::wire::TransportMsgType_KemPubkey, bad_payload);
         auto [err, _] = responder.receive_kem_pubkey(bad_msg);
         REQUIRE(err == HandshakeError::InvalidMessage);
     }
 
     SECTION("initiator rejects wrong message type for ciphertext") {
-        auto init_id = chromatin::identity::NodeIdentity::generate();
+        auto init_id = chromatindb::identity::NodeIdentity::generate();
         HandshakeInitiator initiator(init_id);
         initiator.start(); // Generate KEM keypair
 
         std::span<const uint8_t> empty{};
         auto wrong_msg = TransportCodec::encode(
-            chromatin::wire::TransportMsgType_Ping, empty);
+            chromatindb::wire::TransportMsgType_Ping, empty);
         auto err = initiator.receive_kem_ciphertext(wrong_msg);
         REQUIRE(err == HandshakeError::InvalidMessage);
     }

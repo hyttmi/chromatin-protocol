@@ -8,7 +8,7 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
-namespace chromatin::engine {
+namespace chromatindb::engine {
 
 // =============================================================================
 // IngestResult factory methods
@@ -130,4 +130,4 @@ std::vector<storage::NamespaceInfo> BlobEngine::list_namespaces() {
     return storage_.list_namespaces();
 }
 
-} // namespace chromatin::engine
+} // namespace chromatindb::engine

@@ -2,7 +2,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace chromatin::identity {
+namespace chromatindb::identity {
 
 NodeIdentity NodeIdentity::generate() {
     NodeIdentity id;
@@ -94,4 +94,4 @@ void NodeIdentity::save_to(const std::filesystem::path& data_dir) const {
     key_file.write(reinterpret_cast<const char*>(sk.data()), sk.size());
 }
 
-} // namespace chromatin::identity
+} // namespace chromatindb::identity

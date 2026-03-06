@@ -23,7 +23,7 @@
 #include <string>
 #include <vector>
 
-namespace chromatin::peer {
+namespace chromatindb::peer {
 
 /// A persisted peer address with connection tracking.
 struct PersistedPeer {
@@ -154,4 +154,4 @@ private:
     bool stopping_ = false;
 };
 
-} // namespace chromatin::peer
+} // namespace chromatindb::peer

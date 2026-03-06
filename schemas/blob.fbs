@@ -1,4 +1,4 @@
-namespace chromatin.wire;
+namespace chromatindb.wire;
 
 table Blob {
   namespace_id:[ubyte];   // 32 bytes: SHA3-256(pubkey)

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-using namespace chromatin::crypto;
+using namespace chromatindb::crypto;
 
 TEST_CASE("SHA3-256 of empty input produces known digest", "[hash]") {
     // Known SHA3-256("") = a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a

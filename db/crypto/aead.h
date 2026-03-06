@@ -7,7 +7,7 @@
 #include <span>
 #include <vector>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 /// ChaCha20-Poly1305 AEAD encryption/decryption.
 /// Uses libsodium's IETF construction.
@@ -38,4 +38,4 @@ std::optional<std::vector<uint8_t>> decrypt(
 
 } // namespace AEAD
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

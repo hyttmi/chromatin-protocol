@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <fstream>
 
-using namespace chromatin::identity;
+using namespace chromatindb::identity;
 
 TEST_CASE("NodeIdentity::generate creates valid identity", "[identity]") {
     auto id = NodeIdentity::generate();
@@ -16,7 +16,7 @@ TEST_CASE("NodeIdentity::generate creates valid identity", "[identity]") {
 
     // Public key should be ML-DSA-87 size
     auto pk = id.public_key();
-    REQUIRE(pk.size() == chromatin::crypto::Signer::PUBLIC_KEY_SIZE);
+    REQUIRE(pk.size() == chromatindb::crypto::Signer::PUBLIC_KEY_SIZE);
 
     // Namespace should not be all zeros
     bool all_zero = true;
@@ -31,7 +31,7 @@ TEST_CASE("Namespace derivation is deterministic: SHA3-256(pubkey)", "[identity]
 
     // Manually derive namespace from public key
     auto pk = id.public_key();
-    auto expected_ns = chromatin::crypto::sha3_256(pk);
+    auto expected_ns = chromatindb::crypto::sha3_256(pk);
 
     auto actual_ns = id.namespace_id();
     REQUIRE(std::equal(actual_ns.begin(), actual_ns.end(), expected_ns.begin()));
@@ -53,10 +53,10 @@ TEST_CASE("NodeIdentity can sign messages", "[identity]") {
     std::vector<uint8_t> msg = {1, 2, 3, 4, 5};
     auto sig = id.sign(msg);
 
-    REQUIRE(sig.size() == chromatin::crypto::Signer::MAX_SIGNATURE_SIZE);
+    REQUIRE(sig.size() == chromatindb::crypto::Signer::MAX_SIGNATURE_SIZE);
 
     // Verify signature with public key
-    REQUIRE(chromatin::crypto::Signer::verify(msg, sig, id.public_key()));
+    REQUIRE(chromatindb::crypto::Signer::verify(msg, sig, id.public_key()));
 }
 
 TEST_CASE("save_to and load_from round-trip correctly", "[identity]") {
@@ -70,8 +70,8 @@ TEST_CASE("save_to and load_from round-trip correctly", "[identity]") {
     // Verify files exist with correct sizes
     REQUIRE(std::filesystem::exists(tmp_dir / "node.pub"));
     REQUIRE(std::filesystem::exists(tmp_dir / "node.key"));
-    REQUIRE(std::filesystem::file_size(tmp_dir / "node.pub") == chromatin::crypto::Signer::PUBLIC_KEY_SIZE);
-    REQUIRE(std::filesystem::file_size(tmp_dir / "node.key") == chromatin::crypto::Signer::SECRET_KEY_SIZE);
+    REQUIRE(std::filesystem::file_size(tmp_dir / "node.pub") == chromatindb::crypto::Signer::PUBLIC_KEY_SIZE);
+    REQUIRE(std::filesystem::file_size(tmp_dir / "node.key") == chromatindb::crypto::Signer::SECRET_KEY_SIZE);
 
     // Load and compare
     auto loaded = NodeIdentity::load_from(tmp_dir);
@@ -87,7 +87,7 @@ TEST_CASE("save_to and load_from round-trip correctly", "[identity]") {
     // Loaded identity can sign and original can verify
     std::vector<uint8_t> msg = {10, 20, 30};
     auto sig = loaded.sign(msg);
-    REQUIRE(chromatin::crypto::Signer::verify(msg, sig, original.public_key()));
+    REQUIRE(chromatindb::crypto::Signer::verify(msg, sig, original.public_key()));
 
     std::filesystem::remove_all(tmp_dir);
 }
@@ -108,7 +108,7 @@ TEST_CASE("load_from throws on corrupt key file", "[identity]") {
     // Write a valid-size pub file but wrong-size key file
     {
         std::ofstream pub(tmp_dir / "node.pub", std::ios::binary);
-        std::vector<uint8_t> fake_pub(chromatin::crypto::Signer::PUBLIC_KEY_SIZE, 0);
+        std::vector<uint8_t> fake_pub(chromatindb::crypto::Signer::PUBLIC_KEY_SIZE, 0);
         pub.write(reinterpret_cast<const char*>(fake_pub.data()), fake_pub.size());
     }
     {

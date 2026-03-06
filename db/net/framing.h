@@ -7,7 +7,7 @@
 #include <span>
 #include <vector>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 /// Maximum frame payload size (16 MB).
 constexpr uint32_t MAX_FRAME_SIZE = 16 * 1024 * 1024;
@@ -43,4 +43,4 @@ std::optional<FrameResult> read_frame(
     std::span<const uint8_t> key,
     uint64_t counter);
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

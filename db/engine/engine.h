@@ -10,7 +10,7 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
-namespace chromatin::engine {
+namespace chromatindb::engine {
 
 /// Error codes for blob ingest rejection.
 enum class IngestError {
@@ -92,4 +92,4 @@ private:
     storage::Storage& storage_;
 };
 
-} // namespace chromatin::engine
+} // namespace chromatindb::engine

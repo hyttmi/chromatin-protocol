@@ -74,7 +74,7 @@ int cmd_keygen(int argc, char* argv[]) {
 
     fs::create_directories(data_dir);
 
-    auto identity = chromatin::identity::NodeIdentity::generate();
+    auto identity = chromatindb::identity::NodeIdentity::generate();
     identity.save_to(data_dir);
 
     std::cout << "Generated identity at " << data_dir << "/" << std::endl;
@@ -91,18 +91,18 @@ int cmd_run(int argc, char* argv[]) {
         args.push_back(argv[i]);
     }
 
-    auto config = chromatin::config::parse_args(
+    auto config = chromatindb::config::parse_args(
         static_cast<int>(args.size()), args.data());
 
     // Initialize logging
-    chromatin::logging::init(config.log_level);
+    chromatindb::logging::init(config.log_level);
 
     spdlog::info("chromatindb {}", VERSION);
     spdlog::info("bind: {}", config.bind_address);
     spdlog::info("data: {}", config.data_dir);
 
     // Create/load identity
-    auto identity = chromatin::identity::NodeIdentity::load_or_generate(config.data_dir);
+    auto identity = chromatindb::identity::NodeIdentity::load_or_generate(config.data_dir);
     spdlog::info("namespace: {}", to_hex(identity.namespace_id()));
 
     // Log bootstrap peers
@@ -117,11 +117,11 @@ int cmd_run(int argc, char* argv[]) {
     spdlog::info("sync interval: {}s", config.sync_interval_seconds);
 
     // Create components
-    chromatin::storage::Storage storage(config.data_dir);
-    chromatin::engine::BlobEngine engine(storage);
+    chromatindb::storage::Storage storage(config.data_dir);
+    chromatindb::engine::BlobEngine engine(storage);
     asio::io_context ioc;
 
-    chromatin::peer::PeerManager pm(config, identity, engine, storage, ioc);
+    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc);
     pm.start();
 
     // Periodic expiry scanner

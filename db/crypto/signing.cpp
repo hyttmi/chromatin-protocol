@@ -2,7 +2,7 @@
 #include <oqs/oqs.h>
 #include <cstring>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 Signer::Signer() {
     sig_ = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
@@ -109,4 +109,4 @@ Signer Signer::from_keypair(std::span<const uint8_t> pubkey,
     return s;
 }
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

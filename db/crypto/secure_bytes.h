@@ -7,7 +7,7 @@
 #include <utility>
 #include <span>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 /// Ensures sodium_init() is called exactly once.
 inline void ensure_sodium_init() {
@@ -92,4 +92,4 @@ private:
     size_t size_ = 0;
 };
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

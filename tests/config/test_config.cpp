@@ -3,7 +3,7 @@
 #include <fstream>
 #include <filesystem>
 
-using namespace chromatin::config;
+using namespace chromatindb::config;
 
 TEST_CASE("Default config has sensible values", "[config]") {
     Config cfg;
@@ -13,7 +13,7 @@ TEST_CASE("Default config has sensible values", "[config]") {
     REQUIRE(cfg.data_dir == "./data");
     REQUIRE(cfg.bootstrap_peers.empty());
     REQUIRE(cfg.log_level == "info");
-    REQUIRE(chromatin::config::BLOB_TTL_SECONDS == 604800);
+    REQUIRE(chromatindb::config::BLOB_TTL_SECONDS == 604800);
 }
 
 TEST_CASE("load_config with non-existent file returns defaults", "[config]") {
@@ -127,7 +127,7 @@ TEST_CASE("parse_args without --config uses base config", "[config]") {
 }
 
 TEST_CASE("BLOB_TTL_SECONDS is a protocol constant", "[config]") {
-    REQUIRE(chromatin::config::BLOB_TTL_SECONDS == 604800);  // 7 days
+    REQUIRE(chromatindb::config::BLOB_TTL_SECONDS == 604800);  // 7 days
     // Verify it's not part of Config struct (compile-time guarantee)
     // The fact that Config has no default_ttl field means it can't be overridden
 }

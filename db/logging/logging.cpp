@@ -2,7 +2,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <mutex>
 
-namespace chromatin::logging {
+namespace chromatindb::logging {
 
 static std::once_flag init_flag;
 static spdlog::level::level_enum global_level = spdlog::level::info;
@@ -38,4 +38,4 @@ std::shared_ptr<spdlog::logger> get_logger(const std::string& name) {
     return logger;
 }
 
-} // namespace chromatin::logging
+} // namespace chromatindb::logging

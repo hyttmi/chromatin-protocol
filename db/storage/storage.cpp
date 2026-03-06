@@ -11,7 +11,7 @@
 #include "db/crypto/hash.h"
 #include "db/wire/codec.h"
 
-namespace chromatin::storage {
+namespace chromatindb::storage {
 
 namespace fs = std::filesystem;
 
@@ -506,4 +506,4 @@ size_t Storage::run_expiry_scan() {
     return purged;
 }
 
-} // namespace chromatin::storage
+} // namespace chromatindb::storage

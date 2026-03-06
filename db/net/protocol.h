@@ -7,11 +7,11 @@
 
 #include "db/wire/transport_generated.h"
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 /// Decoded transport message.
 struct DecodedMessage {
-    chromatin::wire::TransportMsgType type;
+    chromatindb::wire::TransportMsgType type;
     std::vector<uint8_t> payload;
 };
 
@@ -19,7 +19,7 @@ struct DecodedMessage {
 /// Encodes/decodes TransportMessage for wire transmission.
 struct TransportCodec {
     /// Encode a transport message to FlatBuffer bytes.
-    static std::vector<uint8_t> encode(chromatin::wire::TransportMsgType type,
+    static std::vector<uint8_t> encode(chromatindb::wire::TransportMsgType type,
                                         std::span<const uint8_t> payload);
 
     /// Decode FlatBuffer bytes to a transport message.
@@ -27,4 +27,4 @@ struct TransportCodec {
     static std::optional<DecodedMessage> decode(std::span<const uint8_t> data);
 };
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

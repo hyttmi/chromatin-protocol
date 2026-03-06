@@ -3,9 +3,9 @@
 #include "db/net/protocol.h"
 #include "db/crypto/aead.h"
 
-using namespace chromatin::net;
-using namespace chromatin::crypto;
-using namespace chromatin::wire;
+using namespace chromatindb::net;
+using namespace chromatindb::crypto;
+using namespace chromatindb::wire;
 
 TEST_CASE("make_nonce produces correct nonces", "[framing]") {
     SECTION("counter 0 produces all zeros") {

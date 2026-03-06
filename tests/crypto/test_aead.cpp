@@ -3,7 +3,7 @@
 #include <sodium.h>
 #include <cstring>
 
-using namespace chromatin::crypto;
+using namespace chromatindb::crypto;
 
 static std::array<uint8_t, AEAD::NONCE_SIZE> make_nonce(uint8_t val = 0) {
     std::array<uint8_t, AEAD::NONCE_SIZE> nonce{};

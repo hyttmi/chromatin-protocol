@@ -37,20 +37,20 @@ struct TempDir {
     TempDir& operator=(const TempDir&) = delete;
 };
 
-chromatin::wire::BlobData make_signed_blob(
-    const chromatin::identity::NodeIdentity& id,
+chromatindb::wire::BlobData make_signed_blob(
+    const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
     uint64_t timestamp = 1000)
 {
-    chromatin::wire::BlobData blob;
+    chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = timestamp;
 
-    auto signing_input = chromatin::wire::build_signing_input(
+    auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
 
@@ -59,11 +59,11 @@ chromatin::wire::BlobData make_signed_blob(
 
 } // anonymous namespace
 
-using chromatin::config::Config;
-using chromatin::engine::BlobEngine;
-using chromatin::identity::NodeIdentity;
-using chromatin::peer::PeerManager;
-using chromatin::storage::Storage;
+using chromatindb::config::Config;
+using chromatindb::engine::BlobEngine;
+using chromatindb::identity::NodeIdentity;
+using chromatindb::peer::PeerManager;
+using chromatindb::storage::Storage;
 
 // ============================================================================
 // Keygen tests

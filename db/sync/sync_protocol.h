@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace chromatin::sync {
+namespace chromatindb::sync {
 
 /// Statistics from a sync round.
 struct SyncStats {
@@ -92,4 +92,4 @@ private:
     storage::Clock clock_;
 };
 
-} // namespace chromatin::sync
+} // namespace chromatindb::sync

@@ -2,7 +2,7 @@
 #include <sodium.h>
 #include <stdexcept>
 
-namespace chromatin::crypto::AEAD {
+namespace chromatindb::crypto::AEAD {
 
 SecureBytes keygen() {
     ensure_sodium_init();
@@ -80,4 +80,4 @@ std::optional<std::vector<uint8_t>> decrypt(
     return plaintext;
 }
 
-} // namespace chromatin::crypto::AEAD
+} // namespace chromatindb::crypto::AEAD

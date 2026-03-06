@@ -7,12 +7,12 @@
 #include <thread>
 #include <chrono>
 
-using namespace chromatin::net;
+using namespace chromatindb::net;
 
 TEST_CASE("Server starts and accepts inbound connection", "[server]") {
-    auto identity = chromatin::identity::NodeIdentity::generate();
+    auto identity = chromatindb::identity::NodeIdentity::generate();
 
-    chromatin::config::Config cfg;
+    chromatindb::config::Config cfg;
     cfg.bind_address = "127.0.0.1:0";  // random port -- Server binds to 0
 
     // Server needs a fixed port for the client to connect to.
@@ -27,7 +27,7 @@ TEST_CASE("Server starts and accepts inbound connection", "[server]") {
     server.start();
 
     // Connect a raw TCP client to verify accept works
-    auto client_id = chromatin::identity::NodeIdentity::generate();
+    auto client_id = chromatindb::identity::NodeIdentity::generate();
     bool connected = false;
 
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
@@ -49,9 +49,9 @@ TEST_CASE("Server starts and accepts inbound connection", "[server]") {
 }
 
 TEST_CASE("Server stop triggers draining state", "[server]") {
-    auto identity = chromatin::identity::NodeIdentity::generate();
+    auto identity = chromatindb::identity::NodeIdentity::generate();
 
-    chromatin::config::Config cfg;
+    chromatindb::config::Config cfg;
     cfg.bind_address = "127.0.0.1:44202";
 
     asio::io_context ioc;
@@ -68,8 +68,8 @@ TEST_CASE("Server stop triggers draining state", "[server]") {
 }
 
 TEST_CASE("Server connects to bootstrap peer", "[server]") {
-    auto server_id = chromatin::identity::NodeIdentity::generate();
-    auto peer_id = chromatin::identity::NodeIdentity::generate();
+    auto server_id = chromatindb::identity::NodeIdentity::generate();
+    auto peer_id = chromatindb::identity::NodeIdentity::generate();
 
     asio::io_context ioc;
 
@@ -86,7 +86,7 @@ TEST_CASE("Server connects to bootstrap peer", "[server]") {
     }, asio::detached);
 
     // Configure server with bootstrap peer
-    chromatin::config::Config cfg;
+    chromatindb::config::Config cfg;
     cfg.bind_address = "127.0.0.1:44204";
     cfg.bootstrap_peers = {"127.0.0.1:44203"};
 
@@ -108,10 +108,10 @@ TEST_CASE("Server connects to bootstrap peer", "[server]") {
 }
 
 TEST_CASE("Server handles full handshake with inbound peer", "[server]") {
-    auto server_id = chromatin::identity::NodeIdentity::generate();
-    auto client_id = chromatin::identity::NodeIdentity::generate();
+    auto server_id = chromatindb::identity::NodeIdentity::generate();
+    auto client_id = chromatindb::identity::NodeIdentity::generate();
 
-    chromatin::config::Config cfg;
+    chromatindb::config::Config cfg;
     cfg.bind_address = "127.0.0.1:44205";
 
     asio::io_context ioc;

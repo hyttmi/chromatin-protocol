@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstring>
 
-using namespace chromatin::crypto;
+using namespace chromatindb::crypto;
 
 TEST_CASE("ML-DSA-87 keypair generation produces correct sizes", "[signing]") {
     Signer signer;

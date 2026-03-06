@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace chromatin::config {
+namespace chromatindb::config {
 
 /// Protocol constants (not user-configurable).
 constexpr uint32_t BLOB_TTL_SECONDS = 604800;  // 7 days
@@ -30,4 +30,4 @@ Config load_config(const std::filesystem::path& path);
 /// Supports: --config <path>, --data-dir <path>, --log-level <level>
 Config parse_args(int argc, const char* argv[], Config base = {});
 
-} // namespace chromatin::config
+} // namespace chromatindb::config

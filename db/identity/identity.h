@@ -8,7 +8,7 @@
 #include <span>
 #include <vector>
 
-namespace chromatin::identity {
+namespace chromatindb::identity {
 
 /// Node identity: owns an ML-DSA-87 keypair and the derived namespace.
 /// Namespace = SHA3-256(public_key).
@@ -49,4 +49,4 @@ private:
     std::array<uint8_t, 32> namespace_id_{};
 };
 
-} // namespace chromatin::identity
+} // namespace chromatindb::identity

@@ -11,7 +11,7 @@
 #include <map>
 #include <sstream>
 
-namespace chromatin::peer {
+namespace chromatindb::peer {
 
 namespace {
 
@@ -892,4 +892,4 @@ std::string PeerManager::peer_display_name(const net::Connection::Ptr& conn) {
     return ns_hex + "@" + conn->remote_address();
 }
 
-} // namespace chromatin::peer
+} // namespace chromatindb::peer

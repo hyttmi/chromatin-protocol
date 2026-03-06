@@ -3,7 +3,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace chromatin::config {
+namespace chromatindb::config {
 
 Config load_config(const std::filesystem::path& path) {
     Config cfg;
@@ -77,4 +77,4 @@ Config parse_args(int argc, const char* argv[], Config base) {
     return cfg;
 }
 
-} // namespace chromatin::config
+} // namespace chromatindb::config

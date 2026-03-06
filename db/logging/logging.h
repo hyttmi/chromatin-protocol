@@ -4,7 +4,7 @@
 #include <string>
 #include <spdlog/spdlog.h>
 
-namespace chromatin::logging {
+namespace chromatindb::logging {
 
 /// Initialize the logging system with a console sink.
 /// Safe to call multiple times (idempotent).
@@ -14,4 +14,4 @@ void init(const std::string& level = "info");
 /// Get or create a named logger.
 std::shared_ptr<spdlog::logger> get_logger(const std::string& name);
 
-} // namespace chromatin::logging
+} // namespace chromatindb::logging

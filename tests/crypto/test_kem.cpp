@@ -2,7 +2,7 @@
 #include "db/crypto/kem.h"
 #include <cstring>
 
-using namespace chromatin::crypto;
+using namespace chromatindb::crypto;
 
 TEST_CASE("ML-KEM-1024 keypair generation produces correct sizes", "[kem]") {
     KEM kem;

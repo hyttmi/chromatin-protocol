@@ -33,13 +33,13 @@ struct TempDir {
 };
 
 /// Build a properly signed BlobData using a NodeIdentity.
-chromatin::wire::BlobData make_signed_blob(
-    const chromatin::identity::NodeIdentity& id,
+chromatindb::wire::BlobData make_signed_blob(
+    const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
     uint64_t timestamp = 1000)
 {
-    chromatin::wire::BlobData blob;
+    chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
@@ -47,7 +47,7 @@ chromatin::wire::BlobData make_signed_blob(
     blob.timestamp = timestamp;
 
     // Build canonical signing input and sign it
-    auto signing_input = chromatin::wire::build_signing_input(
+    auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
 
@@ -56,10 +56,10 @@ chromatin::wire::BlobData make_signed_blob(
 
 } // anonymous namespace
 
-using chromatin::engine::BlobEngine;
-using chromatin::engine::IngestError;
-using chromatin::engine::IngestStatus;
-using chromatin::storage::Storage;
+using chromatindb::engine::BlobEngine;
+using chromatindb::engine::IngestError;
+using chromatindb::engine::IngestStatus;
+using chromatindb::storage::Storage;
 
 // ============================================================================
 // Plan 03-01 Task 2: BlobEngine ingest pipeline
@@ -70,7 +70,7 @@ TEST_CASE("BlobEngine rejects blob with wrong pubkey size", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "wrong-pubkey-size");
 
     // Corrupt pubkey size
@@ -87,7 +87,7 @@ TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "empty-sig");
 
     // Clear signature
@@ -104,7 +104,7 @@ TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "wrong-namespace");
 
     // Corrupt namespace_id
@@ -121,7 +121,7 @@ TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "bad-sig");
 
     // Flip first byte of signature
@@ -138,7 +138,7 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "valid-blob");
 
     auto result = engine.ingest(blob);
@@ -158,7 +158,7 @@ TEST_CASE("BlobEngine duplicate returns existing seq_num", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "dup-blob");
 
     auto first = engine.ingest(blob);
@@ -175,8 +175,8 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id1 = chromatin::identity::NodeIdentity::generate();
-    auto id2 = chromatin::identity::NodeIdentity::generate();
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+    auto id2 = chromatindb::identity::NodeIdentity::generate();
 
     auto blob1 = make_signed_blob(id1, "ns1-blob");
     auto blob2 = make_signed_blob(id2, "ns2-blob");
@@ -199,7 +199,7 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Ingest 3 blobs with different data (unique timestamps make unique blobs)
     auto blob1 = make_signed_blob(id, "seq-range-1", 604800, 1000);
@@ -231,7 +231,7 @@ TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Ingest 5 blobs
     for (int i = 0; i < 5; ++i) {
@@ -276,9 +276,9 @@ TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
     BlobEngine engine(store);
 
     // Generate 3 identities, ingest 1 blob each
-    auto id1 = chromatin::identity::NodeIdentity::generate();
-    auto id2 = chromatin::identity::NodeIdentity::generate();
-    auto id3 = chromatin::identity::NodeIdentity::generate();
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+    auto id2 = chromatindb::identity::NodeIdentity::generate();
+    auto id3 = chromatindb::identity::NodeIdentity::generate();
 
     auto r1 = engine.ingest(make_signed_blob(id1, "ns-list-1"));
     auto r2 = engine.ingest(make_signed_blob(id2, "ns-list-2"));
@@ -301,8 +301,8 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto idA = chromatin::identity::NodeIdentity::generate();
-    auto idB = chromatin::identity::NodeIdentity::generate();
+    auto idA = chromatindb::identity::NodeIdentity::generate();
+    auto idB = chromatindb::identity::NodeIdentity::generate();
 
     // Ingest 4 blobs in namespace A
     for (int i = 0; i < 4; ++i) {
@@ -356,7 +356,7 @@ TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "get-by-hash");
     auto result = engine.ingest(blob);
     REQUIRE(result.accepted);
@@ -373,7 +373,7 @@ TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     // Don't ingest anything -- query a fake hash
     std::array<uint8_t, 32> fake_hash{};
     fake_hash.fill(0xDE);
@@ -390,11 +390,11 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     BlobEngine engine(store);
 
     // Generate 2 identities
-    auto idA = chromatin::identity::NodeIdentity::generate();
-    auto idB = chromatin::identity::NodeIdentity::generate();
+    auto idA = chromatindb::identity::NodeIdentity::generate();
+    auto idB = chromatindb::identity::NodeIdentity::generate();
 
     // Ingest 3 blobs for identity A
-    std::vector<chromatin::engine::WriteAck> acksA;
+    std::vector<chromatindb::engine::WriteAck> acksA;
     for (int i = 0; i < 3; ++i) {
         auto blob = make_signed_blob(idA,
             "e2e-A-" + std::to_string(i), 604800,
@@ -406,7 +406,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     }
 
     // Ingest 2 blobs for identity B
-    std::vector<chromatin::engine::WriteAck> acksB;
+    std::vector<chromatindb::engine::WriteAck> acksB;
     for (int i = 0; i < 2; ++i) {
         auto blob = make_signed_blob(idB,
             "e2e-B-" + std::to_string(i), 604800,
@@ -466,7 +466,7 @@ TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]")
     Storage store(tmp.path.string());
     BlobEngine engine(store);
 
-    auto id = chromatin::identity::NodeIdentity::generate();
+    auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "order-check");
 
     // Corrupt BOTH namespace AND signature

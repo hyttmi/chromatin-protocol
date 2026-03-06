@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 // =============================================================================
 // Session key derivation
@@ -311,4 +311,4 @@ SessionKeys HandshakeResponder::take_session_keys() {
     return std::move(keys_);
 }
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

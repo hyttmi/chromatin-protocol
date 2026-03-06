@@ -2,7 +2,7 @@
 #include <oqs/oqs.h>
 #include <oqs/sha3.h>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 std::array<uint8_t, SHA3_256_SIZE> sha3_256(std::span<const uint8_t> input) {
     std::array<uint8_t, SHA3_256_SIZE> output{};
@@ -16,4 +16,4 @@ std::array<uint8_t, SHA3_256_SIZE> sha3_256(const void* data, size_t len) {
     return output;
 }
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

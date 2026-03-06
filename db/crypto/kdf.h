@@ -5,7 +5,7 @@
 #include <span>
 #include <string_view>
 
-namespace chromatin::crypto {
+namespace chromatindb::crypto {
 
 /// HKDF-SHA256 key derivation functions.
 /// Uses libsodium's crypto_kdf_hkdf_sha256_* API (RFC 5869).
@@ -32,4 +32,4 @@ SecureBytes derive(std::span<const uint8_t> salt,
 
 } // namespace KDF
 
-} // namespace chromatin::crypto
+} // namespace chromatindb::crypto

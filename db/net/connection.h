@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 /// Completion token for non-throwing async operations.
 constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
@@ -129,4 +129,4 @@ private:
     ReadyCallback ready_cb_;
 };
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

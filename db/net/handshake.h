@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace chromatin::net {
+namespace chromatindb::net {
 
 /// Directional session keys derived from ML-KEM shared secret.
 struct SessionKeys {
@@ -107,4 +107,4 @@ private:
     std::vector<uint8_t> initiator_signing_pubkey_;
 };
 
-} // namespace chromatin::net
+} // namespace chromatindb::net

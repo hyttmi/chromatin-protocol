@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-namespace chromatin::wire {
+namespace chromatindb::wire {
 
 /// Structured blob data for codec operations.
 struct BlobData {
@@ -37,4 +37,4 @@ std::vector<uint8_t> build_signing_input(
 /// Used for content-addressed deduplication.
 std::array<uint8_t, 32> blob_hash(std::span<const uint8_t> encoded_blob);
 
-} // namespace chromatin::wire
+} // namespace chromatindb::wire

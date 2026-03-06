@@ -1,4 +1,4 @@
-namespace chromatin.wire;
+namespace chromatindb.wire;
 
 enum TransportMsgType : byte {
     None = 0,
