@@ -4,7 +4,7 @@
 
 **Phases:** 8 | **Plans:** 21 | **Commits:** 80 | **LOC:** 9,449 C++
 **Tests:** 155 tests, 586 assertions | **Requirements:** 32/32
-**Timeline:** 3 days (2026-03-03 → 2026-03-05)
+**Timeline:** 3 days (2026-03-03 -> 2026-03-05)
 **Git range:** `490d2bc..6553b9b`
 
 **Key accomplishments:**
@@ -24,3 +24,17 @@
 
 ---
 
+## v2.0 Closed Node Model (In Progress)
+
+**Phases:** 9-11 (3 phases) | **Requirements:** 14
+**Goal:** Transform chromatindb from an open permissionless node into a hostable secure storage service with access control and larger blob support.
+
+**Target features:**
+- Source restructure: /db directory layout, chromatindb:: namespace
+- Closed node model with allowed_keys config (restrict who can connect)
+- Fully authenticated access -- only authorized pubkeys can read or write
+- Larger blob limit (100 MiB) for medium files (documents, images, small archives)
+
+**Roadmap:** [ROADMAP.md](ROADMAP.md) | **Requirements:** [REQUIREMENTS.md](REQUIREMENTS.md)
+
+---

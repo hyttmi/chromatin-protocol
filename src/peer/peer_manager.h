@@ -13,14 +13,24 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace chromatin::peer {
+
+/// A persisted peer address with connection tracking.
+struct PersistedPeer {
+    std::string address;
+    uint64_t last_seen = 0;     // Unix timestamp
+    uint32_t fail_count = 0;
+};
 
 /// A sync message received from a peer, queued for processing.
 struct SyncMessage {
@@ -73,6 +83,17 @@ public:
     static constexpr uint32_t STRIKE_THRESHOLD = 10;
     static constexpr uint32_t STRIKE_COOLDOWN_SEC = 300;  // 5 minutes
 
+    /// PEX constants (public for testing).
+    static constexpr uint32_t PEX_INTERVAL_SEC = 300;        // 5 minutes
+    static constexpr uint32_t MAX_PEERS_PER_EXCHANGE = 8;    // Max peers to share per response
+    static constexpr uint32_t MAX_DISCOVERED_PER_ROUND = 3;  // Max new peers to connect per round
+    static constexpr uint32_t MAX_PERSISTED_PEERS = 100;     // Max entries in peers.json
+    static constexpr uint32_t MAX_PERSIST_FAILURES = 3;      // Prune after N consecutive startup failures
+
+    /// PEX wire encoding (public for testing).
+    static std::vector<uint8_t> encode_peer_list(const std::vector<std::string>& addresses);
+    static std::vector<std::string> decode_peer_list(std::span<const uint8_t> payload);
+
 private:
     // Server callbacks
     void on_peer_connected(net::Connection::Ptr conn);
@@ -96,6 +117,20 @@ private:
     void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
     asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout);
 
+    // PEX protocol
+    asio::awaitable<void> pex_timer_loop();
+    asio::awaitable<void> request_peers_from_all();
+    asio::awaitable<void> run_pex_with_peer(net::Connection::Ptr conn);
+    asio::awaitable<void> handle_pex_as_responder(net::Connection::Ptr conn);
+    void handle_peer_list_response(net::Connection::Ptr conn, std::vector<uint8_t> payload);
+    std::vector<std::string> build_peer_list_response(const std::string& exclude_address);
+
+    // Peer persistence
+    void load_persisted_peers();
+    void save_persisted_peers();
+    void update_persisted_peer(const std::string& address, bool success);
+    std::filesystem::path peers_file_path() const;
+
     // Strike system
     void record_strike(net::Connection::Ptr conn, const std::string& reason);
 
@@ -112,8 +147,10 @@ private:
     net::Server server_;
     sync::SyncProtocol sync_proto_;
 
-    std::vector<PeerInfo> peers_;
+    std::deque<PeerInfo> peers_;
     std::set<std::string> bootstrap_addresses_;
+    std::set<std::string> known_addresses_;      // All addresses we know about
+    std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
 };
 

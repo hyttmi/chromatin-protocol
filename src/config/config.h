@@ -17,6 +17,8 @@ struct Config {
     std::string data_dir = "./data";
     std::vector<std::string> bootstrap_peers;
     std::string log_level = "info";
+    uint32_t max_peers = 32;
+    uint32_t sync_interval_seconds = 60;
 };
 
 /// Load configuration from a JSON file.

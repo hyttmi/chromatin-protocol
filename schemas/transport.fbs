@@ -9,7 +9,18 @@ enum TransportMsgType : byte {
     Ping = 5,
     Pong = 6,
     Goodbye = 7,
-    Data = 8
+    Data = 8,
+    // Phase 5: Sync protocol
+    SyncRequest = 9,
+    SyncAccept = 10,
+    NamespaceList = 11,
+    HashList = 12,
+    BlobRequest = 13,
+    BlobTransfer = 14,
+    SyncComplete = 15,
+    // Phase 7: Peer exchange
+    PeerListRequest = 16,
+    PeerListResponse = 17
 }
 
 table TransportMessage {

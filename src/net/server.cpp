@@ -243,6 +243,50 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
 }
 
 // =============================================================================
+// One-shot outbound connection (no reconnect)
+// =============================================================================
+
+void Server::connect_once(const std::string& address) {
+    if (draining_) return;
+    asio::co_spawn(ioc_, [this, address]() -> asio::awaitable<void> {
+        auto [host, port] = parse_address(address);
+
+        asio::ip::tcp::resolver resolver(ioc_);
+        auto [ec_resolve, endpoints] = co_await resolver.async_resolve(
+            host, port, use_nothrow);
+        if (ec_resolve) {
+            spdlog::debug("connect_once: failed to resolve {}: {}", address, ec_resolve.message());
+            co_return;
+        }
+
+        asio::ip::tcp::socket socket(ioc_);
+        auto [ec_connect, ep] = co_await asio::async_connect(
+            socket, endpoints, use_nothrow);
+        if (ec_connect) {
+            spdlog::debug("connect_once: failed to connect to {}: {}", address, ec_connect.message());
+            co_return;
+        }
+
+        spdlog::info("connect_once: connected to {}", address);
+
+        auto conn = Connection::create_outbound(std::move(socket), identity_);
+        connections_.push_back(conn);
+
+        conn->on_close([this](Connection::Ptr c, bool /*graceful*/) {
+            remove_connection(c);
+            if (on_disconnected_) on_disconnected_(c);
+        });
+
+        conn->on_ready([this](Connection::Ptr c) {
+            if (on_connected_) on_connected_(c);
+        });
+
+        co_await conn->run();
+        // Connection ended -- no reconnect for discovered peers
+    }, asio::detached);
+}
+
+// =============================================================================
 // Graceful shutdown
 // =============================================================================
 

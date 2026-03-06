@@ -136,6 +136,8 @@ add_library(chromatindb_lib STATIC
   src/net/handshake.cpp
   src/net/connection.cpp
   src/net/server.cpp
+  src/sync/sync_protocol.cpp
+  src/peer/peer_manager.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -151,6 +153,12 @@ target_link_libraries(chromatindb_lib PUBLIC
   mdbx-static
   asio::asio
 )
+
+# =============================================================================
+# Daemon binary
+# =============================================================================
+add_executable(chromatindb src/main.cpp)
+target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
 # =============================================================================
 # Test target
@@ -171,6 +179,9 @@ add_executable(chromatindb_tests
   tests/net/test_handshake.cpp
   tests/net/test_connection.cpp
   tests/net/test_server.cpp
+  tests/sync/test_sync_protocol.cpp
+  tests/peer/test_peer_manager.cpp
+  tests/test_daemon.cpp
 )
 
 target_link_libraries(chromatindb_tests PRIVATE

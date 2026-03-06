@@ -28,6 +28,8 @@ Config load_config(const std::filesystem::path& path) {
     cfg.storage_path = j.value("storage_path", cfg.storage_path);
     cfg.data_dir = j.value("data_dir", cfg.data_dir);
     cfg.log_level = j.value("log_level", cfg.log_level);
+    cfg.max_peers = j.value("max_peers", cfg.max_peers);
+    cfg.sync_interval_seconds = j.value("sync_interval_seconds", cfg.sync_interval_seconds);
 
     if (j.contains("bootstrap_peers") && j["bootstrap_peers"].is_array()) {
         for (const auto& peer : j["bootstrap_peers"]) {

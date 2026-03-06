@@ -93,7 +93,16 @@ TEST_CASE("Server connects to bootstrap peer", "[server]") {
     Server server(cfg, server_id, ioc);
     server.start();
 
-    ioc.run_for(std::chrono::seconds(3));
+    // Stop server after 2s so reconnect_loop exits before scope ends
+    asio::steady_timer stop_timer(ioc);
+    stop_timer.expires_after(std::chrono::seconds(2));
+    stop_timer.async_wait([&](asio::error_code) {
+        asio::error_code ec;
+        peer_acceptor.close(ec);
+        server.stop();
+    });
+
+    ioc.run_for(std::chrono::seconds(8));
 
     REQUIRE(peer_got_connection);
 }

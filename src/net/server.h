@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +19,10 @@ namespace chromatin::net {
 /// TCP server: accepts inbound connections, connects to peers, manages lifecycles.
 class Server {
 public:
+    /// Callback types for PeerManager integration.
+    using ConnectionCallback = std::function<void(Connection::Ptr)>;
+    using AcceptFilter = std::function<bool()>;
+
     Server(const config::Config& config,
            const identity::NodeIdentity& identity,
            asio::io_context& ioc);
@@ -33,6 +38,18 @@ public:
 
     /// Whether the server is in shutdown/draining state.
     bool is_draining() const { return draining_; }
+
+    /// Set callback for when a peer successfully connects and authenticates.
+    void set_on_connected(ConnectionCallback cb) { on_connected_ = std::move(cb); }
+
+    /// Set callback for when a peer disconnects.
+    void set_on_disconnected(ConnectionCallback cb) { on_disconnected_ = std::move(cb); }
+
+    /// Set filter for accepting inbound connections (return false to reject).
+    void set_accept_filter(AcceptFilter cb) { accept_filter_ = std::move(cb); }
+
+    /// Connect to a peer once (no reconnect on failure). For discovered peers.
+    void connect_once(const std::string& address);
 
 private:
     /// Accept inbound connections in a loop.
@@ -62,6 +79,11 @@ private:
     std::vector<Connection::Ptr> connections_;
     bool draining_ = false;
     bool started_ = false;
+
+    // PeerManager integration callbacks
+    ConnectionCallback on_connected_;
+    ConnectionCallback on_disconnected_;
+    AcceptFilter accept_filter_;
 };
 
 } // namespace chromatin::net
