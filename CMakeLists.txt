@@ -138,6 +138,7 @@ add_library(chromatindb_lib STATIC
   db/net/server.cpp
   db/sync/sync_protocol.cpp
   db/peer/peer_manager.cpp
+  db/acl/access_control.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
@@ -181,6 +182,7 @@ add_executable(chromatindb_tests
   tests/net/test_server.cpp
   tests/sync/test_sync_protocol.cpp
   tests/peer/test_peer_manager.cpp
+  tests/acl/test_access_control.cpp
   tests/test_daemon.cpp
 )
 
