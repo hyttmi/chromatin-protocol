@@ -652,18 +652,25 @@ void PeerManager::record_strike(net::Connection::Ptr conn, const std::string& re
 
 void PeerManager::setup_sighup_handler() {
     sighup_signal_.add(SIGHUP);
-    asio::co_spawn(ioc_, [this]() -> asio::awaitable<void> {
-        while (!stopping_) {
-            auto [ec, sig] = co_await sighup_signal_.async_wait(
-                asio::as_tuple(asio::use_awaitable));
-            if (ec || stopping_) co_return;
-            handle_sighup();
-        }
-    }(), asio::detached);
+    asio::co_spawn(ioc_, sighup_loop(), asio::detached);
+}
+
+asio::awaitable<void> PeerManager::sighup_loop() {
+    while (!stopping_) {
+        auto [ec, sig] = co_await sighup_signal_.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        if (ec || stopping_) co_return;
+        handle_sighup();
+    }
 }
 
 void PeerManager::handle_sighup() {
-    spdlog::info("SIGHUP received, reloading allowed_keys from {}...", config_path_.string());
+    spdlog::info("SIGHUP received, reloading config...");
+    reload_config();
+}
+
+void PeerManager::reload_config() {
+    spdlog::info("reloading allowed_keys from {}...", config_path_.string());
 
     // Re-read config file
     config::Config new_cfg;

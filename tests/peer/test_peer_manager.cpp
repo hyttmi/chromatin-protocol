@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <cstring>
 #include <ctime>
@@ -323,6 +324,165 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     pm1.stop();
     pm2.stop();
     ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
+    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+
+    // Write config file for node1 with id2 allowed
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14260", "allowed_keys": [")" << id2_ns_hex << R"("]})";
+    }
+
+    auto cfg1 = chromatindb::config::load_config(config_path);
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 1;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14261";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14260"};
+    cfg2.sync_interval_seconds = 1;
+    cfg2.max_peers = 32;
+    cfg2.allowed_keys = {id1_ns_hex};
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(5));
+
+    // Verify they connected
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // Now rewrite config to REMOVE id2 from allowed_keys (revocation)
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14260", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+    }
+
+    // Trigger reload (same as what SIGHUP handler calls)
+    pm1.reload_config();
+
+    // Run io_context to process the disconnect
+    ioc.run_for(std::chrono::seconds(2));
+
+    // Node1 should have disconnected node2 (ACL-05: immediate revocation)
+    REQUIRE(pm1.peer_count() == 0);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][reload]") {
+    TempDir tmp1;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    // Write valid config file
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14262", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+    }
+
+    auto cfg1 = chromatindb::config::load_config(config_path);
+    cfg1.data_dir = tmp1.path.string();
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+    pm1.start();
+
+    // Drain start-up handlers (including SIGHUP coroutine setup)
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    REQUIRE(acl1.is_closed_mode());
+    REQUIRE(acl1.allowed_count() == 1);
+
+    // Corrupt the config file
+    {
+        std::ofstream f(config_path);
+        f << "{ this is not valid json }}}";
+    }
+
+    // Trigger reload -- should NOT crash, should keep current config
+    pm1.reload_config();
+
+    // ACL should still be in closed mode with 1 key (fail-safe)
+    REQUIRE(acl1.is_closed_mode());
+    REQUIRE(acl1.allowed_count() == 1);
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload]") {
+    TempDir tmp1;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    // Write config file with NO allowed_keys (open mode)
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14263"})";
+    }
+
+    auto cfg1 = chromatindb::config::load_config(config_path);
+    cfg1.data_dir = tmp1.path.string();
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+    pm1.start();
+
+    REQUIRE_FALSE(acl1.is_closed_mode());
+
+    // Rewrite config to add allowed_keys (switch to closed mode)
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14263", "allowed_keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]})";
+    }
+
+    pm1.reload_config();
+
+    REQUIRE(acl1.is_closed_mode());
+    REQUIRE(acl1.allowed_count() == 1);
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
 }
 
 TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {

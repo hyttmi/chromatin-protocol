@@ -98,6 +98,10 @@ public:
     static std::vector<uint8_t> encode_peer_list(const std::vector<std::string>& addresses);
     static std::vector<std::string> decode_peer_list(std::span<const uint8_t> payload);
 
+    /// Reload allowed_keys from config file and disconnect revoked peers.
+    /// Public for testing; called internally by SIGHUP handler.
+    void reload_config();
+
 private:
     // Server callbacks
     void on_peer_connected(net::Connection::Ptr conn);
@@ -140,6 +144,7 @@ private:
 
     // SIGHUP config reload
     void setup_sighup_handler();
+    asio::awaitable<void> sighup_loop();
     void handle_sighup();
     void disconnect_unauthorized_peers();
 
