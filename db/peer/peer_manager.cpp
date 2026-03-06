@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -35,7 +36,8 @@ PeerManager::PeerManager(const config::Config& config,
                          engine::BlobEngine& engine,
                          storage::Storage& storage,
                          asio::io_context& ioc,
-                         acl::AccessControl& acl)
+                         acl::AccessControl& acl,
+                         const std::filesystem::path& config_path)
     : config_(config)
     , identity_(identity)
     , engine_(engine)
@@ -43,7 +45,9 @@ PeerManager::PeerManager(const config::Config& config,
     , ioc_(ioc)
     , acl_(acl)
     , server_(config, identity, ioc)
-    , sync_proto_(engine) {
+    , sync_proto_(engine)
+    , sighup_signal_(ioc)
+    , config_path_(config_path) {
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
         bootstrap_addresses_.insert(addr);
@@ -70,6 +74,14 @@ void PeerManager::start() {
         spdlog::info("access control: open mode");
     }
 
+    // Set up SIGHUP handler for config reload (only if config path was provided)
+    if (!config_path_.empty()) {
+        setup_sighup_handler();
+        spdlog::info("SIGHUP reload: enabled (config: {})", config_path_.string());
+    } else {
+        spdlog::info("SIGHUP reload: disabled (no --config provided)");
+    }
+
     // Load persisted peers before starting server
     load_persisted_peers();
 
@@ -92,6 +104,7 @@ void PeerManager::start() {
 
 void PeerManager::stop() {
     stopping_ = true;
+    sighup_signal_.cancel();
     server_.stop();
 }
 
@@ -630,6 +643,82 @@ void PeerManager::record_strike(net::Connection::Ptr conn, const std::string& re
         spdlog::warn("disconnecting peer {}: {} validation failures",
                      conn->remote_address(), peer->strike_count);
         asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);
+    }
+}
+
+// =============================================================================
+// SIGHUP config reload
+// =============================================================================
+
+void PeerManager::setup_sighup_handler() {
+    sighup_signal_.add(SIGHUP);
+    asio::co_spawn(ioc_, [this]() -> asio::awaitable<void> {
+        while (!stopping_) {
+            auto [ec, sig] = co_await sighup_signal_.async_wait(
+                asio::as_tuple(asio::use_awaitable));
+            if (ec || stopping_) co_return;
+            handle_sighup();
+        }
+    }(), asio::detached);
+}
+
+void PeerManager::handle_sighup() {
+    spdlog::info("SIGHUP received, reloading allowed_keys from {}...", config_path_.string());
+
+    // Re-read config file
+    config::Config new_cfg;
+    try {
+        new_cfg = config::load_config(config_path_);
+    } catch (const std::exception& e) {
+        spdlog::error("config reload failed (invalid JSON): {} (keeping current config)", e.what());
+        return;
+    }
+
+    // Validate new allowed_keys
+    try {
+        config::validate_allowed_keys(new_cfg.allowed_keys);
+    } catch (const std::exception& e) {
+        spdlog::error("config reload rejected (malformed key): {} (keeping current config)", e.what());
+        return;
+    }
+
+    // Reload ACL
+    auto result = acl_.reload(new_cfg.allowed_keys);
+
+    // Log diff summary
+    spdlog::info("config reload: +{} keys, -{} keys", result.added, result.removed);
+
+    if (acl_.is_closed_mode()) {
+        spdlog::info("access control: closed mode ({} allowed keys)", acl_.allowed_count());
+    } else {
+        spdlog::info("access control: open mode");
+    }
+
+    // Disconnect revoked peers
+    if (result.removed > 0 || acl_.is_closed_mode()) {
+        disconnect_unauthorized_peers();
+    }
+}
+
+void PeerManager::disconnect_unauthorized_peers() {
+    // Take snapshot -- closing connections triggers on_peer_disconnected which modifies peers_
+    std::vector<net::Connection::Ptr> to_disconnect;
+
+    for (const auto& peer : peers_) {
+        auto peer_ns = crypto::sha3_256(peer.connection->peer_pubkey());
+        if (!acl_.is_allowed(std::span<const uint8_t, 32>(peer_ns))) {
+            to_disconnect.push_back(peer.connection);
+        }
+    }
+
+    for (const auto& conn : to_disconnect) {
+        auto full_hex = to_hex(std::span<const uint8_t>(conn->peer_pubkey()), 32);
+        spdlog::warn("revoking peer: namespace={} ip={}", full_hex, conn->remote_address());
+        conn->close();  // Immediate close, no goodbye
+    }
+
+    if (!to_disconnect.empty()) {
+        spdlog::info("config reload: disconnected {} peer(s)", to_disconnect.size());
     }
 }
 

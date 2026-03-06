@@ -123,7 +123,7 @@ int cmd_run(int argc, char* argv[]) {
     asio::io_context ioc;
 
     chromatindb::acl::AccessControl acl(config.allowed_keys, identity.namespace_id());
-    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, acl);
+    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, acl, config.config_path);
     pm.start();
 
     // Periodic expiry scanner

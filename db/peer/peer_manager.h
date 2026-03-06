@@ -68,7 +68,8 @@ public:
                 engine::BlobEngine& engine,
                 storage::Storage& storage,
                 asio::io_context& ioc,
-                acl::AccessControl& acl);
+                acl::AccessControl& acl,
+                const std::filesystem::path& config_path = {});
 
     /// Start the server and sync timer.
     void start();
@@ -137,6 +138,11 @@ private:
     // Strike system
     void record_strike(net::Connection::Ptr conn, const std::string& reason);
 
+    // SIGHUP config reload
+    void setup_sighup_handler();
+    void handle_sighup();
+    void disconnect_unauthorized_peers();
+
     // Helpers
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
     std::string peer_display_name(const net::Connection::Ptr& conn);
@@ -150,6 +156,8 @@ private:
 
     net::Server server_;
     sync::SyncProtocol sync_proto_;
+    asio::signal_set sighup_signal_;
+    std::filesystem::path config_path_;
 
     std::deque<PeerInfo> peers_;
     std::set<std::string> bootstrap_addresses_;
