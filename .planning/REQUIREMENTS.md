@@ -9,7 +9,7 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 ### Source Restructure
 
-- [ ] **STRUCT-01**: Source files moved to `/db` directory layout with updated CMakeLists.txt
+- [x] **STRUCT-01**: Source files moved to `/db` directory layout with updated CMakeLists.txt
 - [ ] **STRUCT-02**: C++ namespace renamed from `chromatin::` to `chromatindb::` across all source, headers, and FlatBuffers schemas
 - [ ] **STRUCT-03**: All 155 existing tests pass after restructure with clean build
 
@@ -58,7 +58,7 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STRUCT-01 | Phase 9 | Pending |
+| STRUCT-01 | Phase 9 | Complete |
 | STRUCT-02 | Phase 9 | Pending |
 | STRUCT-03 | Phase 9 | Pending |
 | ACL-01 | Phase 10 | Pending |
