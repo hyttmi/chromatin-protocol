@@ -131,3 +131,154 @@ TEST_CASE("BLOB_TTL_SECONDS is a protocol constant", "[config]") {
     // Verify it's not part of Config struct (compile-time guarantee)
     // The fact that Config has no default_ttl field means it can't be overridden
 }
+
+// =============================================================================
+// ACL: allowed_keys config tests
+// =============================================================================
+
+TEST_CASE("Default config has empty allowed_keys", "[config][acl]") {
+    Config cfg;
+    REQUIRE(cfg.allowed_keys.empty());
+    REQUIRE(cfg.config_path.empty());
+}
+
+TEST_CASE("load_config parses allowed_keys from JSON array", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_acl.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "allowed_keys": [
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ]
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.allowed_keys.size() == 2);
+    REQUIRE(cfg.allowed_keys[0] == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+    REQUIRE(cfg.allowed_keys[1] == "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config with missing allowed_keys results in empty vector", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_acl.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.allowed_keys.empty());
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config with empty allowed_keys array results in empty vector", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_empty_acl.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"allowed_keys": []})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.allowed_keys.empty());
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config throws on key with wrong length", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_len.json";
+
+    SECTION("too short (63 chars)") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"allowed_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    SECTION("too long (65 chars)") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"allowed_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2a"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config throws on key with non-hex characters", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_hex.json";
+    {
+        std::ofstream f(tmp);
+        // 'g' is not a hex char
+        f << R"({"allowed_keys": ["g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"]})";
+    }
+
+    REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config accepts uppercase hex in allowed_keys", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_upper.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"allowed_keys": ["A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"]})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.allowed_keys.size() == 1);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("parse_args stores config_path when --config provided", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_path.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({})";
+    }
+
+    const char* argv[] = {"chromatindb", "--config", tmp.c_str()};
+    auto cfg = parse_args(3, argv);
+
+    REQUIRE(cfg.config_path == tmp);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("parse_args leaves config_path empty when --config not provided", "[config][acl]") {
+    const char* argv[] = {"chromatindb", "--data-dir", "/some/dir"};
+    auto cfg = parse_args(3, argv);
+
+    REQUIRE(cfg.config_path.empty());
+}
+
+TEST_CASE("validate_allowed_keys accepts valid keys", "[config][acl]") {
+    std::vector<std::string> valid_keys = {
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "AABBCCDD00112233AABBCCDD00112233AABBCCDD00112233AABBCCDD00112233"
+    };
+    REQUIRE_NOTHROW(validate_allowed_keys(valid_keys));
+}
+
+TEST_CASE("validate_allowed_keys accepts empty vector", "[config][acl]") {
+    std::vector<std::string> empty;
+    REQUIRE_NOTHROW(validate_allowed_keys(empty));
+}
+
+TEST_CASE("validate_allowed_keys rejects malformed keys", "[config][acl]") {
+    SECTION("wrong length") {
+        std::vector<std::string> keys = {"abcd"};
+        REQUIRE_THROWS_AS(validate_allowed_keys(keys), std::runtime_error);
+    }
+
+    SECTION("non-hex chars") {
+        std::vector<std::string> keys = {"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"};
+        REQUIRE_THROWS_AS(validate_allowed_keys(keys), std::runtime_error);
+    }
+}

@@ -19,6 +19,8 @@ struct Config {
     std::string log_level = "info";
     uint32_t max_peers = 32;
     uint32_t sync_interval_seconds = 60;
+    std::vector<std::string> allowed_keys;          // Hex namespace hashes (64 chars each)
+    std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 
 /// Load configuration from a JSON file.
@@ -29,5 +31,9 @@ Config load_config(const std::filesystem::path& path);
 /// Parse CLI arguments and override base config.
 /// Supports: --config <path>, --data-dir <path>, --log-level <level>
 Config parse_args(int argc, const char* argv[], Config base = {});
+
+/// Validate allowed_keys: each must be exactly 64 hex characters.
+/// @throws std::runtime_error if any key is malformed.
+void validate_allowed_keys(const std::vector<std::string>& keys);
 
 } // namespace chromatindb::config

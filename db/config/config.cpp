@@ -39,6 +39,15 @@ Config load_config(const std::filesystem::path& path) {
         }
     }
 
+    if (j.contains("allowed_keys") && j["allowed_keys"].is_array()) {
+        for (const auto& key : j["allowed_keys"]) {
+            if (key.is_string()) {
+                cfg.allowed_keys.push_back(key.get<std::string>());
+            }
+        }
+        validate_allowed_keys(cfg.allowed_keys);
+    }
+
     return cfg;
 }
 
@@ -61,6 +70,7 @@ Config parse_args(int argc, const char* argv[], Config base) {
     // If --config was provided, load that file first
     if (!config_path.empty()) {
         cfg = load_config(config_path);
+        cfg.config_path = config_path;
         // Re-apply CLI overrides that came after --config
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
@@ -75,6 +85,23 @@ Config parse_args(int argc, const char* argv[], Config base) {
     }
 
     return cfg;
+}
+
+void validate_allowed_keys(const std::vector<std::string>& keys) {
+    for (const auto& key : keys) {
+        if (key.size() != 64) {
+            throw std::runtime_error(
+                "Invalid allowed_key '" + key + "': expected 64 hex characters, got " +
+                std::to_string(key.size()));
+        }
+        for (char c : key) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                throw std::runtime_error(
+                    "Invalid allowed_key '" + key + "': non-hex character '" +
+                    std::string(1, c) + "'");
+            }
+        }
+    }
 }
 
 } // namespace chromatindb::config
