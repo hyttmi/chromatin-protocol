@@ -89,7 +89,7 @@ target_include_directories(oqs PUBLIC
 # FlatBuffers schema compilation
 # =============================================================================
 set(FLATBUFFERS_SCHEMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/schemas)
-set(FLATBUFFERS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/wire)
+set(FLATBUFFERS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/db/wire)
 
 # Will be enabled once schemas exist
 if(EXISTS ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs)
@@ -120,28 +120,28 @@ endif()
 # Library target
 # =============================================================================
 add_library(chromatindb_lib STATIC
-  src/crypto/hash.cpp
-  src/crypto/signing.cpp
-  src/crypto/kem.cpp
-  src/crypto/aead.cpp
-  src/crypto/kdf.cpp
-  src/wire/codec.cpp
-  src/config/config.cpp
-  src/logging/logging.cpp
-  src/identity/identity.cpp
-  src/storage/storage.cpp
-  src/engine/engine.cpp
-  src/net/framing.cpp
-  src/net/protocol.cpp
-  src/net/handshake.cpp
-  src/net/connection.cpp
-  src/net/server.cpp
-  src/sync/sync_protocol.cpp
-  src/peer/peer_manager.cpp
+  db/crypto/hash.cpp
+  db/crypto/signing.cpp
+  db/crypto/kem.cpp
+  db/crypto/aead.cpp
+  db/crypto/kdf.cpp
+  db/wire/codec.cpp
+  db/config/config.cpp
+  db/logging/logging.cpp
+  db/identity/identity.cpp
+  db/storage/storage.cpp
+  db/engine/engine.cpp
+  db/net/framing.cpp
+  db/net/protocol.cpp
+  db/net/handshake.cpp
+  db/net/connection.cpp
+  db/net/server.cpp
+  db/sync/sync_protocol.cpp
+  db/peer/peer_manager.cpp
 )
 
 target_include_directories(chromatindb_lib PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(chromatindb_lib PUBLIC
@@ -157,7 +157,7 @@ target_link_libraries(chromatindb_lib PUBLIC
 # =============================================================================
 # Daemon binary
 # =============================================================================
-add_executable(chromatindb src/main.cpp)
+add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
 # =============================================================================
