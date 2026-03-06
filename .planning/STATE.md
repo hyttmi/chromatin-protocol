@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Closed Node Model
-status: active
-last_updated: "2026-03-06T03:24:53Z"
+status: unknown
+last_updated: "2026-03-06T03:29:42.063Z"
 progress:
-  total_phases: 3
+  total_phases: 1
   completed_phases: 1
   total_plans: 2
   completed_plans: 2
