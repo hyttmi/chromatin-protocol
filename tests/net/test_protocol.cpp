@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "net/protocol.h"
+#include "db/net/protocol.h"
 
 using namespace chromatin::net;
 using namespace chromatin::wire;

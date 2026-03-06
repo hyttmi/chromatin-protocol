@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-#include "net/handshake.h"
-#include "identity/identity.h"
-#include "crypto/kem.h"
-#include "crypto/aead.h"
+#include "db/net/handshake.h"
+#include "db/identity/identity.h"
+#include "db/crypto/kem.h"
+#include "db/crypto/aead.h"
 
 using namespace chromatin::net;
 using namespace chromatin::crypto;

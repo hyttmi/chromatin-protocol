@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "crypto/hash.h"
-#include "crypto/secure_bytes.h"
+#include "db/crypto/hash.h"
+#include "db/crypto/secure_bytes.h"
 #include <array>
 #include <cstring>
 #include <string>

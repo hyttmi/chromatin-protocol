@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "net/framing.h"
-#include "net/protocol.h"
-#include "crypto/aead.h"
+#include "db/net/framing.h"
+#include "db/net/protocol.h"
+#include "db/crypto/aead.h"
 
 using namespace chromatin::net;
 using namespace chromatin::crypto;

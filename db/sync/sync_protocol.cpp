@@ -1,4 +1,4 @@
-#include "sync/sync_protocol.h"
+#include "db/sync/sync_protocol.h"
 
 #include <spdlog/spdlog.h>
 

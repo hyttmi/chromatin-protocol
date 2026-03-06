@@ -1,7 +1,7 @@
-#include "net/handshake.h"
+#include "db/net/handshake.h"
 
-#include "crypto/signing.h"
-#include "wire/transport_generated.h"
+#include "db/crypto/signing.h"
+#include "db/wire/transport_generated.h"
 
 #include <cstring>
 

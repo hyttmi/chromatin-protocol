@@ -1,6 +1,6 @@
-#include "wire/codec.h"
-#include "wire/blob_generated.h"
-#include "crypto/hash.h"
+#include "db/wire/codec.h"
+#include "db/wire/blob_generated.h"
+#include "db/crypto/hash.h"
 #include <flatbuffers/flatbuffers.h>
 #include <cstring>
 #include <stdexcept>

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "crypto/aead.h"
-#include "crypto/hash.h"
-#include "crypto/kdf.h"
-#include "crypto/kem.h"
-#include "crypto/secure_bytes.h"
-#include "identity/identity.h"
-#include "net/framing.h"
-#include "net/protocol.h"
+#include "db/crypto/aead.h"
+#include "db/crypto/hash.h"
+#include "db/crypto/kdf.h"
+#include "db/crypto/kem.h"
+#include "db/crypto/secure_bytes.h"
+#include "db/identity/identity.h"
+#include "db/net/framing.h"
+#include "db/net/protocol.h"
 
 #include <array>
 #include <cstdint>

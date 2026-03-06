@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/aead.h"
+#include "db/crypto/aead.h"
 #include <array>
 #include <cstdint>
 #include <optional>

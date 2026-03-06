@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "net/connection.h"
-#include "identity/identity.h"
+#include "db/net/connection.h"
+#include "db/identity/identity.h"
 
 #include <asio.hpp>
 #include <thread>

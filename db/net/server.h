@@ -1,8 +1,8 @@
 #pragma once
 
-#include "config/config.h"
-#include "identity/identity.h"
-#include "net/connection.h"
+#include "db/config/config.h"
+#include "db/identity/identity.h"
+#include "db/net/connection.h"
 
 #include <asio.hpp>
 

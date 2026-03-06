@@ -1,12 +1,12 @@
 #pragma once
 
-#include "config/config.h"
-#include "engine/engine.h"
-#include "identity/identity.h"
-#include "net/connection.h"
-#include "net/server.h"
-#include "storage/storage.h"
-#include "sync/sync_protocol.h"
+#include "db/config/config.h"
+#include "db/engine/engine.h"
+#include "db/identity/identity.h"
+#include "db/net/connection.h"
+#include "db/net/server.h"
+#include "db/storage/storage.h"
+#include "db/sync/sync_protocol.h"
 
 #include <asio.hpp>
 

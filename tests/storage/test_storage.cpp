@@ -2,10 +2,10 @@
 #include <filesystem>
 #include <random>
 
-#include "storage/storage.h"
-#include "wire/codec.h"
-#include "crypto/hash.h"
-#include "identity/identity.h"
+#include "db/storage/storage.h"
+#include "db/wire/codec.h"
+#include "db/crypto/hash.h"
+#include "db/identity/identity.h"
 
 namespace fs = std::filesystem;
 

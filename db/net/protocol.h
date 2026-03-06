@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-#include "wire/transport_generated.h"
+#include "db/wire/transport_generated.h"
 
 namespace chromatin::net {
 

@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "storage/storage.h"
-#include "wire/codec.h"
+#include "db/storage/storage.h"
+#include "db/wire/codec.h"
 
 namespace chromatin::engine {
 

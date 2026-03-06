@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "crypto/kem.h"
+#include "db/crypto/kem.h"
 #include <cstring>
 
 using namespace chromatin::crypto;

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "wire/codec.h"
+#include "db/wire/codec.h"
 
 namespace chromatin::storage {
 

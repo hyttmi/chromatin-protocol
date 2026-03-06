@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "wire/codec.h"
-#include "crypto/hash.h"
+#include "db/wire/codec.h"
+#include "db/crypto/hash.h"
 #include <cstring>
 #include <vector>
 

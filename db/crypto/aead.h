@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/secure_bytes.h"
+#include "db/crypto/secure_bytes.h"
 #include <array>
 #include <cstdint>
 #include <optional>

@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "crypto/kdf.h"
-#include "crypto/kem.h"
-#include "crypto/aead.h"
+#include "db/crypto/kdf.h"
+#include "db/crypto/kem.h"
+#include "db/crypto/aead.h"
 #include <cstring>
 
 using namespace chromatin::crypto;

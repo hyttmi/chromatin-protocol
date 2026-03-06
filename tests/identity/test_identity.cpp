@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "identity/identity.h"
-#include "crypto/hash.h"
-#include "crypto/signing.h"
+#include "db/identity/identity.h"
+#include "db/crypto/hash.h"
+#include "db/crypto/signing.h"
 #include <filesystem>
 #include <fstream>
 

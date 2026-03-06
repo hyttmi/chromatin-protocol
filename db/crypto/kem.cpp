@@ -1,4 +1,4 @@
-#include "crypto/kem.h"
+#include "db/crypto/kem.h"
 #include <oqs/oqs.h>
 
 namespace chromatin::crypto {

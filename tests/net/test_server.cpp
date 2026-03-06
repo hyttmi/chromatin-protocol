@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "net/server.h"
-#include "identity/identity.h"
-#include "config/config.h"
+#include "db/net/server.h"
+#include "db/identity/identity.h"
+#include "db/config/config.h"
 
 #include <asio.hpp>
 #include <thread>

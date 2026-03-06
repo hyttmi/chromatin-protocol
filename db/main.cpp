@@ -1,9 +1,9 @@
-#include "config/config.h"
-#include "engine/engine.h"
-#include "identity/identity.h"
-#include "logging/logging.h"
-#include "peer/peer_manager.h"
-#include "storage/storage.h"
+#include "db/config/config.h"
+#include "db/engine/engine.h"
+#include "db/identity/identity.h"
+#include "db/logging/logging.h"
+#include "db/peer/peer_manager.h"
+#include "db/storage/storage.h"
 
 #include <asio.hpp>
 #include <spdlog/spdlog.h>

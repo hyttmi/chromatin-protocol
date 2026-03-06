@@ -1,4 +1,4 @@
-#include "crypto/hash.h"
+#include "db/crypto/hash.h"
 #include <oqs/oqs.h>
 #include <oqs/sha3.h>
 

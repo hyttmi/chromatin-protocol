@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "crypto/aead.h"
+#include "db/crypto/aead.h"
 #include <sodium.h>
 #include <cstring>
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "crypto/signing.h"
-#include "crypto/hash.h"
+#include "db/crypto/signing.h"
+#include "db/crypto/hash.h"
 #include <array>
 #include <cstdint>
 #include <filesystem>

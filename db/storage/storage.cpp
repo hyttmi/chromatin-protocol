@@ -1,4 +1,4 @@
-#include "storage/storage.h"
+#include "db/storage/storage.h"
 
 #include <chrono>
 #include <cstring>
@@ -8,8 +8,8 @@
 #include <mdbx.h++>
 #include <spdlog/spdlog.h>
 
-#include "crypto/hash.h"
-#include "wire/codec.h"
+#include "db/crypto/hash.h"
+#include "db/wire/codec.h"
 
 namespace chromatin::storage {
 

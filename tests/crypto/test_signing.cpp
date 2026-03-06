@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "crypto/signing.h"
+#include "db/crypto/signing.h"
 #include <vector>
 #include <cstring>
 

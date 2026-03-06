@@ -1,12 +1,12 @@
-#include "engine/engine.h"
+#include "db/engine/engine.h"
 
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/bin_to_hex.h>
 
-#include "crypto/hash.h"
-#include "crypto/signing.h"
-#include "storage/storage.h"
-#include "wire/codec.h"
+#include "db/crypto/hash.h"
+#include "db/crypto/signing.h"
+#include "db/storage/storage.h"
+#include "db/wire/codec.h"
 
 namespace chromatin::engine {
 

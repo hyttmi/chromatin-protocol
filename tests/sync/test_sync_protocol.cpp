@@ -4,12 +4,12 @@
 #include <random>
 #include <cstring>
 
-#include "sync/sync_protocol.h"
-#include "engine/engine.h"
-#include "identity/identity.h"
-#include "storage/storage.h"
-#include "wire/codec.h"
-#include "config/config.h"
+#include "db/sync/sync_protocol.h"
+#include "db/engine/engine.h"
+#include "db/identity/identity.h"
+#include "db/storage/storage.h"
+#include "db/wire/codec.h"
+#include "db/config/config.h"
 
 namespace fs = std::filesystem;
 
