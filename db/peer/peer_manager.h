@@ -1,6 +1,8 @@
 #pragma once
 
+#include "db/acl/access_control.h"
 #include "db/config/config.h"
+#include "db/crypto/hash.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/net/connection.h"
@@ -65,7 +67,8 @@ public:
                 identity::NodeIdentity& identity,
                 engine::BlobEngine& engine,
                 storage::Storage& storage,
-                asio::io_context& ioc);
+                asio::io_context& ioc,
+                acl::AccessControl& acl);
 
     /// Start the server and sync timer.
     void start();
@@ -143,6 +146,7 @@ private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
     asio::io_context& ioc_;
+    acl::AccessControl& acl_;
 
     net::Server server_;
     sync::SyncProtocol sync_proto_;

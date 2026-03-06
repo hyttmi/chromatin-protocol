@@ -4,6 +4,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "db/acl/access_control.h"
 #include "db/config/config.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
@@ -59,6 +60,7 @@ chromatindb::wire::BlobData make_signed_blob(
 
 } // anonymous namespace
 
+using chromatindb::acl::AccessControl;
 using chromatindb::config::Config;
 using chromatindb::engine::BlobEngine;
 using chromatindb::identity::NodeIdentity;
@@ -123,7 +125,8 @@ TEST_CASE("daemon starts with unreachable bootstrap peers", "[daemon]") {
     BlobEngine eng(store);
 
     asio::io_context ioc;
-    PeerManager pm(cfg, id, eng, store, ioc);
+    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    PeerManager pm(cfg, id, eng, store, ioc, acl);
 
     // Should not throw
     REQUIRE_NOTHROW(pm.start());
@@ -182,8 +185,10 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
 
     // Create PeerManagers on shared io_context
     asio::io_context ioc;
-    PeerManager pm1(cfg1, id1, eng1, store1, ioc);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc);
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
 
     pm1.start();
     pm2.start();
@@ -244,8 +249,10 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     REQUIRE(r2.accepted);
 
     asio::io_context ioc;
-    PeerManager pm1(cfg1, id1, eng1, store1, ioc);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc);
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
 
     pm1.start();
     pm2.start();
@@ -316,9 +323,12 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
 
     // Create PeerManagers on shared io_context
     asio::io_context ioc;
-    PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc);
-    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc);
-    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc);
+    AccessControl acl_a(cfg_a.allowed_keys, id_a.namespace_id());
+    AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
+    AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
+    PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, acl_a);
+    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, acl_b);
+    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, acl_c);
 
     // Start nodes: A first, then B, then C (natural bootstrap order)
     pm_a.start();

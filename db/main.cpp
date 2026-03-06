@@ -1,3 +1,4 @@
+#include "db/acl/access_control.h"
 #include "db/config/config.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
@@ -121,7 +122,8 @@ int cmd_run(int argc, char* argv[]) {
     chromatindb::engine::BlobEngine engine(storage);
     asio::io_context ioc;
 
-    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc);
+    chromatindb::acl::AccessControl acl(config.allowed_keys, identity.namespace_id());
+    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, acl);
     pm.start();
 
     // Periodic expiry scanner

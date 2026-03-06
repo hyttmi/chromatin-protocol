@@ -3,6 +3,7 @@
 #include <random>
 #include <cstring>
 
+#include "db/acl/access_control.h"
 #include "db/peer/peer_manager.h"
 #include "db/config/config.h"
 #include "db/engine/engine.h"
@@ -59,6 +60,7 @@ chromatindb::wire::BlobData make_signed_blob(
 
 } // anonymous namespace
 
+using chromatindb::acl::AccessControl;
 using chromatindb::config::Config;
 using chromatindb::engine::BlobEngine;
 using chromatindb::identity::NodeIdentity;
@@ -82,7 +84,8 @@ TEST_CASE("PeerManager starts with unreachable bootstrap", "[peer]") {
     BlobEngine eng(store);
 
     asio::io_context ioc;
-    PeerManager pm(cfg, id, eng, store, ioc);
+    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    PeerManager pm(cfg, id, eng, store, ioc, acl);
 
     // Should not throw
     REQUIRE_NOTHROW(pm.start());
@@ -109,7 +112,8 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     BlobEngine eng(store);
 
     asio::io_context ioc;
-    PeerManager pm(cfg, id, eng, store, ioc);
+    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    PeerManager pm(cfg, id, eng, store, ioc, acl);
 
     pm.start();
 

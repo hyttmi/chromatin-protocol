@@ -34,12 +34,14 @@ PeerManager::PeerManager(const config::Config& config,
                          identity::NodeIdentity& identity,
                          engine::BlobEngine& engine,
                          storage::Storage& storage,
-                         asio::io_context& ioc)
+                         asio::io_context& ioc,
+                         acl::AccessControl& acl)
     : config_(config)
     , identity_(identity)
     , engine_(engine)
     , storage_(storage)
     , ioc_(ioc)
+    , acl_(acl)
     , server_(config, identity, ioc)
     , sync_proto_(engine) {
     // Track bootstrap addresses
@@ -61,6 +63,13 @@ PeerManager::PeerManager(const config::Config& config,
 }
 
 void PeerManager::start() {
+    // Log access control mode
+    if (acl_.is_closed_mode()) {
+        spdlog::info("access control: closed mode ({} allowed keys)", acl_.allowed_count());
+    } else {
+        spdlog::info("access control: open mode");
+    }
+
     // Load persisted peers before starting server
     load_persisted_peers();
 
@@ -107,6 +116,16 @@ bool PeerManager::should_accept_connection() {
 }
 
 void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
+    // ACL check: derive peer namespace hash and verify against allowed list.
+    // Must happen BEFORE adding to peers_ so unauthorized peers never see data.
+    auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
+    if (!acl_.is_allowed(std::span<const uint8_t, 32>(peer_ns))) {
+        auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
+        spdlog::warn("access denied: namespace={} ip={}", full_hex, conn->remote_address());
+        conn->close();  // Silent close, no goodbye
+        return;
+    }
+
     PeerInfo info;
     info.connection = conn;
     info.address = conn->remote_address();
@@ -426,7 +445,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                  total_stats.namespaces_synced);
 
     // PEX exchange: send PeerListRequest and wait for response (inline, no concurrent send)
-    {
+    // Skip in closed mode -- don't advertise or discover peers
+    if (!acl_.is_closed_mode()) {
         std::span<const uint8_t> empty{};
         if (!co_await conn->send_message(wire::TransportMsgType_PeerListRequest, empty)) {
             spdlog::debug("PEX: failed to send PeerListRequest to {}", conn->remote_address());
@@ -551,7 +571,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                  total_stats.namespaces_synced);
 
     // PEX exchange: wait for PeerListRequest from initiator, then respond (inline, no concurrent send)
-    {
+    // Skip in closed mode -- don't share peer addresses
+    if (!acl_.is_closed_mode()) {
         auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
             auto addresses = build_peer_list_response(conn->remote_address());
@@ -705,6 +726,10 @@ std::vector<std::string> PeerManager::build_peer_list_response(const std::string
 asio::awaitable<void> PeerManager::handle_pex_as_responder(net::Connection::Ptr conn) {
     auto* peer = find_peer(conn);
     if (!peer || peer->syncing) co_return;
+
+    // In closed mode, don't respond to PEX requests (no address sharing)
+    if (acl_.is_closed_mode()) co_return;
+
     peer->syncing = true;
     // NOTE: do NOT clear sync_inbox -- PeerListRequest is already queued in it
 
@@ -756,6 +781,9 @@ asio::awaitable<void> PeerManager::pex_timer_loop() {
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
         if (ec || stopping_) co_return;
+
+        // Skip PEX entirely in closed mode -- don't advertise or discover peers
+        if (acl_.is_closed_mode()) continue;
 
         co_await request_peers_from_all();
     }
