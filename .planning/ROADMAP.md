@@ -27,8 +27,8 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 **Milestone Goal:** Transform chromatindb from an open permissionless node into a hostable secure storage service with access control and larger blob support.
 
-- [ ] **Phase 9: Source Restructure** - Move to /db layout and rename namespace to chromatindb::
-- [ ] **Phase 10: Access Control** - Closed node model with allowed_keys config and connection-level gating
+- [x] **Phase 9: Source Restructure** - Move to /db layout and rename namespace to chromatindb::
+- [x] **Phase 10: Access Control** - Closed node model with allowed_keys config and connection-level gating
 - [ ] **Phase 11: Larger Blob Support** - Bump blob limit to 100 MiB with safe sync and transport
 
 ## Phase Details
@@ -42,8 +42,8 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. Every C++ namespace reference and FlatBuffers schema uses chromatindb:: instead of chromatin::
   3. All 155 existing tests pass after a clean build (rm -rf build && cmake && make && ctest)
 **Plans**: 2 plans
-- [ ] 09-01-PLAN.md -- Move src/ to db/ directory layout and update all paths
-- [ ] 09-02-PLAN.md -- Rename namespace to chromatindb:: and verify clean build
+- [x] 09-01-PLAN.md -- Move src/ to db/ directory layout and update all paths
+- [x] 09-02-PLAN.md -- Rename namespace to chromatindb:: and verify clean build
 
 ### Phase 10: Access Control
 **Goal**: Node operators can restrict which pubkeys connect, creating a fully closed node that rejects unauthorized peers
@@ -54,7 +54,10 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. Unauthorized peers are disconnected after handshake but before entering PeerManager state -- they never see any data
   3. PEX is disabled when the node is in closed mode so it does not advertise or accept peer addresses
   4. Sending SIGHUP to the daemon reloads allowed_keys from config without restarting, and peers whose pubkey was removed are immediately disconnected
-**Plans**: TBD
+**Plans**: 3 plans
+- [x] 10-01-PLAN.md -- Config extensions + AccessControl class
+- [x] 10-02-PLAN.md -- PeerManager ACL integration + PEX disable
+- [x] 10-03-PLAN.md -- SIGHUP reload + peer revocation
 
 ### Phase 11: Larger Blob Support
 **Goal**: Nodes accept, store, and sync blobs up to 100 MiB without memory exhaustion or sync failure
@@ -82,6 +85,6 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 | 6. Complete Sync Receive Side | v1.0 | 2/2 | Complete | 2026-03-05 |
 | 7. Peer Discovery | v1.0 | 2/2 | Complete | 2026-03-05 |
 | 8. Verification & Cleanup | v1.0 | 2/2 | Complete | 2026-03-05 |
-| 9. Source Restructure | v2.0 | 0/2 | Planned | - |
-| 10. Access Control | v2.0 | 0/? | Not started | - |
+| 9. Source Restructure | v2.0 | 2/2 | Complete | 2026-03-06 |
+| 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
 | 11. Larger Blob Support | v2.0 | 0/? | Not started | - |

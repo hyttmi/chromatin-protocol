@@ -15,11 +15,11 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 ### Access Control
 
-- [ ] **ACL-01**: Node operator can specify `allowed_keys` in config JSON to restrict which pubkeys can connect (non-empty = closed mode, empty = open mode)
-- [ ] **ACL-02**: Unauthorized peers are rejected at connection level after handshake, before entering PeerManager state
-- [ ] **ACL-03**: PEX is disabled when node is in closed mode (non-empty `allowed_keys`)
-- [ ] **ACL-04**: Node operator can hot-reload `allowed_keys` via SIGHUP without restarting the daemon
-- [ ] **ACL-05**: Peers whose pubkey is revoked from `allowed_keys` are disconnected on config reload
+- [x] **ACL-01**: Node operator can specify `allowed_keys` in config JSON to restrict which pubkeys can connect (non-empty = closed mode, empty = open mode)
+- [x] **ACL-02**: Unauthorized peers are rejected at connection level after handshake, before entering PeerManager state
+- [x] **ACL-03**: PEX is disabled when node is in closed mode (non-empty `allowed_keys`)
+- [x] **ACL-04**: Node operator can hot-reload `allowed_keys` via SIGHUP without restarting the daemon
+- [x] **ACL-05**: Peers whose pubkey is revoked from `allowed_keys` are disconnected on config reload
 
 ### Larger Blob Support
 
@@ -61,11 +61,11 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 | STRUCT-01 | Phase 9 | Complete |
 | STRUCT-02 | Phase 9 | Complete |
 | STRUCT-03 | Phase 9 | Complete |
-| ACL-01 | Phase 10 | Pending |
-| ACL-02 | Phase 10 | Pending |
-| ACL-03 | Phase 10 | Pending |
-| ACL-04 | Phase 10 | Pending |
-| ACL-05 | Phase 10 | Pending |
+| ACL-01 | Phase 10 | Complete |
+| ACL-02 | Phase 10 | Complete |
+| ACL-03 | Phase 10 | Complete |
+| ACL-04 | Phase 10 | Complete |
+| ACL-05 | Phase 10 | Complete |
 | BLOB-01 | Phase 11 | Pending |
 | BLOB-02 | Phase 11 | Pending |
 | BLOB-03 | Phase 11 | Pending |
@@ -80,4 +80,4 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 ---
 *Requirements defined: 2026-03-05*
-*Last updated: 2026-03-05 after roadmap creation*
+*Last updated: 2026-03-06 after Phase 10 completion*
