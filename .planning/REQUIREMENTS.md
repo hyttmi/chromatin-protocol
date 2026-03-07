@@ -24,14 +24,14 @@ Requirements for v3.0 Real-time & Delegation. Each maps to roadmap phases.
 
 ### Blob Deletion
 
-- [ ] **DEL-01**: Namespace owner can delete a blob by creating a signed tombstone targeting a specific blob hash
-- [ ] **DEL-02**: Tombstones are permanent (TTL=0) and replicate like regular blobs
-- [ ] **DEL-03**: Nodes receiving a tombstone delete the target blob and retain the tombstone
-- [ ] **DEL-04**: Tombstones propagate via sync protocol (included in hash-list diff)
+- [x] **DEL-01**: Namespace owner can delete a blob by creating a signed tombstone targeting a specific blob hash
+- [x] **DEL-02**: Tombstones are permanent (TTL=0) and replicate like regular blobs
+- [x] **DEL-03**: Nodes receiving a tombstone delete the target blob and retain the tombstone
+- [x] **DEL-04**: Tombstones propagate via sync protocol (included in hash-list diff)
 
 ### Build & Tooling
 
-- [ ] **BUILD-01**: Strip unused algorithms from liboqs build (only ML-DSA-87, ML-KEM-1024, SHA3-256)
+- [x] **BUILD-01**: Strip unused algorithms from liboqs build (only ML-DSA-87, ML-KEM-1024, SHA3-256)
 
 ### Documentation & Performance
 
@@ -67,10 +67,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEL-01 | Phase 12 | Pending |
-| DEL-02 | Phase 12 | Pending |
-| DEL-03 | Phase 12 | Pending |
-| DEL-04 | Phase 12 | Pending |
+| DEL-01 | Phase 12 | Complete |
+| DEL-02 | Phase 12 | Complete |
+| DEL-03 | Phase 12 | Complete |
+| DEL-04 | Phase 12 | Complete |
 | DELEG-01 | Phase 13 | Pending |
 | DELEG-02 | Phase 13 | Pending |
 | DELEG-03 | Phase 13 | Pending |
@@ -80,7 +80,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SUB-03 | Phase 14 | Pending |
 | SUB-04 | Phase 14 | Pending |
 | SUB-05 | Phase 14 | Pending |
-| BUILD-01 | Phase 12 | Pending |
+| BUILD-01 | Phase 12 | Complete |
 | DOCS-01 | Phase 15 | Pending |
 | PERF-01 | Phase 15 | Pending |
 

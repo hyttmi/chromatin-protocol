@@ -39,7 +39,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 **Milestone Goal:** Make chromatindb collaborative and responsive -- pub/sub notifications for real-time awareness, namespace delegation for multi-writer support, and explicit blob deletion via tombstones.
 
-- [ ] **Phase 12: Blob Deletion** - Owner-signed tombstones that permanently delete blobs and replicate via sync + liboqs build optimization
+- [x] **Phase 12: Blob Deletion** - Owner-signed tombstones that permanently delete blobs and replicate via sync + liboqs build optimization
 - [ ] **Phase 13: Namespace Delegation** - Signed delegation blobs granting write access to other pubkeys
 - [ ] **Phase 14: Pub/Sub Notifications** - Real-time SUBSCRIBE/NOTIFICATION wire messages for namespace changes
 - [ ] **Phase 15: Polish & Benchmarks** - README documentation and performance test suite
@@ -56,11 +56,11 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   3. A node receiving a tombstone via sync deletes the target blob locally and retains the tombstone
   4. Tombstones appear in hash-list diffs and propagate to peers that do not yet have them
   5. A node that already holds a tombstone for a blob hash rejects that blob on subsequent sync or ingest (tombstone-before-blob edge case)
-**Plans**: TBD
+**Plans**: 2/2
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
+- [x] 12-01: Tombstone deletion (DEL-01, DEL-02, DEL-03, DEL-04) -- completed 2026-03-07
+- [x] 12-02: liboqs build optimization (BUILD-01) -- completed 2026-03-07
 
 ### Phase 13: Namespace Delegation
 **Goal**: Namespace owners can grant write access to other pubkeys via signed delegation blobs, enabling multi-writer namespaces
@@ -125,7 +125,7 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 9. Source Restructure | v2.0 | 2/2 | Complete | 2026-03-06 |
 | 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
-| 12. Blob Deletion | v3.0 | 0/? | Not started | - |
+| 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
 | 13. Namespace Delegation | v3.0 | 0/? | Not started | - |
 | 14. Pub/Sub Notifications | v3.0 | 0/? | Not started | - |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
