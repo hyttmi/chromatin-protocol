@@ -352,6 +352,45 @@ std::vector<wire::BlobData> Storage::get_blobs_by_seq(
     return results;
 }
 
+std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
+    std::span<const uint8_t, 32> ns) {
+    std::vector<std::array<uint8_t, 32>> hashes;
+
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->seq_map);
+
+        // Seek to first entry for this namespace (seq_num = 1)
+        auto lower_key = make_seq_key(ns.data(), 1);
+        auto seek_result = cursor.lower_bound(to_slice(lower_key));
+        if (!seek_result.done) return hashes;
+
+        do {
+            auto key_data = cursor.current(false).key;
+            if (key_data.length() != 40) break;
+
+            // Check namespace prefix
+            if (std::memcmp(key_data.data(), ns.data(), 32) != 0) break;
+
+            // Read hash from value (32 bytes)
+            auto val_data = cursor.current(false).value;
+            if (val_data.length() == 32) {
+                std::array<uint8_t, 32> hash;
+                std::memcpy(hash.data(), val_data.data(), 32);
+                hashes.push_back(hash);
+            }
+
+            auto next = cursor.to_next(false);
+            if (!next.done) break;
+        } while (true);
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_hashes_by_namespace: {}", e.what());
+    }
+
+    return hashes;
+}
+
 std::vector<NamespaceInfo> Storage::list_namespaces() {
     std::vector<NamespaceInfo> result;
 

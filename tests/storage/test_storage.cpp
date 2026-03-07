@@ -546,6 +546,121 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
     REQUIRE(found_ns2);
 }
 
+// ============================================================================
+// Plan 11-02: get_hashes_by_namespace
+// ============================================================================
+
+TEST_CASE("Storage get_hashes_by_namespace returns empty for unknown namespace", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0xAA);
+    auto hashes = store.get_hashes_by_namespace(ns);
+    REQUIRE(hashes.empty());
+}
+
+TEST_CASE("Storage get_hashes_by_namespace returns correct hashes", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob1 = make_test_blob(0x10, "payload-one");
+    auto blob2 = make_test_blob(0x10, "payload-two");
+    auto blob3 = make_test_blob(0x10, "payload-three");
+
+    auto r1 = store.store_blob(blob1);
+    auto r2 = store.store_blob(blob2);
+    auto r3 = store.store_blob(blob3);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+    REQUIRE(r2.status == StoreResult::Status::Stored);
+    REQUIRE(r3.status == StoreResult::Status::Stored);
+
+    auto hashes = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob1.namespace_id));
+    REQUIRE(hashes.size() == 3);
+
+    // Hashes should match store_blob results
+    REQUIRE(hashes[0] == r1.blob_hash);
+    REQUIRE(hashes[1] == r2.blob_hash);
+    REQUIRE(hashes[2] == r3.blob_hash);
+}
+
+TEST_CASE("Storage get_hashes_by_namespace returns hashes in seq order", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob1 = make_test_blob(0x20, "first");
+    auto blob2 = make_test_blob(0x20, "second");
+    auto blob3 = make_test_blob(0x20, "third");
+
+    auto r1 = store.store_blob(blob1);
+    auto r2 = store.store_blob(blob2);
+    auto r3 = store.store_blob(blob3);
+
+    auto hashes = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob1.namespace_id));
+    REQUIRE(hashes.size() == 3);
+
+    // seq order: r1 first, then r2, then r3
+    REQUIRE(hashes[0] == r1.blob_hash);
+    REQUIRE(hashes[1] == r2.blob_hash);
+    REQUIRE(hashes[2] == r3.blob_hash);
+}
+
+TEST_CASE("Storage get_hashes_by_namespace isolates namespaces", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob_a1 = make_test_blob(0x30, "ns-a-one");
+    auto blob_a2 = make_test_blob(0x30, "ns-a-two");
+    auto blob_b1 = make_test_blob(0x31, "ns-b-one");
+
+    auto ra1 = store.store_blob(blob_a1);
+    auto ra2 = store.store_blob(blob_a2);
+    auto rb1 = store.store_blob(blob_b1);
+
+    auto hashes_a = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob_a1.namespace_id));
+    auto hashes_b = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob_b1.namespace_id));
+
+    REQUIRE(hashes_a.size() == 2);
+    REQUIRE(hashes_b.size() == 1);
+    REQUIRE(hashes_a[0] == ra1.blob_hash);
+    REQUIRE(hashes_a[1] == ra2.blob_hash);
+    REQUIRE(hashes_b[0] == rb1.blob_hash);
+}
+
+TEST_CASE("Storage get_hashes_by_namespace dedup: duplicate blob has one hash entry", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x40, "deduplicate-me");
+    auto r1 = store.store_blob(blob);
+    auto r2 = store.store_blob(blob);  // duplicate
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+    REQUIRE(r2.status == StoreResult::Status::Duplicate);
+
+    auto hashes = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(hashes.size() == 1);  // Duplicate doesn't add second seq entry
+    REQUIRE(hashes[0] == r1.blob_hash);
+}
+
+TEST_CASE("Storage get_hashes_by_namespace matches blob_hash computation", "[storage]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x50, "hash-check");
+    auto expected_hash = compute_hash(blob);
+    store.store_blob(blob);
+
+    auto hashes = store.get_hashes_by_namespace(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(hashes.size() == 1);
+    REQUIRE(hashes[0] == expected_hash);
+}
+
 TEST_CASE("Storage list_namespaces empty on fresh storage", "[storage][plan03]") {
     TempDir tmp;
     Storage store(tmp.path.string());

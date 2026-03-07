@@ -89,6 +89,14 @@ public:
         std::span<const uint8_t, 32> ns,
         uint64_t since_seq);
 
+    /// Retrieve all blob hashes for a namespace from the seq_map index.
+    /// Reads only 32-byte hash values from seq_map without touching blobs_map.
+    /// This is the memory-efficient path for sync hash collection.
+    /// Hashes are returned in seq_num order (ascending).
+    /// Note: may include hashes for blobs deleted by expiry (seq gaps).
+    std::vector<std::array<uint8_t, 32>> get_hashes_by_namespace(
+        std::span<const uint8_t, 32> ns);
+
     /// List all namespaces in storage with their latest seq_num.
     /// Scans the sequence sub-database using cursor jumps.
     /// @return Vector of NamespaceInfo with namespace_id and latest_seq_num.
