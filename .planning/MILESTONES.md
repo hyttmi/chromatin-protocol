@@ -1,5 +1,27 @@
 # Milestones
 
+## v2.0 Closed Node Model (Shipped: 2026-03-07)
+
+**Phases:** 3 (9-11) | **Plans:** 8 | **Commits:** 38 | **LOC:** 11,027 C++
+**Tests:** 196 tests (41 new) | **Requirements:** 14/14
+**Timeline:** 2 days (2026-03-05 -> 2026-03-07)
+
+**Key accomplishments:**
+- Source restructured to db/ layout with chromatindb:: namespace (60 files, 155 tests preserved)
+- Closed node model with allowed_keys ACL gating at connection level (open/closed mode)
+- PEX disabled in closed mode at all 4 protocol points
+- SIGHUP hot-reload of allowed_keys with immediate peer revocation
+- 100 MiB blob support with Step 0 oversized rejection before crypto
+- Memory-efficient sync: index-only hash reads + one-blob-at-a-time transfer with adaptive timeout
+
+**Tech debt carried forward:**
+- Expired blob hashes included in sync hash lists (documented intentional trade-off)
+- Wire protocol strings "chromatin-init-to-resp-v1" retained (protocol identifiers, not namespace refs)
+
+**Archive:** [v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md) | [v2.0-REQUIREMENTS.md](milestones/v2.0-REQUIREMENTS.md)
+
+---
+
 ## v1.0 MVP (Shipped: 2026-03-05)
 
 **Phases:** 8 | **Plans:** 21 | **Commits:** 80 | **LOC:** 9,449 C++
@@ -21,20 +43,5 @@
 - No standalone verification docs for Phases 7/8
 
 **Archive:** [v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md) | [v1.0-REQUIREMENTS.md](milestones/v1.0-REQUIREMENTS.md)
-
----
-
-## v2.0 Closed Node Model (In Progress)
-
-**Phases:** 9-11 (3 phases) | **Requirements:** 14
-**Goal:** Transform chromatindb from an open permissionless node into a hostable secure storage service with access control and larger blob support.
-
-**Target features:**
-- Source restructure: /db directory layout, chromatindb:: namespace
-- Closed node model with allowed_keys config (restrict who can connect)
-- Fully authenticated access -- only authorized pubkeys can read or write
-- Larger blob limit (100 MiB) for medium files (documents, images, small archives)
-
-**Roadmap:** [ROADMAP.md](ROADMAP.md) | **Requirements:** [REQUIREMENTS.md](REQUIREMENTS.md)
 
 ---

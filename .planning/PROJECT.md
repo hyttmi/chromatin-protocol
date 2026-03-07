@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A decentralized, post-quantum secure database node. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Anyone can run a node. Anyone can generate a keypair and start writing. The system is designed to be technically unstoppable.
+A decentralized, post-quantum secure database node with access control. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB and is designed to be technically unstoppable.
 
 The database layer is intentionally dumb — it stores signed blobs, verifies ownership, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
 
@@ -26,13 +26,15 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Write ACKs: confirmation after local storage — v1.0
 - ✓ Wire format: FlatBuffers with deterministic encoding for signing — v1.0
 - ✓ Query interface: "give me namespace X since seq_num Y", "list all namespaces" — v1.0
+- ✓ Access control: allowed_keys config restricts which pubkeys can connect — v2.0
+- ✓ Fully closed node: only authorized pubkeys can read or write — v2.0
+- ✓ Larger blob limit: 100 MiB for medium files (documents, images, small archives) — v2.0
+- ✓ SIGHUP hot-reload of ACL without restart — v2.0
+- ✓ Memory-efficient sync for large blobs (index-only hashes, one-blob-at-a-time) — v2.0
 
 ### Active
 
-<!-- v2.0 Closed Node Model -->
-- [ ] Access control: allowed_keys config restricts which pubkeys can connect
-- [ ] Fully closed node: only authorized pubkeys can read or write
-- [ ] Larger blob limit: bump from 15 MiB to ~50-100 MiB for medium files (documents, images, small archives)
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -47,27 +49,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted TCP only
 - NAT traversal / hole punching — server daemon assumes reachable address
 - OpenSSL — prefer minimal deps (liboqs + libsodium)
+- Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
+- Per-peer read/write restrictions — YAGNI for current access control model
 
 ## Context
 
-## Current Milestone: v2.0 Closed Node Model
-
-**Goal:** Transform chromatindb from an open permissionless node into a hostable secure storage service with access control and larger blob support.
-
-**Target features:**
-- Closed node model with allowed_keys config (restrict who can connect)
-- Fully authenticated access — only authorized pubkeys can read or write
-- Larger blob limit for medium files (documents, images, small archives)
-
-## Context
-
-Shipped v1.0 with 9,449 LOC C++20, 155 tests, 586 assertions.
-Built in 3 days across 8 phases and 21 plans.
+Shipped v2.0 with 11,027 LOC C++20, 196 tests.
+Built across 5 days total: v1.0 in 3 days (8 phases, 21 plans), v2.0 in 2 days (3 phases, 8 plans).
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v1.0 SHIPPED, v2.0 IN PROGRESS): chromatindb** — database node network
+- **Layer 1 (v2.0 SHIPPED): chromatindb** — database node network with access control
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
@@ -110,6 +103,15 @@ Previous projects inform design:
 | Deque for peers_ container | Prevents pointer invalidation on push_back during coroutine suspension | ✓ Good — fixed nasty coroutine bug |
 | Timer-cancel pattern for sync inbox | steady_timer on stack, pointer in PeerInfo, cancel to wake | ✓ Good — clean async message queue |
 | TTL as protocol invariant | constexpr, not user-configurable — simplifies protocol | ✓ Good — eliminated config complexity |
+| AccessControl with std::set + implicit self-allow | O(log n) lookup; self-allow prevents accidental self-lockout | ✓ Good — simple, correct |
+| ACL gating at on_peer_connected | After handshake, before message loop — unauthorized peers never see data | ✓ Good — minimal attack surface |
+| Silent TCP close for ACL rejection | No protocol-level denial — no information leakage about access rules | ✓ Good — defense in depth |
+| SIGHUP via coroutine member function | Avoids stack-use-after-return with compiler coroutine frames | ✓ Good — safer than lambda approach |
+| Implicit closed mode from non-empty allowed_keys | One config field, zero ambiguity — no separate toggle needed | ✓ Good — KISS |
+| MAX_BLOB_DATA_SIZE as Step 0 in ingest | Single integer comparison before any crypto — cheapest validation first | ✓ Good — prevents resource waste |
+| One-blob-at-a-time sync transfer | Memory bounded: only one blob in flight per connection | ✓ Good — prevents OOM with 100 MiB blobs |
+| Expiry filtering deferred to receiver | Sender doesn't need blob data at hash collection time | ✓ Good — simplifies sender, index-only reads |
+| MAX_FRAME_SIZE = 110 MiB (10% headroom) | Room for protocol overhead without a second round-trip | ✓ Good — future-proof |
 
 ---
-*Last updated: 2026-03-05 after v2.0 milestone started*
+*Last updated: 2026-03-07 after v2.0 milestone*
