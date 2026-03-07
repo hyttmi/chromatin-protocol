@@ -4,6 +4,7 @@
 
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
+#include "db/net/framing.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -459,6 +460,86 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     auto bad_result = engine.ingest(bad_blob);
     REQUIRE_FALSE(bad_result.accepted);
     REQUIRE(bad_result.error.value() == IngestError::namespace_mismatch);
+}
+
+// ============================================================================
+// Plan 11-01 Task 2: Oversized blob rejection (Step 0)
+// ============================================================================
+
+TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    SECTION("blob with data > MAX_BLOB_DATA_SIZE is rejected") {
+        chromatindb::wire::BlobData blob;
+        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.ttl = 604800;
+        blob.timestamp = 1000;
+        blob.signature = {0x01};  // Invalid sig, but we should never reach sig check
+
+        auto result = engine.ingest(blob);
+        REQUIRE_FALSE(result.accepted);
+        REQUIRE(result.error.has_value());
+        REQUIRE(result.error.value() == IngestError::oversized_blob);
+    }
+
+    SECTION("blob with data == MAX_BLOB_DATA_SIZE is not rejected for size") {
+        chromatindb::wire::BlobData blob;
+        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE, 0x42);
+        blob.ttl = 604800;
+        blob.timestamp = 1000;
+        blob.signature = {0x01};  // Invalid sig
+
+        auto result = engine.ingest(blob);
+        // Should not be oversized_blob -- will fail on later validation step
+        if (!result.accepted && result.error.has_value()) {
+            REQUIRE(result.error.value() != IngestError::oversized_blob);
+        }
+    }
+
+    SECTION("blob with empty data is not rejected for size") {
+        auto blob = make_signed_blob(id, "");
+        auto result = engine.ingest(blob);
+        // Empty data is valid, should be accepted
+        REQUIRE(result.accepted);
+    }
+
+    SECTION("oversized_blob rejection happens before signature verification") {
+        chromatindb::wire::BlobData blob;
+        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.ttl = 604800;
+        blob.timestamp = 1000;
+        // Invalid signature -- if size check is first, we get oversized_blob, not invalid_signature
+        blob.signature.resize(100, 0xFF);
+
+        auto result = engine.ingest(blob);
+        REQUIRE_FALSE(result.accepted);
+        REQUIRE(result.error.value() == IngestError::oversized_blob);
+    }
+
+    SECTION("error_detail includes actual size") {
+        chromatindb::wire::BlobData blob;
+        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.ttl = 604800;
+        blob.timestamp = 1000;
+        blob.signature = {0x01};
+
+        auto result = engine.ingest(blob);
+        REQUIRE_FALSE(result.accepted);
+        // error_detail should contain the actual size
+        REQUIRE(result.error_detail.find(std::to_string(chromatindb::net::MAX_BLOB_DATA_SIZE + 1)) != std::string::npos);
+    }
 }
 
 TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]") {

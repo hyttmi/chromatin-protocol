@@ -17,6 +17,7 @@ enum class IngestError {
     namespace_mismatch,   ///< SHA3-256(pubkey) != claimed namespace_id.
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
     malformed_blob,       ///< Structural issue (wrong pubkey size, empty sig).
+    oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
     storage_error         ///< Storage layer failed to write.
 };
 

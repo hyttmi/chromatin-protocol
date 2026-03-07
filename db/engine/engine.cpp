@@ -5,6 +5,7 @@
 
 #include "db/crypto/hash.h"
 #include "db/crypto/signing.h"
+#include "db/net/framing.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -37,6 +38,15 @@ BlobEngine::BlobEngine(storage::Storage& store)
     : storage_(store) {}
 
 IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
+    // Step 0: Size check (cheapest possible -- one integer comparison)
+    if (blob.data.size() > net::MAX_BLOB_DATA_SIZE) {
+        spdlog::warn("Ingest rejected: blob data size {} exceeds max {}",
+                     blob.data.size(), net::MAX_BLOB_DATA_SIZE);
+        return IngestResult::rejection(IngestError::oversized_blob,
+            "blob data size " + std::to_string(blob.data.size()) +
+            " exceeds max " + std::to_string(net::MAX_BLOB_DATA_SIZE));
+    }
+
     // Step 1: Structural checks (cheapest first)
     if (blob.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {
         spdlog::warn("Ingest rejected: wrong pubkey size {} (expected {})",
