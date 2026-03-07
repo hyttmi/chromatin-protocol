@@ -147,8 +147,15 @@ TEST_CASE("read_frame rejects invalid frames", "[framing]") {
     }
 
     SECTION("frame exceeding MAX_FRAME_SIZE throws") {
-        // Craft a frame header claiming > 16MB
-        std::vector<uint8_t> bad_frame = {0x01, 0x00, 0x00, 0x01}; // 16MB + 1
+        // Craft a frame header claiming > 110 MiB (MAX_FRAME_SIZE)
+        // 110 MiB = 115343360 = 0x06E00000, so use 0x06E00001 (one byte over)
+        uint32_t over_max = MAX_FRAME_SIZE + 1;
+        std::vector<uint8_t> bad_frame = {
+            static_cast<uint8_t>((over_max >> 24) & 0xFF),
+            static_cast<uint8_t>((over_max >> 16) & 0xFF),
+            static_cast<uint8_t>((over_max >> 8) & 0xFF),
+            static_cast<uint8_t>(over_max & 0xFF)
+        };
         REQUIRE_THROWS_AS(read_frame(bad_frame, key.span(), 0), std::runtime_error);
     }
 
@@ -174,6 +181,33 @@ TEST_CASE("read_frame rejects invalid frames", "[framing]") {
         auto result = read_frame(frame, key.span(), 0);
         REQUIRE_FALSE(result.has_value());
     }
+}
+
+TEST_CASE("Protocol constants for larger blob support", "[framing]") {
+    SECTION("MAX_BLOB_DATA_SIZE is 100 MiB") {
+        REQUIRE(MAX_BLOB_DATA_SIZE == 100ULL * 1024 * 1024);
+        REQUIRE(MAX_BLOB_DATA_SIZE == 104857600ULL);
+    }
+
+    SECTION("MAX_FRAME_SIZE is 110 MiB") {
+        REQUIRE(MAX_FRAME_SIZE == 110u * 1024 * 1024);
+        REQUIRE(MAX_FRAME_SIZE == 115343360u);
+    }
+
+    SECTION("MAX_FRAME_SIZE > MAX_BLOB_DATA_SIZE") {
+        REQUIRE(MAX_FRAME_SIZE > MAX_BLOB_DATA_SIZE);
+    }
+}
+
+TEST_CASE("write_frame + read_frame round-trip with 1 MiB payload", "[framing]") {
+    auto key = AEAD::keygen();
+    std::vector<uint8_t> plaintext(1024 * 1024, 0xAB);  // 1 MiB
+    auto frame = write_frame(plaintext, key.span(), 0);
+    auto result = read_frame(frame, key.span(), 0);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->plaintext.size() == plaintext.size());
+    REQUIRE(result->plaintext == plaintext);
 }
 
 TEST_CASE("Integration: protocol encode -> frame -> read -> decode", "[framing][protocol]") {

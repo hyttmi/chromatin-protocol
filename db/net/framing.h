@@ -9,8 +9,14 @@
 
 namespace chromatindb::net {
 
-/// Maximum frame payload size (16 MB).
-constexpr uint32_t MAX_FRAME_SIZE = 16 * 1024 * 1024;
+/// Maximum frame payload size (110 MiB — accommodates 100 MiB blob + protocol overhead).
+constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;
+
+/// Maximum blob data size (100 MiB). Protocol invariant, not configurable.
+constexpr uint64_t MAX_BLOB_DATA_SIZE = 100ULL * 1024 * 1024;
+
+static_assert(MAX_FRAME_SIZE > MAX_BLOB_DATA_SIZE,
+    "frame must accommodate max blob plus overhead");
 
 /// Frame header size (4-byte big-endian uint32_t length prefix).
 constexpr size_t FRAME_HEADER_SIZE = 4;
