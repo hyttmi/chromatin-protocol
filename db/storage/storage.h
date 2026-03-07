@@ -102,6 +102,21 @@ public:
     /// @return Vector of NamespaceInfo with namespace_id and latest_seq_num.
     std::vector<NamespaceInfo> list_namespaces();
 
+    /// Delete a single blob by namespace + content hash.
+    /// Removes from blobs_map and expiry_map (if entry exists).
+    /// Does NOT touch seq_map (gaps are expected per existing pattern).
+    /// @return true if found and deleted, false if not found.
+    bool delete_blob_data(
+        std::span<const uint8_t, 32> ns,
+        std::span<const uint8_t, 32> blob_hash);
+
+    /// Check if a tombstone exists for a given target blob hash in a namespace.
+    /// Scans namespace blobs looking for tombstone data whose target matches.
+    /// O(n) in namespace size -- deletion is rare, correctness over performance.
+    bool has_tombstone_for(
+        std::span<const uint8_t, 32> ns,
+        std::span<const uint8_t, 32> target_blob_hash);
+
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.
     /// Sequence index entries are NOT deleted (gaps are expected).

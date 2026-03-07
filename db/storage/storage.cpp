@@ -480,6 +480,97 @@ std::vector<NamespaceInfo> Storage::list_namespaces() {
     return result;
 }
 
+bool Storage::delete_blob_data(
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t, 32> blob_hash) {
+    try {
+        auto txn = impl_->env.start_write();
+        auto blob_key = make_blob_key(ns.data(), blob_hash.data());
+        auto key_slice = to_slice(blob_key);
+
+        // Check if blob exists
+        auto existing = txn.get(impl_->blobs_map, key_slice, not_found_sentinel);
+        if (existing.data() == nullptr) {
+            txn.abort();
+            return false;
+        }
+
+        // Decode to get TTL + timestamp for expiry cleanup
+        auto blob = wire::decode_blob(std::span<const uint8_t>(
+            static_cast<const uint8_t*>(existing.data()), existing.length()));
+
+        // Delete from blobs_map
+        txn.erase(impl_->blobs_map, key_slice);
+
+        // Delete from expiry_map if TTL > 0
+        if (blob.ttl > 0) {
+            uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) +
+                                   static_cast<uint64_t>(blob.ttl);
+            auto exp_key = make_expiry_key(expiry_time, blob_hash.data());
+            try {
+                txn.erase(impl_->expiry_map, to_slice(exp_key));
+            } catch (const mdbx::exception&) {
+                // Already deleted -- not an error
+            }
+        }
+
+        txn.commit();
+        spdlog::debug("Deleted blob from storage (ns {:02x}{:02x}...)",
+                       ns[0], ns[1]);
+        return true;
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in delete_blob_data: {}", e.what());
+        return false;
+    }
+}
+
+bool Storage::has_tombstone_for(
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t, 32> target_blob_hash) {
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->blobs_map);
+
+        // Build lower bound key for this namespace: [ns:32][0x00...00:32]
+        std::array<uint8_t, 64> lower_key{};
+        std::memcpy(lower_key.data(), ns.data(), 32);
+        // Hash bytes are already zero-initialized
+
+        auto result = cursor.lower_bound(to_slice(lower_key));
+        if (!result.done) return false;
+
+        do {
+            auto key_data = cursor.current(false).key;
+            if (key_data.length() != 64) break;
+
+            // Check namespace prefix -- stop if we've left this namespace
+            if (std::memcmp(key_data.data(), ns.data(), 32) != 0) break;
+
+            // Read blob data and check if it's a tombstone targeting our hash
+            auto val_data = cursor.current(false).value;
+            auto blob = wire::decode_blob(std::span<const uint8_t>(
+                static_cast<const uint8_t*>(val_data.data()), val_data.length()));
+
+            if (wire::is_tombstone(blob.data)) {
+                auto target = wire::extract_tombstone_target(blob.data);
+                if (std::memcmp(target.data(), target_blob_hash.data(), 32) == 0) {
+                    return true;
+                }
+            }
+
+            auto next = cursor.to_next(false);
+            if (!next.done) break;
+        } while (true);
+
+        return false;
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in has_tombstone_for: {}", e.what());
+        return false;
+    }
+}
+
 size_t Storage::run_expiry_scan() {
     size_t purged = 0;
 

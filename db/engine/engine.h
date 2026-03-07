@@ -18,7 +18,8 @@ enum class IngestError {
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
     malformed_blob,       ///< Structural issue (wrong pubkey size, empty sig).
     oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
-    storage_error         ///< Storage layer failed to write.
+    storage_error,        ///< Storage layer failed to write.
+    tombstoned            ///< Blob rejected because a tombstone exists for it.
 };
 
 /// Status of a successful ingest.
@@ -68,6 +69,20 @@ public:
     ///
     /// @return IngestResult with WriteAck on success or error on rejection.
     IngestResult ingest(const wire::BlobData& blob);
+
+    /// Delete a blob by creating a signed tombstone.
+    ///
+    /// The delete_request BlobData must contain:
+    /// - namespace_id: target namespace
+    /// - pubkey: owner's ML-DSA-87 public key
+    /// - data: 32-byte target blob hash (raw bytes, not tombstone-encoded)
+    /// - ttl: 0
+    /// - timestamp: client's unix timestamp
+    /// - signature: over canonical form SHA3-256(namespace || data || 0 || timestamp)
+    ///
+    /// Validation: same pipeline as ingest (structural -> namespace -> signature).
+    /// On success: deletes target blob if present, stores tombstone, returns ack.
+    IngestResult delete_blob(const wire::BlobData& delete_request);
 
     /// Query blobs in a namespace since a given seq_num.
     /// Returns blobs with seq_num > since_seq in ascending order.

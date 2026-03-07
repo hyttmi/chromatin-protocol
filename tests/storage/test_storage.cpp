@@ -668,3 +668,125 @@ TEST_CASE("Storage list_namespaces empty on fresh storage", "[storage][plan03]")
     auto namespaces = store.list_namespaces();
     REQUIRE(namespaces.empty());
 }
+
+// ============================================================================
+// Phase 12: Storage tombstone operations
+// ============================================================================
+
+TEST_CASE("Storage delete_blob_data removes existing blob", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x60, "to-delete");
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    // Verify blob exists
+    REQUIRE(store.has_blob(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+
+    // Delete it
+    bool deleted = store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash));
+    REQUIRE(deleted);
+
+    // Verify blob is gone
+    REQUIRE_FALSE(store.has_blob(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+}
+
+TEST_CASE("Storage delete_blob_data returns false for non-existent blob", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0x61);
+    std::array<uint8_t, 32> fake_hash{};
+    fake_hash.fill(0xFF);
+
+    bool deleted = store.delete_blob_data(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(fake_hash));
+    REQUIRE_FALSE(deleted);
+}
+
+TEST_CASE("Storage delete_blob_data cleans up expiry index", "[storage][tombstone]") {
+    TempDir tmp;
+    uint64_t fake_now = 1000;
+    Storage store(tmp.path.string(), [&]() { return fake_now; });
+
+    // Store a blob with TTL
+    auto blob = make_test_blob(0x62, "expiry-cleanup", 3600, 1000);
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    // Delete the blob
+    bool deleted = store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash));
+    REQUIRE(deleted);
+
+    // Advance past expiry and scan -- should purge 0 (already deleted)
+    fake_now = 99999;
+    auto purged = store.run_expiry_scan();
+    REQUIRE(purged == 0);
+}
+
+TEST_CASE("Storage has_tombstone_for finds tombstone", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a regular blob
+    auto blob = make_test_blob(0x63, "regular-blob");
+    auto blob_result = store.store_blob(blob);
+    REQUIRE(blob_result.status == StoreResult::Status::Stored);
+
+    // No tombstone yet
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+
+    // Store a tombstone targeting this blob
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id = blob.namespace_id;
+    tombstone.pubkey = blob.pubkey;
+    tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 2000;
+    tombstone.signature.resize(4627, 0x42);
+    store.store_blob(tombstone);
+
+    // Now tombstone should be found
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+}
+
+TEST_CASE("Storage has_tombstone_for returns false for wrong target", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a tombstone targeting a specific hash
+    std::array<uint8_t, 32> target{};
+    target.fill(0xAA);
+
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id.fill(0x64);
+    tombstone.pubkey.resize(2592, 0x64);
+    tombstone.data = chromatindb::wire::make_tombstone_data(target);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 2000;
+    tombstone.signature.resize(4627, 0x42);
+    store.store_blob(tombstone);
+
+    // Query for a different target hash
+    std::array<uint8_t, 32> other_target{};
+    other_target.fill(0xBB);
+
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(other_target)));
+}

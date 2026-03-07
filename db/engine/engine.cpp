@@ -82,6 +82,26 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
             "ML-DSA-87 signature verification failed");
     }
 
+    // Step 3.5: Tombstone handling for incoming blobs
+    if (wire::is_tombstone(blob.data)) {
+        // Tombstone blob arriving via sync or direct ingest.
+        // Delete the target blob if it exists, then store the tombstone.
+        auto target_hash = wire::extract_tombstone_target(blob.data);
+        storage_.delete_blob_data(blob.namespace_id, target_hash);
+        spdlog::debug("Tombstone received: deleting target blob in ns {:02x}{:02x}...",
+                       blob.namespace_id[0], blob.namespace_id[1]);
+    } else {
+        // Regular blob: check if a tombstone blocks it.
+        auto encoded = wire::encode_blob(blob);
+        auto content_hash = wire::blob_hash(encoded);
+        if (storage_.has_tombstone_for(blob.namespace_id, content_hash)) {
+            spdlog::debug("Ingest rejected: blob blocked by tombstone (ns {:02x}{:02x}...)",
+                           blob.namespace_id[0], blob.namespace_id[1]);
+            return IngestResult::rejection(IngestError::tombstoned,
+                "blocked by tombstone");
+        }
+    }
+
     // Step 4: Store to storage layer
     auto store_result = storage_.store_blob(blob);
 
@@ -108,6 +128,85 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
     }
 
     // Unreachable, but satisfy compiler
+    return IngestResult::rejection(IngestError::storage_error, "unknown status");
+}
+
+IngestResult BlobEngine::delete_blob(const wire::BlobData& delete_request) {
+    // The delete_request is a BlobData where:
+    //   data = tombstone data (4-byte magic + 32-byte target hash = 36 bytes)
+    //   ttl = 0 (permanent)
+    //   signature = over canonical form SHA3-256(namespace || tombstone_data || 0 || timestamp)
+    //
+    // This design means the tombstone is directly storable and verifiable on any node.
+
+    // Step 1: Structural checks
+    if (delete_request.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {
+        return IngestResult::rejection(IngestError::malformed_blob,
+            "pubkey size " + std::to_string(delete_request.pubkey.size()) +
+            " != " + std::to_string(crypto::Signer::PUBLIC_KEY_SIZE));
+    }
+
+    if (delete_request.signature.empty()) {
+        return IngestResult::rejection(IngestError::malformed_blob,
+            "empty signature");
+    }
+
+    // Validate data is tombstone format
+    if (!wire::is_tombstone(delete_request.data)) {
+        return IngestResult::rejection(IngestError::malformed_blob,
+            "delete request data must be tombstone format (4-byte magic + 32-byte hash)");
+    }
+
+    // Step 2: Namespace ownership check
+    auto derived_ns = crypto::sha3_256(delete_request.pubkey);
+    if (derived_ns != delete_request.namespace_id) {
+        return IngestResult::rejection(IngestError::namespace_mismatch,
+            "SHA3-256(pubkey) != namespace_id");
+    }
+
+    // Step 3: Signature verification
+    auto signing_input = wire::build_signing_input(
+        delete_request.namespace_id, delete_request.data,
+        delete_request.ttl, delete_request.timestamp);
+
+    if (!crypto::Signer::verify(signing_input, delete_request.signature,
+                                 delete_request.pubkey)) {
+        return IngestResult::rejection(IngestError::invalid_signature,
+            "ML-DSA-87 signature verification failed");
+    }
+
+    // Step 4: Extract target hash and delete target blob
+    auto target_hash = wire::extract_tombstone_target(delete_request.data);
+    storage_.delete_blob_data(delete_request.namespace_id, target_hash);
+
+    // Step 5: Store the tombstone blob (the delete_request IS the tombstone)
+    auto store_result = storage_.store_blob(delete_request);
+
+    switch (store_result.status) {
+        case storage::StoreResult::Status::Stored: {
+            spdlog::info("Blob deleted via tombstone in ns {:02x}{:02x}...",
+                          delete_request.namespace_id[0], delete_request.namespace_id[1]);
+            WriteAck ack;
+            ack.blob_hash = store_result.blob_hash;
+            ack.seq_num = store_result.seq_num;
+            ack.status = IngestStatus::stored;
+            ack.replication_count = 1;
+            return IngestResult::success(std::move(ack));
+        }
+        case storage::StoreResult::Status::Duplicate: {
+            // Idempotent: tombstone already exists
+            WriteAck ack;
+            ack.blob_hash = store_result.blob_hash;
+            ack.seq_num = store_result.seq_num;
+            ack.status = IngestStatus::duplicate;
+            ack.replication_count = 1;
+            return IngestResult::success(std::move(ack));
+        }
+        case storage::StoreResult::Status::Error:
+            return IngestResult::rejection(IngestError::storage_error,
+                "storage write failed for tombstone");
+    }
+
     return IngestResult::rejection(IngestError::storage_error, "unknown status");
 }
 

@@ -96,4 +96,27 @@ std::array<uint8_t, 32> blob_hash(std::span<const uint8_t> encoded_blob) {
     return crypto::sha3_256(encoded_blob);
 }
 
+// =============================================================================
+// Tombstone utilities
+// =============================================================================
+
+bool is_tombstone(std::span<const uint8_t> data) {
+    if (data.size() != TOMBSTONE_DATA_SIZE) return false;
+    return std::memcmp(data.data(), TOMBSTONE_MAGIC.data(), TOMBSTONE_MAGIC.size()) == 0;
+}
+
+std::array<uint8_t, 32> extract_tombstone_target(std::span<const uint8_t> data) {
+    std::array<uint8_t, 32> target{};
+    std::memcpy(target.data(), data.data() + TOMBSTONE_MAGIC.size(), 32);
+    return target;
+}
+
+std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_hash) {
+    std::vector<uint8_t> result;
+    result.reserve(TOMBSTONE_DATA_SIZE);
+    result.insert(result.end(), TOMBSTONE_MAGIC.begin(), TOMBSTONE_MAGIC.end());
+    result.insert(result.end(), target_hash.begin(), target_hash.end());
+    return result;
+}
+
 } // namespace chromatindb::wire

@@ -55,6 +55,26 @@ chromatindb::wire::BlobData make_signed_blob(
     return blob;
 }
 
+/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
+chromatindb::wire::BlobData make_signed_tombstone(
+    const chromatindb::identity::NodeIdentity& id,
+    const std::array<uint8_t, 32>& target_blob_hash,
+    uint64_t timestamp = 2000)
+{
+    chromatindb::wire::BlobData tombstone;
+    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
+    tombstone.ttl = 0;  // Permanent
+    tombstone.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
+    tombstone.signature = id.sign(signing_input);
+
+    return tombstone;
+}
+
 } // anonymous namespace
 
 using chromatindb::engine::BlobEngine;
@@ -558,4 +578,270 @@ TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]")
     REQUIRE_FALSE(result.accepted);
     // Should be namespace_mismatch (checked before signature), not invalid_signature
     REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+}
+
+// ============================================================================
+// Phase 12: Tombstone deletion tests
+// ============================================================================
+
+TEST_CASE("Tombstone utility functions", "[engine][tombstone]") {
+    SECTION("is_tombstone detects valid tombstone data") {
+        std::array<uint8_t, 32> target{};
+        target.fill(0xAB);
+        auto data = chromatindb::wire::make_tombstone_data(target);
+        REQUIRE(chromatindb::wire::is_tombstone(data));
+    }
+
+    SECTION("is_tombstone rejects regular blob data") {
+        std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+        REQUIRE_FALSE(chromatindb::wire::is_tombstone(data));
+    }
+
+    SECTION("is_tombstone rejects empty data") {
+        std::vector<uint8_t> data;
+        REQUIRE_FALSE(chromatindb::wire::is_tombstone(data));
+    }
+
+    SECTION("is_tombstone rejects wrong prefix with right size") {
+        std::vector<uint8_t> data(36, 0x00);
+        REQUIRE_FALSE(chromatindb::wire::is_tombstone(data));
+    }
+
+    SECTION("extract_tombstone_target returns correct hash") {
+        std::array<uint8_t, 32> target{};
+        target.fill(0xCD);
+        auto data = chromatindb::wire::make_tombstone_data(target);
+        auto extracted = chromatindb::wire::extract_tombstone_target(data);
+        REQUIRE(extracted == target);
+    }
+}
+
+TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest a blob first
+    auto blob = make_signed_blob(id, "to-be-deleted");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto target_hash = ingest_result.ack->blob_hash;
+
+    // Verify blob exists
+    auto found_before = engine.get_blob(id.namespace_id(), target_hash);
+    REQUIRE(found_before.has_value());
+
+    // Delete it
+    auto tombstone = make_signed_tombstone(id, target_hash);
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+    REQUIRE(delete_result.ack.has_value());
+    REQUIRE(delete_result.ack->status == IngestStatus::stored);
+
+    // Original blob should be gone
+    auto found_after = engine.get_blob(id.namespace_id(), target_hash);
+    REQUIRE_FALSE(found_after.has_value());
+
+    // Tombstone should exist (under its own hash)
+    auto tombstone_hash = delete_result.ack->blob_hash;
+    auto found_tombstone = engine.get_blob(id.namespace_id(), tombstone_hash);
+    REQUIRE(found_tombstone.has_value());
+    REQUIRE(chromatindb::wire::is_tombstone(found_tombstone->data));
+}
+
+TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Delete a blob that was never stored (pre-emptive)
+    std::array<uint8_t, 32> fake_hash{};
+    fake_hash.fill(0xBB);
+
+    auto tombstone = make_signed_tombstone(id, fake_hash);
+    auto result = engine.delete_blob(tombstone);
+    REQUIRE(result.accepted);
+    REQUIRE(result.ack->status == IngestStatus::stored);
+}
+
+TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create a blob and delete it
+    auto blob = make_signed_blob(id, "idempotent-delete");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto target_hash = ingest_result.ack->blob_hash;
+
+    auto tombstone = make_signed_tombstone(id, target_hash);
+    auto first_delete = engine.delete_blob(tombstone);
+    REQUIRE(first_delete.accepted);
+    REQUIRE(first_delete.ack->status == IngestStatus::stored);
+
+    // Delete again -- should return duplicate
+    auto second_delete = engine.delete_blob(tombstone);
+    REQUIRE(second_delete.accepted);
+    REQUIRE(second_delete.ack->status == IngestStatus::duplicate);
+}
+
+TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create and ingest a blob
+    auto blob = make_signed_blob(id, "will-be-blocked");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto target_hash = ingest_result.ack->blob_hash;
+
+    // Delete it
+    auto tombstone = make_signed_tombstone(id, target_hash);
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Try to re-ingest the same blob -- should be blocked
+    auto re_ingest = engine.ingest(blob);
+    REQUIRE_FALSE(re_ingest.accepted);
+    REQUIRE(re_ingest.error.has_value());
+    REQUIRE(re_ingest.error.value() == IngestError::tombstoned);
+}
+
+TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create blob but DON'T ingest it yet
+    auto blob = make_signed_blob(id, "pre-emptive-block");
+
+    // Compute what its hash would be
+    auto encoded = chromatindb::wire::encode_blob(blob);
+    auto blob_content_hash = chromatindb::wire::blob_hash(encoded);
+
+    // Create tombstone for it before it ever arrives
+    auto tombstone = make_signed_tombstone(id, blob_content_hash);
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Now try to ingest the blob -- should be blocked
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE_FALSE(ingest_result.accepted);
+    REQUIRE(ingest_result.error.value() == IngestError::tombstoned);
+}
+
+TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest a regular blob
+    auto blob = make_signed_blob(id, "sync-delete-target");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto target_hash = ingest_result.ack->blob_hash;
+
+    // Verify it exists
+    auto found_before = engine.get_blob(id.namespace_id(), target_hash);
+    REQUIRE(found_before.has_value());
+
+    // Create a tombstone and INGEST it (simulating sync receive)
+    auto tombstone = make_signed_tombstone(id, target_hash);
+    auto tombstone_ingest = engine.ingest(tombstone);
+    REQUIRE(tombstone_ingest.accepted);
+    REQUIRE(tombstone_ingest.ack->status == IngestStatus::stored);
+
+    // Target blob should be deleted
+    auto found_after = engine.get_blob(id.namespace_id(), target_hash);
+    REQUIRE_FALSE(found_after.has_value());
+
+    // Tombstone should be stored
+    auto tombstone_hash = tombstone_ingest.ack->blob_hash;
+    auto found_tombstone = engine.get_blob(id.namespace_id(), tombstone_hash);
+    REQUIRE(found_tombstone.has_value());
+    REQUIRE(chromatindb::wire::is_tombstone(found_tombstone->data));
+}
+
+TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto attacker = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest a blob owned by 'owner'
+    auto blob = make_signed_blob(owner, "owned-blob");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+
+    // Attacker tries to delete it -- tombstone has wrong namespace
+    auto tombstone = make_signed_tombstone(attacker, ingest_result.ack->blob_hash);
+    // Override namespace to owner's namespace (simulating attack)
+    std::memcpy(tombstone.namespace_id.data(), owner.namespace_id().data(), 32);
+
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE_FALSE(delete_result.accepted);
+    REQUIRE(delete_result.error.value() == IngestError::namespace_mismatch);
+}
+
+TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    std::array<uint8_t, 32> target{};
+    target.fill(0xCC);
+    auto tombstone = make_signed_tombstone(id, target);
+
+    // Corrupt signature
+    tombstone.signature[0] ^= 0xFF;
+
+    auto result = engine.delete_blob(tombstone);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::invalid_signature);
+}
+
+TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
+    TempDir tmp;
+    uint64_t fake_now = 100000;
+    Storage store(tmp.path.string(), [&]() { return fake_now; });
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create and delete a blob
+    auto blob = make_signed_blob(id, "expiry-test", 604800, 1000);
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+
+    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Advance time far past any TTL
+    fake_now = 99999999;
+    store.run_expiry_scan();
+
+    // Tombstone should still exist (TTL=0 means permanent)
+    auto tombstone_hash = delete_result.ack->blob_hash;
+    auto found = engine.get_blob(id.namespace_id(), tombstone_hash);
+    REQUIRE(found.has_value());
+    REQUIRE(chromatindb::wire::is_tombstone(found->data));
 }
