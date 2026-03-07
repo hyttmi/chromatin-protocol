@@ -83,6 +83,10 @@ public:
     /// Number of connected bootstrap peers.
     size_t bootstrap_peer_count() const;
 
+    /// Sync constants (public for testing).
+    static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;  ///< Max hashes per BlobRequest
+    static constexpr auto BLOB_TRANSFER_TIMEOUT = std::chrono::seconds(120);  ///< Per-blob timeout
+
     /// Strike threshold (public for testing).
     static constexpr uint32_t STRIKE_THRESHOLD = 10;
     static constexpr uint32_t STRIKE_COOLDOWN_SEC = 300;  // 5 minutes

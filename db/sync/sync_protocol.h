@@ -85,6 +85,11 @@ public:
     static std::vector<uint8_t> encode_blob_transfer(
         const std::vector<wire::BlobData>& blobs);
 
+    /// Encode a single blob for transfer (count=1, reuses existing wire format).
+    /// Used for one-blob-at-a-time sync to keep memory bounded.
+    static std::vector<uint8_t> encode_single_blob_transfer(
+        const wire::BlobData& blob);
+
     /// Decode blobs from a transfer message.
     static std::vector<wire::BlobData> decode_blob_transfer(
         std::span<const uint8_t> payload);

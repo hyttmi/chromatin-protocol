@@ -393,13 +393,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         }
     }
 
-    // Phase C: Compute diffs and exchange blobs
-    // First, compute all our missing hashes and send all BlobRequests.
-    // Then handle all incoming messages (both BlobTransfer responses and BlobRequests from peer).
-    // This avoids deadlock when both sides send BlobRequest simultaneously.
+    // Phase C: Compute diffs and exchange blobs one at a time.
+    // Batches BlobRequests to MAX_HASHES_PER_REQUEST hashes per message.
+    // Each BlobTransfer carries exactly one blob to keep memory bounded.
+    // Uses BLOB_TRANSFER_TIMEOUT (120s) for blob transfers vs SYNC_TIMEOUT (30s) for control.
 
-    // C1: Send all BlobRequests up front
-    uint32_t pending_responses = 0;
     for (const auto& [ns, their_hashes] : peer_hashes) {
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
@@ -408,45 +406,74 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             continue;
         }
 
-        auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
-        if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
-            peer->syncing = false;
-            co_return;
+        // Send BlobRequests in batches of MAX_HASHES_PER_REQUEST
+        for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
+            size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
+                                        missing.size());
+            std::vector<std::array<uint8_t, 32>> batch(
+                missing.begin() + static_cast<ptrdiff_t>(i),
+                missing.begin() + static_cast<ptrdiff_t>(batch_end));
+
+            auto req_payload = sync::SyncProtocol::encode_hash_list(ns, batch);
+            if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
+                peer->syncing = false;
+                co_return;
+            }
+
+            // Receive individual BlobTransfers for this batch.
+            // Also handle interleaved BlobRequests from peer.
+            uint32_t expected = static_cast<uint32_t>(batch.size());
+            uint32_t received = 0;
+            while (received < expected) {
+                auto msg = co_await recv_sync_msg(peer, BLOB_TRANSFER_TIMEOUT);
+                if (!msg) {
+                    spdlog::warn("sync: timeout waiting for blob transfer from {}",
+                                 conn->remote_address());
+                    break;  // Skip remaining, continue next batch
+                }
+
+                if (msg->type == wire::TransportMsgType_BlobTransfer) {
+                    auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+                    auto s = sync_proto_.ingest_blobs(blobs);
+                    total_stats.blobs_received += s.blobs_received;
+                    received++;
+                } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+                    auto [req_ns, requested_hashes] =
+                        sync::SyncProtocol::decode_hash_list(msg->payload);
+                    for (const auto& hash : requested_hashes) {
+                        auto blob = engine_.get_blob(req_ns, hash);
+                        if (blob.has_value()) {
+                            auto bt_payload =
+                                sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                            co_await conn->send_message(
+                                wire::TransportMsgType_BlobTransfer, bt_payload);
+                            total_stats.blobs_sent++;
+                        }
+                    }
+                }
+            }
         }
-        pending_responses++;
+
         total_stats.namespaces_synced++;
     }
 
-    // C2: Process incoming messages (BlobTransfer responses + BlobRequests from peer)
-    // Loop until we've received all expected BlobTransfer responses and no more BlobRequests arrive
-    while (pending_responses > 0) {
-        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
-        if (!msg) break;
-
-        if (msg->type == wire::TransportMsgType_BlobTransfer) {
-            auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-            auto s = sync_proto_.ingest_blobs(blobs);
-            total_stats.blobs_received += s.blobs_received;
-            pending_responses--;
-        } else if (msg->type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
-            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
-            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
-            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
-            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
-        }
-    }
-
-    // C3: Handle any remaining BlobRequests from peer (they may still need our blobs)
+    // Handle remaining BlobRequests from peer (they may still need our blobs)
     while (true) {
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
-            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
-            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
-            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
-            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+            auto [req_ns, requested_hashes] =
+                sync::SyncProtocol::decode_hash_list(msg->payload);
+            for (const auto& hash : requested_hashes) {
+                auto blob = engine_.get_blob(req_ns, hash);
+                if (blob.has_value()) {
+                    auto bt_payload =
+                        sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                    co_await conn->send_message(
+                        wire::TransportMsgType_BlobTransfer, bt_payload);
+                    total_stats.blobs_sent++;
+                }
+            }
         } else {
             break;
         }
@@ -527,9 +554,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         }
     }
 
-    // Phase C: Compute diffs, exchange blobs
-    // Same as initiator: send all BlobRequests first, then process responses + requests.
-    uint32_t pending_responses = 0;
+    // Phase C: Compute diffs and exchange blobs one at a time.
+    // Same structure as initiator: batched requests, individual transfers, adaptive timeout.
     for (const auto& [ns, their_hashes] : peer_hashes) {
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
@@ -538,41 +564,68 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             continue;
         }
 
-        auto req_payload = sync::SyncProtocol::encode_hash_list(ns, missing);
-        co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
-        pending_responses++;
+        for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
+            size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
+                                        missing.size());
+            std::vector<std::array<uint8_t, 32>> batch(
+                missing.begin() + static_cast<ptrdiff_t>(i),
+                missing.begin() + static_cast<ptrdiff_t>(batch_end));
+
+            auto req_payload = sync::SyncProtocol::encode_hash_list(ns, batch);
+            co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
+
+            uint32_t expected = static_cast<uint32_t>(batch.size());
+            uint32_t received = 0;
+            while (received < expected) {
+                auto msg = co_await recv_sync_msg(peer, BLOB_TRANSFER_TIMEOUT);
+                if (!msg) {
+                    spdlog::warn("sync responder: timeout waiting for blob transfer from {}",
+                                 conn->remote_address());
+                    break;
+                }
+
+                if (msg->type == wire::TransportMsgType_BlobTransfer) {
+                    auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+                    auto s = sync_proto_.ingest_blobs(blobs);
+                    total_stats.blobs_received += s.blobs_received;
+                    received++;
+                } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+                    auto [req_ns, requested_hashes] =
+                        sync::SyncProtocol::decode_hash_list(msg->payload);
+                    for (const auto& hash : requested_hashes) {
+                        auto blob = engine_.get_blob(req_ns, hash);
+                        if (blob.has_value()) {
+                            auto bt_payload =
+                                sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                            co_await conn->send_message(
+                                wire::TransportMsgType_BlobTransfer, bt_payload);
+                            total_stats.blobs_sent++;
+                        }
+                    }
+                }
+            }
+        }
+
         total_stats.namespaces_synced++;
     }
 
-    // Process incoming messages (BlobTransfer responses + BlobRequests from peer)
-    while (pending_responses > 0) {
-        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
-        if (!msg) break;
-
-        if (msg->type == wire::TransportMsgType_BlobTransfer) {
-            auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-            auto s = sync_proto_.ingest_blobs(blobs);
-            total_stats.blobs_received += s.blobs_received;
-            pending_responses--;
-        } else if (msg->type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
-            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
-            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
-            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
-            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
-        }
-    }
-
-    // Handle any remaining BlobRequests from peer
+    // Handle remaining BlobRequests from peer
     while (true) {
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
-            auto [ns, requested_hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
-            auto blobs = sync_proto_.get_blobs_by_hashes(ns, requested_hashes);
-            auto bt_payload = sync::SyncProtocol::encode_blob_transfer(blobs);
-            co_await conn->send_message(wire::TransportMsgType_BlobTransfer, bt_payload);
-            total_stats.blobs_sent += static_cast<uint32_t>(blobs.size());
+            auto [req_ns, requested_hashes] =
+                sync::SyncProtocol::decode_hash_list(msg->payload);
+            for (const auto& hash : requested_hashes) {
+                auto blob = engine_.get_blob(req_ns, hash);
+                if (blob.has_value()) {
+                    auto bt_payload =
+                        sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                    co_await conn->send_message(
+                        wire::TransportMsgType_BlobTransfer, bt_payload);
+                    total_stats.blobs_sent++;
+                }
+            }
         } else {
             break;
         }

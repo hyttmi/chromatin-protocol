@@ -436,3 +436,19 @@ TEST_CASE("blob transfer encode/decode round-trip", "[sync][codec]") {
     REQUIRE(decoded[0].timestamp == blob1.timestamp);
     REQUIRE(decoded[1].data == blob2.data);
 }
+
+TEST_CASE("single blob transfer encode/decode round-trip", "[sync][codec]") {
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "single-transfer", 604800, 9000);
+
+    auto encoded = SyncProtocol::encode_single_blob_transfer(blob);
+    auto decoded = SyncProtocol::decode_blob_transfer(encoded);
+
+    REQUIRE(decoded.size() == 1);
+    REQUIRE(decoded[0].data == blob.data);
+    REQUIRE(decoded[0].ttl == blob.ttl);
+    REQUIRE(decoded[0].timestamp == blob.timestamp);
+    REQUIRE(decoded[0].namespace_id == blob.namespace_id);
+    REQUIRE(decoded[0].pubkey == blob.pubkey);
+    REQUIRE(decoded[0].signature == blob.signature);
+}

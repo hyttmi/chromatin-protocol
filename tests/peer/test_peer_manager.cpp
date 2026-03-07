@@ -573,3 +573,19 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     pm_c.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
+
+// ============================================================================
+// Plan 11-03: Sync constants
+// ============================================================================
+
+TEST_CASE("PeerManager sync constants", "[peer]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    SECTION("MAX_HASHES_PER_REQUEST is 64") {
+        REQUIRE(PM::MAX_HASHES_PER_REQUEST == 64);
+    }
+
+    SECTION("BLOB_TRANSFER_TIMEOUT is 120 seconds") {
+        REQUIRE(PM::BLOB_TRANSFER_TIMEOUT == std::chrono::seconds(120));
+    }
+}

@@ -250,6 +250,17 @@ std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
     return buf;
 }
 
+std::vector<uint8_t> SyncProtocol::encode_single_blob_transfer(
+    const wire::BlobData& blob) {
+    auto encoded = wire::encode_blob(blob);
+    std::vector<uint8_t> buf;
+    buf.reserve(4 + 4 + encoded.size());
+    write_u32_be(buf, 1);  // count = 1
+    write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
+    buf.insert(buf.end(), encoded.begin(), encoded.end());
+    return buf;
+}
+
 std::vector<wire::BlobData> SyncProtocol::decode_blob_transfer(
     std::span<const uint8_t> payload) {
     if (payload.size() < 4) return {};
