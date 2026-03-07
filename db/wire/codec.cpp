@@ -8,7 +8,9 @@
 namespace chromatindb::wire {
 
 std::vector<uint8_t> encode_blob(const BlobData& blob) {
-    flatbuffers::FlatBufferBuilder builder(8192);
+    // Size builder to avoid reallocations: blob data + pubkey(2592) + sig(4627) + overhead(1024)
+    size_t estimated_size = blob.data.size() + 8192;
+    flatbuffers::FlatBufferBuilder builder(estimated_size);
     builder.ForceDefaults(true);  // Deterministic: include zero-value fields
 
     auto ns = builder.CreateVector(blob.namespace_id.data(), blob.namespace_id.size());
