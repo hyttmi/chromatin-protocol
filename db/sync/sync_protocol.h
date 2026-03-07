@@ -28,16 +28,18 @@ struct SyncStats {
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class SyncProtocol {
 public:
-    /// Construct with a BlobEngine and injectable clock.
+    /// Construct with a BlobEngine, Storage, and injectable clock.
+    /// Storage is used for index-only hash reads during sync.
     explicit SyncProtocol(engine::BlobEngine& engine,
+                          storage::Storage& storage,
                           storage::Clock clock = storage::system_clock_seconds);
 
     /// Check if a blob has expired given the current time.
     /// Returns true if ttl > 0 AND timestamp + ttl <= now.
     static bool is_blob_expired(const wire::BlobData& blob, uint64_t now);
 
-    /// Collect non-expired blob hashes for a namespace.
-    /// Retrieves all blobs via BlobEngine, filters expired ones, returns their content hashes.
+    /// Collect blob hashes for a namespace from the storage index.
+    /// Reads hashes directly from seq_map without loading blob data.
     std::vector<std::array<uint8_t, 32>> collect_namespace_hashes(
         std::span<const uint8_t, 32> namespace_id);
 
@@ -89,6 +91,7 @@ public:
 
 private:
     engine::BlobEngine& engine_;
+    storage::Storage& storage_;
     storage::Clock clock_;
 };
 

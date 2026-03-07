@@ -7,8 +7,10 @@
 
 namespace chromatindb::sync {
 
-SyncProtocol::SyncProtocol(engine::BlobEngine& engine, storage::Clock clock)
-    : engine_(engine), clock_(clock) {}
+SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
+                           storage::Storage& storage,
+                           storage::Clock clock)
+    : engine_(engine), storage_(storage), clock_(clock) {}
 
 // =============================================================================
 // Expiry check
@@ -25,22 +27,11 @@ bool SyncProtocol::is_blob_expired(const wire::BlobData& blob, uint64_t now) {
 
 std::vector<std::array<uint8_t, 32>> SyncProtocol::collect_namespace_hashes(
     std::span<const uint8_t, 32> namespace_id) {
-    uint64_t now = clock_();
-    auto blobs = engine_.get_blobs_since(namespace_id, 0);
-
-    std::vector<std::array<uint8_t, 32>> hashes;
-    hashes.reserve(blobs.size());
-
-    for (const auto& blob : blobs) {
-        if (is_blob_expired(blob, now)) {
-            continue;  // Skip expired blobs (SYNC-03)
-        }
-        auto encoded = wire::encode_blob(blob);
-        auto hash = wire::blob_hash(encoded);
-        hashes.push_back(hash);
-    }
-
-    return hashes;
+    // Read hashes directly from seq_map index -- no blob data loaded.
+    // This is O(n) on hash count, not O(n * blob_size).
+    // Expiry filtering is not done here; expired blobs synced to peers
+    // are harmless -- the peer's expiry scanner handles cleanup.
+    return storage_.get_hashes_by_namespace(namespace_id);
 }
 
 // =============================================================================

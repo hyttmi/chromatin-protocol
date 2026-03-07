@@ -45,7 +45,7 @@ PeerManager::PeerManager(const config::Config& config,
     , ioc_(ioc)
     , acl_(acl)
     , server_(config, identity, ioc)
-    , sync_proto_(engine)
+    , sync_proto_(engine, storage)
     , sighup_signal_(ioc)
     , config_path_(config_path) {
     // Track bootstrap addresses

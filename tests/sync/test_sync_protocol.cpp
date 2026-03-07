@@ -136,7 +136,7 @@ TEST_CASE("is_blob_expired", "[sync]") {
 // collect_namespace_hashes
 // ============================================================================
 
-TEST_CASE("collect_namespace_hashes returns non-expired hashes", "[sync]") {
+TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     TempDir tmp;
     Storage store(tmp.path.string(), test_clock);
     BlobEngine engine(store);
@@ -158,11 +158,12 @@ TEST_CASE("collect_namespace_hashes returns non-expired hashes", "[sync]") {
     auto blob3 = make_signed_blob(id, "permanent", 0, 5000);
     REQUIRE(engine.ingest(blob3).accepted);
 
-    SyncProtocol sync(engine, test_clock);
+    SyncProtocol sync(engine, store, test_clock);
     auto hashes = sync.collect_namespace_hashes(id.namespace_id());
 
-    // Should have 2 hashes: non-expired + permanent. Expired should be excluded.
-    REQUIRE(hashes.size() == 2);
+    // Index-only reads return ALL hashes including expired -- expiry is handled
+    // at ingest time on the receiving end, not during hash collection.
+    REQUIRE(hashes.size() == 3);
 }
 
 // ============================================================================
@@ -235,8 +236,8 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto blob_c = make_signed_blob(id2, "blob-C", 604800, 9002);
     REQUIRE(engine2.ingest(blob_c).accepted);
 
-    SyncProtocol sync1(engine1, test_clock);
-    SyncProtocol sync2(engine2, test_clock);
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
 
     // Simulate sync:
     // 1. Exchange namespace lists
@@ -297,14 +298,14 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     auto blob_expired = make_signed_blob(id, "already-expired", 100, 1);
     REQUIRE(engine1.ingest(blob_expired).accepted);
 
-    SyncProtocol sync1(engine1, test_clock);
-    SyncProtocol sync2(engine2, test_clock);
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
 
-    // Collect hashes -- expired blob should be excluded
+    // Collect hashes -- index-only reads include all hashes (expired too)
     auto hashes = sync1.collect_namespace_hashes(id.namespace_id());
-    REQUIRE(hashes.size() == 1);  // Only the non-expired blob
+    REQUIRE(hashes.size() == 2);  // Both blobs in index
 
-    // Even if we try to ingest the expired blob directly, it should be skipped
+    // Expired blob ingestion on the receiving side is skipped
     auto stats = sync2.ingest_blobs({blob_expired});
     REQUIRE(stats.blobs_received == 0);  // Expired, not ingested
 }
@@ -325,8 +326,8 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     REQUIRE(engine1.ingest(blob).accepted);
     REQUIRE(engine2.ingest(blob).accepted);
 
-    SyncProtocol sync1(engine1, test_clock);
-    SyncProtocol sync2(engine2, test_clock);
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(id.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
@@ -351,8 +352,8 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     auto blob = make_signed_blob(id, "only-on-one-side", 604800, 9000);
     REQUIRE(engine1.ingest(blob).accepted);
 
-    SyncProtocol sync1(engine1, test_clock);
-    SyncProtocol sync2(engine2, test_clock);
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
 
     // Engine2 has no hashes for this namespace
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
