@@ -4,6 +4,11 @@ plan: 02
 subsystem: peer
 tags: [peer-manager, acl, pex, connection-gating]
 
+requirements_completed:
+  - ACL-01
+  - ACL-02
+  - ACL-03
+
 requires:
   - phase: 10-access-control
     provides: AccessControl class from plan 01

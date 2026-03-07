@@ -4,6 +4,9 @@ plan: 01
 subsystem: acl
 tags: [config, access-control, sha3-256]
 
+requirements_completed:
+  - ACL-01 (partial)
+
 requires:
   - phase: 09-source-restructure
     provides: chromatindb:: namespace and /db layout

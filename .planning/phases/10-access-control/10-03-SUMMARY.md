@@ -4,6 +4,10 @@ plan: 03
 subsystem: peer
 tags: [sighup, hot-reload, revocation, config]
 
+requirements_completed:
+  - ACL-04
+  - ACL-05
+
 requires:
   - phase: 10-access-control
     provides: ACL integration from plan 02
