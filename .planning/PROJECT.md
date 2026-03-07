@@ -34,7 +34,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(None — planning next milestone)
+- [ ] Real-time pub/sub notifications for namespace changes
+- [ ] Namespace delegation (owner grants write access to other pubkeys)
+- [ ] Blob deletion by owner via replicated tombstones
+
+## Current Milestone: v3.0 Real-time & Delegation
+
+**Goal:** Make chromatindb collaborative and responsive — pub/sub notifications, namespace delegation for multi-writer support, and explicit blob deletion via tombstones. All prerequisites for Layer 2 (Relay).
+
+**Target features:**
+- Pub/sub notifications: SUBSCRIBE/NOTIFICATION wire messages, metadata-rich (namespace + seq + hash + size)
+- Namespace delegation: signed delegation blobs, write-only access, revocation via deletion
+- Blob deletion: owner-signed tombstones, permanent (TTL=0), replicated like blobs
 
 ### Out of Scope
 
@@ -114,4 +125,4 @@ Previous projects inform design:
 | MAX_FRAME_SIZE = 110 MiB (10% headroom) | Room for protocol overhead without a second round-trip | ✓ Good — future-proof |
 
 ---
-*Last updated: 2026-03-07 after v2.0 milestone*
+*Last updated: 2026-03-07 after v3.0 milestone started*
