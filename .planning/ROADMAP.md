@@ -29,7 +29,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 - [x] **Phase 9: Source Restructure** - Move to /db layout and rename namespace to chromatindb::
 - [x] **Phase 10: Access Control** - Closed node model with allowed_keys config and connection-level gating
-- [ ] **Phase 11: Larger Blob Support** - Bump blob limit to 100 MiB with safe sync and transport
+- [x] **Phase 11: Larger Blob Support** - Bump blob limit to 100 MiB with safe sync and transport (completed 2026-03-07)
 
 ## Phase Details
 
@@ -87,4 +87,4 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 | 8. Verification & Cleanup | v1.0 | 2/2 | Complete | 2026-03-05 |
 | 9. Source Restructure | v2.0 | 2/2 | Complete | 2026-03-06 |
 | 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
-| 11. Larger Blob Support | 2/3 | In Progress|  | - |
+| 11. Larger Blob Support | 3/3 | Complete   | 2026-03-07 | - |
