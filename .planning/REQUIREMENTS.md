@@ -1,7 +1,7 @@
 # Requirements: chromatindb
 
 **Defined:** 2026-03-07
-**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 
 ## v3.0 Requirements
 
@@ -29,13 +29,22 @@ Requirements for v3.0 Real-time & Delegation. Each maps to roadmap phases.
 - [ ] **DEL-03**: Nodes receiving a tombstone delete the target blob and retain the tombstone
 - [ ] **DEL-04**: Tombstones propagate via sync protocol (included in hash-list diff)
 
+### Build & Tooling
+
+- [ ] **BUILD-01**: Strip unused algorithms from liboqs build (only ML-DSA-87, ML-KEM-1024, SHA3-256)
+
+### Documentation & Performance
+
+- [ ] **DOCS-01**: README.md with usage guide for interacting with running chromatindb nodes
+- [ ] **PERF-01**: Performance test suite with benchmark numbers
+
 ## Future Requirements
 
 ### Layer 2 Relay
 
 - **RELAY-01**: Application semantics layer (messages, profiles, nicknames)
 - **RELAY-02**: Relay owns a namespace, writes app data as blobs
-- **RELAY-03**: Client ↔ relay communication via WebSocket
+- **RELAY-03**: Client <-> relay communication via WebSocket
 
 ### Layer 3 Client
 
@@ -58,25 +67,28 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SUB-01 | — | Pending |
-| SUB-02 | — | Pending |
-| SUB-03 | — | Pending |
-| SUB-04 | — | Pending |
-| SUB-05 | — | Pending |
-| DELEG-01 | — | Pending |
-| DELEG-02 | — | Pending |
-| DELEG-03 | — | Pending |
-| DELEG-04 | — | Pending |
-| DEL-01 | — | Pending |
-| DEL-02 | — | Pending |
-| DEL-03 | — | Pending |
-| DEL-04 | — | Pending |
+| DEL-01 | Phase 12 | Pending |
+| DEL-02 | Phase 12 | Pending |
+| DEL-03 | Phase 12 | Pending |
+| DEL-04 | Phase 12 | Pending |
+| DELEG-01 | Phase 13 | Pending |
+| DELEG-02 | Phase 13 | Pending |
+| DELEG-03 | Phase 13 | Pending |
+| DELEG-04 | Phase 13 | Pending |
+| SUB-01 | Phase 14 | Pending |
+| SUB-02 | Phase 14 | Pending |
+| SUB-03 | Phase 14 | Pending |
+| SUB-04 | Phase 14 | Pending |
+| SUB-05 | Phase 14 | Pending |
+| BUILD-01 | Phase 12 | Pending |
+| DOCS-01 | Phase 15 | Pending |
+| PERF-01 | Phase 15 | Pending |
 
 **Coverage:**
-- v3.0 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13 ⚠️
+- v3.0 requirements: 16 total
+- Mapped to phases: 16
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-07*
-*Last updated: 2026-03-07 after initial definition*
+*Last updated: 2026-03-07 after roadmap revision*
