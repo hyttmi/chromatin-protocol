@@ -72,6 +72,26 @@ chromatindb::wire::BlobData make_signed_blob(
     return blob;
 }
 
+/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
+chromatindb::wire::BlobData make_signed_tombstone(
+    const chromatindb::identity::NodeIdentity& id,
+    const std::array<uint8_t, 32>& target_blob_hash,
+    uint64_t timestamp = 2000)
+{
+    chromatindb::wire::BlobData tombstone;
+    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
+    tombstone.ttl = 0;  // Permanent
+    tombstone.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
+    tombstone.signature = id.sign(signing_input);
+
+    return tombstone;
+}
+
 } // anonymous namespace
 
 using chromatindb::acl::AccessControl;
@@ -588,4 +608,89 @@ TEST_CASE("PeerManager sync constants", "[peer]") {
     SECTION("BLOB_TRANSFER_TIMEOUT is 120 seconds") {
         REQUIRE(PM::BLOB_TRANSFER_TIMEOUT == std::chrono::seconds(120));
     }
+}
+
+// ============================================================================
+// Phase 12: Tombstone deletion integration tests
+// ============================================================================
+
+TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][tombstone]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14270";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14271";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14270"};
+    cfg2.sync_interval_seconds = 3;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob in node1
+    auto blob = make_signed_blob(id1, "delete-me", 604800, now);
+    auto ingest_result = eng1.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto blob_hash = ingest_result.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync -- blob should propagate to node2
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Verify node2 has the blob
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+    REQUIRE(n2_blobs[0].data == blob.data);
+
+    // Now delete the blob on node1 via tombstone
+    auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
+    auto delete_result = eng1.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Let sync propagate the tombstone to node2.
+    // Use longer window since both nodes sync on 1s interval and sync
+    // collisions ("no SyncAccept") can delay propagation.
+    ioc.run_for(std::chrono::seconds(15));
+
+    // Node2 should have the tombstone now (original blob deleted)
+    auto n2_after = eng2.get_blob(id1.namespace_id(), blob_hash);
+    REQUIRE_FALSE(n2_after.has_value());
+
+    // Tombstone should be present on node2
+    auto n2_all = eng2.get_blobs_since(id1.namespace_id(), 0);
+    bool found_tombstone = false;
+    for (const auto& b : n2_all) {
+        if (chromatindb::wire::is_tombstone(b.data)) {
+            found_tombstone = true;
+            auto target = chromatindb::wire::extract_tombstone_target(b.data);
+            REQUIRE(target == blob_hash);
+        }
+    }
+    REQUIRE(found_tombstone);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
 }

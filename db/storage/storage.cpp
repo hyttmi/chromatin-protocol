@@ -502,6 +502,27 @@ bool Storage::delete_blob_data(
         // Delete from blobs_map
         txn.erase(impl_->blobs_map, key_slice);
 
+        // Delete from seq_map (scan for matching hash)
+        {
+            auto cursor = txn.open_cursor(impl_->seq_map);
+            auto lower = make_seq_key(ns.data(), 1);
+            auto seek = cursor.lower_bound(to_slice(lower));
+            while (seek.done) {
+                auto k = cursor.current(false).key;
+                if (k.length() != 40 ||
+                    std::memcmp(k.data(), ns.data(), 32) != 0) {
+                    break;
+                }
+                auto v = cursor.current(false).value;
+                if (v.length() == 32 &&
+                    std::memcmp(v.data(), blob_hash.data(), 32) == 0) {
+                    cursor.erase();
+                    break;
+                }
+                seek = cursor.to_next(false);
+            }
+        }
+
         // Delete from expiry_map if TTL > 0
         if (blob.ttl > 0) {
             uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) +

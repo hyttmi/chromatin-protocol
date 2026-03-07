@@ -39,11 +39,13 @@ enum TransportMsgType : int8_t {
   TransportMsgType_SyncComplete = 15,
   TransportMsgType_PeerListRequest = 16,
   TransportMsgType_PeerListResponse = 17,
+  TransportMsgType_Delete = 18,
+  TransportMsgType_DeleteAck = 19,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_PeerListResponse
+  TransportMsgType_MAX = TransportMsgType_DeleteAck
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[18] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[20] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -62,13 +64,15 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[18] {
     TransportMsgType_BlobTransfer,
     TransportMsgType_SyncComplete,
     TransportMsgType_PeerListRequest,
-    TransportMsgType_PeerListResponse
+    TransportMsgType_PeerListResponse,
+    TransportMsgType_Delete,
+    TransportMsgType_DeleteAck
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[19] = {
+  static const char * const names[21] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -87,13 +91,15 @@ inline const char * const *EnumNamesTransportMsgType() {
     "SyncComplete",
     "PeerListRequest",
     "PeerListResponse",
+    "Delete",
+    "DeleteAck",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_PeerListResponse)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_DeleteAck)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

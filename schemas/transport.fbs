@@ -20,7 +20,10 @@ enum TransportMsgType : byte {
     SyncComplete = 15,
     // Phase 7: Peer exchange
     PeerListRequest = 16,
-    PeerListResponse = 17
+    PeerListResponse = 17,
+    // Phase 12: Blob deletion
+    Delete = 18,
+    DeleteAck = 19
 }
 
 table TransportMessage {

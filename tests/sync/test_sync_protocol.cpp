@@ -58,6 +58,26 @@ chromatindb::wire::BlobData make_signed_blob(
     return blob;
 }
 
+/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
+chromatindb::wire::BlobData make_signed_tombstone(
+    const chromatindb::identity::NodeIdentity& id,
+    const std::array<uint8_t, 32>& target_blob_hash,
+    uint64_t timestamp = 2000)
+{
+    chromatindb::wire::BlobData tombstone;
+    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
+    tombstone.ttl = 0;  // Permanent
+    tombstone.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
+    tombstone.signature = id.sign(signing_input);
+
+    return tombstone;
+}
+
 /// Fixed clock for deterministic tests.
 uint64_t test_clock_value = 10000;
 uint64_t test_clock() { return test_clock_value; }
@@ -451,4 +471,140 @@ TEST_CASE("single blob transfer encode/decode round-trip", "[sync][codec]") {
     REQUIRE(decoded[0].namespace_id == blob.namespace_id);
     REQUIRE(decoded[0].pubkey == blob.pubkey);
     REQUIRE(decoded[0].signature == blob.signature);
+}
+
+// ============================================================================
+// Tombstone sync tests (Phase 12: Blob Deletion)
+// ============================================================================
+
+TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") {
+    TempDir tmp;
+    test_clock_value = 10000;
+
+    Storage store(tmp.path.string(), test_clock);
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Store a regular blob
+    auto blob = make_signed_blob(id, "to-be-deleted", 604800, 9000);
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+
+    // Delete it via tombstone
+    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash, 9500);
+    auto delete_result = engine.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    SyncProtocol sync(engine, store, test_clock);
+    auto hashes = sync.collect_namespace_hashes(id.namespace_id());
+
+    // Tombstone is stored as a blob, so it appears in hash collection.
+    // Original blob was deleted, so only tombstone hash remains.
+    REQUIRE(hashes.size() == 1);
+    REQUIRE(hashes[0] == delete_result.ack->blob_hash);
+}
+
+TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Both nodes have the same blob
+    auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
+    auto ingest1 = engine1.ingest(blob);
+    REQUIRE(ingest1.accepted);
+    REQUIRE(engine2.ingest(blob).accepted);
+    auto blob_hash = ingest1.ack->blob_hash;
+
+    // Node1 deletes the blob
+    auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
+    auto delete_result = engine1.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Simulate sync: node1 sends its hashes to node2
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
+
+    auto hashes1 = sync1.collect_namespace_hashes(id.namespace_id());
+    auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
+
+    // Node2 needs the tombstone (it has the original blob but not the tombstone)
+    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    REQUIRE(missing_on_2.size() == 1);  // The tombstone
+
+    // Transfer the tombstone to node2
+    auto transfer = sync1.get_blobs_by_hashes(id.namespace_id(), missing_on_2);
+    REQUIRE(transfer.size() == 1);
+    REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
+
+    // Ingest the tombstone on node2
+    auto stats = sync2.ingest_blobs(transfer);
+    REQUIRE(stats.blobs_received == 1);
+
+    // Original blob should now be deleted on node2
+    auto found = engine2.get_blob(id.namespace_id(), blob_hash);
+    REQUIRE_FALSE(found.has_value());
+}
+
+TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create blob on node1
+    auto blob = make_signed_blob(id, "will-be-blocked", 604800, 9000);
+    auto ingest_result = engine1.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+    auto blob_hash = ingest_result.ack->blob_hash;
+
+    // Node2 receives a tombstone for this blob before the blob itself arrives
+    auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
+    auto tombstone_ingest = engine2.ingest(tombstone);
+    REQUIRE(tombstone_ingest.accepted);
+
+    // Now try to sync the original blob to node2 via ingest_blobs
+    SyncProtocol sync2(engine2, store2, test_clock);
+    auto stats = sync2.ingest_blobs({blob});
+
+    // Blob should be rejected (tombstoned)
+    REQUIRE(stats.blobs_received == 0);
+
+    // Verify blob is not present on node2
+    auto found = engine2.get_blob(id.namespace_id(), blob_hash);
+    REQUIRE_FALSE(found.has_value());
+}
+
+TEST_CASE("tombstone transfer encode/decode preserves tombstone data", "[sync][tombstone][codec]") {
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    std::array<uint8_t, 32> target{};
+    target.fill(0xDD);
+    auto tombstone = make_signed_tombstone(id, target, 9500);
+
+    // Encode and decode via blob transfer (used during sync)
+    auto encoded = SyncProtocol::encode_single_blob_transfer(tombstone);
+    auto decoded = SyncProtocol::decode_blob_transfer(encoded);
+
+    REQUIRE(decoded.size() == 1);
+    REQUIRE(chromatindb::wire::is_tombstone(decoded[0].data));
+
+    auto extracted = chromatindb::wire::extract_tombstone_target(decoded[0].data);
+    REQUIRE(extracted == target);
+    REQUIRE(decoded[0].ttl == 0);
+    REQUIRE(decoded[0].namespace_id == tombstone.namespace_id);
+    REQUIRE(decoded[0].pubkey == tombstone.pubkey);
+    REQUIRE(decoded[0].signature == tombstone.signature);
 }

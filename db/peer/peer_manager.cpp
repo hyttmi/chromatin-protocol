@@ -263,6 +263,38 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_Delete) {
+        // Delete message -- process as blob deletion, send ack via coroutine
+        try {
+            auto blob = wire::decode_blob(payload);
+            auto result = engine_.delete_blob(blob);
+            if (result.accepted && result.ack.has_value()) {
+                // Build DeleteAck payload: [blob_hash:32][seq_num_be:8][status:1]
+                auto ack = result.ack.value();
+                asio::co_spawn(ioc_, [conn, ack]() -> asio::awaitable<void> {
+                    std::vector<uint8_t> ack_payload(41);
+                    std::memcpy(ack_payload.data(), ack.blob_hash.data(), 32);
+                    for (int i = 7; i >= 0; --i) {
+                        ack_payload[32 + (7 - i)] = static_cast<uint8_t>(
+                            ack.seq_num >> (i * 8));
+                    }
+                    ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
+                    co_await conn->send_message(wire::TransportMsgType_DeleteAck,
+                                                 std::span<const uint8_t>(ack_payload));
+                }, asio::detached);
+            } else if (result.error.has_value()) {
+                spdlog::warn("delete rejected from {}: {}",
+                             conn->remote_address(), result.error_detail);
+                record_strike(conn, result.error_detail);
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("malformed delete from {}: {}",
+                         conn->remote_address(), e.what());
+            record_strike(conn, e.what());
+        }
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob
         try {
