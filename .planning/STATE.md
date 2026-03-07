@@ -8,7 +8,7 @@ progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 11 of 11 (Larger Blob Support) -- IN PROGRESS
-Plan: 1 of 3 complete
-Status: Executing Wave 1
-Last activity: 2026-03-07 -- Completed 11-01 (protocol constants + size validation)
+Plan: 2 of 3 complete
+Status: Executing Wave 2
+Last activity: 2026-03-07 -- Completed 11-02 (hash index + sync optimization)
 
-Progress: [███░░░░░░░] 33% (Phase 11)
+Progress: [██████░░░░] 66% (Phase 11)
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ v2.0 decisions:
 - Phase 10-03: SIGHUP handler uses dedicated coroutine member function (not lambda) to avoid stack-use-after-return with compiler coroutine frames. reload_config() is public for testability.
 
 - Phase 11-01: MAX_FRAME_SIZE set to 110 MiB (10% headroom). MAX_BLOB_DATA_SIZE is uint64_t to prevent overflow. Size check is Step 0 in ingest (cheapest first).
+- Phase 11-02: Expiry filtering removed from collect_namespace_hashes -- peers handle expired blobs at ingest time. SyncProtocol takes Storage& alongside BlobEngine&.
 
 v2.0 decisions pending: None.
 
@@ -70,5 +71,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-07
-Stopped at: Completed Plan 11-01, executing Plan 11-02
+Stopped at: Completed Plan 11-02, executing Plan 11-03
 Resume file: None
