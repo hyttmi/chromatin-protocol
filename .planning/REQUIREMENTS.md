@@ -23,11 +23,11 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 
 ### Larger Blob Support
 
-- [ ] **BLOB-01**: Node enforces `MAX_BLOB_DATA_SIZE` (100 MiB) as Step 0 in ingest, before signature verification
-- [ ] **BLOB-02**: Transport frame size supports 100 MiB blobs plus protocol overhead
+- [x] **BLOB-01**: Node enforces `MAX_BLOB_DATA_SIZE` (100 MiB) as Step 0 in ingest, before signature verification
+- [x] **BLOB-02**: Transport frame size supports 100 MiB blobs plus protocol overhead
 - [ ] **BLOB-03**: Sync hash collection reads hashes from seq_map index without loading blob data
 - [ ] **BLOB-04**: Sync transfers blobs individually with batched requests capped by `MAX_HASHES_PER_REQUEST`
-- [ ] **BLOB-05**: Transport validates declared frame length against max before allocating receive buffer
+- [x] **BLOB-05**: Transport validates declared frame length against max before allocating receive buffer
 - [ ] **BLOB-06**: Sync timeout adapts to transfer size to prevent timeout on large blob exchanges
 
 ## Future Requirements
@@ -66,11 +66,11 @@ Requirements for v2.0 Closed Node Model. Each maps to roadmap phases.
 | ACL-03 | Phase 10 | Complete |
 | ACL-04 | Phase 10 | Complete |
 | ACL-05 | Phase 10 | Complete |
-| BLOB-01 | Phase 11 | Pending |
-| BLOB-02 | Phase 11 | Pending |
+| BLOB-01 | Phase 11 | Complete |
+| BLOB-02 | Phase 11 | Complete |
 | BLOB-03 | Phase 11 | Pending |
 | BLOB-04 | Phase 11 | Pending |
-| BLOB-05 | Phase 11 | Pending |
+| BLOB-05 | Phase 11 | Complete |
 | BLOB-06 | Phase 11 | Pending |
 
 **Coverage:**

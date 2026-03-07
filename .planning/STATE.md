@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Closed Node Model
-status: unknown
-last_updated: "2026-03-06"
+status: in_progress
+last_updated: "2026-03-07"
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 8
+  completed_plans: 6
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 10 complete, ready for Phase 11
+**Current focus:** Phase 11 in progress -- larger blob support (100 MiB)
 
 ## Current Position
 
-Phase: 10 of 11 (Access Control) -- COMPLETE
-Plan: 3 of 3 (all complete)
-Status: Phase Complete
-Last activity: 2026-03-06 -- Completed 10-03 (SIGHUP reload + peer revocation)
+Phase: 11 of 11 (Larger Blob Support) -- IN PROGRESS
+Plan: 1 of 3 complete
+Status: Executing Wave 1
+Last activity: 2026-03-07 -- Completed 11-01 (protocol constants + size validation)
 
-Progress: [██████████] 100% (Phase 10)
+Progress: [███░░░░░░░] 33% (Phase 11)
 
 ## Performance Metrics
 
@@ -55,8 +55,9 @@ v2.0 decisions:
 - Phase 10-02: ACL gating point is on_peer_connected (fires after handshake, before message loop). Silent TCP close for rejected peers (no protocol-level denial).
 - Phase 10-03: SIGHUP handler uses dedicated coroutine member function (not lambda) to avoid stack-use-after-return with compiler coroutine frames. reload_config() is public for testability.
 
-v2.0 decisions pending:
-- Phase 11: Storage architecture (inline libmdbx vs external filesystem) -- must resolve before Phase 11 planning
+- Phase 11-01: MAX_FRAME_SIZE set to 110 MiB (10% headroom). MAX_BLOB_DATA_SIZE is uint64_t to prevent overflow. Size check is Step 0 in ingest (cheapest first).
+
+v2.0 decisions pending: None.
 
 ### Pending Todos
 
@@ -64,10 +65,10 @@ None.
 
 ### Blockers/Concerns
 
-- Phase 11 requires storage architecture decision before planning (inline libmdbx overflow pages vs external filesystem storage for 100 MiB blobs)
+None.
 
 ## Session Continuity
 
-Last session: 2026-03-06
-Stopped at: Completed Phase 10 (all 3 plans)
+Last session: 2026-03-07
+Stopped at: Completed Plan 11-01, executing Plan 11-02
 Resume file: None
