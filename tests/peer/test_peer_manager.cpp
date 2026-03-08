@@ -611,6 +611,106 @@ TEST_CASE("PeerManager sync constants", "[peer]") {
 }
 
 // ============================================================================
+// Phase 14: Pub/Sub wire encoding unit tests
+// ============================================================================
+
+TEST_CASE("encode_namespace_list round-trip", "[peer][pubsub]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    std::vector<std::array<uint8_t, 32>> namespaces(3);
+    for (int i = 0; i < 3; ++i) {
+        namespaces[i].fill(static_cast<uint8_t>(i + 1));
+    }
+
+    auto encoded = PM::encode_namespace_list(namespaces);
+    REQUIRE(encoded.size() == 2 + 3 * 32);
+
+    auto decoded = PM::decode_namespace_list(encoded);
+    REQUIRE(decoded.size() == 3);
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(decoded[i] == namespaces[i]);
+    }
+}
+
+TEST_CASE("encode_namespace_list empty", "[peer][pubsub]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    std::vector<std::array<uint8_t, 32>> empty_list;
+    auto encoded = PM::encode_namespace_list(empty_list);
+    REQUIRE(encoded.size() == 2);
+    REQUIRE(encoded[0] == 0);
+    REQUIRE(encoded[1] == 0);
+
+    auto decoded = PM::decode_namespace_list(encoded);
+    REQUIRE(decoded.empty());
+}
+
+TEST_CASE("decode_namespace_list rejects truncated payload", "[peer][pubsub]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    // count=2 but only 34 bytes total (2 + 32, should be 2 + 64)
+    std::vector<uint8_t> payload(34, 0);
+    payload[0] = 0;
+    payload[1] = 2;  // count = 2
+
+    auto decoded = PM::decode_namespace_list(payload);
+    REQUIRE(decoded.empty());
+}
+
+TEST_CASE("encode_notification layout", "[peer][pubsub]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0xAA);
+    std::array<uint8_t, 32> blob_hash{};
+    blob_hash.fill(0xBB);
+    uint64_t seq_num = 0x0102030405060708ULL;
+    uint32_t blob_size = 0x11223344;
+    bool is_tombstone = false;
+
+    auto payload = PM::encode_notification(ns_id, blob_hash, seq_num, blob_size, is_tombstone);
+    REQUIRE(payload.size() == 77);
+
+    // namespace_id at offset 0
+    for (int i = 0; i < 32; ++i) {
+        REQUIRE(payload[i] == 0xAA);
+    }
+    // blob_hash at offset 32
+    for (int i = 32; i < 64; ++i) {
+        REQUIRE(payload[i] == 0xBB);
+    }
+    // seq_num big-endian at offset 64
+    REQUIRE(payload[64] == 0x01);
+    REQUIRE(payload[65] == 0x02);
+    REQUIRE(payload[66] == 0x03);
+    REQUIRE(payload[67] == 0x04);
+    REQUIRE(payload[68] == 0x05);
+    REQUIRE(payload[69] == 0x06);
+    REQUIRE(payload[70] == 0x07);
+    REQUIRE(payload[71] == 0x08);
+    // blob_size big-endian at offset 72
+    REQUIRE(payload[72] == 0x11);
+    REQUIRE(payload[73] == 0x22);
+    REQUIRE(payload[74] == 0x33);
+    REQUIRE(payload[75] == 0x44);
+    // is_tombstone at offset 76
+    REQUIRE(payload[76] == 0);
+}
+
+TEST_CASE("encode_notification tombstone flag", "[peer][pubsub]") {
+    using PM = chromatindb::peer::PeerManager;
+
+    std::array<uint8_t, 32> ns_id{};
+    std::array<uint8_t, 32> blob_hash{};
+
+    auto payload_false = PM::encode_notification(ns_id, blob_hash, 1, 36, false);
+    REQUIRE(payload_false[76] == 0);
+
+    auto payload_true = PM::encode_notification(ns_id, blob_hash, 1, 36, true);
+    REQUIRE(payload_true[76] == 1);
+}
+
+// ============================================================================
 // Phase 12: Tombstone deletion integration tests
 // ============================================================================
 
