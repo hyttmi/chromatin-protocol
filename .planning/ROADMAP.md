@@ -72,11 +72,11 @@ Plans:
   3. Delegation blobs replicate to peers via the existing sync protocol like any other blob
   4. Owner can revoke a delegation by tombstoning the delegation blob, and the node rejects subsequent writes from that delegate
   5. Delegation verification on the write hot-path is efficient (indexed lookup, not storage scan)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 13-01: TBD
-- [ ] 13-02: TBD
+- [ ] 13-01: Delegation blob format, storage delegation index, and delegation blob creation (DELEG-01, DELEG-03)
+- [ ] 13-02: Delegate write acceptance in ingest and revocation via tombstone (DELEG-02, DELEG-04)
 
 ### Phase 14: Pub/Sub Notifications
 **Goal**: Connected peers receive real-time notifications when blobs are ingested or deleted in namespaces they subscribe to
@@ -126,6 +126,6 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
-| 13. Namespace Delegation | v3.0 | 0/? | Not started | - |
+| 13. Namespace Delegation | v3.0 | 0/2 | Planned | - |
 | 14. Pub/Sub Notifications | v3.0 | 0/? | Not started | - |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
