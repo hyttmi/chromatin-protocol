@@ -40,7 +40,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 **Milestone Goal:** Make chromatindb collaborative and responsive -- pub/sub notifications for real-time awareness, namespace delegation for multi-writer support, and explicit blob deletion via tombstones.
 
 - [x] **Phase 12: Blob Deletion** - Owner-signed tombstones that permanently delete blobs and replicate via sync + liboqs build optimization
-- [ ] **Phase 13: Namespace Delegation** - Signed delegation blobs granting write access to other pubkeys
+- [x] **Phase 13: Namespace Delegation** - Signed delegation blobs granting write access to other pubkeys (completed 2026-03-08)
 - [ ] **Phase 14: Pub/Sub Notifications** - Real-time SUBSCRIBE/NOTIFICATION wire messages for namespace changes
 - [ ] **Phase 15: Polish & Benchmarks** - README documentation and performance test suite
 
@@ -126,6 +126,6 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
-| 13. Namespace Delegation | 1/2 | In Progress|  | - |
+| 13. Namespace Delegation | 2/2 | Complete   | 2026-03-08 | - |
 | 14. Pub/Sub Notifications | v3.0 | 0/? | Not started | - |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
