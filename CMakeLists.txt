@@ -184,6 +184,12 @@ add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
 # =============================================================================
+# Benchmark binary
+# =============================================================================
+add_executable(chromatindb_bench bench/bench_main.cpp)
+target_link_libraries(chromatindb_bench PRIVATE chromatindb_lib)
+
+# =============================================================================
 # Test target
 # =============================================================================
 add_executable(chromatindb_tests
