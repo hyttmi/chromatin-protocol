@@ -41,7 +41,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 - [x] **Phase 12: Blob Deletion** - Owner-signed tombstones that permanently delete blobs and replicate via sync + liboqs build optimization
 - [x] **Phase 13: Namespace Delegation** - Signed delegation blobs granting write access to other pubkeys (completed 2026-03-08)
-- [ ] **Phase 14: Pub/Sub Notifications** - Real-time SUBSCRIBE/NOTIFICATION wire messages for namespace changes
+- [x] **Phase 14: Pub/Sub Notifications** - Real-time SUBSCRIBE/NOTIFICATION wire messages for namespace changes (completed 2026-03-08)
 - [ ] **Phase 15: Polish & Benchmarks** - README documentation and performance test suite
 
 ## Phase Details
@@ -91,7 +91,7 @@ Plans:
 
 Plans:
 - [x] 14-01: Wire format + subscription state management (SUB-01, SUB-03, SUB-04) -- completed 2026-03-08
-- [ ] 14-02: Notification dispatch + E2E tests (SUB-02, SUB-05)
+- [x] 14-02: Notification dispatch + E2E tests (SUB-02, SUB-05) -- completed 2026-03-08
 
 ### Phase 15: Polish & Benchmarks
 **Goal**: Documentation and performance validation for the complete v3.0 feature set
@@ -127,5 +127,5 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 14. Pub/Sub Notifications | 1/2 | In Progress|  | - |
+| 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
