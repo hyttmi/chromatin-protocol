@@ -42,7 +42,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 - [x] **Phase 12: Blob Deletion** - Owner-signed tombstones that permanently delete blobs and replicate via sync + liboqs build optimization
 - [x] **Phase 13: Namespace Delegation** - Signed delegation blobs granting write access to other pubkeys (completed 2026-03-08)
 - [x] **Phase 14: Pub/Sub Notifications** - Real-time SUBSCRIBE/NOTIFICATION wire messages for namespace changes (completed 2026-03-08)
-- [ ] **Phase 15: Polish & Benchmarks** - README documentation and performance test suite
+- [x] **Phase 15: Polish & Benchmarks** - README documentation and performance test suite (completed 2026-03-08)
 
 ## Phase Details
 
@@ -128,4 +128,4 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 15. Polish & Benchmarks | 1/2 | In Progress|  | - |
+| 15. Polish & Benchmarks | 2/2 | Complete   | 2026-03-08 | - |
