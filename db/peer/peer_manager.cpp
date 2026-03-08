@@ -916,6 +916,11 @@ void PeerManager::notify_subscribers(
     uint64_t seq_num,
     uint32_t blob_size,
     bool is_tombstone) {
+    // Test hook -- fire notification callback if set
+    if (on_notification_) {
+        on_notification_(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
+    }
+
     // Build notification payload once
     auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
 

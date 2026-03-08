@@ -127,6 +127,18 @@ public:
     /// Public for testing; called internally by SIGHUP handler.
     void reload_config();
 
+    /// Callback type for notification dispatch (public for testing).
+    using NotificationCallback = std::function<void(
+        const std::array<uint8_t, 32>& namespace_id,
+        const std::array<uint8_t, 32>& blob_hash,
+        uint64_t seq_num,
+        uint32_t blob_size,
+        bool is_tombstone)>;
+
+    /// Set a callback invoked whenever a notification is dispatched.
+    /// For testing only -- allows capturing notification events.
+    void set_on_notification(NotificationCallback cb) { on_notification_ = std::move(cb); }
+
 private:
     // Server callbacks
     void on_peer_connected(net::Connection::Ptr conn);
@@ -204,6 +216,7 @@ private:
     std::set<std::string> known_addresses_;      // All addresses we know about
     std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
+    NotificationCallback on_notification_;        // Test hook for notification dispatch
 };
 
 } // namespace chromatindb::peer

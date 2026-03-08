@@ -32,20 +32,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ SIGHUP hot-reload of ACL without restart — v2.0
 - ✓ Memory-efficient sync for large blobs (index-only hashes, one-blob-at-a-time) — v2.0
 
+- ✓ Real-time pub/sub notifications for namespace changes — v3.0
+- ✓ Namespace delegation (owner grants write access to other pubkeys) — v3.0
+- ✓ Blob deletion by owner via replicated tombstones — v3.0
+
 ### Active
 
-- [ ] Real-time pub/sub notifications for namespace changes
-- [ ] Namespace delegation (owner grants write access to other pubkeys)
-- [ ] Blob deletion by owner via replicated tombstones
-
-## Current Milestone: v3.0 Real-time & Delegation
-
-**Goal:** Make chromatindb collaborative and responsive — pub/sub notifications, namespace delegation for multi-writer support, and explicit blob deletion via tombstones. All prerequisites for Layer 2 (Relay).
-
-**Target features:**
-- Pub/sub notifications: SUBSCRIBE/NOTIFICATION wire messages, metadata-rich (namespace + seq + hash + size)
-- Namespace delegation: signed delegation blobs, write-only access, revocation via deletion
-- Blob deletion: owner-signed tombstones, permanent (TTL=0), replicated like blobs
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -65,13 +58,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v2.0 with 11,027 LOC C++20, 196 tests.
-Built across 5 days total: v1.0 in 3 days (8 phases, 21 plans), v2.0 in 2 days (3 phases, 8 plans).
+Shipped v3.0 with 14,152 LOC C++20, 255 tests.
+Built across 7 days total: v1.0 in 3 days (8 phases, 21 plans), v2.0 in 2 days (3 phases, 8 plans), v3.0 in 2 days (4 phases, 8 plans).
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v2.0 SHIPPED): chromatindb** — database node network with access control
+- **Layer 1 (v3.0 SHIPPED): chromatindb** — database node network with access control, delegation, pub/sub, deletion
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
@@ -123,6 +116,15 @@ Previous projects inform design:
 | One-blob-at-a-time sync transfer | Memory bounded: only one blob in flight per connection | ✓ Good — prevents OOM with 100 MiB blobs |
 | Expiry filtering deferred to receiver | Sender doesn't need blob data at hash collection time | ✓ Good — simplifies sender, index-only reads |
 | MAX_FRAME_SIZE = 110 MiB (10% headroom) | Room for protocol overhead without a second round-trip | ✓ Good — future-proof |
+| Tombstones permanent (TTL=0) | Deleted means deleted forever, no resurrection | ✓ Good — simple semantics |
+| Tombstone data = 4-byte magic + 32-byte target hash | Self-verifiable on any node, replicates like blobs | ✓ Good — clean design |
+| Delegation via signed blob in owner's namespace | Delegates sign with own key; verification: ownership OR valid delegation | ✓ Good — no protocol changes needed |
+| Delegates write-only (no delete) | Deletion is owner-privileged; keeps security model simple | ✓ Good — clear privilege boundary |
+| Revocation by tombstoning delegation blob | Reuses existing deletion infrastructure | ✓ Good — zero new mechanisms |
+| Delegation index key = namespace:32 + SHA3-256(delegate_pubkey):32 | O(1) btree lookup on write hot-path | ✓ Good — efficient verification |
+| Pub/sub: metadata-rich notifications | Namespace + seq + hash + size; subscriber fetches blob if wanted | ✓ Good — pull model, no data push |
+| Subscriptions connection-scoped | No persistence across disconnects; relay can re-subscribe | ✓ Good — simple state management |
+| No self-exclusion on notifications | Writing peer receives its own notifications | ✓ Good — consistent, simple |
 
 ---
-*Last updated: 2026-03-07 after v3.0 milestone started*
+*Last updated: 2026-03-08 after v3.0 milestone complete*

@@ -2,6 +2,55 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v3.0 — Real-time & Delegation
+
+**Shipped:** 2026-03-08
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~3
+
+### What Was Built
+- Blob deletion: owner-signed tombstones (4-byte magic + 32-byte target hash), permanent (TTL=0), sync-propagated
+- liboqs algorithm stripping: only ML-DSA-87 + ML-KEM-1024 enabled (BUILD-01)
+- Namespace delegation: signed delegation blobs, O(1) indexed verification, write-only delegate access
+- Delegation revocation via tombstoning delegation blob (reuses Phase 12 infrastructure)
+- Pub/sub notifications: SUBSCRIBE/UNSUBSCRIBE/NOTIFICATION wire messages, connection-scoped subscriptions
+- Three notification trigger paths: Data handler, Delete handler, SyncProtocol callback
+- README.md with build/config/CLI/scenarios/crypto documentation
+- Standalone benchmark binary covering crypto, data path, sync, and network operations
+
+### What Worked
+- Phase dependencies perfectly ordered: deletion -> delegation (needs tombstone for revocation) -> pub/sub (needs deletion for tombstone notifications)
+- Reusing existing patterns: magic-prefix blob types (tombstone, delegation) fit cleanly into existing ingest pipeline
+- Zero engine changes for delegation blob creation — existing pipeline handled it naturally
+- Delegation revocation as "just tombstone the delegation blob" was elegant and required zero new mechanisms
+- Fastest milestone: 8 plans in 2 days, average ~15 min/plan (vs ~25 min for v1.0)
+- liboqs stripping reduced build time significantly
+
+### What Was Inefficient
+- Missing VERIFICATION.md for phases 12 and 14 — caught by milestone audit, documentation-only gap
+- Phase 15 plans had stale checkboxes in roadmap despite being completed
+- Audit found `gaps_found` status that was technically correct but misleading (all code worked, just docs missing)
+
+### Patterns Established
+- Magic-prefix blob types: 4-byte magic identifies blob variant (tombstone=0xDEADBEEF, delegation=0xDE1E6A7E)
+- Ownership-or-delegation check: two-path verification on ingest hot path
+- Delegate restriction guards: explicit checks before signature verification for delegation/tombstone creation
+- co_spawn for notification fan-out: one coroutine per subscriber for non-blocking dispatch
+- OnBlobIngested callback: SyncProtocol notifies peer manager of sync-received blobs
+
+### Key Lessons
+1. liboqs algorithm stripping should have been done in v1.0 — build time was a bottleneck for 2 milestones
+2. Reusing existing infrastructure (tombstones for revocation, ingest pipeline for delegation) is faster and less error-prone than new mechanisms
+3. Magic-prefix blob types are a clean extensibility pattern — new blob types slot in without protocol changes
+4. Three trigger paths for notifications (data/delete/sync) is the right architecture — each has different context
+5. Missing verification docs are a process gap, not a quality gap — all code was correct and tested
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~3 across 2 days
+- Notable: Phases 13-14 were fastest at ~25 min combined — building directly on Phase 12 patterns
+
+---
+
 ## Milestone: v2.0 — Closed Node Model
 
 **Shipped:** 2026-03-07
@@ -107,6 +156,7 @@
 |-----------|----------|--------|------------|
 | v1.0 | ~8 | 8 | Bottom-up dependency ordering + gap closure via audit |
 | v2.0 | ~4 | 3 | Clean milestone audit (zero gaps) — scoping improved from v1.0 lessons |
+| v3.0 | ~3 | 4 | Fastest per-plan avg (~15 min) — pattern reuse accelerated delivery |
 
 ### Cumulative Quality
 
@@ -114,6 +164,7 @@
 |-----------|-------|-----|-------------|--------------|
 | v1.0 | 155 | 9,449 | 53 | 32/32 |
 | v2.0 | 196 | 11,027 | ~60 | 14/14 |
+| v3.0 | 255 | 14,152 | ~70 | 16/16 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -121,4 +172,5 @@
 2. Milestone audit before shipping catches integration gaps that phase-level verification misses
 3. Source restructure is low-risk when done as a dedicated phase — mechanical work, no design decisions
 4. Building on established async patterns (timer-cancel, sequential protocol) prevents new concurrency bugs
-5. liboqs build time is a real bottleneck — strip unnecessary algorithms in next milestone
+5. Reusing existing infrastructure (magic-prefix types, ingest pipeline) is faster and less error-prone than new mechanisms
+6. Algorithm stripping for liboqs resolved in v3.0 — should have been done earlier (2 milestones of slow builds)

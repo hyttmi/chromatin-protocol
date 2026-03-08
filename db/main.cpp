@@ -1,3 +1,4 @@
+#include "db/version.h"
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
 #include "db/engine/engine.h"
@@ -14,7 +15,6 @@
 #include <span>
 #include <string>
 
-static constexpr const char* VERSION = "0.1.0-dev";
 
 namespace {
 

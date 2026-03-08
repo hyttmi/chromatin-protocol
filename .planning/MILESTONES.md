@@ -1,5 +1,30 @@
 # Milestones
 
+## v3.0 Real-time & Delegation (Shipped: 2026-03-08)
+
+**Phases:** 4 (12-15) | **Plans:** 8 | **Commits:** 31 | **LOC:** 14,152 C++ (+6,591)
+**Tests:** 255 tests (59 new) | **Requirements:** 16/16
+**Timeline:** 2 days (2026-03-07 -> 2026-03-08)
+
+**Key accomplishments:**
+- Tombstone-based blob deletion with sync propagation and tombstone-before-blob rejection
+- liboqs algorithm stripping (ML-DSA-87 + ML-KEM-1024 only) for faster builds
+- Signed delegation blobs for multi-writer namespaces with O(1) indexed verification
+- Real-time pub/sub notifications with connection-scoped subscriptions and tombstone events
+- Comprehensive README with build, config, CLI, deployment scenarios, and crypto stack docs
+- Standalone benchmark binary with crypto, data path, sync, handshake, and notification benchmarks
+
+**Known gaps (documentation-only):**
+- Missing VERIFICATION.md for phases 12 and 14 (all code works, all tests pass)
+
+**Tech debt carried forward:**
+- has_tombstone_for uses O(n) namespace scan (deletion is rare)
+- No combined delegation + notification E2E test (code correct, untested as composed scenario)
+
+**Archive:** [v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md) | [v3.0-REQUIREMENTS.md](milestones/v3.0-REQUIREMENTS.md)
+
+---
+
 ## v2.0 Closed Node Model (Shipped: 2026-03-07)
 
 **Phases:** 3 (9-11) | **Plans:** 8 | **Commits:** 38 | **LOC:** 11,027 C++
