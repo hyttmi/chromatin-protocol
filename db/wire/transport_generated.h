@@ -18,7 +18,6 @@ namespace wire {
 
 struct TransportMessage;
 struct TransportMessageBuilder;
-struct TransportMessageT;
 
 enum TransportMsgType : int8_t {
   TransportMsgType_None = 0,
@@ -41,11 +40,14 @@ enum TransportMsgType : int8_t {
   TransportMsgType_PeerListResponse = 17,
   TransportMsgType_Delete = 18,
   TransportMsgType_DeleteAck = 19,
+  TransportMsgType_Subscribe = 20,
+  TransportMsgType_Unsubscribe = 21,
+  TransportMsgType_Notification = 22,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_DeleteAck
+  TransportMsgType_MAX = TransportMsgType_Notification
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[20] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[23] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -66,13 +68,16 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[20] {
     TransportMsgType_PeerListRequest,
     TransportMsgType_PeerListResponse,
     TransportMsgType_Delete,
-    TransportMsgType_DeleteAck
+    TransportMsgType_DeleteAck,
+    TransportMsgType_Subscribe,
+    TransportMsgType_Unsubscribe,
+    TransportMsgType_Notification
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[21] = {
+  static const char * const names[24] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -93,25 +98,21 @@ inline const char * const *EnumNamesTransportMsgType() {
     "PeerListResponse",
     "Delete",
     "DeleteAck",
+    "Subscribe",
+    "Unsubscribe",
+    "Notification",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_DeleteAck)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_Notification)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }
 
-struct TransportMessageT : public ::flatbuffers::NativeTable {
-  typedef TransportMessage TableType;
-  chromatindb::wire::TransportMsgType type = chromatindb::wire::TransportMsgType_None;
-  std::vector<uint8_t> payload{};
-};
-
 struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef TransportMessageT NativeTableType;
   typedef TransportMessageBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TYPE = 4,
@@ -130,9 +131,6 @@ struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(payload()) &&
            verifier.EndTable();
   }
-  TransportMessageT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(TransportMessageT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<TransportMessage> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 };
 
 struct TransportMessageBuilder {
@@ -177,37 +175,6 @@ inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessageDirect(
       payload__);
 }
 
-::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-inline TransportMessageT *TransportMessage::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::unique_ptr<TransportMessageT>(new TransportMessageT());
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void TransportMessage::UnPackTo(TransportMessageT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = type(); _o->type = _e; }
-  { auto _e = payload(); if (_e) { _o->payload.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->payload.begin()); } }
-}
-
-inline ::flatbuffers::Offset<TransportMessage> TransportMessage::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return CreateTransportMessage(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TransportMessageT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _type = _o->type;
-  auto _payload = _o->payload.size() ? _fbb.CreateVector(_o->payload) : 0;
-  return chromatindb::wire::CreateTransportMessage(
-      _fbb,
-      _type,
-      _payload);
-}
-
 inline const chromatindb::wire::TransportMessage *GetTransportMessage(const void *buf) {
   return ::flatbuffers::GetRoot<chromatindb::wire::TransportMessage>(buf);
 }
@@ -236,18 +203,6 @@ inline void FinishSizePrefixedTransportMessageBuffer(
     ::flatbuffers::FlatBufferBuilder &fbb,
     ::flatbuffers::Offset<chromatindb::wire::TransportMessage> root) {
   fbb.FinishSizePrefixed(root);
-}
-
-inline std::unique_ptr<chromatindb::wire::TransportMessageT> UnPackTransportMessage(
-    const void *buf,
-    const ::flatbuffers::resolver_function_t *res = nullptr) {
-  return std::unique_ptr<chromatindb::wire::TransportMessageT>(GetTransportMessage(buf)->UnPack(res));
-}
-
-inline std::unique_ptr<chromatindb::wire::TransportMessageT> UnPackSizePrefixedTransportMessage(
-    const void *buf,
-    const ::flatbuffers::resolver_function_t *res = nullptr) {
-  return std::unique_ptr<chromatindb::wire::TransportMessageT>(GetSizePrefixedTransportMessage(buf)->UnPack(res));
 }
 
 }  // namespace wire

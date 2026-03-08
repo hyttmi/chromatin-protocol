@@ -50,6 +50,8 @@ struct PeerInfo {
     // Sync message queue (timer-cancel pattern)
     std::deque<SyncMessage> sync_inbox;
     asio::steady_timer* sync_notify = nullptr;
+    // Pub/Sub subscriptions (connection-scoped)
+    std::set<std::array<uint8_t, 32>> subscribed_namespaces;
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.
@@ -101,6 +103,25 @@ public:
     /// PEX wire encoding (public for testing).
     static std::vector<uint8_t> encode_peer_list(const std::vector<std::string>& addresses);
     static std::vector<std::string> decode_peer_list(std::span<const uint8_t> payload);
+
+    /// Pub/Sub wire encoding (public for testing).
+    /// Encode a list of 32-byte namespace IDs for Subscribe/Unsubscribe payload.
+    /// Format: [uint16_be count][ns_id:32][ns_id:32]...
+    static std::vector<uint8_t> encode_namespace_list(
+        const std::vector<std::array<uint8_t, 32>>& namespaces);
+
+    /// Decode Subscribe/Unsubscribe payload back to namespace ID list.
+    static std::vector<std::array<uint8_t, 32>> decode_namespace_list(
+        std::span<const uint8_t> payload);
+
+    /// Encode a notification payload.
+    /// Format: [namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
+    static std::vector<uint8_t> encode_notification(
+        std::span<const uint8_t, 32> namespace_id,
+        std::span<const uint8_t, 32> blob_hash,
+        uint64_t seq_num,
+        uint32_t blob_size,
+        bool is_tombstone);
 
     /// Reload allowed_keys from config file and disconnect revoked peers.
     /// Public for testing; called internally by SIGHUP handler.

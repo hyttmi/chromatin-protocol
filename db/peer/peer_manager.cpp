@@ -263,6 +263,34 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_Subscribe) {
+        auto* peer = find_peer(conn);
+        if (peer) {
+            auto namespaces = decode_namespace_list(payload);
+            for (const auto& ns : namespaces) {
+                peer->subscribed_namespaces.insert(ns);
+            }
+            spdlog::debug("Peer {} subscribed to {} namespaces (total: {})",
+                         peer_display_name(conn), namespaces.size(),
+                         peer->subscribed_namespaces.size());
+        }
+        return;
+    }
+
+    if (type == wire::TransportMsgType_Unsubscribe) {
+        auto* peer = find_peer(conn);
+        if (peer) {
+            auto namespaces = decode_namespace_list(payload);
+            for (const auto& ns : namespaces) {
+                peer->subscribed_namespaces.erase(ns);
+            }
+            spdlog::debug("Peer {} unsubscribed from {} namespaces (total: {})",
+                         peer_display_name(conn), namespaces.size(),
+                         peer->subscribed_namespaces.size());
+        }
+        return;
+    }
+
     if (type == wire::TransportMsgType_Delete) {
         // Delete message -- process as blob deletion, send ack via coroutine
         try {
@@ -851,6 +879,62 @@ std::vector<std::string> PeerManager::decode_peer_list(std::span<const uint8_t> 
         result.emplace_back(reinterpret_cast<const char*>(payload.data() + offset), len);
         offset += len;
     }
+    return result;
+}
+
+// =============================================================================
+// Pub/Sub wire encoding
+// =============================================================================
+
+std::vector<uint8_t> PeerManager::encode_namespace_list(
+    const std::vector<std::array<uint8_t, 32>>& namespaces) {
+    std::vector<uint8_t> result(2 + namespaces.size() * 32);
+    auto count = static_cast<uint16_t>(namespaces.size());
+    result[0] = static_cast<uint8_t>(count >> 8);
+    result[1] = static_cast<uint8_t>(count & 0xFF);
+    size_t offset = 2;
+    for (const auto& ns : namespaces) {
+        std::memcpy(result.data() + offset, ns.data(), 32);
+        offset += 32;
+    }
+    return result;
+}
+
+std::vector<std::array<uint8_t, 32>> PeerManager::decode_namespace_list(
+    std::span<const uint8_t> payload) {
+    std::vector<std::array<uint8_t, 32>> result;
+    if (payload.size() < 2) return result;
+    uint16_t count = (static_cast<uint16_t>(payload[0]) << 8) |
+                      static_cast<uint16_t>(payload[1]);
+    if (payload.size() != 2 + static_cast<size_t>(count) * 32) return result;
+    for (uint16_t i = 0; i < count; ++i) {
+        std::array<uint8_t, 32> ns{};
+        std::memcpy(ns.data(), payload.data() + 2 + i * 32, 32);
+        result.push_back(ns);
+    }
+    return result;
+}
+
+std::vector<uint8_t> PeerManager::encode_notification(
+    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> blob_hash,
+    uint64_t seq_num,
+    uint32_t blob_size,
+    bool is_tombstone) {
+    std::vector<uint8_t> result(77);
+    std::memcpy(result.data(), namespace_id.data(), 32);
+    std::memcpy(result.data() + 32, blob_hash.data(), 32);
+    // seq_num big-endian at offset 64
+    for (int i = 7; i >= 0; --i) {
+        result[64 + (7 - i)] = static_cast<uint8_t>(seq_num >> (i * 8));
+    }
+    // blob_size big-endian at offset 72
+    result[72] = static_cast<uint8_t>(blob_size >> 24);
+    result[73] = static_cast<uint8_t>(blob_size >> 16);
+    result[74] = static_cast<uint8_t>(blob_size >> 8);
+    result[75] = static_cast<uint8_t>(blob_size & 0xFF);
+    // is_tombstone at offset 76
+    result[76] = is_tombstone ? 1 : 0;
     return result;
 }
 

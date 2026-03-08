@@ -23,7 +23,11 @@ enum TransportMsgType : byte {
     PeerListResponse = 17,
     // Phase 12: Blob deletion
     Delete = 18,
-    DeleteAck = 19
+    DeleteAck = 19,
+    // Phase 14: Pub/Sub notifications
+    Subscribe = 20,
+    Unsubscribe = 21,
+    Notification = 22
 }
 
 table TransportMessage {
