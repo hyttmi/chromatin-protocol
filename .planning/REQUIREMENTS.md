@@ -17,10 +17,10 @@ Requirements for v3.0 Real-time & Delegation. Each maps to roadmap phases.
 
 ### Namespace Delegation
 
-- [ ] **DELEG-01**: Namespace owner can create a signed delegation blob granting write access to another pubkey
-- [ ] **DELEG-02**: Node accepts writes from delegates after verifying a valid delegation blob exists in the namespace
-- [ ] **DELEG-03**: Delegation blobs replicate like any blob via sync protocol
-- [ ] **DELEG-04**: Owner can revoke delegation by deleting the delegation blob (tombstone)
+- [x] **DELEG-01**: Namespace owner can create a signed delegation blob granting write access to another pubkey
+- [x] **DELEG-02**: Node accepts writes from delegates after verifying a valid delegation blob exists in the namespace
+- [x] **DELEG-03**: Delegation blobs replicate like any blob via sync protocol
+- [x] **DELEG-04**: Owner can revoke delegation by deleting the delegation blob (tombstone)
 
 ### Blob Deletion
 
@@ -71,10 +71,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DEL-02 | Phase 12 | Complete |
 | DEL-03 | Phase 12 | Complete |
 | DEL-04 | Phase 12 | Complete |
-| DELEG-01 | Phase 13 | Pending |
-| DELEG-02 | Phase 13 | Pending |
-| DELEG-03 | Phase 13 | Pending |
-| DELEG-04 | Phase 13 | Pending |
+| DELEG-01 | Phase 13 | Complete |
+| DELEG-02 | Phase 13 | Complete |
+| DELEG-03 | Phase 13 | Complete |
+| DELEG-04 | Phase 13 | Complete |
 | SUB-01 | Phase 14 | Pending |
 | SUB-02 | Phase 14 | Pending |
 | SUB-03 | Phase 14 | Pending |
@@ -91,4 +91,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-07*
-*Last updated: 2026-03-07 after roadmap revision*
+*Last updated: 2026-03-08 after Phase 13 completion*
