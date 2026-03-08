@@ -608,3 +608,215 @@ TEST_CASE("tombstone transfer encode/decode preserves tombstone data", "[sync][t
     REQUIRE(decoded[0].pubkey == tombstone.pubkey);
     REQUIRE(decoded[0].signature == tombstone.signature);
 }
+
+// ============================================================================
+// Phase 13: Delegation sync tests
+// ============================================================================
+
+namespace {
+
+/// Build a properly signed delegation BlobData: owner delegates to delegate.
+chromatindb::wire::BlobData make_signed_delegation_sync(
+    const chromatindb::identity::NodeIdentity& owner,
+    const chromatindb::identity::NodeIdentity& delegate,
+    uint64_t timestamp = 9000)
+{
+    chromatindb::wire::BlobData blob;
+    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
+    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
+    blob.ttl = 0;  // Permanent
+    blob.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    blob.signature = owner.sign(signing_input);
+
+    return blob;
+}
+
+/// Build a properly signed blob written by a delegate to an owner's namespace.
+chromatindb::wire::BlobData make_delegate_blob_sync(
+    const chromatindb::identity::NodeIdentity& owner,
+    const chromatindb::identity::NodeIdentity& delegate,
+    const std::string& payload,
+    uint32_t ttl = 604800,
+    uint64_t timestamp = 9100)
+{
+    chromatindb::wire::BlobData blob;
+    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
+    blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    blob.data.assign(payload.begin(), payload.end());
+    blob.ttl = ttl;
+    blob.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    blob.signature = delegate.sign(signing_input);
+
+    return blob;
+}
+
+} // anonymous namespace
+
+TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Node1: owner creates delegation
+    auto deleg = make_signed_delegation_sync(owner, delegate);
+    auto deleg_result = engine1.ingest(deleg);
+    REQUIRE(deleg_result.accepted);
+
+    // Sync: node1 sends delegation to node2
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
+
+    auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
+    auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
+
+    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    REQUIRE(missing_on_2.size() == 1);
+
+    auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);
+    REQUIRE(transfer.size() == 1);
+    REQUIRE(chromatindb::wire::is_delegation(transfer[0].data));
+
+    auto stats = sync2.ingest_blobs(transfer);
+    REQUIRE(stats.blobs_received == 1);
+
+    // Node2 should now recognize the delegation (DELEG-03)
+    REQUIRE(store2.has_valid_delegation(
+        owner.namespace_id(), delegate.public_key()));
+}
+
+TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Node1: owner delegates, delegate writes
+    auto deleg = make_signed_delegation_sync(owner, delegate);
+    REQUIRE(engine1.ingest(deleg).accepted);
+
+    auto delegate_blob = make_delegate_blob_sync(owner, delegate, "sync-delegate-data");
+    REQUIRE(engine1.ingest(delegate_blob).accepted);
+
+    // Sync everything from node1 to node2
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
+
+    auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
+    auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
+
+    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    REQUIRE(missing_on_2.size() == 2);  // delegation blob + delegate-written blob
+
+    auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);
+    REQUIRE(transfer.size() == 2);
+
+    // Ingest on node2 -- delegation blob must be ingested first for delegate blob to succeed
+    // ingest_blobs iterates in order, so ensure delegation blob comes first
+    std::vector<chromatindb::wire::BlobData> ordered_transfer;
+    for (auto& b : transfer) {
+        if (chromatindb::wire::is_delegation(b.data)) {
+            ordered_transfer.insert(ordered_transfer.begin(), std::move(b));
+        } else {
+            ordered_transfer.push_back(std::move(b));
+        }
+    }
+
+    auto stats = sync2.ingest_blobs(ordered_transfer);
+    REQUIRE(stats.blobs_received == 2);
+
+    // Node2 should have both the delegation and the delegate-written blob
+    REQUIRE(store2.has_valid_delegation(
+        owner.namespace_id(), delegate.public_key()));
+
+    // Find the delegate blob on node2
+    auto all_blobs = engine2.get_blobs_since(owner.namespace_id(), 0);
+    bool found_delegate_blob = false;
+    for (const auto& b : all_blobs) {
+        std::string data_str(b.data.begin(), b.data.end());
+        if (data_str == "sync-delegate-data") {
+            found_delegate_blob = true;
+        }
+    }
+    REQUIRE(found_delegate_blob);
+}
+
+TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Both nodes have the delegation
+    auto deleg = make_signed_delegation_sync(owner, delegate);
+    REQUIRE(engine1.ingest(deleg).accepted);
+    REQUIRE(engine2.ingest(deleg).accepted);
+
+    auto deleg_hash = engine1.get_blobs_since(owner.namespace_id(), 0);
+    REQUIRE(!deleg_hash.empty());
+
+    // Get the delegation blob hash via encoding
+    auto encoded_deleg = chromatindb::wire::encode_blob(deleg);
+    auto deleg_content_hash = chromatindb::wire::blob_hash(encoded_deleg);
+
+    // Node2 should recognize delegation
+    REQUIRE(store2.has_valid_delegation(
+        owner.namespace_id(), delegate.public_key()));
+
+    // Node1: owner revokes by tombstoning
+    auto tombstone = make_signed_tombstone(owner, deleg_content_hash, 9500);
+    auto delete_result = engine1.delete_blob(tombstone);
+    REQUIRE(delete_result.accepted);
+
+    // Sync tombstone from node1 to node2
+    SyncProtocol sync1(engine1, store1, test_clock);
+    SyncProtocol sync2(engine2, store2, test_clock);
+
+    auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
+    auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
+
+    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    REQUIRE(missing_on_2.size() == 1);  // Just the tombstone
+
+    auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);
+    REQUIRE(transfer.size() == 1);
+    REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
+
+    auto stats = sync2.ingest_blobs(transfer);
+    REQUIRE(stats.blobs_received == 1);
+
+    // Delegation should be revoked on node2
+    REQUIRE_FALSE(store2.has_valid_delegation(
+        owner.namespace_id(), delegate.public_key()));
+
+    // Delegate writes to node2 should now fail
+    auto delegate_blob = make_delegate_blob_sync(owner, delegate, "post-revocation");
+    auto result = engine2.ingest(delegate_blob);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);
+}
