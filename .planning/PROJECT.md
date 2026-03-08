@@ -38,7 +38,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(None — planning next milestone)
+<!-- v0.4.0 Production Readiness -->
+
+- [ ] Global storage limits with configurable max
+- [ ] Disk-full reporting to peers (protocol-level rejection)
+- [ ] Persistent peer list across restarts
+- [ ] Graceful shutdown (clean disconnect, finish in-flight)
+- [ ] Metrics/observability (connections, storage, sync stats)
+- [ ] Rate limiting for abuse prevention
+- [ ] Tombstone index (fix O(n) has_tombstone_for)
+- [ ] Namespace-scoped sync (filter replicated namespaces per connection)
+- [ ] README in db/ with usage/interaction samples
+- [ ] Update version.h to 0.4.0
 
 ### Out of Scope
 
@@ -127,4 +138,16 @@ Previous projects inform design:
 | No self-exclusion on notifications | Writing peer receives its own notifications | ✓ Good — consistent, simple |
 
 ---
-*Last updated: 2026-03-08 after v3.0 milestone complete*
+## Current Milestone: v0.4.0 Production Readiness
+
+**Goal:** Harden chromatindb for real-world deployment with storage limits, disk-full reporting, operational tooling, and abuse prevention.
+
+**Target features:**
+- Global storage limits with disk-full reporting to peers
+- Persistent peer list, graceful shutdown, metrics
+- Rate limiting, namespace-scoped sync
+- Tombstone index optimization
+- README with usage samples, version bump
+
+---
+*Last updated: 2026-03-08 after v0.4.0 milestone started*

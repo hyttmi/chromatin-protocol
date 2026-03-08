@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.0
-milestone_name: Real-time & Delegation
-status: complete
+milestone: v0.4.0
+milestone_name: Production Readiness
+status: defining_requirements
 last_updated: "2026-03-08"
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -17,14 +17,15 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-03-08)
 
-**Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v3.0 shipped. Planning next milestone.
+**Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+**Current focus:** v0.4.0 Production Readiness
 
 ## Current Position
 
-Milestone: v3.0 Real-time & Delegation -- SHIPPED 2026-03-08
-All 15 phases complete across 3 milestones (v1.0, v2.0, v3.0).
-37 plans executed, 255 tests, 14,152 LOC C++20.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-08 — Milestone v0.4.0 started
 
 ## Performance Metrics
 
@@ -60,5 +61,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-08
-Stopped at: v3.0 milestone complete. Ready for next milestone.
+Stopped at: Defining requirements for v0.4.0 Production Readiness.
 Resume file: None
