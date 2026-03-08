@@ -64,6 +64,13 @@ PeerManager::PeerManager(const config::Config& config,
     server_.set_on_disconnected([this](net::Connection::Ptr conn) {
         on_peer_disconnected(conn);
     });
+
+    // Set up sync-received blob notification callback
+    sync_proto_.set_on_blob_ingested(
+        [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
+               uint64_t seq, uint32_t size, bool tombstone) {
+            notify_subscribers(ns, hash, seq, size, tombstone);
+        });
 }
 
 void PeerManager::start() {
@@ -310,6 +317,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
                                                  std::span<const uint8_t>(ack_payload));
                 }, asio::detached);
+                // Notify subscribers about tombstone
+                if (ack.status == engine::IngestStatus::stored) {
+                    notify_subscribers(
+                        blob.namespace_id,
+                        ack.blob_hash,
+                        ack.seq_num,
+                        static_cast<uint32_t>(blob.data.size()),
+                        true);  // tombstone notification
+                }
             } else if (result.error.has_value()) {
                 spdlog::warn("delete rejected from {}: {}",
                              conn->remote_address(), result.error_detail);
@@ -328,7 +344,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         try {
             auto blob = wire::decode_blob(payload);
             auto result = engine_.ingest(blob);
-            if (!result.accepted && result.error.has_value()) {
+            if (result.accepted && result.ack.has_value() &&
+                result.ack->status == engine::IngestStatus::stored) {
+                notify_subscribers(
+                    blob.namespace_id,
+                    result.ack->blob_hash,
+                    result.ack->seq_num,
+                    static_cast<uint32_t>(blob.data.size()),
+                    wire::is_tombstone(blob.data));
+            } else if (!result.accepted && result.error.has_value()) {
                 spdlog::warn("invalid blob from peer {}: {}",
                              conn->remote_address(),
                              result.error_detail.empty() ? "validation failed" : result.error_detail);
@@ -880,6 +904,33 @@ std::vector<std::string> PeerManager::decode_peer_list(std::span<const uint8_t> 
         offset += len;
     }
     return result;
+}
+
+// =============================================================================
+// Pub/Sub notification dispatch
+// =============================================================================
+
+void PeerManager::notify_subscribers(
+    const std::array<uint8_t, 32>& namespace_id,
+    const std::array<uint8_t, 32>& blob_hash,
+    uint64_t seq_num,
+    uint32_t blob_size,
+    bool is_tombstone) {
+    // Build notification payload once
+    auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
+
+    // Fan out to all subscribed peers
+    for (auto& peer : peers_) {
+        if (peer.subscribed_namespaces.count(namespace_id)) {
+            auto conn = peer.connection;
+            auto payload_copy = payload;  // Copy for each co_spawn
+            asio::co_spawn(ioc_, [conn, payload_copy = std::move(payload_copy)]() -> asio::awaitable<void> {
+                co_await conn->send_message(
+                    wire::TransportMsgType_Notification,
+                    std::span<const uint8_t>(payload_copy));
+            }, asio::detached);
+        }
+    }
 }
 
 // =============================================================================

@@ -173,6 +173,16 @@ private:
     void handle_sighup();
     void disconnect_unauthorized_peers();
 
+    // Pub/Sub notification dispatch
+    /// Notify all peers subscribed to a namespace about a new blob.
+    /// Fires co_spawn per subscriber -- async, does not block caller.
+    void notify_subscribers(
+        const std::array<uint8_t, 32>& namespace_id,
+        const std::array<uint8_t, 32>& blob_hash,
+        uint64_t seq_num,
+        uint32_t blob_size,
+        bool is_tombstone);
+
     // Helpers
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
     std::string peer_display_name(const net::Connection::Ptr& conn);

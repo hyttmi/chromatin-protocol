@@ -84,6 +84,10 @@ std::vector<wire::BlobData> SyncProtocol::get_blobs_by_hashes(
 // Blob ingestion
 // =============================================================================
 
+void SyncProtocol::set_on_blob_ingested(OnBlobIngested callback) {
+    on_blob_ingested_ = std::move(callback);
+}
+
 SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
     SyncStats stats;
     uint64_t now = clock_();
@@ -98,6 +102,17 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
         auto result = engine_.ingest(blob);
         if (result.accepted) {
             stats.blobs_received++;
+            // Notify subscribers about successful sync-received ingest
+            if (result.ack.has_value() &&
+                result.ack->status == engine::IngestStatus::stored &&
+                on_blob_ingested_) {
+                on_blob_ingested_(
+                    blob.namespace_id,
+                    result.ack->blob_hash,
+                    result.ack->seq_num,
+                    static_cast<uint32_t>(blob.data.size()),
+                    wire::is_tombstone(blob.data));
+            }
         } else if (result.error.has_value()) {
             spdlog::warn("sync ingest rejected blob: {}",
                          result.error_detail.empty() ? "unknown" : result.error_detail);

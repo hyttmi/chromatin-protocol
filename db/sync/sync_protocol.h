@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -53,6 +54,18 @@ public:
         std::span<const uint8_t, 32> namespace_id,
         const std::vector<std::array<uint8_t, 32>>& hashes);
 
+    /// Callback invoked after a blob is successfully ingested during sync.
+    /// Parameters: namespace_id, blob_hash, seq_num, blob_data_size, is_tombstone.
+    using OnBlobIngested = std::function<void(
+        const std::array<uint8_t, 32>& namespace_id,
+        const std::array<uint8_t, 32>& blob_hash,
+        uint64_t seq_num,
+        uint32_t blob_data_size,
+        bool is_tombstone)>;
+
+    /// Set the callback for successful sync blob ingests (pub/sub notifications).
+    void set_on_blob_ingested(OnBlobIngested callback);
+
     /// Ingest received blobs. Validates and stores each non-expired blob.
     /// Returns stats: how many were accepted.
     SyncStats ingest_blobs(const std::vector<wire::BlobData>& blobs);
@@ -98,6 +111,7 @@ private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
     storage::Clock clock_;
+    OnBlobIngested on_blob_ingested_;
 };
 
 } // namespace chromatindb::sync
