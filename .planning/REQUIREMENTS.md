@@ -9,11 +9,11 @@ Requirements for v3.0 Real-time & Delegation. Each maps to roadmap phases.
 
 ### Pub/Sub Notifications
 
-- [ ] **SUB-01**: Peer can subscribe to one or more namespaces via SUBSCRIBE message
-- [ ] **SUB-02**: Node pushes NOTIFICATION (namespace + seq_num + hash + size) when blob ingested into subscribed namespace
-- [ ] **SUB-03**: Peer can unsubscribe from namespaces
-- [ ] **SUB-04**: Subscriptions are connection-scoped (no persistence across disconnects)
-- [ ] **SUB-05**: Subscribers receive notification when a blob is deleted (tombstoned) in a subscribed namespace
+- [x] **SUB-01**: Peer can subscribe to one or more namespaces via SUBSCRIBE message
+- [x] **SUB-02**: Node pushes NOTIFICATION (namespace + seq_num + hash + size) when blob ingested into subscribed namespace
+- [x] **SUB-03**: Peer can unsubscribe from namespaces
+- [x] **SUB-04**: Subscriptions are connection-scoped (no persistence across disconnects)
+- [x] **SUB-05**: Subscribers receive notification when a blob is deleted (tombstoned) in a subscribed namespace
 
 ### Namespace Delegation
 
@@ -35,8 +35,8 @@ Requirements for v3.0 Real-time & Delegation. Each maps to roadmap phases.
 
 ### Documentation & Performance
 
-- [ ] **DOCS-01**: README.md with usage guide for interacting with running chromatindb nodes
-- [ ] **PERF-01**: Performance test suite with benchmark numbers
+- [x] **DOCS-01**: README.md with usage guide for interacting with running chromatindb nodes
+- [x] **PERF-01**: Performance test suite with benchmark numbers
 
 ## Future Requirements
 
@@ -75,14 +75,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DELEG-02 | Phase 13 | Complete |
 | DELEG-03 | Phase 13 | Complete |
 | DELEG-04 | Phase 13 | Complete |
-| SUB-01 | Phase 14 | Pending |
-| SUB-02 | Phase 14 | Pending |
-| SUB-03 | Phase 14 | Pending |
-| SUB-04 | Phase 14 | Pending |
-| SUB-05 | Phase 14 | Pending |
+| SUB-01 | Phase 14 | Complete |
+| SUB-02 | Phase 14 | Complete |
+| SUB-03 | Phase 14 | Complete |
+| SUB-04 | Phase 14 | Complete |
+| SUB-05 | Phase 14 | Complete |
 | BUILD-01 | Phase 12 | Complete |
-| DOCS-01 | Phase 15 | Pending |
-| PERF-01 | Phase 15 | Pending |
+| DOCS-01 | Phase 15 | Complete |
+| PERF-01 | Phase 15 | Complete |
 
 **Coverage:**
 - v3.0 requirements: 16 total
