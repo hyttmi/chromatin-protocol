@@ -87,11 +87,11 @@ Plans:
   2. A connected peer can unsubscribe from namespaces and stops receiving notifications for them
   3. Subscriptions are connection-scoped -- a peer that disconnects and reconnects has no active subscriptions until it re-subscribes
   4. When a blob is deleted (tombstoned) in a subscribed namespace, subscribers receive a notification for the tombstone event
-**Plans**: TBD
+**Plans**: 2/2
 
 Plans:
-- [ ] 14-01: TBD
-- [ ] 14-02: TBD
+- [ ] 14-01: Wire format + subscription state management (SUB-01, SUB-03, SUB-04)
+- [ ] 14-02: Notification dispatch + E2E tests (SUB-02, SUB-05)
 
 ### Phase 15: Polish & Benchmarks
 **Goal**: Documentation and performance validation for the complete v3.0 feature set
