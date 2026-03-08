@@ -101,11 +101,11 @@ Plans:
   1. README.md documents how to build, configure, and interact with chromatindb nodes (write, read, sync, subscribe, delegate, delete)
   2. Performance test suite produces concrete numbers for key operations (ingest, sync, notification latency)
   3. Benchmark results are reproducible and documented
-**Plans**: TBD
+**Plans**: 2
 
 Plans:
-- [ ] 15-01: TBD
-- [ ] 15-02: TBD
+- [ ] 15-01: README documentation (DOCS-01)
+- [ ] 15-02: Benchmark binary and performance results (PERF-01)
 
 ## Progress
 
@@ -128,4 +128,4 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
+| 15. Polish & Benchmarks | v3.0 | 0/2 | Not started | - |
