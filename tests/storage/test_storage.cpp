@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <filesystem>
 #include <random>
 
@@ -789,4 +790,189 @@ TEST_CASE("Storage has_tombstone_for returns false for wrong target", "[storage]
     REQUIRE_FALSE(store.has_tombstone_for(
         std::span<const uint8_t, 32>(tombstone.namespace_id),
         std::span<const uint8_t, 32>(other_target)));
+}
+
+// ============================================================================
+// Phase 13: Delegation index
+// ============================================================================
+
+namespace {
+
+/// Create a delegation BlobData: owner delegates to delegate's pubkey.
+chromatindb::wire::BlobData make_delegation_blob(
+    const chromatindb::identity::NodeIdentity& owner,
+    const chromatindb::identity::NodeIdentity& delegate,
+    uint64_t timestamp = 3000)
+{
+    chromatindb::wire::BlobData blob;
+    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
+    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
+    blob.ttl = 0;  // Permanent
+    blob.timestamp = timestamp;
+    blob.signature.resize(4627, 0x42);  // Fake sig for storage-level tests
+    return blob;
+}
+
+} // anonymous namespace
+
+TEST_CASE("Delegation codec: is_delegation detects valid delegation data", "[storage][delegation]") {
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+    auto data = chromatindb::wire::make_delegation_data(delegate.public_key());
+    REQUIRE(chromatindb::wire::is_delegation(data));
+}
+
+TEST_CASE("Delegation codec: is_delegation rejects non-delegation data", "[storage][delegation]") {
+    SECTION("empty data") {
+        std::vector<uint8_t> data;
+        REQUIRE_FALSE(chromatindb::wire::is_delegation(data));
+    }
+    SECTION("regular blob data") {
+        std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+        REQUIRE_FALSE(chromatindb::wire::is_delegation(data));
+    }
+    SECTION("tombstone data") {
+        std::array<uint8_t, 32> target{};
+        target.fill(0xAB);
+        auto data = chromatindb::wire::make_tombstone_data(target);
+        REQUIRE_FALSE(chromatindb::wire::is_delegation(data));
+    }
+    SECTION("wrong size with right prefix") {
+        std::vector<uint8_t> data(100);
+        std::memcpy(data.data(), chromatindb::wire::DELEGATION_MAGIC.data(), 4);
+        REQUIRE_FALSE(chromatindb::wire::is_delegation(data));
+    }
+}
+
+TEST_CASE("Delegation codec: extract_delegate_pubkey round-trips", "[storage][delegation]") {
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+    auto data = chromatindb::wire::make_delegation_data(delegate.public_key());
+
+    auto extracted = chromatindb::wire::extract_delegate_pubkey(data);
+    auto expected = delegate.public_key();
+    REQUIRE(extracted.size() == expected.size());
+    REQUIRE(std::equal(extracted.begin(), extracted.end(), expected.begin()));
+}
+
+TEST_CASE("Delegation index: has_valid_delegation returns true after storing delegation blob", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg_blob = make_delegation_blob(owner, delegate);
+    auto result = store.store_blob(deleg_blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(),
+        delegate.public_key()));
+}
+
+TEST_CASE("Delegation index: has_valid_delegation returns false for non-existent delegation", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    REQUIRE_FALSE(store.has_valid_delegation(
+        owner.namespace_id(),
+        delegate.public_key()));
+}
+
+TEST_CASE("Delegation index: has_valid_delegation returns false for wrong namespace", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+    auto other_owner = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg_blob = make_delegation_blob(owner, delegate);
+    store.store_blob(deleg_blob);
+
+    REQUIRE_FALSE(store.has_valid_delegation(
+        other_owner.namespace_id(),
+        delegate.public_key()));
+}
+
+TEST_CASE("Delegation index: has_valid_delegation returns false for wrong delegate pubkey", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+    auto other_delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg_blob = make_delegation_blob(owner, delegate);
+    store.store_blob(deleg_blob);
+
+    REQUIRE_FALSE(store.has_valid_delegation(
+        owner.namespace_id(),
+        other_delegate.public_key()));
+}
+
+TEST_CASE("Delegation index: delete_blob_data removes delegation index entry", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg_blob = make_delegation_blob(owner, delegate);
+    auto result = store.store_blob(deleg_blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    // Verify delegation exists
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(),
+        delegate.public_key()));
+
+    // Delete the delegation blob
+    bool deleted = store.delete_blob_data(
+        owner.namespace_id(),
+        std::span<const uint8_t, 32>(result.blob_hash));
+    REQUIRE(deleted);
+
+    // Delegation index should be cleaned
+    REQUIRE_FALSE(store.has_valid_delegation(
+        owner.namespace_id(),
+        delegate.public_key()));
+}
+
+TEST_CASE("Delegation index: multiple delegations in same namespace", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg1 = make_delegation_blob(owner, delegate1, 3000);
+    auto deleg2 = make_delegation_blob(owner, delegate2, 3001);
+
+    auto r1 = store.store_blob(deleg1);
+    auto r2 = store.store_blob(deleg2);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+    REQUIRE(r2.status == StoreResult::Status::Stored);
+
+    // Both delegations should be valid
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(), delegate1.public_key()));
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(), delegate2.public_key()));
+
+    // Delete only the first delegation
+    bool deleted = store.delete_blob_data(
+        owner.namespace_id(),
+        std::span<const uint8_t, 32>(r1.blob_hash));
+    REQUIRE(deleted);
+
+    // First should be gone, second still valid
+    REQUIRE_FALSE(store.has_valid_delegation(
+        owner.namespace_id(), delegate1.public_key()));
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(), delegate2.public_key()));
 }

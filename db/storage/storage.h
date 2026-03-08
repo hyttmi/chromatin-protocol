@@ -117,6 +117,13 @@ public:
         std::span<const uint8_t, 32> ns,
         std::span<const uint8_t, 32> target_blob_hash);
 
+    /// Check if a valid delegation exists for a given namespace+delegate_pubkey pair.
+    /// Performs O(1) indexed lookup in the delegation_map sub-database.
+    /// @return true if a delegation blob exists for this delegate in this namespace.
+    bool has_valid_delegation(
+        std::span<const uint8_t, 32> namespace_id,
+        std::span<const uint8_t> delegate_pubkey);
+
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.
     /// Sequence index entries are NOT deleted (gaps are expected).

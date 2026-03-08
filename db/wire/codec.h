@@ -57,4 +57,27 @@ std::array<uint8_t, 32> extract_tombstone_target(std::span<const uint8_t> data);
 /// Create 36-byte tombstone data: magic prefix + target hash.
 std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_hash);
 
+// =============================================================================
+// Delegation utilities
+// =============================================================================
+
+/// 4-byte magic prefix identifying delegation data.
+inline constexpr std::array<uint8_t, 4> DELEGATION_MAGIC = {0xDE, 0x1E, 0x6A, 0x7E};
+
+/// ML-DSA-87 delegate public key size in bytes.
+inline constexpr size_t DELEGATION_PUBKEY_SIZE = 2592;
+
+/// Delegation data size: 4-byte magic + 2592-byte delegate pubkey.
+inline constexpr size_t DELEGATION_DATA_SIZE = 4 + DELEGATION_PUBKEY_SIZE;
+
+/// Check if blob data is a delegation (magic prefix + delegate pubkey).
+bool is_delegation(std::span<const uint8_t> data);
+
+/// Extract the delegate public key from delegation data.
+/// @pre is_delegation(data) must be true.
+std::vector<uint8_t> extract_delegate_pubkey(std::span<const uint8_t> data);
+
+/// Create delegation data: magic prefix + delegate public key.
+std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubkey);
+
 } // namespace chromatindb::wire

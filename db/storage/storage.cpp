@@ -78,6 +78,7 @@ struct Storage::Impl {
     mdbx::map_handle blobs_map{0};
     mdbx::map_handle seq_map{0};
     mdbx::map_handle expiry_map{0};
+    mdbx::map_handle delegation_map{0};
     Clock clock;
 
     Impl(const std::string& data_dir, Clock clk) : clock(std::move(clk)) {
@@ -94,23 +95,24 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 4;  // 3 needed + 1 spare
+        operate_params.max_maps = 5;  // 4 needed + 1 spare
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
 
         env = mdbx::env_managed(data_dir, create_params, operate_params);
 
-        // Create all 3 sub-databases in a single write transaction
+        // Create all 4 sub-databases in a single write transaction
         {
             auto txn = env.start_write();
             blobs_map = txn.create_map("blobs");
             seq_map = txn.create_map("sequence");
             expiry_map = txn.create_map("expiry");
+            delegation_map = txn.create_map("delegation");
             txn.commit();
         }
 
-        spdlog::info("Storage opened at {} with 3 sub-databases", data_dir);
+        spdlog::info("Storage opened at {} with 4 sub-databases", data_dir);
     }
 
     uint64_t next_seq_num(mdbx::txn_managed& txn, const uint8_t* ns) {
@@ -240,6 +242,17 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
             txn.upsert(impl_->expiry_map, to_slice(exp_key),
                         mdbx::slice(blob.namespace_id.data(),
                                     blob.namespace_id.size()));
+        }
+
+        // Populate delegation index if this is a delegation blob
+        if (wire::is_delegation(blob.data)) {
+            auto delegate_pubkey = wire::extract_delegate_pubkey(blob.data);
+            auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
+            // Key: [namespace:32][delegate_pk_hash:32]
+            auto deleg_key = make_blob_key(blob.namespace_id.data(), delegate_pk_hash.data());
+            // Value: [delegation_blob_hash:32]
+            txn.upsert(impl_->delegation_map, to_slice(deleg_key),
+                        mdbx::slice(hash.data(), hash.size()));
         }
 
         txn.commit();
@@ -535,6 +548,18 @@ bool Storage::delete_blob_data(
             }
         }
 
+        // Clean delegation index if this was a delegation blob
+        if (wire::is_delegation(blob.data)) {
+            auto delegate_pubkey = wire::extract_delegate_pubkey(blob.data);
+            auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
+            auto deleg_key = make_blob_key(ns.data(), delegate_pk_hash.data());
+            try {
+                txn.erase(impl_->delegation_map, to_slice(deleg_key));
+            } catch (const mdbx::exception&) {
+                // Already deleted -- not an error
+            }
+        }
+
         txn.commit();
         spdlog::debug("Deleted blob from storage (ns {:02x}{:02x}...)",
                        ns[0], ns[1]);
@@ -542,6 +567,23 @@ bool Storage::delete_blob_data(
 
     } catch (const std::exception& e) {
         spdlog::error("Storage error in delete_blob_data: {}", e.what());
+        return false;
+    }
+}
+
+bool Storage::has_valid_delegation(
+    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t> delegate_pubkey) {
+    try {
+        auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
+        auto deleg_key = make_blob_key(namespace_id.data(), delegate_pk_hash.data());
+        auto txn = impl_->env.start_read();
+
+        auto val = txn.get(impl_->delegation_map, to_slice(deleg_key), not_found_sentinel);
+        return val.data() != nullptr;
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in has_valid_delegation: {}", e.what());
         return false;
     }
 }

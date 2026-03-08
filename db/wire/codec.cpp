@@ -119,4 +119,26 @@ std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_has
     return result;
 }
 
+// =============================================================================
+// Delegation utilities
+// =============================================================================
+
+bool is_delegation(std::span<const uint8_t> data) {
+    if (data.size() != DELEGATION_DATA_SIZE) return false;
+    return std::memcmp(data.data(), DELEGATION_MAGIC.data(), DELEGATION_MAGIC.size()) == 0;
+}
+
+std::vector<uint8_t> extract_delegate_pubkey(std::span<const uint8_t> data) {
+    return {data.begin() + DELEGATION_MAGIC.size(),
+            data.begin() + DELEGATION_MAGIC.size() + DELEGATION_PUBKEY_SIZE};
+}
+
+std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubkey) {
+    std::vector<uint8_t> result;
+    result.reserve(DELEGATION_DATA_SIZE);
+    result.insert(result.end(), DELEGATION_MAGIC.begin(), DELEGATION_MAGIC.end());
+    result.insert(result.end(), delegate_pubkey.begin(), delegate_pubkey.end());
+    return result;
+}
+
 } // namespace chromatindb::wire
