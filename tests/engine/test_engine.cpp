@@ -3,6 +3,7 @@
 #include <random>
 
 #include "db/engine/engine.h"
+#include "db/crypto/hash.h"
 #include "db/identity/identity.h"
 #include "db/net/framing.h"
 #include "db/storage/storage.h"
@@ -73,6 +74,26 @@ chromatindb::wire::BlobData make_signed_tombstone(
     tombstone.signature = id.sign(signing_input);
 
     return tombstone;
+}
+
+/// Build a properly signed delegation BlobData: owner delegates to delegate.
+chromatindb::wire::BlobData make_signed_delegation(
+    const chromatindb::identity::NodeIdentity& owner,
+    const chromatindb::identity::NodeIdentity& delegate,
+    uint64_t timestamp = 3000)
+{
+    chromatindb::wire::BlobData blob;
+    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
+    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
+    blob.ttl = 0;  // Permanent
+    blob.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    blob.signature = owner.sign(signing_input);
+
+    return blob;
 }
 
 } // anonymous namespace
@@ -844,4 +865,114 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
     auto found = engine.get_blob(id.namespace_id(), tombstone_hash);
     REQUIRE(found.has_value());
     REQUIRE(chromatindb::wire::is_tombstone(found->data));
+}
+
+// ============================================================================
+// Phase 13: Delegation blob creation via ingest
+// ============================================================================
+
+TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto result = engine.ingest(deleg);
+    REQUIRE(result.accepted);
+    REQUIRE(result.ack.has_value());
+    REQUIRE(result.ack->status == IngestStatus::stored);
+}
+
+TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto result = engine.ingest(deleg);
+    REQUIRE(result.accepted);
+
+    REQUIRE(store.has_valid_delegation(
+        owner.namespace_id(),
+        delegate.public_key()));
+}
+
+TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto first = engine.ingest(deleg);
+    auto second = engine.ingest(deleg);
+
+    REQUIRE(first.accepted);
+    REQUIRE(second.accepted);
+    REQUIRE(second.ack->status == IngestStatus::duplicate);
+}
+
+TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto attacker = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Attacker tries to create a delegation in owner's namespace
+    auto deleg = make_signed_delegation(attacker, delegate);
+    std::memcpy(deleg.namespace_id.data(), owner.namespace_id().data(), 32);
+
+    auto result = engine.ingest(deleg);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+}
+
+TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg = make_signed_delegation(owner, delegate);
+    deleg.signature[0] ^= 0xFF;
+
+    auto result = engine.ingest(deleg);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::invalid_signature);
+}
+
+TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto result = engine.ingest(deleg);
+    REQUIRE(result.accepted);
+
+    // Retrieve via get_blob -- proves it's a regular blob in storage
+    auto found = engine.get_blob(owner.namespace_id(), result.ack->blob_hash);
+    REQUIRE(found.has_value());
+    REQUIRE(chromatindb::wire::is_delegation(found->data));
+
+    // Verify the delegate pubkey in the retrieved blob
+    auto extracted_pk = chromatindb::wire::extract_delegate_pubkey(found->data);
+    auto expected_pk = delegate.public_key();
+    REQUIRE(std::equal(extracted_pk.begin(), extracted_pk.end(), expected_pk.begin()));
 }
