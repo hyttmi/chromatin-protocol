@@ -158,7 +158,59 @@ The node enters closed mode implicitly when `allowed_keys` is non-empty. Reload 
 
 ## Performance
 
-See benchmark instructions below. Build and run the benchmark binary for performance numbers on your hardware.
+Results measured on AMD Ryzen 9 / Linux 6.18. Your numbers will vary.
+
+### Crypto Operations
+
+| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
+|-----------|------------|------------|----------|---------|
+| SHA3-256 (64 B) | 1000 | 0.3 | 0.3 | 3,018,394 |
+| SHA3-256 (1 KiB) | 1000 | 2.5 | 2.5 | 400,595 |
+| SHA3-256 (64 KiB) | 100 | 15.5 | 155.3 | 6,441 |
+| SHA3-256 (1 MiB) | 100 | 230.4 | 2,304.2 | 434 |
+| ML-DSA-87 keygen | 10 | 0.7 | 66.6 | 15,008 |
+| ML-DSA-87 sign (64 B) | 100 | 12.5 | 124.6 | 8,024 |
+| ML-DSA-87 verify (64 B) | 100 | 6.2 | 62.0 | 16,139 |
+| ML-KEM-1024 keygen | 10 | 0.2 | 17.5 | 57,068 |
+| ML-KEM-1024 encaps | 100 | 1.8 | 17.8 | 56,199 |
+| ML-KEM-1024 decaps | 100 | 2.1 | 20.9 | 47,774 |
+| ChaCha20-Poly1305 encrypt (64 B) | 1000 | 0.5 | 0.5 | 2,153,492 |
+| ChaCha20-Poly1305 encrypt (1 KiB) | 1000 | 2.4 | 2.4 | 422,826 |
+| ChaCha20-Poly1305 encrypt (64 KiB) | 100 | 12.7 | 127.3 | 7,856 |
+| ChaCha20-Poly1305 encrypt (1 MiB) | 100 | 203.7 | 2,036.6 | 491 |
+| ChaCha20-Poly1305 decrypt (64 B) | 1000 | 0.5 | 0.5 | 1,967,172 |
+| ChaCha20-Poly1305 decrypt (1 KiB) | 1000 | 2.4 | 2.4 | 422,393 |
+| ChaCha20-Poly1305 decrypt (64 KiB) | 100 | 12.6 | 126.0 | 7,938 |
+| ChaCha20-Poly1305 decrypt (1 MiB) | 100 | 204.0 | 2,040.2 | 490 |
+
+### Data Path
+
+| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
+|-----------|------------|------------|----------|---------|
+| Blob ingest (1 KiB) | 100 | 24.9 | 249.4 | 4,010 |
+| Blob ingest (64 KiB) | 100 | 94.3 | 942.6 | 1,061 |
+| Blob retrieve (1 KiB) | 1000 | 0.3 | 0.3 | 2,905,659 |
+| Blob retrieve (64 KiB) | 1000 | 1.4 | 1.4 | 726,372 |
+| Blob encode (1 KiB) | 1000 | 0.2 | 0.2 | 4,384,849 |
+| Blob decode (1 KiB) | 1000 | 0.2 | 0.2 | 5,958,233 |
+| Sync throughput (100x1KiB) | 10 | 149.2 | 149.2 | 6,704 |
+
+### Network Operations
+
+| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
+|-----------|------------|------------|----------|---------|
+| PQ handshake (full) | 10 | 4.9 | 488.4 | 2,047 |
+| Notification dispatch | 100 | 12.5 | 125.1 | 7,996 |
+
+Post-quantum handshakes complete in under 500 us. Blob ingest (sign + validate + store) takes ~250 us for 1 KiB payloads. Sync transfers ~6,700 blobs/sec between two nodes (in-process, no TCP overhead). Notification callbacks fire within ~125 us of blob ingestion.
+
+### Running Benchmarks
+
+```bash
+cd build
+cmake .. && make -j$(nproc) chromatindb_bench
+./chromatindb_bench
+```
 
 ## License
 
