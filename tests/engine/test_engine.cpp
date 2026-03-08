@@ -96,6 +96,31 @@ chromatindb::wire::BlobData make_signed_delegation(
     return blob;
 }
 
+/// Build a properly signed blob written by a delegate to an owner's namespace.
+/// The delegate signs the canonical form with their own key.
+chromatindb::wire::BlobData make_delegate_blob(
+    const chromatindb::identity::NodeIdentity& owner,
+    const chromatindb::identity::NodeIdentity& delegate,
+    const std::string& payload,
+    uint32_t ttl = 604800,
+    uint64_t timestamp = 4000)
+{
+    chromatindb::wire::BlobData blob;
+    // Target the owner's namespace
+    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
+    // Signed by delegate's key
+    blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    blob.data.assign(payload.begin(), payload.end());
+    blob.ttl = ttl;
+    blob.timestamp = timestamp;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    blob.signature = delegate.sign(signing_input);
+
+    return blob;
+}
+
 } // anonymous namespace
 
 using chromatindb::engine::BlobEngine;
@@ -155,7 +180,8 @@ TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
     auto result = engine.ingest(blob);
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
-    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+    // With delegation bypass, non-owner without delegation gets no_delegation
+    REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
 TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
@@ -500,7 +526,8 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
 
     auto bad_result = engine.ingest(bad_blob);
     REQUIRE_FALSE(bad_result.accepted);
-    REQUIRE(bad_result.error.value() == IngestError::namespace_mismatch);
+    // With delegation bypass, non-owner without delegation gets no_delegation
+    REQUIRE(bad_result.error.value() == IngestError::no_delegation);
 }
 
 // ============================================================================
@@ -583,7 +610,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
     }
 }
 
-TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]") {
+TEST_CASE("BlobEngine validation order: namespace/delegation before signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     BlobEngine engine(store);
@@ -597,8 +624,8 @@ TEST_CASE("BlobEngine validation order: namespace before signature", "[engine]")
 
     auto result = engine.ingest(blob);
     REQUIRE_FALSE(result.accepted);
-    // Should be namespace_mismatch (checked before signature), not invalid_signature
-    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+    // Should be no_delegation (namespace/delegation checked before signature), not invalid_signature
+    REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
 // ============================================================================
@@ -935,7 +962,8 @@ TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]
 
     auto result = engine.ingest(deleg);
     REQUIRE_FALSE(result.accepted);
-    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+    // Attacker's pubkey doesn't own the namespace and has no delegation
+    REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
 TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]") {
@@ -975,4 +1003,279 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
     auto extracted_pk = chromatindb::wire::extract_delegate_pubkey(found->data);
     auto expected_pk = delegate.public_key();
     REQUIRE(std::equal(extracted_pk.begin(), extracted_pk.end(), expected_pk.begin()));
+}
+
+// ============================================================================
+// Phase 13: Delegate write acceptance (DELEG-02, DELEG-04)
+// ============================================================================
+
+TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner creates delegation
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(engine.ingest(deleg).accepted);
+
+    // Delegate writes to owner's namespace
+    auto blob = make_delegate_blob(owner, delegate, "delegate-write-1");
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+    REQUIRE(result.ack->status == IngestStatus::stored);
+}
+
+TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // No delegation -- delegate tries to write
+    auto blob = make_delegate_blob(owner, delegate, "no-delegation");
+    auto result = engine.ingest(blob);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::no_delegation);
+}
+
+TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner creates delegation and a blob
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(engine.ingest(deleg).accepted);
+
+    auto blob = make_signed_blob(owner, "owner-blob");
+    auto ingest_result = engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+
+    // Delegate tries to delete -- uses delete_blob with delegate's key
+    chromatindb::wire::BlobData del_req;
+    std::memcpy(del_req.namespace_id.data(), owner.namespace_id().data(), 32);
+    del_req.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    del_req.data = chromatindb::wire::make_tombstone_data(ingest_result.ack->blob_hash);
+    del_req.ttl = 0;
+    del_req.timestamp = 5000;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        del_req.namespace_id, del_req.data, del_req.ttl, del_req.timestamp);
+    del_req.signature = delegate.sign(signing_input);
+
+    auto result = engine.delete_blob(del_req);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+}
+
+TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+    auto other = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner delegates to delegate
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(engine.ingest(deleg).accepted);
+
+    // Delegate tries to create a delegation blob for 'other' in owner's namespace
+    chromatindb::wire::BlobData fake_deleg;
+    std::memcpy(fake_deleg.namespace_id.data(), owner.namespace_id().data(), 32);
+    fake_deleg.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    fake_deleg.data = chromatindb::wire::make_delegation_data(other.public_key());
+    fake_deleg.ttl = 0;
+    fake_deleg.timestamp = 5000;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        fake_deleg.namespace_id, fake_deleg.data, fake_deleg.ttl, fake_deleg.timestamp);
+    fake_deleg.signature = delegate.sign(signing_input);
+
+    auto result = engine.ingest(fake_deleg);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::no_delegation);
+}
+
+TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner delegates
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(engine.ingest(deleg).accepted);
+
+    // Delegate tries to ingest a tombstone blob in owner's namespace
+    std::array<uint8_t, 32> fake_target{};
+    fake_target.fill(0xAA);
+
+    chromatindb::wire::BlobData tomb;
+    std::memcpy(tomb.namespace_id.data(), owner.namespace_id().data(), 32);
+    tomb.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    tomb.data = chromatindb::wire::make_tombstone_data(fake_target);
+    tomb.ttl = 0;
+    tomb.timestamp = 5000;
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        tomb.namespace_id, tomb.data, tomb.ttl, tomb.timestamp);
+    tomb.signature = delegate.sign(signing_input);
+
+    auto result = engine.ingest(tomb);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::no_delegation);
+}
+
+TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner creates delegation
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto deleg_result = engine.ingest(deleg);
+    REQUIRE(deleg_result.accepted);
+
+    // Delegate can write
+    auto blob1 = make_delegate_blob(owner, delegate, "before-revocation", 604800, 4000);
+    REQUIRE(engine.ingest(blob1).accepted);
+
+    // Owner revokes by tombstoning the delegation blob
+    auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash, 5000);
+    auto del_result = engine.delete_blob(tombstone);
+    REQUIRE(del_result.accepted);
+
+    // Delegate writes should now be rejected
+    auto blob2 = make_delegate_blob(owner, delegate, "after-revocation", 604800, 6000);
+    auto result = engine.ingest(blob2);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.value() == IngestError::no_delegation);
+}
+
+TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // 1. Delegate
+    auto deleg1 = make_signed_delegation(owner, delegate, 3000);
+    auto deleg1_result = engine.ingest(deleg1);
+    REQUIRE(deleg1_result.accepted);
+
+    // 2. Delegate writes
+    auto blob1 = make_delegate_blob(owner, delegate, "round-1", 604800, 4000);
+    REQUIRE(engine.ingest(blob1).accepted);
+
+    // 3. Revoke
+    auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash, 5000);
+    REQUIRE(engine.delete_blob(tombstone).accepted);
+
+    // 4. Delegate blocked
+    auto blob2 = make_delegate_blob(owner, delegate, "blocked", 604800, 6000);
+    REQUIRE_FALSE(engine.ingest(blob2).accepted);
+
+    // 5. Re-delegate (new timestamp -> new blob hash -> not blocked by old tombstone)
+    auto deleg2 = make_signed_delegation(owner, delegate, 7000);
+    REQUIRE(engine.ingest(deleg2).accepted);
+
+    // 6. Delegate can write again
+    auto blob3 = make_delegate_blob(owner, delegate, "round-2", 604800, 8000);
+    REQUIRE(engine.ingest(blob3).accepted);
+}
+
+TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Delegate, write, revoke
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto deleg_result = engine.ingest(deleg);
+    REQUIRE(deleg_result.accepted);
+
+    auto blob = make_delegate_blob(owner, delegate, "persists-after-revoke");
+    auto blob_result = engine.ingest(blob);
+    REQUIRE(blob_result.accepted);
+
+    auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash, 5000);
+    REQUIRE(engine.delete_blob(tombstone).accepted);
+
+    // Delegate's blob should still be retrievable
+    auto found = engine.get_blob(owner.namespace_id(), blob_result.ack->blob_hash);
+    REQUIRE(found.has_value());
+    REQUIRE(found->data == blob.data);
+}
+
+TEST_CASE("Owner can still write after creating delegation", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Owner creates delegation
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(engine.ingest(deleg).accepted);
+
+    // Owner writes a regular blob -- should still work via ownership check
+    auto blob = make_signed_blob(owner, "owner-still-writes");
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("Multiple delegates: independent write and revocation", "[engine][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    BlobEngine engine(store);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    // Delegate both
+    auto deleg1 = make_signed_delegation(owner, delegate1, 3000);
+    auto deleg2 = make_signed_delegation(owner, delegate2, 3001);
+    auto deleg1_result = engine.ingest(deleg1);
+    auto deleg2_result = engine.ingest(deleg2);
+    REQUIRE(deleg1_result.accepted);
+    REQUIRE(deleg2_result.accepted);
+
+    // Both can write
+    auto blob1 = make_delegate_blob(owner, delegate1, "d1-writes", 604800, 4000);
+    auto blob2 = make_delegate_blob(owner, delegate2, "d2-writes", 604800, 4001);
+    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(engine.ingest(blob2).accepted);
+
+    // Revoke delegate1 only
+    auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash, 5000);
+    REQUIRE(engine.delete_blob(tombstone).accepted);
+
+    // delegate1 blocked, delegate2 still works
+    auto blob3 = make_delegate_blob(owner, delegate1, "d1-blocked", 604800, 6000);
+    REQUIRE_FALSE(engine.ingest(blob3).accepted);
+
+    auto blob4 = make_delegate_blob(owner, delegate2, "d2-still-works", 604800, 6001);
+    REQUIRE(engine.ingest(blob4).accepted);
 }

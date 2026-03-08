@@ -19,7 +19,8 @@ enum class IngestError {
     malformed_blob,       ///< Structural issue (wrong pubkey size, empty sig).
     oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
     storage_error,        ///< Storage layer failed to write.
-    tombstoned            ///< Blob rejected because a tombstone exists for it.
+    tombstoned,           ///< Blob rejected because a tombstone exists for it.
+    no_delegation         ///< Delegate write rejected: no valid delegation exists.
 };
 
 /// Status of a successful ingest.

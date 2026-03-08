@@ -62,13 +62,34 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
             "empty signature");
     }
 
-    // Step 2: Namespace ownership check
+    // Step 2: Namespace ownership OR delegation check
     auto derived_ns = crypto::sha3_256(blob.pubkey);
-    if (derived_ns != blob.namespace_id) {
-        spdlog::warn("Ingest rejected: namespace mismatch (claimed {:02x}{:02x}...)",
-                     blob.namespace_id[0], blob.namespace_id[1]);
-        return IngestResult::rejection(IngestError::namespace_mismatch,
-            "SHA3-256(pubkey) != namespace_id");
+    bool is_owner = (derived_ns == blob.namespace_id);
+    bool is_delegate = false;
+
+    if (!is_owner) {
+        // Not the owner -- check if this pubkey has a valid delegation
+        is_delegate = storage_.has_valid_delegation(blob.namespace_id, blob.pubkey);
+        if (!is_delegate) {
+            spdlog::warn("Ingest rejected: no ownership or delegation for namespace {:02x}{:02x}...",
+                         blob.namespace_id[0], blob.namespace_id[1]);
+            return IngestResult::rejection(IngestError::no_delegation,
+                "pubkey has no ownership or valid delegation for this namespace");
+        }
+
+        // Delegates cannot create delegation blobs (only owners can)
+        if (wire::is_delegation(blob.data)) {
+            spdlog::warn("Ingest rejected: delegates cannot create delegation blobs");
+            return IngestResult::rejection(IngestError::no_delegation,
+                "delegates cannot create delegation blobs");
+        }
+
+        // Delegates cannot create tombstone blobs (deletion is owner-privileged)
+        if (wire::is_tombstone(blob.data)) {
+            spdlog::warn("Ingest rejected: delegates cannot create tombstone blobs");
+            return IngestResult::rejection(IngestError::no_delegation,
+                "delegates cannot create tombstone blobs");
+        }
     }
 
     // Step 3: Signature verification (most expensive)
