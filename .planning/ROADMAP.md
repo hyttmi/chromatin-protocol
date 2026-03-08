@@ -126,6 +126,6 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 10. Access Control | v2.0 | 3/3 | Complete | 2026-03-06 |
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
-| 13. Namespace Delegation | v3.0 | 0/2 | Planned | - |
+| 13. Namespace Delegation | 1/2 | In Progress|  | - |
 | 14. Pub/Sub Notifications | v3.0 | 0/? | Not started | - |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |
