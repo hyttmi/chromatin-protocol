@@ -90,7 +90,7 @@ Plans:
 **Plans**: 2/2
 
 Plans:
-- [ ] 14-01: Wire format + subscription state management (SUB-01, SUB-03, SUB-04)
+- [x] 14-01: Wire format + subscription state management (SUB-01, SUB-03, SUB-04) -- completed 2026-03-08
 - [ ] 14-02: Notification dispatch + E2E tests (SUB-02, SUB-05)
 
 ### Phase 15: Polish & Benchmarks
@@ -127,5 +127,5 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15
 | 11. Larger Blob Support | v2.0 | 3/3 | Complete | 2026-03-07 |
 | 12. Blob Deletion | v3.0 | 2/2 | Complete | 2026-03-07 |
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 14. Pub/Sub Notifications | v3.0 | 0/? | Not started | - |
+| 14. Pub/Sub Notifications | 1/2 | In Progress|  | - |
 | 15. Polish & Benchmarks | v3.0 | 0/? | Not started | - |

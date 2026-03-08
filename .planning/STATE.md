@@ -18,14 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 13 - Namespace Delegation (complete)
+**Current focus:** Phase 14 - Pub/Sub Notifications (in progress)
 
 ## Current Position
 
-Phase: 13 of 15 (Namespace Delegation) -- second phase of v3.0
-Plan: 2 of 2 in current phase
-Status: Phase 13 verified and complete. Ready for Phase 14.
-Last activity: 2026-03-08 -- Phase 13 verified (namespace delegation)
+Phase: 14 of 15 (Pub/Sub Notifications) -- third phase of v3.0
+Plan: 1 of 2 complete in current phase
+Status: Plan 14-01 complete (wire types + subscription state). Plan 14-02 next.
+Last activity: 2026-03-08 -- Plan 14-01 complete (pub/sub wire types)
 
 Progress: [#####░░░░░] 50%
 
@@ -42,7 +42,7 @@ Progress: [#####░░░░░] 50%
 |-------|-------|-------|----------|
 | 12. Blob Deletion | 2/2 | ~55 min | ~28 min |
 | 13. Namespace Delegation | 2/2 | ~27 min | ~14 min |
-| 14. Pub/Sub Notifications | 0/? | - | - |
+| 14. Pub/Sub Notifications | 1/2 | ~8 min | ~8 min |
 | 15. Polish & Benchmarks | 0/? | - | - |
 
 **Recent Trend:**
