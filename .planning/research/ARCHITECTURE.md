@@ -1,566 +1,600 @@
-# Architecture Research: v2.0 Integration
+# Architecture Patterns: v0.4.0 Production Readiness
 
-**Domain:** Access control and larger blob support for existing chromatindb node
-**Researched:** 2026-03-05
-**Confidence:** HIGH (modifications to existing, well-understood codebase; no new external dependencies)
+**Domain:** Production hardening of an existing chromatindb daemon
+**Researched:** 2026-03-08
+**Confidence:** HIGH — All findings based on direct codebase inspection of 14,152 LOC across all headers
+and key implementation files.
 
-## Scope
+---
 
-This document analyzes how two v2.0 features integrate with the existing v1.0 architecture:
+## Integration Overview
 
-1. **Access control** (allowed_keys config, closed node model)
-2. **Larger blob support** (bump from 15 MiB to ~100 MiB)
+This milestone adds 8 features to an already-complete system. None require architectural changes to
+the three-layer model (chromatindb / Relay / Client). All integrate within the existing component
+boundary. `peer_manager.cpp` is the central integration point for most features; `storage.cpp` and
+`engine.h` handle storage-side concerns.
 
-Plus the prerequisite **source restructure** (move to /db, namespace rename).
+The key constraint: no new subsystem-level abstractions are needed. All features slot into existing
+component slots or extend them with new methods/fields.
 
-This is NOT a greenfield architecture. Every component already exists and works. The question is: where do new features attach, what existing code changes, and what is the correct build order.
+---
 
-## Current Architecture (v1.0 Baseline)
-
-```
-Inbound TCP ──► Server.accept_loop()
-                    │
-                    ▼
-              Connection.run()
-                    │
-            ┌───────┴────────┐
-            │  do_handshake() │   ML-KEM key exchange + ML-DSA mutual auth
-            │  (4-step)       │   peer_pubkey_ set on success
-            └───────┬────────┘
-                    │ on_ready callback
-                    ▼
-            PeerManager.on_peer_connected()
-                    │
-                    ▼
-              message_loop() ──► on_peer_message()
-                                      │
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                    SyncRequest    Data        PeerListRequest
-                         │            │            │
-                         ▼            ▼            ▼
-                   SyncProtocol  BlobEngine   PEX exchange
-                                  .ingest()
-                                      │
-                              ┌───────┴────────┐
-                              │ 1. structural  │
-                              │ 2. namespace   │
-                              │ 3. signature   │
-                              │ 4. storage     │
-                              └────────────────┘
-```
-
-Key observation: **peer_pubkey_ is available immediately after handshake**, before `on_ready` fires and before `on_peer_connected` runs. This is the natural insertion point for access control.
-
-## Feature 1: Access Control (Closed Node Model)
-
-### Design Decision: Where Does the Pubkey Check Go?
-
-Three options analyzed:
-
-| Option | Location | When | Pros | Cons |
-|--------|----------|------|------|------|
-| A | Connection.run(), after handshake | Before on_ready fires | Earliest possible, no messages exchanged with unauthorized peers | Connection needs access to allowed_keys |
-| B | PeerManager.on_peer_connected() | After on_ready, before message routing | Clean separation, PeerManager already has config | Brief window where unauthorized peer is "connected" |
-| C | New AccessPolicy middleware | Between handshake and PeerManager | Extensible, testable in isolation | Over-engineered for a simple set lookup |
-
-**Recommendation: Option A -- check in Connection.run(), right after do_handshake() succeeds.**
-
-Rationale:
-- The handshake already proves peer identity (mutual ML-DSA-87 auth). The peer_pubkey_ is set.
-- Checking immediately means zero protocol messages are exchanged with unauthorized peers.
-- The connection simply closes with a log message. No new wire protocol needed.
-- The peer never reaches on_ready, never gets added to peers_, never triggers sync.
-- No middleware needed. A simple callback or config reference is sufficient.
-
-### Integration Design
+## Existing Component Map
 
 ```
-Connection.run():
-    hs_ok = co_await do_handshake();
-    if (!hs_ok) { close; return false; }
-
-    // NEW: Access control check
-    if (access_policy_ && !access_policy_(peer_pubkey_)) {
-        spdlog::warn("rejected peer: pubkey not in allowed_keys");
-        close();
-        if (close_cb_) close_cb_(self, false);
-        co_return false;
-    }
-
-    if (ready_cb_) ready_cb_(self);
-    co_await message_loop();
+main.cpp
+  |
+  +-- Storage          (db/storage/storage.{h,cpp})   — libmdbx, 4 sub-databases
+  |                     blobs_map, seq_map, expiry_map, delegation_map
+  |
+  +-- BlobEngine       (db/engine/engine.{h,cpp})     — ingest pipeline, fail-fast validation
+  |
+  +-- AccessControl    (db/acl/access_control.{h,cpp})— open/closed mode, allowed_keys
+  |
+  +-- PeerManager      (db/peer/peer_manager.{h,cpp}) — central orchestrator
+       |
+       +-- Server      (db/net/server.{h,cpp})          — TCP accept/connect, SIGINT/SIGTERM
+       |    +-- Connection (db/net/connection.{h,cpp})  — handshake, AEAD IO, heartbeat
+       |
+       +-- SyncProtocol (db/sync/sync_protocol.{h,cpp}) — hash-list diff, blob transfer
+       |
+       +-- [sighup_loop, pex_timer_loop, sync_timer_loop] — coroutines in peer_manager.cpp
 ```
 
-### New/Modified Components
+**Write data flow:** Connection -> PeerManager message router -> BlobEngine.ingest -> Storage.store_blob
 
-| Component | Status | Changes |
-|-----------|--------|---------|
-| `config::Config` | MODIFY | Add `std::vector<std::string> allowed_keys` (hex-encoded pubkeys), add `bool closed_node = false` |
-| `config::load_config` | MODIFY | Parse `allowed_keys` array and `closed_node` bool from JSON |
-| `net::Connection` | MODIFY | Add `AccessPolicy` callback type and setter, check after handshake in `run()` |
-| `net::Server` | MODIFY | Accept `AccessPolicy` from PeerManager, pass to each Connection on creation |
-| `peer::PeerManager` | MODIFY | Build AccessPolicy lambda from config, pass to Server |
-| `peer::AccessControl` | NEW (optional) | Encapsulates allowed_keys set, provides `is_allowed(pubkey) -> bool`. Could be a simple class or just inline in PeerManager. |
+**Key state:** `PeerInfo` (in peer_manager.h) is the per-connection state bag. `Storage::Impl` is the
+internal libmdbx handle struct (pimpl). Both are the primary modification targets in this milestone.
 
-### Config Format
+---
 
-```json
-{
-  "bind_address": "0.0.0.0:4200",
-  "data_dir": "./data",
-  "closed_node": true,
-  "allowed_keys": [
-    "aabbccdd...hex-encoded-ml-dsa-87-pubkey...",
-    "11223344...another-pubkey..."
-  ],
-  "bootstrap_peers": ["10.0.0.1:4200"]
-}
+## Feature-by-Feature Integration Analysis
+
+### 1. Tombstone Index (O(n) -> O(1) has_tombstone_for)
+
+**Current problem:** `Storage::has_tombstone_for` scans all blobs in a namespace linearly, decoding
+each blob to check if it is a tombstone for the target hash. Called on every ingest to prevent
+resurrection of deleted blobs. O(n) in namespace size.
+
+**Integration point:** `Storage::Impl` (pimpl struct in storage.cpp).
+
+**Solution:** Fifth sub-database `tombstone_map`, indexed by `[namespace:32][target_blob_hash:32]`.
+
+**Why this structure:** Matches the existing `delegation_map` pattern exactly — same composite key
+encoding, same population location (inside `store_blob`), same lookup replacement pattern. Delegations
+are indexed by `[namespace:32][delegate_pk_hash:32]`; tombstones follow the same form with target hash.
+
+**Modified components:**
+- `Storage::Impl` — open `tombstone_map` in constructor write transaction alongside delegation_map.
+  Increment `operate_params.max_maps` from 5 to 6.
+- `Storage::store_blob` — when `wire::is_tombstone(blob.data)`, extract target hash via
+  `wire::extract_tombstone_target(blob.data)` and upsert `[namespace:32][target_hash:32] -> [tombstone_blob_hash:32]`
+  into tombstone_map inside the existing write transaction (zero extra transactions).
+- `Storage::has_tombstone_for` — replace cursor scan with single btree lookup: build the 64-byte key,
+  call `txn.get(tombstone_map, key, sentinel)`, return `val.data() != nullptr`.
+
+**Zero protocol changes, zero API surface changes.** The `has_tombstone_for` signature is unchanged.
+
+**Build order:** First. All other features depend on correct tombstone behavior. Smallest, most isolated
+change in this milestone — one new sub-database, one additional upsert in store_blob, one lookup
+replacement. Zero coroutine changes, zero networking changes.
+
+---
+
+### 2. Global Storage Limits
+
+**Current state:** `Storage::Impl` configures libmdbx geometry with `size_upper = 64 GiB`. No
+application-level byte tracking. `StoreResult` has no capacity concept. `BlobEngine::ingest` has no
+storage-full rejection path.
+
+**Integration points:** `Storage` (new method) + `BlobEngine::ingest` (new Step 0 check) + `Config`
+(new field).
+
+**Measuring used storage:** Two approaches exist:
+
+Option A — Track bytes in an in-memory counter, initialized from libmdbx stats at startup.
+Option B — Query libmdbx `env.stat()` per-map for leaf/overflow page counts and multiply by page size.
+
+Recommendation: Option B. `env.stat()` is accurate after crashes and restarts because it reads actual
+on-disk state. libmdbx exposes `env.info().mi_geo.current` (current mapped file size) which is an
+upper bound, or per-map `stat.ms_leaf_pages + stat.ms_overflow_pages` multiplied by `stat.ms_psize`
+for a tighter estimate of actual stored bytes. A new `Storage::used_bytes()` method encapsulates this
+with a read transaction.
+
+**New `StorageStats` struct:**
+```cpp
+struct StorageStats {
+    uint64_t used_bytes = 0;
+    uint64_t max_bytes = 0;  // from config, 0 = unlimited
+    uint64_t blob_count = 0; // from seq_map entry count
+};
 ```
 
-### Access Control Semantics
+**Modified components:**
+- `Config` — add `uint64_t max_storage_bytes = 0` (0 = unlimited, backwards compatible).
+- `StoreResult::Status` — add `StorageFull` variant.
+- `IngestError` — add `storage_full` error code.
+- `BlobEngine` — take `uint64_t max_storage_bytes` in constructor or via setter. Add Step 0 capacity
+  check: `if (max_storage_bytes > 0 && storage.used_bytes() >= max_storage_bytes)` return rejection.
+  This check belongs in BlobEngine before namespace derivation, following the existing Step 0 pattern
+  (integer comparison before SHA3-256 computation).
+- `Storage` — add `StorageStats storage_stats()` and `uint64_t used_bytes()` methods.
 
-| Mode | `closed_node` | `allowed_keys` | Behavior |
-|------|---------------|----------------|----------|
-| Open (v1.0 default) | `false` | empty | Accept all authenticated peers |
-| Whitelist | `false` | non-empty | Accept listed + accept unlisted (warning log) |
-| Closed | `true` | non-empty | ONLY accept listed pubkeys, reject all others |
-| Invalid | `true` | empty | Startup error: closed_node requires allowed_keys |
+**Step 0 ordering (updated):** structural checks -> capacity check -> namespace derivation -> signature.
+Capacity check is a single libmdbx stat read (cheap) vs. SHA3-256 (expensive).
 
-This two-field design avoids a single "mode" enum and makes the config self-documenting. The `closed_node` flag is the hard gate; `allowed_keys` alone is advisory/logging.
+**Build order:** Second. Disk-full reporting (feature 3) depends on the `storage_full` error code.
 
-**Simplification option:** If YAGNI applies, skip the "whitelist" mode entirely. Just have `allowed_keys`: if non-empty, enforce it (reject unlisted). If empty, accept all. One field, one behavior. The `closed_node` bool becomes unnecessary.
+---
 
-**Recommendation: Single field.** `allowed_keys` non-empty = closed node. Empty = open. No mode enum, no `closed_node` bool. If you later need an advisory mode, add it then.
+### 3. Disk-Full Reporting to Peers
 
-### Data Flow: Access Check
+**Current state:** Ingest rejections return `IngestError` variants. The `Data` message handler in
+`PeerManager::on_peer_message` calls `engine_.ingest()` but there is no wire protocol path to inform
+the sender that the node is full. The connection continues silently.
 
+**Integration points:** `wire/transport.fbs` (new message type) + `PeerManager::on_peer_message`.
+
+**New wire message:** `StorageFull = 23` — sent in response to a `Data` message when local storage
+is at capacity. Payload: `[used_bytes:u64be][max_bytes:u64be]` (16 bytes, informational). This lets
+the sender know the rejection is permanent until space is freed, and allows logging useful diagnostics.
+
+**Modified components:**
+- `wire/transport.fbs` — add `StorageFull = 23` to the `TransportMsgType` enum. Regenerate the
+  FlatBuffers header. This is additive — old nodes receiving this message type log and skip it in
+  `on_peer_message` (unknown type handling already exists).
+- `PeerManager::on_peer_message` on `Data` type — when `engine_.ingest()` returns `storage_full`,
+  encode and send a `StorageFull` response before returning. Do NOT close the connection — the peer
+  may still be a valid sync partner for reads.
+- `PeerInfo` — add `bool peer_is_full = false`. Set when a `StorageFull` message is received from
+  that peer. `run_sync_with_peer` skips sending blobs to full peers (pointless round-trips).
+
+**Receiving side in PeerManager:**
+- Add `StorageFull` case to `on_peer_message` — set `peer->peer_is_full = true`, log warning.
+- Clear `peer_is_full` on next successful write ACK from that peer (not needed in v0.4.0 scope, but
+  the flag persists per-session, which is correct: if a peer is full, assume it stays full this session).
+
+**Build order:** Third, after storage limits (needs `storage_full` error code and `used_bytes()` method).
+
+---
+
+### 4. Persistent Peer List
+
+**Current state (already largely implemented):** `PeerManager` has `load_persisted_peers()`,
+`save_persisted_peers()`, `update_persisted_peer()`, `PersistedPeer` struct, `persisted_peers_` member,
+`MAX_PERSISTED_PEERS = 100`, `MAX_PERSIST_FAILURES = 3`, and `peers_file_path()`. The JSON file format
+is implemented. `load_persisted_peers()` is called in `PeerManager::start()` and bootstrap peers from
+the file are connected. This is substantially complete from v3.0.
+
+**Gap to close:** `save_persisted_peers()` must be called at shutdown and after successful connections.
+The shutdown wiring is the missing piece. Currently, `PeerManager::stop()` does not call it, and if
+the process receives SIGINT, the peer list never gets saved to disk.
+
+**Modified components:**
+- `PeerManager::stop()` — call `save_persisted_peers()` before initiating drain. This must happen
+  first because after drain starts, peers_ may be modified by disconnect callbacks.
+- `PeerManager::on_peer_disconnected()` — verify whether `update_persisted_peer` is already being
+  called here for non-bootstrap peers. If not, add it. This keeps the file current across the session.
+
+**Build order:** Fourth, or done in conjunction with graceful shutdown (they share `stop()`).
+
+---
+
+### 5. Graceful Shutdown
+
+**Current state:** `Server::stop()` sets `draining_ = true`, cancels the TCP acceptor, spawns a
+`drain(std::chrono::seconds(5))` coroutine that calls `close_gracefully()` on all connections. Signal
+handling: SIGINT/SIGTERM are caught by `Server::signals_` and call `server.stop()`. A second signal
+forces `std::_Exit(1)`. The `drain()` coroutine sends `Goodbye` to each peer and waits.
+
+**Gaps:**
+1. `PeerManager::stop()` is never called from the signal path or from `main.cpp`. In-flight sync
+   coroutines (`run_sync_with_peer`, `handle_sync_as_responder`) are running inside PeerManager and
+   will be aborted without setting `stopping_ = true`. They may access `peers_` as it drains, risking
+   use-after-free if a connection closes while a sync coroutine iterates it.
+2. `save_persisted_peers()` is not called before exit (see feature 4).
+3. The expiry scan coroutine in `main.cpp` is spawned as `asio::detached` and never cancelled. It will
+   attempt to fire every 60 seconds. After the Server stops and all connections close, `ioc.run()`
+   should still drain this timer — but it prevents immediate clean exit.
+
+**Integration point:** `main.cpp::cmd_run()` and `PeerManager::stop()`.
+
+**Required changes:**
+- `Server::stop()` should call a registered shutdown callback instead of (or in addition to) calling
+  drain directly. Simplest: `Server` fires `on_shutdown_started_` callback, PeerManager registers it
+  and calls `pm.stop()` first, then `server_.stop()`. Alternatively: make `PeerManager::stop()` call
+  `server_.stop()` as its last action (PeerManager already owns server_).
+- `PeerManager::stop()` sequence: (a) set `stopping_ = true`, (b) call `save_persisted_peers()`,
+  (c) cancel sync timer, PEX timer, SIGHUP signal set, (d) call `server_.stop()` (starts drain).
+- The expiry scan coroutine in `main.cpp` needs a cancellation path. Add a `asio::cancellation_signal`
+  or, simpler, check a shared `std::atomic<bool> running` flag in the coroutine before each sleep.
+  PeerManager exposes `is_stopping()` or main sets `running = false` before `pm.stop()`.
+
+**Simplest wiring change in main.cpp:**
+```cpp
+// Before pm.start():
+asio::cancellation_signal expiry_cancel;
+
+// Expiry scan coroutine uses cancellation_signal
+asio::co_spawn(ioc,
+    asio::bind_cancellation_slot(expiry_cancel.slot(), expiry_loop(storage, ioc)),
+    asio::detached);
+
+// At shutdown (called from pm.stop() or signal handler):
+expiry_cancel.emit(asio::cancellation_type::terminal);
 ```
-TCP connect
-    │
-    ▼
-Connection created (inbound or outbound)
-    │
-    ▼
-do_handshake() ──► ML-KEM + ML-DSA mutual auth
-    │                peer_pubkey_ now set
-    ▼
-access_policy_(peer_pubkey_)?
-    │
-    ├── YES ──► on_ready ──► PeerManager.on_peer_connected ──► normal flow
-    │
-    └── NO ──► log warning ──► close() ──► close_cb_ ──► removed from Server.connections_
-```
 
-### Impact on Existing Features
+The SIGHUP signal set in PeerManager should be cancelled in `stop()` — currently it is a
+`asio::signal_set sighup_signal_` member. Calling `sighup_signal_.cancel()` stops the `sighup_loop()`
+coroutine.
 
-| Feature | Impact | Notes |
-|---------|--------|-------|
-| Bootstrap reconnect | None | Reconnect loop in Server continues. If bootstrap peer is not in allowed_keys, connections will keep failing (expected). Operator must ensure bootstrap peers are in allowed_keys. |
-| PEX | Low | PEX discovers addresses, not pubkeys. A discovered peer connects, does handshake, gets rejected if not allowed. No protocol change needed. Closed nodes should probably not share peers via PEX (config-gated). |
-| Sync | None | Sync only runs with connected peers. Rejected peers never connect. |
-| Strike system | None | Strikes only apply to connected peers. |
-| Peer persistence | Low | Persisted peers may include non-allowed peers. On reconnect, they get rejected at handshake. Harmless but wasteful. Consider not persisting peers that were rejected. |
+**Build order:** Fifth, done with or after persistent peer list (both touch `stop()`). Can be a single
+phase covering both features 4 and 5.
 
-### PEX in Closed Mode
+---
 
-In closed mode, PEX is likely undesirable -- you do not want your closed node advertising its peer list to outsiders (they are all authorized peers). Two options:
+### 6. Metrics/Observability
 
-1. **Disable PEX entirely in closed mode.** Simplest. If all peers are in allowed_keys, you already know them.
-2. **Allow PEX but only share/accept allowed peers.** More complex, marginal benefit.
+**Current state:** Zero runtime metrics. Only spdlog event logging. No way to query operational state
+without grepping logs.
 
-**Recommendation: Disable PEX in closed mode.** In `PeerManager::start()`, skip `pex_timer_loop()` if allowed_keys is non-empty. Still respond to PeerListRequest from authorized peers (just return empty list or skip). This is a 2-line change.
+**Integration point:** New `Metrics` struct + counters at existing code paths in PeerManager +
+SIGUSR1 dump coroutine.
 
-## Feature 2: Larger Blob Support (~100 MiB)
-
-### Layer-by-Layer Impact Analysis
-
-#### Transport Layer: Framing
-
-**Current state:**
-- `MAX_FRAME_SIZE = 16 * 1024 * 1024` (16 MiB) in `framing.h`
-- Frame header: 4-byte big-endian uint32_t length prefix
-- Maximum representable: ~4 GiB (uint32_t max)
-- Encrypted frames: plaintext -> AEAD encrypt -> [4B length][ciphertext + 16B tag]
-
-**Change needed:**
-- Bump `MAX_FRAME_SIZE` to `128 * 1024 * 1024` (128 MiB) or `108 * 1024 * 1024` (108 MiB)
-- The 4-byte uint32_t header is sufficient (max ~4 GiB). No header format change needed.
-- AEAD (ChaCha20-Poly1305) has no practical message size limit (2^38 bytes per message with a given nonce).
-
-**Sizing rationale:**
-- 100 MiB blob data + ML-DSA-87 pubkey (2,592 B) + signature (4,627 B) + FlatBuffer overhead (~100 B) = ~100 MiB blob on wire
-- TransportMessage envelope adds FlatBuffer framing around the blob bytes = ~100 MiB payload
-- AEAD tag adds 16 bytes
-- Frame limit should be >= 100 MiB blob + protocol overhead. 128 MiB provides comfortable headroom.
-- During sync, BlobTransfer messages can contain MULTIPLE blobs. A batch of large blobs could exceed 128 MiB. **Solution: send one blob per BlobTransfer message for large blobs, or cap batch encoding at MAX_FRAME_SIZE.** See sync protocol section below.
-
-**Risk: Memory pressure.** A 100 MiB blob means:
-1. Receive 100+ MiB into memory (recv_raw allocates `std::vector<uint8_t>(len)`)
-2. AEAD decrypt produces another 100 MiB buffer
-3. FlatBuffer decode may produce another copy
-4. BlobEngine.ingest encodes to FlatBuffer (another copy)
-5. Storage writes to libmdbx
-
-Peak memory per connection per large blob: ~400-500 MiB. With 32 peers potentially syncing large blobs simultaneously, this is problematic.
-
-**Mitigation strategy (for v2.0 scope):**
-- Accept the memory cost for now. 100 MiB blobs are the exception, not the rule. Most blobs remain small.
-- Do NOT implement streaming/chunking in v2.0. That is a major protocol change.
-- Consider adding a `max_blob_size` config parameter so operators can tune it per-node.
-- The existing `MAX_FRAME_SIZE` check in `recv_raw()` already protects against unbounded allocation.
-
-#### Connection Layer
-
-**Current state:**
-- `recv_raw()` reads 4-byte header, validates against MAX_FRAME_SIZE, allocates vector, reads payload
-- `send_encrypted()` encrypts plaintext in one shot, calls `send_raw()` which writes header + ciphertext
-
-**Change needed:**
-- Update `MAX_FRAME_SIZE` constant -- that is the only change. Both `recv_raw()` and `send_raw()` already handle variable-size payloads correctly.
-- No streaming needed. `asio::async_read` with a buffer of the declared size works fine for 100 MiB.
-- TCP handles fragmentation transparently. Asio's `async_read` reads until the buffer is full.
-
-#### Wire Format: FlatBuffers
-
-**Current state:**
-- `Blob.data` field is `[ubyte]` (variable-length byte vector). No size limit in the schema.
-- `TransportMessage.payload` is `[ubyte]`. No size limit.
-
-**Change needed:**
-- None in the schema itself. FlatBuffers handles large byte vectors fine (uses 32-bit offset internally, max ~2 GiB per buffer).
-- `encode_blob()` and `decode_blob()` work with arbitrary sizes.
-
-#### BlobEngine: Ingest Pipeline
-
-**Current state:**
-- 4-stage pipeline: structural -> namespace -> signature -> storage
-- No size check anywhere in the pipeline
-
-**Change needed:**
-- Add a size limit check as **Step 0** (before structural checks, cheapest possible rejection):
+**Recommended approach:** A lightweight `Metrics` struct with `std::atomic<uint64_t>` counters,
+updated inline at existing integration points. No external library. No HTTP endpoint. Dump to spdlog
+on SIGUSR1.
 
 ```cpp
-// Step 0: Size limit
-constexpr uint32_t MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024;  // 100 MiB
-if (blob.data.size() > MAX_BLOB_DATA_SIZE) {
-    return IngestResult::rejection(IngestError::too_large, "blob data exceeds max size");
+// db/metrics/metrics.h  (or inline in peer_manager.h)
+struct Metrics {
+    std::atomic<uint64_t> blobs_ingested{0};
+    std::atomic<uint64_t> blobs_rejected_invalid{0};
+    std::atomic<uint64_t> blobs_rejected_storage_full{0};
+    std::atomic<uint64_t> blobs_rate_limited{0};
+    std::atomic<uint64_t> sync_rounds_initiated{0};
+    std::atomic<uint64_t> sync_rounds_completed{0};
+    std::atomic<uint64_t> blobs_sent_sync{0};
+    std::atomic<uint64_t> blobs_received_sync{0};
+    std::atomic<uint64_t> connections_accepted{0};
+    std::atomic<uint64_t> connections_rejected_acl{0};
+    std::atomic<uint64_t> peers_discovered_pex{0};
+};
+```
+
+**SIGUSR1 dump coroutine:** Follows the `sighup_loop()` pattern exactly — dedicated coroutine member
+function in PeerManager, `asio::signal_set sigusr1_signal_`, awaits signal in a loop, dumps metrics
+via `spdlog::info`. Avoids the stack-use-after-return issue documented in RETROSPECTIVE for SIGHUP.
+
+**Counter placement:**
+- `blobs_ingested` / `blobs_rejected_*` — in `PeerManager::on_peer_message` after `engine_.ingest()`
+- `sync_rounds_*` / `blobs_sent/received_sync` — in `run_sync_with_peer` using `SyncStats` return value
+- `connections_accepted` — in `on_peer_connected`
+- `connections_rejected_acl` — in `on_peer_connected` when ACL check fires (currently silent TCP close)
+- `peers_discovered_pex` — in `handle_peer_list_response`
+- `blobs_rate_limited` — in rate limit check (feature 7)
+
+**Storage stats exposure:** `metrics_dump()` also calls `storage.storage_stats()` and logs used/max bytes.
+
+**Build order:** Can be done any time after storage limits (for the storage stats integration). Good to
+build before rate limiting so drop counters are already wired.
+
+---
+
+### 7. Rate Limiting
+
+**Current state:** No write rate limiting. The strike system (`STRIKE_THRESHOLD = 10`) fires on
+malformed/invalid messages — abuse prevention for correctness violations, not volume. A single peer
+can send unlimited `Data` messages per second.
+
+**What to limit:** `Data` messages (direct writes) per peer per second. `BlobTransfer` (sync) is
+exempt — it is already bounded by one-blob-at-a-time and the sequential Phase A/B/C protocol.
+
+**Integration point:** `PeerInfo` struct (token bucket state) + `PeerManager::on_peer_message`
+handler for `Data` and `Delete` message types.
+
+**Algorithm:** Token bucket, per-peer, O(1) state.
+```cpp
+// Fields added to PeerInfo:
+uint32_t write_tokens = RATE_LIMIT_BURST;
+uint64_t last_token_refill_us = 0;   // microseconds for finer granularity
+
+// On each Data/Delete message:
+uint64_t now_us = current_time_us();
+uint64_t elapsed_us = now_us - peer->last_token_refill_us;
+uint32_t new_tokens = std::min<uint64_t>(RATE_LIMIT_BURST,
+    peer->write_tokens + (elapsed_us * RATE_LIMIT_PER_SEC) / 1'000'000);
+peer->write_tokens = new_tokens;
+peer->last_token_refill_us = now_us;
+
+if (peer->write_tokens == 0) {
+    metrics_.blobs_rate_limited++;
+    // Drop silently or record_strike? Drop silently — rate limiting is not an error.
+    co_return;  // or return from message handler
+}
+peer->write_tokens--;
+// proceed to engine_.ingest()
+```
+
+**Why token bucket:** O(1) state (two uint64_t fields per peer), no ring buffer, no sorted containers.
+Naturally handles burst traffic. Constant-time on every message. Proven pattern for network rate limiting.
+
+**Config fields:**
+- `Config::rate_limit_writes_per_sec = 10` (default: 10 writes/second per peer)
+- `Config::rate_limit_burst = 50` (default: burst of 50 before throttling)
+- Both 0 = disabled (backwards compatible default).
+
+**Modified components:**
+- `PeerInfo` — add `write_tokens` and `last_token_refill_us` fields.
+- `PeerManager::on_peer_message` — token bucket check before `engine_.ingest()` on `Data` and
+  `Delete` message types. Consult `config_.rate_limit_writes_per_sec == 0` to skip when disabled.
+- `Config` — add two rate limit fields.
+- Metrics — increment `blobs_rate_limited`.
+
+**Build order:** After metrics (so drops are counted). Depends on config fields from feature 6 cycle
+if done together, otherwise independent.
+
+---
+
+### 8. Namespace-Scoped Sync
+
+**Current state:** `PeerManager::run_sync_with_peer` calls `engine_.list_namespaces()` and syncs ALL
+namespaces with ALL peers. No per-peer filter exists.
+
+**What this adds:** A per-connection namespace filter — a node can declare which namespaces it wants
+to replicate with a specific peer. This is operationally distinct from pub/sub (real-time notifications)
+and from ACL (which controls who can connect). Namespace-scoped sync controls what gets replicated
+during the hash-list diff phase.
+
+**Integration point:** `PeerInfo` struct + `PeerManager::run_sync_with_peer` + `Config`.
+
+**Protocol options:**
+
+Option A — Negotiated filter (new wire messages `SyncFilterRequest = 24`, `SyncFilterResponse = 25`):
+Requires protocol changes, regenerating FlatBuffers, and a new sync handshake step.
+
+Option B — Local-only filter (no new wire messages):
+The initiator already controls which namespaces it requests hashes for in `run_sync_with_peer`.
+Adding a `std::set<std::array<uint8_t, 32>> sync_namespaces` field to `PeerInfo` and filtering the
+`list_namespaces()` result before entering the hash-exchange phase requires zero protocol changes.
+
+**Recommendation: Option B.** The existing sync protocol's Phase A already sends the local namespace
+list to the responder. The initiator then requests hash lists only for namespaces in the intersection.
+Adding a filter at the initiator side (`if (!peer->sync_namespaces.empty() && !peer->sync_namespaces.count(ns.namespace_id)) continue;`) is a 3-line change in `run_sync_with_peer`. The responder
+still receives hash requests only for filtered namespaces — naturally scoped.
+
+**Config design:**
+```json
+{
+  "sync_namespaces": ["aabbcc...hex32bytes...", "11223344...hex32bytes..."]
 }
 ```
+Global filter applied to all peers. Empty = sync all (current behavior, backwards compatible).
 
-- Add `IngestError::too_large` to the enum.
-- Make this configurable via Config if desired, or keep as constexpr (consistent with TTL being constexpr).
+**Modified components:**
+- `Config` — add `std::vector<std::string> sync_namespaces` (hex namespace IDs, validated like `allowed_keys`).
+- `PeerManager` — on start, convert `config_.sync_namespaces` to a `std::set<std::array<uint8_t,32>>`.
+- `PeerManager::run_sync_with_peer` — filter the namespace list from `engine_.list_namespaces()` against
+  the set before entering Phase B hash exchange. Zero protocol changes.
+- Per-peer scoping (if needed later): add `sync_namespaces` to `PeerInfo` and populate from a
+  per-peer config section. Out of scope for v0.4.0 — global filter is sufficient.
 
-**Recommendation: constexpr.** Consistent with the TTL decision. Protocol invariant, not user-configurable. If you allow different nodes to have different max blob sizes, sync breaks (node A stores a 100 MiB blob, syncs to node B which has a 50 MiB limit -- B rejects it).
+**Build order:** Independent, no deps on other v0.4.0 features. Last or concurrent with metrics/rate
+limiting.
 
-#### Storage: libmdbx
+---
 
-**Current state:**
-- `geometry.size_upper = 64 GiB` -- plenty of room
-- Values stored as `mdbx::slice(encoded.data(), encoded.size())` -- no size limit enforced by the API
-- libmdbx max value size: ~2 GiB (INT32_MAX). 100 MiB is well within limits.
-- Default page size: 4 KiB. Large values span multiple overflow pages automatically.
+## Component Modification Summary
 
-**Change needed:**
-- None. libmdbx handles 100 MiB values natively via overflow pages.
-- Performance consideration: writing a 100 MiB value creates ~25,000 overflow pages in a single transaction. This is fine for occasional large blobs but would be slow if the majority of writes are 100 MiB.
-- Read performance for large values is excellent (memory-mapped, sequential read).
+| Component | File | Change Type | Feature(s) |
+|-----------|------|-------------|------------|
+| `Storage::Impl` | storage.cpp | Add 5th sub-database (`tombstone_map`), max_maps 5->6 | Tombstone index |
+| `Storage::store_blob` | storage.cpp | Populate tombstone_map on tombstone writes | Tombstone index |
+| `Storage::has_tombstone_for` | storage.cpp | O(n) scan replaced with O(1) btree lookup | Tombstone index |
+| `Storage` | storage.h | New `storage_stats()` returning `StorageStats` struct | Storage limits |
+| `StorageStats` | storage.h | New struct: used_bytes, max_bytes, blob_count | Storage limits |
+| `StoreResult::Status` | storage.h | Add `StorageFull` variant | Storage limits |
+| `IngestError` | engine.h | Add `storage_full` error code | Storage limits |
+| `BlobEngine` | engine.h/.cpp | Step 0 capacity check before namespace derivation | Storage limits |
+| `wire/transport.fbs` | transport.fbs | Add `StorageFull = 23` to TransportMsgType enum | Disk-full reporting |
+| `transport_generated.h` | wire/ | Regenerate from updated transport.fbs | Disk-full reporting |
+| `PeerManager::on_peer_message` | peer_manager.cpp | Handle storage_full: send StorageFull response | Disk-full reporting |
+| `PeerInfo` | peer_manager.h | Add `bool peer_is_full = false` | Disk-full reporting |
+| `PeerManager::stop()` | peer_manager.cpp | Call save_persisted_peers() before drain | Persistent peer list |
+| `PeerManager::on_peer_disconnected` | peer_manager.cpp | Verify update_persisted_peer is called | Persistent peer list |
+| `PeerManager::stop()` | peer_manager.cpp | Cancel all timers, set stopping_, call server_.stop() | Graceful shutdown |
+| `main.cpp::cmd_run` | main.cpp | Wire expiry coroutine cancellation | Graceful shutdown |
+| `Metrics` struct | metrics/metrics.h | New: atomic counters for all key events | Metrics |
+| `PeerManager` | peer_manager.h | Add `Metrics metrics_` member + SIGUSR1 signal set | Metrics |
+| `PeerManager` | peer_manager.cpp | Increment counters at event sites, add sigusr1_loop() | Metrics |
+| `PeerInfo` | peer_manager.h | Add token bucket fields (write_tokens, last_refill_us) | Rate limiting |
+| `PeerManager::on_peer_message` | peer_manager.cpp | Token bucket check before Data/Delete ingest | Rate limiting |
+| `Config` | config.h | Add max_storage_bytes, rate limit fields, sync_namespaces | All config fields |
+| `PeerManager` | peer_manager.cpp | Parse sync_namespaces into set, filter in run_sync_with_peer | Namespace-scoped sync |
 
-**Potential issue: write transaction size.** The sync protocol ingests blobs one at a time (each `store_blob()` call opens its own write transaction). This is correct -- a 100 MiB write in its own transaction is fine. If we batched multiple large blobs in one transaction, we could hit issues with transaction size vs. free page list. Current design avoids this.
+---
 
-#### Sync Protocol
+## New Components Required
 
-**Current state:**
-- `encode_blob_transfer()`: batches ALL requested blobs into one payload
-  - Wire format: `[count:u32BE][len1:u32BE][blob1_flatbuf]...[lenN:u32BE][blobN_flatbuf]`
-- If peer requests 5 blobs of 100 MiB each, the transfer message is ~500 MiB
-- This would exceed MAX_FRAME_SIZE even at 128 MiB
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `tombstone_map` sub-database | `Storage::Impl` | O(1) tombstone lookup index |
+| `StorageStats` struct | storage.h | Return type for `storage_stats()` |
+| `Metrics` struct | `db/metrics/metrics.h` | Runtime atomic counters |
+| SIGUSR1 signal handler | peer_manager.cpp | Metrics dump coroutine (follows sighup_loop pattern) |
+| `StorageFull = 23` wire message | transport.fbs | Protocol-level rejection signal for storage capacity |
 
-**Change needed -- this is the most significant v2.0 integration concern:**
+A dedicated `db/metrics/metrics.h` is cleaner for testability. Alternatively, `Metrics` can be
+defined inline in `peer_manager.h` since PeerManager owns all integration points — either is
+acceptable given the simple struct design.
 
-Option A: **Cap batch size in BlobTransfer messages.** When encoding a BlobTransfer, stop adding blobs when cumulative size approaches MAX_FRAME_SIZE. Send multiple BlobTransfer messages for one BlobRequest. Receiver processes them incrementally.
+---
 
-Option B: **One BlobTransfer per BlobRequest.** Instead of batching, request one blob at a time for large blobs. Simpler but more round trips.
+## Data Flow Changes
 
-Option C: **Size-aware batching.** Small blobs batch as today. Large blobs (> some threshold like 10 MiB) get individual transfers.
-
-**Recommendation: Option A (capped batching).** Minimal protocol change -- both sides already handle multiple BlobTransfer messages in the sync loop. The change is in `PeerManager`'s sync orchestration: instead of sending all requested hashes in one BlobRequest, split into groups that fit within MAX_FRAME_SIZE.
-
-Concretely:
-1. When responding to a BlobRequest, fetch blobs by hash and accumulate into a BlobTransfer message.
-2. When the accumulated size exceeds a threshold (e.g., 80% of MAX_FRAME_SIZE = ~100 MiB), send the current batch and start a new one.
-3. The requesting side already loops on `recv_sync_msg` -- it naturally handles multiple BlobTransfer messages.
-4. The requesting side needs to track how many BlobTransfer messages to expect. **Solution: include a count or "more" flag in BlobTransfer, OR have the responder send a final empty BlobTransfer as sentinel, OR track by hash count.**
-
-Simplest approach: The responder sends N BlobTransfer messages (one per hash group), then nothing. The requester knows how many hashes it requested and counts received blobs until all are accounted for or timeout. This works because the existing protocol already tracks `pending_responses` per BlobRequest.
-
-**Wait -- re-reading the sync code more carefully:** The current protocol sends ONE BlobTransfer per BlobRequest. The `pending_responses` counter decrements per BlobTransfer received. If we split one BlobRequest's response into multiple BlobTransfer messages, `pending_responses` logic breaks.
-
-**Better approach:** Split the BlobRequest itself. Instead of one BlobRequest with 50 hashes (potentially 50 x 100 MiB), send multiple smaller BlobRequests. Each gets one BlobTransfer response. The `pending_responses` counter increments per BlobRequest sent.
-
-This requires changes to sync orchestration in PeerManager but NOT to the wire protocol or message types. The hash list already supports any number of hashes per BlobRequest message.
-
-**Updated recommendation:**
-
-In the BlobRequest encoding step (Phase C1 of sync):
-1. Instead of `encode_hash_list(ns, ALL missing hashes)`, batch hashes into groups where estimated total blob size fits in MAX_FRAME_SIZE.
-2. Without knowing blob sizes in advance, batch by count: e.g., max 10 hashes per BlobRequest, or estimate size from hash-list metadata.
-3. Simplest: just limit to 1 hash per BlobRequest for "potentially large" blobs. Since we do not know sizes, apply a reasonable batch limit universally (e.g., 50 hashes per request, which at 15 MiB old limit = 750 MiB, but at 100 MiB new limit could be 5 GiB).
-
-**Final recommendation: Add a MAX_HASHES_PER_REQUEST constant (e.g., 10). Split BlobRequest messages when the hash list exceeds this count. Each BlobRequest gets one BlobTransfer response. pending_responses counts correctly.** This is backward-compatible (the other side does not care how many BlobRequests you send) and bounds memory usage on the responder side.
-
-### Configuration Changes
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `allowed_keys` | `string[]` | `[]` | Hex-encoded ML-DSA-87 pubkeys. Non-empty = closed mode. |
-| `max_blob_size` | removed | N/A | Not configurable -- protocol invariant (constexpr 100 MiB) |
-
-## Source Restructure
-
-### Current Layout
-
+### Write Path (after v0.4.0)
 ```
-src/
-  crypto/      hash, signing, kem, aead, kdf
-  wire/        codec, blob_generated.h, transport_generated.h
-  config/      config
-  logging/     logging
-  identity/    identity
-  storage/     storage
-  engine/      engine
-  net/         connection, server, framing, handshake, protocol
-  sync/        sync_protocol
-  peer/        peer_manager
-  main.cpp
-tests/
-  crypto/      test_hash, test_signing, ...
-  wire/        test_codec
-  config/      test_config
-  ...
-schemas/
-  blob.fbs, transport.fbs
-CMakeLists.txt
+Data message -> on_peer_message
+  -> rate limit check (token bucket per peer)     [NEW — drop+count if exhausted]
+  -> engine_.ingest()
+      -> Step 0: structural size check
+      -> Step 0: capacity check (used_bytes >= max) [NEW — storage_full rejection]
+      -> namespace derivation (SHA3-256)
+      -> signature verification (ML-DSA-87)
+      -> storage.store_blob()
+          -> tombstone_map upsert (if tombstone)   [NEW — O(1) index population]
+      -> WriteAck OR StorageFull wire response      [NEW — new rejection + wire message]
+  -> metrics.blobs_ingested++ OR blobs_rejected_* [NEW]
 ```
 
-### Target Layout (from milestone context: "move to /db")
-
+### Shutdown Path (after v0.4.0)
 ```
-db/
-  src/
-    crypto/      (unchanged)
-    wire/        (unchanged)
-    config/      (unchanged)
-    logging/     (unchanged)
-    identity/    (unchanged)
-    storage/     (unchanged)
-    engine/      (unchanged)
-    net/         (unchanged)
-    sync/        (unchanged)
-    peer/        (unchanged)
-    main.cpp
-  tests/
-    ...
-  schemas/
-    blob.fbs, transport.fbs
-  CMakeLists.txt
+SIGINT -> Server::stop() called -> PeerManager::stop() triggered
+  -> set stopping_ = true
+  -> save_persisted_peers()                        [NEW — before drain]
+  -> cancel sync_timer, pex_timer, sighup_signal, sigusr1_signal
+  -> server_.stop() -> drain(5s)
+       -> Goodbye to all peers
+       -> close all connections
+  -> expiry_cancel.emit() -> expiry scan coroutine exits [NEW — cancellation wired]
+  -> ioc.run() returns cleanly
 ```
 
-### Namespace Rename: `chromatin::` to `chromatindb::`
-
-**Scope of change:**
-- Every `.h` and `.cpp` file uses `namespace chromatin::*`
-- FlatBuffers schemas use `namespace chromatin.wire;`
-- All includes use `"crypto/hash.h"` etc. (relative, no namespace prefix) -- unchanged
-- Test files reference `chromatin::*` types
-
-**Estimated file count:** All 53 source files + 18 test files + 2 schema files = ~73 files.
-
-**Approach:** Mechanical find-and-replace:
-1. `chromatin::` -> `chromatindb::` in all .h/.cpp files
-2. `namespace chromatin` -> `namespace chromatindb` in all .h/.cpp files
-3. `chromatin.wire` -> `chromatindb.wire` in .fbs files
-4. Regenerate FlatBuffer headers
-5. Rebuild and run tests
-
-**Risk:** Zero functional risk. Pure rename. But it touches every file, so it must be the FIRST phase to avoid merge conflicts with feature work.
-
-## Build Order
-
-The three work streams have clear dependencies:
-
+### Sync Path (after v0.4.0, namespace-scoped)
 ```
-Phase 1: Source Restructure (move to /db + namespace rename)
-    │      No functional changes. Mechanical. Must go first to avoid
-    │      conflicts with subsequent feature work.
-    │
-    ▼
-Phase 2: Access Control (allowed_keys, closed node)
-    │      Modifies: Config, Connection, Server, PeerManager
-    │      New: AccessPolicy callback pattern
-    │      Independent of blob size changes.
-    │
-    ▼
-Phase 3: Larger Blob Support
-           Modifies: framing.h (MAX_FRAME_SIZE), engine.h (MAX_BLOB_DATA_SIZE, IngestError::too_large)
-           Modifies: PeerManager sync (batched BlobRequests)
-           Independent of access control changes.
+run_sync_with_peer(conn)
+  -> engine_.list_namespaces()
+  -> [NEW] filter: remove namespaces not in config_.sync_namespace_set (if non-empty)
+  -> Phase A: send filtered NamespaceList
+  -> Phase B: hash exchange for each namespace in filtered set
+  -> Phase C: diff -> BlobRequest -> BlobTransfer
+  (no protocol changes — filtering is local to initiator)
 ```
 
-Phases 2 and 3 are functionally independent and could theoretically be done in parallel, but serializing them avoids merge conflicts in shared files (PeerManager, Config). Phase 2 goes first because it is higher-value (the primary v2.0 goal) and lower-risk.
+---
 
-### Phase 1: Source Restructure
+## Suggested Build Order
 
-**Work items:**
-1. Create `db/` directory, move `src/`, `tests/`, `schemas/`, `CMakeLists.txt`
-2. Update CMakeLists.txt paths
-3. Find-and-replace namespace `chromatin` -> `chromatindb`
-4. Regenerate FlatBuffer headers
-5. Build and run all tests
-6. Update `src/main.cpp` version string
+This order minimizes blocked work and front-loads correctness improvements:
 
-**Files touched:** All ~73+ files (mechanical)
-**Risk:** Low (no logic changes)
-**Estimated size:** Small (automated rename + path changes)
+| Order | Feature | Rationale |
+|-------|---------|-----------|
+| 1 | Tombstone index | Isolated, no deps, correctness fix. Touches storage.cpp only. |
+| 2 | Storage limits | Extends storage.h/engine.h. No wire changes yet. |
+| 3 | Disk-full reporting | Depends on storage_full error code (feature 2). Adds wire message. |
+| 4 | Persistent peer list + Graceful shutdown | Coupled at PeerManager::stop(). Single phase. |
+| 5 | Metrics | No deps. Add early so counters are in place for remaining features. |
+| 6 | Rate limiting | Depends on metrics (for drop counting). |
+| 7 | Namespace-scoped sync | Independent. No deps on other v0.4.0 features. |
+| 8 | README + version bump | After all features stable. Documentation-only. |
 
-### Phase 2: Access Control
+**Estimated phase structure:** 3-4 phases covering 8 plans.
+- Phase A: Storage (tombstone index + storage limits + disk-full reporting) — 3 plans
+- Phase B: Operations (graceful shutdown + persistent peers + metrics) — 2-3 plans
+- Phase C: Abuse prevention + sync control (rate limiting + namespace-scoped sync) — 2 plans
+- Phase D: Docs + version (README + version.h) — 1 plan
 
-**Work items:**
-1. Add `allowed_keys` field to `Config` struct, parse from JSON
-2. Add `AccessPolicy` callback type to Connection (or simple `std::function<bool(span<const uint8_t>)>`)
-3. Add access check in `Connection::run()` after handshake
-4. Wire PeerManager to build AccessPolicy from config and pass through Server to connections
-5. Disable PEX timer when allowed_keys is non-empty
-6. Tests: config parsing, access rejection, closed-mode PEX behavior
+---
 
-**Files modified:**
-- `config/config.h` + `.cpp` (add field, parse)
-- `net/connection.h` + `.cpp` (add callback, add check in run())
-- `net/server.h` + `.cpp` (propagate policy to connections)
-- `peer/peer_manager.h` + `.cpp` (build policy, gate PEX)
-- Tests: `test_config.cpp`, `test_connection.cpp`, new `test_access_control.cpp` or extend `test_peer_manager.cpp`
+## Architectural Constraints to Preserve
 
-**Risk:** Low-medium. The handshake + access check path must be correct to not break open-mode operation. Good test coverage needed for both open and closed modes.
+| Constraint | Application in this milestone |
+|------------|-------------------------------|
+| Pimpl for Storage | `tombstone_map` lives in `Storage::Impl`. Never exposed in storage.h. |
+| Step 0 pattern | Capacity check (stat read) before namespace derivation (SHA3-256). |
+| Deque for `peers_` | Token bucket fields in PeerInfo do not change this. |
+| No new coroutine primitives | SIGUSR1 follows SIGHUP pattern — member function coroutine, not lambda. |
+| Sequential sync protocol | Namespace filter applies before Phase A, does not change Phase A/B/C ordering. |
+| One-blob-at-a-time | Rate limiting applies to client Data messages only, not to sync BlobTransfer. |
+| Silent TCP close for ACL | StorageFull is NOT silent — it sends a wire response. Correct: capacity is operational, not a security boundary. |
+| FlatBuffers additive versioning | `StorageFull = 23` is additive. Old nodes log-and-skip unknown types in on_peer_message. |
+| No new external dependencies | All features use existing components: libmdbx stats, Asio signals, atomic counters. |
 
-### Phase 3: Larger Blob Support
-
-**Work items:**
-1. Bump `MAX_FRAME_SIZE` to `128 * 1024 * 1024` in `framing.h`
-2. Add `MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024` constexpr and `IngestError::too_large` in engine
-3. Add size check as Step 0 in `BlobEngine::ingest()`
-4. Add `MAX_HASHES_PER_REQUEST` constant for sync batching
-5. Modify sync BlobRequest encoding to split large hash lists
-6. Tests: oversized blob rejection, large blob ingest, sync with large blobs, batched BlobRequest
-
-**Files modified:**
-- `net/framing.h` (bump constant)
-- `engine/engine.h` + `.cpp` (add size check, new error)
-- `peer/peer_manager.cpp` (split BlobRequest batching in sync Phase C)
-- `sync/sync_protocol.h` (add MAX_HASHES_PER_REQUEST constant)
-- Tests: `test_engine.cpp`, `test_framing.cpp`, `test_peer_manager.cpp`
-
-**Risk:** Medium. The sync batching change is the most subtle -- must ensure pending_responses tracking remains correct when splitting BlobRequests. Integration testing with actual large blobs over real connections is important.
+---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Middleware/Interceptor Chain
-**What:** Building a generic middleware pipeline for access control.
-**Why bad:** Over-engineered for a single check. Adds indirection and complexity.
-**Instead:** A simple callback/lambda on Connection. One check, one place.
+### Anti-Pattern: In-Memory Byte Counter for Storage Limits
+**What:** Maintain a `std::atomic<uint64_t>` tracking bytes stored, increment on write, decrement on
+expiry.
+**Why bad:** The counter is wrong after a crash and restart. libmdbx has the truth; the counter is a
+stale shadow. The expiry scanner runs periodically — in the gap between expiry events and counter
+updates, the limit may be incorrectly enforced.
+**Instead:** Query libmdbx stats directly via `env.stat()`. A read transaction is cheap and always
+accurate.
 
-### Anti-Pattern 2: Streaming/Chunking Protocol for Large Blobs
-**What:** Adding a new chunked transfer protocol for blobs > N MiB.
-**Why bad:** Major protocol change. Both sides need to agree. Breaks simplicity of "blob is one message."
-**Instead:** Raise the frame limit and batch BlobRequests more conservatively. The blobs are still "medium" (100 MiB, not 10 GiB). Memory is cheap. Streaming can wait for a future version if needed.
+### Anti-Pattern: StorageFull Causes Connection Close
+**What:** When a peer's Data message hits the storage limit, close the connection.
+**Why bad:** The peer may be a valid sync partner for hash-list diff (reading). Closing forces
+reconnection overhead and disrupts the sync session. The node is still useful for read operations.
+**Instead:** Send StorageFull wire message, set `peer_is_full = true`, continue accepting sync.
 
-### Anti-Pattern 3: Making max_blob_size Configurable per Node
-**What:** Letting each node set its own blob size limit.
-**Why bad:** Sync breaks. Node A stores a 100 MiB blob, syncs to Node B which rejects it because its limit is 50 MiB. Data loss in the network.
-**Instead:** Protocol invariant (constexpr), like TTL. All nodes agree on the same limit.
+### Anti-Pattern: Rate Limiting Sync Traffic
+**What:** Apply the token bucket to BlobTransfer (sync) messages as well as Data messages.
+**Why bad:** Sync is already bounded by the one-blob-at-a-time sequential protocol. Rate limiting it
+adds latency to legitimate replication with no abuse prevention benefit — sync is authenticated and
+initiated by the peer, not a write endpoint.
+**Instead:** Rate limit only Data and Delete messages (direct client writes).
 
-### Anti-Pattern 4: Access Control in PeerManager Instead of Connection
-**What:** Checking allowed_keys in on_peer_connected instead of after handshake.
-**Why bad:** The peer is briefly "connected" -- gets a PeerInfo entry, may trigger sync-on-connect before the check runs. Race condition window.
-**Instead:** Check in Connection.run() before on_ready fires. Rejected peer never enters PeerManager state.
+### Anti-Pattern: Negotiated Namespace Filter (Option A) for Sync Scoping
+**What:** Add SyncFilterRequest/SyncFilterResponse wire messages for namespace-scoped sync.
+**Why bad:** Adds protocol complexity and two new message types. Requires changes on both sides of
+every connection. The initiator already controls what it requests — a local filter achieves the same
+result with zero protocol changes.
+**Instead:** Local filter in `run_sync_with_peer`. The responder receives hash requests only for
+namespaces the initiator chose to include — naturally scoped without negotiation.
 
-## Component Interaction Summary
+### Anti-Pattern: External Metrics Exporter (Prometheus/StatsD)
+**What:** Adding a Prometheus endpoint or StatsD UDP export for metrics.
+**Why bad:** Adds external dependencies, network attack surface, and configuration complexity. The
+daemon has no HTTP server and should not gain one (PROJECT.md explicitly excludes HTTP/REST).
+**Instead:** SIGUSR1 dump to spdlog. Operators can scrape logs. Simple, zero new dependencies.
 
-### Access Control Data Flow
+---
 
-```
-Config JSON ──► Config.allowed_keys (vector<string>)
-                    │
-                    ▼
-PeerManager constructor ──► build AccessPolicy lambda
-                                │ convert hex strings to binary pubkeys
-                                │ store in unordered_set for O(1) lookup
-                                ▼
-Server.set_access_policy(policy)
-    │
-    │ accept_loop / connect_to_peer / reconnect_loop:
-    │ conn->set_access_policy(access_policy_)
-    │
-    ▼
-Connection.run()
-    │ do_handshake() ──► peer_pubkey_ set
-    │ access_policy_(peer_pubkey_) ──► bool
-    │   YES ──► on_ready ──► normal flow
-    │   NO  ──► close ──► gone
-```
+## Patterns to Follow
 
-### Larger Blob Data Flow
+### Extend PeerInfo for Per-Connection State
+Previous examples: `strike_count`, `syncing`, `sync_inbox`, `sync_notify`, `subscribed_namespaces`,
+`is_bootstrap`. New additions: `peer_is_full`, token bucket fields. All are connection-scoped,
+populated in `on_peer_connected`, accessed in message handlers. No locking needed — single io_context
+thread.
 
-```
-Inbound blob (wire) ──► recv_encrypted() ──► TransportCodec::decode()
-    │                       ▲
-    │                   MAX_FRAME_SIZE = 128 MiB (was 16 MiB)
-    │
-    ▼
-BlobEngine.ingest()
-    │
-    ├── Step 0: size check (NEW) ──► reject if data > 100 MiB
-    ├── Step 1: structural
-    ├── Step 2: namespace
-    ├── Step 3: signature
-    └── Step 4: storage ──► libmdbx (handles 100 MiB values natively)
+### New Sub-Database Follows delegation_map Pattern
+`tombstone_map` creation mirrors `delegation_map` exactly: open in `Impl` constructor write
+transaction, increment `max_maps`, populate in `store_blob` using existing data from the blob being
+written. The blob provides all needed data (namespace, tombstone flag, target hash).
 
-Sync outbound: BlobRequest now batched
-    │
-    ├── collect missing hashes
-    ├── split into groups of MAX_HASHES_PER_REQUEST
-    ├── send multiple BlobRequest messages
-    ├── pending_responses++ per BlobRequest sent
-    └── receive BlobTransfer, pending_responses-- per BlobTransfer received
-```
+### SIGHUP Coroutine Pattern for Signal Handling
+SIGUSR1 metrics dump follows `sighup_loop()` exactly: dedicated member function (not lambda —
+avoids stack-use-after-return), `asio::signal_set` on the io_context, awaits signal in a loop.
+Cancel via `sigusr1_signal_.cancel()` in `stop()`.
 
-## Testing Strategy
+### Step 0 Ordering in BlobEngine::ingest
+Current: structural -> namespace -> signature -> storage.
+Updated: structural -> **capacity** -> namespace -> signature -> storage.
+Capacity check (libmdbx stat read, ~microseconds) is cheaper than SHA3-256 (hundreds of microseconds
+for large blobs). Put cheaper rejections first.
 
-### Access Control Tests
-
-| Test | What It Verifies |
-|------|-----------------|
-| Config parses allowed_keys from JSON | Config parsing |
-| Config with empty allowed_keys = open mode | Open mode default |
-| Connection rejects unlisted pubkey when allowed_keys set | Core access control |
-| Connection accepts listed pubkey when allowed_keys set | Positive case |
-| Connection accepts all when allowed_keys empty | Open mode behavior |
-| PEX disabled when allowed_keys non-empty | Closed mode PEX gating |
-| Bootstrap reconnect to non-allowed peer fails gracefully | Error handling |
-
-### Larger Blob Tests
-
-| Test | What It Verifies |
-|------|-----------------|
-| BlobEngine rejects blob with data > MAX_BLOB_DATA_SIZE | Size limit enforcement |
-| BlobEngine accepts blob at exactly MAX_BLOB_DATA_SIZE | Boundary condition |
-| Storage round-trips a 100 MiB blob | libmdbx large value handling |
-| Framing round-trips a 100 MiB encrypted frame | Transport layer |
-| Sync batches BlobRequests when hash count > MAX_HASHES_PER_REQUEST | Sync batching |
-| Sync correctly tracks pending_responses with multiple BlobRequests | Counter correctness |
+---
 
 ## Sources
 
-- [libmdbx GitHub - max value size ~2 GiB (INT32_MAX)](https://github.com/erthink/libmdbx)
-- [libmdbx documentation - settings and limits](https://libmdbx.dqdkfa.ru/group__c__settings.html)
-- Existing codebase analysis (all source files read directly)
-- v1.0 retrospective (patterns established, lessons learned)
+All findings from direct codebase inspection — no external sources required.
+
+- `db/storage/storage.h` — Storage API, StoreResult, sub-database structure
+- `db/storage/storage.cpp` — libmdbx geometry config (size_upper=64 GiB, max_maps=5), store_blob
+  implementation (delegation_map population pattern), has_tombstone_for O(n) scan
+- `db/engine/engine.h` — IngestError enum, BlobEngine ingest pipeline
+- `db/peer/peer_manager.h` — PeerInfo struct (all fields), PeerManager methods, persistence
+  infrastructure (load/save/update_persisted_peer), MAX constants
+- `db/peer/peer_manager.cpp` — Constructor wiring, start() sequence, signal handling, sighup_loop
+  pattern, sync orchestration structure
+- `db/net/server.h` / `server.cpp` — drain() coroutine, SIGINT/SIGTERM handling, draining_ flag
+- `db/net/connection.h` — Connection lifecycle, peer_pubkey_, close_gracefully()
+- `db/sync/sync_protocol.h` — SyncProtocol API, SyncStats struct
+- `db/config/config.h` — Config struct (current fields: allowed_keys, max_peers, sync_interval)
+- `db/wire/transport_generated.h` — TransportMsgType enum (current max: Notification = 22)
+- `db/main.cpp` — Component wiring, expiry scan coroutine (asio::detached, never cancelled)
+- `.planning/PROJECT.md` — Requirements, constraints, key decisions table
+- `.planning/RETROSPECTIVE.md` — Patterns established, lessons learned across all milestones

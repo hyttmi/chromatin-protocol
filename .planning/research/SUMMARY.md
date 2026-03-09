@@ -1,165 +1,205 @@
 # Project Research Summary
 
-**Project:** chromatindb v2.0
-**Domain:** Closed node access control + larger blob support for decentralized PQ-secure database node
-**Researched:** 2026-03-05
+**Project:** chromatindb v0.4.0 — Production Readiness
+**Domain:** Production hardening of a C++20 P2P post-quantum blob store daemon
+**Researched:** 2026-03-08
 **Confidence:** HIGH
 
 ## Executive Summary
 
-chromatindb v2.0 is a focused extension of the v1.0 PQ-secure blob store daemon. The two core deliverables are a closed node model (pubkey whitelist) and support for blobs up to 100 MiB. Research confirms that both are achievable with zero new dependencies — every existing library handles the v2.0 requirements within its documented limits. The implementation is mechanical changes to a well-understood codebase, not greenfield work. libmdbx supports values up to ~2 GiB, FlatBuffers handles buffers up to ~2 GiB, ChaCha20-Poly1305 supports messages up to ~256 GiB, and the existing 4-byte frame length prefix supports frames up to ~4 GiB. All changes are constant bumps, config additions, and targeted logic changes in existing files.
+chromatindb v0.4.0 is a pure hardening milestone: no new protocols, no new dependencies, no architectural shifts. The existing 14,152 LOC codebase already contains nearly every primitive needed — libmdbx storage stats, graceful drain coroutines, peer persistence machinery, spdlog, and the strike system are all in place. The work is connecting existing pieces, filling the gaps between them, and adding three narrow new constructs: a fifth mdbx sub-database for tombstone indexing, a `NodeMetrics` struct with plain `uint64_t` counters, and a token bucket per `PeerInfo`. All 8 features total approximately 370 lines of new code.
 
-The recommended approach is three sequential phases: source restructure first (namespace rename + move to /db), then access control, then larger blob support. The ordering is non-negotiable. The namespace rename touches every file mechanically and must precede feature work to avoid merge conflicts. Access control is architecturally simpler and higher-value, so it goes before blob size changes. Blob support has the most subtle changes (sync batching, potential storage architecture pivot) and benefits from a clean, already-restructured codebase.
+The recommended implementation order is correctness first, then operations, then topology control. The tombstone index (currently O(n) on every ingest) ships first because it is on the hot path for all subsequent features. Storage limit enforcement comes before disk-full reporting, which produces the error code that triggers the wire message. Graceful shutdown and persistent peer persistence are tightly coupled at `PeerManager::stop()` and build as a single phase. Metrics and rate limiting are independent and follow in any order.
 
-The primary risk is the storage architecture decision for large blobs: whether to keep blobs inline in libmdbx (simpler code, ACID) or move to external filesystem storage (avoids overflow page fragmentation and write amplification). This decision cascades into the sync protocol and expiry scan design. The secondary risk is the sync protocol memory budget — the current hash collection implementation loads full blob data just to compute hashes, which would cause OOM with 100 MiB blobs. Both must be resolved before any large blob implementation begins.
+The dominant risk category is coroutine concurrency: every `co_await` in the Asio model is a preemption point where container state can change. The three highest-cost pitfalls are: (1) a stale storage limit check that fires in a coroutine body instead of inside the synchronous `BlobEngine::ingest()`; (2) `io_context` destroyed with live coroutine frames causing use-after-free at shutdown; and (3) a raw `PeerInfo*` going dangling across a `co_await` in the rate limit path. All three are prevented by patterns already documented in the project's RETROSPECTIVE.md.
 
 ## Key Findings
 
 ### Recommended Stack
 
-No new dependencies are required. The v1.0 stack handles v2.0 requirements natively. All changes are constant bumps and targeted code modifications in existing files. The build process is unchanged.
+No new dependencies. Every v0.4.0 feature is achievable with the existing stack. See `STACK.md` for full detail.
 
-**Core technologies (unchanged from v1.0):**
-- `libmdbx`: blob storage — handles 100 MiB values natively via overflow pages; no changes to storage.cpp API
-- `libsodium` (ChaCha20-Poly1305): transport encryption — supports 100 MiB messages with no modification (~256 GiB max)
-- `FlatBuffers`: wire format — 32-bit offsets handle 100 MiB blobs; `FlatBufferBuilder` initial size needs dynamic sizing to avoid ~14 reallocation copies for large data
-- `liboqs` (ML-DSA-87, ML-KEM-1024): PQ handshake — already exposes `peer_pubkey_` after handshake; access control hooks naturally here
-- `nlohmann/json`: config — already parses arrays; `allowed_keys` is a new JSON array field, no new parser needed
-- `Asio`: networking — `async_read` handles variable-size payloads without changes; `asio::signal_set` (already in codebase) used for SIGHUP config reload
+**Core technologies and their v0.4.0 roles:**
+- **libmdbx** — add 5th sub-database (`tombstone_map`); expose storage stats via `env.get_info()` (verified in `build/_deps/libmdbx-src/mdbx.h++` line 5486). `MDBX_MAX_DBI` default is 32768; current usage is 4 DBIs; adding a 5th is trivial.
+- **Asio (C++20 coroutines)** — expiry coroutine cancellation via `asio::cancellation_signal`; SIGUSR1 metrics dump follows existing `sighup_loop()` member-function coroutine pattern exactly.
+- **spdlog** — periodic metrics log line on 60-second timer; no Prometheus, no HTTP server, no external metrics endpoint needed.
+- **nlohmann/json** — three new config fields: `max_storage_bytes`, `rate_limit_bytes_per_sec`, `sync_namespaces`.
+- **`std::chrono::steady_clock`** — token bucket timing for per-connection rate limiting (30 lines, no library).
 
-**Critical constant changes:**
-- `MAX_FRAME_SIZE`: 16 MiB -> 110 MiB (100 MiB data + ~7.3 KiB PQ overhead + 16 B AEAD tag + ~10% headroom)
-- `FlatBufferBuilder` initial size: dynamic — `std::max(size_t(8192), blob.data.size() + 16384)`
-- New: `MAX_BLOB_DATA_SIZE = 100 * 1024 * 1024` (constexpr protocol invariant, like TTL)
-- New: `MAX_HASHES_PER_REQUEST` (caps BlobRequest batch size in sync to bound responder memory)
+**What NOT to add:** prometheus-cpp (adds HTTP server + protobuf), StatsD client (UDP socket dependency), any rate limiting library (token bucket is 30 lines of code). PROJECT.md explicitly prohibits HTTP/REST API.
 
 ### Expected Features
 
-**Must have (table stakes — v2.0 core):**
-- `allowed_keys` config — JSON array of hex-encoded namespace IDs (SHA3-256 of pubkey, 64 hex chars); non-empty = closed mode, empty = open (backward compatible with v1.0)
-- Connection-level auth gating — reject unauthorized peers immediately after handshake in `Connection::run()`, before `on_ready` fires; denied peers never enter PeerManager state
-- Blob size limit enforcement — `MAX_BLOB_DATA_SIZE` checked as Step 0 in `BlobEngine::ingest()`, before signature verification (cheapest rejection)
-- Frame size increase — `MAX_FRAME_SIZE` bumped to 110 MiB to fit 100 MiB blob + protocol overhead
-- Sync blob transfer batching — split BlobRequests by `MAX_HASHES_PER_REQUEST` to prevent multi-hundred-MiB single-allocation sync messages; fix hash collection to not load blob data
+**Must have (table stakes — all 6 blocking for production deployment):**
+- **Tombstone index** — O(1) `has_tombstone_for()` via new `tombstone_map` mdbx DBI. Current O(n) scan over all blobs in a namespace is unacceptable at scale and sits on the ingest hot path.
+- **Global storage limit** — `max_storage_bytes` config field, `Storage::used_bytes()` via libmdbx stats, `IngestError::storage_full`. Prevents node from filling disk and crashing the host.
+- **Disk-full rejection** — New `StorageFull = 23` wire message type (additive, backward compatible). Peers receive actionable signal instead of a silent drop or generic error.
+- **Graceful shutdown** — SIGTERM drains coroutines cleanly. Primary gap: `PeerManager::stop()` is not called from the signal path; sync coroutines do not check `stopping_`; the expiry scan coroutine is `asio::detached` with no cancellation path.
+- **Metrics/observability** — `NodeMetrics` struct (plain `uint64_t` — single io_context thread, not atomic), SIGUSR1 dump via spdlog, 60-second periodic log line.
+- **Rate limiting** — Token bucket per `PeerInfo` (`write_tokens` + `last_token_refill_us`). Applies to `Data`/`Delete` messages only, not sync `BlobTransfer`. Feeds the existing strike system.
 
-**Should have (differentiators worth building):**
-- SIGHUP config reload — hot-reload `allowed_keys` without daemon restart; use `asio::signal_set` (already in codebase), not raw signal handlers (which would create thread safety issues)
-- Disconnect revoked peers — on config reload, iterate connected peers and close connections whose pubkey is no longer in `allowed_keys`; `close_gracefully()` pattern already exists
-- Memory-aware blob reception — validate declared frame length against `MAX_BLOB_DATA_SIZE + overhead` before allocating recv buffer; prevents forced 4 GiB allocation from malformed frame headers
+**Should have (differentiator, medium complexity):**
+- **Namespace-scoped sync** — `sync_namespaces` config filter applied at Phase A namespace list assembly (before sending to peer), not at Phase C blob transfer. Zero protocol changes — local initiator filter only. Prevents leaking namespace IDs for filtered namespaces.
+- **README in db/** — Operator documentation for config schema, startup, wire protocol overview.
 
-**Defer (post-v2.0):**
-- Per-peer write restriction (read-only vs read+write) — adds config schema complexity; YAGNI for initial closed model
-- Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data in memory for signing regardless
-- Namespace-level ACLs — belongs in Layer 2 (Relay), not the database node
-- inotify-based config watching — SIGHUP is the correct Unix convention
+**Defer (anti-features, explicitly out of scope):**
+- Per-namespace storage quota — wrong layer; application concern for the relay, not the database node
+- HTTP metrics endpoint — violates PROJECT.md "No HTTP/REST API" constraint
+- Persistent rate limit state — rate limits are connection-scoped by design; reset on reconnect is correct
+- Write-ahead rate limit with queuing — reject immediately, peer retries; queuing adds memory pressure for no gain
+
+**Already shipped (NOT new for v0.4.0):**
+- Persistent peer list — `peers.json`, `load_persisted_peers`, `save_persisted_peers` already exist in `peer_manager.cpp`. The gap is wiring `save_persisted_peers()` into `stop()` and using atomic file write (temp + fsync + rename).
 
 ### Architecture Approach
 
-The v1.0 architecture has exactly the right hooks for both features. The ML-DSA-87 handshake already sets `peer_pubkey_` before `on_ready` fires, making `Connection::run()` the correct access control check point. BlobEngine's 4-stage ingest pipeline accepts a size check as Step 0 with no structural changes. The sync protocol's existing `pending_responses` counter and BlobTransfer message type support the batching change without wire format modifications.
+All 8 features integrate within the existing three-layer architecture without any subsystem-level changes. `peer_manager.cpp` is the central integration point for the majority of features; `storage.cpp` and `engine.h` handle storage-side concerns. No new coroutine primitives, no new networking, no new protocol handshakes.
 
-**Major components and v2.0 changes:**
-1. `config::Config` — add `allowed_keys` (vector<string> of hex-encoded namespace IDs), parse from JSON array
-2. `net::Connection` — add `AccessPolicy` callback type, check after handshake in `run()` before `on_ready`; if not allowed, call `close()` and `close_cb_`, never fire `on_ready`
-3. `net::Server` — propagate access policy to each Connection on creation
-4. `peer::PeerManager` — build AccessPolicy lambda from config (O(1) unordered_set lookup); disable PEX when in closed mode (2-line change); handle SIGHUP via `asio::signal_set`; disconnect revoked peers on reload
-5. `engine::BlobEngine` — add `IngestError::too_large`, check `data.size()` as Step 0 in `ingest()`
-6. `net/framing.h` — bump `MAX_FRAME_SIZE` to 110 MiB
-7. `sync/sync_protocol.cpp` — fix hash collection to iterate seq_map cursor directly (no blob data load); send one BlobTransfer per blob (not batch); add `MAX_HASHES_PER_REQUEST` constant
-
-**Source restructure (prerequisite to all features):**
-- Move to `db/` directory layout; move `src/`, `tests/`, `schemas/`, `CMakeLists.txt`
-- Rename `chromatin::` namespace to `chromatindb::` across all ~73 files + FlatBuffers schemas + regenerate headers
-- Must be a single atomic commit, followed by clean build (`rm -rf build`) + full test run (155 tests)
+**Major components and their v0.4.0 changes:**
+1. **Storage** (`db/storage/`) — add `tombstone_map` 5th DBI (mirrors `delegation_map` pattern exactly); add `used_bytes()` / `storage_stats()` methods; populate tombstone index in the same transaction as the tombstone blob write.
+2. **BlobEngine** (`db/engine/`) — add `storage_full` to `IngestError`; insert capacity check as new Step 0 (before namespace derivation and signature verification) inside the synchronous `ingest()` call, not in the coroutine body.
+3. **PeerManager** (`db/peer/`) — token bucket fields in `PeerInfo`; `NodeMetrics` member; SIGUSR1 signal set (follows `sighup_loop` pattern); fix `stop()` to: set `stopping_` → call `save_persisted_peers()` → cancel all timers → call `server_.stop()`; namespace filter set built from config at startup.
+4. **Config** (`db/config/`) — three new fields: `max_storage_bytes`, `rate_limit_bytes_per_sec` + `rate_limit_burst`, `sync_namespaces`.
+5. **Wire protocol** (`db/wire/transport.fbs`) — add `StorageFull = 23` to `TransportMsgType` enum. Additive; old nodes log-and-skip unknown types in `on_peer_message`.
+6. **main.cpp** — wire `asio::cancellation_signal` for expiry scan coroutine; verify `PeerManager::stop()` is called from SIGTERM path.
 
 ### Critical Pitfalls
 
-1. **Access control at the wrong layer** — Checking `allowed_keys` in `BlobEngine::ingest()` allows unauthorized peers to freely read all data (no access checks on get/list operations) and creates a DoS vector (full ML-KEM handshake CPU cost before rejection). Enforce in `Connection::run()` after `do_handshake()` sets `peer_pubkey_`, before `on_ready` fires. Never add access checks to the engine layer.
+1. **Storage limit check stale after co_await** — The check MUST live inside `BlobEngine::ingest()` which is fully synchronous. Any check in the coroutine body before dispatching to the engine is not atomic with the write. Another coroutine can write past the limit during any `co_await` suspension.
 
-2. **Memory exhaustion from sync hash collection** — `SyncProtocol::collect_namespace_hashes()` currently calls `get_blobs_since()` which loads full blob data just to compute 32-byte hashes. With ten 100 MiB blobs, this allocates ~2 GiB. Fix: rewrite to iterate the seq_map cursor directly and read only hash values, never loading blob data. This is a prerequisite that must be completed before bumping the blob size limit.
+2. **MDBX_MAP_FULL before logical quota fires** — libmdbx's physical `size_upper` geometry limit can be hit before the application quota if they are too close. Set `size_upper` to at least 2x `max_storage_bytes`. Also map `MDBX_MAP_FULL` explicitly to `StoreResult::StorageFull` inside `store_blob()` so the error reaches the wire protocol correctly instead of becoming a silent generic error.
 
-3. **libmdbx overflow page fragmentation** — 100 MiB values consume ~25,600 contiguous overflow pages. Allocating contiguous pages in a fragmented database is slow; expiry scanning many large blobs in one transaction can stress freelist management. Options: (a) store blob data externally on filesystem using content hash as filename (standard pattern in Git, IPFS, container registries), keeping only metadata in libmdbx; or (b) keep blobs in libmdbx and increase page size to 65536 bytes (16x fewer overflow pages, but requires database migration). This architectural decision must be made before Phase 3 implementation.
+3. **Graceful shutdown blocks 120s per stuck sync peer** — `recv_sync_msg()` has `BLOB_TRANSFER_TIMEOUT` (120 seconds). On `stop()`, cancel all `peer.sync_notify` timers immediately to wake blocked coroutines. Check `stopping_` immediately after every timer expiry. Set a hard 3-second backstop timer as a fallback.
 
-4. **Sync timeout too short for large blobs** — The 30-second `SYNC_TIMEOUT` assumes small blobs. At 10 MB/s, three 100 MiB blobs hit the timeout exactly and sync permanently fails. Make the timeout adaptive based on estimated transfer size, or implement per-blob transfer with acknowledgments that create a natural progress heartbeat.
+4. **io_context destroyed with live coroutine frames** — Do NOT call `io_context::stop()` to initiate shutdown. Cancel timers and close sockets via `server_.stop()`; let the io_context drain naturally when all coroutines `co_return`. Destructor order must be: cancel timers → server stop → `ioc.run()` returns → destroy objects.
 
-5. **Source restructure build breakage** — CMakeLists.txt has hardcoded source file lists and FlatBuffers output paths. Moving files without updating all references causes linker errors. FlatBuffers schema namespace (`chromatin.wire`) must match C++ namespace or generated headers will be in the wrong namespace. Always do a clean build after restructuring, not incremental.
+5. **Non-atomic tombstone index + blob write** — Both the `blobs_map` entry and the `tombstone_map` index entry must be written in a single libmdbx transaction. Copy the `delegation_map` pattern exactly — it already writes the delegation blob and its index in one transaction.
+
+6. **Raw `PeerInfo*` dangling across co_await** — Never store a raw `PeerInfo*` across any suspension point. Re-lookup via `find_peer(conn)` after every `co_await`. Prefer the strike+disconnect approach (instantaneous, no suspension) over backpressure `co_await` delays.
+
+7. **peers.json corrupted on crash** — Use write-to-temp + fsync + rename. Directory fsync is required on Linux for the rename to survive power loss. Do NOT call `fsync` inside `on_peer_disconnected()` — it blocks the io_context thread. Use a 30-second periodic flush timer plus a flush on clean shutdown.
 
 ## Implications for Roadmap
 
-Three phases are clearly implied by the architecture and dependency chain. The ordering reflects hard technical dependencies and risk minimization, not preference.
+Based on combined research, the natural phase structure is 4 phases covering 10 plans with a clear dependency ordering:
 
-### Phase 1: Source Restructure
-**Rationale:** Mechanical rename touches every file. Doing it first eliminates merge conflicts with all feature work. Zero functional risk — testable immediately against the existing 155-test suite. Must be a single atomic commit.
-**Delivers:** `db/` directory layout, `chromatindb::` namespace throughout all source files, regenerated FlatBuffers headers, all 155 tests passing after clean rebuild.
-**Avoids:** Pitfall 7 (CMakeLists stale builds from stale objects), Pitfall 11 (namespace cascade causing FlatBuffers schema mismatch)
-**Note:** If the namespace rename is not required by the milestone spec, skip it. Phase 1 becomes directory restructure only — much smaller scope.
+### Phase A: Storage Foundation
 
-### Phase 2: Access Control (Closed Node Model)
-**Rationale:** Higher-value primary deliverable; lower risk than blob size changes; modifies fewer files; establishes the `AccessPolicy` callback pattern cleanly before sync changes add complexity to PeerManager. Access control and blob support are functionally independent — doing access control first keeps each phase focused.
-**Delivers:** `allowed_keys` config field, connection-level gating in `Connection::run()`, PEX disabled in closed mode, SIGHUP reload via `asio::signal_set`, disconnect of revoked peers on reload.
-**Implements:** `config::Config` + `net::Connection` + `net::Server` + `peer::PeerManager` changes
-**Avoids:** Pitfall 1 (wrong layer), Pitfall 6 (SIGHUP raw signal handler thread safety), Pitfall 8 (TOCTOU — revoked peers disconnected promptly on reload)
+**Rationale:** Tombstone index is the highest-priority correctness fix — on the hot path for every ingest, affects all subsequent features. Storage limits and disk-full reporting share `IngestError::storage_full` and are two sides of one feature. All three ship first because downstream phases (metrics, rate limiting) call `engine_.ingest()` and require these paths to be correct. No other features depend on the tombstone index being slow; all features depend on storage limits being correct.
 
-### Phase 3: Larger Blob Support
-**Rationale:** Depends on Phase 1 for the clean namespace. Contains the highest-risk change (sync batching + storage architecture decision). Benefits from Phase 2 being complete so PeerManager changes don't conflict.
-**Delivers:** `MAX_FRAME_SIZE` = 110 MiB, `MAX_BLOB_DATA_SIZE` = 100 MiB constexpr, size check as Step 0 in `BlobEngine::ingest()`, fixed hash collection (seq_map cursor iteration, no blob data load), one-blob-per-transfer sync, adaptive sync timeout, dynamic `FlatBufferBuilder` initial sizing.
-**Uses:** libmdbx overflow pages or external filesystem storage (decision required before coding)
-**Avoids:** Pitfall 2 (sync OOM from hash collection and batch transfer), Pitfall 3 (libmdbx fragmentation), Pitfall 4 (sync timeout), Pitfall 5 (frame/blob size constant mismatch), Pitfall 9 (missing size validation in ingest)
+**Delivers:** O(1) tombstone lookups replacing the O(n) scan, bounded disk usage enforced at the protocol boundary, wire-level storage full signal to peers.
+
+**Addresses:** Tombstone index, global storage limit, disk-full rejection.
+
+**Avoids:** MDBX_MAP_FULL before quota fires (set `size_upper` = 2x limit), stale limit check after co_await (check inside `ingest()` only), non-atomic index + blob write (single transaction; copy delegation_map).
+
+**Plans:**
+- PLAN-01: Tombstone index (`tombstone_map` DBI + startup migration scan + `has_tombstone_for` O(1) replacement)
+- PLAN-02: Storage limits (`Storage::used_bytes()`, `IngestError::storage_full`, `Config::max_storage_bytes`, Step 0 capacity check in `ingest()`)
+- PLAN-03: Disk-full reporting (`StorageFull = 23` wire message, `peer_is_full` in `PeerInfo`, send response on `storage_full` in `on_peer_message`)
+
+### Phase B: Operational Stability
+
+**Rationale:** Graceful shutdown and persistent peer list are tightly coupled at `PeerManager::stop()` — both require modifying the same function. Building them as one phase avoids implementing `stop()` twice. Metrics logically follows: it needs storage stats from Phase A for the used-bytes log line and should be in place before rate limiting so drop counters are wired from the start.
+
+**Delivers:** Clean SIGTERM behavior with bounded shutdown time, peer list persistence across restarts, runtime observability via SIGUSR1 dump and periodic log line.
+
+**Addresses:** Graceful shutdown, persistent peer list (wiring gap), metrics logging.
+
+**Avoids:** Shutdown blocking 120s per peer (cancel `sync_notify` timers in `stop()`), io_context lifetime violation (cancel then drain, not stop()), peers.json corruption (temp + fsync + rename + dir fsync), fsync on every disconnect (periodic 30s timer flush), uint32_t counter overflow (use uint64_t throughout), atomic overhead on hot path (plain uint64_t not atomic on single-threaded io_context).
+
+**Plans:**
+- PLAN-04: Graceful shutdown (`stop()` sequence: `stopping_` → save peers → cancel all timers → `server_.stop()`; expiry coroutine cancellation signal in `main.cpp`)
+- PLAN-05: Persistent peer list wiring (atomic file write pattern, 30s flush timer, flush on clean shutdown)
+- PLAN-06: Metrics (`NodeMetrics` struct, counter placement at event sites, SIGUSR1 dump coroutine following `sighup_loop` pattern)
+
+### Phase C: Abuse Prevention and Topology Control
+
+**Rationale:** Rate limiting depends on metrics being in place (for `blobs_rate_limited` counter) and is independent of namespace-scoped sync. Both are lower-risk than Phase A/B features and build after the system is stable.
+
+**Delivers:** Per-connection write rate limiting preventing abuse on open nodes, operator control over which namespaces replicate to which peers.
+
+**Addresses:** Rate limiting, namespace-scoped sync.
+
+**Avoids:** Raw `PeerInfo*` dangling after co_await (re-lookup after every suspension; prefer strike+disconnect), blocking sleep stalling io_context (never `sleep_for` in coroutine), rate limiting sync traffic (applies to Data/Delete only, not BlobTransfer), namespace filter at Phase C leaking namespace IDs (filter at Phase A namespace list assembly, not at blob transfer time).
+
+**Plans:**
+- PLAN-07: Rate limiting (token bucket in `PeerInfo`, config fields, strike integration, metrics counter)
+- PLAN-08: Namespace-scoped sync (config `sync_namespaces`, `std::set` built at startup, filter in `run_sync_with_peer` before Phase A namespace list encoding)
+
+### Phase D: Documentation and Release
+
+**Rationale:** README documents what exists after all features are stable and tested. Version bump is last so version-string assertions in tests do not generate CI noise during development.
+
+**Delivers:** Operator documentation, version 0.4.0 tag-ready binary.
+
+**Addresses:** README in `db/`, version bump.
+
+**Avoids:** Version bump breaking test assertions (search for version string assertions first, then bump as final step).
+
+**Plans:**
+- PLAN-09: README (`db/README.md`: config schema, startup, wire protocol overview, example flows)
+- PLAN-10: Version bump (`version.h` → 0.4.0, after all features pass all tests)
 
 ### Phase Ordering Rationale
 
-- Phase 1 must be first: touching 73+ files for a mechanical rename while simultaneously adding features makes code review impossible and guarantees conflicts.
-- Phase 2 before Phase 3: access control modifies the handshake/connection layer; blob support modifies the engine/sync layer. Keeping them separate ensures each is auditable. Access control is also the primary v2.0 goal.
-- Phase 3 last: the sync protocol changes have the most subtle correctness requirements (pending_responses counter, one-blob-per-transfer invariant, adaptive timeouts). A clean, tested codebase reduces debugging burden.
+- Phase A before Phase B: Storage limit enforcement is correct before observability is wired. `Storage::used_bytes()` from Phase A is required by the metrics log line in Phase B.
+- Phase B before Phase C: Metrics must be in place before rate limiting so `blobs_rate_limited` is wired at feature-build time. Graceful shutdown must be correct before adding more signal handlers (SIGUSR1 in Phase B metrics).
+- Phase C before Phase D: All features must be stable before the README documents them and the version is bumped.
+- Tombstone index first within Phase A: It is on the ingest hot path, has no dependencies on other v0.4.0 features, is the smallest isolated change in the milestone, and tests cleanly in isolation before touching storage limits.
 
 ### Research Flags
 
-Needs resolution before coding Phase 3:
-- **Phase 3 — storage architecture:** Inline libmdbx (simpler code, ACID, ~25,600 overflow pages per 100 MiB blob, fragmentation risk) vs external filesystem (standard blob store pattern, eliminates overflow issues, adds two consistency domains). Must decide at phase planning time. Recommendation: if YAGNI applies, stay in libmdbx with page size increased to 65536; if correctness of expiry and fragmentation concern the operator, use external storage. This is the only open architectural question in the milestone.
+All phases have well-documented patterns from direct codebase inspection. No phase requires `/gsd:research-phase` during planning. Specific notes:
 
-Standard patterns (no additional research needed):
-- **Phase 1:** Mechanical find-and-replace + CMake path updates. Well-understood.
-- **Phase 2:** Connection-gated access control after handshake is an established pattern (Quorum, Tendermint, strfry). All integration points are identified with specific file and function references. Config reload via `asio::signal_set` is already in the codebase.
-- **Phase 3 (except storage decision):** Frame size bump, engine size check, sync batching — all changes are identified with specific files, functions, and line-level rationale. No library unknowns.
+- **Phase A:** Implementation details fully specified in STACK.md and ARCHITECTURE.md. libmdbx API verified against actual headers. The `delegation_map` write pattern in `storage.cpp` is the exact template for `tombstone_map`.
+- **Phase B:** Shutdown sequence specified in ARCHITECTURE.md with gaps identified. `sighup_loop()` in `peer_manager.cpp` is the exact template for `sigusr1_loop()`. Atomic file write is textbook POSIX.
+- **Phase C:** Token bucket algorithm is specified completely and fits in 30 lines. Namespace filter is a 3-line change to `run_sync_with_peer`. No unknowns.
+- **Phase D:** No research needed. Documentation and `version.h` edit only.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All constants verified against official docs and v1.0 source. libmdbx ~2 GiB limit, FlatBuffers ~2 GiB limit, ChaCha20 ~256 GiB limit — all confirmed. Zero new dependencies. |
-| Features | HIGH | Table stakes are direct analogs of patterns from strfry (pubkey whitelist), Quorum (disconnect after handshake), standard Unix daemons (SIGHUP). Anti-features are well-reasoned exclusions. |
-| Architecture | HIGH | Based on direct analysis of v1.0 source with line-level references. Integration points are specific file+function references, not estimates. |
-| Pitfalls | HIGH | Critical pitfalls derived from codebase analysis with specific line numbers (e.g., sync_protocol.cpp:26-44, connection.cpp:66-89). Hash collection OOM is a verifiable bug in current code. |
+| Stack | HIGH | All claims verified against actual headers in `build/_deps/`. Zero new dependencies confirmed. libmdbx API for storage stats verified at specific lines. |
+| Features | HIGH | Existing codebase inspected directly. Persistent peer list confirmed already shipped at source level. Complexity estimates are line-level. All anti-features justified against specific PROJECT.md constraints. |
+| Architecture | HIGH | Every integration point specified by file, method, and where relevant, line number. All patterns (delegation_map, sighup_loop, deque, Step 0 ordering) are existing code being extended, not invented. |
+| Pitfalls | HIGH | Critical pitfalls derived from project RETROSPECTIVE.md, libmdbx issue tracker, and Asio coroutine lifetime documentation. Not speculative — all grounded in concrete failure modes. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Storage architecture decision (Phase 3):** Research identifies the tradeoffs clearly but does not prescribe the final answer. The v1.0 YAGNI principle favors staying in libmdbx; correct large-blob engineering favors external storage. Decide explicitly before Phase 3 planning.
+- **Counter drift vs. direct libmdbx query:** STACK.md recommends querying libmdbx stats directly. PITFALLS.md identifies that an in-memory running counter drifts after crashes and misses decrement paths. Resolution is clear: always query libmdbx `env.get_info()`. PLAN-02 scope must explicitly include startup recomputation (one `compute_used_bytes()` call before accepting any ingests) rather than assuming the counter starts at zero.
 
-- **Memory budget validation:** Peak memory with 100 MiB blobs is ~300-500 MiB per connection (4 copies of blob in flight during ingest). Research recommends documenting 4 GiB RAM minimum for nodes handling large blobs. Validate during Phase 3 integration testing.
+- **io_context drain vs. hard stop():** ARCHITECTURE.md suggests `io_context::stop()` as a backstop after 5 seconds. PITFALLS.md warns against calling `io_context::stop()` while coroutines hold live references. These are compatible: prefer natural drain; `io_context::stop()` fires only after the configurable hard timeout if natural drain has not completed. PLAN-04 must document this as the fallback, not the primary mechanism.
 
-- **Namespace rename necessity:** Research flags the `chromatin::` -> `chromatindb::` rename as optional. If not required by milestone spec, skip it. Phase 1 scope drops from ~73 files to directory move + CMakeLists.txt updates only.
+- **Metrics counter type:** STACK.md drafted `NodeMetrics` with `std::atomic<uint64_t>`. PITFALLS.md recommends plain `uint64_t` on the single-threaded io_context path to avoid MFENCE overhead on the hot ingest path. Resolution: use plain `uint64_t` for all counters updated on the io_context thread; document that atomics would be needed only if a cross-thread reader is added in the future.
 
 ## Sources
 
-### Primary (HIGH confidence)
-- [libmdbx C API docs](https://libmdbx.dqdkfa.ru/group__c__api.html) — `MDBX_MAXDATASIZE = 0x7FFF0000`, overflow page handling
-- [libmdbx GitHub](https://github.com/erthink/libmdbx) — page size defaults, geometry configuration, overflow page issue #192
-- [FlatBuffers Internals](https://flatbuffers.dev/internals/) — 32-bit offset limit ~2 GiB; FlatBuffers issues #7537, #7391 confirm limit
-- [libsodium ChaCha20-Poly1305 docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305) — IETF variant ~256 GiB per-message limit
-- [RFC 7539](https://datatracker.ietf.org/doc/html/rfc7539) — IETF AEAD construction, 32-bit block counter
-- [TOCTOU CWE-367](https://cwe.mitre.org/data/definitions/367.html) — revocation timing analysis
-- chromatindb v1.0 source code — direct analysis of all 40+ source/header files with line-level references
+### Primary (HIGH confidence — source code verified)
+- `db/storage/storage.h` / `storage.cpp` — Storage API, sub-database structure, `has_tombstone_for` O(n) scan, `delegation_map` write pattern
+- `db/engine/engine.h` — `IngestError` enum, ingest pipeline, Step 0 ordering
+- `db/peer/peer_manager.h` / `peer_manager.cpp` — `PeerInfo` struct, persistence infrastructure, `sighup_loop` pattern, `stopping_` flag
+- `db/net/server.h` / `server.cpp` — `drain()` coroutine, SIGINT/SIGTERM handling
+- `db/wire/transport_generated.h` — `TransportMsgType` enum (current max: `Notification = 22`)
+- `db/main.cpp` — expiry scan coroutine (`asio::detached`, no cancellation path in current code)
+- `build/_deps/libmdbx-src/mdbx.h` lines 2808-2886 — `MDBX_envinfo` struct
+- `build/_deps/libmdbx-src/mdbx.h++` lines 5486-5495 — `env::get_info()` C++ wrapper
+- `.planning/RETROSPECTIVE.md` — SIGHUP lambda stack-use-after-return, deque invalidation at co_await
 
 ### Secondary (MEDIUM confidence)
-- [strfry Nostr relay](https://github.com/hoytech/strfry) — pubkey whitelist and connection-level gating patterns
-- [Quorum p2p auth](https://github.com/ConsenSys/quorum/pull/897/files) — disconnect unauthorized peers after handshake
-- [SIGHUP convention](https://blog.devtrovert.com/p/sighup-signal-for-configuration-reloads) — Unix daemon reload pattern
-- [Reth libmdbx large value discussion](https://github.com/paradigmxyz/reth/issues/19546) — real-world large value usage (third-party, not official)
-
-### Tertiary (LOW confidence)
-- [p2panda access control](https://p2panda.org/2025/07/28/access-control.html) — CRDT-based ACL design, referenced as anti-pattern only
+- [CockroachDB node shutdown](https://www.cockroachlabs.com/docs/dev/node-shutdown) — drain sequence: stop accepting → drain in-flight → disconnect
+- [Nostr NIP-11](https://nips.nostr.com/11) — storage capacity advertisement patterns
+- [LWN: crash-safe atomic file write](https://lwn.net/Articles/457667/) — temp + fsync + rename + directory fsync required on Linux
+- [libmdbx MDBX_MAP_FULL issue #136](https://github.com/erthink/libmdbx/issues/136) — confirmed production failure mode
+- [Token bucket algorithm reference](https://intronetworks.cs.luc.edu/current/html/tokenbucket.html) — algorithm correctness
+- [travisdowns.github.io: concurrency costs](https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html) — atomic fence overhead on hot paths
+- [Asio coroutine cancellation: chriskohlhoff/asio#1574](https://github.com/chriskohlhoff/asio/issues/1574) — object lifetime with co_spawn
+- [PouchDB filtered replication](https://pouchdb.com/2015/04/05/filtered-replication.html) — namespace-scoped sync pattern
+- [IPFS Kubo storage quota #972](https://github.com/ipfs/kubo/issues/972) — StorageMax config, mi_used_pgno tracking
 
 ---
-*Research completed: 2026-03-05*
+*Research completed: 2026-03-08*
 *Ready for roadmap: yes*
