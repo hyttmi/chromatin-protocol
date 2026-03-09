@@ -1,0 +1,97 @@
+# Requirements: chromatindb
+
+**Defined:** 2026-03-08
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+
+## v0.4.0 Requirements
+
+Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
+
+### Storage & Data Integrity
+
+- [ ] **STOR-01**: Tombstone lookups use O(1) indexed check via dedicated mdbx sub-database instead of O(n) namespace scan
+- [ ] **STOR-02**: Operator can configure a global storage limit (max_storage_bytes) that prevents the node from exceeding disk capacity
+- [ ] **STOR-03**: Storage limit check runs as Step 0 inside synchronous ingest() before any crypto operations
+- [ ] **STOR-04**: Node sends StorageFull wire message to peers when rejecting a blob due to capacity
+- [ ] **STOR-05**: Peers receiving StorageFull set a peer_is_full flag and suppress sync pushes to that peer
+
+### Operations
+
+- [ ] **OPS-01**: SIGTERM triggers graceful shutdown: stop accepting connections, drain in-flight coroutines, save peer list, bounded timeout
+- [ ] **OPS-02**: Expiry scan coroutine is cancellable via asio::cancellation_signal (not asio::detached with no cancel path)
+- [ ] **OPS-03**: Persistent peer list is saved atomically on clean shutdown (temp + fsync + rename + dir fsync)
+- [ ] **OPS-04**: Persistent peer list flushes periodically (30s timer) in addition to shutdown flush
+- [ ] **OPS-05**: NodeMetrics struct tracks blob count, storage used, connections, syncs, ingests, rejections, rate-limited count
+- [ ] **OPS-06**: SIGUSR1 dumps current metrics via spdlog (follows sighup_loop coroutine pattern)
+- [ ] **OPS-07**: Metrics logged periodically (60s timer) via spdlog
+
+### Protocol & Abuse Prevention
+
+- [ ] **PROT-01**: Per-connection token bucket rate limiter applies to Data/Delete messages (not sync BlobTransfer)
+- [ ] **PROT-02**: Rate limit exceeded triggers strike system (immediate disconnect, no backpressure delay)
+- [ ] **PROT-03**: Rate limit parameters configurable (rate_limit_bytes_per_sec, rate_limit_burst)
+- [ ] **PROT-04**: Operator can configure sync_namespaces to filter which namespaces the node replicates
+- [ ] **PROT-05**: Namespace filter applied at sync Phase A (namespace list assembly), not at blob transfer time
+- [ ] **PROT-06**: Empty sync_namespaces means replicate all (backward compatible default)
+
+### Documentation
+
+- [ ] **DOC-01**: README.md moved from repo root to db/ (chromatindb is the product, not the repo)
+- [ ] **DOC-02**: README documents config schema, startup, wire protocol overview, and deployment scenarios
+- [ ] **DOC-03**: Interaction samples file showing how to connect to and use the database programmatically
+- [ ] **DOC-04**: version.h updated to 0.4.0 after all features pass tests
+
+## Future Requirements
+
+### Deferred
+
+- **Per-namespace storage quota** — relay/application layer concern, not database node
+- **HTTP metrics endpoint** — violates "No HTTP/REST API" constraint
+- **Persistent rate limit state** — connection-scoped by design; reset on reconnect is correct
+- **Write-ahead rate limit queuing** — reject immediately; queuing adds memory pressure for no gain
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Per-namespace storage quota | Wrong layer — relay/app concern |
+| HTTP/Prometheus metrics endpoint | Violates PROJECT.md "No HTTP/REST API" |
+| Rate limit backpressure/queuing | Reject + disconnect is simpler and correct |
+| Persistent rate limit state across reconnects | Connection-scoped by design |
+| Per-peer namespace filter negotiation | YAGNI — global filter sufficient for v0.4.0 |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| STOR-01 | — | Pending |
+| STOR-02 | — | Pending |
+| STOR-03 | — | Pending |
+| STOR-04 | — | Pending |
+| STOR-05 | — | Pending |
+| OPS-01 | — | Pending |
+| OPS-02 | — | Pending |
+| OPS-03 | — | Pending |
+| OPS-04 | — | Pending |
+| OPS-05 | — | Pending |
+| OPS-06 | — | Pending |
+| OPS-07 | — | Pending |
+| PROT-01 | — | Pending |
+| PROT-02 | — | Pending |
+| PROT-03 | — | Pending |
+| PROT-04 | — | Pending |
+| PROT-05 | — | Pending |
+| PROT-06 | — | Pending |
+| DOC-01 | — | Pending |
+| DOC-02 | — | Pending |
+| DOC-03 | — | Pending |
+| DOC-04 | — | Pending |
+
+**Coverage:**
+- v0.4.0 requirements: 22 total
+- Mapped to phases: 0
+- Unmapped: 22 ⚠️
+
+---
+*Requirements defined: 2026-03-08*
+*Last updated: 2026-03-08 after initial definition*
