@@ -8,7 +8,7 @@ progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 10
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 16 of 19 (Storage Foundation)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: Executing
-Last activity: 2026-03-09 -- Completed 16-01 tombstone index O(1) + used_bytes
+Last activity: 2026-03-09 -- Completed 16-02 storage capacity limits (max_storage_bytes)
 
-Progress: [█░░░░░░░░░] 10%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [█░░░░░░░░░] 10%
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 16 | 01 | 27min | 2 | 3 |
+| 16 | 02 | 25min | 2 | 7 |
 
 ## Accumulated Context
 
@@ -59,6 +60,9 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 
 - **16-01:** Startup migration for tombstone_map (one-time scan, batched 1000/txn) over forward-only indexing
 - **16-01:** used_bytes() via env.get_info().mi_geo.current (authoritative, no drift)
+- **16-02:** Step 0b capacity check after oversized_blob but before structural/namespace/signature checks
+- **16-02:** Tombstone exemption from capacity check (they free space, always small)
+- **16-02:** max_storage_bytes=0 default means unlimited (backward compatible)
 
 ### Pending Todos
 
@@ -71,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-09
-Stopped at: Completed 16-01-PLAN.md (tombstone index O(1) + used_bytes). Next: 16-02.
+Stopped at: Completed 16-02-PLAN.md (storage capacity limits). Next: 16-03.
 Resume file: None

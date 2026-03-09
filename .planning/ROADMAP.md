@@ -142,7 +142,7 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 15. Polish & Benchmarks | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 16. Storage Foundation | 1/3 | In Progress|  | - |
+| 16. Storage Foundation | 2/3 | In Progress|  | - |
 | 17. Operational Stability | v0.4.0 | 0/3 | Not started | - |
 | 18. Abuse Prevention & Topology | v0.4.0 | 0/2 | Not started | - |
 | 19. Documentation & Release | v0.4.0 | 0/2 | Not started | - |
