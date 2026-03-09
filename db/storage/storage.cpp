@@ -79,6 +79,7 @@ struct Storage::Impl {
     mdbx::map_handle seq_map{0};
     mdbx::map_handle expiry_map{0};
     mdbx::map_handle delegation_map{0};
+    mdbx::map_handle tombstone_map{0};
     Clock clock;
 
     Impl(const std::string& data_dir, Clock clk) : clock(std::move(clk)) {
@@ -95,24 +96,70 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 5;  // 4 needed + 1 spare
+        operate_params.max_maps = 6;  // 5 sub-databases + 1 spare
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
 
         env = mdbx::env_managed(data_dir, create_params, operate_params);
 
-        // Create all 4 sub-databases in a single write transaction
+        // Create all 5 sub-databases in a single write transaction
         {
             auto txn = env.start_write();
             blobs_map = txn.create_map("blobs");
             seq_map = txn.create_map("sequence");
             expiry_map = txn.create_map("expiry");
             delegation_map = txn.create_map("delegation");
+            tombstone_map = txn.create_map("tombstone");
             txn.commit();
         }
 
-        spdlog::info("Storage opened at {} with 4 sub-databases", data_dir);
+        // One-time migration: populate tombstone_map from existing tombstone blobs
+        {
+            // Scan blobs_map with a read transaction to collect tombstone entries
+            struct TombstoneEntry {
+                std::array<uint8_t, 64> key;
+            };
+            std::vector<TombstoneEntry> entries;
+
+            {
+                auto rtxn = env.start_read();
+                auto cursor = rtxn.open_cursor(blobs_map);
+                auto result = cursor.to_first(false);
+                while (result.done) {
+                    auto val_data = cursor.current(false).value;
+                    auto blob = wire::decode_blob(std::span<const uint8_t>(
+                        static_cast<const uint8_t*>(val_data.data()),
+                        val_data.length()));
+                    if (wire::is_tombstone(blob.data)) {
+                        auto target_hash = wire::extract_tombstone_target(
+                            std::span<const uint8_t>(blob.data));
+                        auto ts_key = make_blob_key(
+                            blob.namespace_id.data(), target_hash.data());
+                        entries.push_back({ts_key});
+                    }
+                    result = cursor.to_next(false);
+                }
+            }
+
+            // Batch-write tombstone index entries (1000 per transaction)
+            if (!entries.empty()) {
+                constexpr size_t BATCH_SIZE = 1000;
+                for (size_t i = 0; i < entries.size(); i += BATCH_SIZE) {
+                    auto wtxn = env.start_write();
+                    size_t end = std::min(i + BATCH_SIZE, entries.size());
+                    for (size_t j = i; j < end; ++j) {
+                        wtxn.upsert(tombstone_map,
+                                    to_slice(entries[j].key), mdbx::slice());
+                    }
+                    wtxn.commit();
+                }
+                spdlog::info("Migrated {} existing tombstones to tombstone index",
+                             entries.size());
+            }
+        }
+
+        spdlog::info("Storage opened at {} with 5 sub-databases", data_dir);
     }
 
     uint64_t next_seq_num(mdbx::txn_managed& txn, const uint8_t* ns) {
@@ -253,6 +300,14 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
             // Value: [delegation_blob_hash:32]
             txn.upsert(impl_->delegation_map, to_slice(deleg_key),
                         mdbx::slice(hash.data(), hash.size()));
+        }
+
+        // Populate tombstone index if this is a tombstone blob
+        if (wire::is_tombstone(blob.data)) {
+            auto target_hash = wire::extract_tombstone_target(
+                std::span<const uint8_t>(blob.data));
+            auto ts_key = make_blob_key(blob.namespace_id.data(), target_hash.data());
+            txn.upsert(impl_->tombstone_map, to_slice(ts_key), mdbx::slice());
         }
 
         txn.commit();
@@ -560,6 +615,18 @@ bool Storage::delete_blob_data(
             }
         }
 
+        // Clean tombstone index if this was a tombstone blob
+        if (wire::is_tombstone(blob.data)) {
+            auto target_hash = wire::extract_tombstone_target(
+                std::span<const uint8_t>(blob.data));
+            auto ts_key = make_blob_key(ns.data(), target_hash.data());
+            try {
+                txn.erase(impl_->tombstone_map, to_slice(ts_key));
+            } catch (const mdbx::exception&) {
+                // Already deleted -- not an error
+            }
+        }
+
         txn.commit();
         spdlog::debug("Deleted blob from storage (ns {:02x}{:02x}...)",
                        ns[0], ns[1]);
@@ -592,41 +659,10 @@ bool Storage::has_tombstone_for(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> target_blob_hash) {
     try {
+        auto ts_key = make_blob_key(ns.data(), target_blob_hash.data());
         auto txn = impl_->env.start_read();
-        auto cursor = txn.open_cursor(impl_->blobs_map);
-
-        // Build lower bound key for this namespace: [ns:32][0x00...00:32]
-        std::array<uint8_t, 64> lower_key{};
-        std::memcpy(lower_key.data(), ns.data(), 32);
-        // Hash bytes are already zero-initialized
-
-        auto result = cursor.lower_bound(to_slice(lower_key));
-        if (!result.done) return false;
-
-        do {
-            auto key_data = cursor.current(false).key;
-            if (key_data.length() != 64) break;
-
-            // Check namespace prefix -- stop if we've left this namespace
-            if (std::memcmp(key_data.data(), ns.data(), 32) != 0) break;
-
-            // Read blob data and check if it's a tombstone targeting our hash
-            auto val_data = cursor.current(false).value;
-            auto blob = wire::decode_blob(std::span<const uint8_t>(
-                static_cast<const uint8_t*>(val_data.data()), val_data.length()));
-
-            if (wire::is_tombstone(blob.data)) {
-                auto target = wire::extract_tombstone_target(blob.data);
-                if (std::memcmp(target.data(), target_blob_hash.data(), 32) == 0) {
-                    return true;
-                }
-            }
-
-            auto next = cursor.to_next(false);
-            if (!next.done) break;
-        } while (true);
-
-        return false;
+        auto val = txn.get(impl_->tombstone_map, to_slice(ts_key), not_found_sentinel);
+        return val.data() != nullptr;
 
     } catch (const std::exception& e) {
         spdlog::error("Storage error in has_tombstone_for: {}", e.what());
@@ -697,6 +733,11 @@ size_t Storage::run_expiry_scan() {
     }
 
     return purged;
+}
+
+uint64_t Storage::used_bytes() const {
+    auto info = impl_->env.get_info();
+    return info.mi_geo.current;
 }
 
 } // namespace chromatindb::storage

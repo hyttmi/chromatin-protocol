@@ -40,10 +40,12 @@ uint64_t system_clock_seconds();
 
 /// Persistent blob storage engine backed by libmdbx.
 ///
-/// Manages three sub-databases:
-/// - blobs:    [namespace:32][hash:32] -> FlatBuffer-encoded blob
-/// - sequence: [namespace:32][seq_be:8] -> hash:32
-/// - expiry:   [expiry_ts_be:8][hash:32] -> namespace:32
+/// Manages five sub-databases:
+/// - blobs:      [namespace:32][hash:32] -> FlatBuffer-encoded blob
+/// - sequence:   [namespace:32][seq_be:8] -> hash:32
+/// - expiry:     [expiry_ts_be:8][hash:32] -> namespace:32
+/// - delegation: [namespace:32][delegate_pk_hash:32] -> delegation_blob_hash:32
+/// - tombstone:  [namespace:32][target_hash:32] -> (empty, existence check only)
 ///
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class Storage {
@@ -111,8 +113,8 @@ public:
         std::span<const uint8_t, 32> blob_hash);
 
     /// Check if a tombstone exists for a given target blob hash in a namespace.
-    /// Scans namespace blobs looking for tombstone data whose target matches.
-    /// O(n) in namespace size -- deletion is rare, correctness over performance.
+    /// Performs O(1) indexed lookup in the tombstone_map sub-database.
+    /// @return true if a tombstone blob exists targeting this hash in this namespace.
     bool has_tombstone_for(
         std::span<const uint8_t, 32> ns,
         std::span<const uint8_t, 32> target_blob_hash);
@@ -129,6 +131,10 @@ public:
     /// Sequence index entries are NOT deleted (gaps are expected).
     /// @return Number of blobs purged.
     size_t run_expiry_scan();
+
+    /// Return the current database file size in bytes.
+    /// Uses mdbx env info (O(1), authoritative).
+    uint64_t used_bytes() const;
 
 private:
     struct Impl;
