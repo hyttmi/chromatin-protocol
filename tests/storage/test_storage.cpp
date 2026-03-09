@@ -976,3 +976,102 @@ TEST_CASE("Delegation index: multiple delegations in same namespace", "[storage]
     REQUIRE(store.has_valid_delegation(
         owner.namespace_id(), delegate2.public_key()));
 }
+
+// ============================================================================
+// Phase 16-01: Tombstone index O(1) and used_bytes
+// ============================================================================
+
+TEST_CASE("Storage tombstone index - O(1) lookup finds stored tombstone", "[storage][tombstone-index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a regular blob
+    auto blob = make_test_blob(0x70, "target-blob");
+    auto blob_result = store.store_blob(blob);
+    REQUIRE(blob_result.status == StoreResult::Status::Stored);
+
+    // Store a tombstone targeting that blob
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id = blob.namespace_id;
+    tombstone.pubkey = blob.pubkey;
+    tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 2000;
+    tombstone.signature.resize(4627, 0x42);
+    store.store_blob(tombstone);
+
+    // O(1) indexed lookup should find it
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+}
+
+TEST_CASE("Storage tombstone index - lookup returns false for non-existent target", "[storage][tombstone-index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0x71);
+    std::array<uint8_t, 32> random_hash{};
+    random_hash.fill(0xCC);
+
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(random_hash)));
+}
+
+TEST_CASE("Storage tombstone index - cleanup on tombstone deletion", "[storage][tombstone-index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a regular blob
+    auto blob = make_test_blob(0x72, "target-for-delete");
+    auto blob_result = store.store_blob(blob);
+    REQUIRE(blob_result.status == StoreResult::Status::Stored);
+
+    // Store a tombstone targeting that blob
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id = blob.namespace_id;
+    tombstone.pubkey = blob.pubkey;
+    tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 2000;
+    tombstone.signature.resize(4627, 0x42);
+    auto ts_result = store.store_blob(tombstone);
+
+    // Tombstone should be found
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+
+    // Delete the tombstone blob
+    bool deleted = store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(ts_result.blob_hash));
+    REQUIRE(deleted);
+
+    // Tombstone index entry should be cleaned
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+}
+
+TEST_CASE("Storage used_bytes - non-zero after storing data", "[storage][used-bytes]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0x73, "some-data-for-size");
+    store.store_blob(blob);
+
+    REQUIRE(store.used_bytes() > 0);
+}
+
+TEST_CASE("Storage used_bytes - works on empty database", "[storage][used-bytes]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Should not throw, value >= 0 always true for uint64_t
+    auto bytes = store.used_bytes();
+    (void)bytes;  // Just verifying it doesn't throw
+    REQUIRE(true);
+}
