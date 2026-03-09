@@ -1297,6 +1297,7 @@ TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") 
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::storage_full);
+    REQUIRE(result.error_detail == "storage capacity exceeded");
 }
 
 TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]") {
@@ -1331,6 +1332,25 @@ TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[e
     auto blob = make_signed_blob(id, "unlimited-test");
 
     auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Ingest a blob first (with generous limit), then lower limit and delete
+    BlobEngine unlimited_engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "to-be-deleted");
+    auto ingest_result = unlimited_engine.ingest(blob);
+    REQUIRE(ingest_result.accepted);
+
+    // Now create a capacity-limited engine and delete via tombstone
+    BlobEngine limited_engine(store, 1);
+    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
+    auto result = limited_engine.delete_blob(tombstone);
+    // delete_blob has no capacity check (it creates tombstones, which are inherently exempt)
     REQUIRE(result.accepted);
 }
 
