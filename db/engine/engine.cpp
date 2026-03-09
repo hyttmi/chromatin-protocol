@@ -34,8 +34,8 @@ IngestResult IngestResult::rejection(IngestError err, std::string detail) {
 // BlobEngine
 // =============================================================================
 
-BlobEngine::BlobEngine(storage::Storage& store)
-    : storage_(store) {}
+BlobEngine::BlobEngine(storage::Storage& store, uint64_t max_storage_bytes)
+    : storage_(store), max_storage_bytes_(max_storage_bytes) {}
 
 IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
     // Step 0: Size check (cheapest possible -- one integer comparison)
@@ -45,6 +45,17 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
         return IngestResult::rejection(IngestError::oversized_blob,
             "blob data size " + std::to_string(blob.data.size()) +
             " exceeds max " + std::to_string(net::MAX_BLOB_DATA_SIZE));
+    }
+
+    // Step 0b: Capacity check (query + comparison, cheaper than crypto)
+    // Tombstones exempt: small (36 bytes) and they free space by deleting target
+    if (max_storage_bytes_ > 0 && !wire::is_tombstone(blob.data)) {
+        if (storage_.used_bytes() >= max_storage_bytes_) {
+            spdlog::warn("Ingest rejected: storage capacity exceeded ({} >= {} bytes)",
+                         storage_.used_bytes(), max_storage_bytes_);
+            return IngestResult::rejection(IngestError::storage_full,
+                "storage capacity exceeded");
+        }
     }
 
     // Step 1: Structural checks (cheapest first)

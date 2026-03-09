@@ -1279,3 +1279,70 @@ TEST_CASE("Multiple delegates: independent write and revocation", "[engine][dele
     auto blob4 = make_delegate_blob(owner, delegate2, "d2-still-works", 604800, 6001);
     REQUIRE(engine.ingest(blob4).accepted);
 }
+
+// ============================================================================
+// Plan 16-02: BlobEngine storage capacity enforcement
+// ============================================================================
+
+TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set max_storage_bytes = 1 byte -- any real database exceeds this immediately
+    BlobEngine engine(store, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "capacity-test");
+
+    auto result = engine.ingest(blob);
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.has_value());
+    REQUIRE(result.error.value() == IngestError::storage_full);
+}
+
+TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set max_storage_bytes = 1 byte -- database already exceeds this
+    BlobEngine engine(store, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create a tombstone targeting a random hash
+    std::array<uint8_t, 32> random_hash{};
+    random_hash.fill(0xAB);
+    auto tombstone = make_signed_tombstone(id, random_hash);
+
+    auto result = engine.ingest(tombstone);
+    // Tombstone should NOT be rejected with storage_full.
+    // It may fail for other reasons (like the target not existing), but
+    // the key assertion is that it does NOT fail with storage_full.
+    if (!result.accepted) {
+        REQUIRE(result.error.value() != IngestError::storage_full);
+    }
+}
+
+TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[engine][capacity]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Default: max_storage_bytes = 0 (unlimited)
+    BlobEngine engine(store);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "unlimited-test");
+
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set generous limit: 1 GiB
+    BlobEngine engine(store, 1ULL << 30);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "under-capacity-test");
+
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+}

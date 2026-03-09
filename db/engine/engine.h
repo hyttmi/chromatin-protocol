@@ -20,7 +20,8 @@ enum class IngestError {
     oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
     storage_error,        ///< Storage layer failed to write.
     tombstoned,           ///< Blob rejected because a tombstone exists for it.
-    no_delegation         ///< Delegate write rejected: no valid delegation exists.
+    no_delegation,        ///< Delegate write rejected: no valid delegation exists.
+    storage_full          ///< Storage capacity exceeded (max_storage_bytes).
 };
 
 /// Status of a successful ingest.
@@ -58,7 +59,8 @@ class BlobEngine {
 public:
     /// Construct a BlobEngine backed by the given storage.
     /// @param store Reference to storage (must outlive this engine).
-    explicit BlobEngine(storage::Storage& store);
+    /// @param max_storage_bytes Capacity limit in bytes (0 = unlimited).
+    explicit BlobEngine(storage::Storage& store, uint64_t max_storage_bytes = 0);
 
     /// Validate and ingest a blob.
     ///
@@ -107,6 +109,7 @@ public:
 
 private:
     storage::Storage& storage_;
+    uint64_t max_storage_bytes_ = 0;
 };
 
 } // namespace chromatindb::engine

@@ -19,6 +19,7 @@ struct Config {
     std::string log_level = "info";
     uint32_t max_peers = 32;
     uint32_t sync_interval_seconds = 60;
+    uint64_t max_storage_bytes = 0;                 // 0 = unlimited (no capacity limit)
     std::vector<std::string> allowed_keys;          // Hex namespace hashes (64 chars each)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };

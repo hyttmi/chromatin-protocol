@@ -119,7 +119,7 @@ int cmd_run(int argc, char* argv[]) {
 
     // Create components
     chromatindb::storage::Storage storage(config.data_dir);
-    chromatindb::engine::BlobEngine engine(storage);
+    chromatindb::engine::BlobEngine engine(storage, config.max_storage_bytes);
     asio::io_context ioc;
 
     chromatindb::acl::AccessControl acl(config.allowed_keys, identity.namespace_id());

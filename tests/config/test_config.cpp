@@ -126,6 +126,41 @@ TEST_CASE("parse_args without --config uses base config", "[config]") {
     REQUIRE(cfg.data_dir == "/override");
 }
 
+// =============================================================================
+// Storage capacity: max_storage_bytes config tests
+// =============================================================================
+
+TEST_CASE("max_storage_bytes parses from JSON", "[config][capacity]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_maxstorage.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"max_storage_bytes": 1073741824})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.max_storage_bytes == 1073741824);  // 1 GiB
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("max_storage_bytes defaults to 0 when missing", "[config][capacity]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_nomaxstorage.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.max_storage_bytes == 0);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Default config has max_storage_bytes 0 (unlimited)", "[config][capacity]") {
+    Config cfg;
+    REQUIRE(cfg.max_storage_bytes == 0);
+}
+
 TEST_CASE("BLOB_TTL_SECONDS is a protocol constant", "[config]") {
     REQUIRE(chromatindb::config::BLOB_TTL_SECONDS == 604800);  // 7 days
     // Verify it's not part of Config struct (compile-time guarantee)
