@@ -114,51 +114,6 @@ struct Storage::Impl {
             txn.commit();
         }
 
-        // One-time migration: populate tombstone_map from existing tombstone blobs
-        {
-            // Scan blobs_map with a read transaction to collect tombstone entries
-            struct TombstoneEntry {
-                std::array<uint8_t, 64> key;
-            };
-            std::vector<TombstoneEntry> entries;
-
-            {
-                auto rtxn = env.start_read();
-                auto cursor = rtxn.open_cursor(blobs_map);
-                auto result = cursor.to_first(false);
-                while (result.done) {
-                    auto val_data = cursor.current(false).value;
-                    auto blob = wire::decode_blob(std::span<const uint8_t>(
-                        static_cast<const uint8_t*>(val_data.data()),
-                        val_data.length()));
-                    if (wire::is_tombstone(blob.data)) {
-                        auto target_hash = wire::extract_tombstone_target(
-                            std::span<const uint8_t>(blob.data));
-                        auto ts_key = make_blob_key(
-                            blob.namespace_id.data(), target_hash.data());
-                        entries.push_back({ts_key});
-                    }
-                    result = cursor.to_next(false);
-                }
-            }
-
-            // Batch-write tombstone index entries (1000 per transaction)
-            if (!entries.empty()) {
-                constexpr size_t BATCH_SIZE = 1000;
-                for (size_t i = 0; i < entries.size(); i += BATCH_SIZE) {
-                    auto wtxn = env.start_write();
-                    size_t end = std::min(i + BATCH_SIZE, entries.size());
-                    for (size_t j = i; j < end; ++j) {
-                        wtxn.upsert(tombstone_map,
-                                    to_slice(entries[j].key), mdbx::slice());
-                    }
-                    wtxn.commit();
-                }
-                spdlog::info("Migrated {} existing tombstones to tombstone index",
-                             entries.size());
-            }
-        }
-
         spdlog::info("Storage opened at {} with 5 sub-databases", data_dir);
     }
 
