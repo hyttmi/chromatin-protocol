@@ -1056,6 +1056,104 @@ TEST_CASE("Storage tombstone index - cleanup on tombstone deletion", "[storage][
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 }
 
+TEST_CASE("Storage tombstone index - multiple tombstones in same namespace", "[storage][tombstone-index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store two regular blobs
+    auto blob1 = make_test_blob(0x74, "multi-target-1");
+    auto blob2 = make_test_blob(0x74, "multi-target-2");
+    auto r1 = store.store_blob(blob1);
+    auto r2 = store.store_blob(blob2);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+    REQUIRE(r2.status == StoreResult::Status::Stored);
+
+    // Store tombstones targeting each blob
+    chromatindb::wire::BlobData ts1;
+    ts1.namespace_id = blob1.namespace_id;
+    ts1.pubkey = blob1.pubkey;
+    ts1.data = chromatindb::wire::make_tombstone_data(r1.blob_hash);
+    ts1.ttl = 0;
+    ts1.timestamp = 2000;
+    ts1.signature.resize(4627, 0x42);
+    auto ts1_result = store.store_blob(ts1);
+
+    chromatindb::wire::BlobData ts2;
+    ts2.namespace_id = blob2.namespace_id;
+    ts2.pubkey = blob2.pubkey;
+    ts2.data = chromatindb::wire::make_tombstone_data(r2.blob_hash);
+    ts2.ttl = 0;
+    ts2.timestamp = 2001;
+    ts2.signature.resize(4627, 0x42);
+    store.store_blob(ts2);
+
+    // Both tombstones should be found
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(r1.blob_hash)));
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob2.namespace_id),
+        std::span<const uint8_t, 32>(r2.blob_hash)));
+
+    // Delete only the first tombstone
+    bool deleted = store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(ts1_result.blob_hash));
+    REQUIRE(deleted);
+
+    // First should be gone, second still present
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(r1.blob_hash)));
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob2.namespace_id),
+        std::span<const uint8_t, 32>(r2.blob_hash)));
+}
+
+TEST_CASE("Storage tombstone index - cross-namespace isolation", "[storage][tombstone-index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Same target hash in two different namespaces
+    std::array<uint8_t, 32> target{};
+    target.fill(0xDD);
+
+    // Tombstone in namespace 0x75
+    chromatindb::wire::BlobData ts_a;
+    ts_a.namespace_id.fill(0x75);
+    ts_a.pubkey.resize(2592, 0x75);
+    ts_a.data = chromatindb::wire::make_tombstone_data(target);
+    ts_a.ttl = 0;
+    ts_a.timestamp = 2000;
+    ts_a.signature.resize(4627, 0x42);
+    store.store_blob(ts_a);
+
+    // Tombstone in namespace 0x76
+    chromatindb::wire::BlobData ts_b;
+    ts_b.namespace_id.fill(0x76);
+    ts_b.pubkey.resize(2592, 0x76);
+    ts_b.data = chromatindb::wire::make_tombstone_data(target);
+    ts_b.ttl = 0;
+    ts_b.timestamp = 2000;
+    ts_b.signature.resize(4627, 0x42);
+    store.store_blob(ts_b);
+
+    // Both namespaces should find the tombstone
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(ts_a.namespace_id),
+        std::span<const uint8_t, 32>(target)));
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(ts_b.namespace_id),
+        std::span<const uint8_t, 32>(target)));
+
+    // A third namespace without a tombstone should return false
+    std::array<uint8_t, 32> other_ns{};
+    other_ns.fill(0x77);
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(other_ns),
+        std::span<const uint8_t, 32>(target)));
+}
+
 TEST_CASE("Storage used_bytes - non-zero after storing data", "[storage][used-bytes]") {
     TempDir tmp;
     Storage store(tmp.path.string());
