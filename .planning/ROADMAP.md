@@ -5,6 +5,7 @@
 - ✅ **v1.0 MVP** — Phases 1-8 (shipped 2026-03-05)
 - ✅ **v2.0 Closed Node Model** — Phases 9-11 (shipped 2026-03-07)
 - ✅ **v3.0 Real-time & Delegation** — Phases 12-15 (shipped 2026-03-08)
+- **v0.4.0 Production Readiness** — Phases 16-19 (in progress)
 
 ## Phases
 
@@ -47,7 +48,82 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 
 </details>
 
+### v0.4.0 Production Readiness
+
+- [ ] **Phase 16: Storage Foundation** - O(1) tombstone lookups, bounded disk usage, disk-full signaling to peers
+- [ ] **Phase 17: Operational Stability** - Graceful shutdown, persistent peer list, runtime observability
+- [ ] **Phase 18: Abuse Prevention & Topology** - Per-connection rate limiting, namespace-scoped sync filtering
+- [ ] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0
+
+## Phase Details
+
+### Phase 16: Storage Foundation
+**Goal**: Node enforces storage capacity at the protocol boundary with O(1) tombstone verification
+**Depends on**: Phase 15
+**Requirements**: STOR-01, STOR-02, STOR-03, STOR-04, STOR-05
+**Success Criteria** (what must be TRUE):
+  1. Tombstone lookups complete in O(1) via indexed sub-database instead of scanning all blobs in the namespace
+  2. Node stops accepting blobs when storage exceeds the configured max_storage_bytes limit
+  3. Storage capacity check runs before any cryptographic operations on the ingest path
+  4. Peers receiving a StorageFull message suppress sync pushes to the full node until reconnection
+**Plans**: 3 plans
+
+Plans:
+- [ ] 16-01: Tombstone index (tombstone_map DBI, startup migration, O(1) has_tombstone_for)
+- [ ] 16-02: Storage limits (used_bytes query, IngestError::storage_full, Step 0 capacity check in ingest)
+- [ ] 16-03: Disk-full reporting (StorageFull wire message, peer_is_full flag, sync push suppression)
+
+### Phase 17: Operational Stability
+**Goal**: Node survives restarts and crashes without losing peer connections or operational visibility
+**Depends on**: Phase 16
+**Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06, OPS-07
+**Success Criteria** (what must be TRUE):
+  1. SIGTERM triggers a bounded shutdown that drains in-flight coroutines, saves peer list, and exits cleanly
+  2. Node reconnects to previously-known peers after restart without requiring bootstrap re-discovery
+  3. Operator can send SIGUSR1 to get a metrics snapshot (connections, storage used, blobs, syncs, rejections) in the log
+  4. Metrics are logged automatically every 60 seconds without operator intervention
+  5. Expiry scan coroutine is cancellable and does not block shutdown
+**Plans**: 3 plans
+
+Plans:
+- [ ] 17-01: Graceful shutdown (stop sequence, expiry coroutine cancellation, bounded drain timeout)
+- [ ] 17-02: Persistent peer list (atomic file write, 30s periodic flush, shutdown flush)
+- [ ] 17-03: Metrics (NodeMetrics struct, counter instrumentation, SIGUSR1 dump, periodic log)
+
+### Phase 18: Abuse Prevention & Topology
+**Goal**: Open nodes resist write-flooding abuse and operators control which namespaces replicate
+**Depends on**: Phase 17
+**Requirements**: PROT-01, PROT-02, PROT-03, PROT-04, PROT-05, PROT-06
+**Success Criteria** (what must be TRUE):
+  1. A peer exceeding the configured write rate is disconnected via the strike system without stalling the io_context
+  2. Rate limiting applies only to Data and Delete messages, not to sync BlobTransfer traffic
+  3. Operator can configure sync_namespaces to restrict which namespaces the node replicates
+  4. Namespace filter is applied at sync Phase A (namespace list assembly) so filtered namespace IDs are never sent to peers
+  5. Empty sync_namespaces defaults to replicate-all behavior (backward compatible)
+**Plans**: 2 plans
+
+Plans:
+- [ ] 18-01: Rate limiting (token bucket in PeerInfo, config fields, strike integration)
+- [ ] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A)
+
+### Phase 19: Documentation & Release
+**Goal**: Operator can deploy and interact with chromatindb using documented procedures
+**Depends on**: Phase 18
+**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04
+**Success Criteria** (what must be TRUE):
+  1. db/README.md documents config schema, startup command, wire protocol overview, and deployment scenarios
+  2. Interaction samples file demonstrates how to connect to and use the database programmatically
+  3. version.h reports 0.4.0 and all tests pass with the new version
+**Plans**: 2 plans
+
+Plans:
+- [ ] 19-01: README and interaction samples (db/README.md, usage examples)
+- [ ] 19-02: Version bump (version.h to 0.4.0, test verification)
+
 ## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -66,3 +142,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 15. Polish & Benchmarks | v3.0 | 2/2 | Complete | 2026-03-08 |
+| 16. Storage Foundation | v0.4.0 | 0/3 | Not started | - |
+| 17. Operational Stability | v0.4.0 | 0/3 | Not started | - |
+| 18. Abuse Prevention & Topology | v0.4.0 | 0/2 | Not started | - |
+| 19. Documentation & Release | v0.4.0 | 0/2 | Not started | - |

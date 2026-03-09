@@ -1,7 +1,7 @@
 # Requirements: chromatindb
 
 **Defined:** 2026-03-08
-**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 
 ## v0.4.0 Requirements
 
@@ -45,53 +45,53 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 
 ### Deferred
 
-- **Per-namespace storage quota** — relay/application layer concern, not database node
-- **HTTP metrics endpoint** — violates "No HTTP/REST API" constraint
-- **Persistent rate limit state** — connection-scoped by design; reset on reconnect is correct
-- **Write-ahead rate limit queuing** — reject immediately; queuing adds memory pressure for no gain
+- **Per-namespace storage quota** -- relay/application layer concern, not database node
+- **HTTP metrics endpoint** -- violates "No HTTP/REST API" constraint
+- **Persistent rate limit state** -- connection-scoped by design; reset on reconnect is correct
+- **Write-ahead rate limit queuing** -- reject immediately; queuing adds memory pressure for no gain
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Per-namespace storage quota | Wrong layer — relay/app concern |
+| Per-namespace storage quota | Wrong layer -- relay/app concern |
 | HTTP/Prometheus metrics endpoint | Violates PROJECT.md "No HTTP/REST API" |
 | Rate limit backpressure/queuing | Reject + disconnect is simpler and correct |
 | Persistent rate limit state across reconnects | Connection-scoped by design |
-| Per-peer namespace filter negotiation | YAGNI — global filter sufficient for v0.4.0 |
+| Per-peer namespace filter negotiation | YAGNI -- global filter sufficient for v0.4.0 |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STOR-01 | — | Pending |
-| STOR-02 | — | Pending |
-| STOR-03 | — | Pending |
-| STOR-04 | — | Pending |
-| STOR-05 | — | Pending |
-| OPS-01 | — | Pending |
-| OPS-02 | — | Pending |
-| OPS-03 | — | Pending |
-| OPS-04 | — | Pending |
-| OPS-05 | — | Pending |
-| OPS-06 | — | Pending |
-| OPS-07 | — | Pending |
-| PROT-01 | — | Pending |
-| PROT-02 | — | Pending |
-| PROT-03 | — | Pending |
-| PROT-04 | — | Pending |
-| PROT-05 | — | Pending |
-| PROT-06 | — | Pending |
-| DOC-01 | — | Pending |
-| DOC-02 | — | Pending |
-| DOC-03 | — | Pending |
-| DOC-04 | — | Pending |
+| STOR-01 | Phase 16 | Pending |
+| STOR-02 | Phase 16 | Pending |
+| STOR-03 | Phase 16 | Pending |
+| STOR-04 | Phase 16 | Pending |
+| STOR-05 | Phase 16 | Pending |
+| OPS-01 | Phase 17 | Pending |
+| OPS-02 | Phase 17 | Pending |
+| OPS-03 | Phase 17 | Pending |
+| OPS-04 | Phase 17 | Pending |
+| OPS-05 | Phase 17 | Pending |
+| OPS-06 | Phase 17 | Pending |
+| OPS-07 | Phase 17 | Pending |
+| PROT-01 | Phase 18 | Pending |
+| PROT-02 | Phase 18 | Pending |
+| PROT-03 | Phase 18 | Pending |
+| PROT-04 | Phase 18 | Pending |
+| PROT-05 | Phase 18 | Pending |
+| PROT-06 | Phase 18 | Pending |
+| DOC-01 | Phase 19 | Pending |
+| DOC-02 | Phase 19 | Pending |
+| DOC-03 | Phase 19 | Pending |
+| DOC-04 | Phase 19 | Pending |
 
 **Coverage:**
 - v0.4.0 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22 ⚠️
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-08*
-*Last updated: 2026-03-08 after initial definition*
+*Last updated: 2026-03-09 after roadmap creation*
