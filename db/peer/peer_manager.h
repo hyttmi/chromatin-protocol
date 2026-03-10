@@ -167,6 +167,9 @@ private:
     void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
     asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout);
 
+    // Periodic peer list flush
+    asio::awaitable<void> peer_flush_timer_loop();
+
     // PEX protocol
     asio::awaitable<void> pex_timer_loop();
     asio::awaitable<void> request_peers_from_all();

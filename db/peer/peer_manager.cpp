@@ -3,6 +3,9 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <fcntl.h>    // O_WRONLY, O_CREAT, O_TRUNC, O_RDONLY, O_DIRECTORY
+#include <unistd.h>   // ::write, ::fsync, ::close, ::open
+
 #include <algorithm>
 #include <csignal>
 #include <cstring>
@@ -115,6 +118,9 @@ void PeerManager::start() {
 
     // Start periodic peer exchange timer
     asio::co_spawn(ioc_, pex_timer_loop(), asio::detached);
+
+    // Start periodic peer list flush timer (30s)
+    asio::co_spawn(ioc_, peer_flush_timer_loop(), asio::detached);
 
     // Start cancellable expiry scan coroutine
     asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
@@ -961,6 +967,21 @@ asio::awaitable<void> PeerManager::expiry_scan_loop() {
 }
 
 // =============================================================================
+// Periodic peer list flush
+// =============================================================================
+
+asio::awaitable<void> PeerManager::peer_flush_timer_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        timer.expires_after(std::chrono::seconds(30));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        if (ec || stopping_) co_return;
+        save_persisted_peers();
+    }
+}
+
+// =============================================================================
 // PEX wire encoding
 // =============================================================================
 
@@ -1286,13 +1307,50 @@ void PeerManager::save_persisted_peers() {
     }
 
     auto path = peers_file_path();
+    auto tmp_path = std::filesystem::path(path.string() + ".tmp");
+
     try {
         std::filesystem::create_directories(path.parent_path());
-        std::ofstream f(path);
-        f << j.dump(2);
-        spdlog::debug("saved {} persisted peers to {}", persisted_peers_.size(), path.string());
+        auto json_str = j.dump(2);
+
+        // Write to temp file via raw POSIX (std::ofstream cannot fsync)
+        int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            spdlog::warn("failed to create temp peer file: {}", strerror(errno));
+            return;
+        }
+
+        auto written = ::write(fd, json_str.data(), json_str.size());
+        if (written < 0 || static_cast<size_t>(written) != json_str.size()) {
+            ::close(fd);
+            std::filesystem::remove(tmp_path);
+            spdlog::warn("failed to write temp peer file");
+            return;
+        }
+
+        if (::fsync(fd) != 0) {
+            ::close(fd);
+            std::filesystem::remove(tmp_path);
+            spdlog::warn("failed to fsync temp peer file");
+            return;
+        }
+        ::close(fd);
+
+        // Atomic rename
+        std::filesystem::rename(tmp_path, path);
+
+        // Directory fsync (required on Linux for rename durability)
+        int dir_fd = ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+        if (dir_fd >= 0) {
+            ::fsync(dir_fd);
+            ::close(dir_fd);
+        }
+
+        spdlog::debug("saved {} persisted peers", persisted_peers_.size());
     } catch (const std::exception& e) {
         spdlog::warn("failed to save persisted peers: {}", e.what());
+        std::error_code ec;
+        std::filesystem::remove(tmp_path, ec);
     }
 }
 
