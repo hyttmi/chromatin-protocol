@@ -56,6 +56,17 @@ struct PeerInfo {
     bool peer_is_full = false;
 };
 
+/// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
+/// Monotonically increasing since startup (never reset).
+struct NodeMetrics {
+    uint64_t ingests = 0;                  // Successful blob ingestions
+    uint64_t rejections = 0;               // Failed ingestions (validation errors)
+    uint64_t syncs = 0;                    // Completed sync rounds
+    uint64_t rate_limited = 0;             // Rate limit rejections (Phase 18, stub at 0)
+    uint64_t peers_connected_total = 0;    // Total peer connections since startup
+    uint64_t peers_disconnected_total = 0; // Total peer disconnections since startup
+};
+
 /// Manages peer connections, sync scheduling, and connection policies.
 ///
 /// Wraps Server and adds:
@@ -89,6 +100,9 @@ public:
 
     /// Number of connected bootstrap peers.
     size_t bootstrap_peer_count() const;
+
+    /// Access metrics (for testing and metrics output).
+    const NodeMetrics& metrics() const { return metrics_; }
 
     /// Sync constants (public for testing).
     static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;  ///< Max hashes per BlobRequest
@@ -229,6 +243,8 @@ private:
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
     NotificationCallback on_notification_;        // Test hook for notification dispatch
+    NodeMetrics metrics_;
+    std::chrono::steady_clock::time_point start_time_;
 };
 
 } // namespace chromatindb::peer

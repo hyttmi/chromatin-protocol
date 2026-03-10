@@ -77,6 +77,8 @@ PeerManager::PeerManager(const config::Config& config,
 }
 
 void PeerManager::start() {
+    start_time_ = std::chrono::steady_clock::now();
+
     // Log access control mode
     if (acl_.is_closed_mode()) {
         spdlog::info("access control: closed mode ({} allowed keys)", acl_.allowed_count());
@@ -205,6 +207,7 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
 
     peers_.push_back(info);
     peers_.back().sync_inbox.clear();
+    ++metrics_.peers_connected_total;
 
     // Track this peer's address
     known_addresses_.insert(info.address);
@@ -238,6 +241,7 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
                            return p.connection == conn;
                        }),
         peers_.end());
+    ++metrics_.peers_disconnected_total;
 }
 
 // =============================================================================
@@ -384,7 +388,11 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     result.ack->seq_num,
                     static_cast<uint32_t>(blob.data.size()),
                     wire::is_tombstone(blob.data));
+                ++metrics_.ingests;
+            } else if (result.accepted) {
+                ++metrics_.ingests;  // Duplicate or already-known blob
             } else if (!result.accepted && result.error.has_value()) {
+                ++metrics_.rejections;
                 if (*result.error == engine::IngestError::storage_full) {
                     // Send StorageFull to inform peer we cannot accept blobs
                     spdlog::warn("Storage full, notifying peer {}", peer_display_name(conn));
@@ -645,6 +653,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         }
     }
 
+    ++metrics_.syncs;
     peer->syncing = false;
 }
 
@@ -812,6 +821,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         }
     }
 
+    ++metrics_.syncs;
     peer->syncing = false;
 }
 

@@ -1360,3 +1360,95 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         ioc.run_for(std::chrono::seconds(2));
     }
 }
+
+// ============================================================================
+// Phase 17: NodeMetrics counter instrumentation tests (OPS-05)
+// ============================================================================
+
+TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14320";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14321";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14320"};
+    cfg2.sync_interval_seconds = 2;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob in node1 -- will be synced to node2
+    auto blob1 = make_signed_blob(id1, "metrics-test", 604800, now);
+    auto r1 = eng1.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    // Metrics start at zero
+    REQUIRE(pm1.metrics().peers_connected_total == 0);
+    REQUIRE(pm1.metrics().syncs == 0);
+    REQUIRE(pm1.metrics().ingests == 0);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Both nodes should be connected
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // peers_connected_total should have incremented on both nodes
+    REQUIRE(pm1.metrics().peers_connected_total > 0);
+    REQUIRE(pm2.metrics().peers_connected_total > 0);
+
+    // Sync should have completed at least once on both sides
+    REQUIRE(pm1.metrics().syncs > 0);
+    REQUIRE(pm2.metrics().syncs > 0);
+
+    // Node2 should have received and ingested the blob via sync
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+
+    // rate_limited starts at 0 (Phase 18 stub)
+    REQUIRE(pm1.metrics().rate_limited == 0);
+    REQUIRE(pm2.metrics().rate_limited == 0);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+
+    // After disconnect, peers_disconnected_total should increment
+    REQUIRE(pm1.metrics().peers_disconnected_total > 0);
+    REQUIRE(pm2.metrics().peers_disconnected_total > 0);
+}
+
+TEST_CASE("NodeMetrics struct default initialization", "[peer][metrics]") {
+    chromatindb::peer::NodeMetrics m;
+    REQUIRE(m.ingests == 0);
+    REQUIRE(m.rejections == 0);
+    REQUIRE(m.syncs == 0);
+    REQUIRE(m.rate_limited == 0);
+    REQUIRE(m.peers_connected_total == 0);
+    REQUIRE(m.peers_disconnected_total == 0);
+}
