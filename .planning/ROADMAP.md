@@ -86,9 +86,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 17-01: Graceful shutdown (stop sequence, expiry coroutine cancellation, bounded drain timeout)
-- [ ] 17-02: Persistent peer list (atomic file write, 30s periodic flush, shutdown flush)
-- [ ] 17-03: Metrics (NodeMetrics struct, counter instrumentation, SIGUSR1 dump, periodic log)
+- [ ] 17-01: Graceful shutdown + expiry cancellation (Server on_shutdown callback, re-arming signal handler, cancellable expiry coroutine, exit code propagation)
+- [ ] 17-02: Persistent peer list + NodeMetrics (atomic file write, 30s periodic flush, NodeMetrics struct, counter instrumentation)
+- [ ] 17-03: SIGUSR1 dump + periodic metrics log (sigusr1_loop coroutine, dump_metrics, metrics_timer_loop, structured key=value output)
 
 ### Phase 18: Abuse Prevention & Topology
 **Goal**: Open nodes resist write-flooding abuse and operators control which namespaces replicate
