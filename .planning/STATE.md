@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 17 of 19 (Operational Stability)
-Plan: 1 of 3 in current phase (17-01 complete)
+Plan: 2 of 3 in current phase (17-02 complete)
 Status: Executing
-Last activity: 2026-03-10 -- Completed 17-01 graceful shutdown + cancellable expiry
+Last activity: 2026-03-10 -- Completed 17-02 peer persistence & metrics
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [████░░░░░░] 40%
 | 16 | 02 | 25min | 2 | 7 |
 | 16 | 03 | 34min | 2 | 7 |
 | 17 | 01 | 4min | 2 | 5 |
+| 17 | 02 | 6min | 2 | 3 |
 
 ## Accumulated Context
 
@@ -71,6 +72,9 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **17-01:** Timer-cancel pattern (pointer to stack timer) for expiry scan over cancellation_signal
 - **17-01:** on_shutdown callback registered after server_.start() to ensure signal handler armed first
 - **17-01:** Exit code propagated via accessor chain Server -> PeerManager -> main
+- **17-02:** Atomic write inline (not reusable utility) per YAGNI
+- **17-02:** Count duplicates as ingests (accepted by engine)
+- **17-02:** Plain uint64_t counters (single io_context thread, no atomics needed)
 
 ### Pending Todos
 
@@ -83,5 +87,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 17-01-PLAN.md (graceful shutdown + cancellable expiry). Next: 17-02.
+Stopped at: Completed 17-02-PLAN.md (peer persistence & metrics). Next: 17-03.
 Resume file: None
