@@ -94,6 +94,14 @@ void PeerManager::start() {
 
     server_.start();
 
+    // Register shutdown callback (save peers before drain)
+    server_.set_on_shutdown([this]() {
+        stopping_ = true;
+        save_persisted_peers();  // Save while connection list is still accurate
+        sighup_signal_.cancel();
+        if (expiry_timer_) expiry_timer_->cancel();
+    });
+
     // Connect to persisted peers (in addition to bootstrap peers from server_.start())
     for (const auto& pp : persisted_peers_) {
         if (!bootstrap_addresses_.count(pp.address)) {
@@ -107,12 +115,20 @@ void PeerManager::start() {
 
     // Start periodic peer exchange timer
     asio::co_spawn(ioc_, pex_timer_loop(), asio::detached);
+
+    // Start cancellable expiry scan coroutine
+    asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
 }
 
 void PeerManager::stop() {
     stopping_ = true;
     sighup_signal_.cancel();
+    if (expiry_timer_) expiry_timer_->cancel();
     server_.stop();
+}
+
+int PeerManager::exit_code() const {
+    return server_.exit_code();
 }
 
 size_t PeerManager::peer_count() const {
@@ -920,6 +936,27 @@ void PeerManager::disconnect_unauthorized_peers() {
 
     if (!to_disconnect.empty()) {
         spdlog::info("config reload: disconnected {} peer(s)", to_disconnect.size());
+    }
+}
+
+// =============================================================================
+// Expiry scanning (cancellable member coroutine)
+// =============================================================================
+
+asio::awaitable<void> PeerManager::expiry_scan_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        expiry_timer_ = &timer;
+        timer.expires_after(std::chrono::seconds(60));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        expiry_timer_ = nullptr;
+        if (ec || stopping_) co_return;
+
+        auto purged = storage_.run_expiry_scan();
+        if (purged > 0) {
+            spdlog::info("expiry scan: purged {} blobs", purged);
+        }
     }
 }
 

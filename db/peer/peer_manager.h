@@ -84,6 +84,9 @@ public:
     /// Number of currently connected peers.
     size_t peer_count() const;
 
+    /// Exit code from Server: 0 = clean shutdown, 1 = forced/timeout.
+    int exit_code() const;
+
     /// Number of connected bootstrap peers.
     size_t bootstrap_peer_count() const;
 
@@ -187,6 +190,9 @@ private:
     void handle_sighup();
     void disconnect_unauthorized_peers();
 
+    // Expiry scanning (cancellable member coroutine)
+    asio::awaitable<void> expiry_scan_loop();
+
     // Pub/Sub notification dispatch
     /// Notify all peers subscribed to a namespace about a new blob.
     /// Fires co_spawn per subscriber -- async, does not block caller.
@@ -218,6 +224,7 @@ private:
     std::set<std::string> known_addresses_;      // All addresses we know about
     std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
+    asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
     NotificationCallback on_notification_;        // Test hook for notification dispatch
 };
 

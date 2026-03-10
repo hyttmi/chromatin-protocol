@@ -126,28 +126,12 @@ int cmd_run(int argc, char* argv[]) {
     chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, acl, config.config_path);
     pm.start();
 
-    // Periodic expiry scanner
-    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
-        while (true) {
-            asio::steady_timer timer(ioc);
-            timer.expires_after(std::chrono::seconds(60));
-            auto [ec] = co_await timer.async_wait(
-                asio::as_tuple(asio::use_awaitable));
-            if (ec) co_return;
-
-            auto purged = storage.run_expiry_scan();
-            if (purged > 0) {
-                spdlog::info("expiry scan: purged {} blobs", purged);
-            }
-        }
-    }(), asio::detached);
-
     spdlog::info("daemon started");
 
-    // Run event loop
+    // Run event loop (expiry scanning now lives in PeerManager)
     ioc.run();
 
-    return 0;
+    return pm.exit_code();
 }
 
 } // anonymous namespace
