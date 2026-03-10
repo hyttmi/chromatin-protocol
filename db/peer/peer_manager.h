@@ -207,6 +207,18 @@ private:
     void handle_sighup();
     void disconnect_unauthorized_peers();
 
+    // SIGUSR1 metrics dump
+    void setup_sigusr1_handler();
+    asio::awaitable<void> sigusr1_loop();
+    void dump_metrics();
+
+    // Periodic metrics
+    asio::awaitable<void> metrics_timer_loop();
+    void log_metrics_line();
+
+    // Helpers
+    uint64_t compute_uptime_seconds() const;
+
     // Expiry scanning (cancellable member coroutine)
     asio::awaitable<void> expiry_scan_loop();
 
@@ -234,6 +246,7 @@ private:
     net::Server server_;
     sync::SyncProtocol sync_proto_;
     asio::signal_set sighup_signal_;
+    asio::signal_set sigusr1_signal_;
     std::filesystem::path config_path_;
 
     std::deque<PeerInfo> peers_;

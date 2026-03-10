@@ -50,6 +50,7 @@ PeerManager::PeerManager(const config::Config& config,
     , server_(config, identity, ioc)
     , sync_proto_(engine, storage)
     , sighup_signal_(ioc)
+    , sigusr1_signal_(ioc)
     , config_path_(config_path) {
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
@@ -94,6 +95,9 @@ void PeerManager::start() {
         spdlog::info("SIGHUP reload: disabled (no --config provided)");
     }
 
+    // Set up SIGUSR1 handler for metrics dump (always enabled, no config dependency)
+    setup_sigusr1_handler();
+
     // Load persisted peers before starting server
     load_persisted_peers();
 
@@ -104,6 +108,7 @@ void PeerManager::start() {
         stopping_ = true;
         save_persisted_peers();  // Save while connection list is still accurate
         sighup_signal_.cancel();
+        sigusr1_signal_.cancel();
         if (expiry_timer_) expiry_timer_->cancel();
     });
 
@@ -126,11 +131,15 @@ void PeerManager::start() {
 
     // Start cancellable expiry scan coroutine
     asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
+
+    // Start periodic metrics log timer (60s)
+    asio::co_spawn(ioc_, metrics_timer_loop(), asio::detached);
 }
 
 void PeerManager::stop() {
     stopping_ = true;
     sighup_signal_.cancel();
+    sigusr1_signal_.cancel();
     if (expiry_timer_) expiry_timer_->cancel();
     server_.stop();
 }
@@ -1401,6 +1410,94 @@ PeerInfo* PeerManager::find_peer(const net::Connection::Ptr& conn) {
 std::string PeerManager::peer_display_name(const net::Connection::Ptr& conn) {
     auto ns_hex = to_hex(conn->peer_pubkey());
     return ns_hex + "@" + conn->remote_address();
+}
+
+// =============================================================================
+// SIGUSR1 metrics dump
+// =============================================================================
+
+void PeerManager::setup_sigusr1_handler() {
+    sigusr1_signal_.add(SIGUSR1);
+    asio::co_spawn(ioc_, sigusr1_loop(), asio::detached);
+}
+
+asio::awaitable<void> PeerManager::sigusr1_loop() {
+    while (!stopping_) {
+        auto [ec, sig] = co_await sigusr1_signal_.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        if (ec || stopping_) co_return;
+        dump_metrics();
+    }
+}
+
+void PeerManager::dump_metrics() {
+    spdlog::info("=== METRICS DUMP (SIGUSR1) ===");
+
+    // Global counters (same data as periodic line)
+    log_metrics_line();
+
+    // Per-peer breakdown
+    spdlog::info("  peers: {}", peers_.size());
+    for (const auto& peer : peers_) {
+        auto ns_hex = to_hex(peer.connection->peer_pubkey(), 4);
+        spdlog::info("    {} (ns:{}...)", peer.address, ns_hex);
+    }
+
+    // Per-namespace stats via list_namespaces()
+    auto namespaces = storage_.list_namespaces();
+    spdlog::info("  namespaces: {}", namespaces.size());
+    for (const auto& ns : namespaces) {
+        auto ns_hex = to_hex(
+            std::span<const uint8_t>(ns.namespace_id.data(), ns.namespace_id.size()), 4);
+        spdlog::info("    ns:{:>8}... latest_seq={}", ns_hex, ns.latest_seq_num);
+    }
+
+    spdlog::info("=== END METRICS DUMP ===");
+}
+
+// =============================================================================
+// Periodic metrics
+// =============================================================================
+
+asio::awaitable<void> PeerManager::metrics_timer_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        timer.expires_after(std::chrono::seconds(60));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        if (ec || stopping_) co_return;
+        log_metrics_line();
+    }
+}
+
+void PeerManager::log_metrics_line() {
+    auto storage_bytes = storage_.used_bytes();
+    auto storage_mib = static_cast<double>(storage_bytes) / (1024.0 * 1024.0);
+    auto uptime = compute_uptime_seconds();
+
+    // Sum latest_seq_num across namespaces as blob count proxy
+    // (O(N namespaces) not O(N blobs), acceptable for periodic logging)
+    uint64_t blob_count = 0;
+    auto namespaces = storage_.list_namespaces();
+    for (const auto& ns : namespaces) {
+        blob_count += ns.latest_seq_num;
+    }
+
+    spdlog::info("metrics: connections={} blobs={} storage={:.1f}MiB "
+                 "syncs={} ingests={} rejections={} uptime={}",
+                 peers_.size(),
+                 blob_count,
+                 storage_mib,
+                 metrics_.syncs,
+                 metrics_.ingests,
+                 metrics_.rejections,
+                 uptime);
+}
+
+uint64_t PeerManager::compute_uptime_seconds() const {
+    auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count());
 }
 
 } // namespace chromatindb::peer
