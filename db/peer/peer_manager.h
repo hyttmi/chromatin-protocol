@@ -52,6 +52,8 @@ struct PeerInfo {
     asio::steady_timer* sync_notify = nullptr;
     // Pub/Sub subscriptions (connection-scoped)
     std::set<std::array<uint8_t, 32>> subscribed_namespaces;
+    // Phase 16: Storage capacity signaling (resets on reconnect via PeerInfo recreation)
+    bool peer_is_full = false;
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.

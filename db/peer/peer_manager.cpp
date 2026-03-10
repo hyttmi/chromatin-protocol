@@ -339,6 +339,16 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_StorageFull) {
+        auto* peer = find_peer(conn);
+        if (peer) {
+            peer->peer_is_full = true;
+            spdlog::info("Peer {} reported storage full, suppressing sync pushes",
+                         peer_display_name(conn));
+        }
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob
         try {
@@ -353,10 +363,19 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     static_cast<uint32_t>(blob.data.size()),
                     wire::is_tombstone(blob.data));
             } else if (!result.accepted && result.error.has_value()) {
-                spdlog::warn("invalid blob from peer {}: {}",
-                             conn->remote_address(),
-                             result.error_detail.empty() ? "validation failed" : result.error_detail);
-                record_strike(conn, result.error_detail);
+                if (*result.error == engine::IngestError::storage_full) {
+                    // Send StorageFull to inform peer we cannot accept blobs
+                    spdlog::warn("Storage full, notifying peer {}", peer_display_name(conn));
+                    asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+                        std::span<const uint8_t> empty{};
+                        co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
+                    }, asio::detached);
+                } else {
+                    spdlog::warn("invalid blob from peer {}: {}",
+                                 conn->remote_address(),
+                                 result.error_detail.empty() ? "validation failed" : result.error_detail);
+                    record_strike(conn, result.error_detail);
+                }
             }
         } catch (const std::exception& e) {
             spdlog::warn("malformed data message from peer {}: {}",
@@ -520,8 +539,14 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
+                    total_stats.storage_full_count += s.storage_full_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+                    // Skip outbound blob pushes if peer is full
+                    if (peer->peer_is_full) {
+                        spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
+                        continue;
+                    }
                     auto [req_ns, requested_hashes] =
                         sync::SyncProtocol::decode_hash_list(msg->payload);
                     for (const auto& hash : requested_hashes) {
@@ -546,6 +571,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
+            // Skip outbound blob pushes if peer is full
+            if (peer->peer_is_full) {
+                spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
+                continue;
+            }
             auto [req_ns, requested_hashes] =
                 sync::SyncProtocol::decode_hash_list(msg->payload);
             for (const auto& hash : requested_hashes) {
@@ -567,6 +597,14 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                  conn->remote_address(),
                  total_stats.blobs_received, total_stats.blobs_sent,
                  total_stats.namespaces_synced);
+
+    // Post-sync StorageFull signal: inform peer if we rejected blobs for capacity
+    if (total_stats.storage_full_count > 0) {
+        std::span<const uint8_t> empty{};
+        co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
+        spdlog::warn("Sent StorageFull to sync peer {} ({} blobs rejected)",
+                     peer_display_name(conn), total_stats.storage_full_count);
+    }
 
     // PEX exchange: send PeerListRequest and wait for response (inline, no concurrent send)
     // Skip in closed mode -- don't advertise or discover peers
@@ -672,8 +710,14 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
+                    total_stats.storage_full_count += s.storage_full_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
+                    // Skip outbound blob pushes if peer is full
+                    if (peer->peer_is_full) {
+                        spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
+                        continue;
+                    }
                     auto [req_ns, requested_hashes] =
                         sync::SyncProtocol::decode_hash_list(msg->payload);
                     for (const auto& hash : requested_hashes) {
@@ -698,6 +742,11 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
+            // Skip outbound blob pushes if peer is full
+            if (peer->peer_is_full) {
+                spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
+                continue;
+            }
             auto [req_ns, requested_hashes] =
                 sync::SyncProtocol::decode_hash_list(msg->payload);
             for (const auto& hash : requested_hashes) {
@@ -719,6 +768,14 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                  conn->remote_address(),
                  total_stats.blobs_received, total_stats.blobs_sent,
                  total_stats.namespaces_synced);
+
+    // Post-sync StorageFull signal: inform peer if we rejected blobs for capacity
+    if (total_stats.storage_full_count > 0) {
+        std::span<const uint8_t> empty{};
+        co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
+        spdlog::warn("Sent StorageFull to sync peer {} ({} blobs rejected)",
+                     peer_display_name(conn), total_stats.storage_full_count);
+    }
 
     // PEX exchange: wait for PeerListRequest from initiator, then respond (inline, no concurrent send)
     // Skip in closed mode -- don't share peer addresses

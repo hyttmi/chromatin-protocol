@@ -43,11 +43,12 @@ enum TransportMsgType : int8_t {
   TransportMsgType_Subscribe = 20,
   TransportMsgType_Unsubscribe = 21,
   TransportMsgType_Notification = 22,
+  TransportMsgType_StorageFull = 23,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_Notification
+  TransportMsgType_MAX = TransportMsgType_StorageFull
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[23] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[24] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -71,13 +72,14 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[23] {
     TransportMsgType_DeleteAck,
     TransportMsgType_Subscribe,
     TransportMsgType_Unsubscribe,
-    TransportMsgType_Notification
+    TransportMsgType_Notification,
+    TransportMsgType_StorageFull
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[24] = {
+  static const char * const names[25] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -101,13 +103,14 @@ inline const char * const *EnumNamesTransportMsgType() {
     "Subscribe",
     "Unsubscribe",
     "Notification",
+    "StorageFull",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_Notification)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_StorageFull)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

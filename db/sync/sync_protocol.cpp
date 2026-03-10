@@ -91,6 +91,7 @@ void SyncProtocol::set_on_blob_ingested(OnBlobIngested callback) {
 SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
     SyncStats stats;
     uint64_t now = clock_();
+    uint32_t storage_full_count = 0;
 
     for (const auto& blob : blobs) {
         // Skip expired blobs (SYNC-03)
@@ -114,11 +115,18 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
                     wire::is_tombstone(blob.data));
             }
         } else if (result.error.has_value()) {
-            spdlog::warn("sync ingest rejected blob: {}",
-                         result.error_detail.empty() ? "unknown" : result.error_detail);
+            if (*result.error == engine::IngestError::storage_full) {
+                // Skip blob silently -- do not count as received, do not fire callback
+                storage_full_count++;
+                spdlog::debug("Sync blob skipped: storage full");
+            } else {
+                spdlog::warn("sync ingest rejected blob: {}",
+                             result.error_detail.empty() ? "unknown" : result.error_detail);
+            }
         }
     }
 
+    stats.storage_full_count = storage_full_count;
     return stats;
 }
 
