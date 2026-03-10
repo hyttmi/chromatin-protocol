@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 
 ## Current Position
 
-Phase: 17 of 19 (Operational Stability)
-Plan: 2 of 3 in current phase (17-02 complete)
-Status: Executing
-Last activity: 2026-03-10 -- Completed 17-02 peer persistence & metrics
+Phase: 17 of 19 (Operational Stability) -- COMPLETE
+Plan: 3 of 3 in current phase (17-03 complete)
+Status: Phase complete
+Last activity: 2026-03-10 -- Completed 17-03 metrics dump & periodic log
 
-Progress: [██████░░░░] 60%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [██████░░░░] 60%
 | 16 | 03 | 34min | 2 | 7 |
 | 17 | 01 | 4min | 2 | 5 |
 | 17 | 02 | 6min | 2 | 3 |
+| 17 | 03 | 6min | 2 | 3 |
 
 ## Accumulated Context
 
@@ -75,6 +76,8 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **17-02:** Atomic write inline (not reusable utility) per YAGNI
 - **17-02:** Count duplicates as ingests (accepted by engine)
 - **17-02:** Plain uint64_t counters (single io_context thread, no atomics needed)
+- **17-03:** Sync-ingested blobs do not increment metrics_.ingests (counter tracks direct IngestBlob messages only)
+- **17-03:** blob_count as sum of latest_seq_num is upper-bound proxy (acceptable for logging)
 
 ### Pending Todos
 
@@ -87,5 +90,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 17-02-PLAN.md (peer persistence & metrics). Next: 17-03.
+Stopped at: Completed 17-03-PLAN.md (metrics dump & periodic log). Phase 17 complete. Next: Phase 18.
 Resume file: None

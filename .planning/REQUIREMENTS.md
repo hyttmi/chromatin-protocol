@@ -22,8 +22,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 - [x] **OPS-03**: Persistent peer list is saved atomically on clean shutdown (temp + fsync + rename + dir fsync)
 - [x] **OPS-04**: Persistent peer list flushes periodically (30s timer) in addition to shutdown flush
 - [x] **OPS-05**: NodeMetrics struct tracks blob count, storage used, connections, syncs, ingests, rejections, rate-limited count
-- [ ] **OPS-06**: SIGUSR1 dumps current metrics via spdlog (follows sighup_loop coroutine pattern)
-- [ ] **OPS-07**: Metrics logged periodically (60s timer) via spdlog
+- [x] **OPS-06**: SIGUSR1 dumps current metrics via spdlog (follows sighup_loop coroutine pattern)
+- [x] **OPS-07**: Metrics logged periodically (60s timer) via spdlog
 
 ### Protocol & Abuse Prevention
 
@@ -74,8 +74,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | OPS-03 | Phase 17 | Complete |
 | OPS-04 | Phase 17 | Complete |
 | OPS-05 | Phase 17 | Complete |
-| OPS-06 | Phase 17 | Pending |
-| OPS-07 | Phase 17 | Pending |
+| OPS-06 | Phase 17 | Complete |
+| OPS-07 | Phase 17 | Complete |
 | PROT-01 | Phase 18 | Pending |
 | PROT-02 | Phase 18 | Pending |
 | PROT-03 | Phase 18 | Pending |
