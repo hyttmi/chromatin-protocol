@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 16 - Storage Foundation (v0.4.0 Production Readiness)
+**Current focus:** Phase 17 - Operational Stability (v0.4.0 Production Readiness)
 
 ## Current Position
 
-Phase: 16 of 19 (Storage Foundation) -- COMPLETE
-Plan: 3 of 3 in current phase (all complete)
+Phase: 17 of 19 (Operational Stability)
+Plan: 1 of 3 in current phase (17-01 complete)
 Status: Executing
-Last activity: 2026-03-10 -- Completed 16-03 disk-full signaling (StorageFull wire message)
+Last activity: 2026-03-10 -- Completed 17-01 graceful shutdown + cancellable expiry
 
-Progress: [███░░░░░░░] 30%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███░░░░░░░] 30%
 | 16 | 01 | 27min | 2 | 3 |
 | 16 | 02 | 25min | 2 | 7 |
 | 16 | 03 | 34min | 2 | 7 |
+| 17 | 01 | 4min | 2 | 5 |
 
 ## Accumulated Context
 
@@ -67,6 +68,9 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **16-03:** StorageFull is empty-payload signaling (no data needed), no StorageAvailable message
 - **16-03:** peer_is_full resets via PeerInfo default construction on reconnect
 - **16-03:** Suppression is outbound-only (full peers can still serve data they have)
+- **17-01:** Timer-cancel pattern (pointer to stack timer) for expiry scan over cancellation_signal
+- **17-01:** on_shutdown callback registered after server_.start() to ensure signal handler armed first
+- **17-01:** Exit code propagated via accessor chain Server -> PeerManager -> main
 
 ### Pending Todos
 
@@ -79,5 +83,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 16-03-PLAN.md (disk-full signaling). Phase 16 complete. Next: Phase 17.
+Stopped at: Completed 17-01-PLAN.md (graceful shutdown + cancellable expiry). Next: 17-02.
 Resume file: None

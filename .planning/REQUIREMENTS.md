@@ -17,8 +17,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 
 ### Operations
 
-- [ ] **OPS-01**: SIGTERM triggers graceful shutdown: stop accepting connections, drain in-flight coroutines, save peer list, bounded timeout
-- [ ] **OPS-02**: Expiry scan coroutine is cancellable via asio::cancellation_signal (not asio::detached with no cancel path)
+- [x] **OPS-01**: SIGTERM triggers graceful shutdown: stop accepting connections, drain in-flight coroutines, save peer list, bounded timeout
+- [x] **OPS-02**: Expiry scan coroutine is cancellable via asio::cancellation_signal (not asio::detached with no cancel path)
 - [ ] **OPS-03**: Persistent peer list is saved atomically on clean shutdown (temp + fsync + rename + dir fsync)
 - [ ] **OPS-04**: Persistent peer list flushes periodically (30s timer) in addition to shutdown flush
 - [ ] **OPS-05**: NodeMetrics struct tracks blob count, storage used, connections, syncs, ingests, rejections, rate-limited count
@@ -69,8 +69,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | STOR-03 | Phase 16 | Complete |
 | STOR-04 | Phase 16 | Complete |
 | STOR-05 | Phase 16 | Complete |
-| OPS-01 | Phase 17 | Pending |
-| OPS-02 | Phase 17 | Pending |
+| OPS-01 | Phase 17 | Complete |
+| OPS-02 | Phase 17 | Complete |
 | OPS-03 | Phase 17 | Pending |
 | OPS-04 | Phase 17 | Pending |
 | OPS-05 | Phase 17 | Pending |
