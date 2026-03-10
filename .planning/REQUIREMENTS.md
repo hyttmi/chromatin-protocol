@@ -12,8 +12,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 - [x] **STOR-01**: Tombstone lookups use O(1) indexed check via dedicated mdbx sub-database instead of O(n) namespace scan
 - [x] **STOR-02**: Operator can configure a global storage limit (max_storage_bytes) that prevents the node from exceeding disk capacity
 - [x] **STOR-03**: Storage limit check runs as Step 0 inside synchronous ingest() before any crypto operations
-- [ ] **STOR-04**: Node sends StorageFull wire message to peers when rejecting a blob due to capacity
-- [ ] **STOR-05**: Peers receiving StorageFull set a peer_is_full flag and suppress sync pushes to that peer
+- [x] **STOR-04**: Node sends StorageFull wire message to peers when rejecting a blob due to capacity
+- [x] **STOR-05**: Peers receiving StorageFull set a peer_is_full flag and suppress sync pushes to that peer
 
 ### Operations
 
@@ -67,8 +67,8 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | STOR-01 | Phase 16 | Complete |
 | STOR-02 | Phase 16 | Complete |
 | STOR-03 | Phase 16 | Complete |
-| STOR-04 | Phase 16 | Pending |
-| STOR-05 | Phase 16 | Pending |
+| STOR-04 | Phase 16 | Complete |
+| STOR-05 | Phase 16 | Complete |
 | OPS-01 | Phase 17 | Pending |
 | OPS-02 | Phase 17 | Pending |
 | OPS-03 | Phase 17 | Pending |

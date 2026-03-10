@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Production Readiness
 status: executing
-last_updated: "2026-03-09"
+last_updated: "2026-03-10"
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 10
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 
 ## Current Position
 
-Phase: 16 of 19 (Storage Foundation)
-Plan: 2 of 3 in current phase
+Phase: 16 of 19 (Storage Foundation) -- COMPLETE
+Plan: 3 of 3 in current phase (all complete)
 Status: Executing
-Last activity: 2026-03-09 -- Completed 16-02 storage capacity limits (max_storage_bytes)
+Last activity: 2026-03-10 -- Completed 16-03 disk-full signaling (StorageFull wire message)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███░░░░░░░] 30%
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [██░░░░░░░░] 20%
 |-------|------|----------|-------|-------|
 | 16 | 01 | 27min | 2 | 3 |
 | 16 | 02 | 25min | 2 | 7 |
+| 16 | 03 | 34min | 2 | 7 |
 
 ## Accumulated Context
 
@@ -63,6 +64,9 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **16-02:** Step 0b capacity check after oversized_blob but before structural/namespace/signature checks
 - **16-02:** Tombstone exemption from capacity check (they free space, always small)
 - **16-02:** max_storage_bytes=0 default means unlimited (backward compatible)
+- **16-03:** StorageFull is empty-payload signaling (no data needed), no StorageAvailable message
+- **16-03:** peer_is_full resets via PeerInfo default construction on reconnect
+- **16-03:** Suppression is outbound-only (full peers can still serve data they have)
 
 ### Pending Todos
 
@@ -74,6 +78,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09
-Stopped at: Completed 16-02-PLAN.md (storage capacity limits). Next: 16-03.
+Last session: 2026-03-10
+Stopped at: Completed 16-03-PLAN.md (disk-full signaling). Phase 16 complete. Next: Phase 17.
 Resume file: None
