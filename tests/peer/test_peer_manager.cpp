@@ -1430,6 +1430,14 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
     REQUIRE(n2_blobs.size() == 1);
 
+    // No invalid blobs were sent -- rejections should be zero
+    REQUIRE(pm1.metrics().rejections == 0);
+    REQUIRE(pm2.metrics().rejections == 0);
+
+    // No disconnections yet (before stop)
+    REQUIRE(pm1.metrics().peers_disconnected_total == 0);
+    REQUIRE(pm2.metrics().peers_disconnected_total == 0);
+
     // rate_limited starts at 0 (Phase 18 stub)
     REQUIRE(pm1.metrics().rate_limited == 0);
     REQUIRE(pm2.metrics().rate_limited == 0);
