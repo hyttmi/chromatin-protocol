@@ -22,6 +22,7 @@ public:
     /// Callback types for PeerManager integration.
     using ConnectionCallback = std::function<void(Connection::Ptr)>;
     using AcceptFilter = std::function<bool()>;
+    using ShutdownCallback = std::function<void()>;
 
     Server(const config::Config& config,
            const identity::NodeIdentity& identity,
@@ -48,6 +49,12 @@ public:
     /// Set filter for accepting inbound connections (return false to reject).
     void set_accept_filter(AcceptFilter cb) { accept_filter_ = std::move(cb); }
 
+    /// Set callback invoked before drain starts (PeerManager saves peers here).
+    void set_on_shutdown(ShutdownCallback cb) { on_shutdown_ = std::move(cb); }
+
+    /// Exit code: 0 = clean shutdown, 1 = forced/timeout.
+    int exit_code() const { return exit_code_; }
+
     /// Connect to a peer once (no reconnect on failure). For discovered peers.
     void connect_once(const std::string& address);
 
@@ -67,6 +74,9 @@ private:
     /// Remove a connection from the active set.
     void remove_connection(Connection::Ptr conn);
 
+    /// Arm (or re-arm) the SIGINT/SIGTERM signal handler.
+    void arm_signal_handler();
+
     /// Parse "host:port" string.
     static std::pair<std::string, std::string> parse_address(const std::string& addr);
 
@@ -84,6 +94,8 @@ private:
     ConnectionCallback on_connected_;
     ConnectionCallback on_disconnected_;
     AcceptFilter accept_filter_;
+    ShutdownCallback on_shutdown_;
+    int exit_code_ = 0;
 };
 
 } // namespace chromatindb::net

@@ -47,21 +47,16 @@ void Server::start() {
         asio::co_spawn(ioc_, connect_to_peer(peer), asio::detached);
     }
 
-    // Signal handling
-    signals_.async_wait([this](asio::error_code ec, int sig) {
-        if (ec) return;
-        if (draining_) {
-            spdlog::info("second signal received ({}), forcing exit", sig);
-            std::_Exit(1);
-        }
-        spdlog::info("signal {} received, starting graceful shutdown", sig);
-        stop();
-    });
+    // Signal handling (re-arming for second-signal force shutdown)
+    arm_signal_handler();
 }
 
 void Server::stop() {
     if (draining_) return;
     draining_ = true;
+
+    // Invoke pre-drain callback (PeerManager saves peers here)
+    if (on_shutdown_) on_shutdown_();
 
     // Cancel acceptor
     asio::error_code ec;
@@ -69,6 +64,25 @@ void Server::stop() {
 
     // Start drain coroutine
     asio::co_spawn(ioc_, drain(std::chrono::seconds(5)), asio::detached);
+}
+
+void Server::arm_signal_handler() {
+    signals_.async_wait([this](asio::error_code ec, int sig) {
+        if (ec) return;
+        if (draining_) {
+            // Second signal: force shutdown, clean exit (NOT std::_Exit)
+            spdlog::info("second signal received ({}), forcing shutdown", sig);
+            for (auto& conn : connections_) conn->close();
+            connections_.clear();
+            exit_code_ = 1;
+            spdlog::default_logger()->flush();
+            ioc_.stop();
+            return;
+        }
+        spdlog::info("signal {} received, starting graceful shutdown", sig);
+        stop();
+        arm_signal_handler();  // Re-arm for second signal
+    });
 }
 
 size_t Server::connection_count() const {
@@ -312,11 +326,14 @@ asio::awaitable<void> Server::drain(std::chrono::seconds timeout) {
     timer.expires_after(timeout);
     auto [ec] = co_await timer.async_wait(use_nothrow);
 
-    // Force close any remaining
-    for (auto& conn : connections_) {
-        conn->close();
+    // Force close any remaining (timeout = forced shutdown)
+    if (!connections_.empty()) {
+        exit_code_ = 1;
+        for (auto& conn : connections_) {
+            conn->close();
+        }
+        connections_.clear();
     }
-    connections_.clear();
 
     spdlog::info("shutdown complete");
     ioc_.stop();
