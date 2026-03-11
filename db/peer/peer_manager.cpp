@@ -53,6 +53,17 @@ bool try_consume_tokens(PeerInfo& peer, uint64_t bytes,
     return true;
 }
 
+/// Convert 64-char hex string to 32-byte namespace ID.
+/// Caller must ensure hex.size() == 64 and all chars are valid hex.
+std::array<uint8_t, 32> hex_to_namespace(const std::string& hex) {
+    std::array<uint8_t, 32> result{};
+    for (size_t i = 0; i < 32; ++i) {
+        auto byte_str = hex.substr(i * 2, 2);
+        result[i] = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+    }
+    return result;
+}
+
 } // anonymous namespace
 
 PeerManager::PeerManager(const config::Config& config,
@@ -76,6 +87,11 @@ PeerManager::PeerManager(const config::Config& config,
     // Initialize rate limit parameters from config
     rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
     rate_limit_burst_ = config.rate_limit_burst;
+
+    // Initialize namespace filter from config
+    for (const auto& hex : config.sync_namespaces) {
+        sync_namespaces_.insert(hex_to_namespace(hex));
+    }
 
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
@@ -995,6 +1011,23 @@ void PeerManager::reload_config() {
                      rate_limit_bytes_per_sec_, rate_limit_burst_);
     } else {
         spdlog::info("config reload: rate_limit=disabled");
+    }
+
+    // Reload sync_namespaces
+    try {
+        config::validate_allowed_keys(new_cfg.sync_namespaces);
+    } catch (const std::exception& e) {
+        spdlog::error("config reload rejected (malformed sync_namespace): {} (keeping current)", e.what());
+        return;
+    }
+    sync_namespaces_.clear();
+    for (const auto& hex : new_cfg.sync_namespaces) {
+        sync_namespaces_.insert(hex_to_namespace(hex));
+    }
+    if (sync_namespaces_.empty()) {
+        spdlog::info("config reload: sync_namespaces=all (unrestricted)");
+    } else {
+        spdlog::info("config reload: sync_namespaces={} namespaces", sync_namespaces_.size());
     }
 }
 

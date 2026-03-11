@@ -260,6 +260,7 @@ private:
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
+    std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;

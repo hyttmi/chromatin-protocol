@@ -42,6 +42,15 @@ Config load_config(const std::filesystem::path& path) {
         }
     }
 
+    if (j.contains("sync_namespaces") && j["sync_namespaces"].is_array()) {
+        for (const auto& ns : j["sync_namespaces"]) {
+            if (ns.is_string()) {
+                cfg.sync_namespaces.push_back(ns.get<std::string>());
+            }
+        }
+        validate_allowed_keys(cfg.sync_namespaces);  // Same 64-char hex format
+    }
+
     if (j.contains("allowed_keys") && j["allowed_keys"].is_array()) {
         for (const auto& key : j["allowed_keys"]) {
             if (key.is_string()) {

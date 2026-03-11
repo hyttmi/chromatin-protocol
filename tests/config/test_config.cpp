@@ -355,3 +355,67 @@ TEST_CASE("rate_limit fields default to 0 when missing from JSON", "[config][rat
 
     std::filesystem::remove(tmp);
 }
+
+// =============================================================================
+// Namespace filtering: sync_namespaces config tests
+// =============================================================================
+
+TEST_CASE("Default config has empty sync_namespaces", "[config][nsfilter]") {
+    Config cfg;
+    REQUIRE(cfg.sync_namespaces.empty());
+}
+
+TEST_CASE("load_config parses sync_namespaces from JSON array", "[config][nsfilter]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_nsfilter.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "sync_namespaces": [
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ]
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_namespaces.size() == 2);
+    REQUIRE(cfg.sync_namespaces[0] == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+    REQUIRE(cfg.sync_namespaces[1] == "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("sync_namespaces defaults to empty when missing from JSON", "[config][nsfilter]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_nsfilter.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_namespaces.empty());
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
+
+    SECTION("wrong length") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"sync_namespaces": ["abcd"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    SECTION("non-hex chars") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"sync_namespaces": ["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    std::filesystem::remove(tmp);
+}

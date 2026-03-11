@@ -22,6 +22,7 @@ struct Config {
     uint64_t max_storage_bytes = 0;                 // 0 = unlimited (no capacity limit)
     uint64_t rate_limit_bytes_per_sec = 0;          // 0 = disabled (no rate limiting)
     uint64_t rate_limit_burst = 0;                  // Burst capacity in bytes (0 = disabled)
+    std::vector<std::string> sync_namespaces;       // Hex namespace hashes to replicate (empty = all)
     std::vector<std::string> allowed_keys;          // Hex namespace hashes (64 chars each)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
