@@ -27,9 +27,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 
 ### Protocol & Abuse Prevention
 
-- [ ] **PROT-01**: Per-connection token bucket rate limiter applies to Data/Delete messages (not sync BlobTransfer)
-- [ ] **PROT-02**: Rate limit exceeded triggers strike system (immediate disconnect, no backpressure delay)
-- [ ] **PROT-03**: Rate limit parameters configurable (rate_limit_bytes_per_sec, rate_limit_burst)
+- [x] **PROT-01**: Per-connection token bucket rate limiter applies to Data/Delete messages (not sync BlobTransfer)
+- [x] **PROT-02**: Rate limit exceeded triggers strike system (immediate disconnect, no backpressure delay)
+- [x] **PROT-03**: Rate limit parameters configurable (rate_limit_bytes_per_sec, rate_limit_burst)
 - [ ] **PROT-04**: Operator can configure sync_namespaces to filter which namespaces the node replicates
 - [ ] **PROT-05**: Namespace filter applied at sync Phase A (namespace list assembly), not at blob transfer time
 - [ ] **PROT-06**: Empty sync_namespaces means replicate all (backward compatible default)
@@ -76,9 +76,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | OPS-05 | Phase 17 | Complete |
 | OPS-06 | Phase 17 | Complete |
 | OPS-07 | Phase 17 | Complete |
-| PROT-01 | Phase 18 | Pending |
-| PROT-02 | Phase 18 | Pending |
-| PROT-03 | Phase 18 | Pending |
+| PROT-01 | Phase 18 | Complete |
+| PROT-02 | Phase 18 | Complete |
+| PROT-03 | Phase 18 | Complete |
 | PROT-04 | Phase 18 | Pending |
 | PROT-05 | Phase 18 | Pending |
 | PROT-06 | Phase 18 | Pending |

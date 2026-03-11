@@ -144,5 +144,5 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 15. Polish & Benchmarks | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 16. Storage Foundation | 3/3 | Complete    | 2026-03-10 | - |
 | 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
-| 18. Abuse Prevention & Topology | v0.4.0 | 0/2 | Not started | - |
+| 18. Abuse Prevention & Topology | 1/2 | In Progress|  | - |
 | 19. Documentation & Release | v0.4.0 | 0/2 | Not started | - |
