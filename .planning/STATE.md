@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 18 of 19 (Abuse Prevention & Topology)
-Plan: 1 of 2 in current phase (18-01 complete)
-Status: In progress
-Last activity: 2026-03-11 -- Completed 18-01 rate limiting
+Plan: 2 of 2 in current phase (18-02 complete)
+Status: Phase 18 complete
+Last activity: 2026-03-11 -- Completed 18-02 namespace filtering
 
-Progress: [█████████░] 95%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [█████████░] 95%
 | 17 | 02 | 6min | 2 | 3 |
 | 17 | 03 | 6min | 2 | 3 |
 | 18 | 01 | 18min | 2 | 6 |
+| 18 | 02 | 38min | 2 | 6 |
 
 ## Accumulated Context
 
@@ -84,6 +85,10 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **18-01:** Immediate disconnect via close_gracefully on rate exceed (no strike involvement)
 - **18-01:** rate_limit_bytes_per_sec=0 disables rate limiting (default)
 - **18-01:** Overflow-safe refill: cap elapsed_ms before multiplication
+- **18-02:** Reuse validate_allowed_keys for sync_namespaces (same 64-char hex format)
+- **18-02:** Filter at Phase C (blob request) in addition to Phase A for completeness
+- **18-02:** Silent drop at Data/Delete ingest for filtered namespaces (no strike)
+- **18-02:** Empty sync_namespaces means replicate all (default)
 
 ### Pending Todos
 
@@ -96,5 +101,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-11
-Stopped at: Completed 18-01-PLAN.md (rate limiting). Next: 18-02 (namespace filtering).
+Stopped at: Completed 18-02-PLAN.md (namespace filtering). Phase 18 complete. Next: Phase 19 (if applicable).
 Resume file: None

@@ -30,9 +30,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 - [x] **PROT-01**: Per-connection token bucket rate limiter applies to Data/Delete messages (not sync BlobTransfer)
 - [x] **PROT-02**: Rate limit exceeded triggers strike system (immediate disconnect, no backpressure delay)
 - [x] **PROT-03**: Rate limit parameters configurable (rate_limit_bytes_per_sec, rate_limit_burst)
-- [ ] **PROT-04**: Operator can configure sync_namespaces to filter which namespaces the node replicates
-- [ ] **PROT-05**: Namespace filter applied at sync Phase A (namespace list assembly), not at blob transfer time
-- [ ] **PROT-06**: Empty sync_namespaces means replicate all (backward compatible default)
+- [x] **PROT-04**: Operator can configure sync_namespaces to filter which namespaces the node replicates
+- [x] **PROT-05**: Namespace filter applied at sync Phase A (namespace list assembly), not at blob transfer time
+- [x] **PROT-06**: Empty sync_namespaces means replicate all (backward compatible default)
 
 ### Documentation
 
@@ -79,9 +79,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | PROT-01 | Phase 18 | Complete |
 | PROT-02 | Phase 18 | Complete |
 | PROT-03 | Phase 18 | Complete |
-| PROT-04 | Phase 18 | Pending |
-| PROT-05 | Phase 18 | Pending |
-| PROT-06 | Phase 18 | Pending |
+| PROT-04 | Phase 18 | Complete |
+| PROT-05 | Phase 18 | Complete |
+| PROT-06 | Phase 18 | Complete |
 | DOC-01 | Phase 19 | Pending |
 | DOC-02 | Phase 19 | Pending |
 | DOC-03 | Phase 19 | Pending |
