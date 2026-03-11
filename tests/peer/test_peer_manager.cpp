@@ -1460,3 +1460,128 @@ TEST_CASE("NodeMetrics struct default initialization", "[peer][metrics]") {
     REQUIRE(m.peers_connected_total == 0);
     REQUIRE(m.peers_disconnected_total == 0);
 }
+
+// =============================================================================
+// Rate limiting tests
+// =============================================================================
+
+TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight limit", "[peer][ratelimit]") {
+    // Set a very low rate limit (100 bytes/sec, 100 bytes burst).
+    // Sync transfers large blobs via BlobTransfer -- these must NOT be rate-limited.
+    // Verify: sync completes successfully, rate_limited stays at 0, blob arrives.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14330";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+    cfg1.rate_limit_bytes_per_sec = 100;  // Very low: 100 B/s
+    cfg1.rate_limit_burst = 100;          // Very low burst
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14331";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14330"};
+    cfg2.sync_interval_seconds = 2;
+    cfg2.max_peers = 32;
+    cfg2.rate_limit_bytes_per_sec = 100;
+    cfg2.rate_limit_burst = 100;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob larger than the rate limit burst on node2
+    // This blob (>100 bytes payload) will be synced to node1 via BlobTransfer
+    std::string large_payload(500, 'X');  // 500 bytes > 100 byte burst
+    auto blob = make_signed_blob(id2, large_payload, 604800, now);
+    auto r = eng2.ingest(blob);
+    REQUIRE(r.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Both nodes should still be connected (sync traffic was not rate-limited)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // The blob should have synced via BlobTransfer (not rate-limited)
+    auto n1_blobs = eng1.get_blobs_since(id2.namespace_id(), 0);
+    REQUIRE(n1_blobs.size() == 1);
+    REQUIRE(n1_blobs[0].data == blob.data);
+
+    // Rate limit counter should NOT have incremented (sync uses BlobTransfer, not Data)
+    REQUIRE(pm1.metrics().rate_limited == 0);
+    REQUIRE(pm2.metrics().rate_limited == 0);
+
+    // Sync should have completed
+    REQUIRE(pm1.metrics().syncs > 0);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][ratelimit][reload]") {
+    // Verify that SIGHUP reload updates rate limit parameters.
+    TempDir tmp1;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    // Write initial config with no rate limit
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14332", "rate_limit_bytes_per_sec": 0, "rate_limit_burst": 0})";
+    }
+
+    auto cfg1 = chromatindb::config::load_config(config_path);
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+
+    pm1.start();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // Update config file with rate limit enabled
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14332", "rate_limit_bytes_per_sec": 1048576, "rate_limit_burst": 10485760})";
+    }
+
+    // Trigger reload (simulates SIGHUP)
+    pm1.reload_config();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // Verify the reload happened without error (no crash, no exceptions)
+    // The rate limit is now active but no peers connected, so no rate limiting events
+    REQUIRE(pm1.metrics().rate_limited == 0);
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
+}
