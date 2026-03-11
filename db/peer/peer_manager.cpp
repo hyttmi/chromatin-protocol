@@ -32,6 +32,27 @@ std::string to_hex(std::span<const uint8_t> bytes, size_t max_len = 8) {
     return result;
 }
 
+/// Token bucket rate limiter: returns true if tokens consumed, false if rate exceeded.
+/// Caller must check rate_bytes_per_sec > 0 before calling (0 = disabled).
+bool try_consume_tokens(PeerInfo& peer, uint64_t bytes,
+                        uint64_t rate_bytes_per_sec, uint64_t burst_bytes) {
+    auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    uint64_t elapsed_ms = now_ms - peer.bucket_last_refill;
+    // Cap elapsed to prevent intermediate overflow in multiplication
+    uint64_t max_elapsed = (burst_bytes * 1000) / rate_bytes_per_sec + 1;
+    elapsed_ms = std::min(elapsed_ms, max_elapsed);
+    uint64_t refill = (rate_bytes_per_sec * elapsed_ms) / 1000;
+    peer.bucket_tokens = std::min(peer.bucket_tokens + refill, burst_bytes);
+    peer.bucket_last_refill = now_ms;
+    if (bytes > peer.bucket_tokens) {
+        return false;
+    }
+    peer.bucket_tokens -= bytes;
+    return true;
+}
+
 } // anonymous namespace
 
 PeerManager::PeerManager(const config::Config& config,
@@ -52,6 +73,10 @@ PeerManager::PeerManager(const config::Config& config,
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path) {
+    // Initialize rate limit parameters from config
+    rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
+    rate_limit_burst_ = config.rate_limit_burst;
+
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
         bootstrap_addresses_.insert(addr);
@@ -185,6 +210,12 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     info.is_bootstrap = false;
     info.strike_count = 0;
     info.syncing = false;
+
+    // Initialize token bucket for rate limiting (full burst capacity on connect)
+    info.bucket_tokens = rate_limit_burst_;
+    info.bucket_last_refill = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
 
     // Check if this connection is to a bootstrap peer
     // Note: remote_address includes port, bootstrap_addresses may not match exactly

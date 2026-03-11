@@ -54,6 +54,9 @@ struct PeerInfo {
     std::set<std::array<uint8_t, 32>> subscribed_namespaces;
     // Phase 16: Storage capacity signaling (resets on reconnect via PeerInfo recreation)
     bool peer_is_full = false;
+    // Phase 18: Token bucket rate limiting (resets on reconnect via PeerInfo recreation)
+    uint64_t bucket_tokens = 0;        // Available throughput tokens (bytes)
+    uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
 };
 
 /// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
@@ -255,6 +258,8 @@ private:
     std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
+    uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
+    uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;

@@ -31,6 +31,8 @@ Config load_config(const std::filesystem::path& path) {
     cfg.max_peers = j.value("max_peers", cfg.max_peers);
     cfg.sync_interval_seconds = j.value("sync_interval_seconds", cfg.sync_interval_seconds);
     cfg.max_storage_bytes = j.value("max_storage_bytes", cfg.max_storage_bytes);
+    cfg.rate_limit_bytes_per_sec = j.value("rate_limit_bytes_per_sec", cfg.rate_limit_bytes_per_sec);
+    cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
 
     if (j.contains("bootstrap_peers") && j["bootstrap_peers"].is_array()) {
         for (const auto& peer : j["bootstrap_peers"]) {

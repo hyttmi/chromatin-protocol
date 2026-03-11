@@ -317,3 +317,41 @@ TEST_CASE("validate_allowed_keys rejects malformed keys", "[config][acl]") {
         REQUIRE_THROWS_AS(validate_allowed_keys(keys), std::runtime_error);
     }
 }
+
+// =============================================================================
+// Rate limiting: config field tests
+// =============================================================================
+
+TEST_CASE("Default config has rate_limit_bytes_per_sec 0 (disabled)", "[config][ratelimit]") {
+    Config cfg;
+    REQUIRE(cfg.rate_limit_bytes_per_sec == 0);
+    REQUIRE(cfg.rate_limit_burst == 0);
+}
+
+TEST_CASE("rate_limit_bytes_per_sec and rate_limit_burst parse from JSON", "[config][ratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_ratelimit.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"rate_limit_bytes_per_sec": 1048576, "rate_limit_burst": 10485760})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.rate_limit_bytes_per_sec == 1048576);   // 1 MiB/s
+    REQUIRE(cfg.rate_limit_burst == 10485760);           // 10 MiB
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("rate_limit fields default to 0 when missing from JSON", "[config][ratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_ratelimit.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.rate_limit_bytes_per_sec == 0);
+    REQUIRE(cfg.rate_limit_burst == 0);
+
+    std::filesystem::remove(tmp);
+}
