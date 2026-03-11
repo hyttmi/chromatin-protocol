@@ -1585,3 +1585,82 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     pm1.stop();
     ioc.run_for(std::chrono::seconds(1));
 }
+
+// =============================================================================
+// Namespace filtering tests
+// =============================================================================
+
+TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][nsfilter]") {
+    // Two nodes: node2 has sync_namespaces configured to only replicate id1's namespace.
+    // Node1 has blobs from two identities: id1 (allowed) and id3 (filtered).
+    // After sync, node2 should have id1's blob but NOT id3's blob.
+    TempDir tmp1, tmp2, tmp3;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+    auto id3 = NodeIdentity::load_or_generate(tmp3.path);
+
+    // Node2 only replicates id1's namespace
+    auto id1_ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id1.namespace_id()));
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14340";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14341";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14340"};
+    cfg2.sync_interval_seconds = 2;
+    cfg2.max_peers = 32;
+    cfg2.sync_namespaces = {id1_ns_hex};  // Only replicate id1's namespace
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store blobs from two different identities on node1
+    auto blob_allowed = make_signed_blob(id1, "allowed-blob", 604800, now);
+    auto blob_filtered = make_signed_blob(id3, "filtered-blob", 604800, now);
+    auto r1 = eng1.ingest(blob_allowed);
+    auto r2 = eng1.ingest(blob_filtered);
+    REQUIRE(r1.accepted);
+    REQUIRE(r2.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Node2 should have the allowed blob (id1's namespace)
+    auto n2_allowed = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_allowed.size() == 1);
+
+    // Node2 should NOT have the filtered blob (id3's namespace)
+    auto n2_filtered = eng2.get_blobs_since(id3.namespace_id(), 0);
+    REQUIRE(n2_filtered.empty());
+
+    // Both nodes still connected (filtering is silent, no disconnect)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // No rejections (namespace filtering is not a validation failure)
+    REQUIRE(pm2.metrics().rejections == 0);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
