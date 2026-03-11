@@ -95,7 +95,7 @@ Plans:
 **Depends on**: Phase 17
 **Requirements**: PROT-01, PROT-02, PROT-03, PROT-04, PROT-05, PROT-06
 **Success Criteria** (what must be TRUE):
-  1. A peer exceeding the configured write rate is disconnected via the strike system without stalling the io_context
+  1. A peer exceeding the configured write rate is disconnected immediately (no strike system, no backpressure)
   2. Rate limiting applies only to Data and Delete messages, not to sync BlobTransfer traffic
   3. Operator can configure sync_namespaces to restrict which namespaces the node replicates
   4. Namespace filter is applied at sync Phase A (namespace list assembly) so filtered namespace IDs are never sent to peers
@@ -103,8 +103,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 18-01: Rate limiting (token bucket in PeerInfo, config fields, strike integration)
-- [ ] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A)
+- [ ] 18-01: Rate limiting (token bucket in PeerInfo, config fields, immediate disconnect on exceed, SIGHUP-reloadable)
+- [ ] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A + Data/Delete ingest, SIGHUP-reloadable)
 
 ### Phase 19: Documentation & Release
 **Goal**: Operator can deploy and interact with chromatindb using documented procedures
