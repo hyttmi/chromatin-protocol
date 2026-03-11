@@ -399,6 +399,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         // Delete message -- process as blob deletion, send ack via coroutine
         try {
             auto blob = wire::decode_blob(payload);
+            // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
+            if (!sync_namespaces_.empty() &&
+                sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
+                spdlog::debug("dropping delete for filtered namespace from {}",
+                              conn->remote_address());
+                return;
+            }
             auto result = engine_.delete_blob(blob);
             if (result.accepted && result.ack.has_value()) {
                 // Build DeleteAck payload: [blob_hash:32][seq_num_be:8][status:1]
@@ -450,6 +457,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         // Data message -- try to ingest as a blob
         try {
             auto blob = wire::decode_blob(payload);
+            // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
+            if (!sync_namespaces_.empty() &&
+                sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
+                spdlog::debug("dropping data for filtered namespace from {}",
+                              conn->remote_address());
+                return;
+            }
             auto result = engine_.ingest(blob);
             if (result.accepted && result.ack.has_value() &&
                 result.ack->status == engine::IngestStatus::stored) {
@@ -549,8 +563,13 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_return;
     }
 
-    // Phase A: Send our data
+    // Phase A: Send our data (filtered by sync_namespaces)
     auto our_namespaces = engine_.list_namespaces();
+    if (!sync_namespaces_.empty()) {
+        std::erase_if(our_namespaces, [this](const storage::NamespaceInfo& ns) {
+            return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
+        });
+    }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     if (!co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload)) {
         peer->syncing = false;
@@ -603,6 +622,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     // Uses BLOB_TRANSFER_TIMEOUT (120s) for blob transfers vs SYNC_TIMEOUT (30s) for control.
 
     for (const auto& [ns, their_hashes] : peer_hashes) {
+        // Namespace filter: skip requesting blobs from filtered namespaces
+        if (!sync_namespaces_.empty() &&
+            sync_namespaces_.find(ns) == sync_namespaces_.end()) {
+            continue;
+        }
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
         if (missing.empty()) {
@@ -740,8 +764,13 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     std::span<const uint8_t> empty{};
     co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty);
 
-    // Phase A: Send our data
+    // Phase A: Send our data (filtered by sync_namespaces)
     auto our_namespaces = engine_.list_namespaces();
+    if (!sync_namespaces_.empty()) {
+        std::erase_if(our_namespaces, [this](const storage::NamespaceInfo& ns) {
+            return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
+        });
+    }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
 
@@ -781,6 +810,11 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     // Phase C: Compute diffs and exchange blobs one at a time.
     // Same structure as initiator: batched requests, individual transfers, adaptive timeout.
     for (const auto& [ns, their_hashes] : peer_hashes) {
+        // Namespace filter: skip requesting blobs from filtered namespaces
+        if (!sync_namespaces_.empty() &&
+            sync_namespaces_.find(ns) == sync_namespaces_.end()) {
+            continue;
+        }
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
         if (missing.empty()) {
