@@ -364,6 +364,21 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    // Rate limiting: check before Data/Delete processing (Step 0 pattern).
+    // Sync messages (BlobTransfer, SyncRequest, etc.) are never rate-checked.
+    if ((type == wire::TransportMsgType_Data || type == wire::TransportMsgType_Delete) &&
+        rate_limit_bytes_per_sec_ > 0) {
+        auto* peer = find_peer(conn);
+        if (peer && !try_consume_tokens(*peer, payload.size(),
+                                         rate_limit_bytes_per_sec_, rate_limit_burst_)) {
+            ++metrics_.rate_limited;
+            spdlog::warn("rate limit exceeded by peer {} ({} bytes, limit {}B/s), disconnecting",
+                         conn->remote_address(), payload.size(), rate_limit_bytes_per_sec_);
+            asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);
+            return;
+        }
+    }
+
     if (type == wire::TransportMsgType_Delete) {
         // Delete message -- process as blob deletion, send ack via coroutine
         try {
@@ -970,6 +985,16 @@ void PeerManager::reload_config() {
     // Disconnect revoked peers
     if (result.removed > 0 || acl_.is_closed_mode()) {
         disconnect_unauthorized_peers();
+    }
+
+    // Reload rate limit parameters
+    rate_limit_bytes_per_sec_ = new_cfg.rate_limit_bytes_per_sec;
+    rate_limit_burst_ = new_cfg.rate_limit_burst;
+    if (rate_limit_bytes_per_sec_ > 0) {
+        spdlog::info("config reload: rate_limit={}B/s burst={}B",
+                     rate_limit_bytes_per_sec_, rate_limit_burst_);
+    } else {
+        spdlog::info("config reload: rate_limit=disabled");
     }
 }
 
