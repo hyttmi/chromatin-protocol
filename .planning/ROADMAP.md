@@ -100,11 +100,12 @@ Plans:
   3. Operator can configure sync_namespaces to restrict which namespaces the node replicates
   4. Namespace filter is applied at sync Phase A (namespace list assembly) so filtered namespace IDs are never sent to peers
   5. Empty sync_namespaces defaults to replicate-all behavior (backward compatible)
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] 18-01: Rate limiting (token bucket in PeerInfo, config fields, immediate disconnect on exceed, SIGHUP-reloadable)
-- [ ] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A + Data/Delete ingest, SIGHUP-reloadable)
+- [x] 18-01: Rate limiting (token bucket in PeerInfo, config fields, immediate disconnect on exceed, SIGHUP-reloadable)
+- [x] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A + Data/Delete ingest, SIGHUP-reloadable)
+- [ ] 18-03: Gap closure — E2E rate limit disconnect test + stale comment fix
 
 ### Phase 19: Documentation & Release
 **Goal**: Operator can deploy and interact with chromatindb using documented procedures
