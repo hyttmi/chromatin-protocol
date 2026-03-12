@@ -118,8 +118,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 19-01: README and interaction samples (db/README.md, usage examples)
-- [ ] 19-02: Version bump (version.h to 0.4.0, test verification)
+- [ ] 19-01: Operator docs + protocol walkthrough (db/README.md comprehensive reference, db/PROTOCOL.md walkthrough, root README pointer)
+- [ ] 19-02: Version bump (version.h to 0.4.0, full test verification)
 
 ## Progress
 
