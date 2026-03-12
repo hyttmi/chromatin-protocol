@@ -1586,6 +1586,86 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     ioc.run_for(std::chrono::seconds(1));
 }
 
+TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][ratelimit][disconnect]") {
+    // E2E test: a raw outbound Connection sends a Data message with payload
+    // exceeding the configured burst capacity. The PeerManager must disconnect
+    // the peer and increment metrics_.rate_limited.
+    TempDir tmp1, tmp_client;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto client_id = NodeIdentity::load_or_generate(tmp_client.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14350";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;  // No sync interference
+    cfg1.max_peers = 32;
+    cfg1.rate_limit_bytes_per_sec = 100;  // Very low: 100 B/s
+    cfg1.rate_limit_burst = 100;          // Very low burst: 100 bytes
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    pm1.start();
+
+    // Let the server start listening
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Create a signed blob with >100 bytes payload.
+    // The encoded blob will be well over 100 bytes (ML-DSA-87 signature alone is ~4627 bytes).
+    auto blob = make_signed_blob(client_id, std::string(200, 'X'), 604800, now);
+    auto encoded_payload = chromatindb::wire::encode_blob(blob);
+
+    // Track whether the client connection was initiated
+    chromatindb::net::Connection::Ptr client_conn;
+
+    // Spawn raw outbound connection from client to PeerManager's listening address
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), 14350),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+
+        client_conn = chromatindb::net::Connection::create_outbound(
+            std::move(socket), client_id);
+        // run() performs PQ handshake then enters message loop; exits when disconnected
+        co_await client_conn->run();
+    }, asio::detached);
+
+    // After handshake completes (~2s), send the oversized Data message
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc,
+                client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_Data, encoded_payload),
+                asio::detached);
+        }
+    });
+
+    // Run long enough for handshake + send + rate check + disconnect
+    ioc.run_for(std::chrono::seconds(5));
+
+    // The rate-limited disconnect must have fired
+    REQUIRE(pm1.metrics().rate_limited >= 1);
+
+    // The peer must have been disconnected
+    REQUIRE(pm1.peer_count() == 0);
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
 // =============================================================================
 // Namespace filtering tests
 // =============================================================================

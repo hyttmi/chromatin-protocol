@@ -65,7 +65,7 @@ struct NodeMetrics {
     uint64_t ingests = 0;                  // Successful blob ingestions
     uint64_t rejections = 0;               // Failed ingestions (validation errors)
     uint64_t syncs = 0;                    // Completed sync rounds
-    uint64_t rate_limited = 0;             // Rate limit rejections (Phase 18, stub at 0)
+    uint64_t rate_limited = 0;             // Rate limit disconnections
     uint64_t peers_connected_total = 0;    // Total peer connections since startup
     uint64_t peers_disconnected_total = 0; // Total peer disconnections since startup
 };
