@@ -53,7 +53,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 - [x] **Phase 16: Storage Foundation** - O(1) tombstone lookups, bounded disk usage, disk-full signaling to peers (completed 2026-03-10)
 - [x] **Phase 17: Operational Stability** - Graceful shutdown, persistent peer list, runtime observability (completed 2026-03-10)
 - [x] **Phase 18: Abuse Prevention & Topology** - Per-connection rate limiting, namespace-scoped sync filtering (completed 2026-03-11)
-- [ ] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0
+- [x] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0 (completed 2026-03-12)
 
 ## Phase Details
 
@@ -146,4 +146,4 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 16. Storage Foundation | 3/3 | Complete    | 2026-03-10 | - |
 | 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
 | 18. Abuse Prevention & Topology | 3/3 | Complete    | 2026-03-12 | - |
-| 19. Documentation & Release | 1/2 | In Progress|  | - |
+| 19. Documentation & Release | 2/2 | Complete   | 2026-03-12 | - |
