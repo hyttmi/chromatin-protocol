@@ -36,9 +36,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 
 ### Documentation
 
-- [ ] **DOC-01**: README.md moved from repo root to db/ (chromatindb is the product, not the repo)
-- [ ] **DOC-02**: README documents config schema, startup, wire protocol overview, and deployment scenarios
-- [ ] **DOC-03**: Interaction samples file showing how to connect to and use the database programmatically
+- [x] **DOC-01**: README.md moved from repo root to db/ (chromatindb is the product, not the repo)
+- [x] **DOC-02**: README documents config schema, startup, wire protocol overview, and deployment scenarios
+- [x] **DOC-03**: Interaction samples file showing how to connect to and use the database programmatically
 - [ ] **DOC-04**: version.h updated to 0.4.0 after all features pass tests
 
 ## Future Requirements
@@ -82,9 +82,9 @@ Requirements for v0.4.0 Production Readiness. Each maps to roadmap phases.
 | PROT-04 | Phase 18 | Complete |
 | PROT-05 | Phase 18 | Complete |
 | PROT-06 | Phase 18 | Complete |
-| DOC-01 | Phase 19 | Pending |
-| DOC-02 | Phase 19 | Pending |
-| DOC-03 | Phase 19 | Pending |
+| DOC-01 | Phase 19 | Complete |
+| DOC-02 | Phase 19 | Complete |
+| DOC-03 | Phase 19 | Complete |
 | DOC-04 | Phase 19 | Pending |
 
 **Coverage:**

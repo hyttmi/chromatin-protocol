@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-12T03:37:17.178Z"
+last_updated: "2026-03-12T16:23:00.108Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 11
+  completed_plans: 10
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 17 - Operational Stability (v0.4.0 Production Readiness)
+**Current focus:** Phase 19 - Documentation & Release (v0.4.0 Production Readiness)
 
 ## Current Position
 
-Phase: 18 of 19 (Abuse Prevention & Topology)
-Plan: 3 of 3 in current phase (18-03 complete)
-Status: Phase 18 fully complete (including gap closure)
-Last activity: 2026-03-12 -- Completed 18-03 gap closure (rate limit disconnect E2E test)
+Phase: 19 of 19 (Documentation & Release)
+Plan: 1 of 2 in current phase (19-01 complete)
+Status: 19-01 complete, 19-02 pending
+Last activity: 2026-03-12 -- Completed 19-01 (operator docs + protocol walkthrough)
 
-Progress: [██████████] 97%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [██████████] 97%
 | 18 | 01 | 18min | 2 | 6 |
 | 18 | 02 | 38min | 2 | 6 |
 | 18 | 03 | 8min | 1 | 2 |
+| 19 | 01 | 4min | 2 | 3 |
 
 ## Accumulated Context
 
@@ -90,6 +91,9 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **18-02:** Filter at Phase C (blob request) in addition to Phase A for completeness
 - **18-02:** Silent drop at Data/Delete ingest for filtered namespaces (no strike)
 - **18-02:** Empty sync_namespaces means replicate all (default)
+- **19-01:** Unified Features section replaces milestone-era v3.0 naming
+- **19-01:** Rate-Limited Public Node added as 4th deployment scenario
+- **19-01:** Protocol walkthrough uses hybrid format (narrative + ASCII diagrams + byte-level wire formats)
 
 ### Pending Todos
 
@@ -102,5 +106,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-12
-Stopped at: Completed 18-03-PLAN.md (gap closure). Phase 18 fully complete. Next: Phase 19 (if applicable).
+Stopped at: Completed 19-01-PLAN.md (operator docs + protocol walkthrough). Next: 19-02 (version bump).
 Resume file: None

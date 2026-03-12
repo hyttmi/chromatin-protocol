@@ -118,7 +118,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 19-01: Operator docs + protocol walkthrough (db/README.md comprehensive reference, db/PROTOCOL.md walkthrough, root README pointer)
+- [x] 19-01: Operator docs + protocol walkthrough (db/README.md comprehensive reference, db/PROTOCOL.md walkthrough, root README pointer)
 - [ ] 19-02: Version bump (version.h to 0.4.0, full test verification)
 
 ## Progress
@@ -146,4 +146,4 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 16. Storage Foundation | 3/3 | Complete    | 2026-03-10 | - |
 | 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
 | 18. Abuse Prevention & Topology | 3/3 | Complete    | 2026-03-12 | - |
-| 19. Documentation & Release | v0.4.0 | 0/2 | Not started | - |
+| 19. Documentation & Release | 1/2 | In Progress|  | - |
