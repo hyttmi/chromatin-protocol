@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 
 ## Current Position
 
-Phase: 19 of 19 (Documentation & Release) -- COMPLETE
-Plan: 2 of 2 in current phase (all complete)
-Status: v0.4.0 milestone complete, all 11 plans across 4 phases shipped
-Last activity: 2026-03-12 -- Completed 19-02 (version bump to 0.4.0)
+Phase: 20 of 20 (Metrics Completeness & Consistency) -- COMPLETE
+Plan: 1 of 1 in current phase (all complete)
+Status: Phase 20 complete, metrics log output and shutdown timer parity shipped
+Last activity: 2026-03-13 -- Completed 20-01 (metrics completeness + timer cancels + stale comment cleanup)
 
 Progress: [██████████] 100%
 
@@ -60,6 +60,7 @@ Progress: [██████████] 100%
 | 18 | 03 | 8min | 1 | 2 |
 | 19 | 01 | 4min | 2 | 3 |
 | 19 | 02 | 11min | 1 | 1 |
+| 20 | 01 | 8min | 3 | 2 |
 
 ## Accumulated Context
 
@@ -96,6 +97,7 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **19-01:** Rate-Limited Public Node added as 4th deployment scenario
 - **19-01:** Protocol walkthrough uses hybrid format (narrative + ASCII diagrams + byte-level wire formats)
 - **19-02:** Pre-existing SEGFAULT (test 260) logged as deferred item, not blocked on for version bump
+- **20-01:** Tasks 1+2 committed together (same file) -- format string and timer cancels in single feat commit
 
 ### Pending Todos
 
@@ -107,6 +109,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12
-Stopped at: Completed 19-02-PLAN.md (version bump to 0.4.0). v0.4.0 milestone COMPLETE.
+Last session: 2026-03-13
+Stopped at: Completed 20-01-PLAN.md (metrics completeness + shutdown timer parity). Phase 20 COMPLETE.
 Resume file: None

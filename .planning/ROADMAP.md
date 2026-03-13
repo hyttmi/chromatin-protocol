@@ -54,7 +54,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 - [x] **Phase 17: Operational Stability** - Graceful shutdown, persistent peer list, runtime observability (completed 2026-03-10)
 - [x] **Phase 18: Abuse Prevention & Topology** - Per-connection rate limiting, namespace-scoped sync filtering (completed 2026-03-11)
 - [x] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0 (completed 2026-03-12)
-- [ ] **Phase 20: Metrics Completeness & Consistency** - Complete log output for all counters, timer cancel consistency
+- [x] **Phase 20: Metrics Completeness & Consistency** - Complete log output for all counters, timer cancel consistency (completed 2026-03-13)
 - [ ] **Phase 21: Test 260 SEGFAULT Fix** - Fix test fixture use-after-free in restart cycle
 
 ## Phase Details
@@ -174,5 +174,5 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
 | 18. Abuse Prevention & Topology | 3/3 | Complete    | 2026-03-12 | - |
 | 19. Documentation & Release | 2/2 | Complete    | 2026-03-12 | - |
-| 20. Metrics Completeness & Consistency | v0.4.0 | TBD | Pending | - |
+| 20. Metrics Completeness & Consistency | 1/1 | Complete   | 2026-03-13 | - |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | TBD | Pending | - |
