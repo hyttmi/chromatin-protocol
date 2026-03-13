@@ -150,7 +150,12 @@ void PeerManager::start() {
         save_persisted_peers();  // Save while connection list is still accurate
         sighup_signal_.cancel();
         sigusr1_signal_.cancel();
+        // Cancel all timers — must match PeerManager::stop()
         if (expiry_timer_) expiry_timer_->cancel();
+        if (sync_timer_) sync_timer_->cancel();
+        if (pex_timer_) pex_timer_->cancel();
+        if (flush_timer_) flush_timer_->cancel();
+        if (metrics_timer_) metrics_timer_->cancel();
     });
 
     // Connect to persisted peers (in addition to bootstrap peers from server_.start())
@@ -1618,14 +1623,18 @@ void PeerManager::log_metrics_line() {
         blob_count += ns.latest_seq_num;
     }
 
-    spdlog::info("metrics: connections={} blobs={} storage={:.1f}MiB "
-                 "syncs={} ingests={} rejections={} uptime={}",
+    spdlog::info("metrics: peers={} connected_total={} disconnected_total={} "
+                 "blobs={} storage={:.1f}MiB "
+                 "syncs={} ingests={} rejections={} rate_limited={} uptime={}",
                  peers_.size(),
+                 metrics_.peers_connected_total,
+                 metrics_.peers_disconnected_total,
                  blob_count,
                  storage_mib,
                  metrics_.syncs,
                  metrics_.ingests,
                  metrics_.rejections,
+                 metrics_.rate_limited,
                  uptime);
 }
 
