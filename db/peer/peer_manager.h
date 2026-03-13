@@ -258,6 +258,10 @@ private:
     std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
+    asio::steady_timer* sync_timer_ = nullptr;    // Timer-cancel pattern for sync loop
+    asio::steady_timer* pex_timer_ = nullptr;     // Timer-cancel pattern for PEX loop
+    asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
+    asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all

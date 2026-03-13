@@ -182,6 +182,10 @@ void PeerManager::stop() {
     sighup_signal_.cancel();
     sigusr1_signal_.cancel();
     if (expiry_timer_) expiry_timer_->cancel();
+    if (sync_timer_) sync_timer_->cancel();
+    if (pex_timer_) pex_timer_->cancel();
+    if (flush_timer_) flush_timer_->cancel();
+    if (metrics_timer_) metrics_timer_->cancel();
     server_.stop();
 }
 
@@ -948,9 +952,11 @@ asio::awaitable<void> PeerManager::sync_all_peers() {
 asio::awaitable<void> PeerManager::sync_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
+        sync_timer_ = &timer;
         timer.expires_after(std::chrono::seconds(config_.sync_interval_seconds));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
+        sync_timer_ = nullptr;
         if (ec || stopping_) co_return;
 
         co_await sync_all_peers();
@@ -1115,9 +1121,11 @@ asio::awaitable<void> PeerManager::expiry_scan_loop() {
 asio::awaitable<void> PeerManager::peer_flush_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
+        flush_timer_ = &timer;
         timer.expires_after(std::chrono::seconds(30));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
+        flush_timer_ = nullptr;
         if (ec || stopping_) co_return;
         save_persisted_peers();
     }
@@ -1355,9 +1363,11 @@ void PeerManager::handle_peer_list_response(net::Connection::Ptr conn,
 asio::awaitable<void> PeerManager::pex_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
+        pex_timer_ = &timer;
         timer.expires_after(std::chrono::seconds(PEX_INTERVAL_SEC));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
+        pex_timer_ = nullptr;
         if (ec || stopping_) co_return;
 
         // Skip PEX entirely in closed mode -- don't advertise or discover peers
@@ -1585,9 +1595,11 @@ void PeerManager::dump_metrics() {
 asio::awaitable<void> PeerManager::metrics_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
+        metrics_timer_ = &timer;
         timer.expires_after(std::chrono::seconds(60));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
+        metrics_timer_ = nullptr;
         if (ec || stopping_) co_return;
         log_metrics_line();
     }

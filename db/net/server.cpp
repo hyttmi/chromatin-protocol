@@ -336,7 +336,7 @@ asio::awaitable<void> Server::drain(std::chrono::seconds timeout) {
     }
 
     spdlog::info("shutdown complete");
-    ioc_.stop();
+    signals_.cancel();
 }
 
 } // namespace chromatindb::net

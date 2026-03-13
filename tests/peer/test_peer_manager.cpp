@@ -1217,7 +1217,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         Config cfg1;
         cfg1.bind_address = "127.0.0.1:14300";
         cfg1.data_dir = tmp1.path.string();
-        cfg1.sync_interval_seconds = 60;  // Long interval -- no sync interference
+        cfg1.sync_interval_seconds = 1;
         cfg1.max_peers = 32;
 
         // Node2 is effectively full: max_storage_bytes = 1 byte
@@ -1225,7 +1225,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         cfg2.bind_address = "127.0.0.1:14301";
         cfg2.data_dir = tmp2.path.string();
         cfg2.bootstrap_peers = {"127.0.0.1:14300"};
-        cfg2.sync_interval_seconds = 60;
+        cfg2.sync_interval_seconds = 1;
         cfg2.max_peers = 32;
         cfg2.max_storage_bytes = 1;  // Effectively full (mdbx file > 1 byte)
 
@@ -1233,6 +1233,12 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         Storage store2(tmp2.path.string());
         BlobEngine eng1(store1);
         BlobEngine eng2(store2, cfg2.max_storage_bytes);
+
+        // Pre-load blob before starting PeerManagers so first sync hits storage full
+        uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+        auto blob = make_signed_blob(id1, "test-storage-full", 604800, now);
+        auto r = eng1.ingest(blob);
+        REQUIRE(r.accepted);
 
         asio::io_context ioc;
         AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
@@ -1244,50 +1250,19 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         pm1.start();
         pm2.start();
 
-        // Let nodes connect and handshake
-        ioc.run_for(std::chrono::seconds(3));
+        // Let nodes connect and sync (blob rejected, StorageFull sent)
+        ioc.run_for(std::chrono::seconds(8));
+
         REQUIRE(pm1.peer_count() == 1);
         REQUIRE(pm2.peer_count() == 1);
-
-        // Store a blob in node1 -- needs a fresh sync to propagate
-        uint64_t now = static_cast<uint64_t>(std::time(nullptr));
-        auto blob = make_signed_blob(id1, "test-storage-full", 604800, now);
-        auto r = eng1.ingest(blob);
-        REQUIRE(r.accepted);
-
-        // Disconnect and reconnect with short sync interval to trigger sync
-        pm1.stop();
-        pm2.stop();
-        ioc.run_for(std::chrono::seconds(2));
-
-        Config cfg1b = cfg1;
-        cfg1b.sync_interval_seconds = 1;
-        cfg1b.bind_address = "127.0.0.1:14302";
-
-        Config cfg2b = cfg2;
-        cfg2b.sync_interval_seconds = 1;
-        cfg2b.bind_address = "127.0.0.1:14303";
-        cfg2b.bootstrap_peers = {"127.0.0.1:14302"};
-
-        AccessControl acl1b(cfg1b.allowed_keys, id1.namespace_id());
-        AccessControl acl2b(cfg2b.allowed_keys, id2.namespace_id());
-
-        PeerManager pm1b(cfg1b, id1, eng1, store1, ioc, acl1b);
-        PeerManager pm2b(cfg2b, id2, eng2, store2, ioc, acl2b);
-
-        pm1b.start();
-        pm2b.start();
-
-        // Let sync happen -- node2 is full, blobs rejected, StorageFull sent
-        ioc.run_for(std::chrono::seconds(8));
 
         // Blob should NOT be on node2 (storage full rejection)
         auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
         REQUIRE(n2_blobs.empty());
 
-        pm1b.stop();
-        pm2b.stop();
-        ioc.run_for(std::chrono::seconds(2));
+        pm1.stop();
+        pm2.stop();
+        ioc.run_for(std::chrono::seconds(6));
     }
 
     SECTION("peer_is_full resets on reconnect (default initialization)") {
