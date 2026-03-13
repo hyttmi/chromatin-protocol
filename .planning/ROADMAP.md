@@ -132,7 +132,10 @@ Plans:
   1. `log_metrics_line()` includes `rate_limited`, `peers_connected_total`, `peers_disconnected_total` in both periodic (60s) and SIGUSR1 output
   2. `on_shutdown_` callback cancels all 5 timers (`expiry_timer_`, `sync_timer_`, `flush_timer_`, `metrics_timer_`, `pex_timer_`), matching `PeerManager::stop()`
   3. Stale "Phase 18 stub" comment removed from `test_peer_manager.cpp:1441`
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 20-01: Metrics format string completion, shutdown timer cancel parity, stale comment cleanup
 
 ### Phase 21: Test 260 SEGFAULT Fix
 **Goal**: All tests pass (284/284) with no segfaults
