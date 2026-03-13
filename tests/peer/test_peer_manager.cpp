@@ -1413,7 +1413,6 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     REQUIRE(pm1.metrics().peers_disconnected_total == 0);
     REQUIRE(pm2.metrics().peers_disconnected_total == 0);
 
-    // rate_limited starts at 0 (Phase 18 stub)
     REQUIRE(pm1.metrics().rate_limited == 0);
     REQUIRE(pm2.metrics().rate_limited == 0);
 
