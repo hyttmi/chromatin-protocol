@@ -18,14 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** COMPLETE - v0.4.0 Production Readiness milestone shipped
+**Current focus:** COMPLETE - v0.4.0 Production Readiness milestone shipped (all tech debt resolved)
 
 ## Current Position
 
-Phase: 20 of 20 (Metrics Completeness & Consistency) -- COMPLETE
+Phase: 21 of 21 (Test 260 SEGFAULT Fix) -- COMPLETE
 Plan: 1 of 1 in current phase (all complete)
-Status: Phase 20 complete, metrics log output and shutdown timer parity shipped
-Last activity: 2026-03-13 -- Completed 20-01 (metrics completeness + timer cancels + stale comment cleanup)
+Status: Phase 21 complete, test 260 verified clean under ASan, 284/284 tests pass
+Last activity: 2026-03-13 -- Completed 21-01 (ENABLE_ASAN option + test 260 ASan verification)
 
 Progress: [██████████] 100%
 
@@ -61,6 +61,7 @@ Progress: [██████████] 100%
 | 19 | 01 | 4min | 2 | 3 |
 | 19 | 02 | 11min | 1 | 1 |
 | 20 | 01 | 8min | 3 | 2 |
+| 21 | 01 | 12min | 2 | 1 |
 
 ## Accumulated Context
 
@@ -98,6 +99,8 @@ All decisions logged in PROJECT.md Key Decisions table (37 decisions total acros
 - **19-01:** Protocol walkthrough uses hybrid format (narrative + ASCII diagrams + byte-level wire formats)
 - **19-02:** Pre-existing SEGFAULT (test 260) logged as deferred item, not blocked on for version bump
 - **20-01:** Tasks 1+2 committed together (same file) -- format string and timer cancels in single feat commit
+- **21-01:** Permanent ENABLE_ASAN CMake option over one-time ASan build (low effort, high future value)
+- **21-01:** SEGFAULT already resolved by Phase 20 timer cancel parity -- no code fix needed, ASan confirms clean
 
 ### Pending Todos
 
@@ -110,5 +113,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-13
-Stopped at: Completed 20-01-PLAN.md (metrics completeness + shutdown timer parity). Phase 20 COMPLETE.
+Stopped at: Completed 21-01-PLAN.md (ENABLE_ASAN + test 260 ASan verification). Phase 21 COMPLETE.
 Resume file: None
