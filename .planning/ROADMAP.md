@@ -54,6 +54,8 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 - [x] **Phase 17: Operational Stability** - Graceful shutdown, persistent peer list, runtime observability (completed 2026-03-10)
 - [x] **Phase 18: Abuse Prevention & Topology** - Per-connection rate limiting, namespace-scoped sync filtering (completed 2026-03-11)
 - [x] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0 (completed 2026-03-12)
+- [ ] **Phase 20: Metrics Completeness & Consistency** - Complete log output for all counters, timer cancel consistency
+- [ ] **Phase 21: Test 260 SEGFAULT Fix** - Fix test fixture use-after-free in restart cycle
 
 ## Phase Details
 
@@ -121,6 +123,28 @@ Plans:
 - [x] 19-01: Operator docs + protocol walkthrough (db/README.md comprehensive reference, db/PROTOCOL.md walkthrough, root README pointer)
 - [ ] 19-02: Version bump (version.h to 0.4.0, full test verification)
 
+### Phase 20: Metrics Completeness & Consistency
+**Goal**: All NodeMetrics counters are observable in log output and shutdown cancels all timers consistently
+**Depends on**: Phase 19
+**Requirements**: OPS-06, OPS-07 (integration completeness)
+**Gap Closure**: Closes METRICS-LOG-INCOMPLETE from v0.4.0 audit
+**Success Criteria** (what must be TRUE):
+  1. `log_metrics_line()` includes `rate_limited`, `peers_connected_total`, `peers_disconnected_total` in both periodic (60s) and SIGUSR1 output
+  2. `on_shutdown_` callback cancels all 5 timers (`expiry_timer_`, `sync_timer_`, `flush_timer_`, `metrics_timer_`, `pex_timer_`), matching `PeerManager::stop()`
+  3. Stale "Phase 18 stub" comment removed from `test_peer_manager.cpp:1441`
+**Plans**: TBD
+
+### Phase 21: Test 260 SEGFAULT Fix
+**Goal**: All tests pass (284/284) with no segfaults
+**Depends on**: Phase 20
+**Requirements**: None (test infrastructure)
+**Gap Closure**: Closes test 260 SEGFAULT tech debt from v0.4.0 audit
+**Success Criteria** (what must be TRUE):
+  1. Test 260 (PeerManager storage full signaling E2E) passes without SEGFAULT
+  2. Test fixture restart cycle has no use-after-free
+  3. Full test suite runs 284/284 with zero failures
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
@@ -147,3 +171,5 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
 | 18. Abuse Prevention & Topology | 3/3 | Complete    | 2026-03-12 | - |
 | 19. Documentation & Release | 2/2 | Complete    | 2026-03-12 | - |
+| 20. Metrics Completeness & Consistency | v0.4.0 | TBD | Pending | - |
+| 21. Test 260 SEGFAULT Fix | v0.4.0 | TBD | Pending | - |
