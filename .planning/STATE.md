@@ -22,12 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 
 ## Current Position
 
-Phase: 21 of 21 (Test 260 SEGFAULT Fix) -- COMPLETE
-Plan: 1 of 1 in current phase (all complete)
-Status: Phase 21 complete, test 260 verified clean under ASan, 284/284 tests pass
-Last activity: 2026-03-13 -- Completed 21-01 (ENABLE_ASAN option + test 260 ASan verification)
-
-Progress: [██████████] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Requirements defined, creating roadmap
+Last activity: 2026-03-14 — Milestone v0.5.0 started, 14 requirements defined
 
 ## Performance Metrics
 
