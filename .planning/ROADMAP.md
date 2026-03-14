@@ -5,7 +5,8 @@
 - ✅ **v1.0 MVP** — Phases 1-8 (shipped 2026-03-05)
 - ✅ **v2.0 Closed Node Model** — Phases 9-11 (shipped 2026-03-07)
 - ✅ **v3.0 Real-time & Delegation** — Phases 12-15 (shipped 2026-03-08)
-- **v0.4.0 Production Readiness** — Phases 16-19 (in progress)
+- ✅ **v0.4.0 Production Readiness** — Phases 16-21 (shipped 2026-03-13)
+- **v0.5.0 Hardening & Flexibility** — Phases 22-26 (in progress)
 
 ## Phases
 
@@ -48,113 +49,89 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 
 </details>
 
-### v0.4.0 Production Readiness
+<details>
+<summary>✅ v0.4.0 Production Readiness (Phases 16-21) — SHIPPED 2026-03-13</summary>
 
-- [x] **Phase 16: Storage Foundation** - O(1) tombstone lookups, bounded disk usage, disk-full signaling to peers (completed 2026-03-10)
-- [x] **Phase 17: Operational Stability** - Graceful shutdown, persistent peer list, runtime observability (completed 2026-03-10)
-- [x] **Phase 18: Abuse Prevention & Topology** - Per-connection rate limiting, namespace-scoped sync filtering (completed 2026-03-11)
-- [x] **Phase 19: Documentation & Release** - Operator README, interaction samples, version 0.4.0 (completed 2026-03-12)
-- [x] **Phase 20: Metrics Completeness & Consistency** - Complete log output for all counters, timer cancel consistency (completed 2026-03-13)
-- [x] **Phase 21: Test 260 SEGFAULT Fix** - Fix test fixture use-after-free in restart cycle (completed 2026-03-13)
+- [x] Phase 16: Storage Foundation (3/3 plans) — completed 2026-03-10
+- [x] Phase 17: Operational Stability (3/3 plans) — completed 2026-03-10
+- [x] Phase 18: Abuse Prevention & Topology (3/3 plans) — completed 2026-03-12
+- [x] Phase 19: Documentation & Release (2/2 plans) — completed 2026-03-12
+- [x] Phase 20: Metrics Completeness & Consistency (1/1 plans) — completed 2026-03-13
+- [x] Phase 21: Test 260 SEGFAULT Fix (1/1 plans) — completed 2026-03-13
+
+</details>
+
+### v0.5.0 Hardening & Flexibility
+
+- [ ] **Phase 22: Build Restructure** - CMakeLists.txt into db/ as self-contained CMake component
+- [ ] **Phase 23: TTL Flexibility** - Writer-controlled blob TTL, configurable max, tombstone expiry
+- [ ] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads
+- [ ] **Phase 25: Transport Optimization** - Lightweight handshake for localhost and trusted peers
+- [ ] **Phase 26: Documentation & Release** - README updates for all v0.5.0 features
 
 ## Phase Details
 
-### Phase 16: Storage Foundation
-**Goal**: Node enforces storage capacity at the protocol boundary with O(1) tombstone verification
-**Depends on**: Phase 15
-**Requirements**: STOR-01, STOR-02, STOR-03, STOR-04, STOR-05
+### Phase 22: Build Restructure
+**Goal**: db/ directory is a self-contained CMake component that can be built and tested independently
+**Depends on**: Phase 21
+**Requirements**: BUILD-01
 **Success Criteria** (what must be TRUE):
-  1. Tombstone lookups complete in O(1) via indexed sub-database instead of scanning all blobs in the namespace
-  2. Node stops accepting blobs when storage exceeds the configured max_storage_bytes limit
-  3. Storage capacity check runs before any cryptographic operations on the ingest path
-  4. Peers receiving a StorageFull message suppress sync pushes to the full node until reconnection
-**Plans**: 3 plans
+  1. db/ contains its own CMakeLists.txt that declares a library target with all db sources
+  2. The root CMakeLists.txt consumes db/ via add_subdirectory and the full project builds and links correctly
+  3. All existing tests compile and pass without modification (zero regressions)
+**Plans**: TBD
 
-Plans:
-- [ ] 16-01: Tombstone index (tombstone_map DBI, startup migration, O(1) has_tombstone_for)
-- [ ] 16-02: Storage limits (used_bytes query, IngestError::storage_full, Step 0 capacity check in ingest)
-- [ ] 16-03: Disk-full reporting (StorageFull wire message, peer_is_full flag, sync push suppression)
-
-### Phase 17: Operational Stability
-**Goal**: Node survives restarts and crashes without losing peer connections or operational visibility
-**Depends on**: Phase 16
-**Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06, OPS-07
+### Phase 23: TTL Flexibility
+**Goal**: Blob lifetimes are controlled by writers and bounded by operators, and tombstones are garbage-collected
+**Depends on**: Phase 22
+**Requirements**: TTL-01, TTL-02, TTL-03, TTL-04, TTL-05
 **Success Criteria** (what must be TRUE):
-  1. SIGTERM triggers a bounded shutdown that drains in-flight coroutines, saves peer list, and exits cleanly
-  2. Node reconnects to previously-known peers after restart without requiring bootstrap re-discovery
-  3. Operator can send SIGUSR1 to get a metrics snapshot (connections, storage used, blobs, syncs, rejections) in the log
-  4. Metrics are logged automatically every 60 seconds without operator intervention
-  5. Expiry scan coroutine is cancellable and does not block shutdown
-**Plans**: 3 plans
+  1. A writer can set a TTL value in the signed blob and the node stores and honors that TTL for expiry
+  2. A blob with TTL exceeding the node's configured max_ttl is rejected at ingest with an appropriate error
+  3. A blob with TTL=0 is stored permanently and never expired (existing behavior preserved)
+  4. Tombstones expire after the configured tombstone_ttl (default 365 days) and are removed by the expiry scan
+  5. Expired tombstones are deleted from both the blob store and the tombstone index
+**Plans**: TBD
 
-Plans:
-- [ ] 17-01: Graceful shutdown + expiry cancellation (Server on_shutdown callback, re-arming signal handler, cancellable expiry coroutine, exit code propagation)
-- [ ] 17-02: Persistent peer list + NodeMetrics (atomic file write, 30s periodic flush, NodeMetrics struct, counter instrumentation)
-- [ ] 17-03: SIGUSR1 dump + periodic metrics log (sigusr1_loop coroutine, dump_metrics, metrics_timer_loop, structured key=value output)
-
-### Phase 18: Abuse Prevention & Topology
-**Goal**: Open nodes resist write-flooding abuse and operators control which namespaces replicate
-**Depends on**: Phase 17
-**Requirements**: PROT-01, PROT-02, PROT-03, PROT-04, PROT-05, PROT-06
+### Phase 24: Encryption at Rest
+**Goal**: All blob payloads stored on disk are encrypted and decrypted transparently
+**Depends on**: Phase 23
+**Requirements**: EAR-01, EAR-02, EAR-03, EAR-04
 **Success Criteria** (what must be TRUE):
-  1. A peer exceeding the configured write rate is disconnected immediately (no strike system, no backpressure)
-  2. Rate limiting applies only to Data and Delete messages, not to sync BlobTransfer traffic
-  3. Operator can configure sync_namespaces to restrict which namespaces the node replicates
-  4. Namespace filter is applied at sync Phase A (namespace list assembly) so filtered namespace IDs are never sent to peers
-  5. Empty sync_namespaces defaults to replicate-all behavior (backward compatible)
-**Plans**: 3 plans
+  1. Blob data written to libmdbx is ChaCha20-Poly1305 encrypted (raw database reads show ciphertext, not plaintext)
+  2. A node-local master key file exists with restricted permissions (0600) and is loaded at startup
+  3. Per-blob encryption keys are derived from the master key via HKDF-SHA256 (not stored separately)
+  4. Read operations return decrypted plaintext transparently -- callers (sync, query, pub/sub) see no difference
+  5. A node started without a master key file auto-generates one on first run
+**Plans**: TBD
 
-Plans:
-- [x] 18-01: Rate limiting (token bucket in PeerInfo, config fields, immediate disconnect on exceed, SIGHUP-reloadable)
-- [x] 18-02: Namespace-scoped sync (sync_namespaces config, std::set filter at Phase A + Data/Delete ingest, SIGHUP-reloadable)
-- [ ] 18-03: Gap closure — E2E rate limit disconnect test + stale comment fix
-
-### Phase 19: Documentation & Release
-**Goal**: Operator can deploy and interact with chromatindb using documented procedures
-**Depends on**: Phase 18
-**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04
+### Phase 25: Transport Optimization
+**Goal**: Localhost and trusted peer connections complete handshake without PQ crypto overhead
+**Depends on**: Phase 22
+**Requirements**: TOPT-01, TOPT-02, TOPT-03
 **Success Criteria** (what must be TRUE):
-  1. db/README.md documents config schema, startup command, wire protocol overview, and deployment scenarios
-  2. Interaction samples file demonstrates how to connect to and use the database programmatically
-  3. version.h reports 0.4.0 and all tests pass with the new version
-**Plans**: 2 plans
+  1. A connection from 127.0.0.1 or ::1 completes handshake without ML-KEM-1024 key exchange
+  2. Connections from addresses listed in trusted_peers config skip PQ handshake with mutual identity verification
+  3. trusted_peers is reloadable via SIGHUP without restarting the node
+  4. Non-trusted remote peers still perform the full PQ-encrypted handshake (no regression)
+**Plans**: TBD
 
-Plans:
-- [x] 19-01: Operator docs + protocol walkthrough (db/README.md comprehensive reference, db/PROTOCOL.md walkthrough, root README pointer)
-- [ ] 19-02: Version bump (version.h to 0.4.0, full test verification)
-
-### Phase 20: Metrics Completeness & Consistency
-**Goal**: All NodeMetrics counters are observable in log output and shutdown cancels all timers consistently
-**Depends on**: Phase 19
-**Requirements**: OPS-06, OPS-07 (integration completeness)
-**Gap Closure**: Closes METRICS-LOG-INCOMPLETE from v0.4.0 audit
+### Phase 26: Documentation & Release
+**Goal**: Operators can understand and use all v0.5.0 features from the README
+**Depends on**: Phase 23, Phase 24, Phase 25
+**Requirements**: DOC-05
 **Success Criteria** (what must be TRUE):
-  1. `log_metrics_line()` includes `rate_limited`, `peers_connected_total`, `peers_disconnected_total` in both periodic (60s) and SIGUSR1 output
-  2. `on_shutdown_` callback cancels all 5 timers (`expiry_timer_`, `sync_timer_`, `flush_timer_`, `metrics_timer_`, `pex_timer_`), matching `PeerManager::stop()`
-  3. Stale "Phase 18 stub" comment removed from `test_peer_manager.cpp:1441`
-**Plans**: 1 plan
-
-Plans:
-- [ ] 20-01: Metrics format string completion, shutdown timer cancel parity, stale comment cleanup
-
-### Phase 21: Test 260 SEGFAULT Fix
-**Goal**: All tests pass (284/284) with no segfaults
-**Depends on**: Phase 20
-**Requirements**: None (test infrastructure)
-**Gap Closure**: Closes test 260 SEGFAULT tech debt from v0.4.0 audit
-**Success Criteria** (what must be TRUE):
-  1. Test 260 (PeerManager storage full signaling E2E) passes without SEGFAULT
-  2. Test fixture restart cycle has no use-after-free
-  3. Full test suite runs 284/284 with zero failures
-**Plans**: 1 plan
-
-Plans:
-- [x] 21-01: ENABLE_ASAN CMake option + test 260 ASan verification
+  1. README documents data-at-rest encryption: master key management, auto-generation, file permissions
+  2. README documents trusted_peers config and localhost handshake behavior
+  3. README documents configurable TTL: per-blob TTL in signed data, max_ttl operator config, tombstone_ttl
+  4. version.h reports 0.5.0 and all tests pass
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 16 -> 17 -> 18 -> 19
+Phases execute in numeric order: 22 -> 23 -> 24 -> 25 -> 26
+Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simplicity. Can be parallelized with 23/24 if desired.
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -173,9 +150,14 @@ Phases execute in numeric order: 16 -> 17 -> 18 -> 19
 | 13. Namespace Delegation | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 14. Pub/Sub Notifications | v3.0 | 2/2 | Complete | 2026-03-08 |
 | 15. Polish & Benchmarks | v3.0 | 2/2 | Complete | 2026-03-08 |
-| 16. Storage Foundation | 3/3 | Complete    | 2026-03-10 | - |
-| 17. Operational Stability | 3/3 | Complete    | 2026-03-10 | - |
-| 18. Abuse Prevention & Topology | 3/3 | Complete    | 2026-03-12 | - |
-| 19. Documentation & Release | 2/2 | Complete    | 2026-03-12 | - |
-| 20. Metrics Completeness & Consistency | 1/1 | Complete    | 2026-03-13 | - |
+| 16. Storage Foundation | v0.4.0 | 3/3 | Complete | 2026-03-10 |
+| 17. Operational Stability | v0.4.0 | 3/3 | Complete | 2026-03-10 |
+| 18. Abuse Prevention & Topology | v0.4.0 | 3/3 | Complete | 2026-03-12 |
+| 19. Documentation & Release | v0.4.0 | 2/2 | Complete | 2026-03-12 |
+| 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
+| 22. Build Restructure | v0.5.0 | 0/TBD | Not started | - |
+| 23. TTL Flexibility | v0.5.0 | 0/TBD | Not started | - |
+| 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
+| 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
+| 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |

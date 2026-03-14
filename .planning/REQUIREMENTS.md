@@ -60,26 +60,26 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EAR-01 | TBD | Pending |
-| EAR-02 | TBD | Pending |
-| EAR-03 | TBD | Pending |
-| EAR-04 | TBD | Pending |
-| TOPT-01 | TBD | Pending |
-| TOPT-02 | TBD | Pending |
-| TOPT-03 | TBD | Pending |
-| TTL-01 | TBD | Pending |
-| TTL-02 | TBD | Pending |
-| TTL-03 | TBD | Pending |
-| TTL-04 | TBD | Pending |
-| TTL-05 | TBD | Pending |
-| BUILD-01 | TBD | Pending |
-| DOC-05 | TBD | Pending |
+| EAR-01 | Phase 24 | Pending |
+| EAR-02 | Phase 24 | Pending |
+| EAR-03 | Phase 24 | Pending |
+| EAR-04 | Phase 24 | Pending |
+| TOPT-01 | Phase 25 | Pending |
+| TOPT-02 | Phase 25 | Pending |
+| TOPT-03 | Phase 25 | Pending |
+| TTL-01 | Phase 23 | Pending |
+| TTL-02 | Phase 23 | Pending |
+| TTL-03 | Phase 23 | Pending |
+| TTL-04 | Phase 23 | Pending |
+| TTL-05 | Phase 23 | Pending |
+| BUILD-01 | Phase 22 | Pending |
+| DOC-05 | Phase 26 | Pending |
 
 **Coverage:**
 - v0.5.0 requirements: 14 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 14
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-14*
-*Last updated: 2026-03-14 after initial definition*
+*Last updated: 2026-03-14 after roadmap creation*
