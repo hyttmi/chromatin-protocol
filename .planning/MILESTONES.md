@@ -1,5 +1,29 @@
 # Milestones
 
+## v0.4.0 Production Readiness (Shipped: 2026-03-14)
+
+**Phases:** 6 (16-21) | **Plans:** 12 | **Commits:** 67 | **LOC:** 14,523 C++ (+371)
+**Tests:** 284 tests (29 new) | **Requirements:** 22/22
+**Timeline:** 5 days (2026-03-09 -> 2026-03-14)
+
+**Key accomplishments:**
+- Tombstone index with O(1) lookup via dedicated sub-database
+- Storage limits with disk-full reporting (StorageFull wire message, peer_is_full flag, sync suppression)
+- Persistent peer list (peers.json), graceful shutdown (SIGTERM drain), exit code propagation
+- Periodic metrics logging + SIGUSR1 dump (connections, blobs, storage, syncs, ingests, rejections, uptime)
+- Token bucket rate limiting with configurable bytes/sec and burst, namespace-scoped sync filtering
+- Comprehensive README, version bump to 0.4.0
+- Resolved tech debt: timer cancel parity (on_shutdown_ matches stop()), ENABLE_ASAN CMake option
+- Full milestone audit: 22/22 requirements, 40/40 observable truths, 6/6 E2E flows
+
+**Tech debt resolved:**
+- Test 260 SEGFAULT (was use-after-free, fixed by Phase 20 timer cancel parity)
+- has_tombstone_for O(n) scan replaced with O(1) indexed lookup
+
+**Archive:** [v0.4.0-ROADMAP.md](milestones/v0.4.0-ROADMAP.md) | [v0.4.0-REQUIREMENTS.md](milestones/v0.4.0-REQUIREMENTS.md)
+
+---
+
 ## v3.0 Real-time & Delegation (Shipped: 2026-03-08)
 
 **Phases:** 4 (12-15) | **Plans:** 8 | **Commits:** 31 | **LOC:** 14,152 C++ (+6,591)

@@ -36,48 +36,43 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Namespace delegation (owner grants write access to other pubkeys) — v3.0
 - ✓ Blob deletion by owner via replicated tombstones — v3.0
 
+- ✓ Global storage limits with configurable max — v0.4.0
+- ✓ Disk-full reporting to peers (protocol-level rejection) — v0.4.0
+- ✓ Persistent peer list across restarts — v0.4.0
+- ✓ Graceful shutdown (clean disconnect, finish in-flight) — v0.4.0
+- ✓ Metrics/observability (connections, storage, sync stats) — v0.4.0
+- ✓ Rate limiting for abuse prevention — v0.4.0
+- ✓ Tombstone index (O(1) indexed lookup) — v0.4.0
+- ✓ Namespace-scoped sync — v0.4.0
+- ✓ README with usage/interaction samples — v0.4.0
+
 ### Active
 
-<!-- v0.4.0 Production Readiness -->
-
-- [ ] Global storage limits with configurable max
-- [ ] Disk-full reporting to peers (protocol-level rejection)
-- [ ] Persistent peer list across restarts
-- [ ] Graceful shutdown (clean disconnect, finish in-flight)
-- [ ] Metrics/observability (connections, storage, sync stats)
-- [ ] Rate limiting for abuse prevention
-- [ ] Tombstone index (fix O(n) has_tombstone_for)
-- [ ] Namespace-scoped sync (filter replicated namespaces per connection)
-- [ ] README in db/ with usage/interaction samples
-- [ ] Update version.h to 0.4.0
+<!-- v0.5.0 Relay MVP -->
 
 ### Out of Scope
 
-- Application semantics (messages, profiles, nicknames) — relay/app layer concern
-- Human-readable names — relay/app layer concern
-- Client authentication — relay layer concern
-- Message routing — relay layer concern
-- Conflict resolution / LWW / HLC — relay/app layer concern
-- Encrypted envelopes — relay/app layer concern
 - DHT or gossip protocol — proven unreliable in previous projects
-- Layer 2 (Relay) and Layer 3 (Client) — future work
 - HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted TCP only
 - NAT traversal / hole punching — server daemon assumes reachable address
 - OpenSSL — prefer minimal deps (liboqs + libsodium)
 - Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
 - Per-peer read/write restrictions — YAGNI for current access control model
+- Layer 3 (Client) — future work, not this milestone
+- Conflict resolution / LWW / HLC — relay uses simple last-write-wins via blob timestamps
+- Web/browser clients — PQ-TCP only for now, no WebSocket
 
 ## Context
 
-Shipped v3.0 with 14,152 LOC C++20, 255 tests.
-Built across 7 days total: v1.0 in 3 days (8 phases, 21 plans), v2.0 in 2 days (3 phases, 8 plans), v3.0 in 2 days (4 phases, 8 plans).
+Shipped v0.4.0 with 14,523 LOC C++20, 284 tests.
+Built across 12 days total: v1.0 (3d, 8 phases), v2.0 (2d, 3 phases), v3.0 (2d, 4 phases), v0.4.0 (5d, 6 phases).
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v3.0 SHIPPED): chromatindb** — database node network with access control, delegation, pub/sub, deletion
-- **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
-- **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
+- **Layer 1 (v0.4.0 SHIPPED): chromatindb** — database node with ACL, delegation, pub/sub, deletion, storage limits, metrics, rate limiting
+- **Layer 2 (v0.5.0 IN PROGRESS): Relay** — messaging relay daemon, per-user namespaces, DMs + channels
+- **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay via PQ-TCP
 
 Previous projects inform design:
 - **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
@@ -138,16 +133,18 @@ Previous projects inform design:
 | No self-exclusion on notifications | Writing peer receives its own notifications | ✓ Good — consistent, simple |
 
 ---
-## Current Milestone: v0.4.0 Production Readiness
+## Current Milestone: v0.5.0 Relay MVP
 
-**Goal:** Harden chromatindb for real-world deployment with storage limits, disk-full reporting, operational tooling, and abuse prevention.
+**Goal:** Build Layer 2 messaging relay — a standalone daemon that connects to chromatindb, manages per-user namespaces, and enables DMs and group channels over PQ-encrypted transport.
 
 **Target features:**
-- Global storage limits with disk-full reporting to peers
-- Persistent peer list, graceful shutdown, metrics
-- Rate limiting, namespace-scoped sync
-- Tombstone index optimization
-- README with usage samples, version bump
+- Relay daemon connecting to chromatindb via PQ-TCP
+- Per-user namespace management (each user owns a namespace via their keypair)
+- Client authentication and session management
+- 1:1 encrypted direct messages
+- Group channels (public and private)
+- User profiles and nicknames
+- Message formatting and metadata
 
 ---
-*Last updated: 2026-03-08 after v0.4.0 milestone started*
+*Last updated: 2026-03-14 after v0.5.0 milestone started*
