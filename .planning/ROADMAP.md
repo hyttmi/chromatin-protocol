@@ -79,7 +79,9 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
   1. db/ contains its own CMakeLists.txt that declares a library target with all db sources
   2. The root CMakeLists.txt consumes db/ via add_subdirectory and the full project builds and links correctly
   3. All existing tests compile and pass without modification (zero regressions)
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 22-01-PLAN.md — Move schemas to db/schemas/, create db/CMakeLists.txt, rewrite root to consume via add_subdirectory
 
 ### Phase 23: TTL Flexibility
 **Goal**: Blob lifetimes are controlled by writers and bounded by operators, and tombstones are garbage-collected
@@ -156,7 +158,7 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 19. Documentation & Release | v0.4.0 | 2/2 | Complete | 2026-03-12 |
 | 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
-| 22. Build Restructure | v0.5.0 | 0/TBD | Not started | - |
+| 22. Build Restructure | v0.5.0 | 0/1 | Planned | - |
 | 23. TTL Flexibility | v0.5.0 | 0/TBD | Not started | - |
 | 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
 | 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
