@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-14T07:39:03.931Z"
+last_updated: "2026-03-14T15:48:31Z"
 progress:
   total_phases: 7
   completed_phases: 7
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.5.0 Hardening & Flexibility — Phase 22 (Build Restructure)
+**Current focus:** v0.5.0 Hardening & Flexibility — Phase 23 (TTL Flexibility)
 
 ## Current Position
 
-Phase: 22 of 26 (Build Restructure) — COMPLETE
+Phase: 23 of 26 (TTL Flexibility) — COMPLETE
 Plan: 1 of 1 (complete)
-Status: Phase 22 complete, ready for Phase 23
-Last activity: 2026-03-14 — Completed 22-01 Build Restructure (db/ self-contained CMake component)
+Status: Phase 23 complete, ready for Phase 24
+Last activity: 2026-03-14 — Completed 23-01 Remove BLOB_TTL_SECONDS, fix run_expiry_scan tombstone_map cleanup
 
-Progress: [██░░░░░░░░] 20%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 22-build-restructure | P01 | 14min | 2 | 4 |
+| 23-ttl-flexibility | P01 | 42min | 1 | 4 |
 
 ## Accumulated Context
 
@@ -61,6 +62,7 @@ v0.5.0 decisions:
 - No ENABLE_ASAN in db/CMakeLists.txt (YAGNI -- sanitizers are a consumer concern)
 - No install() rules in db/ (YAGNI -- no external consumers)
 - No CMAKE_BUILD_TYPE in db/ (inherited from root or set by standalone user)
+- No new APIs needed for TTL>0 tombstone expiry -- existing store_blob() already creates expiry entries
 
 ### Pending Todos
 
@@ -73,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Completed 22-01-PLAN.md (Build Restructure)
+Stopped at: Completed 23-01-PLAN.md (Remove BLOB_TTL_SECONDS, fix run_expiry_scan tombstone_map cleanup)
 Resume file: None

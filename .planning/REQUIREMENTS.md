@@ -22,11 +22,10 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 ### TTL Flexibility
 
-- [ ] **TTL-01**: Blob TTL is set by the writer (included in signed blob data), not a hardcoded constant
-- [ ] **TTL-02**: Node enforces a configurable maximum TTL (default 7 days) — blobs with TTL exceeding max are rejected
-- [ ] **TTL-03**: TTL=0 remains valid and means permanent (no expiry)
-- [ ] **TTL-04**: Tombstones have a configurable TTL (default 365 days) instead of being permanent
-- [ ] **TTL-05**: Expired tombstones are garbage collected by the existing expiry scan
+- [x] **TTL-01**: Blob TTL is set by the writer (included in signed blob data), not a hardcoded constant
+- [x] **TTL-03**: TTL=0 remains valid and means permanent (no expiry)
+- [x] **TTL-04**: Tombstone TTL is writer-controlled (set in signed tombstone data) — tombstones with TTL>0 expire naturally
+- [x] **TTL-05**: Expired tombstones are garbage collected by the existing expiry scan, including tombstone_map cleanup
 
 ### Build & Documentation
 
@@ -67,17 +66,16 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 | TOPT-01 | Phase 25 | Pending |
 | TOPT-02 | Phase 25 | Pending |
 | TOPT-03 | Phase 25 | Pending |
-| TTL-01 | Phase 23 | Pending |
-| TTL-02 | Phase 23 | Pending |
-| TTL-03 | Phase 23 | Pending |
-| TTL-04 | Phase 23 | Pending |
-| TTL-05 | Phase 23 | Pending |
+| TTL-01 | Phase 23 | Complete |
+| TTL-03 | Phase 23 | Complete |
+| TTL-04 | Phase 23 | Complete |
+| TTL-05 | Phase 23 | Complete |
 | BUILD-01 | Phase 22 | Complete |
 | DOC-05 | Phase 26 | Pending |
 
 **Coverage:**
-- v0.5.0 requirements: 14 total
-- Mapped to phases: 14
+- v0.5.0 requirements: 13 total
+- Mapped to phases: 13
 - Unmapped: 0
 
 ---

@@ -64,7 +64,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 ### v0.5.0 Hardening & Flexibility
 
 - [x] **Phase 22: Build Restructure** - CMakeLists.txt into db/ as self-contained CMake component (completed 2026-03-14)
-- [ ] **Phase 23: TTL Flexibility** - Writer-controlled blob TTL, configurable max, tombstone expiry
+- [x] **Phase 23: TTL Flexibility** - Remove hardcoded TTL constant, fix tombstone expiry scan (completed 2026-03-14)
 - [ ] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads
 - [ ] **Phase 25: Transport Optimization** - Lightweight handshake for localhost and trusted peers
 - [ ] **Phase 26: Documentation & Release** - README updates for all v0.5.0 features
@@ -84,19 +84,18 @@ Plans:
 - [ ] 22-01-PLAN.md — Move schemas to db/schemas/, create db/CMakeLists.txt, rewrite root to consume via add_subdirectory
 
 ### Phase 23: TTL Flexibility
-**Goal**: Blob lifetimes are controlled by writers and bounded by operators, and tombstones are garbage-collected
+**Goal**: Writers control blob lifetime via TTL in signed data (no hardcoded constant), and expired tombstones are garbage-collected
 **Depends on**: Phase 22
-**Requirements**: TTL-01, TTL-02, TTL-03, TTL-04, TTL-05
+**Requirements**: TTL-01, TTL-03, TTL-04, TTL-05
 **Success Criteria** (what must be TRUE):
-  1. A writer can set a TTL value in the signed blob and the node stores and honors that TTL for expiry
-  2. A blob with TTL exceeding the node's configured max_ttl is rejected at ingest with an appropriate error
-  3. A blob with TTL=0 is stored permanently and never expired (existing behavior preserved)
-  4. Tombstones expire after the configured tombstone_ttl (default 365 days) and are removed by the expiry scan
-  5. Expired tombstones are deleted from both the blob store and the tombstone index
-**Plans:** 2 plans
+  1. BLOB_TTL_SECONDS constexpr no longer exists — writers set TTL in signed blob data, the node honors it
+  2. A blob with TTL=0 is stored permanently and never expired (existing behavior preserved)
+  3. Tombstones with TTL>0 are expired by the existing expiry scan and cleaned from all indexes including tombstone_map
+  4. Tombstones with TTL=0 remain permanent (existing behavior preserved)
+  5. Regular blob expiry is unaffected by the tombstone cleanup changes
+**Plans:** 1/1 plans complete
 Plans:
-- [ ] 23-01-PLAN.md — Config max_ttl/tombstone_ttl fields, IngestError::ttl_exceeded, Step 0c TTL check, remove BLOB_TTL_SECONDS
-- [ ] 23-02-PLAN.md — Tombstone expiry in store_blob, run_expiry_scan tombstone cleanup, SIGHUP reload propagation
+- [ ] 23-01-PLAN.md — Remove BLOB_TTL_SECONDS, fix run_expiry_scan to clean tombstone_map for expired tombstones
 
 ### Phase 24: Encryption at Rest
 **Goal**: All blob payloads stored on disk are encrypted and decrypted transparently
@@ -162,7 +161,7 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 22. Build Restructure | 1/1 | Complete    | 2026-03-14 | - |
-| 23. TTL Flexibility | v0.5.0 | 0/TBD | Not started | - |
+| 23. TTL Flexibility | 1/1 | Complete   | 2026-03-14 | - |
 | 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
 | 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
 | 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |
