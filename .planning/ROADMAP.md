@@ -93,7 +93,10 @@ Plans:
   3. A blob with TTL=0 is stored permanently and never expired (existing behavior preserved)
   4. Tombstones expire after the configured tombstone_ttl (default 365 days) and are removed by the expiry scan
   5. Expired tombstones are deleted from both the blob store and the tombstone index
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 23-01-PLAN.md — Config max_ttl/tombstone_ttl fields, IngestError::ttl_exceeded, Step 0c TTL check, remove BLOB_TTL_SECONDS
+- [ ] 23-02-PLAN.md — Tombstone expiry in store_blob, run_expiry_scan tombstone cleanup, SIGHUP reload propagation
 
 ### Phase 24: Encryption at Rest
 **Goal**: All blob payloads stored on disk are encrypted and decrypted transparently
