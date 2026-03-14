@@ -143,6 +143,7 @@ add_executable(chromatindb_tests
   tests/crypto/test_kem.cpp
   tests/crypto/test_aead.cpp
   tests/crypto/test_kdf.cpp
+  tests/crypto/test_master_key.cpp
   tests/wire/test_codec.cpp
   tests/config/test_config.cpp
   tests/identity/test_identity.cpp

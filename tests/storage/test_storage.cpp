@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <random>
 
+#include <mdbx.h++>
+
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 #include "db/crypto/hash.h"
@@ -1271,4 +1273,168 @@ TEST_CASE("Storage used_bytes - works on empty database", "[storage][used-bytes]
     auto bytes = store.used_bytes();
     (void)bytes;  // Just verifying it doesn't throw
     REQUIRE(true);
+}
+
+// ============================================================================
+// Phase 24: Encryption at Rest
+// ============================================================================
+
+TEST_CASE("Storage encryption at rest: raw mdbx value has version header", "[storage][encryption-at-rest]") {
+    TempDir tmp;
+    std::array<uint8_t, 32> hash;
+
+    // Store a blob, then destroy Storage so mdbx env is released
+    {
+        Storage store(tmp.path.string());
+        auto blob = make_test_blob(0xEE, "hello-encryption-test");
+        auto result = store.store_blob(blob);
+        REQUIRE(result.status == StoreResult::Status::Stored);
+        hash = result.blob_hash;
+    }
+
+    // Open raw mdbx to inspect encrypted value
+    {
+        mdbx::env_managed::create_parameters cp;
+        cp.use_subdirectory = false;
+        mdbx::env::operate_parameters op;
+        op.max_maps = 6;
+        op.max_readers = 4;
+        mdbx::env_managed env(tmp.path.string(), cp, op);
+
+        auto txn = env.start_read();
+        auto blobs_map = txn.open_map("blobs");
+
+        // Build the key: [namespace:32][hash:32]
+        std::array<uint8_t, 64> blob_key;
+        std::memset(blob_key.data(), 0xEE, 32);  // namespace
+        std::memcpy(blob_key.data() + 32, hash.data(), 32);
+
+        auto val = txn.get(blobs_map,
+            mdbx::slice(blob_key.data(), blob_key.size()));
+
+        // First byte must be encryption version 0x01
+        REQUIRE(val.length() > 0);
+        REQUIRE(static_cast<const uint8_t*>(val.data())[0] == 0x01);
+
+        // Total size = 1 (version) + 12 (nonce) + plaintext_size + 16 (tag)
+        // encoded blob is variable size, but envelope overhead is 29 bytes
+        REQUIRE(val.length() > 29);
+    }
+}
+
+TEST_CASE("Storage encryption at rest: raw mdbx value is not plaintext", "[storage][encryption-at-rest]") {
+    TempDir tmp;
+    std::array<uint8_t, 32> hash;
+    const std::string payload = "hello-encryption-test-payload-visible";
+
+    // Store a blob with known payload
+    {
+        Storage store(tmp.path.string());
+        auto blob = make_test_blob(0xEF, payload);
+        auto result = store.store_blob(blob);
+        REQUIRE(result.status == StoreResult::Status::Stored);
+        hash = result.blob_hash;
+    }
+
+    // Open raw mdbx to inspect — payload must not appear in ciphertext
+    {
+        mdbx::env_managed::create_parameters cp;
+        cp.use_subdirectory = false;
+        mdbx::env::operate_parameters op;
+        op.max_maps = 6;
+        op.max_readers = 4;
+        mdbx::env_managed env(tmp.path.string(), cp, op);
+
+        auto txn = env.start_read();
+        auto blobs_map = txn.open_map("blobs");
+
+        std::array<uint8_t, 64> blob_key;
+        std::memset(blob_key.data(), 0xEF, 32);
+        std::memcpy(blob_key.data() + 32, hash.data(), 32);
+
+        auto val = txn.get(blobs_map,
+            mdbx::slice(blob_key.data(), blob_key.size()));
+
+        // Search for payload substring in raw bytes — must NOT appear
+        std::string raw_str(static_cast<const char*>(val.data()), val.length());
+        REQUIRE(raw_str.find(payload) == std::string::npos);
+    }
+
+    // Verify get_blob returns original plaintext correctly
+    {
+        Storage store(tmp.path.string());
+        std::array<uint8_t, 32> ns;
+        ns.fill(0xEF);
+        auto retrieved = store.get_blob(
+            std::span<const uint8_t, 32>(ns),
+            std::span<const uint8_t, 32>(hash));
+        REQUIRE(retrieved.has_value());
+        std::string retrieved_payload(retrieved->data.begin(), retrieved->data.end());
+        REQUIRE(retrieved_payload == payload);
+    }
+}
+
+TEST_CASE("Storage encryption at rest: round-trip through all read paths", "[storage][encryption-at-rest]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a blob
+    auto blob = make_test_blob(0xF0, "round-trip-test");
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    // get_blob returns correct data
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xF0);
+    auto retrieved = store.get_blob(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(result.blob_hash));
+    REQUIRE(retrieved.has_value());
+    REQUIRE(retrieved->data == blob.data);
+    REQUIRE(retrieved->ttl == blob.ttl);
+    REQUIRE(retrieved->timestamp == blob.timestamp);
+
+    // get_blobs_by_seq returns correct data
+    auto blobs = store.get_blobs_by_seq(
+        std::span<const uint8_t, 32>(ns), 0);
+    REQUIRE(blobs.size() == 1);
+    REQUIRE(blobs[0].data == blob.data);
+
+    // has_blob works
+    REQUIRE(store.has_blob(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+
+    // delete_blob_data works (requires decryption for internal checks)
+    REQUIRE(store.delete_blob_data(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+
+    // Blob is now gone
+    REQUIRE_FALSE(store.has_blob(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+}
+
+TEST_CASE("Storage encryption at rest: master key auto-generated on first run", "[storage][encryption-at-rest]") {
+    TempDir tmp;
+
+    // Before creating Storage, no master.key
+    REQUIRE_FALSE(fs::exists(tmp.path / "master.key"));
+
+    {
+        Storage store(tmp.path.string());
+    }
+
+    // After creating Storage, master.key exists with correct size
+    auto key_path = tmp.path / "master.key";
+    REQUIRE(fs::exists(key_path));
+    REQUIRE(fs::file_size(key_path) == 32);
+
+    // Verify restricted permissions (0600)
+    auto perms = fs::status(key_path).permissions();
+    REQUIRE((perms & fs::perms::owner_read) != fs::perms::none);
+    REQUIRE((perms & fs::perms::owner_write) != fs::perms::none);
+    REQUIRE((perms & fs::perms::group_read) == fs::perms::none);
+    REQUIRE((perms & fs::perms::others_read) == fs::perms::none);
 }

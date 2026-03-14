@@ -151,6 +151,7 @@ add_library(chromatindb_lib STATIC
   crypto/kem.cpp
   crypto/aead.cpp
   crypto/kdf.cpp
+  crypto/master_key.cpp
   wire/codec.cpp
   config/config.cpp
   logging/logging.cpp

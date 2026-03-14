@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "db/crypto/secure_bytes.h"
 #include "db/wire/codec.h"
 
 namespace chromatindb::storage {

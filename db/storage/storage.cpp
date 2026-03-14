@@ -6,9 +6,12 @@
 #include <stdexcept>
 
 #include <mdbx.h++>
+#include <sodium.h>
 #include <spdlog/spdlog.h>
 
+#include "db/crypto/aead.h"
 #include "db/crypto/hash.h"
+#include "db/crypto/master_key.h"
 #include "db/wire/codec.h"
 
 namespace chromatindb::storage {
@@ -70,6 +73,14 @@ static mdbx::slice to_slice(const std::array<uint8_t, N>& arr) {
 static const mdbx::slice not_found_sentinel;
 
 // =============================================================================
+// Encryption at rest constants
+// =============================================================================
+
+static constexpr uint8_t ENCRYPTION_VERSION = 0x01;
+static constexpr size_t ENVELOPE_OVERHEAD =
+    1 + crypto::AEAD::NONCE_SIZE + crypto::AEAD::TAG_SIZE;  // 29 bytes
+
+// =============================================================================
 // Storage::Impl
 // =============================================================================
 
@@ -81,8 +92,10 @@ struct Storage::Impl {
     mdbx::map_handle delegation_map{0};
     mdbx::map_handle tombstone_map{0};
     Clock clock;
+    crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
 
-    Impl(const std::string& data_dir, Clock clk) : clock(std::move(clk)) {
+    Impl(const std::string& data_dir, crypto::SecureBytes master_key, Clock clk)
+        : clock(std::move(clk)) {
         fs::create_directories(data_dir);
 
         // Create parameters with geometry
@@ -114,8 +127,88 @@ struct Storage::Impl {
             txn.commit();
         }
 
-        spdlog::info("Storage opened at {} with 5 sub-databases", data_dir);
+        // Derive blob encryption key from master key
+        blob_key_ = crypto::derive_blob_key(master_key);
+
+        // Validate no unencrypted data exists in the database
+        {
+            auto rtxn = env.start_read();
+            validate_no_unencrypted_data(rtxn);
+        }
+
+        spdlog::info("Storage opened at {} with encryption at rest", data_dir);
     }
+
+    // =========================================================================
+    // Encryption helpers
+    // =========================================================================
+
+    /// Encrypt encoded blob -> [version:1][nonce:12][ciphertext+tag:N+16]
+    std::vector<uint8_t> encrypt_value(
+        std::span<const uint8_t> plaintext,
+        std::span<const uint8_t> ad) {
+
+        std::array<uint8_t, crypto::AEAD::NONCE_SIZE> nonce;
+        randombytes_buf(nonce.data(), nonce.size());
+
+        auto ciphertext = crypto::AEAD::encrypt(
+            plaintext, ad, nonce, blob_key_.span());
+
+        std::vector<uint8_t> envelope;
+        envelope.reserve(1 + nonce.size() + ciphertext.size());
+        envelope.push_back(ENCRYPTION_VERSION);
+        envelope.insert(envelope.end(), nonce.begin(), nonce.end());
+        envelope.insert(envelope.end(), ciphertext.begin(), ciphertext.end());
+        return envelope;
+    }
+
+    /// Decrypt [version:1][nonce:12][ciphertext+tag:N+16] -> encoded blob
+    std::vector<uint8_t> decrypt_value(
+        std::span<const uint8_t> encrypted,
+        std::span<const uint8_t> ad) {
+
+        if (encrypted.size() < ENVELOPE_OVERHEAD) {
+            throw std::runtime_error("Encrypted value too short");
+        }
+        if (encrypted[0] != ENCRYPTION_VERSION) {
+            throw std::runtime_error(
+                "Unknown encryption version or unencrypted data detected");
+        }
+
+        auto nonce = encrypted.subspan(1, crypto::AEAD::NONCE_SIZE);
+        auto ciphertext = encrypted.subspan(1 + crypto::AEAD::NONCE_SIZE);
+
+        auto plaintext = crypto::AEAD::decrypt(
+            ciphertext, ad, nonce, blob_key_.span());
+        if (!plaintext) {
+            throw std::runtime_error("AEAD decryption failed (authentication error)");
+        }
+        return *plaintext;
+    }
+
+    /// Validate all existing blob values have the encryption version header.
+    /// Refuses to start if unencrypted data is detected.
+    void validate_no_unencrypted_data(mdbx::txn_managed& txn) {
+        auto cursor = txn.open_cursor(blobs_map);
+        auto first = cursor.to_first(false);
+        if (!first.done) return;  // Empty database, nothing to validate
+
+        do {
+            auto val = cursor.current(false).value;
+            if (val.length() == 0 ||
+                static_cast<const uint8_t*>(val.data())[0] != ENCRYPTION_VERSION) {
+                throw std::runtime_error(
+                    "Database contains unencrypted data. "
+                    "Delete data_dir and restart.");
+            }
+            auto next = cursor.to_next(false);
+            if (!next.done) break;
+        } while (true);
+    }
+
+    // =========================================================================
+    // Seq helpers
+    // =========================================================================
 
     uint64_t next_seq_num(mdbx::txn_managed& txn, const uint8_t* ns) {
         auto cursor = txn.open_cursor(seq_map);
@@ -177,7 +270,10 @@ uint64_t system_clock_seconds() {
 }
 
 Storage::Storage(const std::string& data_dir, Clock clock)
-    : impl_(std::make_unique<Impl>(data_dir, std::move(clock))) {}
+    : impl_(std::make_unique<Impl>(
+          data_dir,
+          crypto::load_or_generate_master_key(data_dir),
+          std::move(clock))) {}
 
 Storage::~Storage() = default;
 Storage::Storage(Storage&& other) noexcept = default;
@@ -192,7 +288,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
 
         auto txn = impl_->env.start_write();
 
-        // Check dedup: use 3-arg get with sentinel for not-found
+        // Check dedup BEFORE encryption (hash is on plaintext)
         auto existing = txn.get(impl_->blobs_map, key_slice, not_found_sentinel);
         if (existing.data() != nullptr) {
             // Blob already exists -- find existing seq_num by scanning
@@ -226,9 +322,14 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
             return result;
         }
 
-        // Store blob
+        // Encrypt the encoded blob value (AD = 64-byte mdbx key)
+        auto encrypted = impl_->encrypt_value(
+            std::span<const uint8_t>(encoded.data(), encoded.size()),
+            std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+
+        // Store encrypted blob
         txn.upsert(impl_->blobs_map, key_slice,
-                    mdbx::slice(encoded.data(), encoded.size()));
+                    mdbx::slice(encrypted.data(), encrypted.size()));
 
         // Assign seq_num
         uint64_t seq = impl_->next_seq_num(txn, blob.namespace_id.data());
@@ -294,8 +395,14 @@ std::optional<wire::BlobData> Storage::get_blob(
             return std::nullopt;
         }
 
-        auto decoded = wire::decode_blob(std::span<const uint8_t>(
-            static_cast<const uint8_t*>(val.data()), val.length()));
+        // Decrypt the value (AD = 64-byte mdbx key)
+        auto decrypted = impl_->decrypt_value(
+            std::span<const uint8_t>(
+                static_cast<const uint8_t*>(val.data()), val.length()),
+            std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+
+        auto decoded = wire::decode_blob(
+            std::span<const uint8_t>(decrypted.data(), decrypted.size()));
         return decoded;
 
     } catch (const std::exception& e) {
@@ -356,9 +463,14 @@ std::vector<wire::BlobData> Storage::get_blobs_by_seq(
             auto blob_val = txn.get(impl_->blobs_map, to_slice(blob_key),
                                      not_found_sentinel);
             if (blob_val.data() != nullptr) {
-                auto blob = wire::decode_blob(std::span<const uint8_t>(
-                    static_cast<const uint8_t*>(blob_val.data()),
-                    blob_val.length()));
+                // Decrypt the value (AD = 64-byte mdbx key)
+                auto decrypted = impl_->decrypt_value(
+                    std::span<const uint8_t>(
+                        static_cast<const uint8_t*>(blob_val.data()),
+                        blob_val.length()),
+                    std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+                auto blob = wire::decode_blob(
+                    std::span<const uint8_t>(decrypted.data(), decrypted.size()));
                 results.push_back(std::move(blob));
             }
             // else: blob deleted by expiry, skip (gap in seq)
@@ -518,9 +630,13 @@ bool Storage::delete_blob_data(
             return false;
         }
 
-        // Decode to get TTL + timestamp for expiry cleanup
-        auto blob = wire::decode_blob(std::span<const uint8_t>(
-            static_cast<const uint8_t*>(existing.data()), existing.length()));
+        // Decrypt and decode to get TTL + timestamp for expiry cleanup
+        auto decrypted = impl_->decrypt_value(
+            std::span<const uint8_t>(
+                static_cast<const uint8_t*>(existing.data()), existing.length()),
+            std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+        auto blob = wire::decode_blob(
+            std::span<const uint8_t>(decrypted.data(), decrypted.size()));
 
         // Delete from blobs_map
         txn.erase(impl_->blobs_map, key_slice);
@@ -661,8 +777,13 @@ size_t Storage::run_expiry_scan() {
             auto raw = txn.get(impl_->blobs_map, to_slice(blob_key),
                                not_found_sentinel);
             if (raw.data() != nullptr) {
-                auto decoded = wire::decode_blob(std::span<const uint8_t>(
-                    static_cast<const uint8_t*>(raw.data()), raw.length()));
+                // Decrypt the value (AD = 64-byte mdbx key)
+                auto decrypted = impl_->decrypt_value(
+                    std::span<const uint8_t>(
+                        static_cast<const uint8_t*>(raw.data()), raw.length()),
+                    std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+                auto decoded = wire::decode_blob(
+                    std::span<const uint8_t>(decrypted.data(), decrypted.size()));
                 if (wire::is_tombstone(decoded.data)) {
                     auto target_hash = wire::extract_tombstone_target(
                         std::span<const uint8_t>(decoded.data));
