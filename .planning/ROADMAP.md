@@ -161,7 +161,7 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 22. Build Restructure | 1/1 | Complete    | 2026-03-14 | - |
-| 23. TTL Flexibility | 1/1 | Complete   | 2026-03-14 | - |
+| 23. TTL Flexibility | 1/1 | Complete    | 2026-03-14 | - |
 | 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
 | 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
 | 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |
