@@ -1154,6 +1154,105 @@ TEST_CASE("Storage tombstone index - cross-namespace isolation", "[storage][tomb
         std::span<const uint8_t, 32>(target)));
 }
 
+// ============================================================================
+// Phase 23-01: Tombstone expiry lifecycle
+// ============================================================================
+
+TEST_CASE("Storage tombstone with TTL>0 is expired by expiry scan", "[storage][tombstone-expiry]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    // Store a regular blob
+    auto blob = make_test_blob(0x70, "target-blob", 604800, 1000);
+    auto blob_result = store.store_blob(blob);
+    REQUIRE(blob_result.status == StoreResult::Status::Stored);
+
+    // Store a tombstone targeting it with TTL=3600, timestamp=1000
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id = blob.namespace_id;
+    tombstone.pubkey = blob.pubkey;
+    tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
+    tombstone.ttl = 3600;
+    tombstone.timestamp = 1000;
+    tombstone.signature.resize(4627, 0x42);
+    auto ts_result = store.store_blob(tombstone);
+    REQUIRE(ts_result.status == StoreResult::Status::Stored);
+
+    // Verify tombstone index is populated
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+
+    // Advance clock past tombstone expiry (1000 + 3600 = 4600, so 4601)
+    fake_time = 4601;
+    auto purged = store.run_expiry_scan();
+    REQUIRE(purged >= 1);
+
+    // tombstone_map should be cleaned
+    REQUIRE_FALSE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob_result.blob_hash)));
+}
+
+TEST_CASE("Storage tombstone with TTL=0 is never expired", "[storage][tombstone-expiry]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    // Store a tombstone with TTL=0 (permanent)
+    std::array<uint8_t, 32> target{};
+    target.fill(0xAA);
+
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id.fill(0x78);
+    tombstone.pubkey.resize(2592, 0x78);
+    tombstone.data = chromatindb::wire::make_tombstone_data(target);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 1000;
+    tombstone.signature.resize(4627, 0x42);
+    store.store_blob(tombstone);
+
+    // Verify tombstone exists
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(target)));
+
+    // Advance clock far into the future
+    fake_time = 99999999;
+    REQUIRE(store.run_expiry_scan() == 0);
+
+    // Tombstone should still be there (permanent)
+    REQUIRE(store.has_tombstone_for(
+        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(target)));
+}
+
+TEST_CASE("Storage regular blob expiry unaffected by tombstone scan", "[storage][tombstone-expiry]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    // Store a regular blob with TTL=100
+    auto blob = make_test_blob(0x79, "regular-expiry", 100, 1000);
+    auto hash = compute_hash(blob);
+    store.store_blob(blob);
+
+    // Verify blob exists
+    REQUIRE(store.has_blob(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(hash)));
+
+    // Advance past expiry
+    fake_time = 1101;
+    REQUIRE(store.run_expiry_scan() == 1);
+
+    // Blob should be gone
+    REQUIRE_FALSE(store.has_blob(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(hash)));
+}
+
 TEST_CASE("Storage used_bytes - non-zero after storing data", "[storage][used-bytes]") {
     TempDir tmp;
     Storage store(tmp.path.string());

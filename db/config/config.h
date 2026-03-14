@@ -7,9 +7,6 @@
 
 namespace chromatindb::config {
 
-/// Protocol constants (not user-configurable).
-constexpr uint32_t BLOB_TTL_SECONDS = 604800;  // 7 days
-
 /// Node configuration loaded from JSON file and/or CLI arguments.
 struct Config {
     std::string bind_address = "0.0.0.0:4200";

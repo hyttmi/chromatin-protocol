@@ -13,7 +13,6 @@ TEST_CASE("Default config has sensible values", "[config]") {
     REQUIRE(cfg.data_dir == "./data");
     REQUIRE(cfg.bootstrap_peers.empty());
     REQUIRE(cfg.log_level == "info");
-    REQUIRE(chromatindb::config::BLOB_TTL_SECONDS == 604800);
 }
 
 TEST_CASE("load_config with non-existent file returns defaults", "[config]") {
@@ -159,12 +158,6 @@ TEST_CASE("max_storage_bytes defaults to 0 when missing", "[config][capacity]") 
 TEST_CASE("Default config has max_storage_bytes 0 (unlimited)", "[config][capacity]") {
     Config cfg;
     REQUIRE(cfg.max_storage_bytes == 0);
-}
-
-TEST_CASE("BLOB_TTL_SECONDS is a protocol constant", "[config]") {
-    REQUIRE(chromatindb::config::BLOB_TTL_SECONDS == 604800);  // 7 days
-    // Verify it's not part of Config struct (compile-time guarantee)
-    // The fact that Config has no default_ttl field means it can't be overridden
 }
 
 // =============================================================================

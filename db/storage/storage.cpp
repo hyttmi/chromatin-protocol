@@ -656,12 +656,29 @@ size_t Storage::run_expiry_scan() {
             const uint8_t* ns_ptr =
                 static_cast<const uint8_t*>(ns_data.data());
 
-            // Delete from blobs index (ignore if already deleted)
+            // Read blob before deleting to check if it's a tombstone
             auto blob_key = make_blob_key(ns_ptr, hash_ptr);
-            try {
-                txn.erase(impl_->blobs_map, to_slice(blob_key));
-            } catch (const mdbx::exception&) {
-                // Already deleted -- not an error
+            auto raw = txn.get(impl_->blobs_map, to_slice(blob_key),
+                               not_found_sentinel);
+            if (raw.data() != nullptr) {
+                auto decoded = wire::decode_blob(std::span<const uint8_t>(
+                    static_cast<const uint8_t*>(raw.data()), raw.length()));
+                if (wire::is_tombstone(decoded.data)) {
+                    auto target_hash = wire::extract_tombstone_target(
+                        std::span<const uint8_t>(decoded.data));
+                    auto ts_key = make_blob_key(ns_ptr, target_hash.data());
+                    try {
+                        txn.erase(impl_->tombstone_map, to_slice(ts_key));
+                    } catch (const mdbx::exception&) {
+                        // Already cleaned -- not an error
+                    }
+                }
+                // Delete from blobs index
+                try {
+                    txn.erase(impl_->blobs_map, to_slice(blob_key));
+                } catch (const mdbx::exception&) {
+                    // Already deleted -- not an error
+                }
             }
 
             // Advance cursor BEFORE erasing (erase invalidates position)
