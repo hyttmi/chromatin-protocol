@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Hardening & Flexibility
-status: ready_to_plan
-last_updated: "2026-03-14"
+status: executing
+last_updated: "2026-03-14T07:34:56Z"
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  completed_phases: 1
+  total_plans: 1
+  completed_plans: 1
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-14)
 
 ## Current Position
 
-Phase: 22 of 26 (Build Restructure) — first of 5 v0.5.0 phases
-Plan: —
-Status: Ready to plan
-Last activity: 2026-03-14 — Roadmap created for v0.5.0 (5 phases, 14 requirements)
+Phase: 22 of 26 (Build Restructure) — COMPLETE
+Plan: 1 of 1 (complete)
+Status: Phase 22 complete, ready for Phase 23
+Last activity: 2026-03-14 — Completed 22-01 Build Restructure (db/ self-contained CMake component)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -47,12 +47,20 @@ Progress: [░░░░░░░░░░] 0%
 
 **Trend:** Stable (v0.4.0 maintained v3.0 pace despite more complex work)
 
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 22-build-restructure | P01 | 14min | 2 | 4 |
+
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
-No new decisions for v0.5.0 yet.
+
+v0.5.0 decisions:
+- No ENABLE_ASAN in db/CMakeLists.txt (YAGNI -- sanitizers are a consumer concern)
+- No install() rules in db/ (YAGNI -- no external consumers)
+- No CMAKE_BUILD_TYPE in db/ (inherited from root or set by standalone user)
 
 ### Pending Todos
 
@@ -65,5 +73,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Roadmap created for v0.5.0 milestone (phases 22-26, 14 requirements mapped)
+Stopped at: Completed 22-01-PLAN.md (Build Restructure)
 Resume file: None

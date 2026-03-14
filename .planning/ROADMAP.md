@@ -63,7 +63,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 
 ### v0.5.0 Hardening & Flexibility
 
-- [ ] **Phase 22: Build Restructure** - CMakeLists.txt into db/ as self-contained CMake component
+- [x] **Phase 22: Build Restructure** - CMakeLists.txt into db/ as self-contained CMake component (completed 2026-03-14)
 - [ ] **Phase 23: TTL Flexibility** - Writer-controlled blob TTL, configurable max, tombstone expiry
 - [ ] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads
 - [ ] **Phase 25: Transport Optimization** - Lightweight handshake for localhost and trusted peers
@@ -79,7 +79,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
   1. db/ contains its own CMakeLists.txt that declares a library target with all db sources
   2. The root CMakeLists.txt consumes db/ via add_subdirectory and the full project builds and links correctly
   3. All existing tests compile and pass without modification (zero regressions)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 22-01-PLAN.md — Move schemas to db/schemas/, create db/CMakeLists.txt, rewrite root to consume via add_subdirectory
 
@@ -158,7 +158,7 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 19. Documentation & Release | v0.4.0 | 2/2 | Complete | 2026-03-12 |
 | 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
-| 22. Build Restructure | v0.5.0 | 0/1 | Planned | - |
+| 22. Build Restructure | 1/1 | Complete   | 2026-03-14 | - |
 | 23. TTL Flexibility | v0.5.0 | 0/TBD | Not started | - |
 | 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
 | 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |

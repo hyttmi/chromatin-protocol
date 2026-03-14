@@ -30,7 +30,7 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 ### Build & Documentation
 
-- [ ] **BUILD-01**: CMakeLists.txt restructured so db/ is a self-contained CMake component
+- [x] **BUILD-01**: CMakeLists.txt restructured so db/ is a self-contained CMake component
 - [ ] **DOC-05**: README updated to document DARE, trusted peers, configurable TTL, and tombstone expiry
 
 ## Future Requirements
@@ -72,7 +72,7 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 | TTL-03 | Phase 23 | Pending |
 | TTL-04 | Phase 23 | Pending |
 | TTL-05 | Phase 23 | Pending |
-| BUILD-01 | Phase 22 | Pending |
+| BUILD-01 | Phase 22 | Complete |
 | DOC-05 | Phase 26 | Pending |
 
 **Coverage:**
