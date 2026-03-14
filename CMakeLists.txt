@@ -118,74 +118,9 @@ target_include_directories(oqs PUBLIC
 )
 
 # =============================================================================
-# FlatBuffers schema compilation
+# Library component (guards in db/CMakeLists.txt skip re-fetching)
 # =============================================================================
-set(FLATBUFFERS_SCHEMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/schemas)
-set(FLATBUFFERS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/db/wire)
-
-# Will be enabled once schemas exist
-if(EXISTS ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs)
-  add_custom_command(
-    OUTPUT ${FLATBUFFERS_GENERATED_DIR}/blob_generated.h
-    COMMAND flatc --cpp --gen-object-api
-            -o ${FLATBUFFERS_GENERATED_DIR}
-            ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs
-    DEPENDS ${FLATBUFFERS_SCHEMA_DIR}/blob.fbs flatc
-    COMMENT "Generating FlatBuffers blob header"
-  )
-  add_custom_target(flatbuffers_blob_generated DEPENDS ${FLATBUFFERS_GENERATED_DIR}/blob_generated.h)
-endif()
-
-if(EXISTS ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs)
-  add_custom_command(
-    OUTPUT ${FLATBUFFERS_GENERATED_DIR}/transport_generated.h
-    COMMAND flatc --cpp --gen-object-api
-            -o ${FLATBUFFERS_GENERATED_DIR}
-            ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs
-    DEPENDS ${FLATBUFFERS_SCHEMA_DIR}/transport.fbs flatc
-    COMMENT "Generating FlatBuffers transport header"
-  )
-  add_custom_target(flatbuffers_transport_generated DEPENDS ${FLATBUFFERS_GENERATED_DIR}/transport_generated.h)
-endif()
-
-# =============================================================================
-# Library target
-# =============================================================================
-add_library(chromatindb_lib STATIC
-  db/crypto/hash.cpp
-  db/crypto/signing.cpp
-  db/crypto/kem.cpp
-  db/crypto/aead.cpp
-  db/crypto/kdf.cpp
-  db/wire/codec.cpp
-  db/config/config.cpp
-  db/logging/logging.cpp
-  db/identity/identity.cpp
-  db/storage/storage.cpp
-  db/engine/engine.cpp
-  db/net/framing.cpp
-  db/net/protocol.cpp
-  db/net/handshake.cpp
-  db/net/connection.cpp
-  db/net/server.cpp
-  db/sync/sync_protocol.cpp
-  db/peer/peer_manager.cpp
-  db/acl/access_control.cpp
-)
-
-target_include_directories(chromatindb_lib PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_link_libraries(chromatindb_lib PUBLIC
-  oqs
-  sodium
-  flatbuffers
-  spdlog::spdlog
-  nlohmann_json::nlohmann_json
-  mdbx-static
-  asio::asio
-)
+add_subdirectory(db)
 
 # =============================================================================
 # Daemon binary
