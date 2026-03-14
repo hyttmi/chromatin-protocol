@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-14T16:30:46.664Z"
+last_updated: "2026-03-14T17:03:01.829Z"
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 15
-  completed_plans: 15
+  total_phases: 9
+  completed_phases: 9
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.5.0 Hardening & Flexibility — Phase 23 (TTL Flexibility)
+**Current focus:** v0.5.0 Hardening & Flexibility — Phase 25 (Transport Optimization)
 
 ## Current Position
 
-Phase: 23 of 26 (TTL Flexibility) — COMPLETE
+Phase: 24 of 26 (Encryption at Rest) — COMPLETE
 Plan: 1 of 1 (complete)
-Status: Phase 23 complete, ready for Phase 24
-Last activity: 2026-03-14 — Completed 23-01 Remove BLOB_TTL_SECONDS, fix run_expiry_scan tombstone_map cleanup
+Status: Phase 24 complete, ready for Phase 25
+Last activity: 2026-03-14 — Completed 24-01 Encryption at rest for all stored blob payloads
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [████░░░░░░] 40%
 |-------|------|----------|-------|-------|
 | 22-build-restructure | P01 | 14min | 2 | 4 |
 | 23-ttl-flexibility | P01 | 42min | 1 | 4 |
+| 24-encryption-at-rest | P01 | 15min | 1 | 8 |
 
 ## Accumulated Context
 
@@ -63,6 +64,9 @@ v0.5.0 decisions:
 - No install() rules in db/ (YAGNI -- no external consumers)
 - No CMAKE_BUILD_TYPE in db/ (inherited from root or set by standalone user)
 - No new APIs needed for TTL>0 tombstone expiry -- existing store_blob() already creates expiry entries
+- Single HKDF-derived blob key (not per-blob) with context "chromatindb-dare-v1"
+- AEAD AD = mdbx key (namespace||content_hash) to bind ciphertext to storage location
+- Full startup scan for unencrypted data (not sampling) -- pre-release, no migration path
 
 ### Pending Todos
 
@@ -75,5 +79,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-14
-Stopped at: Completed 23-01-PLAN.md (Remove BLOB_TTL_SECONDS, fix run_expiry_scan tombstone_map cleanup)
+Stopped at: Completed 24-01-PLAN.md (Encryption at rest for all stored blob payloads)
 Resume file: None

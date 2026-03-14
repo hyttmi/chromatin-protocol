@@ -65,7 +65,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 
 - [x] **Phase 22: Build Restructure** - CMakeLists.txt into db/ as self-contained CMake component (completed 2026-03-14)
 - [x] **Phase 23: TTL Flexibility** - Remove hardcoded TTL constant, fix tombstone expiry scan (completed 2026-03-14)
-- [ ] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads
+- [x] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads (completed 2026-03-14)
 - [ ] **Phase 25: Transport Optimization** - Lightweight handshake for localhost and trusted peers
 - [ ] **Phase 26: Documentation & Release** - README updates for all v0.5.0 features
 
@@ -107,7 +107,9 @@ Plans:
   3. Per-blob encryption keys are derived from the master key via HKDF-SHA256 (not stored separately)
   4. Read operations return decrypted plaintext transparently -- callers (sync, query, pub/sub) see no difference
   5. A node started without a master key file auto-generates one on first run
-**Plans**: TBD
+**Plans:** 1/1 plans complete
+Plans:
+- [x] 24-01-PLAN.md — Create master key module and add ChaCha20-Poly1305 encryption to all Storage read/write paths
 
 ### Phase 25: Transport Optimization
 **Goal**: Localhost and trusted peer connections complete handshake without PQ crypto overhead
@@ -160,8 +162,8 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 19. Documentation & Release | v0.4.0 | 2/2 | Complete | 2026-03-12 |
 | 20. Metrics Completeness & Consistency | v0.4.0 | 1/1 | Complete | 2026-03-13 |
 | 21. Test 260 SEGFAULT Fix | v0.4.0 | 1/1 | Complete | 2026-03-13 |
-| 22. Build Restructure | 1/1 | Complete    | 2026-03-14 | - |
-| 23. TTL Flexibility | 1/1 | Complete    | 2026-03-14 | - |
-| 24. Encryption at Rest | v0.5.0 | 0/TBD | Not started | - |
+| 22. Build Restructure | v0.5.0 | 1/1 | Complete | 2026-03-14 |
+| 23. TTL Flexibility | v0.5.0 | 1/1 | Complete | 2026-03-14 |
+| 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
 | 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |

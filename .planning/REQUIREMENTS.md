@@ -9,10 +9,10 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 ### Encryption at Rest
 
-- [ ] **EAR-01**: Blob payloads are encrypted with ChaCha20-Poly1305 before writing to libmdbx
-- [ ] **EAR-02**: Encryption key is derived from a node-local master key via HKDF-SHA256 (one key per node, not per blob)
-- [ ] **EAR-03**: Master key is stored in a separate file (not in the database) with restricted file permissions
-- [ ] **EAR-04**: Encrypted blobs are decrypted transparently on read — callers see plaintext
+- [x] **EAR-01**: Blob payloads are encrypted with ChaCha20-Poly1305 before writing to libmdbx
+- [x] **EAR-02**: Encryption key is derived from a node-local master key via HKDF-SHA256 (one key per node, not per blob)
+- [x] **EAR-03**: Master key is stored in a separate file (not in the database) with restricted file permissions
+- [x] **EAR-04**: Encrypted blobs are decrypted transparently on read — callers see plaintext
 
 ### Transport Optimization
 
@@ -59,10 +59,10 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EAR-01 | Phase 24 | Pending |
-| EAR-02 | Phase 24 | Pending |
-| EAR-03 | Phase 24 | Pending |
-| EAR-04 | Phase 24 | Pending |
+| EAR-01 | Phase 24 | Complete |
+| EAR-02 | Phase 24 | Complete |
+| EAR-03 | Phase 24 | Complete |
+| EAR-04 | Phase 24 | Complete |
 | TOPT-01 | Phase 25 | Pending |
 | TOPT-02 | Phase 25 | Pending |
 | TOPT-03 | Phase 25 | Pending |
@@ -80,4 +80,4 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 ---
 *Requirements defined: 2026-03-14*
-*Last updated: 2026-03-14 after roadmap creation*
+*Last updated: 2026-03-14 after Phase 24 completion*
