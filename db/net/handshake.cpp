@@ -55,6 +55,59 @@ SessionKeys derive_session_keys(
 }
 
 // =============================================================================
+// Lightweight session key derivation (non-PQ, for trusted connections)
+// =============================================================================
+
+SessionKeys derive_lightweight_session_keys(
+    std::span<const uint8_t> initiator_nonce,
+    std::span<const uint8_t> responder_nonce,
+    std::span<const uint8_t> initiator_signing_pk,
+    std::span<const uint8_t> responder_signing_pk,
+    bool is_initiator) {
+
+    // IKM = initiator_nonce || responder_nonce (64 bytes)
+    std::vector<uint8_t> ikm;
+    ikm.reserve(initiator_nonce.size() + responder_nonce.size());
+    ikm.insert(ikm.end(), initiator_nonce.begin(), initiator_nonce.end());
+    ikm.insert(ikm.end(), responder_nonce.begin(), responder_nonce.end());
+
+    // Salt = initiator_signing_pk || responder_signing_pk (5184 bytes)
+    std::vector<uint8_t> salt;
+    salt.reserve(initiator_signing_pk.size() + responder_signing_pk.size());
+    salt.insert(salt.end(), initiator_signing_pk.begin(), initiator_signing_pk.end());
+    salt.insert(salt.end(), responder_signing_pk.begin(), responder_signing_pk.end());
+
+    // HKDF extract: PRK from nonces (IKM) with pubkeys as salt
+    auto prk = crypto::KDF::extract(salt, ikm);
+
+    // Derive directional keys -- same context strings as PQ path
+    auto init_to_resp = crypto::KDF::expand(
+        prk.span(), "chromatin-init-to-resp-v1", crypto::AEAD::KEY_SIZE);
+    auto resp_to_init = crypto::KDF::expand(
+        prk.span(), "chromatin-resp-to-init-v1", crypto::AEAD::KEY_SIZE);
+
+    // Session fingerprint: SHA3-256(IKM || Salt)
+    std::vector<uint8_t> fp_input;
+    fp_input.reserve(ikm.size() + salt.size());
+    fp_input.insert(fp_input.end(), ikm.begin(), ikm.end());
+    fp_input.insert(fp_input.end(), salt.begin(), salt.end());
+    auto fingerprint = crypto::sha3_256(fp_input);
+
+    SessionKeys keys;
+    keys.session_fingerprint = fingerprint;
+
+    if (is_initiator) {
+        keys.send_key = std::move(init_to_resp);
+        keys.recv_key = std::move(resp_to_init);
+    } else {
+        keys.send_key = std::move(resp_to_init);
+        keys.recv_key = std::move(init_to_resp);
+    }
+
+    return keys;
+}
+
+// =============================================================================
 // Helper: encode auth payload = [pubkey_size (4B LE)][pubkey][signature]
 // =============================================================================
 

@@ -4,6 +4,8 @@
 #include "db/crypto/kem.h"
 #include "db/crypto/aead.h"
 
+#include <sodium.h>
+
 using namespace chromatindb::net;
 using namespace chromatindb::crypto;
 
@@ -238,4 +240,112 @@ TEST_CASE("Handshake rejects invalid KEM messages", "[handshake]") {
         auto err = initiator.receive_kem_ciphertext(wrong_msg);
         REQUIRE(err == HandshakeError::InvalidMessage);
     }
+}
+
+// =============================================================================
+// Phase 25: Lightweight session key derivation tests
+// =============================================================================
+
+TEST_CASE("derive_lightweight_session_keys produces symmetric directional keys", "[handshake][lightweight]") {
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
+
+    std::array<uint8_t, 32> nonce_i{}, nonce_r{};
+    randombytes_buf(nonce_i.data(), nonce_i.size());
+    randombytes_buf(nonce_r.data(), nonce_r.size());
+
+    auto init_keys = derive_lightweight_session_keys(
+        nonce_i, nonce_r,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        true);
+
+    auto resp_keys = derive_lightweight_session_keys(
+        nonce_i, nonce_r,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        false);
+
+    SECTION("initiator send_key == responder recv_key") {
+        REQUIRE(init_keys.send_key.size() == AEAD::KEY_SIZE);
+        REQUIRE(resp_keys.recv_key.size() == AEAD::KEY_SIZE);
+        REQUIRE(std::equal(
+            init_keys.send_key.data(),
+            init_keys.send_key.data() + init_keys.send_key.size(),
+            resp_keys.recv_key.data()));
+    }
+
+    SECTION("responder send_key == initiator recv_key") {
+        REQUIRE(std::equal(
+            resp_keys.send_key.data(),
+            resp_keys.send_key.data() + resp_keys.send_key.size(),
+            init_keys.recv_key.data()));
+    }
+
+    SECTION("send_key != recv_key (different directions)") {
+        REQUIRE_FALSE(std::equal(
+            init_keys.send_key.data(),
+            init_keys.send_key.data() + init_keys.send_key.size(),
+            init_keys.recv_key.data()));
+    }
+
+    SECTION("session fingerprint identical on both sides") {
+        REQUIRE(init_keys.session_fingerprint == resp_keys.session_fingerprint);
+    }
+}
+
+TEST_CASE("derive_lightweight_session_keys: different nonces produce different keys", "[handshake][lightweight]") {
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
+
+    std::array<uint8_t, 32> nonce_i1{}, nonce_r1{}, nonce_i2{}, nonce_r2{};
+    randombytes_buf(nonce_i1.data(), nonce_i1.size());
+    randombytes_buf(nonce_r1.data(), nonce_r1.size());
+    randombytes_buf(nonce_i2.data(), nonce_i2.size());
+    randombytes_buf(nonce_r2.data(), nonce_r2.size());
+
+    auto keys1 = derive_lightweight_session_keys(
+        nonce_i1, nonce_r1,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        true);
+
+    auto keys2 = derive_lightweight_session_keys(
+        nonce_i2, nonce_r2,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        true);
+
+    REQUIRE_FALSE(std::equal(
+        keys1.send_key.data(),
+        keys1.send_key.data() + keys1.send_key.size(),
+        keys2.send_key.data()));
+}
+
+TEST_CASE("derive_lightweight_session_keys: deterministic with same inputs", "[handshake][lightweight]") {
+    auto initiator_id = chromatindb::identity::NodeIdentity::generate();
+    auto responder_id = chromatindb::identity::NodeIdentity::generate();
+
+    std::array<uint8_t, 32> nonce_i{}, nonce_r{};
+    randombytes_buf(nonce_i.data(), nonce_i.size());
+    randombytes_buf(nonce_r.data(), nonce_r.size());
+
+    auto keys1 = derive_lightweight_session_keys(
+        nonce_i, nonce_r,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        true);
+
+    auto keys2 = derive_lightweight_session_keys(
+        nonce_i, nonce_r,
+        initiator_id.public_key(),
+        responder_id.public_key(),
+        true);
+
+    REQUIRE(std::equal(
+        keys1.send_key.data(),
+        keys1.send_key.data() + keys1.send_key.size(),
+        keys2.send_key.data()));
+
+    REQUIRE(keys1.session_fingerprint == keys2.session_fingerprint);
 }

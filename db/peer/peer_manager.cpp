@@ -108,6 +108,11 @@ PeerManager::PeerManager(const config::Config& config,
         known_addresses_.insert(addr);
     }
 
+    // Wire trust check for lightweight handshake
+    server_.set_trust_check([this](const asio::ip::address& addr) {
+        return is_trusted_address(addr);
+    });
+
     // Wire server callbacks
     server_.set_accept_filter([this]() { return should_accept_connection(); });
 

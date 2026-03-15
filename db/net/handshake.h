@@ -33,6 +33,16 @@ SessionKeys derive_session_keys(
     std::span<const uint8_t> responder_signing_pubkey,
     bool is_initiator);
 
+/// Derive session keys for lightweight (non-PQ) handshake.
+/// Uses HKDF with exchanged nonces as IKM and signing pubkeys as salt.
+/// Same HKDF context strings as PQ path -- produces identical SessionKeys struct.
+SessionKeys derive_lightweight_session_keys(
+    std::span<const uint8_t> initiator_nonce,      // 32 bytes
+    std::span<const uint8_t> responder_nonce,       // 32 bytes
+    std::span<const uint8_t> initiator_signing_pk,  // 2592 bytes
+    std::span<const uint8_t> responder_signing_pk,  // 2592 bytes
+    bool is_initiator);
+
 /// Handshake error codes.
 enum class HandshakeError {
     Success,

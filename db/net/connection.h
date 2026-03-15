@@ -81,6 +81,12 @@ public:
     /// This is where PeerManager should set up message routing and start sync.
     void on_ready(ReadyCallback cb) { ready_cb_ = std::move(cb); }
 
+    /// Trust-check function type: returns true if the IP address is trusted.
+    using TrustCheck = std::function<bool(const asio::ip::address&)>;
+
+    /// Set trust-check for lightweight handshake path.
+    void set_trust_check(TrustCheck check) { trust_check_ = std::move(check); }
+
     /// Whether this connection was received as goodbye (graceful peer shutdown).
     bool received_goodbye() const { return received_goodbye_; }
 
@@ -92,8 +98,15 @@ private:
                const identity::NodeIdentity& identity,
                bool is_initiator);
 
-    /// Perform the full handshake (KEM + auth).
+    /// Perform the full handshake (KEM + auth, or lightweight for trusted peers).
     asio::awaitable<bool> do_handshake();
+
+    /// Handshake sub-paths
+    asio::awaitable<bool> do_handshake_initiator_trusted();
+    asio::awaitable<bool> do_handshake_initiator_pq();
+    asio::awaitable<bool> do_handshake_responder_trusted(std::vector<uint8_t> payload);
+    asio::awaitable<bool> do_handshake_responder_pq_fallback(std::vector<uint8_t> payload);
+    asio::awaitable<bool> do_handshake_responder_pq(std::vector<uint8_t> first_msg);
 
     /// Run the message read loop after handshake.
     asio::awaitable<void> message_loop();
@@ -127,6 +140,7 @@ private:
     MessageCallback message_cb_;
     CloseCallback close_cb_;
     ReadyCallback ready_cb_;
+    TrustCheck trust_check_;
 };
 
 } // namespace chromatindb::net

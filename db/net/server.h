@@ -52,6 +52,12 @@ public:
     /// Set callback invoked before drain starts (PeerManager saves peers here).
     void set_on_shutdown(ShutdownCallback cb) { on_shutdown_ = std::move(cb); }
 
+    /// Trust-check function type for lightweight handshake.
+    using TrustCheck = std::function<bool(const asio::ip::address&)>;
+
+    /// Set trust-check function, passed to each Connection for handshake branching.
+    void set_trust_check(TrustCheck cb) { trust_check_ = std::move(cb); }
+
     /// Exit code: 0 = clean shutdown, 1 = forced/timeout.
     int exit_code() const { return exit_code_; }
 
@@ -95,6 +101,7 @@ private:
     ConnectionCallback on_disconnected_;
     AcceptFilter accept_filter_;
     ShutdownCallback on_shutdown_;
+    TrustCheck trust_check_;
     int exit_code_ = 0;
 };
 
