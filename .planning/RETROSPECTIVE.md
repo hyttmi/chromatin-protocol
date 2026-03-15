@@ -2,6 +2,51 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v0.5.0 — Hardening & Flexibility
+
+**Shipped:** 2026-03-15
+**Phases:** 5 | **Plans:** 6 | **Sessions:** ~2
+
+### What Was Built
+- Build restructure: db/ as self-contained CMake component with guarded FetchContent pattern
+- TTL flexibility: BLOB_TTL_SECONDS removed, writer-controlled TTL, tombstone_map cleanup in expiry scan
+- Encryption at rest: ChaCha20-Poly1305 for all stored blob payloads, HKDF-derived keys, auto-generated master key
+- Transport optimization: trusted_peers config, lightweight handshake skipping ML-KEM-1024 for localhost/trusted peers
+- Mismatch fallback: PQRequired message forces PQ upgrade when trust doesn't match (no connection failure)
+- Documentation: README updated for DARE, trusted peers, configurable TTL
+
+### What Worked
+- Cleanest milestone yet: 5 phases, 6 plans, 2 days, zero issues
+- Each phase was tightly scoped with clear success criteria — no scope creep
+- HKDF key derivation pattern reused from transport layer (DARE) — familiar pattern, fast implementation
+- TrustCheck lambda chain (PeerManager→Server→Connection) kept layers decoupled
+- Mismatch fallback design (TrustedHello→PQRequired) is graceful — no connection failures on trust mismatch
+
+### What Was Inefficient
+- No milestone audit performed — all requirements were verified during phase execution, but the formal audit step was skipped
+- Phase 26 (documentation) was minimal — only README + version bump. Could have been folded into Phase 25
+
+### Patterns Established
+- Guarded FetchContent: `if(NOT TARGET dep) FetchContent_Declare/MakeAvailable endif()` for composable CMake
+- Envelope format: `[version][nonce][ciphertext+tag]` for self-describing encrypted storage
+- AEAD associated data binding: AD = mdbx key to bind ciphertext to storage location
+- Initiator-first trust negotiation: initiator proposes mode, responder accepts or forces upgrade
+- Read-before-delete in expiry scan for index cleanup (tombstone_map)
+
+### Key Lessons
+1. Self-contained CMake components (db/) enable future reuse without pulling entire project — worth doing early
+2. Single HKDF-derived key per node (not per-blob) is simpler and sufficient when AEAD AD binds ciphertext to location
+3. Trust negotiation with fallback is better than hard failure — mismatch just upgrades to full PQ
+4. Writer-controlled TTL is the right design for a dumb database — policy belongs to the application layer
+5. Small milestones (5 phases) ship faster and have fewer integration issues than large ones
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~2 across 2 days
+- Notable: Fastest milestone per-phase (~20 min avg) — all phases were focused, no multi-plan sprawl except Phase 25
+
+---
+
 ## Milestone: v3.0 — Real-time & Delegation
 
 **Shipped:** 2026-03-08
@@ -157,6 +202,8 @@
 | v1.0 | ~8 | 8 | Bottom-up dependency ordering + gap closure via audit |
 | v2.0 | ~4 | 3 | Clean milestone audit (zero gaps) — scoping improved from v1.0 lessons |
 | v3.0 | ~3 | 4 | Fastest per-plan avg (~15 min) — pattern reuse accelerated delivery |
+| v0.4.0 | ~5 | 6 | Production hardening — storage limits, metrics, rate limiting |
+| v0.5.0 | ~2 | 5 | Cleanest milestone — DARE, trusted peers, configurable TTL in 2 days |
 
 ### Cumulative Quality
 
@@ -165,6 +212,8 @@
 | v1.0 | 155 | 9,449 | 53 | 32/32 |
 | v2.0 | 196 | 11,027 | ~60 | 14/14 |
 | v3.0 | 255 | 14,152 | ~70 | 16/16 |
+| v0.4.0 | 284 | 14,523 | ~70 | 22/22 |
+| v0.5.0 | 284 | 17,124 | 66 | 13/13 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -174,3 +223,5 @@
 4. Building on established async patterns (timer-cancel, sequential protocol) prevents new concurrency bugs
 5. Reusing existing infrastructure (magic-prefix types, ingest pipeline) is faster and less error-prone than new mechanisms
 6. Algorithm stripping for liboqs resolved in v3.0 — should have been done earlier (2 milestones of slow builds)
+7. Writer-controlled policy (TTL, delegation) keeps the database layer dumb — application logic belongs in higher layers
+8. Trust negotiation with graceful fallback is better than hard failure — validated in v0.5.0 transport optimization
