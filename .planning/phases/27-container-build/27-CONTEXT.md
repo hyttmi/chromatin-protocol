@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-Multi-stage Dockerfile producing Release binaries (`chromatindb` and `chromatindb_loadgen`) in debian:bookworm-slim runtime image. The container starts, listens on a configured port, and accepts connections from host-based peers. This phase covers the Dockerfile, .dockerignore, and basic container operability — not multi-node topology (Phase 29) or load generation code (Phase 28).
+Multi-stage Dockerfile producing Release binary (`chromatindb`) in debian:bookworm-slim runtime image. The container starts, listens on a configured port, and accepts connections from host-based peers. This phase covers the Dockerfile, .dockerignore, and basic container operability — not multi-node topology (Phase 29) or load generation code (Phase 28). Phase 28 will update the Dockerfile to add `chromatindb_loadgen` when that target is created.
 
 </domain>
 
@@ -27,8 +27,7 @@ Multi-stage Dockerfile producing Release binaries (`chromatindb` and `chromatind
 - TCP health check on the listen port (lightweight, no extra tooling)
 
 ### Build layer caching
-- CMakeLists-first layer strategy: copy only CMakeLists.txt + db/CMakeLists.txt first, run cmake configure to fetch deps, then copy source and build
-- Source-only changes don't re-download the 8 FetchContent dependencies
+- ~~CMakeLists-first layer strategy~~ **Revised:** CMakeLists-first layer strategy is technically impossible because CMake validates source file existence at configure time (db/main.cpp referenced in add_executable). Instead, use `--mount=type=cache,target=/src/build/_deps` on the build RUN command. This achieves the same goal — source-only changes reuse cached FetchContent downloads — without the configure-time failure.
 - Binaries stripped in the final image (smaller, debug symbols not needed for benchmarks)
 - .dockerignore excludes build/, .planning/, .git/, .claude/, *.md
 
@@ -65,7 +64,7 @@ Multi-stage Dockerfile producing Release binaries (`chromatindb` and `chromatind
 - Daemon listens on bind_address from config (default 0.0.0.0:port)
 - Data dir contains: node.key, node.pub, mdbx database files
 - Config file is JSON with bootstrap_peers, allowed_keys, max_peers, sync_interval, etc.
-- `chromatindb_loadgen` binary doesn't exist yet — Phase 28 adds it. Dockerfile may need update after Phase 28.
+- `chromatindb_loadgen` binary doesn't exist yet — Phase 28 adds it. Phase 28 will update the Dockerfile.
 
 </code_context>
 
@@ -80,3 +79,4 @@ None — discussion stayed within phase scope
 
 *Phase: 27-container-build*
 *Context gathered: 2026-03-15*
+*Revised: 2026-03-15 — DOCK-01 scoped to chromatindb-only; CMakeLists-first caching revised to --mount=type=cache*

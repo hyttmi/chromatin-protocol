@@ -94,7 +94,7 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 **Depends on**: Nothing (first phase of v0.6.0)
 **Requirements**: DOCK-01
 **Success Criteria** (what must be TRUE):
-  1. `docker build` produces a working image with both `chromatindb` and `chromatindb_loadgen` binaries
+  1. `docker build` produces a working image with the `chromatindb` binary (Phase 28 will update the Dockerfile to add `chromatindb_loadgen`)
   2. The container starts, listens on the configured port, and accepts connections from a host-based peer
   3. The image uses debian:bookworm-slim runtime (not the full build image) and builds with CMAKE_BUILD_TYPE=Release
 **Plans**: 1 plan

@@ -9,7 +9,7 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 ### Container Infrastructure
 
-- [ ] **DOCK-01**: Multi-stage Dockerfile produces chromatindb and chromatindb_loadgen binaries in debian:bookworm-slim runtime image with Release build
+- [ ] **DOCK-01**: Multi-stage Dockerfile produces chromatindb binary in debian:bookworm-slim runtime image with Release build
 - [ ] **DOCK-02**: docker-compose topology runs 3-5 nodes in chain connectivity with health checks, named volumes, and per-node configs
 
 ### Load Generation
@@ -23,7 +23,7 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 - [ ] **PERF-01**: Ingest throughput measured at multiple blob sizes (blobs/sec, MiB/sec, p50/p95/p99 latency)
 - [ ] **PERF-02**: Sync/replication latency measured (wall-clock time from write on node A to availability on node B)
-- [ ] **PERF-03**: Multi-hop propagation time measured (A→B→C chain, no direct A-C link)
+- [ ] **PERF-03**: Multi-hop propagation time measured (A->B->C chain, no direct A-C link)
 - [ ] **PERF-04**: Late-joiner catch-up time measured (new node joins after data loaded, measures convergence)
 - [ ] **PERF-05**: Trusted vs PQ handshake comparison run with same workload under both modes
 
@@ -87,4 +87,4 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 ---
 *Requirements defined: 2026-03-15*
-*Last updated: 2026-03-15 after roadmap creation*
+*Last updated: 2026-03-15 after plan-phase revision (DOCK-01 scoped to chromatindb-only for Phase 27)*
