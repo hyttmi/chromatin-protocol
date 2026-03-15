@@ -137,6 +137,8 @@ target_link_libraries(chromatindb_bench PRIVATE chromatindb_lib)
 # =============================================================================
 # Test target
 # =============================================================================
+include(CTest)
+if(BUILD_TESTING)
 add_executable(chromatindb_tests
   tests/crypto/test_hash.cpp
   tests/crypto/test_signing.cpp
@@ -165,6 +167,6 @@ target_link_libraries(chromatindb_tests PRIVATE
   Catch2::Catch2WithMain
 )
 
-include(CTest)
 include(Catch)
 catch_discover_tests(chromatindb_tests)
+endif()

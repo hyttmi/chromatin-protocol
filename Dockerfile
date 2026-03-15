@@ -4,7 +4,7 @@
 FROM debian:bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git libssl-dev pkg-config \
+    build-essential cmake git ca-certificates libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -15,6 +15,7 @@ COPY bench/ bench/
 RUN --mount=type=cache,target=/src/build/_deps \
     cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTING=OFF \
       -DFETCHCONTENT_QUIET=ON \
       -DCMAKE_CXX_FLAGS="-Wno-restrict" \
     && cmake --build build --target chromatindb chromatindb_bench \
