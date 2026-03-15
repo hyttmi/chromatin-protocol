@@ -296,6 +296,176 @@ All deps are fetched during cmake configure. 7 use git clone, 1 uses URL downloa
 ### CMake Parallelism: No --parallel flag (single-threaded build)
 **Rationale:** User preference says "Never use `cmake --build . --parallel` -- eats all memory." In Docker, memory constraints are even tighter. The build is a one-time cost. Single-threaded is safe and reliable. Alternative: `cmake --build build -j2` if build time is a concern (liboqs alone takes ~5 min single-threaded).
 
+## Validation Architecture
+
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | Docker CLI + bash verification (no unit test framework for this phase) |
+| Config file | None -- validation is via Docker commands and container inspection |
+| Quick run command | `docker build -t chromatindb . && docker run --rm chromatindb version` |
+| Full suite command | Run all validation checks below sequentially |
+
+### Phase Requirements to Test Map
+
+| Req ID | Behavior | Test Type | Automated Command | File Exists? |
+|--------|----------|-----------|-------------------|-------------|
+| DOCK-01a | Docker image builds successfully | smoke | `docker build -t chromatindb .` | N/A (Dockerfile is the deliverable) |
+| DOCK-01b | chromatindb binary present and executable in image | smoke | `docker run --rm chromatindb version` | N/A |
+| DOCK-01c | Runtime image is debian:bookworm-slim based | smoke | `docker inspect chromatindb --format '{{.Config.Image}}'` or check Dockerfile FROM | N/A |
+| DOCK-01d | Build uses CMAKE_BUILD_TYPE=Release | smoke | `docker run --rm --entrypoint file chromatindb /usr/local/bin/chromatindb` (verify stripped) | N/A |
+| DOCK-01e | Container starts and listens on port | integration | See "Test 3: Daemon starts and listens" below | N/A |
+| DOCK-01f | Host-based peer can connect | integration | See "Test 4: Host peer connects" below | N/A |
+| DOCK-01g | Non-root user | smoke | `docker run --rm --entrypoint id chromatindb` (verify uid != 0) | N/A |
+| DOCK-01h | /data volume declared | smoke | `docker inspect chromatindb --format '{{.Config.Volumes}}'` | N/A |
+
+### Validation Procedure (Ordered Steps)
+
+**Test 1: Image builds successfully**
+```bash
+# Must complete without error. Validates Dockerfile, all deps fetch, Release compiles.
+docker build -t chromatindb .
+echo "PASS: Image built"
+```
+Expected: Exit code 0. This is the most critical test -- if the image builds, the multi-stage Dockerfile, FetchContent deps, and Release compilation all work.
+
+**Test 2: Binary present, stripped, and runs**
+```bash
+# Verify chromatindb binary exists, is executable, and responds to 'version' command
+docker run --rm chromatindb version
+# Expected output: "chromatindb <version>" (e.g., "chromatindb 0.6.0")
+# Exit code 0
+
+# Verify binary is stripped (no debug symbols -- confirms Release build + strip)
+docker run --rm --entrypoint file chromatindb /usr/local/bin/chromatindb
+# Expected: contains "stripped" in output
+```
+
+**Test 3: Daemon starts and listens on configured port**
+```bash
+# Start container in background with default CMD (daemon mode)
+docker run -d --name chromatindb-test -p 4200:4200 chromatindb
+
+# Wait for daemon to initialize (keygen + bind)
+sleep 3
+
+# Check container is still running (didn't crash)
+docker inspect chromatindb-test --format '{{.State.Running}}'
+# Expected: true
+
+# Check logs show successful startup
+docker logs chromatindb-test 2>&1 | grep -q "daemon started"
+# Expected: exit code 0
+
+# Verify TCP port is listening from the host
+bash -c 'exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-'
+# Expected: exit code 0 (connection accepted)
+
+# Cleanup
+docker rm -f chromatindb-test
+```
+
+**Test 4: Host-based peer can connect to container**
+```bash
+# This test requires a local chromatindb build on the host.
+# Start containerized node
+docker run -d --name chromatindb-node -p 4200:4200 chromatindb
+
+sleep 3
+
+# From host, attempt a PQ handshake connection using the local binary
+# Create a minimal config pointing to the container as a bootstrap peer
+cat > /tmp/test-config.json << 'TESTEOF'
+{
+    "bind_address": "0.0.0.0:4201",
+    "bootstrap_peers": ["127.0.0.1:4200"]
+}
+TESTEOF
+
+# Start host peer briefly, check logs for successful connection
+timeout 10 ./build/chromatindb run --config /tmp/test-config.json --data-dir /tmp/chromatindb-test-host --log-level debug 2>&1 | tee /tmp/peer-test.log &
+HOST_PID=$!
+sleep 5
+
+# Check if handshake succeeded (look for connection log lines)
+grep -q "handshake\|connected\|peer" /tmp/peer-test.log
+RESULT=$?
+
+kill $HOST_PID 2>/dev/null
+docker rm -f chromatindb-node
+rm -rf /tmp/chromatindb-test-host /tmp/test-config.json /tmp/peer-test.log
+
+if [ $RESULT -eq 0 ]; then
+    echo "PASS: Host peer connected to container"
+else
+    echo "FAIL: Host peer could not connect"
+fi
+```
+
+**Test 5: Container properties**
+```bash
+docker build -t chromatindb .
+
+# Non-root user
+docker run --rm --entrypoint id chromatindb
+# Expected: uid != 0, user = chromatindb
+
+# /data volume declared
+docker inspect chromatindb --format '{{json .Config.Volumes}}'
+# Expected: contains "/data"
+
+# EXPOSE 4200
+docker inspect chromatindb --format '{{json .Config.ExposedPorts}}'
+# Expected: contains "4200/tcp"
+
+# ENTRYPOINT set
+docker inspect chromatindb --format '{{json .Config.Entrypoint}}'
+# Expected: ["chromatindb"]
+
+# HEALTHCHECK configured
+docker inspect chromatindb --format '{{json .Config.Healthcheck}}'
+# Expected: non-null, contains /dev/tcp
+```
+
+**Test 6: HEALTHCHECK becomes healthy**
+```bash
+docker run -d --name chromatindb-hc -p 4200:4200 chromatindb
+sleep 35  # Wait for first health check interval (30s) + startup
+docker inspect chromatindb-hc --format '{{.State.Health.Status}}'
+# Expected: "healthy"
+docker rm -f chromatindb-hc
+```
+
+**Test 7: CMD override works (keygen)**
+```bash
+docker run --rm -v /tmp/chromatindb-keygen:/data chromatindb keygen --data-dir /data
+# Expected: exit code 0, prints "Generated identity at /data/"
+ls /tmp/chromatindb-keygen/node.key /tmp/chromatindb-keygen/node.pub
+# Expected: both files exist
+rm -rf /tmp/chromatindb-keygen
+```
+
+**Test 8: .dockerignore verification**
+```bash
+# Build the image, then check that excluded paths are not in the build context
+# (This is verified indirectly: if .git/ were included, build context would be much larger)
+# Check .dockerignore file exists and has correct entries
+cat .dockerignore
+# Expected: contains build/, .planning/, .git/, .claude/, *.md
+```
+
+### Sampling Rate
+- **Per task commit:** `docker build -t chromatindb . && docker run --rm chromatindb version` (Tests 1-2)
+- **Per wave merge:** All tests 1-8 (full validation suite)
+- **Phase gate:** All 8 tests pass before `/gsd:verify-work`
+
+### Wave 0 Gaps
+- [ ] `Dockerfile` -- the primary deliverable, does not exist yet
+- [ ] `.dockerignore` -- must be created with exclusion rules
+- [ ] No test scripts needed -- validation is via Docker CLI commands run manually or in plan verification steps. The tests above are imperative commands, not test framework files.
+
+*(No test framework files needed. This phase produces infrastructure (Dockerfile, .dockerignore), not library code. Validation is via Docker build/run commands, not Catch2 tests.)*
+
 ## Open Questions
 
 1. **chromatindb_loadgen does not exist yet**
@@ -334,6 +504,7 @@ All deps are fetched during cmake configure. 7 use git clone, 1 uses URL downloa
 - Architecture: HIGH - multi-stage Docker is well-established; patterns verified against Docker official docs
 - Pitfalls: HIGH - each pitfall verified by examining actual source code and build artifacts
 - Discretion items: HIGH - recommendations based on existing project defaults and user preferences
+- Validation: HIGH - all test commands use standard Docker CLI; verified daemon CLI flags and default port from source code
 
 **Research date:** 2026-03-15
 **Valid until:** 2026-04-15 (stable domain, debian bookworm LTS)
