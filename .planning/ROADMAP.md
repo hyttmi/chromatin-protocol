@@ -81,7 +81,7 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 
 **Milestone Goal:** Run chromatindb in Docker, measure real-world performance, and validate sync behavior at scale.
 
-- [ ] **Phase 27: Container Build** — Multi-stage Dockerfile producing Release binaries in debian:bookworm-slim
+- [x] **Phase 27: Container Build** — Multi-stage Dockerfile producing Release binaries in debian:bookworm-slim (completed 2026-03-15)
 - [ ] **Phase 28: Load Generator** — Protocol-compliant C++ load generation tool with configurable workloads
 - [ ] **Phase 29: Multi-Node Topology** — Docker Compose 3-5 node chain with health checks and named volumes
 - [ ] **Phase 30: Benchmark Scenarios** — Run all performance scenarios with resource profiling
@@ -192,7 +192,7 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
-| 27. Container Build | v0.6.0 | 0/1 | Planning | - |
+| 27. Container Build | 1/1 | Complete   | 2026-03-15 | - |
 | 28. Load Generator | v0.6.0 | 0/? | Not started | - |
 | 29. Multi-Node Topology | v0.6.0 | 0/? | Not started | - |
 | 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |

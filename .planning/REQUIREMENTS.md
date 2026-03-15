@@ -9,7 +9,7 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 ### Container Infrastructure
 
-- [ ] **DOCK-01**: Multi-stage Dockerfile produces chromatindb binary in debian:bookworm-slim runtime image with Release build
+- [x] **DOCK-01**: Multi-stage Dockerfile produces chromatindb binary in debian:bookworm-slim runtime image with Release build
 - [ ] **DOCK-02**: docker-compose topology runs 3-5 nodes in chain connectivity with health checks, named volumes, and per-node configs
 
 ### Load Generation
@@ -65,7 +65,7 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DOCK-01 | Phase 27 | Pending |
+| DOCK-01 | Phase 27 | Complete |
 | DOCK-02 | Phase 29 | Pending |
 | LOAD-01 | Phase 28 | Pending |
 | LOAD-02 | Phase 28 | Pending |
