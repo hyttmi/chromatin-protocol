@@ -97,10 +97,10 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
   1. `docker build` produces a working image with both `chromatindb` and `chromatindb_loadgen` binaries
   2. The container starts, listens on the configured port, and accepts connections from a host-based peer
   3. The image uses debian:bookworm-slim runtime (not the full build image) and builds with CMAKE_BUILD_TYPE=Release
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 27-01: TBD
+- [ ] 27-01-PLAN.md — Multi-stage Dockerfile, .dockerignore, and version bump to 0.6.0
 
 ### Phase 28: Load Generator
 **Goal**: A standalone C++ tool can generate sustained signed-blob traffic against any chromatindb node
@@ -192,7 +192,7 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
-| 27. Container Build | v0.6.0 | 0/? | Not started | - |
+| 27. Container Build | v0.6.0 | 0/1 | Planning | - |
 | 28. Load Generator | v0.6.0 | 0/? | Not started | - |
 | 29. Multi-Node Topology | v0.6.0 | 0/? | Not started | - |
 | 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
