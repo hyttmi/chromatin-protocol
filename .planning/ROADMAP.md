@@ -120,7 +120,10 @@ Plans:
   2. Connections from addresses listed in trusted_peers config skip PQ handshake with mutual identity verification
   3. trusted_peers is reloadable via SIGHUP without restarting the node
   4. Non-trusted remote peers still perform the full PQ-encrypted handshake (no regression)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 25-01-PLAN.md — Config infrastructure (trusted_peers parsing, validation, SIGHUP reload) and transport schema (TrustedHello, PQRequired)
+- [ ] 25-02-PLAN.md — Lightweight handshake implementation (key derivation, do_handshake branching, mismatch fallback, tests)
 
 ### Phase 26: Documentation & Release
 **Goal**: Operators can understand and use all v0.5.0 features from the README
@@ -165,5 +168,5 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 22. Build Restructure | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 23. TTL Flexibility | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
-| 25. Transport Optimization | v0.5.0 | 0/TBD | Not started | - |
+| 25. Transport Optimization | v0.5.0 | 0/2 | Not started | - |
 | 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |
