@@ -18,7 +18,7 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 
 - [ ] **TOPT-01**: Connections from localhost (127.0.0.1/::1) or configured trusted_peers skip ML-KEM-1024 handshake
 - [ ] **TOPT-02**: Trusted peer connections use a pre-shared key or null-encryption mode with mutual identity verification
-- [ ] **TOPT-03**: trusted_peers is a config option (list of addresses) reloadable via SIGHUP
+- [x] **TOPT-03**: trusted_peers is a config option (list of addresses) reloadable via SIGHUP
 
 ### TTL Flexibility
 
@@ -65,7 +65,7 @@ Requirements for v0.5.0 Hardening & Flexibility. Each maps to roadmap phases.
 | EAR-04 | Phase 24 | Complete |
 | TOPT-01 | Phase 25 | Pending |
 | TOPT-02 | Phase 25 | Pending |
-| TOPT-03 | Phase 25 | Pending |
+| TOPT-03 | Phase 25 | Complete |
 | TTL-01 | Phase 23 | Complete |
 | TTL-03 | Phase 23 | Complete |
 | TTL-04 | Phase 23 | Complete |
