@@ -21,6 +21,7 @@ struct Config {
     uint64_t rate_limit_burst = 0;                  // Burst capacity in bytes (0 = disabled)
     std::vector<std::string> sync_namespaces;       // Hex namespace hashes to replicate (empty = all)
     std::vector<std::string> allowed_keys;          // Hex namespace hashes (64 chars each)
+    std::vector<std::string> trusted_peers;         // IP addresses for lightweight handshake
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 
@@ -36,5 +37,9 @@ Config parse_args(int argc, const char* argv[], Config base = {});
 /// Validate allowed_keys: each must be exactly 64 hex characters.
 /// @throws std::runtime_error if any key is malformed.
 void validate_allowed_keys(const std::vector<std::string>& keys);
+
+/// Validate trusted_peers: each must be a valid IP address (no ports).
+/// @throws std::runtime_error if any entry is malformed.
+void validate_trusted_peers(const std::vector<std::string>& peers);
 
 } // namespace chromatindb::config

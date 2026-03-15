@@ -29,7 +29,10 @@ enum TransportMsgType : byte {
     Unsubscribe = 21,
     Notification = 22,
     // Phase 16: Storage capacity signaling
-    StorageFull = 23
+    StorageFull = 23,
+    // Phase 25: Transport optimization
+    TrustedHello = 24,
+    PQRequired = 25
 }
 
 table TransportMessage {

@@ -1,4 +1,5 @@
 #include "db/config/config.h"
+#include <asio.hpp>
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <stdexcept>
@@ -60,6 +61,15 @@ Config load_config(const std::filesystem::path& path) {
         validate_allowed_keys(cfg.allowed_keys);
     }
 
+    if (j.contains("trusted_peers") && j["trusted_peers"].is_array()) {
+        for (const auto& peer : j["trusted_peers"]) {
+            if (peer.is_string()) {
+                cfg.trusted_peers.push_back(peer.get<std::string>());
+            }
+        }
+        validate_trusted_peers(cfg.trusted_peers);
+    }
+
     return cfg;
 }
 
@@ -111,6 +121,45 @@ void validate_allowed_keys(const std::vector<std::string>& keys) {
                 throw std::runtime_error(
                     "Invalid allowed_key '" + key + "': non-hex character '" +
                     std::string(1, c) + "'");
+            }
+        }
+    }
+}
+
+void validate_trusted_peers(const std::vector<std::string>& peers) {
+    for (const auto& peer : peers) {
+        asio::error_code ec;
+        asio::ip::make_address(peer, ec);
+        if (ec) {
+            // Check if entry looks like it has a port (common misconfiguration)
+            // IPv4 with port: "1.2.3.4:1234", IPv6 with port: "[::1]:1234"
+            bool has_port = false;
+            if (peer.find("]:") != std::string::npos) {
+                has_port = true;  // IPv6 with port: [::1]:4200
+            } else {
+                // Check for IPv4 with port: last colon followed by digits only
+                auto last_colon = peer.rfind(':');
+                if (last_colon != std::string::npos) {
+                    auto after = peer.substr(last_colon + 1);
+                    if (!after.empty() && std::all_of(after.begin(), after.end(), ::isdigit)) {
+                        // Try parsing the part before the colon as IPv4
+                        asio::error_code ec2;
+                        asio::ip::make_address(peer.substr(0, last_colon), ec2);
+                        if (!ec2) {
+                            has_port = true;
+                        }
+                    }
+                }
+            }
+
+            if (has_port) {
+                throw std::runtime_error(
+                    "Invalid trusted_peer '" + peer +
+                    "': not a valid IP address (if specifying a port, remove it "
+                    "-- trusted_peers uses plain IPs)");
+            } else {
+                throw std::runtime_error(
+                    "Invalid trusted_peer '" + peer + "': not a valid IP address");
             }
         }
     }

@@ -391,6 +391,106 @@ TEST_CASE("sync_namespaces defaults to empty when missing from JSON", "[config][
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Transport optimization: trusted_peers config tests
+// =============================================================================
+
+TEST_CASE("Default config has empty trusted_peers", "[config][transport]") {
+    Config cfg;
+    REQUIRE(cfg.trusted_peers.empty());
+}
+
+TEST_CASE("load_config parses trusted_peers from JSON array", "[config][transport]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_trusted.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "trusted_peers": ["192.168.1.5", "10.0.0.1", "::1", "fe80::1"]
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.trusted_peers.size() == 4);
+    REQUIRE(cfg.trusted_peers[0] == "192.168.1.5");
+    REQUIRE(cfg.trusted_peers[1] == "10.0.0.1");
+    REQUIRE(cfg.trusted_peers[2] == "::1");
+    REQUIRE(cfg.trusted_peers[3] == "fe80::1");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config without trusted_peers returns empty vector", "[config][transport]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_trusted.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.trusted_peers.empty());
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("validate_trusted_peers accepts valid IPv4 addresses", "[config][transport]") {
+    std::vector<std::string> peers = {"192.168.1.5", "10.0.0.1", "127.0.0.1"};
+    REQUIRE_NOTHROW(validate_trusted_peers(peers));
+}
+
+TEST_CASE("validate_trusted_peers accepts valid IPv6 addresses", "[config][transport]") {
+    std::vector<std::string> peers = {"::1", "fe80::1", "2001:db8::1"};
+    REQUIRE_NOTHROW(validate_trusted_peers(peers));
+}
+
+TEST_CASE("validate_trusted_peers accepts empty list", "[config][transport]") {
+    std::vector<std::string> peers;
+    REQUIRE_NOTHROW(validate_trusted_peers(peers));
+}
+
+TEST_CASE("validate_trusted_peers rejects IPv4 with port", "[config][transport]") {
+    std::vector<std::string> peers = {"192.168.1.5:4200"};
+    REQUIRE_THROWS_AS(validate_trusted_peers(peers), std::runtime_error);
+    try {
+        validate_trusted_peers(peers);
+    } catch (const std::runtime_error& e) {
+        // Should mention port removal in error message
+        std::string msg = e.what();
+        REQUIRE(msg.find("port") != std::string::npos);
+    }
+}
+
+TEST_CASE("validate_trusted_peers rejects IPv6 with port", "[config][transport]") {
+    std::vector<std::string> peers = {"[::1]:4200"};
+    REQUIRE_THROWS_AS(validate_trusted_peers(peers), std::runtime_error);
+}
+
+TEST_CASE("validate_trusted_peers rejects non-IP strings", "[config][transport]") {
+    std::vector<std::string> peers = {"not-an-ip"};
+    REQUIRE_THROWS_AS(validate_trusted_peers(peers), std::runtime_error);
+}
+
+TEST_CASE("load_config throws on invalid trusted_peers entries", "[config][transport]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_trusted.json";
+
+    SECTION("IPv4 with port") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"trusted_peers": ["192.168.1.5:4200"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    SECTION("non-IP string") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"trusted_peers": ["not-an-ip"]})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
 
