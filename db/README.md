@@ -14,17 +14,17 @@ All cryptographic operations use post-quantum algorithms from [liboqs](https://o
 | **ML-KEM-1024** | Key exchange (peer handshake) | FIPS 203 |
 | **ChaCha20-Poly1305** | Authenticated encryption (transport) | RFC 8439 |
 | **SHA3-256** | Hashing (content addressing, namespace derivation) | FIPS 202 |
-| **HKDF-SHA256** | Key derivation (session keys from KEM output) | RFC 5869 |
+| **HKDF-SHA256** | Key derivation (session keys, at-rest encryption key) | RFC 5869 |
 
 Every blob is cryptographically signed by its author using ML-DSA-87. Peers establish encrypted channels using post-quantum key exchange (ML-KEM-1024), then encrypt all traffic with ChaCha20-Poly1305 AEAD. No data travels in plaintext.
 
 ## Architecture
 
-Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace** is derived as `SHA3-256(public_key)`, providing a unique, verifiable identifier. **Blobs** are signed data units that belong to a namespace; each blob carries a signature, TTL (7-day protocol constant), and timestamp. Blobs are content-addressed by their SHA3-256 hash and stored in libmdbx, an ACID key-value store.
+Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace** is derived as `SHA3-256(public_key)`, providing a unique, verifiable identifier. **Blobs** are signed data units that belong to a namespace; each blob carries a signature, TTL (writer-controlled, per-blob), and timestamp. Blobs are content-addressed by their SHA3-256 hash and stored in libmdbx, an ACID key-value store.
 
-**Sync** works via a hash-list diff protocol: peers exchange lists of what they have, compute the difference, and request what they are missing. One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted.
+**Sync** works via a hash-list diff protocol: peers exchange lists of what they have, compute the difference, and request what they are missing. One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted. **Encryption at rest** protects stored blob payloads with ChaCha20-Poly1305 using a key derived from a node-local master key via HKDF-SHA256.
 
-**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones are permanent (TTL=0) and block future arrival of the deleted blob. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
+**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones block future arrival of the deleted blob; they can be permanent (TTL=0) or time-limited (TTL>0), in which case they are garbage-collected by the expiry scanner. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
 
 ## Building
 
@@ -87,6 +87,7 @@ Create a JSON config file and pass it with `--config`:
   "data_dir": "./data",
   "bootstrap_peers": ["192.168.1.10:4200"],
   "allowed_keys": [],
+  "trusted_peers": [],
   "max_peers": 32,
   "sync_interval_seconds": 60,
   "log_level": "info",
@@ -101,6 +102,7 @@ Create a JSON config file and pass it with `--config`:
 - **data_dir** -- directory for identity keys and blob storage (default: `./data`)
 - **bootstrap_peers** -- list of `host:port` strings to connect to on startup
 - **allowed_keys** -- namespace hashes (hex) of peers allowed to connect; empty means open mode
+- **trusted_peers** -- IP addresses (no ports) whose connections use a lightweight handshake without ML-KEM-1024 key exchange; localhost (127.0.0.1, ::1) is always trusted implicitly (default: `[]`)
 - **max_peers** -- maximum number of simultaneous peer connections (default: `32`)
 - **sync_interval_seconds** -- interval between periodic sync rounds in seconds (default: `60`)
 - **log_level** -- log verbosity (default: `info`)
@@ -115,7 +117,7 @@ chromatindb responds to the following Unix signals at runtime:
 
 - **SIGTERM** -- Graceful shutdown. Stops accepting new connections, drains in-flight coroutines, saves the persistent peer list, and exits cleanly. The shutdown is bounded; if draining takes too long, the process exits with a non-zero exit code.
 
-- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, and `sync_namespaces` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately.
+- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, and `sync_namespaces` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately.
 
 - **SIGUSR1** -- Metrics dump. Logs a snapshot of current runtime metrics via spdlog, including: active connections, storage bytes used, total blobs ingested, total sync rounds completed, total rejections, rate-limited disconnections, and uptime.
 
@@ -196,6 +198,20 @@ For an open node that protects against write-flooding abuse, set storage and rat
 
 This configures a node with 10 GiB storage capacity, 1 MiB/s sustained write rate per connection, and 5 MiB burst tolerance. Peers exceeding the rate are disconnected immediately. When storage is full, the node signals StorageFull to connected peers, which suppress further sync pushes until reconnection.
 
+### Trusted Local Peers
+
+For multi-node setups on a trusted LAN, skip the PQ handshake overhead between nodes:
+
+```json
+{
+  "data_dir": "./data",
+  "bootstrap_peers": ["192.168.1.10:4200", "192.168.1.11:4200"],
+  "trusted_peers": ["192.168.1.10", "192.168.1.11"]
+}
+```
+
+Connections between listed peers use a lightweight handshake with ML-DSA-87 identity verification but no ML-KEM-1024 key exchange. Localhost connections are always trusted implicitly. Reload the trusted peer list at runtime with `SIGHUP`.
+
 ## Features
 
 **Signed Blob Storage** -- Every blob is cryptographically signed by its author using ML-DSA-87. The node verifies the signature against the blob's namespace before accepting it. Blobs are content-addressed by SHA3-256 hash and stored in an ACID key-value store (libmdbx).
@@ -221,6 +237,12 @@ This configures a node with 10 GiB storage capacity, 1 MiB/s sustained write rat
 **Persistent Peer List** -- Known peer addresses are saved to disk and reloaded on restart, enabling reconnection without requiring bootstrap re-discovery.
 
 **Runtime Metrics** -- Operators monitor the node via SIGUSR1 (on-demand metrics dump) or automatic periodic logging every 60 seconds. Metrics include connections, storage used, blobs ingested, sync rounds, rejections, and rate-limited disconnections.
+
+**Encryption at Rest** -- All blob payloads are encrypted with ChaCha20-Poly1305 before writing to disk. The encryption key is derived from a node-local master key (`data_dir/master.key`) via HKDF-SHA256. The master key is auto-generated on first run with 0600 file permissions. Back up this file -- without it, stored data is unrecoverable.
+
+**Lightweight Handshake** -- Connections from localhost (127.0.0.1, ::1) and addresses listed in `trusted_peers` skip the ML-KEM-1024 key exchange, completing the handshake without post-quantum crypto overhead. Both sides verify identity via ML-DSA-87 signatures over a shared challenge. Non-trusted peers always perform the full PQ handshake.
+
+**Writer-Controlled TTL** -- Each blob carries its own TTL set by the writer in the signed data. TTL=0 means permanent (no expiry). Blobs with TTL>0 are expired by the node's periodic scan. Tombstones also support writer-controlled TTL: permanent tombstones (TTL=0) persist indefinitely, while time-limited tombstones (TTL>0) are garbage-collected along with their index entries.
 
 ## Performance
 
