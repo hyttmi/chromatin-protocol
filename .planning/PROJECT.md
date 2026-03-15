@@ -2,9 +2,9 @@
 
 ## What This Is
 
-A decentralized, post-quantum secure database node with access control. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB and is designed to be technically unstoppable.
+A decentralized, post-quantum secure database node with access control and data-at-rest encryption. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB with configurable per-blob TTL and is designed to be technically unstoppable.
 
-The database layer is intentionally dumb — it stores signed blobs, verifies ownership, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
+The database layer is intentionally dumb — it stores signed blobs, verifies ownership, encrypts at rest, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
 
 ## Core Value
 
@@ -46,16 +46,16 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Namespace-scoped sync — v0.4.0
 - ✓ README with usage/interaction samples — v0.4.0
 
+- ✓ Data-at-rest encryption (ChaCha20-Poly1305 for stored blobs) — v0.5.0
+- ✓ Lightweight local handshake (skip PQ crypto for trusted/localhost peers) — v0.5.0
+- ✓ Configurable TTL (per-blob TTL set by writer, replacing hardcoded 7-day default) — v0.5.0
+- ✓ Tombstone TTL (tombstones expire after configurable period, garbage collected) — v0.5.0
+- ✓ Build restructure (db/ as self-contained CMake component) — v0.5.0
+- ✓ Documentation updates for all v0.5.0 changes — v0.5.0
+
 ### Active
 
-<!-- v0.5.0 Hardening & Flexibility -->
-
-- [ ] Data-at-rest encryption (ChaCha20-Poly1305 for stored blobs)
-- [ ] Lightweight local handshake (skip PQ crypto for trusted/localhost peers)
-- [ ] Configurable TTL (per-blob TTL set by writer, replacing hardcoded 7-day default)
-- [ ] Tombstone TTL (tombstones expire after configurable period, default 365 days)
-- [ ] Build restructure (CMakeLists.txt into db/ as component)
-- [ ] Documentation updates for all v0.5.0 changes
+<!-- Next milestone requirements go here -->
 
 ### Out of Scope
 
@@ -75,13 +75,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v0.4.0 with 14,523 LOC C++20, 284 tests.
-Built across 12 days total: v1.0 (3d, 8 phases), v2.0 (2d, 3 phases), v3.0 (2d, 4 phases), v0.4.0 (5d, 6 phases).
+Shipped v0.5.0 with 17,124 LOC C++20, 284 tests.
+Built across 14 days total: v1.0 (3d, 8 phases), v2.0 (2d, 3 phases), v3.0 (2d, 4 phases), v0.4.0 (5d, 6 phases), v0.5.0 (2d, 5 phases).
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.4.0 SHIPPED): chromatindb** — database node with ACL, delegation, pub/sub, deletion, storage limits, metrics, rate limiting
+- **Layer 1 (v0.5.0 SHIPPED): chromatindb** — database node with ACL, delegation, pub/sub, deletion, storage limits, metrics, rate limiting, DARE, trusted peers, configurable TTL
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
@@ -142,18 +142,12 @@ Previous projects inform design:
 | Pub/sub: metadata-rich notifications | Namespace + seq + hash + size; subscriber fetches blob if wanted | ✓ Good — pull model, no data push |
 | Subscriptions connection-scoped | No persistence across disconnects; relay can re-subscribe | ✓ Good — simple state management |
 | No self-exclusion on notifications | Writing peer receives its own notifications | ✓ Good — consistent, simple |
+| Single HKDF-derived blob key (not per-blob) | One key per node with context "chromatindb-dare-v1", AEAD AD = mdbx key | ✓ Good — simple, binds ciphertext to storage location |
+| Envelope format [version][nonce][ciphertext+tag] | Self-describing, forward-compatible encryption format | ✓ Good — version byte enables future migration |
+| Full startup scan for unencrypted data | Pre-release, no migration path needed | ✓ Good — catches misconfiguration |
+| Lightweight handshake with mismatch fallback | Initiator proposes TrustedHello, responder replies PQRequired if untrusted | ✓ Good — graceful upgrade, no connection failure |
+| TrustCheck lambda chain (PeerManager→Server→Connection) | Runtime trust decision injection without coupling layers | ✓ Good — clean dependency inversion |
+| No ENABLE_ASAN/install()/CMAKE_BUILD_TYPE in db/ | YAGNI — sanitizers, install, build type are consumer concerns | ✓ Good — minimal self-contained component |
 
 ---
-## Current Milestone: v0.5.0 Hardening & Flexibility
-
-**Goal:** Harden chromatindb with data-at-rest encryption, optimize local connections, and make TTL flexible for relay/client use.
-
-**Target features:**
-- Data-at-rest encryption (ChaCha20-Poly1305 for stored blobs)
-- Lightweight local handshake (skip PQ crypto for localhost/trusted peers)
-- Configurable TTL (per-blob, replacing hardcoded 7-day constant)
-- Tombstone TTL (365-day default expiry, garbage collection)
-- Build restructure (CMakeLists.txt into db/)
-
----
-*Last updated: 2026-03-14 after v0.5.0 milestone started*
+*Last updated: 2026-03-15 after v0.5.0 milestone*

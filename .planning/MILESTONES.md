@@ -1,5 +1,26 @@
 # Milestones
 
+## v0.5.0 Hardening & Flexibility (Shipped: 2026-03-15)
+
+**Phases:** 5 (22-26) | **Plans:** 6 | **Commits:** 32 | **LOC:** 17,124 C++ (+2,601)
+**Tests:** 284 tests | **Requirements:** 13/13
+**Timeline:** 2 days (2026-03-14 -> 2026-03-15)
+
+**Key accomplishments:**
+- Build restructured — db/ is a self-contained CMake component with guarded FetchContent for composable builds
+- Writer-controlled TTL replaces hardcoded 7-day constant; tombstone_map cleanup in expiry scan
+- ChaCha20-Poly1305 encryption at rest for all stored blob payloads with HKDF-derived keys and auto-generated master key
+- Lightweight handshake for localhost/trusted peers skips ML-KEM-1024 with mismatch fallback to full PQ
+- README documents all v0.5.0 features (DARE, trusted peers, configurable TTL)
+
+**Tech debt carried forward:**
+- has_tombstone_for still uses O(n) namespace scan (from v3.0 — deletion is rare)
+- No milestone audit performed (all requirements verified during phase execution)
+
+**Archive:** [v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md) | [v0.5.0-REQUIREMENTS.md](milestones/v0.5.0-REQUIREMENTS.md)
+
+---
+
 ## v3.0 Real-time & Delegation (Shipped: 2026-03-08)
 
 **Phases:** 4 (12-15) | **Plans:** 8 | **Commits:** 31 | **LOC:** 14,152 C++ (+6,591)
