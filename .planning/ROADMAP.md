@@ -7,6 +7,7 @@
 - ✅ **v3.0 Real-time & Delegation** — Phases 12-15 (shipped 2026-03-08)
 - ✅ **v0.4.0 Production Readiness** — Phases 16-21 (shipped 2026-03-13)
 - ✅ **v0.5.0 Hardening & Flexibility** — Phases 22-26 (shipped 2026-03-15)
+- 🚧 **v0.6.0 Real-World Validation** — Phases 27-31 (in progress)
 
 ## Phases
 
@@ -76,7 +77,92 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 
 </details>
 
+### 🚧 v0.6.0 Real-World Validation (In Progress)
+
+**Milestone Goal:** Run chromatindb in Docker, measure real-world performance, and validate sync behavior at scale.
+
+- [ ] **Phase 27: Container Build** — Multi-stage Dockerfile producing Release binaries in debian:bookworm-slim
+- [ ] **Phase 28: Load Generator** — Protocol-compliant C++ load generation tool with configurable workloads
+- [ ] **Phase 29: Multi-Node Topology** — Docker Compose 3-5 node chain with health checks and named volumes
+- [ ] **Phase 30: Benchmark Scenarios** — Run all performance scenarios with resource profiling
+- [ ] **Phase 31: Report Generation** — Structured benchmark results with analysis and automation
+
+## Phase Details
+
+### Phase 27: Container Build
+**Goal**: chromatindb builds and runs in a Docker container with reproducible Release builds
+**Depends on**: Nothing (first phase of v0.6.0)
+**Requirements**: DOCK-01
+**Success Criteria** (what must be TRUE):
+  1. `docker build` produces a working image with both `chromatindb` and `chromatindb_loadgen` binaries
+  2. The container starts, listens on the configured port, and accepts connections from a host-based peer
+  3. The image uses debian:bookworm-slim runtime (not the full build image) and builds with CMAKE_BUILD_TYPE=Release
+**Plans**: TBD
+
+Plans:
+- [ ] 27-01: TBD
+
+### Phase 28: Load Generator
+**Goal**: A standalone C++ tool can generate sustained signed-blob traffic against any chromatindb node
+**Depends on**: Phase 27
+**Requirements**: LOAD-01, LOAD-02, LOAD-03
+**Success Criteria** (what must be TRUE):
+  1. `chromatindb_loadgen` connects to a running node, performs PQ handshake, and sends signed blobs that the node accepts and stores
+  2. Load generator uses timer-driven fixed-rate scheduling (not response-driven) to prevent coordinated omission
+  3. Mixed-size workload mode distributes blobs across small (1 KiB), medium (100 KiB), and large (1+ MiB) sizes
+  4. Per-blob ACK latency and summary statistics (blobs/sec, MiB/sec, p50/p95/p99) are emitted as JSON to stdout
+**Plans**: TBD
+
+Plans:
+- [ ] 28-01: TBD
+
+### Phase 29: Multi-Node Topology
+**Goal**: A multi-node chromatindb network runs in Docker Compose with correct connectivity and sync
+**Depends on**: Phase 27
+**Requirements**: DOCK-02
+**Success Criteria** (what must be TRUE):
+  1. `docker compose up` starts 3-5 nodes that connect, handshake, and begin syncing
+  2. Nodes use named volumes for libmdbx storage (not container filesystem)
+  3. A blob written to node1 replicates to all other nodes through the peer chain
+  4. A late-joiner node can be started after the initial topology and catches up on existing data
+**Plans**: TBD
+
+Plans:
+- [ ] 29-01: TBD
+
+### Phase 30: Benchmark Scenarios
+**Goal**: All core performance scenarios are measured with resource profiling
+**Depends on**: Phase 28, Phase 29
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, PERF-05, OBS-01, LOAD-04
+**Success Criteria** (what must be TRUE):
+  1. Ingest throughput is measured at multiple blob sizes with blobs/sec, MiB/sec, and p50/p95/p99 latency
+  2. Sync latency (write on node A to availability on node B) and multi-hop propagation time (A to B to C) are measured as wall-clock times
+  3. Late-joiner catch-up time is measured (new node joins after data loaded, time to full convergence)
+  4. Trusted vs PQ handshake overhead is compared with the same workload under both modes
+  5. CPU, memory, and disk I/O per container are captured via docker stats during each scenario run
+**Plans**: TBD
+
+Plans:
+- [ ] 30-01: TBD
+- [ ] 30-02: TBD
+
+### Phase 31: Report Generation
+**Goal**: Benchmark results are aggregated into a structured, reproducible report
+**Depends on**: Phase 30
+**Requirements**: OBS-02, OBS-03
+**Success Criteria** (what must be TRUE):
+  1. A markdown report is generated with hardware specs, topology description, per-scenario results tables, and analysis
+  2. Machine-readable JSON results are output alongside the markdown report for each scenario
+  3. `run-benchmark.sh` automates the full pipeline: build images, start topology, run all scenarios, collect metrics, generate report
+**Plans**: TBD
+
+Plans:
+- [ ] 31-01: TBD
+
 ## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -106,3 +192,8 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
+| 27. Container Build | v0.6.0 | 0/? | Not started | - |
+| 28. Load Generator | v0.6.0 | 0/? | Not started | - |
+| 29. Multi-Node Topology | v0.6.0 | 0/? | Not started | - |
+| 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
+| 31. Report Generation | v0.6.0 | 0/? | Not started | - |

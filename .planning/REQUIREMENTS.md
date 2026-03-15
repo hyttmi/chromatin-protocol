@@ -65,26 +65,26 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DOCK-01 | — | Pending |
-| DOCK-02 | — | Pending |
-| LOAD-01 | — | Pending |
-| LOAD-02 | — | Pending |
-| LOAD-03 | — | Pending |
-| LOAD-04 | — | Pending |
-| PERF-01 | — | Pending |
-| PERF-02 | — | Pending |
-| PERF-03 | — | Pending |
-| PERF-04 | — | Pending |
-| PERF-05 | — | Pending |
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| OBS-03 | — | Pending |
+| DOCK-01 | Phase 27 | Pending |
+| DOCK-02 | Phase 29 | Pending |
+| LOAD-01 | Phase 28 | Pending |
+| LOAD-02 | Phase 28 | Pending |
+| LOAD-03 | Phase 28 | Pending |
+| LOAD-04 | Phase 30 | Pending |
+| PERF-01 | Phase 30 | Pending |
+| PERF-02 | Phase 30 | Pending |
+| PERF-03 | Phase 30 | Pending |
+| PERF-04 | Phase 30 | Pending |
+| PERF-05 | Phase 30 | Pending |
+| OBS-01 | Phase 30 | Pending |
+| OBS-02 | Phase 31 | Pending |
+| OBS-03 | Phase 31 | Pending |
 
 **Coverage:**
 - v0.6.0 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-15*
-*Last updated: 2026-03-15 after initial definition*
+*Last updated: 2026-03-15 after roadmap creation*
