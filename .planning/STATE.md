@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.5.0
-milestone_name: Hardening & Flexibility
-status: complete
-last_updated: "2026-03-15T05:41:40.104Z"
+milestone: v0.6.0
+milestone_name: Real-World Validation
+status: active
+last_updated: "2026-03-15"
 progress:
   total_phases: 26
   completed_phases: 26
@@ -18,15 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Planning next milestone
+**Current focus:** v0.6.0 Real-World Validation
 
 ## Current Position
 
-Phase: 26 of 26 — all milestones complete through v0.5.0
-Status: v0.5.0 Hardening & Flexibility shipped 2026-03-15
-Last activity: 2026-03-15 — Milestone v0.5.0 archived
-
-Progress: [██████████] 100% (all 5 milestones shipped)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-15 — Milestone v0.6.0 started
 
 ## Performance Metrics
 
@@ -64,5 +63,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-15
-Stopped at: Milestone v0.5.0 archived, ready for next milestone
+Stopped at: Milestone v0.6.0 requirements definition
 Resume file: None

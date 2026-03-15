@@ -55,7 +55,17 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-<!-- Next milestone requirements go here -->
+## Current Milestone: v0.6.0 Real-World Validation
+
+**Goal:** Run chromatindb in Docker, measure real-world performance, and validate sync behavior at scale.
+
+**Target features:**
+- Dockerfile and docker-compose for multi-node topology
+- Load generator tool with mixed blob sizes (up to ~10 GB dataset)
+- Performance measurement: ingest throughput, sync latency, replication time, multi-hop propagation
+- Resource profiling: CPU, memory, disk I/O under load
+- Late-joiner scenario validation
+- Benchmark results report with analysis
 
 ### Out of Scope
 
@@ -150,4 +160,4 @@ Previous projects inform design:
 | No ENABLE_ASAN/install()/CMAKE_BUILD_TYPE in db/ | YAGNI — sanitizers, install, build type are consumer concerns | ✓ Good — minimal self-contained component |
 
 ---
-*Last updated: 2026-03-15 after v0.5.0 milestone*
+*Last updated: 2026-03-15 after v0.6.0 milestone start*
