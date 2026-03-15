@@ -135,6 +135,12 @@ add_executable(chromatindb_bench bench/bench_main.cpp)
 target_link_libraries(chromatindb_bench PRIVATE chromatindb_lib)
 
 # =============================================================================
+# Load generator binary
+# =============================================================================
+add_executable(chromatindb_loadgen loadgen/loadgen_main.cpp)
+target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
+
+# =============================================================================
 # Test target
 # =============================================================================
 include(CTest)
