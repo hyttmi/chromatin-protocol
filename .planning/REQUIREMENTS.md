@@ -14,9 +14,9 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 ### Load Generation
 
-- [ ] **LOAD-01**: chromatindb_loadgen C++ binary connects as protocol-compliant peer, performs PQ handshake, sends signed blobs
-- [ ] **LOAD-02**: Load generator supports configurable blob count, sizes, and write rate with timer-driven scheduling (no coordinated omission)
-- [ ] **LOAD-03**: Mixed-size workload mode distributes blobs across small/medium/large sizes
+- [x] **LOAD-01**: chromatindb_loadgen C++ binary connects as protocol-compliant peer, performs PQ handshake, sends signed blobs
+- [x] **LOAD-02**: Load generator supports configurable blob count, sizes, and write rate with timer-driven scheduling (no coordinated omission)
+- [x] **LOAD-03**: Mixed-size workload mode distributes blobs across small/medium/large sizes
 - [ ] **LOAD-04**: run-benchmark.sh script builds images, starts topology, runs all scenarios, collects metrics, generates report
 
 ### Performance Measurement
@@ -67,9 +67,9 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 |-------------|-------|--------|
 | DOCK-01 | Phase 27 | Complete |
 | DOCK-02 | Phase 29 | Pending |
-| LOAD-01 | Phase 28 | Pending |
-| LOAD-02 | Phase 28 | Pending |
-| LOAD-03 | Phase 28 | Pending |
+| LOAD-01 | Phase 28 | Complete |
+| LOAD-02 | Phase 28 | Complete |
+| LOAD-03 | Phase 28 | Complete |
 | LOAD-04 | Phase 30 | Pending |
 | PERF-01 | Phase 30 | Pending |
 | PERF-02 | Phase 30 | Pending |

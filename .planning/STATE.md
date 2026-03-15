@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 27-01-PLAN.md
-last_updated: "2026-03-15T17:06:27.089Z"
-last_activity: 2026-03-15 — Completed 27-01 Container Build plan
+stopped_at: Completed 28-01-PLAN.md
+last_updated: "2026-03-15T17:37:59Z"
+last_activity: 2026-03-15 — Completed 28-01 Load Generator plan
 progress:
   total_phases: 5
   completed_phases: 1
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.6.0 Phase 27 - Container Build
+**Current focus:** v0.6.0 Phase 28 - Load Generator
 
 ## Current Position
 
-Phase: 27 of 31 (Container Build)
+Phase: 28 of 31 (Load Generator)
 Plan: 1 of 1 in current phase
 Status: Executing
-Last activity: 2026-03-15 — Completed 27-01 Container Build plan
+Last activity: 2026-03-15 — Completed 28-01 Load Generator plan
 
-Progress: [██████████████████████████░░░░] 84% (26/31 phases)
+Progress: [████████████████████████████░░] 87% (27/31 phases)
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███████████████████████
 
 **Trend:** Consistent (~15-20 min/plan across last 3 milestones)
 | Phase 27 P01 | 2min | 1 tasks | 3 files |
+| Phase 28 P01 | 16min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -59,6 +60,7 @@ Progress: [███████████████████████
 
 All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 27]: Port 4200 (matches config.h default), GCC 12 with -Wno-restrict, BuildKit cache mount for _deps
+- [Phase 28]: Single-file loadgen tool, notification-based ACK for latency, spdlog to stderr / JSON to stdout
 
 ### Pending Todos
 
@@ -70,6 +72,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-15T14:16:27.815Z
-Stopped at: Completed 27-01-PLAN.md
+Last session: 2026-03-15T17:37:59Z
+Stopped at: Completed 28-01-PLAN.md
 Resume file: None
