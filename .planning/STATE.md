@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-14T17:03:01.829Z"
+last_updated: "2026-03-15T05:39:20.527Z"
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 16
-  completed_plans: 16
+  total_phases: 11
+  completed_phases: 11
+  total_plans: 19
+  completed_plans: 19
 ---
 
 # Project State
@@ -18,21 +18,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-14)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.5.0 Hardening & Flexibility — Phase 25 (Transport Optimization)
+**Current focus:** v0.5.0 Hardening & Flexibility — Phase 26 (Documentation & Release) — COMPLETE
 
 ## Current Position
 
-Phase: 25 of 26 (Transport Optimization) — COMPLETE
-Plan: 2 of 2 (complete)
-Status: Phase 25 complete, all transport optimization requirements satisfied
-Last activity: 2026-03-15 — Completed 25-02 Lightweight handshake protocol
+Phase: 26 of 26 (Documentation & Release) — COMPLETE
+Plan: 1 of 1 (complete)
+Status: Phase 26 complete, v0.5.0 milestone shipped
+Last activity: 2026-03-15 — Completed 26-01 Documentation & version bump
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 50 (across v1.0 + v2.0 + v3.0 + v0.4.0)
+- Total plans completed: 51 (across v1.0 + v2.0 + v3.0 + v0.4.0 + v0.5.0)
 - Average duration: ~20 min (historical)
 - Total execution time: ~17 hours
 
@@ -54,6 +54,7 @@ Progress: [████████░░] 80%
 | 24-encryption-at-rest | P01 | 15min | 1 | 8 |
 | 25-transport-optimization | P01 | 15min | 2 | 7 |
 | 25-transport-optimization | P02 | 19min | 2 | 8 |
+| 26-documentation-release | P01 | 10min | 2 | 2 |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ v0.5.0 decisions:
 - Single HKDF-derived blob key (not per-blob) with context "chromatindb-dare-v1"
 - AEAD AD = mdbx key (namespace||content_hash) to bind ciphertext to storage location
 - Full startup scan for unencrypted data (not sampling) -- pre-release, no migration path
+- No CHANGELOG.md (YAGNI)
+- No max_ttl/tombstone_ttl config documented (not implemented in codebase)
 
 ### Pending Todos
 
@@ -81,5 +84,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-15
-Stopped at: Completed Phase 25 (Transport Optimization) — all plans executed
+Stopped at: Completed Phase 26 (Documentation & Release) — v0.5.0 milestone shipped
 Resume file: None

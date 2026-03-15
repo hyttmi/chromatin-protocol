@@ -67,7 +67,7 @@ Full details: [milestones/v3.0-ROADMAP.md](milestones/v3.0-ROADMAP.md)
 - [x] **Phase 23: TTL Flexibility** - Remove hardcoded TTL constant, fix tombstone expiry scan (completed 2026-03-14)
 - [x] **Phase 24: Encryption at Rest** - ChaCha20-Poly1305 encryption for all stored blob payloads (completed 2026-03-14)
 - [x] **Phase 25: Transport Optimization** - Lightweight handshake for localhost and trusted peers (completed 2026-03-15)
-- [ ] **Phase 26: Documentation & Release** - README updates for all v0.5.0 features
+- [x] **Phase 26: Documentation & Release** - README updates for all v0.5.0 features (completed 2026-03-15)
 
 ## Phase Details
 
@@ -169,4 +169,4 @@ Note: Phase 25 depends only on Phase 22 (not 23/24), but ordered here for simpli
 | 23. TTL Flexibility | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
-| 26. Documentation & Release | v0.5.0 | 0/TBD | Not started | - |
+| 26. Documentation & Release | 1/1 | Complete    | 2026-03-15 | - |
