@@ -93,6 +93,15 @@ PeerManager::PeerManager(const config::Config& config,
         sync_namespaces_.insert(hex_to_namespace(hex));
     }
 
+    // Initialize trusted peers from config (canonicalize via Asio parsing)
+    for (const auto& ip_str : config.trusted_peers) {
+        asio::error_code ec;
+        auto addr = asio::ip::make_address(ip_str, ec);
+        if (!ec) {
+            trusted_peers_.insert(addr.to_string());
+        }
+    }
+
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
         bootstrap_addresses_.insert(addr);
@@ -1011,6 +1020,11 @@ void PeerManager::handle_sighup() {
     reload_config();
 }
 
+bool PeerManager::is_trusted_address(const asio::ip::address& addr) const {
+    if (addr.is_loopback()) return true;
+    return trusted_peers_.count(addr.to_string()) > 0;
+}
+
 void PeerManager::reload_config() {
     spdlog::info("reloading allowed_keys from {}...", config_path_.string());
 
@@ -1074,6 +1088,23 @@ void PeerManager::reload_config() {
     } else {
         spdlog::info("config reload: sync_namespaces={} namespaces", sync_namespaces_.size());
     }
+
+    // Reload trusted_peers
+    try {
+        config::validate_trusted_peers(new_cfg.trusted_peers);
+    } catch (const std::exception& e) {
+        spdlog::error("config reload rejected (invalid trusted_peer): {} (keeping current)", e.what());
+        return;
+    }
+    trusted_peers_.clear();
+    for (const auto& ip_str : new_cfg.trusted_peers) {
+        asio::error_code ec;
+        auto addr = asio::ip::make_address(ip_str, ec);
+        if (!ec) {
+            trusted_peers_.insert(addr.to_string());
+        }
+    }
+    spdlog::info("config reload: trusted_peers={} addresses", trusted_peers_.size());
 }
 
 void PeerManager::disconnect_unauthorized_peers() {

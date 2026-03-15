@@ -149,6 +149,10 @@ public:
     /// Public for testing; called internally by SIGHUP handler.
     void reload_config();
 
+    /// Check if an IP address is trusted (localhost or in trusted_peers).
+    /// Passed to Connection as trust-check function.
+    bool is_trusted_address(const asio::ip::address& addr) const;
+
     /// Callback type for notification dispatch (public for testing).
     using NotificationCallback = std::function<void(
         const std::array<uint8_t, 32>& namespace_id,
@@ -255,6 +259,7 @@ private:
     std::deque<PeerInfo> peers_;
     std::set<std::string> bootstrap_addresses_;
     std::set<std::string> known_addresses_;      // All addresses we know about
+    std::set<std::string> trusted_peers_;         // IP strings for transport trust
     std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
