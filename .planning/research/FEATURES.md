@@ -1,252 +1,216 @@
 # Feature Landscape
 
-**Domain:** Production readiness hardening for decentralized PQ-secure database node daemon
-**Researched:** 2026-03-08
-**Milestone:** v0.4.0
+**Domain:** Real-world validation and performance benchmarking for a distributed, PQ-secure blob store (chromatindb v0.6.0)
+**Researched:** 2026-03-15
+**Overall confidence:** HIGH (well-established domain; tooling is mature and patterns are standard)
 
-## Context: What Already Exists
+## Context
 
-Before categorizing new features, the following are shipped and NOT re-implemented:
+chromatindb v0.5.0 shipped with 17,124 LOC C++20, 284 unit tests, and a standalone microbenchmark binary (`chromatindb_bench`) that measures crypto ops, data path, and sync throughput in-process. What is missing is real-world, multi-node validation: running actual daemon instances in a realistic topology, injecting load, measuring end-to-end behavior under sustained traffic, and producing a report with actionable numbers.
 
-- Signed blob storage with namespace ownership (SHA3-256(pubkey) = namespace)
-- PQ-encrypted transport (ML-KEM-1024 + ChaCha20-Poly1305)
-- Hash-list diff sync (bidirectional, one-blob-at-a-time)
-- ACL (allowed_keys, open/closed mode, SIGHUP reload)
-- Delegation (write-only delegates via signed delegation blobs)
-- Pub/sub notifications (connection-scoped subscriptions)
-- Blob deletion via replicated tombstones
-- TTL/expiry (7-day default, TTL=0 permanent)
-- 100 MiB blob support
-- PEX peer discovery
-- Persistent peer list (peers.json via `load_persisted_peers` / `save_persisted_peers`)
-- Strike system for misbehaving peers
-
-The `PersistedPeer` struct and `peers.json` machinery already exist in `peer_manager.h`. Persistent peer list is NOT a new feature for v0.4.0 — it is already shipped.
+The existing `NodeMetrics` struct already tracks ingests, rejections, syncs, rate-limited disconnects, and peer connection totals. The existing `SIGUSR1` handler and periodic metrics log provide runtime observability. The benchmark binary covers microbenchmarks (SHA3, ML-DSA-87, ML-KEM-1024, ChaCha20-Poly1305, blob ingest, sync throughput, PQ handshake, notification dispatch). This milestone builds on top of that foundation.
 
 ---
 
 ## Table Stakes
 
-Features that are baseline expectations for a production node daemon. Missing any of these makes the system feel unfinished or unsafe to deploy.
+Features users (here: developers and operators evaluating chromatindb) expect for any distributed database performance validation. Missing any of these would make the benchmark results incomplete or untrustworthy.
 
-| Feature | Why Expected | Complexity | Dependencies on Existing | Notes |
-|---------|--------------|------------|--------------------------|-------|
-| **Global storage limit with enforcement** | Every production storage system has a quota. Without a cap, a node fills its disk and crashes the entire host. IPFS Kubo has `StorageMax` config. Nostr strfry uses LMDB `mapsize`. Production daemons always have this. | MED | `storage::Storage`, `config::Config`, `engine::BlobEngine::ingest()`, `engine::BlobEngine::delete_blob()` | Add `max_storage_bytes` to Config (default: unlimited, 0 = no limit). `Storage` exposes `used_bytes()` via `mdbx_env_info` (stat.mi_used_pgno * page_size). Engine checks before ingest. Return `IngestError::storage_full` when exceeded. |
-| **Disk-full protocol rejection** | Peers must receive a clear rejection, not a silent connection drop or partial write. Standard P2P pattern: nodes signal capacity limits explicitly so peers can route around them. Nostr NIP-11 defines `max_content_length` and `retention` capacity limits. | LOW | `engine::IngestError`, `wire/transport.fbs` (new `StorageFull` msg type or reuse `Goodbye`), `peer_manager.cpp` | On `IngestError::storage_full`, send `WriteNack` with `storage_full` reason to the writing peer. For inbound sync blobs, skip ingest and log. No protocol change needed if we reuse existing Nack path — just add a new rejection reason code. |
-| **Graceful shutdown** | SIGTERM must drain in-flight work cleanly. Operators expect that killing the daemon does not corrupt the database or leave partial sync state. cockroachdb, gRPC, every Unix daemon standard: stop accepting, finish in-flight, close connections with Goodbye, flush storage. | MED | `PeerManager::stop()`, `net::Server`, `asio::io_context`, `storage::Storage` destructor, `main.cpp` | `stop()` already exists on PeerManager. Graceful shutdown extends it: (1) stop accepting new connections, (2) send Goodbye to all peers, (3) cancel sync timers, (4) wait for active coroutines to finish (bounded timeout, e.g. 10s), (5) close storage. The `stopping_` flag already exists. |
-| **Tombstone index (O(1) has_tombstone_for)** | `has_tombstone_for()` currently scans all blobs in a namespace linearly (O(n)). Called on every ingest to prevent resurrection of deleted blobs. With high-write namespaces this becomes a performance bottleneck. Fixed-cost lookup is required for production correctness. | MED | `storage::Storage::has_tombstone_for()`, `storage.cpp` (Storage::Impl), libmdbx sub-database | Add a `tombstone_map` sub-database in libmdbx: key = `[namespace:32][target_hash:32]`, value = empty (or timestamp). `has_tombstone_for` becomes a btree cursor seek = O(log n) btree, effectively O(1) amortized. Backfill on open: scan existing blobs for tombstone magic, populate index. |
-| **Operational metrics logging** | Operators need visibility into what the node is doing. How many peers connected? How many blobs stored? Sync stats? Rate-limited attempts? Disk usage? Without this, production debugging is blind. Standard pattern: periodic log line with key counters (spdlog already in use). | LOW | `spdlog` (already dep), `PeerManager`, `storage::Storage`, `engine::BlobEngine` | No new dependency needed. Add a `Metrics` struct with atomic counters: `blobs_stored`, `blobs_rejected`, `bytes_stored`, `peers_connected`, `sync_rounds`, `rate_limited_count`. Log via spdlog on a 60s timer (or at SIGHUP). Extend `SyncStats` struct already in `sync_protocol.h`. |
-| **Rate limiting for write abuse** | Open nodes are exposed to write floods. Without per-connection rate limiting, a single peer can saturate disk I/O and starve sync. Nostr relays (strfry, nostr-relay Python) universally implement rate limiting. Token bucket is the standard algorithm (constant memory, handles bursts). | MED | `peer_manager.cpp` (`on_peer_message()`), `config::Config` | Token bucket per connection: `max_writes_per_second` (default: 10), `burst_size` (default: 50). Track in `PeerInfo` struct (two uint64 fields: `rate_tokens`, `rate_last_refill_ns`). Check before processing `Data`/`Delete` messages. On limit: send Nack with `rate_limited` reason, increment strike. No new dependencies — stdlib chrono for timing. |
-| **README with usage and interaction samples** | A deployed daemon needs documentation for operators. What config fields exist? How do you connect a client? What does the wire protocol look like at a high level? | LOW | None | Write `db/README.md` with: node startup, config JSON schema, how to connect, example wire flow. |
-
----
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Multi-stage Dockerfile** | Reproducible build in an isolated container. Standard practice for C++ projects. Ensures benchmark results are not tied to the developer's machine. | Low | CMake, FetchContent (all deps fetched at build time) |
+| **docker-compose multi-node topology** | Minimum 3-node network (A<->B<->C for multi-hop). Without this, you are testing localhost-to-localhost, which proves nothing about real networking, PQ handshake overhead, or sync protocol correctness under latency. | Low | Dockerfile |
+| **Load generator tool** | A binary or script that creates signed blobs and writes them to a running node. Without a load generator, there is no way to produce sustained traffic. Must support configurable blob sizes (1 KiB, 64 KiB, 1 MiB, 10 MiB) and configurable write rate or burst mode. | Med | NodeIdentity (keygen), wire protocol (connect + send Data messages) |
+| **Ingest throughput measurement** | Blobs/sec and MiB/sec at the ingesting node under sustained load. This is the most fundamental metric for any blob store. Must measure at multiple blob sizes. | Low | Load generator, NodeMetrics (already exists: ingests counter) |
+| **Sync/replication latency** | Wall-clock time from "blob written to node A" to "blob available on node B". This is the single most-asked question about any replicated system. Must measure at configurable sync intervals. | Med | Multi-node topology, timestamping in load generator + verification on peer |
+| **Multi-hop propagation time** | Time for a blob written to node A to reach node C (which only connects to B, not A). Validates that the sync protocol actually propagates data transitively. Without this, you have no evidence that the sequential sync protocol works beyond direct peers. | Med | 3+ node topology with chain connectivity (A-B-C, no A-C link) |
+| **Late-joiner scenario** | Start a new node D after data has been written, connect it to the network, measure time to fully catch up. Every replicated system must prove that new nodes can join and converge. | Med | Multi-node topology, load generator (pre-seed data), timing infrastructure |
+| **Resource profiling (CPU, memory, disk I/O)** | Measure resource consumption under load. Without this, throughput numbers are meaningless because you do not know if you are CPU-bound (PQ crypto), memory-bound (100 MiB blobs), or I/O-bound (libmdbx writes). | Low | `docker stats` or cgroup metrics; no custom tooling needed |
+| **Benchmark results report** | A structured document (markdown) with tables and analysis. Numbers without context are useless. Must include hardware specs, topology, workload description, and interpretation. | Low | All measurement features above |
 
 ## Differentiators
 
-Features that add real operational value beyond minimum. Not strictly required, but make the system notably better to run in production.
+Features that go beyond table stakes. Not expected for a v0.6.0 internal validation milestone, but would add significant value if included.
 
-| Feature | Value Proposition | Complexity | Dependencies on Existing | Notes |
-|---------|-------------------|------------|--------------------------|-------|
-| **Namespace-scoped sync** | Filter which namespaces sync with which peers. Allows a node to act as a partial mirror: "I replicate namespaces A and B, not C." Useful for tiered storage (low-disk node mirrors only priority namespaces). Analogous to Nostr relay `retention` spec (NIP-11) and PouchDB filtered replication. | HIGH | `sync::SyncProtocol`, `PeerManager::run_sync_with_peer()`, `peer_manager.cpp`, `config::Config` | Two approaches: (a) per-peer config (which namespaces to sync with which address), or (b) global namespace filter (which namespaces this node stores at all). Option (b) is simpler and YAGNI-aligned. Add `namespace_filter` to Config: if non-empty, only namespaces in the list are stored and synced. Check at ingest time (before crypto verification) and at sync namespace list assembly. |
-| **Storage usage in metrics** | Report current disk usage (bytes used, percentage of limit, number of blobs) as part of the periodic metrics log. Operators need to know when to increase limits or expand storage before hitting the wall. | LOW | `storage::Storage` (needs `used_bytes()` method), `Metrics` struct | Add `Storage::used_bytes()` using `mdbx_env_info()` stat fields. Include in the 60s metrics log line. Feeds the storage-full enforcement logic as well (dual use). |
-| **Rate limit config exposure** | Make rate limiting parameters configurable rather than hardcoded. `max_writes_per_second` and `burst_size` in the JSON config. Different deployments (closed node with 5 trusted peers vs open node with 100 unknown peers) need different policies. | LOW | `config::Config`, rate limiter in `PeerInfo` | Single-field addition to Config. Default values are safe for both open and closed mode. |
-| **Graceful shutdown timeout config** | Let operators tune the drain timeout (default 10s). Some deployments have large in-flight blobs (100 MiB) that need more time to finish. Others want fast restart. | LOW | `config::Config`, graceful shutdown logic in `main.cpp` | Add `shutdown_timeout_seconds` to Config (default: 10). Used in the shutdown wait loop. |
-
----
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Mixed workload scenarios** | Combine writes, reads, deletes, and delegation operations in a single load profile. Closer to real-world usage than pure-write benchmarks. Shows how PQ signature verification on ingest competes with sync and pub/sub. | Med | Load generator with multi-operation support, delegation blob creation |
+| **Automated benchmark runner script** | A single `./run-benchmarks.sh` that builds Docker images, starts compose, runs all scenarios sequentially, collects metrics, and produces the report. Makes benchmarks reproducible by anyone, not just the original developer. | Med | All table stakes features |
+| **Network condition simulation** | Use `tc` (traffic control) inside Docker to add latency and bandwidth constraints between nodes. Simulates WAN conditions for a system designed for internet deployment. Shows how PQ handshake cost (ML-KEM-1024 ciphertext = 1568 bytes per direction) behaves under real latency. | High | docker-compose with `cap_add: NET_ADMIN`, `tc` in container image |
+| **Pub/sub notification latency** | Measure time from blob ingest on publisher to notification receipt on subscriber. Validates the real-time notification pipeline end-to-end, not just the in-process callback latency already measured in `chromatindb_bench`. | Med | Multi-node topology, load generator, subscriber client or log-based measurement |
+| **Storage limit behavior under load** | Fill a node to `max_storage_bytes`, continue writing, verify DISK_FULL rejection propagates correctly, measure throughput degradation (if any) as storage fills up. | Low | Load generator, config with `max_storage_bytes` |
+| **Concurrent writers to same namespace** | Multiple load generators writing to the same namespace via delegation. Measures contention and delegation verification overhead on the ingest hot path. | Med | Delegation blob setup, multiple load generator instances |
+| **Machine-readable results output** | JSON output from the benchmark runner (alongside markdown). Enables trend tracking across versions and automated regression detection. | Low | Benchmark runner script |
+| **Trusted vs PQ transport comparison** | Run the same workload with `trusted_peers` (lightweight handshake) vs full PQ handshake. Quantifies the PQ overhead in connect-heavy scenarios. | Low | Two compose configs differing only in trusted_peers setting |
 
 ## Anti-Features
 
-Features to explicitly NOT build for v0.4.0. Either wrong layer, wrong time, or add complexity exceeding value.
+Features to explicitly NOT build for this milestone.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Per-namespace storage quota** | Different quotas per namespace adds config complexity (per-namespace config map) and tracking overhead (separate counter per namespace). The global limit covers the actual problem: running out of disk. Namespace-level quotas are an application layer concern (relay decides how much of its namespace to use). | Global storage limit with namespace-scoped sync to control which namespaces are stored at all. |
-| **HTTP metrics endpoint (Prometheus scrape)** | Adding an HTTP listener means a new socket, a new dependency (HTTP server or raw socket code), a new attack surface, and diverges from the "binary PQ protocol only" constraint in PROJECT.md. | spdlog periodic log lines. Operators scrape logs. If Prometheus is needed, add a log exporter in the relay layer — not the database node. |
-| **Persistent rate limit state** | Storing rate limit buckets across restarts adds serialization/deserialization for per-connection ephemeral state. Rate limits reset on reconnect naturally — this is correct and expected behavior. | Token buckets are connection-scoped, initialized on connect, reset on disconnect. Same model as pub/sub subscriptions. |
-| **Write-ahead rate limit with queuing** | A leaky-bucket queue that delays writes instead of rejecting them. Adds memory pressure (blob queue), latency, and complexity. On a busy open node, a full queue is indistinguishable from disk-full. | Reject immediately with a Nack. Peer retries. This is the correct behavior for a storage node. |
-| **Dynamic rate limit adjustment** | Auto-tuning rate limits based on peer behavior or disk pressure. This is ML-level complexity for a storage daemon. | Static config. Operator adjusts if needed. |
-| **Filesystem-level storage (ext4/btrfs quotas)** | Using OS-level quotas instead of application-level enforcement means libmdbx writes fail at the OS level with ENOSPC, which is crash-unsafe for LMDB-style MVCC (mid-transaction ENOSPC = corruption risk). | Application-level check in `engine::BlobEngine::ingest()` before any write: if `used_bytes() >= max_storage_bytes`, reject with `storage_full`. |
-| **Streaming metrics (event-based observability)** | Emitting structured events per blob ingest/delete/sync to an external system (OpenTelemetry, InfluxDB) adds dependencies, configuration, and network I/O on the hot path. | Periodic counter log. Counters accumulate, snapshot every 60s. Cheap, zero-dependency. |
-| **Namespace-scoped rate limits** | Different write rates per namespace adds a map lookup per write. The strike system already handles persistent abuse (N strikes = disconnect). Rate limiting is per-connection, not per-namespace. | Per-connection token bucket. Strikes handle namespace-specific spammers. |
-
----
+| **Grafana/Prometheus monitoring stack** | Massive complexity for a validation milestone. The existing spdlog metrics output + `docker stats` provides everything needed. Adding a monitoring stack is an operational concern, not a benchmark concern. | Parse spdlog output and `docker stats` for metrics. Write a simple log-scraping script if needed. |
+| **Custom benchmark framework** | The existing `chromatindb_bench` already covers microbenchmarks. Building a general-purpose framework is YAGNI. | Write scenario-specific measurement scripts. Reuse `chromatindb_bench` for micro-level numbers. |
+| **YCSB integration** | YCSB is Java-based and designed for key-value stores with standard CRUD APIs. chromatindb has a custom binary protocol with PQ crypto -- YCSB cannot speak it. The effort to write a YCSB binding exceeds the value. | Build a purpose-built load generator that speaks the chromatindb wire protocol directly. |
+| **HTTP/REST benchmark endpoint** | chromatindb explicitly has no HTTP API (out of scope per PROJECT.md). Adding one for benchmarking introduces attack surface and deps that must be removed later. | Benchmark the actual binary protocol. The load generator connects via TCP and does the PQ handshake, exactly like a real peer. |
+| **Kubernetes/orchestration** | Overkill for 3-5 node validation. Docker Compose is sufficient. K8s adds networking complexity (CNI, service mesh) that obscures the measurements. | Use docker-compose with explicit network configuration. |
+| **Automated CI benchmark pipeline** | Valuable eventually, but premature for v0.6.0. The goal is to get numbers once, not to run benchmarks on every commit. | Run benchmarks manually. Document the procedure so CI can be added later. |
+| **Cross-platform Docker images** | Building ARM64 + x86_64 images adds build complexity. The benchmarks only need to run on the developer's machine. | Build for the host architecture only (linux/amd64 or whatever the dev machine is). |
+| **Chaos engineering / fault injection** | Network partitions, node crashes, and Byzantine behavior testing is valuable but belongs in a separate milestone focused on resilience, not performance. | Note as future work. The late-joiner scenario is a mild form of this. |
 
 ## Feature Dependencies
 
 ```
-Storage::used_bytes()
-    -> Global storage limit check (engine::BlobEngine::ingest needs the value)
-    -> Disk-full protocol rejection (IngestError::storage_full triggers rejection)
-    -> Storage usage in metrics (dual-use)
-
-Global storage limit
-    -> Disk-full rejection (two sides of the same feature)
-
-Tombstone index (tombstone_map sub-db)
-    -> Storage::has_tombstone_for() O(1) (replaces O(n) scan)
-    -> Must backfill on first open from existing blobs (migration)
-
-Graceful shutdown
-    -> PeerManager::stop() extension (already exists, extend drain logic)
-    -> Goodbye on all peers before close (existing Goodbye message type)
-
-Metrics struct
-    -> Storage usage (needs used_bytes())
-    -> Rate limiter (contributes rate_limited_count)
-    -> Sync stats (SyncStats already exists, aggregate into Metrics)
-
-Rate limiting (PeerInfo token bucket)
-    -> Per-connection: lives in PeerInfo (no external dep)
-    -> Feeds strike system (rate limit excess = strike)
-
-Namespace-scoped sync
-    -> Config namespace_filter
-    -> Engine ingest (early rejection for filtered namespaces)
-    -> SyncProtocol::collect_namespace_hashes (skip filtered namespaces during hash collection)
-    -> PeerManager: filter NamespaceList before sending to peers
+Dockerfile ─────────────────────────────┐
+                                        v
+                              docker-compose topology
+                                        │
+                        ┌───────────────┼───────────────┐
+                        v               v               v
+               Load generator    Resource profiling   Network setup
+                        │               │
+            ┌───────────┼───────────┐   │
+            v           v           v   v
+    Ingest throughput  Sync latency  Multi-hop propagation
+            │           │           │
+            v           v           v
+         Late-joiner scenario (needs pre-seeded data + new node)
+                        │
+                        v
+              Benchmark results report
 ```
 
----
+Key dependency chain:
+- Dockerfile must exist before docker-compose
+- docker-compose must work before any multi-node scenario
+- Load generator must exist before any throughput/latency measurement
+- All measurements must complete before the results report
+
+## Feature Details
+
+### Dockerfile (Multi-Stage Build)
+
+**What:** A two-stage Dockerfile. Stage 1 (`builder`): full build environment with gcc/g++, cmake, git, and all FetchContent dependencies compiled from source. Stage 2 (`runtime`): minimal image (e.g., `debian:bookworm-slim`) with just the `chromatindb` binary and runtime deps (libstdc++, libc).
+
+**Why multi-stage:** The build stage will be large (liboqs, libsodium, FlatBuffers, libmdbx all compile from source). The runtime image should be small. FetchContent fetches everything at build time -- no external package managers needed.
+
+**Key concern:** liboqs build is slow even with algorithm stripping. Docker layer caching mitigates this (dependency layer rarely changes). The `COPY CMakeLists.txt` and `COPY db/CMakeLists.txt` layers should be separated from `COPY . .` to maximize cache reuse.
+
+**Includes both binaries:** `chromatindb` (daemon) and `chromatindb_bench` (microbenchmark) should both be in the image. Optionally the load generator if it is a separate binary.
+
+### docker-compose Topology
+
+**What:** A `docker-compose.yml` defining at minimum:
+- `node-a`: Bootstrap node, accepts inbound. Binds port 4200.
+- `node-b`: Connects to node-a as bootstrap peer. Binds port 4201.
+- `node-c`: Connects to node-b only (NOT node-a). Binds port 4202. This creates the chain topology needed for multi-hop testing.
+
+Each node gets its own `data_dir` volume, its own config file, and pre-generated identity keys.
+
+**Network:** A single Docker bridge network. All nodes can reach each other by DNS name (`node-a`, `node-b`, `node-c`) but bootstrap config controls actual connections.
+
+**Config generation:** A setup script that generates node identities (via `chromatindb keygen`) and writes per-node JSON config files before compose starts. Or: use an entrypoint script that runs `keygen` on first start.
+
+### Load Generator
+
+**What:** A standalone C++ binary (`chromatindb_loadgen`) that:
+1. Generates a node identity (or loads one from disk)
+2. Connects to a target node via TCP + PQ handshake (like a real peer)
+3. Creates signed blobs with configurable size and count
+4. Sends them as Data messages via the wire protocol
+5. Measures and reports: blobs sent, total bytes, elapsed time, blobs/sec, MiB/sec
+
+**Why a separate binary, not a script:** The wire protocol is binary (FlatBuffers over PQ-encrypted TCP). No scripting language can speak it without reimplementing the entire handshake and framing layer. The load generator links against `chromatindb_lib` and reuses all existing infrastructure (wire codec, handshake, framing, AEAD channel).
+
+**CLI interface:**
+```
+chromatindb_loadgen --target <host:port> --count <N> --size <bytes> [--rate <blobs/sec>] [--data-dir <path>]
+```
+
+**Blob size distribution:** Support fixed size (e.g., `--size 1024`) and optionally a mix mode (e.g., `--mix small:70,medium:20,large:10` for 1KiB/64KiB/1MiB distribution). Fixed size is table stakes; mix mode is a differentiator.
+
+### Measurement Methodology
+
+**Ingest throughput:** Measured at the load generator side (send rate) and at the node side (from `NodeMetrics.ingests` delta over time window, observable via periodic metrics log). Report both: send throughput and accept throughput.
+
+**Sync latency:** The load generator writes blob B to node A at time T1. A monitoring process (or log-scraping script) checks node B's metrics log for the ingest of blob B. The difference T2-T1 is sync latency. Since the sync runs on a configurable interval (default 60s), this measurement reflects the actual sync behavior, not an artificial immediate-sync scenario. Use `sync_interval_seconds: 5` for benchmarking to get meaningful numbers without long waits.
+
+**Multi-hop propagation:** Same as sync latency but measured at node C (which only connects to node B). Time T3-T1 where T3 is when blob B appears on node C. Requires at least 2 sync intervals.
+
+**Late-joiner:** Write N blobs to the network. Start a new node D connected to node B. Measure time from node D startup to node D having all N blobs (verified by `list_namespaces` blob count matching).
+
+**Resource profiling:** Use `docker stats --no-stream` at regular intervals during load, capturing CPU%, memory usage, and block I/O. Alternatively, read cgroup files directly for more precision. Record at 1-second intervals during load for meaningful time series.
+
+### Benchmark Scenarios
+
+Based on industry standard practices for distributed database benchmarking (informed by YCSB workload philosophy adapted to chromatindb's blob store model):
+
+| Scenario | Description | Measures | Config |
+|----------|-------------|----------|--------|
+| **S1: Sustained ingest** | Write 10,000 blobs of 1 KiB to node A | Ingest throughput (blobs/sec, MiB/sec), CPU/memory | sync_interval: 5s |
+| **S2: Large blob ingest** | Write 100 blobs of 10 MiB to node A | Large-blob throughput, memory peak | sync_interval: 5s |
+| **S3: Mixed size ingest** | Write 5,000 blobs with 70% 1KiB / 20% 64KiB / 10% 1MiB | Realistic throughput profile | sync_interval: 5s |
+| **S4: Replication latency** | Write 100 blobs to A, measure appearance on B | Sync latency distribution (min/avg/p99/max) | sync_interval: 5s |
+| **S5: Multi-hop propagation** | Write 100 blobs to A, measure appearance on C (A->B->C) | End-to-end propagation time | sync_interval: 5s |
+| **S6: Late joiner** | Write 1,000 blobs to A, then start node D connected to B | Catch-up time, sync throughput during catchup | sync_interval: 5s |
+| **S7: Dataset scale** | Write ~10 GB total data (mixed sizes), let full replication complete | Total replication time, steady-state resource usage | sync_interval: 30s |
+
+### Benchmark Results Report
+
+**Format:** Markdown document with:
+1. Hardware specs (CPU model, cores, RAM, disk type)
+2. Software versions (chromatindb version, Docker version, kernel)
+3. Topology diagram
+4. Per-scenario results table (blobs/sec, MiB/sec, latency percentiles)
+5. Resource usage plots or tables (CPU%, memory over time)
+6. Microbenchmark results from `chromatindb_bench` (already exists)
+7. Analysis and observations
+8. Known limitations and future work
 
 ## MVP Recommendation
 
-**Priority 1 -- Correctness and Safety (must ship):**
-1. **Tombstone index** -- O(n) `has_tombstone_for` is a correctness-adjacent performance bug. Called on every ingest. Fix first because it affects the hot path for all subsequent features (storage limit enforcement also calls ingest).
-2. **Global storage limit + disk-full rejection** -- Prevents node from crashing the host. Requires `Storage::used_bytes()` first.
-3. **Graceful shutdown** -- SIGTERM safety. Operators must be able to restart the daemon without risking database corruption.
+Prioritize (in order):
 
-**Priority 2 -- Operations (high value, low risk):**
-4. **Metrics logging** -- Operational visibility. No dependency on P1 features. Can be built in parallel. Uses existing spdlog, existing SyncStats struct.
-5. **Rate limiting** -- Abuse prevention for open nodes. Simple token bucket in PeerInfo. Feeds strike system.
+1. **Dockerfile** -- everything else depends on this
+2. **docker-compose topology** (3 nodes, chain connectivity) -- enables all multi-node scenarios
+3. **Load generator binary** -- enables all measurement scenarios
+4. **Scenarios S1 + S4 + S5 + S6** -- ingest throughput, sync latency, multi-hop, and late-joiner are the four table-stakes validations
+5. **Resource profiling** -- collect during S1 and S7
+6. **Benchmark results report** -- document everything
 
-**Priority 3 -- Topology control (differentiator, MED complexity):**
-6. **Namespace-scoped sync** -- Allows partial mirrors. More complex protocol interaction. Build after P1+P2 are stable.
-
-**Documentation:**
-7. **README in db/** -- Write after features are finalized. No code risk.
-8. **Version bump to 0.4.0** -- Last step.
-
-**Defer or descope:**
-- Per-namespace storage quota: wrong layer, YAGNI
-- HTTP metrics endpoint: violates protocol constraints
-- Everything in anti-features
-
----
-
-## Implementation Notes
-
-### Tombstone Index Migration
-
-The tombstone index is a net-new libmdbx sub-database (`tombstone_map`). On first open after upgrading, `Storage::open()` must scan all existing blobs for tombstone magic (`0xDEADCAFE` + 32-byte target hash) and backfill the index. This is a one-time O(total blobs) migration that runs on startup. It is fast (index-only reads) and idempotent (can safely re-run). Key = `[namespace:32][target_hash:32]`, value = empty or single byte. The existing `has_tombstone_for` API signature is unchanged — only the implementation changes.
-
-### Storage Used Bytes via libmdbx
-
-`mdbx_env_info()` returns `MDBX_envinfo` with fields:
-- `mi_geo.current` = current database geometry (file size)
-- `mi_used_pgno` = number of pages in use
-- `page_size` = page size in bytes
-
-`used_bytes = mi_used_pgno * page_size` gives the amount of storage actually used by data (not file size, which includes free list pages). This is the correct number to compare against `max_storage_bytes` because it reflects actual data on disk, not pre-allocated geometry.
-
-The check in `engine::BlobEngine::ingest()`:
-```
-// Step 0 (before structural checks): storage limit
-if (max_storage_bytes_ > 0 && storage_.used_bytes() >= max_storage_bytes_) {
-    return IngestResult::rejection(IngestError::storage_full, "node storage limit reached");
-}
-```
-
-This check is cheap (single libmdbx stat call, no disk I/O) and belongs before signature verification. Consistent with the "Step 0: cheapest validation first" decision from v1.0.
-
-### Rate Limiter: Token Bucket in PeerInfo
-
-No new struct needed. Add two fields to `PeerInfo`:
-- `uint64_t rate_tokens = BURST_SIZE` — current token count (scaled by 1000 to avoid float)
-- `uint64_t rate_last_refill_ns = 0` — timestamp of last token refill
-
-Refill on every message: `elapsed_ns = now - last_refill_ns; tokens += elapsed * rate_per_ns; clamp to BURST`. On write message: if `tokens < 1000`, reject with Nack + strike. Otherwise `tokens -= 1000`.
-
-This is pure stdlib chrono arithmetic. Zero allocation. O(1). Correct for a coroutine-based system because `on_peer_message()` is single-threaded per connection.
-
-### Graceful Shutdown Sequence
-
-Current `PeerManager::stop()` cancels timers. Extend to:
-1. Set `stopping_ = true` (already exists, prevents new sync rounds)
-2. Stop `net::Server` accept loop (no new connections)
-3. Send `Goodbye` to all connected peers (iterate `peers_`, `conn->send(Goodbye)`)
-4. Wait up to `shutdown_timeout_seconds` for coroutines to finish
-5. `io_context.stop()` if timeout exceeded
-6. `Storage` destructor handles MDBX close (already RAII)
-
-The existing `Goodbye` message type (TransportMsgType_Goodbye = 7) handles clean peer notification. No new wire messages needed.
-
-### Namespace-Scoped Sync
-
-Config field: `std::vector<std::string> namespace_filter` (hex-encoded namespace IDs, 64 chars each). If empty = replicate all (default, backward compatible).
-
-Three enforcement points:
-1. **Engine ingest**: if `namespace_filter` non-empty and namespace not in filter, return `IngestError::namespace_not_accepted` (new error code). Peers learn quickly not to send blobs for filtered namespaces via consistent rejection.
-2. **SyncProtocol: NamespaceList assembly**: filter out non-accepted namespaces from the list sent to peers in Phase A of sync. Peers only request hashes for namespaces we advertise.
-3. **SyncProtocol: hash collection**: already namespace-scoped. No change needed.
-
-The filter is checked at ingest (fast: set lookup) and at NamespaceList time (also fast: filter once per sync round). No changes to the wire protocol — the existing NamespaceList message carries what we choose to send.
-
-### Metrics Struct
-
-```cpp
-struct Metrics {
-    std::atomic<uint64_t> blobs_stored{0};
-    std::atomic<uint64_t> blobs_rejected{0};
-    std::atomic<uint64_t> blobs_rate_limited{0};
-    std::atomic<uint64_t> sync_rounds_completed{0};
-    std::atomic<uint64_t> peers_connected_total{0};
-    // Point-in-time (read from PeerManager/Storage on log)
-    // peers_currently_connected: peers_.size()
-    // bytes_used: storage_.used_bytes()
-};
-```
-
-Logged every 60s via spdlog at INFO level:
-```
-[metrics] peers=4 blobs_stored=1423 blobs_rejected=12 rate_limited=3 sync_rounds=87 used_bytes=48MB/10GB
-```
-
-Atomic counters because metrics are updated from the coroutine thread but could be read from a signal handler (SIGHUP). In practice, the system is single-threaded on `io_context`, but atomics are cheap insurance.
-
----
+Defer:
+- **S3 (mixed sizes):** nice-to-have but S1+S2 cover the range. Low marginal value.
+- **Network simulation (tc):** High complexity, belongs in a resilience-focused milestone.
+- **Pub/sub latency measurement:** Requires a subscriber client. Can be added to the load generator later but is not critical for v0.6.0.
+- **Automated benchmark runner script:** Valuable but can be assembled after individual pieces work. Manual is fine for first run.
+- **Machine-readable JSON output:** Add after markdown report exists.
+- **Trusted vs PQ comparison:** Low effort but lower priority than core scenarios.
 
 ## Complexity Assessment
 
-| Feature | Lines of Code (est.) | Risk | Touches |
-|---------|---------------------|------|---------|
-| Tombstone index (new MDBX sub-db + migration) | ~80 | MED | storage.cpp (Impl), storage.h |
-| Storage::used_bytes() | ~15 | LOW | storage.cpp, storage.h |
-| Global storage limit + IngestError::storage_full | ~30 | LOW | engine.h, engine.cpp, config.h |
-| Disk-full rejection (Nack reason) | ~20 | LOW | peer_manager.cpp |
-| Graceful shutdown (drain + timeout) | ~50 | MED | peer_manager.cpp, main.cpp, config.h |
-| Metrics struct + 60s log timer | ~60 | LOW | new metrics.h, peer_manager.cpp |
-| Rate limiting (token bucket in PeerInfo) | ~50 | MED | peer_manager.h (PeerInfo), peer_manager.cpp |
-| Namespace-scoped sync | ~60 | MED | config.h, engine.cpp, sync_protocol.cpp, peer_manager.cpp |
-| README in db/ | ~100 lines doc | LOW | db/README.md |
-| Version bump | ~5 | LOW | version.h |
-| **Total (all features)** | **~370** | | |
+| Feature | Estimated Effort | Risk |
+|---------|-----------------|------|
+| Dockerfile (multi-stage) | Small (1 phase) | Low -- standard pattern, all deps via FetchContent |
+| docker-compose + config gen | Small (1 phase) | Low -- well-understood tooling |
+| Load generator binary | Medium (1-2 phases) | Medium -- must implement client-side handshake + send path |
+| Ingest throughput measurement | Small (part of load gen) | Low -- trivially measured at sender |
+| Sync latency measurement | Medium (1 phase) | Medium -- requires timestamp correlation across nodes |
+| Multi-hop propagation | Small (same infra as sync latency) | Low -- just measure at a different node |
+| Late-joiner scenario | Small (1 phase) | Low -- add node to compose, measure convergence |
+| Resource profiling | Small (script) | Low -- `docker stats` parsing |
+| Results report | Small (1 phase) | Low -- documentation |
 
-Risk notes:
-- Tombstone index migration is the highest-risk change: modifies the on-disk database schema. Requires testing with existing populated databases. Must be idempotent.
-- Graceful shutdown coroutine drain has subtle timing: must not cancel timers that are mid-operation. Use `stopping_` flag + bounded wait rather than hard cancel.
-- Namespace-scoped sync changes NamespaceList assembly: must not break existing open-mode behavior (empty filter = send all namespaces, as today).
-
----
+**Total estimated phases:** 5-7
 
 ## Sources
 
-- [Nostr NIP-11 Relay Information Document](https://nips.nostr.com/11) — capacity limits, max_content_length, retention specs; establishes pattern for protocol-level capability advertisement
-- [IPFS Kubo storage quota discussion](https://github.com/ipfs/kubo/issues/972) — StorageMax config, mi_used_pgno pattern for tracking usage
-- [nostr-relay rate limiting docs](https://code.pobblelabs.org/nostr_relay/doc/tip/docs/rate_limits.md) — per-IP and per-pubkey token bucket configuration
-- [CockroachDB node shutdown](https://www.cockroachlabs.com/docs/dev/node-shutdown) — authoritative reference for distributed node drain sequence: stop accepting -> drain in-flight -> disconnect
-- [Graceful shutdown in distributed systems (GeeksForGeeks)](https://www.geeksforgeeks.org/system-design/graceful-shutdown-in-distributed-systems-and-microservices/) — standard pattern: signal -> stop accepting -> drain -> close
-- [Token bucket algorithm](https://intronetworks.cs.luc.edu/current/html/tokenbucket.html) — algorithm reference for per-connection rate limiting
-- [Bitcoin Core peers.dat](https://raghavsood.com/blog/2018/05/20/demystifying-peers-dat/) — reference for persistent peer list format (chromatindb already has peers.json implemented)
-- [PouchDB filtered replication](https://pouchdb.com/2015/04/05/filtered-replication.html) — namespace/topic-scoped sync pattern
-- [prometheus-cpp-lite](https://github.com/biaks/prometheus-cpp-lite) — header-only metrics (NOT recommended for chromatindb; spdlog log lines are sufficient and zero-dependency)
-- Existing codebase: `storage.h` (StoreResult, Storage API), `engine.h` (IngestError enum), `peer_manager.h` (PeerInfo, PersistedPeer, stopping_ flag), `sync_protocol.h` (SyncStats struct)
+- [Aerospike: Best practices for database benchmarking](https://aerospike.com/blog/best-practices-for-database-benchmarking/)
+- [CockroachDB: Performance under Adversity](https://www.cockroachlabs.com/blog/database-testing-performance-under-adversity/)
+- [YCSB Overview (Duke CS)](https://courses.cs.duke.edu/fall13/compsci590.4/838-CloudPapers/ycsb.pdf)
+- [benchANT: YCSB Guide](https://benchant.com/blog/ycsb)
+- [GeeksforGeeks: Benchmarking Distributed Systems](https://www.geeksforgeeks.org/system-design/benchmarking-distributed-systems/)
+- [Abilian: Testing and Benchmarking Distributed Systems](https://lab.abilian.com/Tech/Devops%20&%20Cloud/Testing%20and%20Benchmarking%20Distributed%20Systems/)
+- [Docker: Containerize C++ with multi-stage builds](https://docs.docker.com/guides/cpp/multistage/)
+- [Docker: Runtime metrics](https://docs.docker.com/engine/containers/runmetrics/)
+- [Integrate.io: Database Replication Speed Metrics](https://www.integrate.io/blog/database-replication-speed-metrics/)
+- [Microsoft C++ Blog: Multi-stage containers for C++ development](https://devblogs.microsoft.com/cppblog/using-multi-stage-containers-for-c-development/)

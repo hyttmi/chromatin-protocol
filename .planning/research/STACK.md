@@ -1,292 +1,333 @@
-# Technology Stack: v0.4.0 Production Readiness
+# Technology Stack: v0.6.0 Real-World Validation
 
-**Project:** chromatindb v0.4.0
-**Researched:** 2026-03-08
-**Confidence:** HIGH (all claims verified against source code and library headers in build/_deps/)
+**Project:** chromatindb v0.6.0
+**Researched:** 2026-03-15
+**Confidence:** HIGH (Docker/compose are mature, load generator is custom C++, profiling uses standard Linux/Docker tooling)
 
 ## Executive Summary
 
-No new dependencies are needed. Every v0.4.0 feature is achievable with the existing stack. The key insight: chromatindb already has most of the infrastructure — graceful shutdown is coded, peer persistence is coded, libmdbx exposes storage stats via `mdbx_env_info_ex()`. The work is wiring existing primitives together and filling gaps.
+No new library dependencies are needed. The v0.6.0 milestone is entirely about infrastructure and tooling around the existing binary. The stack additions are: a Dockerfile (multi-stage build), a docker-compose.yml (multi-node topology), a standalone C++ load generator binary (reusing `chromatindb_lib`), and bash scripts for metrics collection via `docker stats`.
 
-The only structural additions are: a new `tombstone_map` mdbx sub-database (adds a fifth DBI, libmdbx default is 1024), a `NodeMetrics` struct with `std::atomic<uint64_t>` counters, and a per-connection token bucket using `std::chrono::steady_clock`.
+The load generator is a C++ binary because it needs to speak chromatindb's PQ-encrypted protocol -- no external tool can do ML-KEM-1024 handshakes and ML-DSA-87 signed blob writes. Building it as a second CMake target that links `chromatindb_lib` gives it full access to the crypto, wire format, and connection code. This is the same pattern already used by `chromatindb_bench`.
 
-## Stack Decision: Zero New Dependencies
+Resource profiling uses `docker stats --no-stream --format '{{json .}}'` polled by a bash script. No Prometheus, no Grafana, no cAdvisor. The goal is benchmark numbers in a markdown report, not a monitoring dashboard.
 
-| Feature | Approach | Why No New Lib |
-|---------|----------|----------------|
-| Global storage limits | `mdbx_env_info_ex()` — already in libmdbx | API exists, just not called yet |
-| Disk-full reporting | New `IngestError` variant + existing protocol rejection path | FlatBuffers transport already has error message type |
-| Persistent peer list | Already implemented — `peers.json` + nlohmann/json | `load_persisted_peers` / `save_persisted_peers` exist in peer_manager.cpp |
-| Graceful shutdown | Already implemented — `Server::drain()` + `Connection::close_gracefully()` | Needs integration testing, not new code |
-| Metrics/observability | `std::atomic<uint64_t>` counters + SIGUSR1/SIGINFO dump | No HTTP server needed; log-based export is sufficient for v0.4.0 |
-| Rate limiting | Token bucket with `std::chrono::steady_clock` + `double tokens` per connection | 30 lines of code, no external dep |
-| Tombstone index | New `tombstone_map` mdbx DBI — key `[ns:32][target_hash:32]` | libmdbx already handles 4 DBIs; adding a 5th is trivial |
-| Namespace-scoped sync | Config field + filter in sync initiator loop | Pure code change in peer_manager.cpp |
+## Recommended Stack
 
-## Existing Components: What Changes
+### Docker Build
 
-### Storage Layer (storage.h / storage.cpp)
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| gcc:14-bookworm | GCC 14.3 on Debian Bookworm | Build stage base image | Official Docker image. GCC 14 has full C++20 support including coroutines. Debian Bookworm uses glibc (not musl), avoiding ABI issues with liboqs and libsodium. |
+| debian:bookworm-slim | Bookworm slim | Runtime stage base image | ~80 MB. Matches the glibc from build stage. No compiler toolchain in production image. Smaller attack surface than full bookworm. |
+| Docker multi-stage build | -- | Separate build from runtime | Build stage: ~2 GB (gcc, cmake, git, build artifacts). Runtime stage: ~100 MB (slim base + binary + shared libs). |
 
-| Change | Detail |
-|--------|--------|
-| Add `tombstone_map` DBI | New `mdbx::map_handle tombstone_map{0}` in `Storage::Impl`. Key: `[namespace:32][target_hash:32]`. Value: empty (presence = tombstone exists). Replaces O(n) blob scan in `has_tombstone_for()` with O(log n) btree lookup. |
-| Add `get_used_bytes()` | Calls `impl_->env.get_info()` which wraps `mdbx_env_info_ex()`. Returns `info.mi_last_pgno * info.mi_dxb_pagesize` as bytes used. Call without a transaction (reads environment state). |
-| Update `store_blob` for tombstones | When storing a tombstone blob, also insert into `tombstone_map` at key `[namespace:32][target_hash:32]`. |
-| Update `run_expiry_scan` | No change needed for tombstones — tombstones have TTL=0 (permanent), so expiry scan already skips them. |
+**Why not Alpine:** Alpine uses musl libc. liboqs and libsodium assume glibc on Linux. musl has known performance regressions with some crypto code paths and occasional ABI incompatibilities with C++ exception handling. The 60 MB size savings is not worth the risk.
 
-**libmdbx storage stats API** (verified from `build/_deps/libmdbx-src/mdbx.h` and `mdbx.h++`):
+**Why not `scratch`/static linking:** chromatindb depends on liboqs, libsodium, and libmdbx which are built as static libs via FetchContent, but the runtime still needs glibc, libstdc++, libpthread, and libdl. A fully static musl build would require cross-compilation setup that adds complexity for zero benefit in a Docker context.
 
-```cpp
-// C++ wrapper (mdbx.h++)
-env::info info = impl_->env.get_info();
-// Returns MDBX_envinfo with:
-//   info.mi_last_pgno    -- last used page number (uint64_t)
-//   info.mi_dxb_pagesize -- page size in bytes (uint32_t)
-//
-// Used bytes = mi_last_pgno * mi_dxb_pagesize
-// This is an approximation; actual file size may be larger due to
-// freed pages pending GC reclamation. For a limit check, this
-// is the correct "high-water mark" approach.
-uint64_t used_bytes = info.mi_last_pgno * info.mi_dxb_pagesize;
-```
+### Container Orchestration
 
-**Confidence: HIGH** — verified via `build/_deps/libmdbx-src/mdbx.h` lines 2808-2886 and `mdbx.h++` lines 5486-5495.
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| docker compose | v2 (compose file format 3.8+) | Multi-node topology | Defines 3-5 node network with custom bridge, health checks, and volume mounts. No Kubernetes needed -- this is a benchmark, not production deployment. |
 
-### Engine Layer (engine.h / engine.cpp)
+### Load Generator
 
-| Change | Detail |
-|--------|--------|
-| Add `storage_full` IngestError | New variant: `IngestError::storage_full`. Checked in `ingest()` after structural checks but before namespace verification (cheaper than crypto). |
-| Check storage limit in `ingest()` | If `storage_.get_used_bytes() >= max_storage_bytes_`, return `IngestResult::rejection(IngestError::storage_full, ...)`. |
-| Inject `max_storage_bytes` | Passed in via constructor (from `Config::max_storage_bytes`). 0 = unlimited (default). |
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| Custom C++ binary (`chromatindb_loadgen`) | -- | Generate load against running nodes | Must speak PQ-encrypted protocol. Links `chromatindb_lib` like the existing `chromatindb_bench`. No external load testing tool (wrk, vegeta, k6) can do ML-KEM-1024 handshakes. |
+| `std::chrono::steady_clock` | C++20 stdlib | Timing measurements | Already used in `chromatindb_bench`. `steady_clock` is monotonic and safe across threads. Avoid `high_resolution_clock` -- it may alias to `system_clock` on some platforms (non-monotonic). |
+| nlohmann/json | 3.11.3 (existing dep) | Results output | JSON output from load generator, consumed by analysis script. Already a project dependency. |
 
-**Step 0 order in `ingest()`:**
+### Resource Profiling
 
-```
-1. Structural checks (pubkey size, sig non-empty)       [existing]
-2. Blob size check (> MAX_BLOB_DATA_SIZE)               [existing]
-3. Storage limit check (used_bytes >= max)              [NEW — cheap uint comparison]
-4. Namespace ownership (SHA3-256(pubkey) == ns)         [existing]
-5. Signature verification (ML-DSA-87)                  [existing]
-6. Tombstone check (has_tombstone_for)                  [existing, now O(1)]
-7. store_blob                                           [existing]
-```
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `docker stats` | Docker CLI built-in | CPU, memory, network I/O, block I/O per container | Reads from cgroups filesystem, near-zero overhead. JSON output with `--format '{{json .}}'`. No additional dependencies. |
+| bash + jq | System tools | Metrics collection script | Poll `docker stats --no-stream` at intervals, append to CSV/JSON. Parse and aggregate for report. `jq` is available in debian:bookworm-slim. |
 
-This preserves the "cheapest first" validation ordering from the key decisions log.
+### Benchmarking Analysis
 
-### Config (config.h / config.cpp)
-
-| Change | Detail |
-|--------|--------|
-| Add `max_storage_bytes` | `uint64_t max_storage_bytes = 0` — 0 means unlimited. JSON field: `"max_storage_bytes"`. Support suffixed strings in config parsing ("10GB", "500MB") for usability, or plain integer bytes. |
-| Add `sync_namespaces` | `std::vector<std::string> sync_namespaces` — hex namespace IDs. Empty = sync all namespaces (default behavior preserved). |
-| Rate limit config | `uint32_t rate_limit_bytes_per_sec = 0` — per-connection inbound rate limit. 0 = no limit. JSON field: `"rate_limit_bytes_per_sec"`. |
-
-### PeerManager (peer_manager.h / peer_manager.cpp)
-
-| Change | Detail |
-|--------|--------|
-| Token bucket per PeerInfo | Add `double rate_tokens = 0.0` and `std::chrono::steady_clock::time_point last_token_refill` to `PeerInfo`. Refill before each frame receive. |
-| Namespace-scoped sync filter | In sync initiator: skip namespaces not in `config_.sync_namespaces` (when list is non-empty). One check per namespace before hash collection. |
-| Disk-full peer notification | When ingest returns `storage_full`, send protocol-level error message to the writing peer instead of silently dropping. |
-| Graceful shutdown hardening | Verify `PeerManager::stop()` calls `server_.stop()` and waits for in-flight coroutines to drain before returning. Review SIGTERM path in main.cpp. |
-
-### NodeMetrics (new file: db/metrics/metrics.h)
-
-```cpp
-namespace chromatindb::metrics {
-
-struct NodeMetrics {
-    std::atomic<uint64_t> blobs_ingested{0};
-    std::atomic<uint64_t> blobs_rejected{0};
-    std::atomic<uint64_t> blobs_synced_sent{0};
-    std::atomic<uint64_t> blobs_synced_received{0};
-    std::atomic<uint64_t> peers_connected{0};
-    std::atomic<uint64_t> peers_rejected{0};
-    std::atomic<uint64_t> bytes_ingested{0};
-    std::atomic<uint64_t> storage_bytes_used{0};  // sampled periodically
-    std::atomic<uint64_t> sync_rounds_completed{0};
-    std::atomic<uint64_t> rate_limit_drops{0};
-};
-
-} // namespace chromatindb::metrics
-```
-
-**Export strategy:** On SIGUSR1 (or SIGINFO on BSD), log all counters via spdlog at INFO level. This is sufficient for v0.4.0 — no HTTP server, no Prometheus push, no external dependency. Operator can parse logs or use spdlog's custom sink if desired.
-
-Why not prometheus-cpp: The library adds civetweb (HTTP server), protobuf, and a thread pool. For a daemon that already exposes everything via its binary protocol, adding an HTTP endpoint is out of scope (PROJECT.md: "No HTTP/REST API"). The `std::atomic` approach has zero overhead.
-
-### Rate Limiter Design
-
-Token bucket per connection — implemented inline in `PeerInfo`, no separate class needed:
-
-```cpp
-// In PeerInfo
-double rate_tokens = 0.0;
-std::chrono::steady_clock::time_point last_token_refill{std::chrono::steady_clock::now()};
-
-// Before accepting each frame (in recv_raw):
-void refill_tokens(double rate_bytes_per_sec) {
-    auto now = std::chrono::steady_clock::now();
-    double elapsed = std::chrono::duration<double>(now - last_token_refill).count();
-    last_token_refill = now;
-    rate_tokens = std::min(rate_bytes_per_sec,  // bucket capacity = 1 second of tokens
-                           rate_tokens + elapsed * rate_bytes_per_sec);
-}
-
-bool consume_tokens(size_t frame_bytes) {
-    if (rate_tokens < static_cast<double>(frame_bytes)) return false;  // drop
-    rate_tokens -= static_cast<double>(frame_bytes);
-    return true;
-}
-```
-
-**Bucket capacity = 1 second of tokens.** This allows bursts up to the rate limit but prevents sustained abuse. Frames that fail the check are dropped and the connection is struck (reusing the existing strike system).
-
-Since PeerManager runs on a single io_context thread, there is no concurrent access to PeerInfo — no atomics needed in the token bucket itself. `std::chrono::steady_clock` is lock-free on all Linux targets.
-
-### Tombstone Index: New mdbx DBI
-
-**Current:** `has_tombstone_for()` in storage.cpp performs an O(n) scan of all blobs in a namespace, decoding each FlatBuffer to check if it's a tombstone. Correctness over performance (per the original comment in storage.h line 116).
-
-**New design:** Add a 5th mdbx DBI, `tombstone_map`:
-
-```
-Key:   [namespace:32][target_blob_hash:32] = 64 bytes
-Value: empty (1-byte magic or zero-length value)
-```
-
-On tombstone store: insert into both `blobs_map` and `tombstone_map`.
-On tombstone lookup: `txn.get(impl_->tombstone_map, to_slice(key), not_found)` — O(log n) btree.
-On tombstone expiry: tombstones have TTL=0, so expiry scan never touches them. The tombstone_map entry persists forever alongside the tombstone blob in blobs_map (consistent).
-
-**libmdbx DBI limit:** Default `MDBX_MAX_DBI = 32768`. Current code uses 4 DBIs (blobs, sequence, expiry, delegation). Adding tombstone = 5. Well within limits.
-
-**Migration:** Existing deployments have tombstones stored only as blobs in `blobs_map`. On first start with v0.4.0, `tombstone_map` will be empty. The `has_tombstone_for` check should fall back to blob scan if tombstone_map lookup misses AND blob is very new (or just accept that historical tombstones without index entries are re-indexed on next write). Simplest approach: one-time migration scan at startup that populates `tombstone_map` from existing tombstone blobs. Runs once, then DBI is authoritative.
-
-### Namespace-Scoped Sync
-
-**Mechanism:** When `config_.sync_namespaces` is non-empty, the sync initiator skips namespaces not in the set. This is a filter at the `list_namespaces()` → namespace iteration loop in `run_sync_with_peer()`.
-
-```cpp
-// In sync initiator, before sending namespace list:
-auto all_ns = engine_.list_namespaces();
-std::vector<storage::NamespaceInfo> filtered;
-if (config_.sync_namespaces.empty()) {
-    filtered = all_ns;  // sync all (default)
-} else {
-    for (const auto& ns : all_ns) {
-        if (sync_ns_set_.count(hex_encode(ns.namespace_id))) {
-            filtered.push_back(ns);
-        }
-    }
-}
-// send filtered namespace list to peer
-```
-
-`sync_ns_set_` is a `std::unordered_set<std::string>` built from `config_.sync_namespaces` at startup. Same pattern as `allowed_set_` in ACL.
-
-Note: namespace-scoped sync is one-sided — the local node only requests blobs for its configured namespaces. The peer still offers all of its namespaces. This is correct: the filter is "what do I want to replicate", not "what do I offer to others".
-
-## Existing Components: Confirmed No Changes Needed
-
-| Component | Current Value | Status |
-|-----------|---------------|--------|
-| libmdbx `MDBX_MAX_DBI` | 32768 default | Adding 5th DBI is trivial |
-| libmdbx `mdbx_env_info_ex` | Present in v0.13.11 | API verified in build/_deps headers |
-| FlatBuffers error message type | Present in transport.fbs | Disk-full rejection reuses existing error path |
-| `Connection::close_gracefully()` | Present and tested | Graceful shutdown uses this |
-| `Server::drain()` | Present in server.cpp | Server-level shutdown exists |
-| spdlog | v1.15.1 | Metrics export via log is sufficient |
-| nlohmann/json | v3.11.3 | Config extension for new fields |
-| `PeerManager::save_persisted_peers()` | Present in peer_manager.cpp | Persistent peer list already coded |
-| SIGTERM handling | Present via asio::signal_set in server.cpp | May need audit of shutdown sequence |
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Metrics export | `std::atomic` + SIGUSR1 log dump | prometheus-cpp | prometheus-cpp adds HTTP server (civetweb), protobuf, threads. Out of scope per PROJECT.md "No HTTP/REST API". |
-| Metrics export | SIGUSR1 log dump | StatsD push | StatsD adds network dependency and UDP socket management. Not worth it for v0.4.0. |
-| Rate limiter | Token bucket in PeerInfo (inline) | Separate RateLimiter class | No benefit for per-connection limiting on a single-threaded io_context. Inline is simpler. |
-| Tombstone index | New mdbx DBI | Serialize tombstone set to disk (JSON) | JSON tombstone file requires full-load on startup and is slower to update. mdbx DBI is ACID, crash-safe, and consistent with existing storage design. |
-| Storage stats | `mdbx_env_info_ex()` | `std::filesystem::space()` | `filesystem::space()` reports disk partition usage, not database usage. A 1 GiB node on a 1 TB disk would never hit its limit. Database-level accounting is correct. |
-| Namespace-scoped sync | Config filter applied at initiator | Per-connection subscription negotiation | Per-connection negotiation is more flexible but adds protocol complexity (new message types). Config filter is sufficient and simpler. |
-| Graceful shutdown | Audit existing `drain()` path | Rewrite shutdown sequence | Drain coroutine and `close_gracefully()` already exist. The gap is likely in main.cpp SIGTERM wiring, not the implementation. |
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| bash scripts | -- | Orchestrate test scenarios | Start topology, run load generator, collect metrics, tear down. Reproducible via `./run-benchmark.sh`. |
+| Markdown report | -- | Results presentation | Load generator outputs JSON, script converts to markdown tables. Same format as existing `chromatindb_bench` output. |
 
 ## What NOT to Add
 
 | Technology | Why Not |
 |------------|---------|
-| prometheus-cpp | Adds HTTP server (civetweb), protobuf dependency. PROJECT.md explicitly prohibits HTTP/REST API. `std::atomic` counters with log dump is sufficient for v0.4.0. |
-| StatsD client | External network dependency for observability. Over-engineering for a daemon that already logs structured data via spdlog. |
-| Rate limiting library (e.g., mfycheng/ratelimiter) | Token bucket is 30 lines of code. External dependency for 30 lines is wasteful. |
-| inotify / file watcher | SIGHUP hot-reload is already implemented. inotify adds complexity with no benefit. |
-| LevelDB / RocksDB | libmdbx already handles the tombstone index. No reason to add a second storage engine. |
-| Chunked transfer for storage accounting | Storage limit applies to stored data, not in-flight data. No protocol changes needed. |
+| Prometheus + Grafana | Over-engineering. This is a one-shot benchmark, not continuous monitoring. `docker stats` + bash gives the same numbers with zero setup. PROJECT.md: "No HTTP/REST API". |
+| cAdvisor | Container-level metrics available via `docker stats` already. cAdvisor adds a web UI and REST API we don't need. |
+| Kubernetes / k3s | Docker compose handles 3-5 nodes on one host trivially. K8s adds massive complexity for zero benefit at this scale. |
+| wrk / vegeta / k6 / locust | None of these speak chromatindb's PQ-encrypted binary protocol. They are HTTP-only tools. |
+| Google Benchmark (gbenchmark) | Already have a working benchmark harness in `chromatindb_bench`. The load generator measures network-level throughput, not microbenchmarks. A framework adds nothing. |
+| perf / flamegraph | Useful for profiling hotspots, but not for the v0.6.0 goal (throughput/latency numbers). Can be added later if bottlenecks are found. Does not work easily in Docker containers without `--privileged` and `--cap-add SYS_ADMIN`. |
+| Testcontainers | Java/Go/.NET library for spinning up Docker containers in tests. We are writing bash + compose, not JUnit tests. |
+| Redis / Kafka / RabbitMQ | No message broker needed. Load generator connects directly to chromatindb nodes via TCP. |
+| InfluxDB / TimescaleDB | Time-series database for metrics storage. Completely unnecessary -- we write a markdown report, not a dashboard. |
 
-## Integration Point Summary
+## Docker Build Details
+
+### Multi-Stage Dockerfile Structure
 
 ```
-storage.h / storage.cpp:
-  + tombstone_map mdbx DBI (5th DBI, key=[ns:32][target_hash:32])
-  + get_used_bytes() -> uint64_t  (calls env.get_info())
-  + store_blob: also writes to tombstone_map for tombstone blobs
-  + has_tombstone_for: replaced O(n) scan with O(log n) tombstone_map lookup
-  + migrate_tombstone_index(): one-time startup scan to populate tombstone_map
+Stage 1: "builder" (gcc:14-bookworm)
+  - Install cmake, git, ninja-build, pkg-config
+  - COPY source code
+  - cmake + build (Release mode, no tests)
+  - Produces: chromatindb, chromatindb_loadgen binaries
 
-engine.h / engine.cpp:
-  + IngestError::storage_full
-  + Storage limit check in ingest() before namespace verify (Step 3)
-  + Constructor takes max_storage_bytes from Config
-
-config.h / config.cpp:
-  + max_storage_bytes: uint64_t (0 = unlimited)
-  + rate_limit_bytes_per_sec: uint32_t (0 = no limit)
-  + sync_namespaces: vector<string> (empty = sync all)
-
-db/metrics/metrics.h (new file):
-  + NodeMetrics struct with 10x std::atomic<uint64_t> counters
-  + dump_metrics(spdlog::logger) function
-
-peer_manager.h / peer_manager.cpp:
-  + PeerInfo: add rate_tokens, last_token_refill for token bucket
-  + Token bucket consume before each frame acceptance
-  + NodeMetrics& injected, counters incremented at ingest/sync events
-  + Namespace filter built from config_.sync_namespaces at startup
-  + Disk-full: send error response to peer on IngestError::storage_full
-  + SIGUSR1 handler: calls dump_metrics()
-  + Audit stop() → server_.stop() → drain() sequence for SIGTERM
-
-main.cpp:
-  + Wire SIGTERM to PeerManager::stop() (if not already)
-  + Instantiate NodeMetrics, pass to PeerManager
-  + Wait for io_context to drain before exit
+Stage 2: "runtime" (debian:bookworm-slim)
+  - Install only: libstdc++6 (if dynamically linked)
+  - COPY --from=builder /app/build/chromatindb /usr/local/bin/
+  - COPY --from=builder /app/build/chromatindb_loadgen /usr/local/bin/
+  - EXPOSE 4200
+  - HEALTHCHECK: connect to port 4200 (TCP check)
+  - ENTRYPOINT ["chromatindb"]
 ```
 
-## Installation
+**Build mode:** `CMAKE_BUILD_TYPE=Release` in Docker. Debug builds are for development only. Release enables -O2 and strips debug info, reducing binary size and improving benchmark accuracy.
 
-No changes to build process. No new FetchContent declarations.
+**Why ninja-build:** Faster than make for parallel builds. Matters in Docker build context where rebuild speed affects iteration time. cmake generates ninja files with `-G Ninja`.
+
+**Binary size estimate:** chromatindb Release binary is likely ~5-10 MB (liboqs ML-DSA/ML-KEM + libsodium + libmdbx + FlatBuffers + Asio headers-only = moderate static lib size). Runtime image total: ~90-110 MB.
+
+### Docker Compose Topology
+
+```yaml
+# 3-node bootstrap network + 1 late-joiner + 1 load generator
+services:
+  node1:  # Bootstrap node (seed)
+  node2:  # Connects to node1
+  node3:  # Connects to node1
+  node4:  # Late-joiner (started after load test)
+  loadgen: # Load generator (connects to node1)
+```
+
+**Network:** Single custom bridge network (`chromatindb-bench`). All nodes on same L2 segment. Docker DNS resolves service names (node1, node2, etc.) to container IPs.
+
+**Health checks:** TCP connect to port 4200. chromatindb accepts connections immediately after `io_context.run()` starts. No application-level health endpoint needed -- if the TCP socket accepts, the node is ready.
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/4200' || exit 1"]
+  interval: 2s
+  timeout: 3s
+  retries: 5
+  start_period: 10s
+```
+
+**depends_on with condition:** `node2` and `node3` depend on `node1` with `condition: service_healthy`. This ensures bootstrap node is accepting connections before peers try to connect.
+
+**Volumes:** Each node gets a named volume for `/data` (libmdbx storage). This allows inspecting data after tests and prevents tmpfs performance artifacts.
+
+### libmdbx Container Considerations
+
+libmdbx uses `write_mapped_io` mode with mmap. In Docker containers:
+
+1. **`vm.max_map_count`:** Default is 65530 on most Linux hosts. libmdbx with a 64 GiB geometry upper limit needs many mmap regions. For benchmarking with ~10 GB dataset across 3-5 nodes, the default should be sufficient. If tests fail with `MDBX_MAP_FULL` or `ENOMEM`, increase on host: `sysctl -w vm.max_map_count=262144`. This is a **host-level** setting, not per-container.
+
+2. **`--shm-size`:** Not needed. libmdbx uses file-backed mmap, not POSIX shared memory (`/dev/shm`).
+
+3. **Storage driver:** Use the default overlay2. libmdbx writes to named volumes which bypass the overlay filesystem entirely (bind-mounted directly to host paths). No performance penalty.
+
+4. **Memory limits:** Set `mem_limit` in compose to prevent OOM-kill from affecting results. Recommend 512 MB per node for a 10 GB total dataset test (each node stores ~3-4 GB after replication, but libmdbx mmap pages in/out).
+
+## Load Generator Design
+
+### Binary: `chromatindb_loadgen`
+
+A new CMake target in the root `CMakeLists.txt`:
+
+```cmake
+add_executable(chromatindb_loadgen tools/loadgen_main.cpp)
+target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
+```
+
+**Why C++ binary, not Python/bash script:** The load generator must:
+1. Perform ML-KEM-1024 key exchange (PQ handshake)
+2. Encrypt all traffic with ChaCha20-Poly1305
+3. Sign blobs with ML-DSA-87
+4. Encode blobs in FlatBuffers wire format
+5. Use the framing protocol (4-byte length prefix + encrypted frame)
+
+All of this is implemented in `chromatindb_lib`. A Python wrapper would require FFI bindings for 5 different subsystems. A C++ binary gets it for free by linking the library.
+
+### Load Generator Capabilities
+
+```
+chromatindb_loadgen --target node1:4200 \
+                    --duration 60 \
+                    --blob-sizes "1k,10k,100k,1m" \
+                    --rate 100 \
+                    --output results.json
+```
+
+| Parameter | Purpose |
+|-----------|---------|
+| `--target` | Node to send blobs to |
+| `--duration` | Test duration in seconds |
+| `--blob-sizes` | Comma-separated blob sizes (mixed workload) |
+| `--rate` | Target blobs/sec (0 = max throughput) |
+| `--output` | JSON results file |
+| `--scenario` | Predefined scenario: `ingest`, `sync-latency`, `late-joiner` |
+
+### Measurement Points
+
+The load generator measures **at the application level**, not the network level:
+
+| Metric | How Measured | Where |
+|--------|-------------|-------|
+| Ingest throughput (blobs/sec) | Count ACKs per second | Load generator: time between send and ACK receive |
+| Ingest latency (p50/p95/p99) | Histogram of send-to-ACK times | Load generator: `steady_clock` before send, after ACK |
+| Sync propagation time | Write to node1, poll node2/node3 for blob | Load generator: `steady_clock` from write ACK to query hit |
+| Multi-hop propagation | Write to node1, poll node3 (which syncs from node2) | Load generator: same technique, topology-dependent |
+| Late-joiner catch-up | Start node4, measure time to full sync | Script: `steady_clock` from node4 start to hash-count match |
+
+### Results Format
+
+JSON output compatible with the existing markdown table format from `chromatindb_bench`:
+
+```json
+{
+  "test": "ingest-throughput",
+  "duration_seconds": 60,
+  "total_blobs": 5847,
+  "total_bytes": 59873280,
+  "throughput_blobs_sec": 97.45,
+  "throughput_mb_sec": 0.95,
+  "latency_p50_ms": 8.2,
+  "latency_p95_ms": 14.7,
+  "latency_p99_ms": 23.1,
+  "errors": 0
+}
+```
+
+## Resource Profiling Approach
+
+### `docker stats` Polling Script
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+#!/bin/bash
+# collect-metrics.sh -- polls docker stats every 2 seconds
+INTERVAL=2
+OUTPUT="metrics.csv"
+
+echo "timestamp,container,cpu_pct,mem_usage_mb,mem_limit_mb,net_rx_mb,net_tx_mb,block_r_mb,block_w_mb" > "$OUTPUT"
+
+while true; do
+  docker stats --no-stream --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}' \
+    | grep chromatindb \
+    | while read line; do
+        echo "$(date +%s),$line" >> "$OUTPUT"
+      done
+  sleep $INTERVAL
+done
+```
+
+**Available fields from `docker stats --format`:**
+
+| Placeholder | Description |
+|-------------|-------------|
+| `.Name` | Container name |
+| `.CPUPerc` | CPU percentage |
+| `.MemUsage` | Memory usage / limit |
+| `.MemPerc` | Memory percentage |
+| `.NetIO` | Network I/O (rx / tx) |
+| `.BlockIO` | Block I/O (read / write) |
+| `.PIDs` | Number of PIDs |
+
+**JSON format:** `docker stats --no-stream --format '{{json .}}'` outputs full JSON per container. Parseable with `jq`.
+
+### What We Measure vs. What We Don't
+
+| Measure | Tool | Sufficient for v0.6.0 |
+|---------|------|----------------------|
+| CPU per container | `docker stats` | Yes -- shows if crypto is the bottleneck |
+| Memory per container | `docker stats` | Yes -- shows if mmap growth is bounded |
+| Network I/O per container | `docker stats` | Yes -- shows sync traffic patterns |
+| Disk I/O per container | `docker stats` | Yes -- shows libmdbx write amplification |
+| Application-level latency | Load generator | Yes -- measures the metric users care about |
+| Kernel-level CPU profiling | NOT measured | Not needed for v0.6.0 -- no optimization target yet |
+| Lock contention | NOT measured | Single-threaded io_context -- no locks |
+| Syscall tracing | NOT measured | Over-engineering for benchmark goals |
+
+## Alternatives Considered
+
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Build image | gcc:14-bookworm | gcc:13-bookworm | GCC 14 has better C++20 coroutine codegen. No reason to use an older compiler. |
+| Build image | gcc:14-bookworm | clang:18 | GCC builds work today. Clang would require testing the entire build. No benefit for benchmarking. |
+| Runtime image | debian:bookworm-slim | alpine:3.20 | musl libc ABI issues with liboqs/libsodium. 60 MB savings not worth the risk. |
+| Runtime image | debian:bookworm-slim | distroless | Distroless has no shell, making health checks and debugging harder. Benchmark images need shell access for troubleshooting. |
+| Orchestration | docker compose | Kubernetes | Massively over-engineered for 3-5 containers on one host. |
+| Orchestration | docker compose | Podman compose | Docker is the de facto standard. Podman compose compatibility is imperfect. |
+| Load generator | C++ binary linking chromatindb_lib | Python + ctypes/cffi | Would need FFI for 5+ subsystems (handshake, AEAD, signing, codec, framing). Months of wrapper work for a one-shot tool. |
+| Load generator | C++ binary linking chromatindb_lib | Go binary with CGo | Same problem -- needs C bindings for every subsystem. |
+| Metrics collection | docker stats + bash | Prometheus + Grafana | Dashboard not needed. We want numbers in a markdown report, not graphs. |
+| Metrics collection | docker stats + bash | cAdvisor | Extra container running a web UI we would never look at. |
+| Timing | `std::chrono::steady_clock` | `std::chrono::high_resolution_clock` | `high_resolution_clock` may alias to `system_clock` (non-monotonic). `steady_clock` is guaranteed monotonic. Already used in `chromatindb_bench`. |
+| Build system | ninja | make | Ninja is ~10-20% faster for parallel builds. Matters during Docker image builds where FetchContent downloads and compiles all deps. |
+
+## Installation / Build Changes
+
+### New CMake Target
+
+```cmake
+# In root CMakeLists.txt, after chromatindb_bench:
+add_executable(chromatindb_loadgen tools/loadgen_main.cpp)
+target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
+```
+
+### New Files
+
+```
+Dockerfile                          # Multi-stage build
+docker-compose.yml                  # 3-5 node topology
+tools/loadgen_main.cpp              # Load generator binary
+tools/collect-metrics.sh            # docker stats poller
+tools/run-benchmark.sh              # Full benchmark orchestration
+tools/generate-report.sh            # Convert JSON results to markdown
+configs/node1.json                  # Per-node configs for compose
+configs/node2.json
+configs/node3.json
+configs/node4.json                  # Late-joiner config
+```
+
+### No Changes to Existing Dependencies
+
+The FetchContent block in `CMakeLists.txt` remains identical. No new `FetchContent_Declare` calls. The load generator reuses `chromatindb_lib` which already links all dependencies.
+
+```bash
+# Build locally (no Docker)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# Build Docker image
+docker build -t chromatindb:v0.6.0 .
+
+# Run benchmark
+docker compose up -d
+./tools/run-benchmark.sh
+docker compose down
 ```
 
 ## Sources
 
-- `build/_deps/libmdbx-src/mdbx.h` lines 2808-2886 — `MDBX_envinfo` struct with `mi_last_pgno` and `mi_dxb_pagesize` — **HIGH confidence**
-- `build/_deps/libmdbx-src/mdbx.h++` lines 5486-5495 — `env::get_info()` C++ wrapper returning `MDBX_envinfo` — **HIGH confidence**
-- `db/storage/storage.cpp` lines 591-635 — current O(n) `has_tombstone_for` implementation — **HIGH confidence** (source code)
-- `db/storage/storage.cpp` lines 78-111 — existing 4 mdbx DBIs (blobs, sequence, expiry, delegation) — **HIGH confidence**
-- `db/peer/peer_manager.cpp` — `load_persisted_peers`, `save_persisted_peers`, `update_persisted_peer` — **HIGH confidence** (source code)
-- `db/net/server.h` lines 33, 65 — `Server::stop()` and `Server::drain()` exist — **HIGH confidence**
-- `db/net/connection.h` lines 56-57 — `Connection::close_gracefully()` exists — **HIGH confidence**
-- `db/engine/engine.h` — `IngestError` enum, current validation pipeline — **HIGH confidence**
-- [github.com/DarkWanderer/metrics-cpp](https://github.com/DarkWanderer/metrics-cpp) — confirms `std::atomic` is sufficient for lock-free metrics at nanosecond overhead — **MEDIUM confidence** (third-party benchmark)
-- [Token Bucket Algorithm — Medium](https://medium.com/@sahilbitsp/rate-limiting-algorithms-c-d185f942a7db) — confirms `chrono::steady_clock` pattern for token bucket — **MEDIUM confidence**
+- [Docker multi-stage builds documentation](https://docs.docker.com/build/building/multi-stage/) -- official Docker docs on multi-stage builds -- **HIGH confidence**
+- [gcc Docker Hub official image](https://hub.docker.com/_/gcc) -- gcc:14-bookworm image verified available -- **HIGH confidence**
+- [Docker Compose services reference](https://docs.docker.com/reference/compose-file/services/) -- healthcheck, depends_on, networks syntax -- **HIGH confidence**
+- [Docker container stats reference](https://docs.docker.com/reference/cli/docker/container/stats/) -- format placeholders for docker stats -- **HIGH confidence**
+- [Docker runtime metrics](https://docs.docker.com/engine/containers/runmetrics/) -- cgroup-based metrics collection -- **HIGH confidence**
+- [Alpine vs Debian for C++ containers](https://www.turnkeylinux.org/blog/alpine-vs-debian) -- musl vs glibc ABI analysis -- **MEDIUM confidence**
+- [Docker Compose health checks guide (2025)](https://www.tvaidyan.com/2025/02/13/health-checks-in-docker-compose-a-practical-guide/) -- depends_on with condition: service_healthy -- **MEDIUM confidence**
+- [Docker stats JSON format](https://kylewbanks.com/blog/docker-stats-memory-cpu-in-json-format) -- --format '{{json .}}' pattern -- **MEDIUM confidence**
+- [std::chrono::high_resolution_clock analysis (2025)](https://www.sandordargo.com/blog/2025/12/10/clocks-part-4-high_resolution_clock) -- confirms steady_clock is safer choice -- **MEDIUM confidence**
+- Existing `chromatindb_bench` source (`bench/bench_main.cpp`) -- validates pattern of linking chromatindb_lib for tooling -- **HIGH confidence** (source code)
+- Existing `db/storage/storage.cpp` -- libmdbx write_mapped_io + 64 GiB geometry confirms mmap dependency -- **HIGH confidence** (source code)
 
 ---
-*Stack research for: chromatindb v0.4.0 — Production Readiness*
-*Researched: 2026-03-08*
+*Stack research for: chromatindb v0.6.0 -- Real-World Validation*
+*Researched: 2026-03-15*

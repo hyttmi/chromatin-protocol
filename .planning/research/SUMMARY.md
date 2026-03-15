@@ -1,205 +1,182 @@
 # Project Research Summary
 
-**Project:** chromatindb v0.4.0 — Production Readiness
-**Domain:** Production hardening of a C++20 P2P post-quantum blob store daemon
-**Researched:** 2026-03-08
+**Project:** chromatindb v0.6.0
+**Domain:** Docker deployment, load generation, and performance benchmarking for a distributed PQ-secure blob store
+**Researched:** 2026-03-15
 **Confidence:** HIGH
 
 ## Executive Summary
 
-chromatindb v0.4.0 is a pure hardening milestone: no new protocols, no new dependencies, no architectural shifts. The existing 14,152 LOC codebase already contains nearly every primitive needed — libmdbx storage stats, graceful drain coroutines, peer persistence machinery, spdlog, and the strike system are all in place. The work is connecting existing pieces, filling the gaps between them, and adding three narrow new constructs: a fifth mdbx sub-database for tombstone indexing, a `NodeMetrics` struct with plain `uint64_t` counters, and a token bucket per `PeerInfo`. All 8 features total approximately 370 lines of new code.
+chromatindb v0.6.0 is a real-world validation milestone, not a feature milestone. The codebase ships with 17,124 LOC, 284 tests, and an in-process microbenchmark (`chromatindb_bench`), but has never been run as a multi-node Docker deployment under sustained load. This milestone closes that gap by adding: a multi-stage Dockerfile, a docker-compose multi-node topology, a custom C++ load generator (`chromatindb_loadgen`), and benchmark orchestration scripts that produce a structured results report. No new library dependencies are required — all tooling is built on top of the existing `chromatindb_lib`.
 
-The recommended implementation order is correctness first, then operations, then topology control. The tombstone index (currently O(n) on every ingest) ships first because it is on the hot path for all subsequent features. Storage limit enforcement comes before disk-full reporting, which produces the error code that triggers the wire message. Graceful shutdown and persistent peer persistence are tightly coupled at `PeerManager::stop()` and build as a single phase. Metrics and rate limiting are independent and follow in any order.
+The critical design constraint driving all tooling decisions is that chromatindb speaks a custom binary protocol (FlatBuffers over PQ-encrypted TCP with ML-KEM-1024 + ML-DSA-87). No off-the-shelf load testing tool can participate in the network, so the load generator must be a C++ binary linking `chromatindb_lib`. This is the same pattern used by `chromatindb_bench`. The infrastructure choice is Docker Compose (not Kubernetes), `docker stats` + bash (not Prometheus + Grafana), and gcc:14-bookworm / debian:bookworm-slim (not Alpine, which has glibc/musl ABI risk with liboqs). All tooling choices prioritize getting accurate numbers with minimal complexity overhead.
 
-The dominant risk category is coroutine concurrency: every `co_await` in the Asio model is a preemption point where container state can change. The three highest-cost pitfalls are: (1) a stale storage limit check that fires in a coroutine body instead of inside the synchronous `BlobEngine::ingest()`; (2) `io_context` destroyed with live coroutine frames causing use-after-free at shutdown; and (3) a raw `PeerInfo*` going dangling across a `co_await` in the rate limit path. All three are prevented by patterns already documented in the project's RETROSPECTIVE.md.
+The dominant risks are measurement correctness, not implementation difficulty. Three pitfalls can silently produce wrong results: libmdbx MMAP on overlay2 filesystem (use named volumes), coordinated omission in the load generator (use timer-driven scheduling, not response-driven), and benchmarking a Debug build instead of Release (Dockerfile must explicitly set `CMAKE_BUILD_TYPE=Release`). All other pitfalls are detectable from `docker stats` output. The overall implementation risk is low — Docker, compose, and bash are well-understood; the load generator complexity is bounded by reusing the existing `Connection` class for the full protocol stack.
 
 ## Key Findings
 
 ### Recommended Stack
 
-No new dependencies. Every v0.4.0 feature is achievable with the existing stack. See `STACK.md` for full detail.
+No new library dependencies. The v0.6.0 stack is infrastructure only: Docker multi-stage builds (gcc:14-bookworm builder, debian:bookworm-slim runtime), docker-compose v2 for topology management, a new `chromatindb_loadgen` CMake target linking `chromatindb_lib`, and bash scripts using `docker stats --no-stream --format '{{json .}}'` for metrics collection. Alpine is explicitly ruled out due to musl libc ABI issues with liboqs and libsodium. Ninja replaces make in the Dockerfile for faster incremental builds during Docker layer cache misses. `std::chrono::steady_clock` (not `high_resolution_clock`) is used for all latency measurement to guarantee monotonicity.
 
-**Core technologies and their v0.4.0 roles:**
-- **libmdbx** — add 5th sub-database (`tombstone_map`); expose storage stats via `env.get_info()` (verified in `build/_deps/libmdbx-src/mdbx.h++` line 5486). `MDBX_MAX_DBI` default is 32768; current usage is 4 DBIs; adding a 5th is trivial.
-- **Asio (C++20 coroutines)** — expiry coroutine cancellation via `asio::cancellation_signal`; SIGUSR1 metrics dump follows existing `sighup_loop()` member-function coroutine pattern exactly.
-- **spdlog** — periodic metrics log line on 60-second timer; no Prometheus, no HTTP server, no external metrics endpoint needed.
-- **nlohmann/json** — three new config fields: `max_storage_bytes`, `rate_limit_bytes_per_sec`, `sync_namespaces`.
-- **`std::chrono::steady_clock`** — token bucket timing for per-connection rate limiting (30 lines, no library).
-
-**What NOT to add:** prometheus-cpp (adds HTTP server + protobuf), StatsD client (UDP socket dependency), any rate limiting library (token bucket is 30 lines of code). PROJECT.md explicitly prohibits HTTP/REST API.
+**Core technologies:**
+- `gcc:14-bookworm` / `debian:bookworm-slim`: build + runtime images — glibc required by liboqs/libsodium; slim runtime is ~100 MB
+- Docker Compose v2: multi-node topology (5 nodes + loadgen service) — no Kubernetes complexity at this scale
+- `chromatindb_loadgen` C++ binary: load generator linking `chromatindb_lib` — only way to speak PQ-encrypted protocol
+- `docker stats` + bash + jq: resource profiling — zero-overhead cgroup reads, no monitoring stack needed
+- `std::chrono::steady_clock`: latency timing — monotonic, matches existing `chromatindb_bench` patterns
 
 ### Expected Features
 
-**Must have (table stakes — all 6 blocking for production deployment):**
-- **Tombstone index** — O(1) `has_tombstone_for()` via new `tombstone_map` mdbx DBI. Current O(n) scan over all blobs in a namespace is unacceptable at scale and sits on the ingest hot path.
-- **Global storage limit** — `max_storage_bytes` config field, `Storage::used_bytes()` via libmdbx stats, `IngestError::storage_full`. Prevents node from filling disk and crashing the host.
-- **Disk-full rejection** — New `StorageFull = 23` wire message type (additive, backward compatible). Peers receive actionable signal instead of a silent drop or generic error.
-- **Graceful shutdown** — SIGTERM drains coroutines cleanly. Primary gap: `PeerManager::stop()` is not called from the signal path; sync coroutines do not check `stopping_`; the expiry scan coroutine is `asio::detached` with no cancellation path.
-- **Metrics/observability** — `NodeMetrics` struct (plain `uint64_t` — single io_context thread, not atomic), SIGUSR1 dump via spdlog, 60-second periodic log line.
-- **Rate limiting** — Token bucket per `PeerInfo` (`write_tokens` + `last_token_refill_us`). Applies to `Data`/`Delete` messages only, not sync `BlobTransfer`. Feeds the existing strike system.
+Research identifies 9 table-stakes features and 8 differentiators. The MVP priority order is: Dockerfile → docker-compose topology → load generator → core scenarios (S1 ingest throughput, S4 sync latency, S5 multi-hop, S6 late-joiner) → resource profiling → results report.
 
-**Should have (differentiator, medium complexity):**
-- **Namespace-scoped sync** — `sync_namespaces` config filter applied at Phase A namespace list assembly (before sending to peer), not at Phase C blob transfer. Zero protocol changes — local initiator filter only. Prevents leaking namespace IDs for filtered namespaces.
-- **README in db/** — Operator documentation for config schema, startup, wire protocol overview.
+**Must have (table stakes):**
+- Multi-stage Dockerfile — reproducible isolated build; removes host-machine dependency
+- docker-compose 3-node+ chain topology — proves multi-hop sync works; A→B→C chain required
+- Load generator binary (`chromatindb_loadgen`) — sustained traffic generation against real PQ-encrypted protocol
+- Ingest throughput measurement (blobs/sec, MiB/sec) — most fundamental blob store metric
+- Sync/replication latency — wall-clock time from write on A to availability on B
+- Multi-hop propagation time — validates transitive sync beyond direct peers
+- Late-joiner scenario — proves new nodes can join and converge on existing data
+- Resource profiling (CPU, memory, disk I/O via `docker stats`) — context for interpreting throughput numbers
+- Benchmark results report (markdown, structured tables with hardware specs + topology) — actionable output
 
-**Defer (anti-features, explicitly out of scope):**
-- Per-namespace storage quota — wrong layer; application concern for the relay, not the database node
-- HTTP metrics endpoint — violates PROJECT.md "No HTTP/REST API" constraint
-- Persistent rate limit state — rate limits are connection-scoped by design; reset on reconnect is correct
-- Write-ahead rate limit with queuing — reject immediately, peer retries; queuing adds memory pressure for no gain
+**Should have (differentiators):**
+- Automated `run-benchmark.sh` script — reproducible one-command benchmark execution
+- Machine-readable JSON output alongside markdown — enables regression tracking
+- Mixed workload scenarios (writes + reads + deletes + delegation) — realistic usage profile
+- Trusted vs PQ handshake comparison — quantifies PQ handshake overhead (ML-KEM-1024)
+- Storage limit behavior under load (fill to `max_storage_bytes`, verify rejection) — validates edge case
+- Concurrent writers via delegation — measures delegation verification overhead
 
-**Already shipped (NOT new for v0.4.0):**
-- Persistent peer list — `peers.json`, `load_persisted_peers`, `save_persisted_peers` already exist in `peer_manager.cpp`. The gap is wiring `save_persisted_peers()` into `stop()` and using atomic file write (temp + fsync + rename).
+**Defer (v2+):**
+- Network condition simulation via `tc` — WAN latency/bandwidth simulation; high complexity, resilience milestone scope
+- Pub/sub notification latency measurement — requires subscriber client; not critical for v0.6.0
+- Automated CI benchmark pipeline — premature; run manually first
+- Cross-platform Docker images (ARM64 + x86_64) — unnecessary for dev-machine benchmarking
+- Chaos engineering / fault injection — belongs in a dedicated resilience milestone
 
 ### Architecture Approach
 
-All 8 features integrate within the existing three-layer architecture without any subsystem-level changes. `peer_manager.cpp` is the central integration point for the majority of features; `storage.cpp` and `engine.h` handle storage-side concerns. No new coroutine primitives, no new networking, no new protocol handshakes.
+All new components are additive — zero changes to `db/` source. The load generator is a protocol-compliant peer (uses `Connection::create_outbound()`, performs full PQ handshake, sends `Data` messages) rather than an internal API bypass. Metrics collection uses the existing SIGUSR1 dump and periodic spdlog metrics lines, parsed by bash scripts. The 5-node topology has `node1` as bootstrap, `node2`/`node3` as direct peers, `node4` as a 2-hop peer (bootstraps to node2), and `node5` as the late-joiner (started via compose `--profile late-joiner`). The `CMakeLists.txt` change is 3 lines to add the `chromatindb_loadgen` target.
 
-**Major components and their v0.4.0 changes:**
-1. **Storage** (`db/storage/`) — add `tombstone_map` 5th DBI (mirrors `delegation_map` pattern exactly); add `used_bytes()` / `storage_stats()` methods; populate tombstone index in the same transaction as the tombstone blob write.
-2. **BlobEngine** (`db/engine/`) — add `storage_full` to `IngestError`; insert capacity check as new Step 0 (before namespace derivation and signature verification) inside the synchronous `ingest()` call, not in the coroutine body.
-3. **PeerManager** (`db/peer/`) — token bucket fields in `PeerInfo`; `NodeMetrics` member; SIGUSR1 signal set (follows `sighup_loop` pattern); fix `stop()` to: set `stopping_` → call `save_persisted_peers()` → cancel all timers → call `server_.stop()`; namespace filter set built from config at startup.
-4. **Config** (`db/config/`) — three new fields: `max_storage_bytes`, `rate_limit_bytes_per_sec` + `rate_limit_burst`, `sync_namespaces`.
-5. **Wire protocol** (`db/wire/transport.fbs`) — add `StorageFull = 23` to `TransportMsgType` enum. Additive; old nodes log-and-skip unknown types in `on_peer_message`.
-6. **main.cpp** — wire `asio::cancellation_signal` for expiry scan coroutine; verify `PeerManager::stop()` is called from SIGTERM path.
+**Major components:**
+1. `tools/loadgen/loadgen_main.cpp` + CMake target — protocol client that generates and sends signed blobs, measures per-blob ACK latency
+2. `docker/Dockerfile` + `docker/docker-compose.yml` + `docker/configs/nodeN.json` — containerized 5-node mesh with health checks, named volumes, bridge networking
+3. `benchmark/*.sh` — orchestration scripts: scenario runners, metrics collector (SIGUSR1 + log parsing), markdown report generator
+
+**Key patterns:**
+- Load generator as protocol client (not internal API bypass): measures real end-to-end cost including PQ crypto
+- Docker multi-stage build with FetchContent layer caching: `COPY CMakeLists.txt` before `COPY . .` for cache hits
+- Metrics via SIGUSR1 + log parsing: no HTTP endpoint, no new attack surface, existing infrastructure
+- Scenario scripts with convergence polling: isolated scenarios, poll `blobs=` from metrics log until all nodes match
 
 ### Critical Pitfalls
 
-1. **Storage limit check stale after co_await** — The check MUST live inside `BlobEngine::ingest()` which is fully synchronous. Any check in the coroutine body before dispatching to the engine is not atomic with the write. Another coroutine can write past the limit during any `co_await` suspension.
+1. **libmdbx MMAP on Docker overlay2** — Always use Docker named volumes for `/data`. Storing libmdbx files in the container's writable layer causes 10-100x performance degradation and potential corruption from overlay2 copy-on-write interacting with WRITEMAP mode.
 
-2. **MDBX_MAP_FULL before logical quota fires** — libmdbx's physical `size_upper` geometry limit can be hit before the application quota if they are too close. Set `size_upper` to at least 2x `max_storage_bytes`. Also map `MDBX_MAP_FULL` explicitly to `StoreResult::StorageFull` inside `store_blob()` so the error reaches the wire protocol correctly instead of becoming a silent generic error.
+2. **Coordinated omission in load generator** — Use Asio `steady_timer` to drive a fixed-rate schedule. Record `scheduled_send_time`, not `actual_send_time`. A response-driven loop produces P99 latency numbers that are 10x better than real-world tail latency under load.
 
-3. **Graceful shutdown blocks 120s per stuck sync peer** — `recv_sync_msg()` has `BLOB_TRANSFER_TIMEOUT` (120 seconds). On `stop()`, cancel all `peer.sync_notify` timers immediately to wake blocked coroutines. Check `stopping_` immediately after every timer expiry. Set a hard 3-second backstop timer as a fallback.
+3. **Benchmarking Debug builds** — The top-level `CMakeLists.txt` hardcodes Debug mode. The Dockerfile must explicitly pass `-DCMAKE_BUILD_TYPE=Release`. PQ crypto inner loops are 2-10x slower in Debug; ML-DSA-87 sign takes >10ms in Debug vs ~1-3ms in Release.
 
-4. **io_context destroyed with live coroutine frames** — Do NOT call `io_context::stop()` to initiate shutdown. Cancel timers and close sockets via `server_.stop()`; let the io_context drain naturally when all coroutines `co_return`. Destructor order must be: cancel timers → server stop → `ioc.run()` returns → destroy objects.
+4. **MMAP memory vs Docker cgroup memory limits** — libmdbx mmap'd pages count against the container's memory limit as page cache. For a 10 GB dataset, set container `mem_limit` to at least 2x expected mmap size, or skip memory limits during benchmarking and measure actual usage via `docker stats` instead.
 
-5. **Non-atomic tombstone index + blob write** — Both the `blobs_map` entry and the `tombstone_map` index entry must be written in a single libmdbx transaction. Copy the `delegation_map` pattern exactly — it already writes the delegation blob and its index in one transaction.
-
-6. **Raw `PeerInfo*` dangling across co_await** — Never store a raw `PeerInfo*` across any suspension point. Re-lookup via `find_peer(conn)` after every `co_await`. Prefer the strike+disconnect approach (instantaneous, no suspension) over backpressure `co_await` delays.
-
-7. **peers.json corrupted on crash** — Use write-to-temp + fsync + rename. Directory fsync is required on Linux for the rename to survive power loss. Do NOT call `fsync` inside `on_peer_disconnected()` — it blocks the io_context thread. Use a 30-second periodic flush timer plus a flush on clean shutdown.
+5. **Docker bridge network overhead invalidating sync latency** — Bridge network adds 10-15% latency overhead and caps throughput at ~580 Mbit/s. Use `network_mode: host` for performance-critical runs, or document bridge overhead explicitly by running a baseline TCP benchmark first.
 
 ## Implications for Roadmap
 
-Based on combined research, the natural phase structure is 4 phases covering 10 plans with a clear dependency ordering:
+Based on the architecture build order (Dockerfile → load generator → compose → benchmark scripts → report) and the feature dependency chain, research suggests 5 phases:
 
-### Phase A: Storage Foundation
+### Phase 1: Dockerfile and Container Build
+**Rationale:** Everything else requires a working Docker image. Must be first to validate the build works in a clean environment without host deps leaking in. Addresses the Debug build pitfall and FetchContent build time pitfall head-on.
+**Delivers:** `docker build -t chromatindb:v0.6.0 .` succeeds; binary runs in debian:bookworm-slim container; both `chromatindb` and `chromatindb_loadgen` binaries present in image.
+**Addresses:** Multi-stage Dockerfile (table stakes), `.dockerignore`, Release build configuration
+**Avoids:** Pitfall 7 (layer cache ordering — CMakeLists.txt before source), Pitfall 8 (Release build explicit in Dockerfile)
 
-**Rationale:** Tombstone index is the highest-priority correctness fix — on the hot path for every ingest, affects all subsequent features. Storage limits and disk-full reporting share `IngestError::storage_full` and are two sides of one feature. All three ship first because downstream phases (metrics, rate limiting) call `engine_.ingest()` and require these paths to be correct. No other features depend on the tombstone index being slow; all features depend on storage limits being correct.
+### Phase 2: Load Generator (`chromatindb_loadgen`)
+**Rationale:** Can be developed and tested locally against a host-running node before Docker Compose exists. Protocol correctness validates before containerization adds complexity. This is the highest-complexity new component.
+**Delivers:** `chromatindb_loadgen --target localhost:4200 --blobs 1000 --mixed-sizes` works against a local node; outputs JSON per-blob latency + summary to stdout; timer-driven fixed-rate scheduling prevents coordinated omission.
+**Addresses:** Load generator binary (table stakes), ingest throughput measurement (table stakes)
+**Avoids:** Pitfall 3 (coordinated omission — use steady_timer for scheduling), Pitfall 9 (load gen self-bottleneck — dedicated container, pre-generate keys), Pitfall 13 (steady_clock not system_clock)
 
-**Delivers:** O(1) tombstone lookups replacing the O(n) scan, bounded disk usage enforced at the protocol boundary, wire-level storage full signal to peers.
+### Phase 3: Docker Compose Topology
+**Rationale:** Requires Dockerfile (Phase 1). The 5-node compose topology with health checks and named volumes is prerequisite for all multi-node scenarios. Validates that nodes form a mesh and sync before adding load.
+**Delivers:** `docker compose up` starts 4-node mesh (node1-4); nodes connect, handshake, and begin syncing; `docker compose --profile late-joiner up node5` adds late-joiner; named volumes on all nodes.
+**Addresses:** docker-compose multi-node topology (table stakes), `docker/configs/nodeN.json`, health checks, named volumes
+**Avoids:** Pitfall 1 (named volumes, not container filesystem), Pitfall 2 (memory limit config — set generously or omit), Pitfall 11 (shutdown ordering via depends_on)
 
-**Addresses:** Tombstone index, global storage limit, disk-full rejection.
+### Phase 4: Benchmark Scenarios and Measurement
+**Rationale:** Requires Phase 2 (load generator) and Phase 3 (compose topology). Runs the four core scenarios (S1 ingest throughput, S4 sync latency, S5 multi-hop, S6 late-joiner) with resource profiling. The convergence detection pattern (poll `blobs=` via SIGUSR1) is the central measurement mechanism.
+**Delivers:** All four benchmark scenarios produce JSON results files; `collect_metrics.sh` captures CPU/memory/I/O from `docker stats` during runs; warmup phase runs before timing starts; scenarios are independently invocable.
+**Addresses:** Ingest throughput, sync latency, multi-hop propagation, late-joiner (all table stakes), resource profiling (table stakes)
+**Avoids:** Pitfall 4 (document bridge overhead, test host networking for sync scenarios), Pitfall 5 (CPU pinning via cpuset), Pitfall 12 (warmup phase before timed measurement), Pitfall 14 (pre-check disk space calculation), Pitfall 15 (separate ingest/sync/propagation measurements — never conflate)
 
-**Avoids:** MDBX_MAP_FULL before quota fires (set `size_upper` = 2x limit), stale limit check after co_await (check inside `ingest()` only), non-atomic index + blob write (single transaction; copy delegation_map).
-
-**Plans:**
-- PLAN-01: Tombstone index (`tombstone_map` DBI + startup migration scan + `has_tombstone_for` O(1) replacement)
-- PLAN-02: Storage limits (`Storage::used_bytes()`, `IngestError::storage_full`, `Config::max_storage_bytes`, Step 0 capacity check in `ingest()`)
-- PLAN-03: Disk-full reporting (`StorageFull = 23` wire message, `peer_is_full` in `PeerInfo`, send response on `storage_full` in `on_peer_message`)
-
-### Phase B: Operational Stability
-
-**Rationale:** Graceful shutdown and persistent peer list are tightly coupled at `PeerManager::stop()` — both require modifying the same function. Building them as one phase avoids implementing `stop()` twice. Metrics logically follows: it needs storage stats from Phase A for the used-bytes log line and should be in place before rate limiting so drop counters are wired from the start.
-
-**Delivers:** Clean SIGTERM behavior with bounded shutdown time, peer list persistence across restarts, runtime observability via SIGUSR1 dump and periodic log line.
-
-**Addresses:** Graceful shutdown, persistent peer list (wiring gap), metrics logging.
-
-**Avoids:** Shutdown blocking 120s per peer (cancel `sync_notify` timers in `stop()`), io_context lifetime violation (cancel then drain, not stop()), peers.json corruption (temp + fsync + rename + dir fsync), fsync on every disconnect (periodic 30s timer flush), uint32_t counter overflow (use uint64_t throughout), atomic overhead on hot path (plain uint64_t not atomic on single-threaded io_context).
-
-**Plans:**
-- PLAN-04: Graceful shutdown (`stop()` sequence: `stopping_` → save peers → cancel all timers → `server_.stop()`; expiry coroutine cancellation signal in `main.cpp`)
-- PLAN-05: Persistent peer list wiring (atomic file write pattern, 30s flush timer, flush on clean shutdown)
-- PLAN-06: Metrics (`NodeMetrics` struct, counter placement at event sites, SIGUSR1 dump coroutine following `sighup_loop` pattern)
-
-### Phase C: Abuse Prevention and Topology Control
-
-**Rationale:** Rate limiting depends on metrics being in place (for `blobs_rate_limited` counter) and is independent of namespace-scoped sync. Both are lower-risk than Phase A/B features and build after the system is stable.
-
-**Delivers:** Per-connection write rate limiting preventing abuse on open nodes, operator control over which namespaces replicate to which peers.
-
-**Addresses:** Rate limiting, namespace-scoped sync.
-
-**Avoids:** Raw `PeerInfo*` dangling after co_await (re-lookup after every suspension; prefer strike+disconnect), blocking sleep stalling io_context (never `sleep_for` in coroutine), rate limiting sync traffic (applies to Data/Delete only, not BlobTransfer), namespace filter at Phase C leaking namespace IDs (filter at Phase A namespace list assembly, not at blob transfer time).
-
-**Plans:**
-- PLAN-07: Rate limiting (token bucket in `PeerInfo`, config fields, strike integration, metrics counter)
-- PLAN-08: Namespace-scoped sync (config `sync_namespaces`, `std::set` built at startup, filter in `run_sync_with_peer` before Phase A namespace list encoding)
-
-### Phase D: Documentation and Release
-
-**Rationale:** README documents what exists after all features are stable and tested. Version bump is last so version-string assertions in tests do not generate CI noise during development.
-
-**Delivers:** Operator documentation, version 0.4.0 tag-ready binary.
-
-**Addresses:** README in `db/`, version bump.
-
-**Avoids:** Version bump breaking test assertions (search for version string assertions first, then bump as final step).
-
-**Plans:**
-- PLAN-09: README (`db/README.md`: config schema, startup, wire protocol overview, example flows)
-- PLAN-10: Version bump (`version.h` → 0.4.0, after all features pass all tests)
+### Phase 5: Report Generation and Analysis
+**Rationale:** Final phase aggregates all JSON results into the markdown report. No new infrastructure needed — pure documentation and scripting. Includes `run_benchmark.sh` master script that automates Phases 3-5 end-to-end.
+**Delivers:** `benchmark/results/YYYY-MM-DD_HH-MM.md` with hardware specs, topology diagram, per-scenario results tables, resource usage, microbenchmark results (from existing `chromatindb_bench`), and analysis. Automated `run_benchmark.sh` orchestrates the full suite.
+**Addresses:** Benchmark results report (table stakes), automated benchmark runner script (differentiator)
+**Avoids:** Pitfall 15 (explicitly separate ingest/sync/propagation/late-joiner in report sections)
 
 ### Phase Ordering Rationale
 
-- Phase A before Phase B: Storage limit enforcement is correct before observability is wired. `Storage::used_bytes()` from Phase A is required by the metrics log line in Phase B.
-- Phase B before Phase C: Metrics must be in place before rate limiting so `blobs_rate_limited` is wired at feature-build time. Graceful shutdown must be correct before adding more signal handlers (SIGUSR1 in Phase B metrics).
-- Phase C before Phase D: All features must be stable before the README documents them and the version is bumped.
-- Tombstone index first within Phase A: It is on the ingest hot path, has no dependencies on other v0.4.0 features, is the smallest isolated change in the milestone, and tests cleanly in isolation before touching storage limits.
+- Dockerfile first: validates the full build chain in isolation; problems surface before multi-node complexity is added
+- Load generator before compose: local testing is faster than debugging inside containers; protocol correctness is the highest-risk item
+- Compose after both: combines them and requires both to exist; health check + depends_on sequencing needs a working binary
+- Benchmark scripts last: should be simple wiring by the time they are written, since all components are validated
+- Report last: requires all measurement data; `run_benchmark.sh` is the natural final artifact
 
 ### Research Flags
 
-All phases have well-documented patterns from direct codebase inspection. No phase requires `/gsd:research-phase` during planning. Specific notes:
+Phases with standard patterns (skip research-phase):
+- **Phase 1 (Dockerfile):** Well-documented Docker multi-stage C++ pattern. gcc:14-bookworm is the obvious choice. No ambiguity in toolchain selection.
+- **Phase 3 (Docker Compose):** Standard compose topology. Health checks and depends_on are well-documented. Named volumes are boilerplate.
+- **Phase 5 (Report):** Pure documentation and scripting. No technical risk. Bash templating is trivial.
 
-- **Phase A:** Implementation details fully specified in STACK.md and ARCHITECTURE.md. libmdbx API verified against actual headers. The `delegation_map` write pattern in `storage.cpp` is the exact template for `tombstone_map`.
-- **Phase B:** Shutdown sequence specified in ARCHITECTURE.md with gaps identified. `sighup_loop()` in `peer_manager.cpp` is the exact template for `sigusr1_loop()`. Atomic file write is textbook POSIX.
-- **Phase C:** Token bucket algorithm is specified completely and fits in 30 lines. Namespace filter is a 3-line change to `run_sync_with_peer`. No unknowns.
-- **Phase D:** No research needed. Documentation and `version.h` edit only.
+Phases needing careful design during planning (read source before writing the plan):
+- **Phase 2 (Load Generator):** The `Connection` class API and how to use `create_outbound()` as a client (not server) needs careful reading of existing source before writing the plan. The coordinated omission fix requires verified Asio timer patterns. Read `db/net/connection.h` and `bench/bench_main.cpp` first.
+- **Phase 4 (Benchmark Scenarios):** The convergence detection via SIGUSR1 + log parsing is brittle; spdlog format must be verified against actual log output before committing to it. The multi-hop scenario requires confirming PEX propagates correctly through the node1→node2→node4 chain. Test the 4-node mesh manually before scripting the scenarios.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All claims verified against actual headers in `build/_deps/`. Zero new dependencies confirmed. libmdbx API for storage stats verified at specific lines. |
-| Features | HIGH | Existing codebase inspected directly. Persistent peer list confirmed already shipped at source level. Complexity estimates are line-level. All anti-features justified against specific PROJECT.md constraints. |
-| Architecture | HIGH | Every integration point specified by file, method, and where relevant, line number. All patterns (delegation_map, sighup_loop, deque, Step 0 ordering) are existing code being extended, not invented. |
-| Pitfalls | HIGH | Critical pitfalls derived from project RETROSPECTIVE.md, libmdbx issue tracker, and Asio coroutine lifetime documentation. Not speculative — all grounded in concrete failure modes. |
+| Stack | HIGH | All choices are standard. Docker official images, docker stats, steady_clock — all well-documented. Only minor uncertainty: liboqs behavior on bookworm-slim vs full bookworm (same glibc, low risk). |
+| Features | HIGH | Well-established distributed systems benchmarking domain. Feature set is conservative and achievable in 5 phases. YCSB workload philosophy adapted cleanly to blob store model. |
+| Architecture | HIGH | Based directly on existing source code analysis. Component boundaries are clear. The `CMakeLists.txt` change is trivially small. Metrics system via SIGUSR1 already exists and works. |
+| Pitfalls | HIGH | libmdbx MMAP + overlay2 is a documented failure mode with issue tracker references. Coordinated omission is well-researched (ScyllaDB, VLDB paper). Debug build risk confirmed from CMakeLists.txt source. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Counter drift vs. direct libmdbx query:** STACK.md recommends querying libmdbx stats directly. PITFALLS.md identifies that an in-memory running counter drifts after crashes and misses decrement paths. Resolution is clear: always query libmdbx `env.get_info()`. PLAN-02 scope must explicitly include startup recomputation (one `compute_used_bytes()` call before accepting any ingests) rather than assuming the counter starts at zero.
+- **`Connection::create_outbound()` client usage:** The load generator acts as a protocol client, not a server. The exact API surface — how to connect outbound, how to receive ACK responses, what the message loop looks like from the client side — needs verification against source before Phase 2 planning. The pattern is clear from `bench_main.cpp` but the outbound client path may differ.
 
-- **io_context drain vs. hard stop():** ARCHITECTURE.md suggests `io_context::stop()` as a backstop after 5 seconds. PITFALLS.md warns against calling `io_context::stop()` while coroutines hold live references. These are compatible: prefer natural drain; `io_context::stop()` fires only after the configurable hard timeout if natural drain has not completed. PLAN-04 must document this as the fallback, not the primary mechanism.
+- **SIGUSR1 log format stability:** The metrics parsing scripts depend on specific spdlog output format (e.g., `blobs=N`, `ingests=N`). This format must be verified to be stable and grep/awk-parseable before committing to log-scraping as the convergence detection mechanism for Phase 4.
 
-- **Metrics counter type:** STACK.md drafted `NodeMetrics` with `std::atomic<uint64_t>`. PITFALLS.md recommends plain `uint64_t` on the single-threaded io_context path to avoid MFENCE overhead on the hot ingest path. Resolution: use plain `uint64_t` for all counters updated on the io_context thread; document that atomics would be needed only if a cross-thread reader is added in the future.
+- **libmdbx geometry in containers:** The current `size_upper = 64 GiB` geometry combined with Docker memory limits creates the Pitfall 2 risk. The benchmark containers may need a config override to reduce `size_upper` to 2x expected dataset size. Needs clarification during Phase 3 planning — whether this is a config field or requires a code change.
+
+- **trusted_peers CIDR vs IP:** The architecture research confirms that `trusted_peers` takes individual IP addresses, not CIDR ranges, making Docker bridge subnet wildcarding impossible. The recommendation is empty `trusted_peers` (full PQ handshake) — a one-time ~5-15ms cost per connection. This should be confirmed during Phase 3 and explicitly documented in benchmark results so readers know PQ handshakes are active.
 
 ## Sources
 
-### Primary (HIGH confidence — source code verified)
-- `db/storage/storage.h` / `storage.cpp` — Storage API, sub-database structure, `has_tombstone_for` O(n) scan, `delegation_map` write pattern
-- `db/engine/engine.h` — `IngestError` enum, ingest pipeline, Step 0 ordering
-- `db/peer/peer_manager.h` / `peer_manager.cpp` — `PeerInfo` struct, persistence infrastructure, `sighup_loop` pattern, `stopping_` flag
-- `db/net/server.h` / `server.cpp` — `drain()` coroutine, SIGINT/SIGTERM handling
-- `db/wire/transport_generated.h` — `TransportMsgType` enum (current max: `Notification = 22`)
-- `db/main.cpp` — expiry scan coroutine (`asio::detached`, no cancellation path in current code)
-- `build/_deps/libmdbx-src/mdbx.h` lines 2808-2886 — `MDBX_envinfo` struct
-- `build/_deps/libmdbx-src/mdbx.h++` lines 5486-5495 — `env::get_info()` C++ wrapper
-- `.planning/RETROSPECTIVE.md` — SIGHUP lambda stack-use-after-return, deque invalidation at co_await
+### Primary (HIGH confidence)
+- Existing `chromatindb_lib` source code — validates load generator linking pattern, confirms SIGUSR1 metrics format, confirms libmdbx WRITEMAP usage
+- Docker official documentation (multi-stage builds, compose services, container stats, resource constraints)
+- libmdbx GitHub — WRITEMAP + Docker overlay2 interaction risk
+- Coordinated Omission paper (VLDB) and ScyllaDB writeup — load generator scheduling correctness requirements
+- liboqs ML-DSA performance data (OQS) — confirms Debug vs Release cost difference is material
+- OverlayFS storage driver documentation (Docker Docs) — overlay2 copy-on-write behavior
 
 ### Secondary (MEDIUM confidence)
-- [CockroachDB node shutdown](https://www.cockroachlabs.com/docs/dev/node-shutdown) — drain sequence: stop accepting → drain in-flight → disconnect
-- [Nostr NIP-11](https://nips.nostr.com/11) — storage capacity advertisement patterns
-- [LWN: crash-safe atomic file write](https://lwn.net/Articles/457667/) — temp + fsync + rename + directory fsync required on Linux
-- [libmdbx MDBX_MAP_FULL issue #136](https://github.com/erthink/libmdbx/issues/136) — confirmed production failure mode
-- [Token bucket algorithm reference](https://intronetworks.cs.luc.edu/current/html/tokenbucket.html) — algorithm correctness
-- [travisdowns.github.io: concurrency costs](https://travisdowns.github.io/blog/2020/07/06/concurrency-costs.html) — atomic fence overhead on hot paths
-- [Asio coroutine cancellation: chriskohlhoff/asio#1574](https://github.com/chriskohlhoff/asio/issues/1574) — object lifetime with co_spawn
-- [PouchDB filtered replication](https://pouchdb.com/2015/04/05/filtered-replication.html) — namespace-scoped sync pattern
-- [IPFS Kubo storage quota #972](https://github.com/ipfs/kubo/issues/972) — StorageMax config, mi_used_pgno tracking
+- Alpine vs Debian musl/glibc ABI analysis — supports bookworm-slim choice over Alpine
+- Docker bridge vs host networking performance analysis — 10-15% overhead estimate
+- Docker stats JSON format examples — parsing patterns for metrics collection scripts
+- std::chrono::steady_clock vs high_resolution_clock analysis (2025) — confirms steady_clock recommendation
+- Docker Compose health check guide — depends_on with condition: service_healthy pattern
+
+### Tertiary (LOW confidence)
+- Docker bridge bandwidth ceiling (~580 Mbit/s) — single source; should be verified against host hardware during Phase 4 measurement
 
 ---
-*Research completed: 2026-03-08*
+*Research completed: 2026-03-15*
 *Ready for roadmap: yes*
