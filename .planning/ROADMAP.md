@@ -77,7 +77,7 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 
 </details>
 
-### 🚧 v0.6.0 Real-World Validation (In Progress)
+### v0.6.0 Real-World Validation (In Progress)
 
 **Milestone Goal:** Run chromatindb in Docker, measure real-world performance, and validate sync behavior at scale.
 
@@ -111,10 +111,10 @@ Plans:
   2. Load generator uses timer-driven fixed-rate scheduling (not response-driven) to prevent coordinated omission
   3. Mixed-size workload mode distributes blobs across small (1 KiB), medium (100 KiB), and large (1+ MiB) sizes
   4. Per-blob ACK latency and summary statistics (blobs/sec, MiB/sec, p50/p95/p99) are emitted as JSON to stdout
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 28-01: TBD
+- [ ] 28-01-PLAN.md — Complete loadgen binary with timer-driven scheduling, mixed sizes, and JSON stats
 
 ### Phase 29: Multi-Node Topology
 **Goal**: A multi-node chromatindb network runs in Docker Compose with correct connectivity and sync
@@ -192,8 +192,8 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 24. Encryption at Rest | v0.5.0 | 1/1 | Complete | 2026-03-14 |
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
-| 27. Container Build | 1/1 | Complete    | 2026-03-15 | - |
-| 28. Load Generator | v0.6.0 | 0/? | Not started | - |
+| 27. Container Build | v0.6.0 | 1/1 | Complete | 2026-03-15 |
+| 28. Load Generator | v0.6.0 | 0/1 | Not started | - |
 | 29. Multi-Node Topology | v0.6.0 | 0/? | Not started | - |
 | 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
 | 31. Report Generation | v0.6.0 | 0/? | Not started | - |
