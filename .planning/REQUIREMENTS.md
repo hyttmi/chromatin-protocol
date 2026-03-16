@@ -17,15 +17,15 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 - [x] **LOAD-01**: chromatindb_loadgen C++ binary connects as protocol-compliant peer, performs PQ handshake, sends signed blobs
 - [x] **LOAD-02**: Load generator supports configurable blob count, sizes, and write rate with timer-driven scheduling (no coordinated omission)
 - [x] **LOAD-03**: Mixed-size workload mode distributes blobs across small/medium/large sizes
-- [ ] **LOAD-04**: run-benchmark.sh script builds images, starts topology, runs all scenarios, collects metrics, generates report
+- [x] **LOAD-04**: run-benchmark.sh script builds images, starts topology, runs all scenarios, collects metrics, generates report
 
 ### Performance Measurement
 
 - [x] **PERF-01**: Ingest throughput measured at multiple blob sizes (blobs/sec, MiB/sec, p50/p95/p99 latency)
 - [x] **PERF-02**: Sync/replication latency measured (wall-clock time from write on node A to availability on node B)
 - [x] **PERF-03**: Multi-hop propagation time measured (A->B->C chain, no direct A-C link)
-- [ ] **PERF-04**: Late-joiner catch-up time measured (new node joins after data loaded, measures convergence)
-- [ ] **PERF-05**: Trusted vs PQ handshake comparison run with same workload under both modes
+- [x] **PERF-04**: Late-joiner catch-up time measured (new node joins after data loaded, measures convergence)
+- [x] **PERF-05**: Trusted vs PQ handshake comparison run with same workload under both modes
 
 ### Observability
 
@@ -70,12 +70,12 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 | LOAD-01 | Phase 28 | Complete |
 | LOAD-02 | Phase 28 | Complete |
 | LOAD-03 | Phase 28 | Complete |
-| LOAD-04 | Phase 30 | Pending |
+| LOAD-04 | Phase 30 | Complete |
 | PERF-01 | Phase 30 | Complete |
 | PERF-02 | Phase 30 | Complete |
 | PERF-03 | Phase 30 | Complete |
-| PERF-04 | Phase 30 | Pending |
-| PERF-05 | Phase 30 | Pending |
+| PERF-04 | Phase 30 | Complete |
+| PERF-05 | Phase 30 | Complete |
 | OBS-01 | Phase 30 | Complete |
 | OBS-02 | Phase 31 | Pending |
 | OBS-03 | Phase 31 | Pending |

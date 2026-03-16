@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 30-01-PLAN.md
-last_updated: "2026-03-16T15:20:24.972Z"
-last_activity: 2026-03-16 — Completed 30-01 Benchmark Scenarios (ingest + sync)
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-03-16T15:24:41Z"
+last_activity: 2026-03-16 — Completed 30-02 Benchmark Scenarios (latejoin + trusted-vs-pq)
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 5
-  completed_plans: 4
-  percent: 94
+  completed_plans: 5
+  percent: 100
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-15)
 ## Current Position
 
 Phase: 30 of 31 (Benchmark Scenarios)
-Plan: 1 of 2 in current phase (COMPLETE)
+Plan: 2 of 2 in current phase (COMPLETE)
 Status: Executing
-Last activity: 2026-03-16 — Completed 30-01 Benchmark Scenarios (ingest + sync)
+Last activity: 2026-03-16 — Completed 30-02 Benchmark Scenarios (latejoin + trusted-vs-pq)
 
 Progress: [█████████░] 94% (30/31 phases)
 
@@ -55,6 +55,7 @@ Progress: [█████████░] 94% (30/31 phases)
 | Phase 28 P01 | 16min | 2 tasks | 3 files |
 | Phase 29 P01 | 1min | 2 tasks | 5 files |
 | Phase 30 P01 | 2min | 2 tasks | 1 files |
+| Phase 30 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -64,7 +65,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 27]: Port 4200 (matches config.h default), GCC 12 with -Wno-restrict, BuildKit cache mount for _deps
 - [Phase 28]: Single-file loadgen tool, notification-based ACK for latency, spdlog to stderr / JSON to stdout
 - [Phase 29]: Chain topology (not mesh) for multi-hop sync validation; 10s sync interval; profiles for late-joiner
-- [Phase 30]: SIGUSR1 blob polling for convergence measurement; sequential scenarios with full topology reset; -p chromatindb for predictable network naming
+- [Phase 30]: SIGUSR1 blob polling for convergence measurement; sequential scenarios with full topology reset; -p chromatindb for predictable network naming; full restart between PQ/trusted for fair comparison; runtime IP resolution via docker inspect for trusted_peers
 
 ### Pending Todos
 
@@ -76,6 +77,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-16T15:20:23.929Z
-Stopped at: Completed 30-01-PLAN.md
+Last session: 2026-03-16T15:24:41Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None
