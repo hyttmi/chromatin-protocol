@@ -1,214 +1,229 @@
 # Domain Pitfalls
 
-**Domain:** Docker deployment, load generation, and performance benchmarking for a C++20 distributed database (chromatindb)
-**Researched:** 2026-03-15
-**Stack context:** libmdbx (MMAP), liboqs (ML-DSA-87, ML-KEM-1024), libsodium (ChaCha20-Poly1305), Standalone Asio (C++20 coroutines), 100 MiB blob support, DARE encryption
+**Domain:** Sync resumption, namespace quotas, crypto performance optimization, test relocation, and cleanup for chromatindb (C++20 distributed blob store)
+**Researched:** 2026-03-16
+**Stack context:** libmdbx (MMAP/ACID), liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305), Standalone Asio (C++20 coroutines, single io_context thread), 100 MiB blob support, DARE encryption, one-blob-at-a-time sequential sync
 
 ## Critical Pitfalls
 
-Mistakes that cause incorrect results, container crashes, or fundamental architecture problems requiring rework.
+Mistakes that cause data loss, sync divergence, or rewrites. These directly threaten correctness.
 
-### Pitfall 1: libmdbx MMAP on Docker overlay2 filesystem
+### Pitfall 1: Sync cursor staleness after deletions and expiry
 
-**What goes wrong:** libmdbx uses `write_mapped_io` mode (WRITEMAP), which relies on the OS kernel writing dirty memory-mapped pages directly to the database file. Docker's default overlay2 storage driver operates at the file level with copy-on-write semantics. Writing the libmdbx data files to a container's writable layer (overlay2) instead of a volume causes catastrophic performance degradation and risks data corruption. Every mmap write triggers overlay2's copy-up mechanism, turning single-page writes into full-file copies.
+**What goes wrong:** Per-peer sync cursors track "last synced seq_num" per namespace to avoid re-syncing already-transferred blobs. But the current storage layer creates seq_map gaps: `delete_blob_data()` removes seq_map entries, and `run_expiry_scan()` removes blobs from blobs_map without touching seq_map (leaving orphan seq entries pointing to deleted blobs). A cursor pointing to seq_num=50 means "I have everything up to 50" -- but if blobs at seq 30-40 were deleted via tombstones and the peer never received the tombstones, the cursor would skip them. The peer never learns about the deletions.
 
-**Why it happens:** The Dockerfile stores data in the container filesystem by default. Developers test locally where the container filesystem is on ext4 and it "works," but performance is 10-100x worse than bare metal and results are meaningless. In the worst case, overlay2's copy-on-write interacts badly with libmdbx's page-level MMAP writes, causing write amplification and potential corruption on unclean shutdown.
+**Why it happens:** Cursors are a natural optimization for "resume where I left off," but the underlying data is mutable. Deletions, tombstones, and expiry create a non-monotonic view: data that existed at cursor-time may be gone, and new tombstones may have appeared that weren't synced.
 
-**Consequences:** Benchmark numbers are orders of magnitude worse than reality. Data corruption on container restart. OOM kills because overlay2 holds multiple copies of the database file in memory. Results that cannot be compared to bare-metal performance.
-
-**Prevention:** Always use Docker named volumes or bind mounts for libmdbx data directories. In docker-compose, map a named volume to the storage_path. Never store database files in the container's writable layer.
-
-```yaml
-volumes:
-  node1_data:
-services:
-  node1:
-    volumes:
-      - node1_data:/data  # MUST be a volume, not container filesystem
-```
-
-**Detection:** If `docker stats` shows unexpectedly high memory and the container's disk usage grows much faster than expected data volume, overlay2 copy-up is likely the cause. Compare `used_bytes()` from chromatindb metrics against `docker system df -v` container size.
-
-### Pitfall 2: MMAP memory accounting vs Docker cgroups memory limits
-
-**What goes wrong:** Docker sets cgroup memory limits (`--memory` or `mem_limit`), but libmdbx's memory-mapped files interact unpredictably with cgroup v1/v2 memory accounting. MMAP'd file pages are counted against the container's memory limit as page cache. With the current `size_upper = 64 GiB` geometry and a 10 GB benchmark dataset, the kernel may page in far more data than the container's memory limit allows, triggering the OOM killer even though the application's heap usage is minimal.
-
-**Why it happens:** The cgroup memory controller counts both anonymous memory (heap/stack) and file-backed memory (page cache from mmap). libmdbx's WRITEMAP mode means the entire mapped region can be paged in by the kernel for reads and writes. A container with `mem_limit: 2g` trying to mmap a 10 GB database will be killed by the OOM killer when page cache pressure exceeds the limit, even though actual RSS is only ~100 MB.
-
-**Consequences:** Containers are killed mid-benchmark with `OOMKilled: true`. Inconsistent benchmark results because the OOM killer terminates the process at unpredictable points. If memory limits are set too low, legitimate database operations fail.
+**Consequences:** Permanent sync divergence between peers. Node A deletes a blob, stores tombstone. Node B's cursor is past the tombstone's seq_num. Node B never requests the tombstone, so Node B keeps the deleted blob forever. This is a silent correctness failure -- the network appears healthy but data is inconsistent.
 
 **Prevention:**
-1. Set `size_upper` in libmdbx geometry to a value proportional to the expected dataset size, not 64 GiB. For a 10 GB benchmark, `size_upper = 12 GiB` with headroom.
-2. Set Docker memory limits to at least 2x the expected mmap size, or use `--memory-swap=-1` to allow unlimited swap (letting the kernel page out mmap'd data).
-3. Alternatively, skip memory limits entirely for benchmarking containers and measure actual usage via `docker stats`.
-4. Document the relationship between `max_storage_bytes` config, libmdbx geometry, and container memory limits.
+- Cursors should track the hash-level diff, not just seq_num. The current hash-list diff approach (collect all hashes, compute set difference) is correct because it catches tombstones as "hashes peer has that we don't have." Sync resumption must preserve this property.
+- Use seq_num cursor as an optimization hint only: "start scanning hashes from this seq_num" rather than "skip everything below this seq_num."
+- Always include tombstone hashes in sync regardless of cursor position. Tombstones are small (36 bytes) and correctness-critical.
+- After cursor-based sync, fall back to full hash-list diff periodically (e.g., every Nth sync round) to catch any drift.
 
-**Detection:** Check `docker inspect <container> | grep OOMKilled`. Monitor `docker stats` memory column during benchmark runs. If memory usage climbs steadily to the limit, mmap page cache is the cause.
+**Detection:** Log hash counts per namespace after sync. If two peers with cursors show "0 missing" but blob counts differ, the cursor is masking divergence.
 
-### Pitfall 3: Coordinated omission in the load generator
+### Pitfall 2: Namespace quota check-then-act race in single-threaded context
 
-**What goes wrong:** The load generator sends requests at a rate that is throttled by response time from the system under test (SUT). When the SUT slows down (e.g., during sync, GC, or large blob ingest), the load generator also slows down, producing artificially low latency measurements. The tail latency (P99, P99.9) appears much better than it actually is.
+**What goes wrong:** Namespace quota enforcement requires checking current namespace usage (size or count) before accepting a write. In chromatindb's single io_context thread model, this seems safe -- but it is not, because the check and the store happen across a co_await boundary. The flow is: (1) check quota, (2) verify signature (ML-DSA-87, which is synchronous but slow), (3) store blob. Between step 1 and step 3, the io_context can schedule other coroutines. If two ingest coroutines for the same namespace are in flight (e.g., direct write + sync ingest), both check quota at step 1 and both pass, then both store at step 3, exceeding the quota.
 
-**Why it happens:** A naive load generator loop looks like: `send request -> wait for response -> record latency -> send next request`. When the SUT takes 500ms instead of 5ms, the generator only measures 500ms for that one request but "omits" the hundreds of requests that should have arrived during that 500ms window. The result: median and P99 latencies look acceptable, but real-world clients would experience queuing delays.
+**Why it happens:** The current code already has this pattern for global storage limits (`used_bytes() >= max_storage_bytes_` in engine.cpp:53), but global limits are approximate by design (libmdbx `mi_geo.current` is coarse). Namespace quotas are expected to be precise, making this race visible and consequential.
 
-**Consequences:** Benchmark results show P99 latency of ~50ms when real-world P99 under load would be ~500ms. Throughput numbers are optimistic because back-pressure from the SUT artificially caps the load. Performance claims based on these numbers are misleading.
-
-**Prevention:** Use a timer-driven schedule (not response-driven) for request generation. Pre-schedule request timestamps at the target rate, and measure latency as `(response_time - scheduled_send_time)` rather than `(response_time - actual_send_time)`. For chromatindb's load generator:
-- Use Asio's `steady_timer` to drive a fixed-rate schedule
-- Record the scheduled send time, not the actual send time
-- Allow requests to queue if the SUT is slow
-- Report both "service time" and "response time" (including queue wait)
-
-**Detection:** If throughput exactly matches the load generator's send rate at all load levels (never plateaus or degrades), the generator has coordinated omission. Real systems degrade under overload.
-
-### Pitfall 4: Docker bridge network overhead invalidating sync latency measurements
-
-**What goes wrong:** Docker Compose's default bridge network adds 10-15% latency overhead and reduces throughput by 12-20% compared to host networking. When measuring sync latency and replication time between containers, the benchmark measures Docker's network overhead rather than chromatindb's actual sync performance.
-
-**Why it happens:** Docker's default bridge network creates a virtual Ethernet bridge (docker0) with veth pairs for each container. Every packet traverses the bridge, incurring iptables NAT rules, netfilter connection tracking, and virtual switch forwarding. For a benchmark measuring "time to replicate 1000 blobs between 3 nodes," a significant portion of the measured time is Docker networking overhead, not chromatindb logic.
-
-**Consequences:** Sync latency numbers include 5-50 microseconds of per-packet Docker overhead. Throughput measurements are bottlenecked by bridge network bandwidth (~580 Mbit/s) rather than the application. Multi-hop propagation times include compounded per-hop networking overhead. Results cannot be used to predict bare-metal performance.
+**Consequences:** Namespace quota silently exceeded by the number of concurrent in-flight writes (typically 2: one sync, one direct write). For a small quota (e.g., 10 blobs), this is a 20% overrun. For a tight size quota (e.g., 10 MiB), two concurrent 5 MiB blobs could push to 20 MiB.
 
 **Prevention:**
-1. Use `network_mode: host` for performance-critical benchmark runs (each node on a different port).
-2. If bridge networking is required for topology isolation, measure and report the Docker networking overhead separately (run a TCP ping benchmark between containers first).
-3. Run the same benchmark with both bridge and host networking to quantify the delta.
-4. Report results with explicit "Docker bridge" or "host networking" labels so readers know what was measured.
+- Accept that namespace quotas are approximate, like the existing global limit. Document "quota may be exceeded by up to N blobs during concurrent writes" where N = max concurrent ingests per namespace.
+- Alternatively: check quota inside the libmdbx write transaction (after `start_write()`), where the check-and-store is atomic. This is the correct approach because libmdbx write transactions are serialized -- only one write txn exists at a time. Move the quota check from `engine.cpp` into `storage.cpp::store_blob()` where it can be inside the write txn.
+- Do NOT add mutexes. chromatindb is single-threaded by design. The serialization point is the libmdbx write transaction, not a C++ mutex.
 
-**Detection:** Run `iperf3` between containers before benchmarking. If bandwidth is below 90% of host-to-host bandwidth, Docker networking is a bottleneck. Compare `chromatindb_bench` (in-process) results against Docker-network results to quantify overhead.
+**Detection:** Test with concurrent ingests to the same namespace at quota boundary. If quota is 5 and you send 6 concurrently, check whether 5 or 6 are stored.
+
+### Pitfall 3: Crypto offloading to thread pool breaks AEAD nonce ordering
+
+**What goes wrong:** The large blob crypto bottleneck (96% CPU at 1 MiB blobs, 15.3 blobs/sec) tempts offloading ML-DSA-87 verification + SHA3-256 hashing to a thread pool. But the current architecture relies on single-threaded execution for correctness: AEAD send/recv counters (Connection::send_counter_, recv_counter_) are plain uint64_t with no synchronization. If two verification results arrive from a thread pool and both try to send responses, the AEAD nonce ordering breaks and the encrypted channel corrupts.
+
+**Why it happens:** The bottleneck is real and dramatic (15.3 vs 50.2 blobs/sec). The natural instinct is "use more cores." But the entire protocol stack from Connection through PeerManager assumes single-threaded execution on one io_context.
+
+**Consequences:** AEAD nonce desync corrupts the encrypted channel. Peer sees "AEAD decrypt failed" and disconnects. Every sync with large blobs fails. In testing this looks like "intermittent connection drops" that are impossible to reproduce deterministically because they depend on thread scheduling.
+
+**Prevention:**
+- Offload ONLY the pure computation (ML-DSA-87 verify + SHA3-256 hash) to a thread pool. The result (bool verified + hash bytes) must be posted back to the io_context via `asio::post(ioc_, ...)` before any protocol action (send, store, etc.).
+- Use the pattern: `co_await asio::post(thread_pool, use_awaitable)` to switch contexts, run CPU work, then `co_await asio::post(ioc_, use_awaitable)` to return to the io_context before touching any connection state.
+- Verify that no Connection, PeerInfo, or Storage member is accessed from the thread pool. All of these are single-thread-only.
+- The SHA3-256 hash in `wire::blob_hash()` is called inside `storage_.store_blob()` which is inside a write transaction -- this must stay on the io_context thread. Only the verification in `engine_.ingest()` can be offloaded.
+- Profile first: the bottleneck may be `SHA3-256(1MiB)` + `ML-DSA-87 verify(1MiB signing input)`. If SHA3-256 dominates, offloading just the hash may be sufficient.
+
+**Detection:** Run large-blob sync with ASAN + TSAN enabled. TSAN will catch any data race from thread pool access to single-threaded state. Without TSAN, the symptom is "AEAD decrypt failed" log messages during sync.
 
 ## Moderate Pitfalls
 
-### Pitfall 5: PQ crypto CPU cost hidden by single-host Docker benchmarks
+Mistakes that cause incorrect behavior, wasted effort, or performance issues, but are recoverable.
 
-**What goes wrong:** ML-DSA-87 sign/verify and ML-KEM-1024 encaps/decaps are CPU-intensive operations. When running multiple chromatindb nodes on the same Docker host, they compete for CPU cores. The benchmark measures degraded crypto performance due to CPU contention, not the system's actual throughput on dedicated hardware.
+### Pitfall 4: CMake catch_discover_tests breaks when tests move to db/
 
-**Prevention:**
-1. Pin each container to specific CPU cores using `cpuset` in docker-compose (`cpuset: "0,1"` for node1, `cpuset: "2,3"` for node2).
-2. Limit total containers to fewer cores than available (leave at least 1 core free for the load generator and Docker daemon).
-3. Report CPU pinning configuration alongside benchmark results.
-4. Measure per-operation crypto costs separately (already done in `chromatindb_bench`) and report them independently from network-level benchmarks.
+**What goes wrong:** Moving test source files from `tests/` to `db/tests/` requires updating the CMakeLists.txt test target, but `catch_discover_tests()` has a subtle dependency on the test executable's working directory and link targets. The current setup has `chromatindb_tests` in the root CMakeLists.txt linking against `chromatindb_lib`. If tests move into `db/CMakeLists.txt`, the Catch2 target (`Catch2::Catch2WithMain`) must be available in that scope, `catch_discover_tests()` must be called in the same directory as `add_executable()`, and the CTest configuration must propagate correctly.
 
-**Detection:** Monitor `docker stats` CPU% during benchmarks. If any container exceeds 100% (multi-core) or if total CPU across all containers exceeds host capacity, contention is affecting results.
+**Why it happens:** CMake's `catch_discover_tests()` works by running the test binary with `--list-tests` at CTest time. The binary path is resolved relative to the CMake binary directory where `add_executable()` was called. Moving the test target to a subdirectory changes this path.
 
-### Pitfall 6: Clock skew in timestamp-dependent measurements
-
-**What goes wrong:** chromatindb's blob timestamps are Unix timestamps used for TTL calculations. All containers on the same Docker host share the host's system clock, so there is no clock skew between nodes. This makes TTL and expiry behavior unrealistically perfect compared to real-world multi-host deployments where clocks can drift by seconds.
+**Consequences:** `ctest` reports "No tests found" after the relocation. The build succeeds but `ctest --test-dir build` shows 0 tests. CI passes because it only checks the build step, not the test step. Tests silently stop running.
 
 **Prevention:**
-1. Document that same-host Docker benchmarks do not test clock skew scenarios.
-2. For TTL/expiry validation, inject clock offsets via the existing injectable `Clock` function in `Storage` constructor -- but this is a code-level concern, not a Docker concern.
-3. Do not claim "TTL works correctly in distributed deployments" based solely on same-host Docker tests.
+- Keep `include(CTest)` in the root CMakeLists.txt (or wherever `enable_testing()` is called).
+- In `db/CMakeLists.txt`, guard the test target with `if(BUILD_TESTING)` and call both `add_executable()` and `catch_discover_tests()` in the same file.
+- Verify with `ctest --test-dir build -N` (dry run, lists test names) immediately after relocation.
+- The `include(Catch)` call that provides `catch_discover_tests()` must appear in or above the directory where it is called. Since Catch2 is fetched in `db/CMakeLists.txt` already (guarded by `if(NOT TARGET Catch2::Catch2)`), this should work, but the `include(Catch)` module path comes from the Catch2 package -- verify it resolves correctly.
 
-**Detection:** Compare blob timestamps across nodes. If they are always identical (sub-millisecond), the benchmark is not exercising clock drift scenarios.
+**Detection:** Run `ctest --test-dir build -N | wc -l` before and after relocation. Must show the same test count (currently 284).
 
-### Pitfall 7: Dockerfile build time explosion from FetchContent
+### Pitfall 5: Sync resumption cursors stored in PeerInfo are lost on reconnect
 
-**What goes wrong:** The current CMake build uses `FetchContent` to download and build 8 dependencies (liboqs, libsodium, flatbuffers, catch2, spdlog, nlohmann/json, libmdbx, asio). A naive Dockerfile that copies source and runs `cmake --build .` will rebuild all dependencies from scratch on every source change, turning a 2-minute incremental build into a 15-30 minute full build.
+**What goes wrong:** The natural place to store per-peer sync cursors is in the `PeerInfo` struct, which is created in `on_peer_connected()` and destroyed in `on_peer_disconnected()`. Every reconnection resets cursors to zero, causing a full re-sync. For a node with thousands of blobs, this means every reconnect triggers a full hash-list exchange, defeating the purpose of resumption.
 
-**Prevention:**
-1. Use a multi-stage Dockerfile with dependency caching. Copy only `CMakeLists.txt` and `db/CMakeLists.txt` first, run the dependency download/build, then copy source files. This leverages Docker layer caching so dependencies are only rebuilt when CMakeLists.txt changes.
-2. Use BuildKit cache mounts (`--mount=type=cache`) for the CMake build directory to preserve object files across builds.
-3. Consider pre-building a "deps" Docker image that includes all compiled dependencies, and use it as the base for the build stage.
-4. Build in Release mode (`-DCMAKE_BUILD_TYPE=Release`) for benchmarks -- the current CMakeLists.txt hardcodes Debug mode, which includes debug symbols and disables optimizations, making benchmark results meaningless.
+**Why it happens:** `PeerInfo` is connection-scoped by design (it tracks the live connection's state). Sync cursors need to survive across connections. But PeerInfo is keyed by connection pointer, not by peer identity.
 
-**Detection:** If `docker build` takes more than 5 minutes and the only change was a `.cpp` file, dependency caching is not working.
-
-### Pitfall 8: Benchmarking Debug builds instead of Release builds
-
-**What goes wrong:** The top-level `CMakeLists.txt` hardcodes `CMAKE_BUILD_TYPE Debug`. Running benchmarks against a Debug build produces results that are 2-10x slower than Release due to disabled optimizations (`-O0`), enabled assertions, and debug symbol overhead. PQ crypto operations (ML-DSA-87 sign/verify) are particularly affected because liboqs has hot inner loops that benefit enormously from compiler optimization and auto-vectorization.
+**Consequences:** Sync resumption only helps for long-lived connections. For the common case (nodes that reconnect periodically, e.g., after network hiccups or restarts), every reconnect triggers a full sync. The optimization provides zero benefit in the most common scenario.
 
 **Prevention:**
-1. The Dockerfile must explicitly set `CMAKE_BUILD_TYPE=Release` or `RelWithDebInfo` for benchmark builds.
-2. Verify the build type in benchmark output (print compiler flags or check binary with `file` command).
-3. Never compare Debug benchmark numbers against published performance claims from other systems that use Release builds.
+- Store cursors separately from PeerInfo, keyed by peer public key (the stable peer identity known after handshake).
+- Use an in-memory map: `std::map<std::vector<uint8_t>, PeerSyncCursor> sync_cursors_` in PeerManager, keyed by peer_pubkey.
+- On connect: look up existing cursor for this peer's pubkey. On disconnect: keep cursor alive.
+- Optionally persist cursors to a new libmdbx sub-database for survival across node restarts.
+- Bound the cursor map size (e.g., LRU eviction for peers not seen in 24h) to prevent unbounded memory growth from transient peers.
 
-**Detection:** Check `cmake --build` output for `-O0` vs `-O2`/`-O3` flags. If ML-DSA-87 sign takes >10ms (vs ~1-3ms in Release), it is a Debug build.
+**Detection:** Log "full sync" vs "resumption sync" at sync start. If production logs show 100% full syncs, cursors are being lost on reconnect.
 
-### Pitfall 9: Load generator as a bottleneck (running in same container or underpowered)
+### Pitfall 6: Quota tracking with DARE requires decryption to count size
 
-**What goes wrong:** The load generator runs in the same container as a chromatindb node, or shares CPU/memory resources, and becomes the bottleneck instead of the system under test. The benchmark measures the load generator's capacity, not chromatindb's.
+**What goes wrong:** Namespace storage quotas need to track the total size of blobs per namespace. But blobs are stored encrypted (DARE). The stored size includes the encryption envelope overhead (29 bytes: 1 version + 12 nonce + 16 tag). Counting stored bytes gives an inflated number. Counting original bytes requires decrypting every blob to check its size, which defeats the purpose of a fast quota check.
 
-**Prevention:**
-1. Run the load generator in its own dedicated container with dedicated CPU cores.
-2. The load generator should be a lightweight binary that does minimal work per request: generate a blob, sign it, send over TCP. Pre-generate keys and blob data before the timed portion.
-3. Verify the load generator is not CPU-bound: its CPU usage should be well below 100% during the benchmark.
-4. Use asynchronous I/O (Asio coroutines) in the load generator to avoid blocking on network operations.
+**Why it happens:** The current `used_bytes()` function returns `mi_geo.current` (total database file size), which is a single O(1) call. Per-namespace size tracking requires scanning all blobs in a namespace or maintaining a separate counter.
 
-**Detection:** If increasing load generator resources (more CPU, more instances) increases measured throughput, the generator was the bottleneck.
-
-### Pitfall 10: Not accounting for PQ handshake cost in connection setup benchmarks
-
-**What goes wrong:** Every new connection to chromatindb requires a PQ handshake (ML-KEM-1024 encaps/decaps + ML-DSA-87 auth). This takes ~5-15ms per connection (based on existing bench results). A load generator that creates new connections per request will be bottlenecked by handshake cost. A load generator that reuses connections will show much better throughput but may not reflect real-world reconnection patterns.
+**Consequences:** If you use stored size, quotas are inaccurate (29 bytes overhead per blob). For many small blobs (e.g., 100-byte blobs), the overhead is 29% and quotas are meaningfully wrong. If you decrypt to check original size, quota checking becomes expensive and blocks writes.
 
 **Prevention:**
-1. Measure and report handshake cost separately from data transfer benchmarks.
-2. The load generator should support both modes: persistent connections (for throughput testing) and fresh connections (for connection establishment testing).
-3. For trusted peers (localhost), the lightweight handshake path should be measured separately to show the performance gain.
-4. Note: chromatindb v0.5.0 supports trusted peer handshake that skips ML-KEM-1024 -- ensure the benchmark tests both paths.
+- Maintain a per-namespace counter in a new libmdbx sub-database: `namespace_stats` with key `[namespace:32]` and value `[blob_count:u64BE][total_data_bytes:u64BE]`. Update atomically inside `store_blob()` and `delete_blob_data()` write transactions.
+- Track original (pre-encryption) data size, not stored size. The blob data size is known at `store_blob()` time before encryption happens.
+- Alternatively, track blob count only (simpler) and defer size quotas to a later milestone. Count quotas are simpler, cheaper, and sufficient for most use cases.
+- Do NOT scan blobs_map to compute namespace sizes on demand. With 100 MiB blobs, even reading index entries is O(n).
 
-**Detection:** If adding `trusted_peers: ["172.18.0.0/16"]` (Docker bridge subnet) dramatically changes throughput, handshake cost is dominating the benchmark.
+**Detection:** Write a test that stores blobs, checks quota usage, then verifies the reported size matches the sum of original blob data sizes (not encrypted sizes).
+
+### Pitfall 7: Removing the standalone benchmark binary breaks Docker benchmarks
+
+**What goes wrong:** The cleanup pass identifies `bench/bench_main.cpp` as a "stale standalone benchmark" that should be removed since v0.6.0 added the Docker-based benchmark suite (`deploy/`). But the `chromatindb_bench` target may be referenced by other tooling, scripts, or manual workflows. Removing it without checking all references breaks things.
+
+**Why it happens:** "Remove stale artifacts" is deceptively risky. The benchmark binary was there before the Docker suite and may have been used in ways not documented. The Dockerfile, compose files, or user scripts might reference it.
+
+**Consequences:** Build scripts or CI that reference `chromatindb_bench` fail. Users who run local benchmarks (without Docker) lose the ability to do so.
+
+**Prevention:**
+- Before removing: `grep -r 'chromatindb_bench' .` to find all references.
+- Check the Dockerfile for any `COPY` or `RUN` that references the bench binary.
+- Check the `deploy/` scripts for any reference.
+- If removing: remove from CMakeLists.txt, delete the source file, and update any references in a single atomic commit.
+- Consider whether local (non-Docker) benchmarking is still valuable. If yes, keep it or migrate it.
+
+**Detection:** CI build fails after removal. `grep -r` before removing catches this.
+
+### Pitfall 8: Cleanup pass deletes code that tests depend on
+
+**What goes wrong:** A cleanup pass removes unused code, updates headers, or reorganizes files. But "unused" is determined by searching the production code, not the test code. A helper function that appears unused in `db/` may be exercised by tests in `tests/`. Removing it breaks compilation only when `BUILD_TESTING=ON`.
+
+**Why it happens:** Tests are in a separate directory (`tests/`) and link against `chromatindb_lib`. They can use any public API. A function that has no callers in `db/*.cpp` may have callers in `tests/*.cpp`. Cleanup tools and manual `grep` searches may only check the library source, not the test source.
+
+**Consequences:** Production build succeeds, test build fails. If CI only builds without testing (or tests are temporarily disabled during relocation), the breakage is silent until someone enables tests.
+
+**Prevention:**
+- Always search both `db/` and `tests/` when checking for usage: `grep -r 'function_name' db/ tests/`.
+- Build with `BUILD_TESTING=ON` after every cleanup change, not just at the end.
+- Run the full test suite (`ctest --test-dir build`) after cleanup, not just compilation.
+- In the test relocation phase, do relocation BEFORE cleanup. That way tests are in `db/tests/` and a search of `db/` catches test usage automatically.
+
+**Detection:** CI with `BUILD_TESTING=ON` catches this immediately.
 
 ## Minor Pitfalls
 
-### Pitfall 11: Container shutdown order affecting benchmark results
+Inconveniences and rough edges that waste time but are easy to fix.
 
-**What goes wrong:** When docker-compose stops containers, they shut down in parallel. If the load generator is still writing while nodes are shutting down, final sync/replication measurements are corrupted by connection-reset errors.
+### Pitfall 9: Seq_map gaps confuse sync cursor logic
 
-**Prevention:** Use `depends_on` with health checks and explicit shutdown ordering. Stop the load generator first, wait for all sync to complete, then stop nodes in reverse dependency order. Use the existing graceful shutdown (SIGTERM handling) in chromatindb.
+**What goes wrong:** The current storage layer leaves gaps in seq_map when blobs are deleted via tombstones (`delete_blob_data()` erases the seq_map entry). If sync cursors are based on "last seq_num seen," a gap doesn't break anything -- the cursor just skips past deleted entries. But if the cursor tracks "highest seq_num successfully synced" and compares it to the peer's `latest_seq_num` (from `list_namespaces()`), gaps cause over-syncing: the cursor shows seq=45 but the latest is seq=50, so it tries to sync 5 blobs, but 3 of those seq entries are deleted, returning only 2 blobs. Not a bug, but the log says "synced 2/5 expected" which looks like an error.
 
-### Pitfall 12: Forgetting to warm up libmdbx before benchmarking
+**Prevention:** Treat seq gaps as normal. Log "synced N blobs from namespace X" without comparing to expected count. Document that seq_map has gaps by design.
 
-**What goes wrong:** libmdbx's mmap'd data starts cold (not in page cache). The first batch of reads/writes touches disk, causing high latency. If the benchmark starts timing immediately, the cold-start penalty inflates average latency.
+### Pitfall 10: Thread pool for crypto must not hold libmdbx read transactions
 
-**Prevention:** Include a warmup phase that writes and reads a representative dataset before starting the timed benchmark. Discard warmup measurements. The existing `bench_main.cpp` already does warmup for individual operations -- the Docker load generator needs the same pattern at the system level.
+**What goes wrong:** If crypto verification is offloaded to a thread pool and the verification function reads from storage (e.g., checking delegation existence via `storage_.has_valid_delegation()`), the read transaction opened on the thread pool thread can block libmdbx write transactions on the io_context thread. libmdbx read transactions prevent page recycling, and long-running reads on a thread pool (blocked behind a queue of verification jobs) can exhaust free database space.
 
-### Pitfall 13: Using `std::chrono::high_resolution_clock` for latency measurement
+**Prevention:** Never access storage from the thread pool. Read all needed data (delegation status, tombstone status) on the io_context thread before offloading to the thread pool. Pass the pre-read data as function arguments.
 
-**What goes wrong:** The existing `bench_main.cpp` uses `high_resolution_clock`, which on Linux is typically an alias for `steady_clock` (monotonic). This is acceptable for in-process benchmarks. However, if the Docker load generator uses `system_clock` for latency measurement, NTP adjustments inside the container can cause negative latency measurements or time jumps.
+### Pitfall 11: db/ README update references old paths or APIs
 
-**Prevention:** Always use `std::chrono::steady_clock` for duration/latency measurements in the load generator. Use `system_clock` only for wall-clock timestamps in logs. The existing bench code uses `high_resolution_clock` which is fine on Linux but should be explicitly `steady_clock` in new code for clarity.
+**What goes wrong:** The `db/README.md` update during cleanup references file paths, API signatures, or configuration options that were changed during the same milestone. If README is updated early in the milestone, subsequent phases (quota addition, sync resumption) change the APIs and the README is stale before the milestone ships.
 
-### Pitfall 14: Large blob benchmarks exhausting container disk space
+**Prevention:** Update README as the LAST task in the cleanup phase, after all other phases are complete. Or: do not update README until the milestone audit.
 
-**What goes wrong:** The v0.6.0 target includes a 10 GB dataset with mixed blob sizes up to 100 MiB. With 3 nodes replicating, that is 30 GB of storage plus libmdbx overhead (metadata, free pages). A Docker volume backed by a host filesystem partition with insufficient space causes `MDBX_MAP_FULL` or filesystem ENOSPC errors mid-benchmark.
+### Pitfall 12: Deletion benchmark adds load generator complexity
 
-**Prevention:** Calculate total disk requirement before running: `dataset_size * node_count * 1.5` (50% overhead for libmdbx metadata, free pages, and DARE encryption overhead of 29 bytes per blob). For a 10 GB dataset with 3 nodes: ~45 GB minimum. Verify available space with `df -h` on the Docker volume's backing filesystem.
+**What goes wrong:** Adding deletion benchmarks to the Docker suite requires the load generator to support a "delete after write" workflow. This means the loadgen needs to (1) store namespace keypairs to sign delete requests, (2) track which blobs it wrote so it can target them for deletion, and (3) handle the tombstone creation protocol (sign the tombstone, not just the blob). This is significantly more complex than the current "sign and send blob" flow.
 
-### Pitfall 15: Not separating ingest throughput from replication throughput
+**Prevention:** Keep the deletion benchmark simple: write N blobs, wait for sync, then delete all N. Do not try to interleave writes and deletes -- that requires tracking per-blob state in the loadgen. The sequential approach is easy to implement and still measures the deletion hot path (tombstone creation + sync propagation).
 
-**What goes wrong:** A benchmark that measures "end-to-end throughput" (load generator -> node1 -> sync to node2 -> sync to node3) conflates three different performance characteristics: ingest rate, sync protocol efficiency, and multi-hop propagation. A single number hides which component is the bottleneck.
+### Pitfall 13: Include path changes after test relocation
 
-**Prevention:** Measure each independently:
-1. **Ingest throughput:** Load generator writes to a single node, no peers connected. Measures raw storage + crypto cost.
-2. **Sync throughput:** Two pre-loaded nodes connect and sync. Measures hash-list diff + transfer efficiency.
-3. **Multi-hop propagation:** Three+ nodes in a chain. Measures end-to-end replication time.
-4. **Late-joiner:** A fresh node joins after dataset is loaded. Measures bulk sync from zero.
+**What goes wrong:** Test files currently use includes like `#include "db/crypto/hash.h"`. If tests are moved from `tests/crypto/test_hash.cpp` to `db/tests/crypto/test_hash.cpp`, the include paths might break depending on how `target_include_directories` is configured. The library target exports `$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>` which resolves to the repo root -- includes starting with `db/` work from that root. But if the test target's include path is configured differently, paths break.
+
+**Prevention:** Verify that the relocated test target has the same include directories as the original. The simplest approach: link the new test target against `chromatindb_lib` (which transitively provides the include path via PUBLIC) and `Catch2::Catch2WithMain`. Do NOT add extra `target_include_directories` -- the library dependency provides everything.
+
+**Detection:** Compile the test target after relocation. If includes fail, the error is immediate and obvious.
 
 ## Phase-Specific Warnings
 
 | Phase Topic | Likely Pitfall | Mitigation |
 |-------------|---------------|------------|
-| Dockerfile & docker-compose | Pitfall 1 (overlay2), Pitfall 7 (build time), Pitfall 8 (Debug build) | Named volumes for data, multi-stage build, Release mode |
-| Load generator tool | Pitfall 3 (coordinated omission), Pitfall 9 (self-bottleneck), Pitfall 10 (handshake cost) | Timer-driven scheduling, dedicated container, measure handshake separately |
-| Ingest throughput benchmark | Pitfall 2 (OOM from mmap), Pitfall 12 (cold start) | Memory limits >> mmap size, warmup phase |
-| Sync latency benchmark | Pitfall 4 (bridge overhead), Pitfall 6 (clock skew) | Host networking or documented overhead, note same-host limitation |
-| Multi-node topology | Pitfall 5 (CPU contention), Pitfall 14 (disk space) | CPU pinning, pre-calculate disk requirements |
-| Resource profiling | Pitfall 2 (mmap vs cgroup accounting) | Understand that `docker stats` memory includes page cache from mmap |
-| Results report | Pitfall 15 (conflated metrics) | Separate ingest/sync/propagation/late-joiner measurements |
+| Sync resumption | Cursor staleness after deletions (Pitfall 1) | Cursor as hint only, periodic full diff fallback |
+| Sync resumption | Cursor lost on reconnect (Pitfall 5) | Key cursors by peer pubkey, not connection |
+| Namespace quotas | Check-then-act race (Pitfall 2) | Enforce inside libmdbx write transaction |
+| Namespace quotas | DARE size inflation (Pitfall 6) | Track pre-encryption size in separate sub-database |
+| Crypto optimization | Thread pool nonce desync (Pitfall 3) | Post results back to io_context before protocol action |
+| Crypto optimization | Thread pool reads blocking writes (Pitfall 10) | Pre-read all storage data before offloading |
+| Test relocation | CTest discovery breaks (Pitfall 4) | Verify `ctest -N` count matches before/after |
+| Test relocation | Include path changes (Pitfall 13) | Link against chromatindb_lib for transitive includes |
+| Deletion benchmarks | Loadgen complexity explosion (Pitfall 12) | Sequential write-then-delete, no interleaving |
+| Cleanup pass | Removing code tests depend on (Pitfall 8) | Search db/ AND tests/ for usage |
+| Cleanup pass | Removing bench binary (Pitfall 7) | grep all references before deletion |
+| Cleanup pass | README staleness (Pitfall 11) | Update README last, after all other phases |
+
+## Integration Pitfalls
+
+These emerge from feature interactions, not individual features.
+
+### Sync resumption + namespace quotas
+
+If a peer is over quota for a namespace and receives synced blobs for that namespace, the quota enforcement must reject the synced blobs. But the sync cursor might advance past those blobs, causing them to never be retried. Prevention: do not advance the cursor past rejected blobs. Only advance to the seq_num of the last successfully stored blob.
+
+### Crypto optimization + sync resumption
+
+If crypto verification is offloaded to a thread pool and sync uses cursor-based resumption, the cursor advance happens after verification completes (asynchronously). If two blobs from the same namespace are verified concurrently and the second finishes first, the cursor could advance past the first (still-pending) blob. Prevention: cursor advances must be serialized on the io_context thread, in blob order, not completion order.
+
+### Cleanup + test relocation
+
+If cleanup (removing stale code) and test relocation happen in the same milestone, the order matters critically. Relocate tests first, then clean up. If cleanup removes code that tests reference, and the tests haven't been relocated yet, the cleanup appears correct (tests are in a separate directory and may not be checked). After relocation, the removed code's absence breaks compilation.
+
+### Namespace quotas + DARE + expiry
+
+When a blob expires and is purged by `run_expiry_scan()`, the namespace quota counter must be decremented. But `run_expiry_scan()` currently does not know about namespace quotas -- it just deletes from blobs_map and expiry_map. The quota counter update must be added to the expiry scan path, not just the explicit deletion path.
 
 ## Sources
 
-- [libmdbx GitHub - usage and container notes](https://github.com/erthink/libmdbx) (HIGH confidence)
-- [Docker cgroup memory limits bypassed for mmap'ed tmpfs files - moby/moby #39004](https://github.com/moby/moby/issues/39004) (HIGH confidence)
-- [Docker bridge vs host network performance analysis](https://www.compilenrun.com/docs/devops/docker/docker-performance/docker-network-performance/) (MEDIUM confidence)
-- [Container network benchmark study - Hathora](https://blog.hathora.dev/benchmarking-container-performance/) (MEDIUM confidence)
-- [Coordinated Omission in NoSQL Database Benchmarking](https://vsis-www.informatik.uni-hamburg.de/getDoc.php/publications/569/Coordinated_Omission_in_NoSQL_Database_Benchmarking-Friedrich.pdf) (HIGH confidence)
-- [ScyllaDB: On Coordinated Omission](https://www.scylladb.com/2021/04/22/on-coordinated-omission/) (HIGH confidence)
-- [High Scalability: Your Load Generator is Probably Lying to You](http://highscalability.com/blog/2015/10/5/your-load-generator-is-probably-lying-to-you-take-the-red-pi.html) (HIGH confidence)
-- [Dockerization Impacts in Database Performance](https://arxiv.org/pdf/1812.04362) (MEDIUM confidence)
-- [Docker resource constraints documentation](https://docs.docker.com/engine/containers/resource_constraints/) (HIGH confidence)
-- [C++ clocks: high_resolution_clock myths](https://www.sandordargo.com/blog/2025/12/10/clocks-part-4-high_resolution_clock) (MEDIUM confidence)
-- [ML-DSA-87 performance characteristics - OQS](https://openquantumsafe.org/liboqs/algorithms/sig/ml-dsa.html) (HIGH confidence)
-- [Multi-stage Docker builds for C++](https://devblogs.microsoft.com/cppblog/using-multi-stage-containers-for-c-development/) (MEDIUM confidence)
-- [OverlayFS storage driver - Docker Docs](https://docs.docker.com/storage/storagedriver/overlayfs-driver/) (HIGH confidence)
+- [libmdbx cursor/transaction issues](https://github.com/erthink/libmdbx/issues/272) - Cursor invalidation when reusing across transactions
+- [libmdbx documentation](https://libmdbx.dqdkfa.ru/intro.html) - Read transaction pitfalls: long-running reads prevent page recycling
+- [Catch2 CMake integration](https://github.com/catchorg/Catch2/blob/devel/docs/cmake-integration.md) - catch_discover_tests requirements
+- [Catch2 issue #2914](https://github.com/catchorg/Catch2/issues/2914) - "No tests were found" after CMake changes
+- [Asio C++20 coroutine support](https://think-async.com/Asio/asio-1.22.0/doc/asio/overview/core/cpp20_coroutines.html) - co_spawn context model
+- [Asio thread pool + coroutines](https://github.com/chriskohlhoff/asio/issues/1508) - Offloading CPU work from io_context
+- [ML-DSA performance analysis](https://arxiv.org/pdf/2601.17785) - ML-DSA-87 verification throughput characteristics
+- [PQMagic ML-DSA optimization](https://link.springer.com/chapter/10.1007/978-3-032-01806-9_9) - 2.04x verify speedup via instruction optimization
+- [Quota enforcement in distributed storage](https://ieeexplore.ieee.org/abstract/document/4367965) - Asynchronous quota enforcement patterns
+- chromatindb benchmark report (deploy/results/REPORT.md) - 15.3 blobs/sec at 1 MiB, 96.48% CPU on node2 during sync verification

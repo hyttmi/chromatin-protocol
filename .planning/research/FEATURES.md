@@ -1,216 +1,296 @@
 # Feature Landscape
 
-**Domain:** Real-world validation and performance benchmarking for a distributed, PQ-secure blob store (chromatindb v0.6.0)
-**Researched:** 2026-03-15
-**Overall confidence:** HIGH (well-established domain; tooling is mature and patterns are standard)
+**Domain:** Sync resumption, namespace quotas, and crypto throughput optimization for a decentralized PQ-secure blob store
+**Researched:** 2026-03-16
+**Overall confidence:** HIGH (primary analysis from existing codebase + domain knowledge; crypto perf numbers MEDIUM)
 
 ## Context
 
-chromatindb v0.5.0 shipped with 17,124 LOC C++20, 284 unit tests, and a standalone microbenchmark binary (`chromatindb_bench`) that measures crypto ops, data path, and sync throughput in-process. What is missing is real-world, multi-node validation: running actual daemon instances in a realistic topology, injecting load, measuring end-to-end behavior under sustained traffic, and producing a report with actionable numbers.
+chromatindb v0.6.0 shipped with 17,775 LOC C++20, 284 tests, and Docker benchmark infrastructure proving the system works. The v0.6.0 benchmarks revealed a critical performance bottleneck: 1 MiB blob ingest/sync runs at 15 blobs/sec with 96% CPU on the receiving node. This milestone (v0.7.0) addresses that bottleneck alongside production-readiness features: sync resumption (avoid redundant work), namespace quotas (prevent abuse), and cleanup.
 
-The existing `NodeMetrics` struct already tracks ingests, rejections, syncs, rate-limited disconnects, and peer connection totals. The existing `SIGUSR1` handler and periodic metrics log provide runtime observability. The benchmark binary covers microbenchmarks (SHA3, ML-DSA-87, ML-KEM-1024, ChaCha20-Poly1305, blob ingest, sync throughput, PQ handshake, notification dispatch). This milestone builds on top of that foundation.
+The existing codebase already has: hash-list diff sync (full bidirectional), namespace-scoped sync filtering, per-peer NamespaceList exchange with seq_num metadata, global storage limits with StorageFull signaling, DARE, token-bucket rate limiting, and persistent peer lists.
 
 ---
 
 ## Table Stakes
 
-Features users (here: developers and operators evaluating chromatindb) expect for any distributed database performance validation. Missing any of these would make the benchmark results incomplete or untrustworthy.
+Features that are expected for a production-ready distributed storage node. Missing any of these would be a real operational problem.
 
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| **Multi-stage Dockerfile** | Reproducible build in an isolated container. Standard practice for C++ projects. Ensures benchmark results are not tied to the developer's machine. | Low | CMake, FetchContent (all deps fetched at build time) |
-| **docker-compose multi-node topology** | Minimum 3-node network (A<->B<->C for multi-hop). Without this, you are testing localhost-to-localhost, which proves nothing about real networking, PQ handshake overhead, or sync protocol correctness under latency. | Low | Dockerfile |
-| **Load generator tool** | A binary or script that creates signed blobs and writes them to a running node. Without a load generator, there is no way to produce sustained traffic. Must support configurable blob sizes (1 KiB, 64 KiB, 1 MiB, 10 MiB) and configurable write rate or burst mode. | Med | NodeIdentity (keygen), wire protocol (connect + send Data messages) |
-| **Ingest throughput measurement** | Blobs/sec and MiB/sec at the ingesting node under sustained load. This is the most fundamental metric for any blob store. Must measure at multiple blob sizes. | Low | Load generator, NodeMetrics (already exists: ingests counter) |
-| **Sync/replication latency** | Wall-clock time from "blob written to node A" to "blob available on node B". This is the single most-asked question about any replicated system. Must measure at configurable sync intervals. | Med | Multi-node topology, timestamping in load generator + verification on peer |
-| **Multi-hop propagation time** | Time for a blob written to node A to reach node C (which only connects to B, not A). Validates that the sync protocol actually propagates data transitively. Without this, you have no evidence that the sequential sync protocol works beyond direct peers. | Med | 3+ node topology with chain connectivity (A-B-C, no A-C link) |
-| **Late-joiner scenario** | Start a new node D after data has been written, connect it to the network, measure time to fully catch up. Every replicated system must prove that new nodes can join and converge. | Med | Multi-node topology, load generator (pre-seed data), timing infrastructure |
-| **Resource profiling (CPU, memory, disk I/O)** | Measure resource consumption under load. Without this, throughput numbers are meaningless because you do not know if you are CPU-bound (PQ crypto), memory-bound (100 MiB blobs), or I/O-bound (libmdbx writes). | Low | `docker stats` or cgroup metrics; no custom tooling needed |
-| **Benchmark results report** | A structured document (markdown) with tables and analysis. Numbers without context are useless. Must include hardware specs, topology, workload description, and interpretation. | Low | All measurement features above |
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Sync resumption (per-peer cursors) | Without it, every sync round exchanges ALL hashes for ALL namespaces -- O(total_blobs) per peer per round. Nodes with 100K+ blobs waste bandwidth and CPU diffing identical data every 60 seconds. Every production replication system tracks sync position. | Medium | Requires per-peer persistent state (seq_num cursor per namespace per peer). Touches peer_manager sync flow. NamespaceList infrastructure already carries the needed metadata. |
+| Large blob crypto throughput fix | 15.3 blobs/sec at 1 MiB with 96% CPU is unusable for any real workload involving documents or images. A node syncing media blobs would be permanently CPU-saturated. The benchmark proved this -- it is not hypothetical. | Medium-High | Root cause: serial crypto on a single thread -- SHA3-256 hashing + ML-DSA-87 verify + redundant re-encoding, all per blob. Multiple optimization angles available. |
+| Deletion benchmarks | Tombstone creation, sync propagation, and GC of expired tombstones all have performance characteristics that are currently unmeasured. Deletion was added in v3.0 but never benchmarked. | Low | Extends existing Docker benchmark infrastructure (v0.6.0). No new chromatindb code needed. |
+| Test relocation into db/ | Tests for the database component live in top-level `tests/`. This breaks the self-contained component contract established in v0.5.0. Anyone consuming db/ as a library gets the component but no tests. | Low | Mechanical file moves + CMakeLists.txt updates. Same pattern as the v2.0 source restructure (14 minutes). |
 
 ## Differentiators
 
-Features that go beyond table stakes. Not expected for a v0.6.0 internal validation milestone, but would add significant value if included.
+Features that set the system apart or significantly improve operational quality. Not strictly expected but high value.
 
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| **Mixed workload scenarios** | Combine writes, reads, deletes, and delegation operations in a single load profile. Closer to real-world usage than pure-write benchmarks. Shows how PQ signature verification on ingest competes with sync and pub/sub. | Med | Load generator with multi-operation support, delegation blob creation |
-| **Automated benchmark runner script** | A single `./run-benchmarks.sh` that builds Docker images, starts compose, runs all scenarios sequentially, collects metrics, and produces the report. Makes benchmarks reproducible by anyone, not just the original developer. | Med | All table stakes features |
-| **Network condition simulation** | Use `tc` (traffic control) inside Docker to add latency and bandwidth constraints between nodes. Simulates WAN conditions for a system designed for internet deployment. Shows how PQ handshake cost (ML-KEM-1024 ciphertext = 1568 bytes per direction) behaves under real latency. | High | docker-compose with `cap_add: NET_ADMIN`, `tc` in container image |
-| **Pub/sub notification latency** | Measure time from blob ingest on publisher to notification receipt on subscriber. Validates the real-time notification pipeline end-to-end, not just the in-process callback latency already measured in `chromatindb_bench`. | Med | Multi-node topology, load generator, subscriber client or log-based measurement |
-| **Storage limit behavior under load** | Fill a node to `max_storage_bytes`, continue writing, verify DISK_FULL rejection propagates correctly, measure throughput degradation (if any) as storage fills up. | Low | Load generator, config with `max_storage_bytes` |
-| **Concurrent writers to same namespace** | Multiple load generators writing to the same namespace via delegation. Measures contention and delegation verification overhead on the ingest hot path. | Med | Delegation blob setup, multiple load generator instances |
-| **Machine-readable results output** | JSON output from the benchmark runner (alongside markdown). Enables trend tracking across versions and automated regression detection. | Low | Benchmark runner script |
-| **Trusted vs PQ transport comparison** | Run the same workload with `trusted_peers` (lightweight handshake) vs full PQ handshake. Quantifies the PQ overhead in connect-heavy scenarios. | Low | Two compose configs differing only in trusted_peers setting |
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Namespace storage quotas (per-namespace byte+count limits) | Prevents a single namespace from consuming disproportionate storage. Critical for multi-tenant node operation where relay operators share infrastructure. Without it, one abusive namespace can fill the entire node, and the global max_storage_bytes provides no per-namespace protection. | Medium | New config, new storage tracking (quota_map sub-database), enforcement in ingest pipeline. |
+| Sync cursor persistence across restarts | Cursors that survive node restart avoid re-diffing everything on reboot. Reduces first-sync-after-restart from O(total_blobs) to O(delta_since_shutdown). | Low-Medium | Requires persisting cursor state to libmdbx or peers.json. Builds on sync resumption. |
+| Per-namespace blob count limits | Complementary to byte limits. A namespace writing millions of tiny blobs stays under byte limits but explodes the seq_map index and sync hash-list exchange. | Low (piggybacks on byte quota infrastructure) | Same enforcement point, same tracking mechanism. |
+| Verified-hash dedup before crypto | Check `storage_.has_blob()` before running signature verification on sync-received blobs. O(1) btree lookup that prevents wasted ML-DSA-87 verification when a blob arrived from another peer between hash-list exchange and blob transfer. | Low | Marginal benefit but zero cost to implement. |
 
 ## Anti-Features
 
-Features to explicitly NOT build for this milestone.
+Features to explicitly NOT build.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Grafana/Prometheus monitoring stack** | Massive complexity for a validation milestone. The existing spdlog metrics output + `docker stats` provides everything needed. Adding a monitoring stack is an operational concern, not a benchmark concern. | Parse spdlog output and `docker stats` for metrics. Write a simple log-scraping script if needed. |
-| **Custom benchmark framework** | The existing `chromatindb_bench` already covers microbenchmarks. Building a general-purpose framework is YAGNI. | Write scenario-specific measurement scripts. Reuse `chromatindb_bench` for micro-level numbers. |
-| **YCSB integration** | YCSB is Java-based and designed for key-value stores with standard CRUD APIs. chromatindb has a custom binary protocol with PQ crypto -- YCSB cannot speak it. The effort to write a YCSB binding exceeds the value. | Build a purpose-built load generator that speaks the chromatindb wire protocol directly. |
-| **HTTP/REST benchmark endpoint** | chromatindb explicitly has no HTTP API (out of scope per PROJECT.md). Adding one for benchmarking introduces attack surface and deps that must be removed later. | Benchmark the actual binary protocol. The load generator connects via TCP and does the PQ handshake, exactly like a real peer. |
-| **Kubernetes/orchestration** | Overkill for 3-5 node validation. Docker Compose is sufficient. K8s adds networking complexity (CNI, service mesh) that obscures the measurements. | Use docker-compose with explicit network configuration. |
-| **Automated CI benchmark pipeline** | Valuable eventually, but premature for v0.6.0. The goal is to get numbers once, not to run benchmarks on every commit. | Run benchmarks manually. Document the procedure so CI can be added later. |
-| **Cross-platform Docker images** | Building ARM64 + x86_64 images adds build complexity. The benchmarks only need to run on the developer's machine. | Build for the host architecture only (linux/amd64 or whatever the dev machine is). |
-| **Chaos engineering / fault injection** | Network partitions, node crashes, and Byzantine behavior testing is valuable but belongs in a separate milestone focused on resilience, not performance. | Note as future work. The late-joiner scenario is a mild form of this. |
+| Multithreaded ingest pipeline | chromatindb runs on a single io_context thread by design. All data structures (Storage, PeerManager, Engine) are explicitly NOT thread-safe. Introducing thread pools for the full ingest pipeline would require thread-safe wrappers everywhere, fundamentally changing the architecture. | Offload only the CPU-bound crypto (hash + verify) to a worker thread, post results back to the io_context. Keep all storage/state mutations on the single thread. |
+| Per-blob sync cursors | Tracking individual blob positions per peer is excessive granularity. A sync round transfers batches, and the meaningful resumption unit is "which namespaces have new data since last sync." | Per-peer, per-namespace seq_num cursors. Resume at namespace granularity. |
+| Hardware crypto acceleration (SHA3-NI, AES-NI) | The project uses liboqs SHA3-256 (software Keccak) and libsodium ChaCha20-Poly1305. Adding hardware acceleration paths requires conditional compilation, CPU feature detection, and runtime dispatch -- significant complexity for marginal gain on the actual bottleneck (ML-DSA-87 verify is the dominant cost, not SHA3). The Ryzen 5 5600U test hardware has no SHA3 instructions (SHA3-NI is Intel Ice Lake server+). | Focus on reducing redundant work and async offloading. |
+| Chunked/streaming blob verification | Splitting signature verification across blob chunks requires a fundamentally different signing scheme. ML-DSA-87 requires the full message for verification -- there is no incremental API in liboqs. | Accept per-blob verification cost. Reduce it by eliminating redundant computation and parallelizing across blobs (not within a blob). |
+| Complex quota policies (tiered, time-based, burst, priority) | YAGNI. The database is intentionally dumb. Per-namespace byte+count hard limits are sufficient. Sophisticated quota policies (burst allowances, time-weighted averages, priority classes) belong in the relay layer which understands application semantics. | Simple hard limits: max_bytes_per_namespace, max_blobs_per_namespace. Reject at ingest with a clear error. |
+| Quota negotiation protocol | Peers do not need to know each other's quota policies. Quotas are node-local operational configuration, exactly like max_storage_bytes. | Node rejects blobs that exceed its quotas. The rejection is a normal ingest failure. No new wire messages needed. |
+| Pre-hashing signing input (HashML-DSA) | FIPS 204 defines a "HashML-DSA" mode where the caller pre-hashes the message before signing/verifying. This would eliminate the large-message penalty entirely. However: it changes the signing scheme (breaking all existing blobs), and liboqs does not currently expose a separate HashML-DSA API -- the standard OQS_SIG_sign/verify always use the "pure" mode. | If liboqs adds HashML-DSA support in a future release, adopt it. For v0.7.0, optimize the surrounding work (eliminate redundant encoding, cache OQS context, async offload). |
+
+## Feature Details
+
+### Sync Resumption
+
+**Current behavior:** Every sync round (default 60s), both peers exchange their FULL namespace list and ALL blob hashes per namespace. For a node with 10K blobs across 50 namespaces, that means encoding, sending, and diffing ~320 KiB of hashes every round, even when nothing changed. The diff itself is O(n) (hash set construction + lookup), and the encoding/sending is O(n) on the wire.
+
+**Target behavior:** Each node tracks the last-seen seq_num per namespace per peer. On sync, both sides first exchange their NamespaceList (namespace + latest_seq_num pairs -- this already happens). If a namespace's seq_num has not advanced since the last sync with this peer, skip the hash-list exchange for that namespace entirely. Only exchange hash lists for namespaces with new data.
+
+**Cursor granularity: per-peer, per-namespace seq_num.**
+
+Rationale:
+- Per-peer because different peers may be at different sync positions (one peer might be a fresh late-joiner, another fully synced).
+- Per-namespace because namespaces are the natural partition boundary. The seq_num index already exists and is monotonically increasing per namespace.
+- seq_num (not timestamp) because seq_num is local, monotonic, and gap-free for new writes. Timestamps are untrusted writer-provided values.
+
+**What the cursor stores:**
+```
+peer_cursors_: map<peer_address, map<namespace_id, last_synced_seq_num>>
+```
+
+**How it works:**
+1. Node A connects to Node B. Both exchange NamespaceList (this already happens in Phase A of sync). The NamespaceList contains `(namespace_id, latest_seq_num)` pairs.
+2. Node A compares B's latest_seq_nums against its stored cursors for B. For each namespace where B's seq > cursor, that namespace has new data -- proceed with hash-list exchange. For namespaces where B's seq == cursor, skip entirely (no hash list needed).
+3. After successful sync of a namespace (all blobs transferred), update cursor to B's latest_seq_num for that namespace.
+4. On peer disconnect/reconnect: cursors persist (in memory at minimum, optionally on disk), so the next sync resumes where it left off.
+
+**Existing infrastructure that helps:**
+- `NamespaceList` already carries `(namespace_id, latest_seq_num)` pairs -- the exact data needed for cursor comparison. No new wire messages required.
+- `seq_num` is monotonically increasing per namespace -- safe for cursor advancement.
+- `PersistedPeer` already exists in peer_manager.h with `address` and `last_seen` -- can be extended with cursor data.
+- `peers.json` persistence already exists -- cursor state can be stored alongside peer addresses.
+
+**Edge cases:**
+- New peer (no cursor): sync everything (cursor defaults to 0, meaning "sync all").
+- Namespace expiry removes blobs: seq_nums have gaps, but cursor is still valid because it tracks "everything up to seq X was synced." New blobs get higher seq_nums.
+- Tombstone creates new seq entry: correctly detected as "something changed" because latest_seq_num advances.
+- Node restart without cursor persistence: falls back to full sync once. Acceptable for initial implementation; persistence can be added as a follow-up.
+- seq_num rollback (theoretically impossible since seq_nums are monotonically assigned): not a concern.
+
+**Complexity:** Medium. No new wire messages. The main work is:
+1. Adding cursor storage (in-memory map, keyed by peer address or pubkey).
+2. Modifying `run_sync_with_peer` and `handle_sync_as_responder` to check cursors before exchanging hash lists in Phase A.
+3. Updating cursors after successful namespace sync in Phase C.
+4. Optional: persisting cursors in peers.json or a dedicated libmdbx sub-database.
+
+**Dependencies:** None on other v0.7.0 features. Can be built independently.
+
+### Namespace Storage Quotas
+
+**Current behavior:** Only global storage limit exists (max_storage_bytes in Config, enforced in BlobEngine::ingest Step 0b). A single namespace can fill the entire node. The StorageFull signal tells peers the node is full, but it does not distinguish which namespace caused it.
+
+**Target behavior:** Per-namespace limits on total bytes stored and total blob count. Enforcement at the ingest pipeline, before signature verification (cheap to check). Configurable with defaults and per-namespace overrides.
+
+**Quota dimensions: bytes AND count.**
+
+Rationale:
+- Bytes alone is insufficient: a namespace writing millions of 1-byte blobs stays under byte limits but explodes the seq_map index (one entry per blob) and sync hash-list exchange.
+- Count alone is insufficient: a namespace writing a few 100 MiB blobs could exhaust storage quickly.
+- Both together provide complete protection.
+
+**Configuration:**
+```json
+{
+  "namespace_quotas": {
+    "default_max_bytes": 1073741824,
+    "default_max_blobs": 100000,
+    "overrides": {
+      "abc123...hex...": { "max_bytes": 10737418240, "max_blobs": 1000000 }
+    }
+  }
+}
+```
+
+- `default_max_bytes` / `default_max_blobs`: apply to all namespaces not in overrides. 0 = unlimited (no quota for that dimension).
+- `overrides`: per-namespace override by 64-char hex namespace ID. Allows the node operator's own namespace or trusted relay namespaces to have higher limits.
+- SIGHUP-reloadable (same pattern as allowed_keys and sync_namespaces).
+
+**Enforcement point:** In `BlobEngine::ingest()`, after Step 0b (global capacity check), before Step 1 (structural checks). This is Step 0c -- cheap O(1) lookup before any crypto operations.
+
+**Tracking mechanism:**
+
+New libmdbx sub-database `quota_map`: key = `[namespace:32]`, value = `[used_bytes:u64BE][blob_count:u64BE]`. Updated atomically in the same write transaction as store_blob. O(1) lookup on ingest, O(1) update on store. Adds 16 bytes per namespace of overhead -- negligible.
+
+Counter maintenance:
+- `store_blob`: increment bytes (by encoded blob size) and count (by 1) in same txn.
+- `delete_blob_data`: decrement bytes and count in same txn.
+- `run_expiry_scan`: decrement for each expired blob in the scan loop.
+
+**Interaction with existing features:**
+- Tombstones: exempt from quota (small at 36 bytes, and they free space by deleting targets). Same logic as the existing global storage_full exemption in engine.cpp.
+- Delegation blobs: count against the owner's namespace quota (they are stored in the owner's namespace).
+- Sync ingest: same quota enforcement path. Synced blobs from a namespace that is over quota are rejected silently.
+- Global max_storage_bytes: checked before namespace quota. If global limit is hit, namespace quota is irrelevant.
+
+**Complexity:** Medium. Requires:
+1. New config fields + validation + SIGHUP reload.
+2. New quota_map sub-database in Storage (sixth sub-database alongside blobs, sequence, expiry, delegation, tombstone).
+3. Counter maintenance in store_blob, delete_blob_data, run_expiry_scan.
+4. Enforcement check in BlobEngine::ingest() at Step 0c.
+5. New IngestError variant (namespace_quota_exceeded).
+6. Tests for quota enforcement, counter maintenance, and SIGHUP reload.
+
+**Dependencies:** None on other v0.7.0 features. Can be built independently.
+
+### Large Blob Crypto Throughput Optimization
+
+**Root cause analysis (from benchmark data + code review):**
+
+The sync path calls `sync_proto_.ingest_blobs()`, which calls `engine_.ingest()` per blob. For each 1 MiB blob, `ingest()` does:
+
+1. **build_signing_input()** (engine.cpp:107): Allocates ~1 MiB vector, copies namespace(32) + data(1 MiB) + ttl(4) + timestamp(8).
+2. **Signer::verify()** (engine.cpp:110): Creates a NEW `OQS_SIG` context (`OQS_SIG_new`), passes the ~1 MiB signing input to `OQS_SIG_verify` (which internally hashes it via SHA3/SHAKE before lattice math), then frees the context (`OQS_SIG_free`). Cost: ~0.23ms for lattice verify on small messages, but the internal SHA3 hash of 1 MiB at ~150 MB/s adds ~6.7ms.
+3. **sha3_256(blob.pubkey)** (engine.cpp:77): 2592 bytes -- negligible.
+4. **encode_blob() + blob_hash()** for tombstone check (engine.cpp:128): Re-encodes the entire blob to FlatBuffers (~1 MiB allocation + copy), then SHA3-256 hashes the encoded result (~6.7ms). This is REDUNDANT -- the same hash is computed inside store_blob.
+5. **Storage encrypt** (storage.cpp:327): ChaCha20-Poly1305 AEAD over ~1 MiB. libsodium does this at ~1 GB/s. Cost: ~1ms.
+6. **libmdbx write**: Synchronous disk write. Cost depends on disk, typically <1ms for SSD.
+
+**Per-blob total at 1 MiB: ~20-30ms of CPU work.** At 15.3 blobs/sec, that is ~65ms per blob, suggesting overhead from memory allocation, FlatBuffer encoding (which copies all fields), and the sequential one-blob-at-a-time pipeline.
+
+The 96% CPU on node2 (sync receiver) confirms the single io_context thread is saturated doing crypto + encoding + storage for every blob.
+
+**Optimization approaches (ordered by impact/effort ratio):**
+
+**1. Eliminate redundant encode+hash for tombstone check (LOW effort, MEDIUM impact):**
+In engine.cpp line 127-128, for regular (non-tombstone) blobs, the code computes `wire::encode_blob(blob)` + `wire::blob_hash(encoded)` to get the content hash for the tombstone lookup. But `storage_.store_blob()` computes the same hash internally. Fix: compute the content hash once, pass it through to avoid double work. This eliminates one full ~1 MiB FlatBuffer encode + SHA3-256 pass per blob. Saves ~10ms per 1 MiB blob.
+
+**2. Reuse OQS_SIG context in verify (LOW effort, LOW impact):**
+`Signer::verify()` creates and destroys an `OQS_SIG` context per call. A static or thread-local context avoids repeated allocation. Impact is modest since `OQS_SIG_new` for ML-DSA is cheap (just a malloc + function pointer setup), but it eliminates unnecessary allocations under load.
+
+**3. Async crypto offload to a worker thread (MEDIUM effort, HIGH impact):**
+The highest-impact optimization: offload the CPU-bound portion (build_signing_input + Signer::verify + sha3_256) to a separate thread, then `co_await` the result on the io_context. Pattern:
+
+```
+io_context thread:  receive blob -> post crypto to worker -> co_await result -> store to libmdbx
+worker thread:      build_signing_input -> verify -> return bool
+```
+
+This keeps the io_context responsive while crypto runs. With one worker thread, throughput is the same per-blob, but the io_context can handle other peers, PEX, and pub/sub notifications while waiting. With a small thread pool (2-3 workers), multiple blobs can be verified concurrently if the sync protocol allows it.
+
+Implementation: `asio::post(worker_strand, [...])` with `asio::use_awaitable` adapter. Crypto functions are stateless (no shared mutable state), so thread safety is achieved by copying inputs. All Storage and Engine mutations remain on the io_context thread.
+
+Complexity: the one-blob-at-a-time sync protocol serializes blob processing per peer connection. True parallelism requires either (a) pipelining within a connection (verify blob N+1 while storing blob N), or (b) parallel sync across multiple peer connections. Option (a) is the better fit.
+
+**4. Pre-crypto dedup check on sync receive (LOW effort, LOW impact):**
+Before running signature verification on a sync-received blob, check `storage_.has_blob(namespace, content_hash)`. If the blob already exists (a duplicate that arrived from another peer between hash-list exchange and blob transfer), skip the expensive verification. O(1) btree lookup. Marginal benefit in practice but costs nothing.
+
+**Recommended approach for v0.7.0:**
+1. Eliminate redundant encode+hash (Step 1 -- immediate win, easy to implement and benchmark).
+2. Reuse OQS_SIG context (Step 2 -- trivial).
+3. Benchmark after Steps 1-2. If throughput is still inadequate, implement async crypto offload (Step 3).
+4. Pre-crypto dedup check (Step 4 -- opportunistic, do alongside other work).
+
+**Dependencies:** Should be benchmarked using the existing Docker infrastructure (v0.6.0). Deletion benchmarks can share the same infrastructure.
+
+### Deletion Benchmarks
+
+**What to measure:**
+1. Tombstone creation throughput: signed tombstone blobs/sec at various batch sizes.
+2. Tombstone sync propagation latency: time from tombstone creation on node1 to arrival on node2/node3.
+3. Deletion effect on stored data: verify target blob is actually removed on all nodes after tombstone propagation.
+4. Expiry scan GC throughput: how fast expired tombstones (with TTL > 0) are cleaned up. (Note: current tombstones are TTL=0 permanent, but tombstone TTL was added in v0.5.0.)
+5. Storage recovery verification: used_bytes before and after deletion.
+
+**Infrastructure:** Extends existing Docker benchmark suite in `deploy/`. New loadgen profile that creates blobs, then creates tombstones targeting those blobs. New benchmark scenario script.
+
+**Complexity:** Low. 1-2 new benchmark scripts + loadgen profile. No changes to chromatindb code.
+
+**Dependencies:** Existing Docker benchmark infrastructure (v0.6.0). No dependency on other v0.7.0 features.
+
+### Test Relocation
+
+**Current state:** 284 tests in `tests/` at the project root, organized by component (tests/crypto/, tests/storage/, tests/sync/, etc.). The `db/` directory is a self-contained CMake component (established in v0.5.0) but has no tests.
+
+**Target state:** Tests exercising db/ internals move into `db/tests/` with their own CMakeLists.txt. The top-level `tests/test_daemon.cpp` (integration test requiring the full daemon binary) stays in `tests/`.
+
+**Complexity:** Low. Mechanical file moves + CMakeLists.txt updates. Pattern proven in v2.0 Phase 9 (source restructure, completed in 14 minutes).
+
+**Dependencies:** None.
+
+### General Cleanup
+
+**Stale artifacts to sweep:**
+- Old standalone benchmark binary from v3.0 (`chromatindb_bench`) -- predates Docker benchmarks, may overlap or be redundant.
+- db/README.md may need updates for v0.7.0 features (namespace quotas, sync resumption config).
+- Stale config examples or documentation references.
+- Any dead code paths identified during other phases.
+
+**Complexity:** Low. Survey + remove/update. Should happen last.
+
+**Dependencies:** All other v0.7.0 features should be built first.
 
 ## Feature Dependencies
 
 ```
-Dockerfile ─────────────────────────────┐
-                                        v
-                              docker-compose topology
-                                        │
-                        ┌───────────────┼───────────────┐
-                        v               v               v
-               Load generator    Resource profiling   Network setup
-                        │               │
-            ┌───────────┼───────────┐   │
-            v           v           v   v
-    Ingest throughput  Sync latency  Multi-hop propagation
-            │           │           │
-            v           v           v
-         Late-joiner scenario (needs pre-seeded data + new node)
-                        │
-                        v
-              Benchmark results report
+Sync Resumption       (independent)
+Namespace Quotas      (independent)
+Crypto Optimization   (independent)
+Deletion Benchmarks   (independent, uses existing Docker infra)
+Test Relocation       (independent)
+General Cleanup       (last -- sweeps artifacts from other phases)
 ```
 
-Key dependency chain:
-- Dockerfile must exist before docker-compose
-- docker-compose must work before any multi-node scenario
-- Load generator must exist before any throughput/latency measurement
-- All measurements must complete before the results report
+No hard dependencies between v0.7.0 features. All can be built in any order. Recommended ordering:
 
-## Feature Details
-
-### Dockerfile (Multi-Stage Build)
-
-**What:** A two-stage Dockerfile. Stage 1 (`builder`): full build environment with gcc/g++, cmake, git, and all FetchContent dependencies compiled from source. Stage 2 (`runtime`): minimal image (e.g., `debian:bookworm-slim`) with just the `chromatindb` binary and runtime deps (libstdc++, libc).
-
-**Why multi-stage:** The build stage will be large (liboqs, libsodium, FlatBuffers, libmdbx all compile from source). The runtime image should be small. FetchContent fetches everything at build time -- no external package managers needed.
-
-**Key concern:** liboqs build is slow even with algorithm stripping. Docker layer caching mitigates this (dependency layer rarely changes). The `COPY CMakeLists.txt` and `COPY db/CMakeLists.txt` layers should be separated from `COPY . .` to maximize cache reuse.
-
-**Includes both binaries:** `chromatindb` (daemon) and `chromatindb_bench` (microbenchmark) should both be in the image. Optionally the load generator if it is a separate binary.
-
-### docker-compose Topology
-
-**What:** A `docker-compose.yml` defining at minimum:
-- `node-a`: Bootstrap node, accepts inbound. Binds port 4200.
-- `node-b`: Connects to node-a as bootstrap peer. Binds port 4201.
-- `node-c`: Connects to node-b only (NOT node-a). Binds port 4202. This creates the chain topology needed for multi-hop testing.
-
-Each node gets its own `data_dir` volume, its own config file, and pre-generated identity keys.
-
-**Network:** A single Docker bridge network. All nodes can reach each other by DNS name (`node-a`, `node-b`, `node-c`) but bootstrap config controls actual connections.
-
-**Config generation:** A setup script that generates node identities (via `chromatindb keygen`) and writes per-node JSON config files before compose starts. Or: use an entrypoint script that runs `keygen` on first start.
-
-### Load Generator
-
-**What:** A standalone C++ binary (`chromatindb_loadgen`) that:
-1. Generates a node identity (or loads one from disk)
-2. Connects to a target node via TCP + PQ handshake (like a real peer)
-3. Creates signed blobs with configurable size and count
-4. Sends them as Data messages via the wire protocol
-5. Measures and reports: blobs sent, total bytes, elapsed time, blobs/sec, MiB/sec
-
-**Why a separate binary, not a script:** The wire protocol is binary (FlatBuffers over PQ-encrypted TCP). No scripting language can speak it without reimplementing the entire handshake and framing layer. The load generator links against `chromatindb_lib` and reuses all existing infrastructure (wire codec, handshake, framing, AEAD channel).
-
-**CLI interface:**
-```
-chromatindb_loadgen --target <host:port> --count <N> --size <bytes> [--rate <blobs/sec>] [--data-dir <path>]
-```
-
-**Blob size distribution:** Support fixed size (e.g., `--size 1024`) and optionally a mix mode (e.g., `--mix small:70,medium:20,large:10` for 1KiB/64KiB/1MiB distribution). Fixed size is table stakes; mix mode is a differentiator.
-
-### Measurement Methodology
-
-**Ingest throughput:** Measured at the load generator side (send rate) and at the node side (from `NodeMetrics.ingests` delta over time window, observable via periodic metrics log). Report both: send throughput and accept throughput.
-
-**Sync latency:** The load generator writes blob B to node A at time T1. A monitoring process (or log-scraping script) checks node B's metrics log for the ingest of blob B. The difference T2-T1 is sync latency. Since the sync runs on a configurable interval (default 60s), this measurement reflects the actual sync behavior, not an artificial immediate-sync scenario. Use `sync_interval_seconds: 5` for benchmarking to get meaningful numbers without long waits.
-
-**Multi-hop propagation:** Same as sync latency but measured at node C (which only connects to node B). Time T3-T1 where T3 is when blob B appears on node C. Requires at least 2 sync intervals.
-
-**Late-joiner:** Write N blobs to the network. Start a new node D connected to node B. Measure time from node D startup to node D having all N blobs (verified by `list_namespaces` blob count matching).
-
-**Resource profiling:** Use `docker stats --no-stream` at regular intervals during load, capturing CPU%, memory usage, and block I/O. Alternatively, read cgroup files directly for more precision. Record at 1-second intervals during load for meaningful time series.
-
-### Benchmark Scenarios
-
-Based on industry standard practices for distributed database benchmarking (informed by YCSB workload philosophy adapted to chromatindb's blob store model):
-
-| Scenario | Description | Measures | Config |
-|----------|-------------|----------|--------|
-| **S1: Sustained ingest** | Write 10,000 blobs of 1 KiB to node A | Ingest throughput (blobs/sec, MiB/sec), CPU/memory | sync_interval: 5s |
-| **S2: Large blob ingest** | Write 100 blobs of 10 MiB to node A | Large-blob throughput, memory peak | sync_interval: 5s |
-| **S3: Mixed size ingest** | Write 5,000 blobs with 70% 1KiB / 20% 64KiB / 10% 1MiB | Realistic throughput profile | sync_interval: 5s |
-| **S4: Replication latency** | Write 100 blobs to A, measure appearance on B | Sync latency distribution (min/avg/p99/max) | sync_interval: 5s |
-| **S5: Multi-hop propagation** | Write 100 blobs to A, measure appearance on C (A->B->C) | End-to-end propagation time | sync_interval: 5s |
-| **S6: Late joiner** | Write 1,000 blobs to A, then start node D connected to B | Catch-up time, sync throughput during catchup | sync_interval: 5s |
-| **S7: Dataset scale** | Write ~10 GB total data (mixed sizes), let full replication complete | Total replication time, steady-state resource usage | sync_interval: 30s |
-
-### Benchmark Results Report
-
-**Format:** Markdown document with:
-1. Hardware specs (CPU model, cores, RAM, disk type)
-2. Software versions (chromatindb version, Docker version, kernel)
-3. Topology diagram
-4. Per-scenario results table (blobs/sec, MiB/sec, latency percentiles)
-5. Resource usage plots or tables (CPU%, memory over time)
-6. Microbenchmark results from `chromatindb_bench` (already exists)
-7. Analysis and observations
-8. Known limitations and future work
+1. Test relocation (warm-up, low risk, improves project structure for all subsequent work)
+2. Crypto optimization (highest user-visible impact, benchmark immediately)
+3. Deletion benchmarks (establishes deletion baseline, exercises benchmark infra)
+4. Sync resumption (second highest impact, well-scoped)
+5. Namespace quotas (production feature, medium complexity)
+6. General cleanup (sweep everything)
 
 ## MVP Recommendation
 
-Prioritize (in order):
+Prioritize by impact-to-effort ratio:
 
-1. **Dockerfile** -- everything else depends on this
-2. **docker-compose topology** (3 nodes, chain connectivity) -- enables all multi-node scenarios
-3. **Load generator binary** -- enables all measurement scenarios
-4. **Scenarios S1 + S4 + S5 + S6** -- ingest throughput, sync latency, multi-hop, and late-joiner are the four table-stakes validations
-5. **Resource profiling** -- collect during S1 and S7
-6. **Benchmark results report** -- document everything
+1. **Crypto throughput optimization** -- highest impact. The 96% CPU / 15 blobs/sec bottleneck is the most urgent problem. Known root cause, multiple optimization angles, easy to benchmark.
 
-Defer:
-- **S3 (mixed sizes):** nice-to-have but S1+S2 cover the range. Low marginal value.
-- **Network simulation (tc):** High complexity, belongs in a resilience-focused milestone.
-- **Pub/sub latency measurement:** Requires a subscriber client. Can be added to the load generator later but is not critical for v0.6.0.
-- **Automated benchmark runner script:** Valuable but can be assembled after individual pieces work. Manual is fine for first run.
-- **Machine-readable JSON output:** Add after markdown report exists.
-- **Trusted vs PQ comparison:** Low effort but lower priority than core scenarios.
+2. **Sync resumption** -- second highest impact. Every sync round being O(total_blobs) is wasteful and gets worse as data grows. The NamespaceList infrastructure already carries seq_nums; this is primarily logic changes.
 
-## Complexity Assessment
+3. **Namespace quotas** -- important for production operation. Without quotas, a single misbehaving namespace can fill a node despite global max_storage_bytes.
 
-| Feature | Estimated Effort | Risk |
-|---------|-----------------|------|
-| Dockerfile (multi-stage) | Small (1 phase) | Low -- standard pattern, all deps via FetchContent |
-| docker-compose + config gen | Small (1 phase) | Low -- well-understood tooling |
-| Load generator binary | Medium (1-2 phases) | Medium -- must implement client-side handshake + send path |
-| Ingest throughput measurement | Small (part of load gen) | Low -- trivially measured at sender |
-| Sync latency measurement | Medium (1 phase) | Medium -- requires timestamp correlation across nodes |
-| Multi-hop propagation | Small (same infra as sync latency) | Low -- just measure at a different node |
-| Late-joiner scenario | Small (1 phase) | Low -- add node to compose, measure convergence |
-| Resource profiling | Small (script) | Low -- `docker stats` parsing |
-| Results report | Small (1 phase) | Low -- documentation |
+4. **Test relocation** -- low effort, improves component hygiene. Good first phase.
 
-**Total estimated phases:** 5-7
+5. **Deletion benchmarks** -- low effort, establishes baseline for a feature that has never been benchmarked.
+
+6. **General cleanup** -- last, sweeps everything.
+
+Defer: None. All features are scoped for v0.7.0 and none are speculative.
 
 ## Sources
 
-- [Aerospike: Best practices for database benchmarking](https://aerospike.com/blog/best-practices-for-database-benchmarking/)
-- [CockroachDB: Performance under Adversity](https://www.cockroachlabs.com/blog/database-testing-performance-under-adversity/)
-- [YCSB Overview (Duke CS)](https://courses.cs.duke.edu/fall13/compsci590.4/838-CloudPapers/ycsb.pdf)
-- [benchANT: YCSB Guide](https://benchant.com/blog/ycsb)
-- [GeeksforGeeks: Benchmarking Distributed Systems](https://www.geeksforgeeks.org/system-design/benchmarking-distributed-systems/)
-- [Abilian: Testing and Benchmarking Distributed Systems](https://lab.abilian.com/Tech/Devops%20&%20Cloud/Testing%20and%20Benchmarking%20Distributed%20Systems/)
-- [Docker: Containerize C++ with multi-stage builds](https://docs.docker.com/guides/cpp/multistage/)
-- [Docker: Runtime metrics](https://docs.docker.com/engine/containers/runmetrics/)
-- [Integrate.io: Database Replication Speed Metrics](https://www.integrate.io/blog/database-replication-speed-metrics/)
-- [Microsoft C++ Blog: Multi-stage containers for C++ development](https://devblogs.microsoft.com/cppblog/using-multi-stage-containers-for-c-development/)
+### Primary (HIGH confidence)
+- Codebase analysis: `db/peer/peer_manager.cpp` (sync flow lines 565-954, cursor positions, NamespaceList exchange), `db/engine/engine.cpp` (ingest pipeline lines 40-164, crypto hot path with redundant encode+hash at lines 127-128), `db/sync/sync_protocol.cpp` (hash-list diff, blob ingestion), `db/storage/storage.cpp` (libmdbx sub-databases, store_blob, used_bytes), `db/crypto/signing.cpp` (OQS_SIG context lifecycle in verify())
+- Benchmark data: `deploy/results/REPORT.md` (v0.6.0 baseline: 15.3 blobs/sec at 1 MiB, 96% CPU on node2, 73% CPU on node1)
+- Project context: `.planning/PROJECT.md` (v0.7.0 target features, constraints, key decisions)
+- Performance concern: `project_perf_concern.md` (root cause: serial SHA3-256 + ML-DSA-87 verify on sync path)
+- Retrospective: `.planning/RETROSPECTIVE.md` (milestone patterns, v2.0 restructure completed in 14 min)
+
+### Secondary (MEDIUM confidence)
+- [ML-DSA-87 verification: ~234us per verify on small messages, ~4272 verifications/sec](https://arxiv.org/html/2601.17785v1) -- research paper, January 2026. For large messages, the internal SHA3 hash dominates.
+- [SHA3-256 performance: 8-15 cycles/byte on x86 without hardware acceleration](https://en.wikipedia.org/wiki/SHA-3) -- implies ~100-200 MB/s throughput, so ~5-10ms per MiB.
+- [Durable Streams: offset-based sync resumption protocol](https://electric-sql.com/blog/2025/12/23/durable-streams-0.1.0) -- pattern validation for cursor-based resumption with monotonic offsets.
+- [OQS benchmarking infrastructure](https://openquantumsafe.org/benchmarking/) -- liboqs speed_sig tool for local benchmarking of ML-DSA-87.
+- [Kubernetes namespace resource quotas](https://kubernetes.io/docs/concepts/policy/resource-quotas/) -- pattern for per-namespace hard limits with defaults and overrides.
+- [Async batch signature verification pattern (Zcash Zebra)](https://github.com/ZcashFoundation/zebra/issues/1944) -- pattern for concurrent crypto verification in blockchain context.
+- [ML-DSA and PQ signing overview](https://www.encryptionconsulting.com/ml-dsa-and-pq-signing/) -- general ML-DSA performance characteristics and timeline.

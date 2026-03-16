@@ -1,333 +1,310 @@
-# Technology Stack: v0.6.0 Real-World Validation
+# Technology Stack: v0.7.0 Production Readiness
 
-**Project:** chromatindb v0.6.0
-**Researched:** 2026-03-15
-**Confidence:** HIGH (Docker/compose are mature, load generator is custom C++, profiling uses standard Linux/Docker tooling)
+**Project:** chromatindb v0.7.0
+**Researched:** 2026-03-16
+**Confidence:** HIGH (no new dependencies, all techniques use existing deps already in the build)
 
 ## Executive Summary
 
-No new library dependencies are needed. The v0.6.0 milestone is entirely about infrastructure and tooling around the existing binary. The stack additions are: a Dockerfile (multi-stage build), a docker-compose.yml (multi-node topology), a standalone C++ load generator binary (reusing `chromatindb_lib`), and bash scripts for metrics collection via `docker stats`.
+No new library dependencies are needed for v0.7.0. All three major features -- sync resumption, namespace quotas, and large blob crypto throughput optimization -- are achievable with the existing dependency set. The stack changes are purely internal: new libmdbx sub-databases for cursor/quota state, `asio::thread_pool` for crypto offload (already bundled in Standalone Asio 1.38.0), and the liboqs incremental SHA3-256 API (`OQS_SHA3_sha3_256_inc_*`) for streaming hash computation.
 
-The load generator is a C++ binary because it needs to speak chromatindb's PQ-encrypted protocol -- no external tool can do ML-KEM-1024 handshakes and ML-DSA-87 signed blob writes. Building it as a second CMake target that links `chromatindb_lib` gives it full access to the crypto, wire format, and connection code. This is the same pattern already used by `chromatindb_bench`.
-
-Resource profiling uses `docker stats --no-stream --format '{{json .}}'` polled by a bash script. No Prometheus, no Grafana, no cAdvisor. The goal is benchmark numbers in a markdown report, not a monitoring dashboard.
+This is a deliberate zero-new-deps milestone. Every technique leverages APIs that already exist in the bundled libraries but are not yet used by chromatindb. The only build change is adding `max_maps` from 6 to 8 in the libmdbx configuration (two new sub-databases).
 
 ## Recommended Stack
 
-### Docker Build
+### Sync Resumption (Per-Peer Cursor Persistence)
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| gcc:14-bookworm | GCC 14.3 on Debian Bookworm | Build stage base image | Official Docker image. GCC 14 has full C++20 support including coroutines. Debian Bookworm uses glibc (not musl), avoiding ABI issues with liboqs and libsodium. |
-| debian:bookworm-slim | Bookworm slim | Runtime stage base image | ~80 MB. Matches the glibc from build stage. No compiler toolchain in production image. Smaller attack surface than full bookworm. |
-| Docker multi-stage build | -- | Separate build from runtime | Build stage: ~2 GB (gcc, cmake, git, build artifacts). Runtime stage: ~100 MB (slim base + binary + shared libs). |
+| libmdbx sub-database "sync_cursors" | v0.13.11 (existing) | Persist per-peer sync cursor state | Same ACID guarantees as all other state. Atomic with blob writes. Cursor data is tiny (peer_id:32 + ns:32 -> seq:8 = 72 bytes per entry). Already have the env open, just `txn.create_map("sync_cursors")`. |
+| nlohmann/json | 3.11.3 (existing) | NOT used for cursors | JSON files (like peers.json) work for infrequently-written data. Sync cursors update on every sync round -- must be in libmdbx for atomicity and crash safety. |
 
-**Why not Alpine:** Alpine uses musl libc. liboqs and libsodium assume glibc on Linux. musl has known performance regressions with some crypto code paths and occasional ABI incompatibilities with C++ exception handling. The 60 MB size savings is not worth the risk.
+**Key: peer_id(32) + namespace_id(32) = 64 bytes.** Peer identity is the SHA3-256 hash of their ML-DSA-87 public key (their namespace). This is stable across reconnections and already exchanged during handshake (AuthPubkey message). No new wire protocol needed for identification.
 
-**Why not `scratch`/static linking:** chromatindb depends on liboqs, libsodium, and libmdbx which are built as static libs via FetchContent, but the runtime still needs glibc, libstdc++, libpthread, and libdl. A fully static musl build would require cross-compilation setup that adds complexity for zero benefit in a Docker context.
+**Value: last_synced_seq(8) = 8 bytes.** The seq_num of the latest blob we know the peer has for each namespace. On next sync, we can skip sending hashes for blobs with seq <= cursor, and the peer can do the same.
 
-### Container Orchestration
+**Why libmdbx, not JSON file:**
+- Sync cursors update every sync round (every 60 seconds per peer). JSON files create fsync storms.
+- Must be crash-safe. If a cursor is written but the corresponding blob ingest is lost, we get gaps. Bundling cursor updates into the same write transaction as blob storage ensures atomicity.
+- libmdbx sub-databases share the same mmap and transaction. Zero additional file descriptors, zero additional memory overhead.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| docker compose | v2 (compose file format 3.8+) | Multi-node topology | Defines 3-5 node network with custom bridge, health checks, and volume mounts. No Kubernetes needed -- this is a benchmark, not production deployment. |
+**Why not a separate libmdbx env:**
+- One env per process is the standard LMDB/libmdbx pattern. Multiple envs mean multiple mmap regions and independent transaction scopes. All chromatindb state belongs in one env.
+- The existing `max_maps = 6` (5 sub-databases + 1 spare) just needs bumping to 8.
 
-### Load Generator
+**Integration point:** `Storage::Impl` adds `sync_cursors_map` alongside the existing 5 maps. New methods: `set_sync_cursor(peer_id, ns, seq)`, `get_sync_cursor(peer_id, ns) -> optional<uint64_t>`, `clear_sync_cursors(peer_id)`. PeerManager calls these during sync orchestration.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| Custom C++ binary (`chromatindb_loadgen`) | -- | Generate load against running nodes | Must speak PQ-encrypted protocol. Links `chromatindb_lib` like the existing `chromatindb_bench`. No external load testing tool (wrk, vegeta, k6) can do ML-KEM-1024 handshakes. |
-| `std::chrono::steady_clock` | C++20 stdlib | Timing measurements | Already used in `chromatindb_bench`. `steady_clock` is monotonic and safe across threads. Avoid `high_resolution_clock` -- it may alias to `system_clock` on some platforms (non-monotonic). |
-| nlohmann/json | 3.11.3 (existing dep) | Results output | JSON output from load generator, consumed by analysis script. Already a project dependency. |
-
-### Resource Profiling
+### Namespace Quotas (Size/Count Enforcement)
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `docker stats` | Docker CLI built-in | CPU, memory, network I/O, block I/O per container | Reads from cgroups filesystem, near-zero overhead. JSON output with `--format '{{json .}}'`. No additional dependencies. |
-| bash + jq | System tools | Metrics collection script | Poll `docker stats --no-stream` at intervals, append to CSV/JSON. Parse and aggregate for report. `jq` is available in debian:bookworm-slim. |
+| libmdbx sub-database "ns_stats" | v0.13.11 (existing) | Track per-namespace blob count and total data bytes | Enables O(1) quota checks on ingest without scanning. Updated atomically with blob storage in the same write transaction. |
+| nlohmann/json config | 3.11.3 (existing) | Quota limits in node config | `max_namespace_bytes` and `max_namespace_blobs` in config.json. Same hot-reload via SIGHUP as other config values. |
 
-### Benchmarking Analysis
+**Key: namespace_id(32) = 32 bytes.**
+**Value: blob_count(8) + total_bytes(8) = 16 bytes.** Both as little-endian uint64.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| bash scripts | -- | Orchestrate test scenarios | Start topology, run load generator, collect metrics, tear down. Reproducible via `./run-benchmark.sh`. |
-| Markdown report | -- | Results presentation | Load generator outputs JSON, script converts to markdown tables. Same format as existing `chromatindb_bench` output. |
+**Why a dedicated sub-database, not computed on demand:**
+- Computing namespace size requires scanning all blobs for that namespace (O(n) per ingest). With 10K+ blobs per namespace, this is too expensive for the hot path.
+- The ns_stats table is a materialized aggregate, updated +1/+size on ingest and -1/-size on delete/expiry. O(1) lookup, O(1) update.
+- Crash safety: ns_stats and blob storage are in the same write transaction. If the transaction commits, both are consistent. If it rolls back, neither changes.
 
-## What NOT to Add
+**Why not an in-memory cache:**
+- Must survive restarts. Rebuilding from a full scan on startup is O(total_blobs), which could be millions.
+- In-memory cache diverges from disk if crash recovery truncates transactions.
+- libmdbx read-transaction overhead is negligible (just an MVCC snapshot) -- no benefit from caching.
 
-| Technology | Why Not |
-|------------|---------|
-| Prometheus + Grafana | Over-engineering. This is a one-shot benchmark, not continuous monitoring. `docker stats` + bash gives the same numbers with zero setup. PROJECT.md: "No HTTP/REST API". |
-| cAdvisor | Container-level metrics available via `docker stats` already. cAdvisor adds a web UI and REST API we don't need. |
-| Kubernetes / k3s | Docker compose handles 3-5 nodes on one host trivially. K8s adds massive complexity for zero benefit at this scale. |
-| wrk / vegeta / k6 / locust | None of these speak chromatindb's PQ-encrypted binary protocol. They are HTTP-only tools. |
-| Google Benchmark (gbenchmark) | Already have a working benchmark harness in `chromatindb_bench`. The load generator measures network-level throughput, not microbenchmarks. A framework adds nothing. |
-| perf / flamegraph | Useful for profiling hotspots, but not for the v0.6.0 goal (throughput/latency numbers). Can be added later if bottlenecks are found. Does not work easily in Docker containers without `--privileged` and `--cap-add SYS_ADMIN`. |
-| Testcontainers | Java/Go/.NET library for spinning up Docker containers in tests. We are writing bash + compose, not JUnit tests. |
-| Redis / Kafka / RabbitMQ | No message broker needed. Load generator connects directly to chromatindb nodes via TCP. |
-| InfluxDB / TimescaleDB | Time-series database for metrics storage. Completely unnecessary -- we write a markdown report, not a dashboard. |
+**Enforcement points:**
+1. `BlobEngine::ingest()` -- Step 0c: after storage capacity check, before crypto. Query ns_stats for the blob's namespace. Reject if count >= max or bytes + blob_size > max.
+2. `Storage::store_blob()` -- atomically increment ns_stats after blob insertion.
+3. `Storage::delete_blob_data()` -- atomically decrement ns_stats.
+4. `Storage::run_expiry_scan()` -- atomically decrement ns_stats for each expired blob.
 
-## Docker Build Details
-
-### Multi-Stage Dockerfile Structure
-
-```
-Stage 1: "builder" (gcc:14-bookworm)
-  - Install cmake, git, ninja-build, pkg-config
-  - COPY source code
-  - cmake + build (Release mode, no tests)
-  - Produces: chromatindb, chromatindb_loadgen binaries
-
-Stage 2: "runtime" (debian:bookworm-slim)
-  - Install only: libstdc++6 (if dynamically linked)
-  - COPY --from=builder /app/build/chromatindb /usr/local/bin/
-  - COPY --from=builder /app/build/chromatindb_loadgen /usr/local/bin/
-  - EXPOSE 4200
-  - HEALTHCHECK: connect to port 4200 (TCP check)
-  - ENTRYPOINT ["chromatindb"]
-```
-
-**Build mode:** `CMAKE_BUILD_TYPE=Release` in Docker. Debug builds are for development only. Release enables -O2 and strips debug info, reducing binary size and improving benchmark accuracy.
-
-**Why ninja-build:** Faster than make for parallel builds. Matters in Docker build context where rebuild speed affects iteration time. cmake generates ninja files with `-G Ninja`.
-
-**Binary size estimate:** chromatindb Release binary is likely ~5-10 MB (liboqs ML-DSA/ML-KEM + libsodium + libmdbx + FlatBuffers + Asio headers-only = moderate static lib size). Runtime image total: ~90-110 MB.
-
-### Docker Compose Topology
-
-```yaml
-# 3-node bootstrap network + 1 late-joiner + 1 load generator
-services:
-  node1:  # Bootstrap node (seed)
-  node2:  # Connects to node1
-  node3:  # Connects to node1
-  node4:  # Late-joiner (started after load test)
-  loadgen: # Load generator (connects to node1)
-```
-
-**Network:** Single custom bridge network (`chromatindb-bench`). All nodes on same L2 segment. Docker DNS resolves service names (node1, node2, etc.) to container IPs.
-
-**Health checks:** TCP connect to port 4200. chromatindb accepts connections immediately after `io_context.run()` starts. No application-level health endpoint needed -- if the TCP socket accepts, the node is ready.
-
-```yaml
-healthcheck:
-  test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/4200' || exit 1"]
-  interval: 2s
-  timeout: 3s
-  retries: 5
-  start_period: 10s
-```
-
-**depends_on with condition:** `node2` and `node3` depend on `node1` with `condition: service_healthy`. This ensures bootstrap node is accepting connections before peers try to connect.
-
-**Volumes:** Each node gets a named volume for `/data` (libmdbx storage). This allows inspecting data after tests and prevents tmpfs performance artifacts.
-
-### libmdbx Container Considerations
-
-libmdbx uses `write_mapped_io` mode with mmap. In Docker containers:
-
-1. **`vm.max_map_count`:** Default is 65530 on most Linux hosts. libmdbx with a 64 GiB geometry upper limit needs many mmap regions. For benchmarking with ~10 GB dataset across 3-5 nodes, the default should be sufficient. If tests fail with `MDBX_MAP_FULL` or `ENOMEM`, increase on host: `sysctl -w vm.max_map_count=262144`. This is a **host-level** setting, not per-container.
-
-2. **`--shm-size`:** Not needed. libmdbx uses file-backed mmap, not POSIX shared memory (`/dev/shm`).
-
-3. **Storage driver:** Use the default overlay2. libmdbx writes to named volumes which bypass the overlay filesystem entirely (bind-mounted directly to host paths). No performance penalty.
-
-4. **Memory limits:** Set `mem_limit` in compose to prevent OOM-kill from affecting results. Recommend 512 MB per node for a 10 GB total dataset test (each node stores ~3-4 GB after replication, but libmdbx mmap pages in/out).
-
-## Load Generator Design
-
-### Binary: `chromatindb_loadgen`
-
-A new CMake target in the root `CMakeLists.txt`:
-
-```cmake
-add_executable(chromatindb_loadgen tools/loadgen_main.cpp)
-target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
-```
-
-**Why C++ binary, not Python/bash script:** The load generator must:
-1. Perform ML-KEM-1024 key exchange (PQ handshake)
-2. Encrypt all traffic with ChaCha20-Poly1305
-3. Sign blobs with ML-DSA-87
-4. Encode blobs in FlatBuffers wire format
-5. Use the framing protocol (4-byte length prefix + encrypted frame)
-
-All of this is implemented in `chromatindb_lib`. A Python wrapper would require FFI bindings for 5 different subsystems. A C++ binary gets it for free by linking the library.
-
-### Load Generator Capabilities
-
-```
-chromatindb_loadgen --target node1:4200 \
-                    --duration 60 \
-                    --blob-sizes "1k,10k,100k,1m" \
-                    --rate 100 \
-                    --output results.json
-```
-
-| Parameter | Purpose |
-|-----------|---------|
-| `--target` | Node to send blobs to |
-| `--duration` | Test duration in seconds |
-| `--blob-sizes` | Comma-separated blob sizes (mixed workload) |
-| `--rate` | Target blobs/sec (0 = max throughput) |
-| `--output` | JSON results file |
-| `--scenario` | Predefined scenario: `ingest`, `sync-latency`, `late-joiner` |
-
-### Measurement Points
-
-The load generator measures **at the application level**, not the network level:
-
-| Metric | How Measured | Where |
-|--------|-------------|-------|
-| Ingest throughput (blobs/sec) | Count ACKs per second | Load generator: time between send and ACK receive |
-| Ingest latency (p50/p95/p99) | Histogram of send-to-ACK times | Load generator: `steady_clock` before send, after ACK |
-| Sync propagation time | Write to node1, poll node2/node3 for blob | Load generator: `steady_clock` from write ACK to query hit |
-| Multi-hop propagation | Write to node1, poll node3 (which syncs from node2) | Load generator: same technique, topology-dependent |
-| Late-joiner catch-up | Start node4, measure time to full sync | Script: `steady_clock` from node4 start to hash-count match |
-
-### Results Format
-
-JSON output compatible with the existing markdown table format from `chromatindb_bench`:
-
+**Config additions:** Two new optional fields in Config:
 ```json
 {
-  "test": "ingest-throughput",
-  "duration_seconds": 60,
-  "total_blobs": 5847,
-  "total_bytes": 59873280,
-  "throughput_blobs_sec": 97.45,
-  "throughput_mb_sec": 0.95,
-  "latency_p50_ms": 8.2,
-  "latency_p95_ms": 14.7,
-  "latency_p99_ms": 23.1,
-  "errors": 0
+  "max_namespace_bytes": 1073741824,
+  "max_namespace_blobs": 100000
 }
 ```
+Zero means unlimited (default). These are node-level quotas applied uniformly to all namespaces on this node.
 
-## Resource Profiling Approach
+### Large Blob Crypto Throughput Optimization
 
-### `docker stats` Polling Script
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| `asio::thread_pool` | 1.38.0 (existing in Standalone Asio) | Offload ML-DSA-87 verification to worker threads | The bottleneck is serial crypto on the single io_context thread. ML-DSA-87 verify takes ~74us for small messages, but the signing input for 1 MiB blobs includes the full data -- making the internal SHA3 passes inside ML-DSA expensive. Offloading to a thread pool unblocks the io_context for I/O while crypto runs in parallel. |
+| `OQS_SHA3_sha3_256_inc_*` | liboqs 0.15.0 (existing) | Incremental/streaming SHA3-256 hashing | Avoid the double-hash penalty: currently, `build_signing_input()` copies namespace+data+ttl+ts into a contiguous buffer (1 MiB allocation + copy), then ML-DSA internally hashes it again. Using incremental SHA3 eliminates the intermediate buffer entirely. |
+| `asio::post()` + `asio::use_future` | 1.38.0 (existing) | Bridge between coroutine and thread pool | `co_await asio::post(pool, use_awaitable)` switches execution to the thread pool. After crypto completes, `co_await asio::post(io_context, use_awaitable)` returns to the io_context for storage/state updates. |
 
-```bash
-#!/bin/bash
-# collect-metrics.sh -- polls docker stats every 2 seconds
-INTERVAL=2
-OUTPUT="metrics.csv"
+**Root cause analysis (from v0.6.0 benchmarks):**
+- 1 MiB blob ingest: 15.3 blobs/sec, 96% CPU on sync verification
+- The ingest pipeline for each blob: `build_signing_input()` (1 MiB memcpy + concat) -> `Signer::verify()` (ML-DSA-87 internally hashes the signing input via SHA3) -> `store_blob()` (SHA3-256 hash for content addressing + AEAD encrypt + mdbx write)
+- All of this runs serially on the single io_context thread, blocking all I/O during crypto
 
-echo "timestamp,container,cpu_pct,mem_usage_mb,mem_limit_mb,net_rx_mb,net_tx_mb,block_r_mb,block_w_mb" > "$OUTPUT"
+**Optimization strategy (ranked by impact):**
 
-while true; do
-  docker stats --no-stream --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}' \
-    | grep chromatindb \
-    | while read line; do
-        echo "$(date +%s),$line" >> "$OUTPUT"
-      done
-  sleep $INTERVAL
-done
+**1. Thread pool offload (HIGH impact, MEDIUM effort):**
+```
+asio::thread_pool crypto_pool_{std::thread::hardware_concurrency()};
+```
+- During sync ingest, `co_await` post the verification to the pool
+- The io_context thread continues processing I/O while crypto runs
+- Storage writes still happen on the io_context thread (libmdbx is single-writer)
+- Expected improvement: N-fold throughput increase where N = number of cores that can verify in parallel. On the benchmark Ryzen 5 5600U (6 cores), expect 4-5x improvement
+
+**Why this is safe:** `Signer::verify()` is a pure function (static method, no mutable state). `build_signing_input()` creates a local buffer. Both can run concurrently without synchronization. Only the subsequent storage write needs to be serialized back to the io_context thread.
+
+**2. Eliminate signing input buffer copy (MEDIUM impact, LOW effort):**
+The current `build_signing_input()` allocates a `vector<uint8_t>` of namespace(32) + data(variable) + ttl(4) + timestamp(8). For 1 MiB blobs, this is a 1 MiB+ allocation and memcpy on every ingest. The ML-DSA-87 verify function then internally hashes this input.
+
+Approach: Pre-hash the signing input using liboqs incremental SHA3-256:
+```cpp
+OQS_SHA3_sha3_256_inc_ctx ctx;
+OQS_SHA3_sha3_256_inc_init(&ctx);
+OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), 32);
+OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
+OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_bytes, 4);
+OQS_SHA3_sha3_256_inc_absorb(&ctx, timestamp_bytes, 8);
+OQS_SHA3_sha3_256_inc_finalize(hash_output, &ctx);
+OQS_SHA3_sha3_256_inc_ctx_release(&ctx);
 ```
 
-**Available fields from `docker stats --format`:**
+Wait -- this does NOT work directly. ML-DSA-87 (Dilithium) does not support pre-hashed messages in its standard API. The `OQS_SIG_verify()` function takes the full message, not a hash. ML-DSA internally uses its own hash-then-sign construction.
 
-| Placeholder | Description |
-|-------------|-------------|
-| `.Name` | Container name |
-| `.CPUPerc` | CPU percentage |
-| `.MemUsage` | Memory usage / limit |
-| `.MemPerc` | Memory percentage |
-| `.NetIO` | Network I/O (rx / tx) |
-| `.BlockIO` | Block I/O (read / write) |
-| `.PIDs` | Number of PIDs |
+**Revised approach:** The real win is eliminating the intermediate buffer allocation. Instead of building a contiguous vector then passing it to verify, pass the signing components directly. But since `OQS_SIG_verify()` takes a single contiguous buffer, we cannot avoid the concatenation step.
 
-**JSON format:** `docker stats --no-stream --format '{{json .}}'` outputs full JSON per container. Parseable with `jq`.
+The actual fix here is simpler: **pre-allocate a reusable buffer** per verification context instead of allocating 1 MiB+ per blob. Use a thread-local `std::vector<uint8_t>` that grows to the max size and stays allocated:
 
-### What We Measure vs. What We Don't
+```cpp
+thread_local std::vector<uint8_t> signing_buf;
+signing_buf.clear();
+// ... append components (no allocation after first use)
+```
 
-| Measure | Tool | Sufficient for v0.6.0 |
-|---------|------|----------------------|
-| CPU per container | `docker stats` | Yes -- shows if crypto is the bottleneck |
-| Memory per container | `docker stats` | Yes -- shows if mmap growth is bounded |
-| Network I/O per container | `docker stats` | Yes -- shows sync traffic patterns |
-| Disk I/O per container | `docker stats` | Yes -- shows libmdbx write amplification |
-| Application-level latency | Load generator | Yes -- measures the metric users care about |
-| Kernel-level CPU profiling | NOT measured | Not needed for v0.6.0 -- no optimization target yet |
-| Lock contention | NOT measured | Single-threaded io_context -- no locks |
-| Syscall tracing | NOT measured | Over-engineering for benchmark goals |
+This eliminates the allocation cost but not the memcpy. Combined with thread pool offload, the memcpy runs on a worker thread anyway.
+
+**3. Pipeline verification with I/O (MEDIUM impact, HIGH effort -- defer):**
+Instead of request-verify-store-request-verify-store, overlap: while blob N is being verified on the thread pool, blob N+1 is being received from the network. This requires restructuring the sync protocol to decouple receiving from ingesting. Defer to a future milestone unless the thread pool alone is insufficient.
+
+**What NOT to do:**
+
+| Anti-approach | Why Not |
+|---------------|---------|
+| Batch signature verification | liboqs has no `OQS_SIG_verify_batch()` API. ML-DSA-87 does not support batch verification at the algorithm level (unlike Ed25519 which has batch verify). Each signature must be verified independently. |
+| Replace SHA3-256 with BLAKE3 | SHA3-256 is used inside ML-DSA-87 itself (the algorithm specification uses SHA3). Replacing the content-addressing hash does not help the bottleneck, which is inside signature verification. Also, mixing hash functions adds confusion. |
+| Replace ML-DSA-87 with ML-DSA-65 | Reduces NIST security category from 5 to 3. The project explicitly chose Cat 5 for maximum PQ security. Performance is fixable; security downgrade is permanent. |
+| Multi-threaded libmdbx writes | libmdbx supports only one concurrent write transaction. Multiple write threads would need serialization anyway. Keep all writes on the io_context thread. |
+| OpenSSL for SHA3 acceleration | Explicit project constraint: no OpenSSL. liboqs SHA3 uses XKCP with AVX2/AVX512 optimizations when available. |
+
+### Build/Configuration Changes
+
+| Change | Current | New | Reason |
+|--------|---------|-----|--------|
+| `max_maps` in libmdbx | 6 | 8 | Two new sub-databases: sync_cursors, ns_stats |
+| Config fields | (none) | `max_namespace_bytes`, `max_namespace_blobs` | Quota limits |
+| Transport schema | 26 msg types | 26 msg types (no change) | Sync resumption uses NamespaceList seq_num comparison, no new wire messages needed |
+
+**Why no new wire protocol messages for sync resumption:**
+The NamespaceList message already includes `latest_seq_num` per namespace. The cursor tells us what seq the peer had last time. If their seq hasn't changed, skip that namespace entirely. If it has changed, proceed with hash-list diff as before -- but the hash list will be smaller because we only collect hashes with seq > cursor. This optimization is entirely local; the peer doesn't need to know about cursors.
+
+### Dependencies NOT Added
+
+| Considered | Why Not |
+|------------|---------|
+| Prometheus client library | Overkill for per-namespace stats. Node metrics already use SIGUSR1 + log line pattern. Quota stats can use the same mechanism. |
+| `std::execution` (C++23 parallel STL) | Not widely available yet. GCC 14 support is partial. `asio::thread_pool` with `asio::post` is proven and already in the build. |
+| LMDB (liblmdb) | Already using libmdbx which is LMDB's successor. No reason to add both. |
+| RocksDB or LevelDB | Project is committed to libmdbx. Switching storage engines is out of scope. |
+| External thread pool (Intel TBB, taskflow) | `asio::thread_pool` is sufficient and avoids a new dependency. Only need simple "post work, await result" pattern. |
+| cppcoro | Abandoned library. `asio::thread_pool` provides the same functionality. |
+
+## Detailed Integration Points
+
+### 1. Storage Layer Changes (storage.h/cpp)
+
+New sub-databases added to `Storage::Impl`:
+```
+sync_cursors: [peer_id:32][namespace:32] -> [seq_num_be:8]
+ns_stats:     [namespace:32] -> [count_le:8][bytes_le:8]
+```
+
+New public methods on `Storage`:
+```cpp
+// Sync cursor persistence
+void set_sync_cursor(std::span<const uint8_t, 32> peer_id,
+                     std::span<const uint8_t, 32> ns,
+                     uint64_t seq_num);
+std::optional<uint64_t> get_sync_cursor(std::span<const uint8_t, 32> peer_id,
+                                         std::span<const uint8_t, 32> ns);
+void clear_sync_cursors(std::span<const uint8_t, 32> peer_id);
+
+// Namespace quota stats
+struct NamespaceStats { uint64_t blob_count; uint64_t total_bytes; };
+NamespaceStats get_namespace_stats(std::span<const uint8_t, 32> ns);
+```
+
+The ns_stats updates are internal -- `store_blob()`, `delete_blob_data()`, and `run_expiry_scan()` update them atomically in their existing write transactions. No caller changes needed for the update path.
+
+### 2. Engine Layer Changes (engine.h/cpp)
+
+New rejection reason:
+```cpp
+enum class IngestError {
+    // ... existing ...
+    namespace_quota_exceeded  // New: per-namespace quota check
+};
+```
+
+New constructor parameter or setter for quota config:
+```cpp
+BlobEngine(storage::Storage& store,
+           uint64_t max_storage_bytes = 0,
+           uint64_t max_namespace_bytes = 0,
+           uint64_t max_namespace_blobs = 0);
+```
+
+### 3. PeerManager Changes (peer_manager.h/cpp)
+
+For sync resumption:
+```cpp
+struct PeerInfo {
+    // ... existing ...
+    std::array<uint8_t, 32> peer_namespace_id{};  // From handshake AuthPubkey
+};
+```
+
+In `run_sync_with_peer()`, before sending NamespaceList, check cursors:
+```
+for each namespace:
+  cursor = storage.get_sync_cursor(peer_ns_id, ns)
+  if cursor >= our_latest_seq for ns: skip namespace
+  else: collect hashes with seq > cursor (optimization)
+```
+
+After successful sync round, update cursors:
+```
+for each namespace synced:
+  storage.set_sync_cursor(peer_ns_id, ns, their_latest_seq)
+```
+
+For crypto offload:
+```cpp
+class PeerManager {
+    // ... existing ...
+    asio::thread_pool crypto_pool_;  // Sized to hardware_concurrency()
+};
+```
+
+### 4. Config Changes (config.h/cpp)
+
+```cpp
+struct Config {
+    // ... existing ...
+    uint64_t max_namespace_bytes = 0;   // 0 = unlimited
+    uint64_t max_namespace_blobs = 0;   // 0 = unlimited
+};
+```
+
+Both are hot-reloadable via SIGHUP (same pattern as `max_storage_bytes`).
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Build image | gcc:14-bookworm | gcc:13-bookworm | GCC 14 has better C++20 coroutine codegen. No reason to use an older compiler. |
-| Build image | gcc:14-bookworm | clang:18 | GCC builds work today. Clang would require testing the entire build. No benefit for benchmarking. |
-| Runtime image | debian:bookworm-slim | alpine:3.20 | musl libc ABI issues with liboqs/libsodium. 60 MB savings not worth the risk. |
-| Runtime image | debian:bookworm-slim | distroless | Distroless has no shell, making health checks and debugging harder. Benchmark images need shell access for troubleshooting. |
-| Orchestration | docker compose | Kubernetes | Massively over-engineered for 3-5 containers on one host. |
-| Orchestration | docker compose | Podman compose | Docker is the de facto standard. Podman compose compatibility is imperfect. |
-| Load generator | C++ binary linking chromatindb_lib | Python + ctypes/cffi | Would need FFI for 5+ subsystems (handshake, AEAD, signing, codec, framing). Months of wrapper work for a one-shot tool. |
-| Load generator | C++ binary linking chromatindb_lib | Go binary with CGo | Same problem -- needs C bindings for every subsystem. |
-| Metrics collection | docker stats + bash | Prometheus + Grafana | Dashboard not needed. We want numbers in a markdown report, not graphs. |
-| Metrics collection | docker stats + bash | cAdvisor | Extra container running a web UI we would never look at. |
-| Timing | `std::chrono::steady_clock` | `std::chrono::high_resolution_clock` | `high_resolution_clock` may alias to `system_clock` (non-monotonic). `steady_clock` is guaranteed monotonic. Already used in `chromatindb_bench`. |
-| Build system | ninja | make | Ninja is ~10-20% faster for parallel builds. Matters during Docker image builds where FetchContent downloads and compiles all deps. |
+| Cursor storage | libmdbx sub-database | JSON file (peers.json style) | Cursors update every sync round (~60s). JSON fsync overhead adds latency. No atomicity with blob storage. |
+| Cursor storage | libmdbx sub-database | In-memory only (rebuild on start) | Defeats the purpose. First sync after restart would be full sync, wasting bandwidth. |
+| Quota tracking | libmdbx ns_stats table | Compute on demand | O(n) per ingest where n = namespace blob count. Unacceptable on hot path. |
+| Quota tracking | libmdbx ns_stats table | In-memory cache | Must survive restart. Cache invalidation on crash recovery is error-prone. |
+| Crypto offload | asio::thread_pool | std::async + std::future | Uncontrolled thread creation. No executor integration with Asio coroutines. |
+| Crypto offload | asio::thread_pool | Manual std::thread pool | Reinventing what asio::thread_pool already provides. |
+| Blob hash optimization | Thread-local reusable buffer | mmap the blob data directly | Storage layer already decrypts into a vector. Mmap doesn't help with the crypto pipeline. |
 
-## Installation / Build Changes
+## Current Dependency Versions (Unchanged)
 
-### New CMake Target
+| Dependency | Version | Status |
+|------------|---------|--------|
+| liboqs | 0.15.0 | Current as of 2026-03 |
+| libsodium (cmake wrapper) | master | Tracks upstream |
+| FlatBuffers | 25.2.10 | Current |
+| Catch2 | 3.7.1 | Current |
+| spdlog | 1.15.1 | Current |
+| nlohmann/json | 3.11.3 | Current |
+| libmdbx | 0.13.11 | Current |
+| Standalone Asio | 1.38.0 | Current |
 
-```cmake
-# In root CMakeLists.txt, after chromatindb_bench:
-add_executable(chromatindb_loadgen tools/loadgen_main.cpp)
-target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
-```
+No version bumps needed. All features use existing APIs within these versions.
 
-### New Files
+## Installation
 
-```
-Dockerfile                          # Multi-stage build
-docker-compose.yml                  # 3-5 node topology
-tools/loadgen_main.cpp              # Load generator binary
-tools/collect-metrics.sh            # docker stats poller
-tools/run-benchmark.sh              # Full benchmark orchestration
-tools/generate-report.sh            # Convert JSON results to markdown
-configs/node1.json                  # Per-node configs for compose
-configs/node2.json
-configs/node3.json
-configs/node4.json                  # Late-joiner config
-```
-
-### No Changes to Existing Dependencies
-
-The FetchContent block in `CMakeLists.txt` remains identical. No new `FetchContent_Declare` calls. The load generator reuses `chromatindb_lib` which already links all dependencies.
-
+No changes to the install/build process. Same CMake FetchContent setup:
 ```bash
-# Build locally (no Docker)
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -B build
 cmake --build build
-
-# Build Docker image
-docker build -t chromatindb:v0.6.0 .
-
-# Run benchmark
-docker compose up -d
-./tools/run-benchmark.sh
-docker compose down
 ```
+
+The only CMake change is the test target source list (test relocation into db/), which is a file organization change, not a dependency change.
+
+## Confidence Assessment
+
+| Area | Confidence | Reason |
+|------|------------|--------|
+| Sync cursor storage in libmdbx | HIGH | Already using 5 sub-databases with identical patterns. Adding a 6th is mechanical. |
+| Namespace quota via ns_stats | HIGH | Standard materialized-aggregate pattern. Same write-transaction atomicity as delegation/tombstone indexes. |
+| asio::thread_pool for crypto | HIGH | `thread_pool.hpp` confirmed present in Asio 1.38.0 bundled in the build. `asio::post()` with coroutines is documented and widely used. |
+| Incremental SHA3-256 API | HIGH | Confirmed `OQS_SHA3_sha3_256_inc_*` functions exist in liboqs 0.15.0 headers. However, these cannot be used to pre-hash for ML-DSA verify (ML-DSA takes raw message). Use is limited to content-addressing hash optimization. |
+| No new wire protocol needed | HIGH | NamespaceList already carries seq_num. Cursor optimization is local. Quota rejection uses existing StorageFull message type. |
+| No batch verify for ML-DSA | HIGH | Confirmed: liboqs has no batch verify API. ML-DSA algorithm does not support it. Thread-level parallelism is the correct approach. |
 
 ## Sources
 
-- [Docker multi-stage builds documentation](https://docs.docker.com/build/building/multi-stage/) -- official Docker docs on multi-stage builds -- **HIGH confidence**
-- [gcc Docker Hub official image](https://hub.docker.com/_/gcc) -- gcc:14-bookworm image verified available -- **HIGH confidence**
-- [Docker Compose services reference](https://docs.docker.com/reference/compose-file/services/) -- healthcheck, depends_on, networks syntax -- **HIGH confidence**
-- [Docker container stats reference](https://docs.docker.com/reference/cli/docker/container/stats/) -- format placeholders for docker stats -- **HIGH confidence**
-- [Docker runtime metrics](https://docs.docker.com/engine/containers/runmetrics/) -- cgroup-based metrics collection -- **HIGH confidence**
-- [Alpine vs Debian for C++ containers](https://www.turnkeylinux.org/blog/alpine-vs-debian) -- musl vs glibc ABI analysis -- **MEDIUM confidence**
-- [Docker Compose health checks guide (2025)](https://www.tvaidyan.com/2025/02/13/health-checks-in-docker-compose-a-practical-guide/) -- depends_on with condition: service_healthy -- **MEDIUM confidence**
-- [Docker stats JSON format](https://kylewbanks.com/blog/docker-stats-memory-cpu-in-json-format) -- --format '{{json .}}' pattern -- **MEDIUM confidence**
-- [std::chrono::high_resolution_clock analysis (2025)](https://www.sandordargo.com/blog/2025/12/10/clocks-part-4-high_resolution_clock) -- confirms steady_clock is safer choice -- **MEDIUM confidence**
-- Existing `chromatindb_bench` source (`bench/bench_main.cpp`) -- validates pattern of linking chromatindb_lib for tooling -- **HIGH confidence** (source code)
-- Existing `db/storage/storage.cpp` -- libmdbx write_mapped_io + 64 GiB geometry confirms mmap dependency -- **HIGH confidence** (source code)
-
----
-*Stack research for: chromatindb v0.6.0 -- Real-World Validation*
-*Researched: 2026-03-15*
+- [libmdbx GitHub -- sub-database support](https://github.com/erthink/libmdbx)
+- [liboqs ML-DSA documentation](https://openquantumsafe.org/liboqs/algorithms/sig/ml-dsa.html)
+- [liboqs SHA3 incremental API (source)](https://github.com/open-quantum-safe/liboqs/blob/f88e6237c53d481200f9bf80c7c5fe9cde5f6a74/src/common/sha3/xkcp_sha3.c)
+- [liboqs OQS_SIG API](https://openquantumsafe.org/liboqs/api/oqssig.html)
+- [Asio C++20 coroutines documentation](https://think-async.com/Asio/asio-1.22.0/doc/asio/overview/core/cpp20_coroutines.html)
+- [Asio thread_pool reference](https://www.boost.org/doc/libs/latest/doc/html/boost_asio/reference/thread_pool.html)
+- [Asio issue #1508 -- coroutines with thread pools](https://github.com/chriskohlhoff/asio/issues/1508)
+- [PQMagic ML-DSA optimization research (Springer 2025)](https://link.springer.com/chapter/10.1007/978-3-032-01806-9_9)
+- Codebase verification: `/home/mika/dev/chromatin-protocol/build/_deps/liboqs-src/src/common/sha3/sha3.h` (incremental SHA3 API confirmed)
+- Codebase verification: `/home/mika/dev/chromatin-protocol/build/_deps/asio-src/include/asio/thread_pool.hpp` (thread_pool confirmed in bundled Asio)
