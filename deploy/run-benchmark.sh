@@ -8,7 +8,7 @@ set -euo pipefail
 # Produces per-scenario JSON results in deploy/results/.
 #
 # Usage:
-#   bash deploy/run-benchmark.sh [--skip-build]
+#   bash deploy/run-benchmark.sh [--skip-build] [--report-only]
 #
 # Prerequisites:
 #   - Docker with Compose v2
@@ -27,6 +27,7 @@ RESULTS_DIR="$SCRIPT_DIR/results"
 BLOB_COUNT=200
 RATE=50
 SKIP_BUILD=false
+REPORT_ONLY=false
 
 # --- Utility Functions -------------------------------------------------------
 
@@ -99,6 +100,31 @@ capture_stats() {
         2>/dev/null | jq -s '.' > "$outfile"
 
     log "Docker stats captured: $outfile"
+}
+
+collect_hardware_info() {
+    log "Collecting hardware info..."
+    local cpu_model cores ram_total kernel docker_ver disk_type
+
+    cpu_model=$(lscpu 2>/dev/null | grep 'Model name' | sed 's/.*:\s*//' || echo "unknown")
+    cores=$(nproc 2>/dev/null || echo "unknown")
+    ram_total=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "unknown")
+    kernel=$(uname -r 2>/dev/null || echo "unknown")
+    docker_ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+    disk_type=$(lsblk -d -o NAME,ROTA 2>/dev/null | awk 'NR>1 && $2=="0" {print "SSD"; exit} NR>1 && $2=="1" {print "HDD"; exit}' || echo "unknown")
+    [[ -z "$disk_type" ]] && disk_type="unknown"
+
+    jq -n \
+        --arg cpu "$cpu_model" \
+        --arg cores "$cores" \
+        --arg ram "$ram_total" \
+        --arg kernel "$kernel" \
+        --arg docker "$docker_ver" \
+        --arg disk "$disk_type" \
+        '{cpu_model: $cpu, cores: ($cores | tonumber // $cores), ram_total: $ram, kernel: $kernel, docker_version: $docker, disk_type: $disk}' \
+        > "$RESULTS_DIR/hardware-info.json"
+
+    log "Hardware info written: $RESULTS_DIR/hardware-info.json"
 }
 
 get_blob_count() {
@@ -192,6 +218,12 @@ TJEOF
 TJEOF
 
     log "Generated trusted configs in $SCRIPT_DIR/configs/"
+}
+
+# --- Report Functions --------------------------------------------------------
+
+generate_report() {
+    log "Report generation..."
 }
 
 # --- Scenario Functions ------------------------------------------------------
@@ -478,6 +510,7 @@ main() {
     for arg in "$@"; do
         case "$arg" in
             --skip-build) SKIP_BUILD=true ;;
+            --report-only) REPORT_ONLY=true ;;
             *) log "Unknown argument: $arg"; exit 1 ;;
         esac
     done
@@ -489,6 +522,13 @@ main() {
     log "Results directory: $RESULTS_DIR"
 
     check_deps
+    collect_hardware_info
+
+    if [[ "$REPORT_ONLY" == true ]]; then
+        generate_report
+        exit 0
+    fi
+
     build_image
 
     # Core scenarios (Plan 30-01)
@@ -498,6 +538,9 @@ main() {
     # Additional scenarios (Plan 30-02)
     run_scenario_latejoin
     run_scenario_trusted_vs_pq
+
+    # Generate report while containers are still available
+    generate_report
 
     # Final cleanup
     $COMPOSE down -v 2>/dev/null || true
