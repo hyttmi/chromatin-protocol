@@ -222,8 +222,413 @@ TJEOF
 
 # --- Report Functions --------------------------------------------------------
 
+get_peak_stats() {
+    local scenario="$1"
+    local container="$2"
+    local metric="$3"  # "cpu" or "mem"
+
+    # Collect all stats files matching this scenario
+    local stat_files=()
+    for f in "$RESULTS_DIR"/docker-stats-"${scenario}"-*.json; do
+        [[ -f "$f" ]] && stat_files+=("$f")
+    done
+
+    if [[ ${#stat_files[@]} -eq 0 ]]; then
+        echo "N/A"
+        return
+    fi
+
+    if [[ "$metric" == "cpu" ]]; then
+        jq -r --arg c "$container" \
+            '[.[] | select(.container == $c) | .cpu | rtrimstr("%") | tonumber] | max // "N/A"' \
+            "${stat_files[@]}" 2>/dev/null || echo "N/A"
+    else
+        # Return peak memory usage string
+        jq -r --arg c "$container" \
+            '[.[] | select(.container == $c) | .mem_usage | split(" / ")[0]] | last // "N/A"' \
+            "${stat_files[@]}" 2>/dev/null || echo "N/A"
+    fi
+}
+
+format_ingest_row() {
+    local label="$1"
+    local display="$2"
+    local file="$RESULTS_DIR/scenario-ingest-${label}.json"
+
+    if [[ ! -f "$file" ]]; then
+        echo "| ${display} | [not run] | [not run] | [not run] | [not run] | [not run] |"
+        return
+    fi
+
+    local blobs_sec mib_sec p50 p95 p99
+    blobs_sec=$(jq -r '.blobs_per_sec | . * 10 | round / 10' "$file")
+    mib_sec=$(jq -r '.mib_per_sec | . * 100 | round / 100' "$file")
+    p50=$(jq -r '.latency_ms.p50 | . * 100 | round / 100' "$file")
+    p95=$(jq -r '.latency_ms.p95 | . * 100 | round / 100' "$file")
+    p99=$(jq -r '.latency_ms.p99 | . * 100 | round / 100' "$file")
+
+    echo "| ${display} | ${blobs_sec} | ${mib_sec} | ${p50} | ${p95} | ${p99} |"
+}
+
+compute_overhead() {
+    local pq_val="$1"
+    local trusted_val="$2"
+    jq -n -r --argjson pq "$pq_val" --argjson tr "$trusted_val" \
+        'if $tr == 0 then "N/A"
+         else (($pq - $tr) / $tr * 100 | . * 10 | round / 10 | tostring) + "%"
+         end'
+}
+
+format_resource_table() {
+    local scenario="$1"
+    local nodes=("chromatindb-node1" "chromatindb-node2" "chromatindb-node3")
+
+    local has_stats=false
+    for f in "$RESULTS_DIR"/docker-stats-"${scenario}"-*.json; do
+        if [[ -f "$f" ]]; then has_stats=true; break; fi
+    done
+
+    if [[ "$has_stats" == false ]]; then
+        echo "*No resource data available.*"
+        return
+    fi
+
+    echo "| Node | Peak CPU | Memory |"
+    echo "|------|----------|--------|"
+    for node in "${nodes[@]}"; do
+        local cpu mem
+        cpu=$(get_peak_stats "$scenario" "$node" "cpu")
+        mem=$(get_peak_stats "$scenario" "$node" "mem")
+        echo "| ${node#chromatindb-} | ${cpu}% | ${mem} |"
+    done
+}
+
 generate_report() {
-    log "Report generation..."
+    log "Generating benchmark report..."
+
+    # Step 1: Provenance
+    local timestamp commit version
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    version=$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo "dev")
+
+    # Step 2: Hardware info
+    local hw_cpu hw_cores hw_ram hw_disk hw_kernel hw_docker
+    if [[ -f "$RESULTS_DIR/hardware-info.json" ]]; then
+        hw_cpu=$(jq -r '.cpu_model // "unknown"' "$RESULTS_DIR/hardware-info.json")
+        hw_cores=$(jq -r '.cores // "unknown"' "$RESULTS_DIR/hardware-info.json")
+        hw_ram=$(jq -r '.ram_total // "unknown"' "$RESULTS_DIR/hardware-info.json")
+        hw_disk=$(jq -r '.disk_type // "unknown"' "$RESULTS_DIR/hardware-info.json")
+        hw_kernel=$(jq -r '.kernel // "unknown"' "$RESULTS_DIR/hardware-info.json")
+        hw_docker=$(jq -r '.docker_version // "unknown"' "$RESULTS_DIR/hardware-info.json")
+    else
+        hw_cpu="unknown"; hw_cores="unknown"; hw_ram="unknown"
+        hw_disk="unknown"; hw_kernel="unknown"; hw_docker="unknown"
+    fi
+
+    # Step 3: Executive summary values
+    local peak_blobs_sec="[not run]"
+    local worst_p99="[not run]"
+    local pq_overhead="[not run]"
+    local catchup_time="[not run]"
+
+    # Peak ingest blobs/sec and worst p99 across ingest scenarios
+    local max_blobs=0 max_p99=0 has_ingest=false
+    for label in 1k 100k 1m; do
+        local f="$RESULTS_DIR/scenario-ingest-${label}.json"
+        if [[ -f "$f" ]]; then
+            has_ingest=true
+            local bs p99v
+            bs=$(jq -r '.blobs_per_sec' "$f")
+            p99v=$(jq -r '.latency_ms.p99' "$f")
+            max_blobs=$(jq -n --argjson a "$max_blobs" --argjson b "$bs" 'if $b > $a then $b else $a end')
+            max_p99=$(jq -n --argjson a "$max_p99" --argjson b "$p99v" 'if $b > $a then $b else $a end')
+        fi
+    done
+    if [[ "$has_ingest" == true ]]; then
+        peak_blobs_sec=$(jq -n "$max_blobs | . * 10 | round / 10" -r)
+        worst_p99=$(jq -n "$max_p99 | . * 100 | round / 100" -r)
+    fi
+
+    # PQ overhead
+    local tvp_file="$RESULTS_DIR/scenario-trusted-vs-pq.json"
+    if [[ -f "$tvp_file" ]]; then
+        local pq_p50 tr_p50
+        pq_p50=$(jq -r '.pq_mode.latency_ms.p50' "$tvp_file")
+        tr_p50=$(jq -r '.trusted_mode.latency_ms.p50' "$tvp_file")
+        pq_overhead=$(compute_overhead "$pq_p50" "$tr_p50")
+    fi
+
+    # Late-joiner catch-up
+    local lj_file="$RESULTS_DIR/scenario-latejoin.json"
+    if [[ -f "$lj_file" ]]; then
+        catchup_time=$(jq -r '.catchup_ms | . / 1000 | . * 10 | round / 10 | tostring + "s (" + (. * 100 | round / 100 | tostring) + "ms)"' "$lj_file" 2>/dev/null || echo "[error]")
+        # Simpler: just show ms
+        catchup_time=$(jq -r '.catchup_ms' "$lj_file")
+        catchup_time="${catchup_time}ms"
+    fi
+
+    # Step 4: Build ingest rows
+    local ingest_row_1k ingest_row_100k ingest_row_1m
+    ingest_row_1k=$(format_ingest_row "1k" "1 KiB")
+    ingest_row_100k=$(format_ingest_row "100k" "100 KiB")
+    ingest_row_1m=$(format_ingest_row "1m" "1 MiB")
+
+    # Step 5: Ingest resource summary
+    local ingest_resources=""
+    for label in 1k 100k 1m; do
+        local res
+        res=$(format_resource_table "ingest-${label}")
+        ingest_resources="${ingest_resources}
+**Ingest ${label}:**
+
+${res}
+"
+    done
+
+    # Step 6: Sync latency section
+    local sync_section=""
+    local sync_file="$RESULTS_DIR/scenario-sync-latency.json"
+    if [[ -f "$sync_file" ]]; then
+        local s1hop s2hop s_interval s1_mult s2_mult
+        s1hop=$(jq -r '.sync_1hop_ms' "$sync_file")
+        s2hop=$(jq -r '.sync_2hop_ms' "$sync_file")
+        s_interval=$(jq -r '.sync_interval_seconds' "$sync_file")
+        s1_mult=$(jq -n -r --argjson ms "$s1hop" --argjson iv "$s_interval" '$ms / ($iv * 1000) | . * 10 | round / 10')
+        s2_mult=$(jq -n -r --argjson ms "$s2hop" --argjson iv "$s_interval" '$ms / ($iv * 1000) | . * 10 | round / 10')
+
+        local sync_resources
+        sync_resources=$(format_resource_table "sync")
+
+        sync_section="| Metric | Value |
+|--------|-------|
+| 1-hop sync (node1 -> node2) | ${s1hop}ms |
+| 2-hop sync (node1 -> node3) | ${s2hop}ms |
+| Sync interval | ${s_interval}s |
+| 1-hop as sync_interval multiple | ${s1_mult}x |
+| 2-hop as sync_interval multiple | ${s2_mult}x |
+
+**Resource Usage:**
+
+${sync_resources}"
+    else
+        sync_section="*Scenario not run.*"
+    fi
+
+    # Step 7: Late-joiner section
+    local lj_section=""
+    if [[ -f "$lj_file" ]]; then
+        local lj_ms lj_blobs
+        lj_ms=$(jq -r '.catchup_ms' "$lj_file")
+        lj_blobs=$(jq -r '.blob_count' "$lj_file")
+
+        local lj_resources
+        lj_resources=$(format_resource_table "latejoin")
+
+        lj_section="| Metric | Value |
+|--------|-------|
+| Catch-up time | ${lj_ms}ms |
+| Blob count | ${lj_blobs} |
+
+**Resource Usage:**
+
+${lj_resources}"
+    else
+        lj_section="*Scenario not run.*"
+    fi
+
+    # Step 8: Trusted vs PQ section
+    local tvp_section=""
+    if [[ -f "$tvp_file" ]]; then
+        local pq_bps tr_bps pq_p50 pq_p95 pq_p99 tr_p50 tr_p95 tr_p99
+        pq_bps=$(jq -r '.pq_mode.blobs_per_sec | . * 10 | round / 10' "$tvp_file")
+        tr_bps=$(jq -r '.trusted_mode.blobs_per_sec | . * 10 | round / 10' "$tvp_file")
+        pq_p50=$(jq -r '.pq_mode.latency_ms.p50 | . * 100 | round / 100' "$tvp_file")
+        pq_p95=$(jq -r '.pq_mode.latency_ms.p95 | . * 100 | round / 100' "$tvp_file")
+        pq_p99=$(jq -r '.pq_mode.latency_ms.p99 | . * 100 | round / 100' "$tvp_file")
+        tr_p50=$(jq -r '.trusted_mode.latency_ms.p50 | . * 100 | round / 100' "$tvp_file")
+        tr_p95=$(jq -r '.trusted_mode.latency_ms.p95 | . * 100 | round / 100' "$tvp_file")
+        tr_p99=$(jq -r '.trusted_mode.latency_ms.p99 | . * 100 | round / 100' "$tvp_file")
+
+        local d_bps d_p50 d_p95 d_p99
+        local pq_bps_raw tr_bps_raw pq_p50_raw tr_p50_raw pq_p95_raw tr_p95_raw pq_p99_raw tr_p99_raw
+        pq_bps_raw=$(jq -r '.pq_mode.blobs_per_sec' "$tvp_file")
+        tr_bps_raw=$(jq -r '.trusted_mode.blobs_per_sec' "$tvp_file")
+        pq_p50_raw=$(jq -r '.pq_mode.latency_ms.p50' "$tvp_file")
+        tr_p50_raw=$(jq -r '.trusted_mode.latency_ms.p50' "$tvp_file")
+        pq_p95_raw=$(jq -r '.pq_mode.latency_ms.p95' "$tvp_file")
+        tr_p95_raw=$(jq -r '.trusted_mode.latency_ms.p95' "$tvp_file")
+        pq_p99_raw=$(jq -r '.pq_mode.latency_ms.p99' "$tvp_file")
+        tr_p99_raw=$(jq -r '.trusted_mode.latency_ms.p99' "$tvp_file")
+
+        d_bps=$(compute_overhead "$pq_bps_raw" "$tr_bps_raw")
+        d_p50=$(compute_overhead "$pq_p50_raw" "$tr_p50_raw")
+        d_p95=$(compute_overhead "$pq_p95_raw" "$tr_p95_raw")
+        d_p99=$(compute_overhead "$pq_p99_raw" "$tr_p99_raw")
+
+        local pq_resources tr_resources
+        pq_resources=$(format_resource_table "pq")
+        tr_resources=$(format_resource_table "trusted")
+
+        tvp_section="| Metric | PQ Mode | Trusted Mode | Delta |
+|--------|---------|--------------|-------|
+| Throughput (blobs/sec) | ${pq_bps} | ${tr_bps} | ${d_bps} |
+| p50 latency (ms) | ${pq_p50} | ${tr_p50} | ${d_p50} |
+| p95 latency (ms) | ${pq_p95} | ${tr_p95} | ${d_p95} |
+| p99 latency (ms) | ${pq_p99} | ${tr_p99} | ${d_p99} |
+
+**Resource Usage (PQ mode):**
+
+${pq_resources}
+
+**Resource Usage (Trusted mode):**
+
+${tr_resources}"
+    else
+        tvp_section="*Scenario not run.*"
+    fi
+
+    # Step 9: Raw data file listing
+    local raw_files
+    raw_files=$(ls -1 "$RESULTS_DIR"/*.json 2>/dev/null | while read -r f; do echo "- \`$(basename "$f")\`"; done)
+    if [[ -z "$raw_files" ]]; then
+        raw_files="*No result files found.*"
+    fi
+
+    # Step 10: Write REPORT.md
+    cat > "$RESULTS_DIR/REPORT.md" <<EOF
+# chromatindb Benchmark Report
+
+**Generated:** ${timestamp} | **Commit:** ${commit} | **Version:** ${version}
+
+## Executive Summary
+
+| Metric | Value |
+|--------|-------|
+| Peak ingest throughput | ${peak_blobs_sec} blobs/sec |
+| Worst p99 latency | ${worst_p99}ms |
+| PQ vs trusted overhead (p50) | ${pq_overhead} |
+| Late-joiner catch-up | ${catchup_time} |
+
+## System Profile
+
+| Property | Value |
+|----------|-------|
+| CPU | ${hw_cpu} |
+| Cores | ${hw_cores} |
+| RAM | ${hw_ram} |
+| Disk | ${hw_disk} |
+| Kernel | ${hw_kernel} |
+| Docker | ${hw_docker} |
+
+## Topology
+
+\`\`\`
+node1 --> node2 --> node3 --> [node4 late-joiner]
+  ^
+  |
+loadgen
+\`\`\`
+
+- Chain topology: each node syncs to the next downstream peer
+- Sync interval: 10s (timer-driven, not event-driven)
+- node4 joins via \`--profile latejoin\` after data is loaded
+
+## Benchmark Parameters
+
+| Parameter | Value |
+|-----------|-------|
+| BLOB_COUNT | ${BLOB_COUNT} |
+| RATE | ${RATE} blobs/sec |
+| Drain timeout | 10s |
+| Sync interval | 10s |
+
+## Ingest Throughput
+
+| Blob Size | blobs/sec | MiB/sec | p50 (ms) | p95 (ms) | p99 (ms) |
+|-----------|-----------|---------|----------|----------|----------|
+${ingest_row_1k}
+${ingest_row_100k}
+${ingest_row_1m}
+
+**Resource Usage:**
+
+${ingest_resources}
+
+## Sync Latency
+
+${sync_section}
+
+## Late-Joiner Catch-Up
+
+${lj_section}
+
+## Trusted vs PQ Handshake
+
+${tvp_section}
+
+## Caveats
+
+- **Sync latency includes sync_interval:** Sync is timer-driven (10s interval), not event-driven. Measured latency includes scheduling delay. Real propagation time is lower.
+- **Single run, no statistical significance:** These are single-run results establishing a baseline. Production benchmarking requires multiple runs with statistical analysis.
+- **Docker overhead:** All nodes run in Docker containers with overlay networking. Bare-metal performance will differ (typically faster).
+
+## Raw Data
+
+${raw_files}
+EOF
+
+    log "Report written: $RESULTS_DIR/REPORT.md"
+
+    # Step 11: Build benchmark-summary.json
+    local hw_json="null"
+    [[ -f "$RESULTS_DIR/hardware-info.json" ]] && hw_json=$(cat "$RESULTS_DIR/hardware-info.json")
+
+    local ingest_1k="null" ingest_100k="null" ingest_1m="null"
+    local sync_json="null" lj_json="null" tvp_json="null"
+
+    [[ -f "$RESULTS_DIR/scenario-ingest-1k.json" ]] && ingest_1k=$(cat "$RESULTS_DIR/scenario-ingest-1k.json")
+    [[ -f "$RESULTS_DIR/scenario-ingest-100k.json" ]] && ingest_100k=$(cat "$RESULTS_DIR/scenario-ingest-100k.json")
+    [[ -f "$RESULTS_DIR/scenario-ingest-1m.json" ]] && ingest_1m=$(cat "$RESULTS_DIR/scenario-ingest-1m.json")
+    [[ -f "$RESULTS_DIR/scenario-sync-latency.json" ]] && sync_json=$(cat "$RESULTS_DIR/scenario-sync-latency.json")
+    [[ -f "$RESULTS_DIR/scenario-latejoin.json" ]] && lj_json=$(cat "$RESULTS_DIR/scenario-latejoin.json")
+    [[ -f "$RESULTS_DIR/scenario-trusted-vs-pq.json" ]] && tvp_json=$(cat "$RESULTS_DIR/scenario-trusted-vs-pq.json")
+
+    jq -n \
+        --arg generated "$timestamp" \
+        --arg commit "$commit" \
+        --arg version "$version" \
+        --argjson hardware "$hw_json" \
+        --argjson blob_count "$BLOB_COUNT" \
+        --argjson rate "$RATE" \
+        --argjson ingest_1k "$ingest_1k" \
+        --argjson ingest_100k "$ingest_100k" \
+        --argjson ingest_1m "$ingest_1m" \
+        --argjson sync_latency "$sync_json" \
+        --argjson latejoin "$lj_json" \
+        --argjson trusted_vs_pq "$tvp_json" \
+        '{
+            generated: $generated,
+            commit: $commit,
+            version: $version,
+            hardware: $hardware,
+            parameters: {
+                blob_count: $blob_count,
+                rate: $rate,
+                drain_timeout: 10,
+                sync_interval_seconds: 10
+            },
+            scenarios: {
+                ingest_1k: $ingest_1k,
+                ingest_100k: $ingest_100k,
+                ingest_1m: $ingest_1m,
+                sync_latency: $sync_latency,
+                latejoin: $latejoin,
+                trusted_vs_pq: $trusted_vs_pq
+            }
+        }' > "$RESULTS_DIR/benchmark-summary.json"
+
+    log "Summary written: $RESULTS_DIR/benchmark-summary.json"
 }
 
 # --- Scenario Functions ------------------------------------------------------
