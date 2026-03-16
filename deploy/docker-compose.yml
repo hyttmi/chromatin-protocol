@@ -1,0 +1,93 @@
+services:
+  node1:
+    image: chromatindb:latest
+    container_name: chromatindb-node1
+    command: ["run", "--config", "/config/node1.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node1-data:/data
+      - ./configs/node1.json:/config/node1.json:ro
+    networks:
+      - chromatindb-net
+    ports:
+      - "4201:4200"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node2:
+    image: chromatindb:latest
+    container_name: chromatindb-node2
+    command: ["run", "--config", "/config/node2.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node2-data:/data
+      - ./configs/node2.json:/config/node2.json:ro
+    networks:
+      - chromatindb-net
+    ports:
+      - "4202:4200"
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node3:
+    image: chromatindb:latest
+    container_name: chromatindb-node3
+    command: ["run", "--config", "/config/node3.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node3-data:/data
+      - ./configs/node3.json:/config/node3.json:ro
+    networks:
+      - chromatindb-net
+    ports:
+      - "4203:4200"
+    depends_on:
+      node2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node4:
+    image: chromatindb:latest
+    container_name: chromatindb-node4
+    command: ["run", "--config", "/config/node4-latejoin.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node4-data:/data
+      - ./configs/node4-latejoin.json:/config/node4-latejoin.json:ro
+    networks:
+      - chromatindb-net
+    ports:
+      - "4204:4200"
+    depends_on:
+      node3:
+        condition: service_healthy
+    profiles:
+      - latejoin
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  node4-data:
+
+networks:
+  chromatindb-net:
+    driver: bridge
