@@ -158,6 +158,9 @@ Previous projects inform design:
 | Lightweight handshake with mismatch fallback | Initiator proposes TrustedHello, responder replies PQRequired if untrusted | ✓ Good — graceful upgrade, no connection failure |
 | TrustCheck lambda chain (PeerManager→Server→Connection) | Runtime trust decision injection without coupling layers | ✓ Good — clean dependency inversion |
 | No ENABLE_ASAN/install()/CMAKE_BUILD_TYPE in db/ | YAGNI — sanitizers, install, build type are consumer concerns | ✓ Good — minimal self-contained component |
+| SIGUSR1 + log grep for benchmark convergence polling | Uses existing metrics mechanism, no new API needed | ✓ Good — zero code changes to chromatindb |
+| Full compose restart between PQ/trusted benchmark runs | SIGHUP reloads config but existing connections keep handshake type | ✓ Good — fair comparison with fresh connections |
+| Runtime IP resolution via docker inspect for trusted_peers | Docker DNS names not accepted; IPs resolved at benchmark time | ✓ Good — dynamic, no hardcoded addresses |
 
 ---
-*Last updated: 2026-03-15 after v0.6.0 milestone start*
+*Last updated: 2026-03-16 after Phase 30*
