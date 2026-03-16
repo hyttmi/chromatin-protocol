@@ -83,7 +83,7 @@ Full details: [milestones/v0.5.0-ROADMAP.md](milestones/v0.5.0-ROADMAP.md)
 
 - [x] **Phase 27: Container Build** — Multi-stage Dockerfile producing Release binaries in debian:bookworm-slim (completed 2026-03-15)
 - [x] **Phase 28: Load Generator** — Protocol-compliant C++ load generation tool with configurable workloads (completed 2026-03-15)
-- [ ] **Phase 29: Multi-Node Topology** — Docker Compose 3-5 node chain with health checks and named volumes
+- [x] **Phase 29: Multi-Node Topology** — Docker Compose 3-5 node chain with health checks and named volumes (completed 2026-03-16)
 - [ ] **Phase 30: Benchmark Scenarios** — Run all performance scenarios with resource profiling
 - [ ] **Phase 31: Report Generation** — Structured benchmark results with analysis and automation
 
@@ -194,6 +194,6 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
 | 27. Container Build | v0.6.0 | 1/1 | Complete | 2026-03-15 |
 | 28. Load Generator | v0.6.0 | 1/1 | Complete | 2026-03-15 |
-| 29. Multi-Node Topology | v0.6.0 | 0/1 | Not started | - |
+| 29. Multi-Node Topology | 1/1 | Complete   | 2026-03-16 | - |
 | 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
 | 31. Report Generation | v0.6.0 | 0/? | Not started | - |
