@@ -21,15 +21,15 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 
 ### Performance Measurement
 
-- [ ] **PERF-01**: Ingest throughput measured at multiple blob sizes (blobs/sec, MiB/sec, p50/p95/p99 latency)
-- [ ] **PERF-02**: Sync/replication latency measured (wall-clock time from write on node A to availability on node B)
-- [ ] **PERF-03**: Multi-hop propagation time measured (A->B->C chain, no direct A-C link)
+- [x] **PERF-01**: Ingest throughput measured at multiple blob sizes (blobs/sec, MiB/sec, p50/p95/p99 latency)
+- [x] **PERF-02**: Sync/replication latency measured (wall-clock time from write on node A to availability on node B)
+- [x] **PERF-03**: Multi-hop propagation time measured (A->B->C chain, no direct A-C link)
 - [ ] **PERF-04**: Late-joiner catch-up time measured (new node joins after data loaded, measures convergence)
 - [ ] **PERF-05**: Trusted vs PQ handshake comparison run with same workload under both modes
 
 ### Observability
 
-- [ ] **OBS-01**: Resource profiling captures CPU, memory, disk I/O per container via docker stats during benchmark runs
+- [x] **OBS-01**: Resource profiling captures CPU, memory, disk I/O per container via docker stats during benchmark runs
 - [ ] **OBS-02**: Benchmark results report generated as structured markdown with hardware specs, topology, per-scenario tables, and analysis
 - [ ] **OBS-03**: Machine-readable JSON results output for each scenario alongside markdown report
 
@@ -71,12 +71,12 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 | LOAD-02 | Phase 28 | Complete |
 | LOAD-03 | Phase 28 | Complete |
 | LOAD-04 | Phase 30 | Pending |
-| PERF-01 | Phase 30 | Pending |
-| PERF-02 | Phase 30 | Pending |
-| PERF-03 | Phase 30 | Pending |
+| PERF-01 | Phase 30 | Complete |
+| PERF-02 | Phase 30 | Complete |
+| PERF-03 | Phase 30 | Complete |
 | PERF-04 | Phase 30 | Pending |
 | PERF-05 | Phase 30 | Pending |
-| OBS-01 | Phase 30 | Pending |
+| OBS-01 | Phase 30 | Complete |
 | OBS-02 | Phase 31 | Pending |
 | OBS-03 | Phase 31 | Pending |
 

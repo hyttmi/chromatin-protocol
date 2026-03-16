@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 29-01-PLAN.md
-last_updated: "2026-03-16T03:36:32.613Z"
-last_activity: 2026-03-16 — Completed 29-01 Multi-Node Topology plan
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-03-16T15:20:24.972Z"
+last_activity: 2026-03-16 — Completed 30-01 Benchmark Scenarios (ingest + sync)
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 3
-  completed_plans: 3
-  percent: 93
+  total_plans: 5
+  completed_plans: 4
+  percent: 94
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.6.0 Phase 29 - Multi-Node Topology
+**Current focus:** v0.6.0 Phase 30 - Benchmark Scenarios
 
 ## Current Position
 
-Phase: 29 of 31 (Multi-Node Topology)
-Plan: 1 of 1 in current phase (COMPLETE)
+Phase: 30 of 31 (Benchmark Scenarios)
+Plan: 1 of 2 in current phase (COMPLETE)
 Status: Executing
-Last activity: 2026-03-16 — Completed 29-01 Multi-Node Topology plan
+Last activity: 2026-03-16 — Completed 30-01 Benchmark Scenarios (ingest + sync)
 
-Progress: [█████████████████████████████░] 93% (29/31 phases)
+Progress: [█████████░] 94% (30/31 phases)
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [███████████████████████
 | Phase 27 P01 | 2min | 1 tasks | 3 files |
 | Phase 28 P01 | 16min | 2 tasks | 3 files |
 | Phase 29 P01 | 1min | 2 tasks | 5 files |
+| Phase 30 P01 | 2min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 27]: Port 4200 (matches config.h default), GCC 12 with -Wno-restrict, BuildKit cache mount for _deps
 - [Phase 28]: Single-file loadgen tool, notification-based ACK for latency, spdlog to stderr / JSON to stdout
 - [Phase 29]: Chain topology (not mesh) for multi-hop sync validation; 10s sync interval; profiles for late-joiner
+- [Phase 30]: SIGUSR1 blob polling for convergence measurement; sequential scenarios with full topology reset; -p chromatindb for predictable network naming
 
 ### Pending Todos
 
@@ -74,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-16T03:26:15.355Z
-Stopped at: Completed 29-01-PLAN.md
+Last session: 2026-03-16T15:20:23.929Z
+Stopped at: Completed 30-01-PLAN.md
 Resume file: None
