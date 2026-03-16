@@ -1,5 +1,37 @@
 # Milestones
 
+## v0.6.0 Real-World Validation (Shipped: 2026-03-16)
+
+**Phases:** 5 (27-31) | **Plans:** 6 | **Files:** 40 modified (+6,451 lines) | **LOC:** 17,775 C++
+**Requirements:** 14/14 (DOCK-01/02, LOAD-01-04, PERF-01-05, OBS-01-03)
+**Timeline:** 2 days (2026-03-15 -> 2026-03-16)
+
+**Key accomplishments:**
+- Multi-stage Dockerfile with debian:bookworm-slim runtime, BuildKit cache, non-root user
+- Protocol-compliant C++ load generator (chromatindb_loadgen) with timer-driven scheduling, mixed sizes, JSON stats
+- Docker Compose 3-node chain topology with health checks, named volumes, late-joiner profile
+- 5-scenario benchmark suite: ingest (3 sizes), sync/multi-hop latency, late-joiner catch-up, trusted-vs-PQ comparison
+- Structured markdown report with hardware profiling, computed analysis, and combined JSON summary
+- `run-benchmark.sh` — 961-line end-to-end automation pipeline with `--report-only` regeneration
+
+**Benchmark baseline (Ryzen 5 5600U, Docker):**
+- 1K blobs: 50.2 blobs/sec, p50=22ms
+- 100K blobs: 50.2 blobs/sec, 4.9 MiB/sec
+- 1M blobs: 15.3 blobs/sec, p99=9.4s (CPU-bound — crypto bottleneck)
+- PQ vs trusted overhead: <1% (negligible)
+- Late-joiner catch-up: 1.0s for 200 blobs
+
+**Known issue:**
+- Large blob (1M) crypto throughput is CPU-bound at 96% (sync verification). Must address before 1.0.0.
+
+**Tech debt carried forward:**
+- `--entrypoint` fix for loadgen in Docker (committed post-execution)
+- jq `-s` slurp fix for docker stats parsing (committed post-execution)
+
+**Archive:** [v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md) | [v0.6.0-REQUIREMENTS.md](milestones/v0.6.0-REQUIREMENTS.md)
+
+---
+
 ## v0.5.0 Hardening & Flexibility (Shipped: 2026-03-15)
 
 **Phases:** 5 (22-26) | **Plans:** 6 | **Commits:** 32 | **LOC:** 17,124 C++ (+2,601)

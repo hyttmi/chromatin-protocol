@@ -53,19 +53,15 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Build restructure (db/ as self-contained CMake component) — v0.5.0
 - ✓ Documentation updates for all v0.5.0 changes — v0.5.0
 
+- ✓ Docker container build with multi-stage Dockerfile and Release binaries — v0.6.0
+- ✓ Protocol-compliant load generator with configurable workloads and JSON stats — v0.6.0
+- ✓ Multi-node Docker Compose topology with health checks and late-joiner support — v0.6.0
+- ✓ Performance benchmark suite: ingest, sync, multi-hop, late-joiner, trusted-vs-PQ — v0.6.0
+- ✓ Structured benchmark report with hardware profiling and computed analysis — v0.6.0
+
 ### Active
 
-## Current Milestone: v0.6.0 Real-World Validation
-
-**Goal:** Run chromatindb in Docker, measure real-world performance, and validate sync behavior at scale.
-
-**Target features:**
-- Dockerfile and docker-compose for multi-node topology
-- Load generator tool with mixed blob sizes (up to ~10 GB dataset)
-- Performance measurement: ingest throughput, sync latency, replication time, multi-hop propagation
-- Resource profiling: CPU, memory, disk I/O under load
-- Late-joiner scenario validation
-- Benchmark results report with analysis
+(None — next milestone will define requirements)
 
 ### Out of Scope
 
@@ -85,15 +81,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v0.5.0 with 17,124 LOC C++20, 284 tests.
-Built across 14 days total: v1.0 (3d, 8 phases), v2.0 (2d, 3 phases), v3.0 (2d, 4 phases), v0.4.0 (5d, 6 phases), v0.5.0 (2d, 5 phases).
+Shipped v0.6.0 with 17,775 LOC C++20, 284 tests.
+Built across 16 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d).
+6 milestones, 31 phases, 63 plans, 14 requirements for v0.6.0 alone.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.5.0 SHIPPED): chromatindb** — database node with ACL, delegation, pub/sub, deletion, storage limits, metrics, rate limiting, DARE, trusted peers, configurable TTL
+- **Layer 1 (v0.6.0 SHIPPED): chromatindb** — database node with full feature set + Docker benchmarking infrastructure
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
+
+**Known performance issue:** Large blob (1 MiB) crypto throughput bottleneck — 15.3 blobs/sec, 96% CPU on sync verification (ML-DSA-87 + SHA3-256). Small/medium blobs are fine (50+ blobs/sec). Must fix before 1.0.0.
 
 Previous projects inform design:
 - **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
@@ -163,4 +162,4 @@ Previous projects inform design:
 | Runtime IP resolution via docker inspect for trusted_peers | Docker DNS names not accepted; IPs resolved at benchmark time | ✓ Good — dynamic, no hardcoded addresses |
 
 ---
-*Last updated: 2026-03-16 after Phase 30*
+*Last updated: 2026-03-16 after v0.6.0 milestone*
