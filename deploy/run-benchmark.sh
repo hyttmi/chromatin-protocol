@@ -150,6 +150,50 @@ run_loadgen() {
         2>/dev/null
 }
 
+# --- Helper Functions --------------------------------------------------------
+
+generate_trusted_configs() {
+    # Resolve container IPs at runtime for trusted_peers configuration.
+    # trusted_peers requires IP addresses, NOT Docker DNS names.
+    local ip1 ip2 ip3
+    ip1=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' chromatindb-node1)
+    ip2=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' chromatindb-node2)
+    ip3=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' chromatindb-node3)
+
+    log "Resolved IPs: node1=$ip1 node2=$ip2 node3=$ip3"
+
+    cat > "$SCRIPT_DIR/configs/node1-trusted.json" <<TJEOF
+{
+  "bind_address": "0.0.0.0:4200",
+  "log_level": "info",
+  "sync_interval_seconds": 10,
+  "trusted_peers": ["$ip2", "$ip3"]
+}
+TJEOF
+
+    cat > "$SCRIPT_DIR/configs/node2-trusted.json" <<TJEOF
+{
+  "bind_address": "0.0.0.0:4200",
+  "bootstrap_peers": ["node1:4200"],
+  "log_level": "info",
+  "sync_interval_seconds": 10,
+  "trusted_peers": ["$ip1", "$ip3"]
+}
+TJEOF
+
+    cat > "$SCRIPT_DIR/configs/node3-trusted.json" <<TJEOF
+{
+  "bind_address": "0.0.0.0:4200",
+  "bootstrap_peers": ["node2:4200"],
+  "log_level": "info",
+  "sync_interval_seconds": 10,
+  "trusted_peers": ["$ip1", "$ip2"]
+}
+TJEOF
+
+    log "Generated trusted configs in $SCRIPT_DIR/configs/"
+}
+
 # --- Scenario Functions ------------------------------------------------------
 
 run_scenario_ingest() {
@@ -262,6 +306,171 @@ run_scenario_sync() {
     log "Sync scenario complete"
 }
 
+run_scenario_latejoin() {
+    # Measures late-joiner catch-up time (PERF-04).
+    # node4 joins after data is fully loaded and converged on node1-3.
+    # Catch-up time = from node4 healthy to full convergence.
+
+    log "========================================="
+    log "Scenario: Late-Joiner Catch-Up (PERF-04)"
+    log "========================================="
+
+    reset_topology
+
+    log "Ingesting $BLOB_COUNT blobs (1 KiB) to node1..."
+    run_loadgen node1 --count "$BLOB_COUNT" --rate "$RATE" --size 1024 --drain-timeout 10 >/dev/null
+
+    log "Waiting for node3 convergence (ensures full chain has data)..."
+    local chain_ms
+    if ! chain_ms=$(wait_for_convergence chromatindb-node3 "$BLOB_COUNT" 120); then
+        log "ERROR: Chain did not converge before late-joiner test"
+        return 1
+    fi
+    log "Chain converged in ${chain_ms}ms"
+
+    capture_stats "pre" "latejoin"
+
+    log "Starting node4 (late-joiner)..."
+    $COMPOSE --profile latejoin up -d node4
+
+    # Wait for node4 healthcheck to pass
+    log "Waiting for node4 to become healthy..."
+    local timeout=30
+    local start
+    start=$(date +%s)
+    while true; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' chromatindb-node4 2>/dev/null || echo "missing")
+        if [[ "$status" == "healthy" ]]; then
+            log "node4 is healthy"
+            break
+        fi
+        local elapsed=$(( $(date +%s) - start ))
+        if [[ $elapsed -gt $timeout ]]; then
+            log "ERROR: Timeout waiting for node4 to become healthy (status: $status)"
+            return 1
+        fi
+        sleep 1
+    done
+
+    log "Timing node4 catch-up..."
+    local catchup_ms
+    if catchup_ms=$(wait_for_convergence chromatindb-node4 "$BLOB_COUNT" 300); then
+        log "node4 caught up in ${catchup_ms}ms"
+    else
+        log "WARNING: node4 catch-up timed out"
+    fi
+
+    capture_stats "post" "latejoin"
+
+    # Build result JSON
+    local result
+    result=$(jq -n \
+        --arg blobs "$BLOB_COUNT" \
+        --arg catchup "$catchup_ms" \
+        '{
+            scenario: "late-joiner",
+            blob_count: ($blobs | tonumber),
+            catchup_ms: ($catchup | tonumber),
+            note: "Time from node4 healthy to full convergence"
+        }')
+
+    echo "$result" > "$RESULTS_DIR/scenario-latejoin.json"
+
+    log "Result: catch-up=${catchup_ms}ms for $BLOB_COUNT blobs"
+    log "Written: $RESULTS_DIR/scenario-latejoin.json"
+    log "Late-joiner scenario complete"
+}
+
+run_scenario_trusted_vs_pq() {
+    # Compares PQ (default) vs trusted handshake overhead (PERF-05).
+    # Full compose down/up between modes for fair comparison (fresh connections).
+
+    log "========================================="
+    log "Scenario: Trusted vs PQ Handshake (PERF-05)"
+    log "========================================="
+
+    # --- RUN 1: PQ mode (default) ---
+    log "--- RUN 1: PQ mode (default handshake) ---"
+    reset_topology
+
+    capture_stats "pre" "pq"
+
+    log "Running loadgen (PQ mode): count=$BLOB_COUNT rate=$RATE size=1024"
+    local pq_result
+    pq_result=$(run_loadgen node1 --count "$BLOB_COUNT" --rate "$RATE" --size 1024 --drain-timeout 10)
+
+    capture_stats "post" "pq"
+
+    # --- Generate trusted configs with resolved IPs ---
+    log "--- Generating trusted configs ---"
+    generate_trusted_configs
+
+    # --- RUN 2: Trusted mode ---
+    log "--- RUN 2: Trusted mode (lightweight handshake) ---"
+
+    # Full restart with trusted config override
+    $COMPOSE down -v 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" -f "$SCRIPT_DIR/docker-compose.trusted.yml" -p chromatindb up -d --wait 2>/dev/null || {
+        # Fallback: poll healthcheck status
+        log "Fallback: polling healthcheck status for trusted mode..."
+        local timeout=30
+        local start
+        start=$(date +%s)
+        for node in chromatindb-node1 chromatindb-node2 chromatindb-node3; do
+            while true; do
+                local status
+                status=$(docker inspect --format '{{.State.Health.Status}}' "$node" 2>/dev/null || echo "missing")
+                if [[ "$status" == "healthy" ]]; then
+                    log "$node is healthy (trusted mode)"
+                    break
+                fi
+                local elapsed=$(( $(date +%s) - start ))
+                if [[ $elapsed -gt $timeout ]]; then
+                    log "ERROR: Timeout waiting for $node to become healthy in trusted mode"
+                    exit 1
+                fi
+                sleep 1
+            done
+        done
+    }
+
+    capture_stats "pre" "trusted"
+
+    log "Running loadgen (trusted mode): count=$BLOB_COUNT rate=$RATE size=1024"
+    local trusted_result
+    trusted_result=$(run_loadgen node1 --count "$BLOB_COUNT" --rate "$RATE" --size 1024 --drain-timeout 10)
+
+    capture_stats "post" "trusted"
+
+    # Cleanup: restore default topology (remove trusted volumes)
+    $COMPOSE down -v 2>/dev/null || true
+
+    # Build comparison JSON
+    local result
+    result=$(jq -n \
+        --argjson pq "$pq_result" \
+        --argjson trusted "$trusted_result" \
+        '{
+            scenario: "trusted-vs-pq",
+            pq_mode: $pq,
+            trusted_mode: $trusted
+        }')
+
+    echo "$result" > "$RESULTS_DIR/scenario-trusted-vs-pq.json"
+
+    # Log comparison summary
+    local pq_p50 pq_p95 trusted_p50 trusted_p95
+    pq_p50=$(echo "$pq_result" | jq -r '.latency_ms.p50 // "N/A"')
+    pq_p95=$(echo "$pq_result" | jq -r '.latency_ms.p95 // "N/A"')
+    trusted_p50=$(echo "$trusted_result" | jq -r '.latency_ms.p50 // "N/A"')
+    trusted_p95=$(echo "$trusted_result" | jq -r '.latency_ms.p95 // "N/A"')
+
+    log "Comparison: PQ p50=${pq_p50}ms p95=${pq_p95}ms | Trusted p50=${trusted_p50}ms p95=${trusted_p95}ms"
+    log "Written: $RESULTS_DIR/scenario-trusted-vs-pq.json"
+    log "Trusted vs PQ scenario complete"
+}
+
 # --- Main --------------------------------------------------------------------
 
 main() {
@@ -286,13 +495,18 @@ main() {
     run_scenario_ingest
     run_scenario_sync
 
-    # Additional scenarios added in Plan 30-02:
-    # - Late-joiner catch-up (PERF-04)
-    # - Trusted vs PQ handshake comparison (PERF-05)
+    # Additional scenarios (Plan 30-02)
+    run_scenario_latejoin
+    run_scenario_trusted_vs_pq
 
+    # Final cleanup
+    $COMPOSE down -v 2>/dev/null || true
+
+    # Summary
+    local result_count
+    result_count=$(find "$RESULTS_DIR" -name '*.json' -type f | wc -l)
     log "========================================="
-    log "Benchmark suite complete"
-    log "Results: $RESULTS_DIR/"
+    log "Benchmark complete: $result_count result files in $RESULTS_DIR"
     log "========================================="
 }
 
