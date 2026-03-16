@@ -171,8 +171,9 @@ run_loadgen() {
     local target_host="$1"
     shift
     docker run --rm --network "$NETWORK" \
+        --entrypoint chromatindb_loadgen \
         chromatindb:latest \
-        chromatindb_loadgen --target "${target_host}:4200" "$@" \
+        --target "${target_host}:4200" "$@" \
         2>/dev/null
 }
 
@@ -239,13 +240,13 @@ get_peak_stats() {
     fi
 
     if [[ "$metric" == "cpu" ]]; then
-        jq -r --arg c "$container" \
-            '[.[] | select(.container == $c) | .cpu | rtrimstr("%") | tonumber] | max // "N/A"' \
+        jq -s -r --arg c "$container" \
+            '[.[][] | select(.container == $c) | .cpu | rtrimstr("%") | tonumber] | max // "N/A"' \
             "${stat_files[@]}" 2>/dev/null || echo "N/A"
     else
-        # Return peak memory usage string
-        jq -r --arg c "$container" \
-            '[.[] | select(.container == $c) | .mem_usage | split(" / ")[0]] | last // "N/A"' \
+        # Return peak memory usage string (from the post-scenario snapshot)
+        jq -s -r --arg c "$container" \
+            '[.[][] | select(.container == $c) | .mem_usage | split(" / ")[0]] | last // "N/A"' \
             "${stat_files[@]}" 2>/dev/null || echo "N/A"
     fi
 }
