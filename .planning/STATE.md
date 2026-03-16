@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 31 context gathered
-last_updated: "2026-03-16T15:46:19.524Z"
-last_activity: 2026-03-16 — Phase 30 complete, transitioning to Phase 31
+status: complete
+stopped_at: Completed 31-01-PLAN.md
+last_updated: "2026-03-16T16:01:36.526Z"
+last_activity: 2026-03-16 — Phase 31 Plan 01 complete (report generation)
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 5
+  total_plans: 6
+  completed_plans: 6
   percent: 100
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 ## Current Position
 
 Phase: 31 of 31 (Report Generation)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-03-16 — Phase 30 complete, transitioning to Phase 31
+Plan: 1 of 1 complete
+Status: Phase complete
+Last activity: 2026-03-16 — Phase 31 Plan 01 complete (report generation)
 
-Progress: [████████████████████] 18/18 plans (100%)
+Progress: [██████████] 19/19 plans (100%)
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [████████████████████] 18/18 p
 | Phase 29 P01 | 1min | 2 tasks | 5 files |
 | Phase 30 P01 | 2min | 2 tasks | 1 files |
 | Phase 30 P02 | 2min | 2 tasks | 2 files |
+| Phase 31 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 28]: Single-file loadgen tool, notification-based ACK for latency, spdlog to stderr / JSON to stdout
 - [Phase 29]: Chain topology (not mesh) for multi-hop sync validation; 10s sync interval; profiles for late-joiner
 - [Phase 30]: SIGUSR1 blob polling for convergence measurement; sequential scenarios with full topology reset; -p chromatindb for predictable network naming; full restart between PQ/trusted for fair comparison; runtime IP resolution via docker inspect for trusted_peers
+- [Phase 31]: jq for all report numeric computation; heredoc markdown templating; format_resource_table helper for per-node stats; dynamic raw data file listing
 
 ### Pending Todos
 
@@ -77,6 +79,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-16T15:46:19.521Z
-Stopped at: Phase 31 context gathered
-Resume file: .planning/phases/31-report-generation/31-CONTEXT.md
+Last session: 2026-03-16T16:01:00Z
+Stopped at: Completed 31-01-PLAN.md
+Resume file: .planning/phases/31-report-generation/31-01-SUMMARY.md

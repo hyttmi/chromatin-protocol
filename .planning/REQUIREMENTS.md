@@ -30,8 +30,8 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 ### Observability
 
 - [x] **OBS-01**: Resource profiling captures CPU, memory, disk I/O per container via docker stats during benchmark runs
-- [ ] **OBS-02**: Benchmark results report generated as structured markdown with hardware specs, topology, per-scenario tables, and analysis
-- [ ] **OBS-03**: Machine-readable JSON results output for each scenario alongside markdown report
+- [x] **OBS-02**: Benchmark results report generated as structured markdown with hardware specs, topology, per-scenario tables, and analysis
+- [x] **OBS-03**: Machine-readable JSON results output for each scenario alongside markdown report
 
 ## Future Requirements
 
@@ -77,8 +77,8 @@ Requirements for real-world validation milestone. Each maps to roadmap phases.
 | PERF-04 | Phase 30 | Complete |
 | PERF-05 | Phase 30 | Complete |
 | OBS-01 | Phase 30 | Complete |
-| OBS-02 | Phase 31 | Pending |
-| OBS-03 | Phase 31 | Pending |
+| OBS-02 | Phase 31 | Complete |
+| OBS-03 | Phase 31 | Complete |
 
 **Coverage:**
 - v0.6.0 requirements: 14 total
