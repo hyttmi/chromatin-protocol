@@ -61,7 +61,17 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(None — next milestone will define requirements)
+## Current Milestone: v0.7.0 Production Readiness
+
+**Goal:** Cleanup, performance optimization, and production-readiness features — move tests into db/, fix large blob crypto bottleneck, add deletion benchmarks, implement sync resumption and namespace quotas, and sweep stale leftovers.
+
+**Target features:**
+- Test relocation into db/ (database-only tests belong with the component)
+- Large blob crypto throughput fix (1M+ blobs CPU-bound at 96%)
+- Deletion performance benchmarks in Docker suite
+- Sync resumption with per-peer cursors
+- Namespace storage quotas (per-namespace size/count limits)
+- General cleanup (remove old standalone benchmark, update db/ README, sweep stale artifacts)
 
 ### Out of Scope
 
@@ -162,4 +172,4 @@ Previous projects inform design:
 | Runtime IP resolution via docker inspect for trusted_peers | Docker DNS names not accepted; IPs resolved at benchmark time | ✓ Good — dynamic, no hardcoded addresses |
 
 ---
-*Last updated: 2026-03-16 after v0.6.0 milestone*
+*Last updated: 2026-03-16 after v0.7.0 milestone start*
