@@ -73,30 +73,30 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLEAN-01 | — | Pending |
-| CLEAN-02 | — | Pending |
-| CLEAN-03 | — | Pending |
-| CLEAN-04 | — | Pending |
-| PERF-01 | — | Pending |
-| PERF-02 | — | Pending |
-| PERF-03 | — | Pending |
-| SYNC-01 | — | Pending |
-| SYNC-02 | — | Pending |
-| SYNC-03 | — | Pending |
-| SYNC-04 | — | Pending |
-| QUOTA-01 | — | Pending |
-| QUOTA-02 | — | Pending |
-| QUOTA-03 | — | Pending |
-| QUOTA-04 | — | Pending |
-| BENCH-01 | — | Pending |
-| BENCH-02 | — | Pending |
-| BENCH-03 | — | Pending |
+| CLEAN-01 | Phase 32 | Pending |
+| CLEAN-02 | Phase 37 | Pending |
+| CLEAN-03 | Phase 37 | Pending |
+| CLEAN-04 | Phase 37 | Pending |
+| PERF-01 | Phase 33 | Pending |
+| PERF-02 | Phase 33 | Pending |
+| PERF-03 | Phase 33 | Pending |
+| SYNC-01 | Phase 34 | Pending |
+| SYNC-02 | Phase 34 | Pending |
+| SYNC-03 | Phase 34 | Pending |
+| SYNC-04 | Phase 34 | Pending |
+| QUOTA-01 | Phase 35 | Pending |
+| QUOTA-02 | Phase 35 | Pending |
+| QUOTA-03 | Phase 35 | Pending |
+| QUOTA-04 | Phase 35 | Pending |
+| BENCH-01 | Phase 36 | Pending |
+| BENCH-02 | Phase 36 | Pending |
+| BENCH-03 | Phase 36 | Pending |
 
 **Coverage:**
 - v0.7.0 requirements: 18 total
-- Mapped to phases: 0
-- Unmapped: 18 (pending roadmap creation)
+- Mapped to phases: 18
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after initial definition*
+*Last updated: 2026-03-16 after roadmap creation*

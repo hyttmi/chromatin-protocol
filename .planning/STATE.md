@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v0.7.0
 milestone_name: Production Readiness
-status: defining_requirements
+status: ready_to_plan
 stopped_at: null
-last_updated: "2026-03-16T17:00:00.000Z"
-last_activity: 2026-03-16 — Milestone v0.7.0 started
+last_updated: "2026-03-16T18:00:00.000Z"
+last_activity: 2026-03-16 — Roadmap created for v0.7.0
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,19 +21,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Defining requirements for v0.7.0
+**Current focus:** Phase 32 - Test Relocation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-16 — Milestone v0.7.0 started
+Phase: 32 (1 of 6 in v0.7.0) (Test Relocation)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-16 -- Roadmap created for v0.7.0
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 63 (across v1.0 + v2.0 + v3.0 + v0.4.0 + v0.5.0 + v0.6.0)
+- Total plans completed: 63 (across v1.0 - v0.6.0)
 - Average duration: ~19 min (historical)
 - Total execution time: ~20 hours
 
@@ -53,6 +55,11 @@ Last activity: 2026-03-16 — Milestone v0.7.0 started
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- v0.7.0: Serial crypto optimizations only; thread pool offload deferred to v0.8.0 (AEAD nonce desync risk)
+- v0.7.0: Sync cursors as optimization hints only; periodic full resync as safety net for drift
+- v0.7.0: Quota enforcement inside libmdbx write transaction to prevent check-then-act race
 
 ### Pending Todos
 
@@ -60,10 +67,12 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- Known: Large blob crypto throughput (15.3 blobs/sec, 96% CPU) -- addressed by Phase 33
+- Risk: Cursor staleness after deletions -- mitigated by periodic full resync fallback (SYNC-04)
+- Risk: Quota check-then-act race across co_await -- mitigated by enforcement in write txn (QUOTA-03)
 
 ## Session Continuity
 
-Last session: 2026-03-16T17:00:00Z
-Stopped at: Milestone v0.7.0 initialization
-Resume file: —
+Last session: 2026-03-16
+Stopped at: Roadmap created for v0.7.0 milestone (6 phases, 18 requirements)
+Resume file: None
