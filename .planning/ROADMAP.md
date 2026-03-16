@@ -154,10 +154,10 @@ Plans:
   1. A markdown report is generated with hardware specs, topology description, per-scenario results tables, and analysis
   2. Machine-readable JSON results are output alongside the markdown report for each scenario
   3. `run-benchmark.sh` automates the full pipeline: build images, start topology, run all scenarios, collect metrics, generate report
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 31-01: TBD
+- [ ] 31-01-PLAN.md — Report generation functions, hardware info collection, --report-only flag, and .gitignore update
 
 ## Progress
 
@@ -195,5 +195,5 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 27. Container Build | v0.6.0 | 1/1 | Complete | 2026-03-15 |
 | 28. Load Generator | v0.6.0 | 1/1 | Complete | 2026-03-15 |
 | 29. Multi-Node Topology | v0.6.0 | 1/1 | Complete | 2026-03-16 |
-| 30. Benchmark Scenarios | 2/2 | Complete    | 2026-03-16 | - |
-| 31. Report Generation | v0.6.0 | 0/? | Not started | - |
+| 30. Benchmark Scenarios | v0.6.0 | 2/2 | Complete | 2026-03-16 |
+| 31. Report Generation | v0.6.0 | 0/1 | Not started | - |
