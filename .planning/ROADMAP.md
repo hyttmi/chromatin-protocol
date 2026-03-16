@@ -125,10 +125,10 @@ Plans:
   2. Nodes use named volumes for libmdbx storage (not container filesystem)
   3. A blob written to node1 replicates to all other nodes through the peer chain
   4. A late-joiner node can be started after the initial topology and catches up on existing data
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 29-01: TBD
+- [ ] 29-01-PLAN.md — Docker Compose 3-node chain topology with late-joiner profile and per-node configs
 
 ### Phase 30: Benchmark Scenarios
 **Goal**: All core performance scenarios are measured with resource profiling
@@ -193,7 +193,7 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 25. Transport Optimization | v0.5.0 | 2/2 | Complete | 2026-03-15 |
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
 | 27. Container Build | v0.6.0 | 1/1 | Complete | 2026-03-15 |
-| 28. Load Generator | 1/1 | Complete    | 2026-03-15 | - |
-| 29. Multi-Node Topology | v0.6.0 | 0/? | Not started | - |
+| 28. Load Generator | v0.6.0 | 1/1 | Complete | 2026-03-15 |
+| 29. Multi-Node Topology | v0.6.0 | 0/1 | Not started | - |
 | 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
 | 31. Report Generation | v0.6.0 | 0/? | Not started | - |
