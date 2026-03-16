@@ -140,11 +140,11 @@ Plans:
   3. Late-joiner catch-up time is measured (new node joins after data loaded, time to full convergence)
   4. Trusted vs PQ handshake overhead is compared with the same workload under both modes
   5. CPU, memory, and disk I/O per container are captured via docker stats during each scenario run
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 30-01: TBD
-- [ ] 30-02: TBD
+- [ ] 30-01-PLAN.md — Benchmark script framework with ingest throughput and sync/multi-hop latency scenarios
+- [ ] 30-02-PLAN.md — Late-joiner catch-up and trusted-vs-PQ comparison scenarios
 
 ### Phase 31: Report Generation
 **Goal**: Benchmark results are aggregated into a structured, reproducible report
@@ -194,6 +194,6 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 26. Documentation & Release | v0.5.0 | 1/1 | Complete | 2026-03-15 |
 | 27. Container Build | v0.6.0 | 1/1 | Complete | 2026-03-15 |
 | 28. Load Generator | v0.6.0 | 1/1 | Complete | 2026-03-15 |
-| 29. Multi-Node Topology | 1/1 | Complete    | 2026-03-16 | - |
-| 30. Benchmark Scenarios | v0.6.0 | 0/? | Not started | - |
+| 29. Multi-Node Topology | v0.6.0 | 1/1 | Complete | 2026-03-16 |
+| 30. Benchmark Scenarios | v0.6.0 | 0/2 | Not started | - |
 | 31. Report Generation | v0.6.0 | 0/? | Not started | - |
