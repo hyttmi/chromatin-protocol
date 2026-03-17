@@ -24,9 +24,9 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 
 ### Sync Resumption
 
-- [ ] **SYNC-01**: Per-peer per-namespace seq_num cursors tracked during sync rounds
+- [x] **SYNC-01**: Per-peer per-namespace seq_num cursors tracked during sync rounds
 - [ ] **SYNC-02**: Hash-list exchange skipped for namespaces where remote seq_num equals cursor (unchanged since last sync)
-- [ ] **SYNC-03**: Sync cursors persisted across node restarts via dedicated libmdbx sub-database
+- [x] **SYNC-03**: Sync cursors persisted across node restarts via dedicated libmdbx sub-database
 - [ ] **SYNC-04**: Periodic full hash-diff resync as fallback for cursor drift (configurable interval, default every 10th round)
 
 ### Namespace Quotas
@@ -83,9 +83,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-03 | Phase 33 | Complete |
 | PERF-04 | Phase 33 | Complete |
 | PERF-05 | Phase 33 | Complete |
-| SYNC-01 | Phase 34 | Pending |
+| SYNC-01 | Phase 34 | Complete |
 | SYNC-02 | Phase 34 | Pending |
-| SYNC-03 | Phase 34 | Pending |
+| SYNC-03 | Phase 34 | Complete |
 | SYNC-04 | Phase 34 | Pending |
 | QUOTA-01 | Phase 35 | Pending |
 | QUOTA-02 | Phase 35 | Pending |
