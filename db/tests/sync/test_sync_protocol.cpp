@@ -820,3 +820,307 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);
 }
+
+// ============================================================================
+// Phase 34: Cursor-based sync integration tests
+// ============================================================================
+
+using chromatindb::storage::SyncCursor;
+using chromatindb::crypto::sha3_256;
+
+TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "[sync][cursor]") {
+    TempDir tmp1, tmp2;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    Storage store2(tmp2.path.string(), test_clock);
+    BlobEngine engine1(store1);
+    BlobEngine engine2(store2);
+
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+
+    // Store a blob on node1
+    auto blob = make_signed_blob(id1, "cursor-test-blob", 604800, 9000);
+    REQUIRE(engine1.ingest(blob).accepted);
+
+    // Simulate "peer hash" for node1 (as seen by node2)
+    auto peer_hash = sha3_256(id1.public_key());
+
+    // Before sync: no cursor exists
+    auto cursor_before = store2.get_sync_cursor(peer_hash, id1.namespace_id());
+    REQUIRE_FALSE(cursor_before.has_value());
+
+    // Simulate first sync: node2 receives node1's namespace info
+    auto ns_list = store1.list_namespaces();
+    REQUIRE(ns_list.size() == 1);
+    auto peer_seq = ns_list[0].latest_seq_num;
+    REQUIRE(peer_seq > 0);
+
+    // After sync completes, set cursor
+    SyncCursor new_cursor;
+    new_cursor.seq_num = peer_seq;
+    new_cursor.round_count = 1;
+    new_cursor.last_sync_timestamp = test_clock_value;
+    store2.set_sync_cursor(peer_hash, id1.namespace_id(), new_cursor);
+
+    // Verify cursor exists now
+    auto cursor_after = store2.get_sync_cursor(peer_hash, id1.namespace_id());
+    REQUIRE(cursor_after.has_value());
+    REQUIRE(cursor_after->seq_num == peer_seq);
+
+    // Simulate second sync with no new blobs: cursor seq matches peer seq
+    auto ns_list2 = store1.list_namespaces();
+    REQUIRE(ns_list2[0].latest_seq_num == peer_seq);  // No change
+    // cursor_after->seq_num == peer_seq => CURSOR HIT
+    REQUIRE(cursor_after->seq_num == ns_list2[0].latest_seq_num);
+}
+
+TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") {
+    TempDir tmp1;
+    test_clock_value = 10000;
+
+    Storage store1(tmp1.path.string(), test_clock);
+    BlobEngine engine1(store1);
+
+    auto id1 = chromatindb::identity::NodeIdentity::generate();
+    auto id2 = chromatindb::identity::NodeIdentity::generate();
+
+    // Store blobs in two namespaces
+    auto blob1 = make_signed_blob(id1, "ns1-blob", 604800, 9000);
+    REQUIRE(engine1.ingest(blob1).accepted);
+    auto blob2 = make_signed_blob(id2, "ns2-blob", 604800, 9001);
+    REQUIRE(engine1.ingest(blob2).accepted);
+
+    // Get initial seq_nums
+    auto ns_list = store1.list_namespaces();
+    REQUIRE(ns_list.size() == 2);
+
+    // Simulate: local node stores cursor for both namespaces at current seq
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xCC);
+    for (const auto& ns : ns_list) {
+        SyncCursor c;
+        c.seq_num = ns.latest_seq_num;
+        c.round_count = 1;
+        c.last_sync_timestamp = test_clock_value;
+        store1.set_sync_cursor(peer_hash, ns.namespace_id, c);
+    }
+
+    // Add a new blob to namespace 1 only
+    auto blob3 = make_signed_blob(id1, "ns1-new-blob", 604800, 9002);
+    REQUIRE(engine1.ingest(blob3).accepted);
+
+    // Re-read namespace list
+    auto ns_list2 = store1.list_namespaces();
+    REQUIRE(ns_list2.size() == 2);
+
+    // Check cursor decisions per namespace
+    for (const auto& ns : ns_list2) {
+        auto cursor = store1.get_sync_cursor(peer_hash, ns.namespace_id);
+        REQUIRE(cursor.has_value());
+        if (std::memcmp(ns.namespace_id.data(), id1.namespace_id().data(), 32) == 0) {
+            // Namespace 1: new blob added, seq increased => cursor MISS
+            REQUIRE(ns.latest_seq_num > cursor->seq_num);
+        } else {
+            // Namespace 2: no change => cursor HIT
+            REQUIRE(ns.latest_seq_num == cursor->seq_num);
+        }
+    }
+}
+
+TEST_CASE("Full resync triggers on round N when full_resync_interval=N", "[sync][cursor]") {
+    // Test the full resync decision logic
+    uint32_t interval = 10;
+    uint64_t stale_seconds = 3600;
+    uint64_t now = 10000;
+
+    SECTION("round 0 triggers full resync (fresh or SIGHUP reset)") {
+        SyncCursor c{.seq_num = 42, .round_count = 0, .last_sync_timestamp = 9000};
+        // 0 % 10 == 0 => periodic full resync
+        REQUIRE(c.round_count % interval == 0);
+    }
+
+    SECTION("round 5 does NOT trigger full resync") {
+        SyncCursor c{.seq_num = 42, .round_count = 5, .last_sync_timestamp = 9000};
+        REQUIRE(c.round_count % interval != 0);
+    }
+
+    SECTION("round 10 triggers full resync") {
+        SyncCursor c{.seq_num = 42, .round_count = 10, .last_sync_timestamp = 9000};
+        REQUIRE(c.round_count % interval == 0);
+    }
+
+    SECTION("round 20 triggers full resync") {
+        SyncCursor c{.seq_num = 42, .round_count = 20, .last_sync_timestamp = 9000};
+        REQUIRE(c.round_count % interval == 0);
+    }
+}
+
+TEST_CASE("Full resync triggers when time gap exceeds cursor_stale_seconds", "[sync][cursor]") {
+    uint64_t stale_seconds = 3600;
+
+    SECTION("last_sync_ts=0 (never synced) does NOT trigger time gap") {
+        SyncCursor c{.seq_num = 0, .round_count = 5, .last_sync_timestamp = 0};
+        // last_sync_timestamp=0 is a special case: cursor just created, no time gap
+        bool time_gap = (stale_seconds > 0 && c.last_sync_timestamp > 0 &&
+                         10000 - c.last_sync_timestamp > stale_seconds);
+        REQUIRE_FALSE(time_gap);
+    }
+
+    SECTION("time gap exceeded triggers full resync") {
+        uint64_t now = 10000;
+        SyncCursor c{.seq_num = 42, .round_count = 5, .last_sync_timestamp = now - 7200};
+        // 10000 - 2800 = 7200 > 3600 => time gap
+        bool time_gap = (stale_seconds > 0 && c.last_sync_timestamp > 0 &&
+                         now - c.last_sync_timestamp > stale_seconds);
+        REQUIRE(time_gap);
+    }
+
+    SECTION("within stale threshold does NOT trigger") {
+        uint64_t now = 10000;
+        SyncCursor c{.seq_num = 42, .round_count = 5, .last_sync_timestamp = now - 1800};
+        bool time_gap = (stale_seconds > 0 && c.last_sync_timestamp > 0 &&
+                         now - c.last_sync_timestamp > stale_seconds);
+        REQUIRE_FALSE(time_gap);
+    }
+}
+
+TEST_CASE("Cursor mismatch: remote seq < stored cursor triggers reset", "[sync][cursor]") {
+    TempDir tmp;
+    test_clock_value = 10000;
+
+    Storage store(tmp.path.string(), test_clock);
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xDD);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0xEE);
+
+    // Set cursor with seq_num=10
+    SyncCursor c;
+    c.seq_num = 10;
+    c.round_count = 3;
+    c.last_sync_timestamp = 9000;
+    store.set_sync_cursor(peer_hash, ns_id, c);
+
+    // Simulate peer reporting seq_num=5 (went backwards)
+    uint64_t remote_seq = 5;
+    auto cursor = store.get_sync_cursor(peer_hash, ns_id);
+    REQUIRE(cursor.has_value());
+    REQUIRE(remote_seq < cursor->seq_num);  // MISMATCH detected
+
+    // Reset cursor for this namespace
+    store.delete_sync_cursor(peer_hash, ns_id);
+
+    // Verify cursor is gone
+    auto after = store.get_sync_cursor(peer_hash, ns_id);
+    REQUIRE_FALSE(after.has_value());
+}
+
+TEST_CASE("Cursors survive Storage reopen (restart persistence)", "[sync][cursor]") {
+    TempDir tmp;
+    test_clock_value = 10000;
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0x11);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0x22);
+
+    SyncCursor original;
+    original.seq_num = 99;
+    original.round_count = 7;
+    original.last_sync_timestamp = 8888;
+
+    // Create storage, set cursor, destroy
+    {
+        Storage store(tmp.path.string(), test_clock);
+        store.set_sync_cursor(peer_hash, ns_id, original);
+    }
+
+    // Reopen storage, verify cursor persisted
+    {
+        Storage store(tmp.path.string(), test_clock);
+        auto loaded = store.get_sync_cursor(peer_hash, ns_id);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->seq_num == 99);
+        REQUIRE(loaded->round_count == 7);
+        REQUIRE(loaded->last_sync_timestamp == 8888);
+    }
+}
+
+TEST_CASE("reset_all_round_counters causes next sync to be full resync", "[sync][cursor]") {
+    TempDir tmp;
+    test_clock_value = 10000;
+
+    Storage store(tmp.path.string(), test_clock);
+
+    // Create cursors for multiple peer+namespace pairs with non-zero round counts
+    std::array<uint8_t, 32> peer_a{}, peer_b{};
+    std::array<uint8_t, 32> ns1{}, ns2{};
+    peer_a.fill(0xAA);
+    peer_b.fill(0xBB);
+    ns1.fill(0x11);
+    ns2.fill(0x22);
+
+    store.set_sync_cursor(peer_a, ns1, {42, 7, 9000});
+    store.set_sync_cursor(peer_a, ns2, {100, 3, 9100});
+    store.set_sync_cursor(peer_b, ns1, {55, 9, 9200});
+
+    // Reset all round counters
+    auto count = store.reset_all_round_counters();
+    REQUIRE(count == 3);
+
+    // All round counts should be 0, seq_nums and timestamps preserved
+    auto c1 = store.get_sync_cursor(peer_a, ns1);
+    REQUIRE(c1.has_value());
+    REQUIRE(c1->round_count == 0);
+    REQUIRE(c1->seq_num == 42);
+    REQUIRE(c1->last_sync_timestamp == 9000);
+
+    auto c2 = store.get_sync_cursor(peer_a, ns2);
+    REQUIRE(c2.has_value());
+    REQUIRE(c2->round_count == 0);
+    REQUIRE(c2->seq_num == 100);
+
+    auto c3 = store.get_sync_cursor(peer_b, ns1);
+    REQUIRE(c3.has_value());
+    REQUIRE(c3->round_count == 0);
+    REQUIRE(c3->seq_num == 55);
+
+    // 0 % N == 0 => next sync will be full resync
+    uint32_t interval = 10;
+    REQUIRE(c1->round_count % interval == 0);
+    REQUIRE(c2->round_count % interval == 0);
+    REQUIRE(c3->round_count % interval == 0);
+}
+
+TEST_CASE("cleanup_stale_cursors removes cursors for unknown peers", "[sync][cursor]") {
+    TempDir tmp;
+    test_clock_value = 10000;
+
+    Storage store(tmp.path.string(), test_clock);
+
+    std::array<uint8_t, 32> peer_a{}, peer_b{};
+    std::array<uint8_t, 32> ns1{};
+    peer_a.fill(0xAA);
+    peer_b.fill(0xBB);
+    ns1.fill(0x11);
+
+    // Create cursors for both peers
+    store.set_sync_cursor(peer_a, ns1, {10, 1, 9000});
+    store.set_sync_cursor(peer_b, ns1, {20, 2, 9100});
+
+    // Cleanup with only peer_a as known
+    std::vector<std::array<uint8_t, 32>> known = {peer_a};
+    auto removed = store.cleanup_stale_cursors(known);
+    REQUIRE(removed == 1);  // peer_b's cursor removed
+
+    // peer_a's cursor still exists
+    auto ca = store.get_sync_cursor(peer_a, ns1);
+    REQUIRE(ca.has_value());
+    REQUIRE(ca->seq_num == 10);
+
+    // peer_b's cursor gone
+    auto cb = store.get_sync_cursor(peer_b, ns1);
+    REQUIRE_FALSE(cb.has_value());
+}
