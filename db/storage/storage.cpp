@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <stdexcept>
 
 #include <mdbx.h++>
@@ -64,6 +65,48 @@ static std::array<uint8_t, 40> make_expiry_key(
     return key;
 }
 
+static std::array<uint8_t, 64> make_cursor_key(
+    const uint8_t* peer_hash, const uint8_t* ns) {
+    std::array<uint8_t, 64> key;
+    std::memcpy(key.data(), peer_hash, 32);
+    std::memcpy(key.data() + 32, ns, 32);
+    return key;
+}
+
+// Cursor value: [seq_num_be:8][round_count_be:4][last_sync_ts_be:8] = 20 bytes
+static constexpr size_t CURSOR_VALUE_SIZE = 20;
+
+static void encode_be_u32(uint32_t val, uint8_t* out) {
+    out[0] = static_cast<uint8_t>(val >> 24);
+    out[1] = static_cast<uint8_t>(val >> 16);
+    out[2] = static_cast<uint8_t>(val >> 8);
+    out[3] = static_cast<uint8_t>(val);
+}
+
+static uint32_t decode_be_u32(const uint8_t* data) {
+    return (static_cast<uint32_t>(data[0]) << 24) |
+           (static_cast<uint32_t>(data[1]) << 16) |
+           (static_cast<uint32_t>(data[2]) << 8) |
+           static_cast<uint32_t>(data[3]);
+}
+
+static std::array<uint8_t, CURSOR_VALUE_SIZE> encode_cursor_value(
+    const SyncCursor& cursor) {
+    std::array<uint8_t, CURSOR_VALUE_SIZE> buf;
+    encode_be_u64(cursor.seq_num, buf.data());
+    encode_be_u32(cursor.round_count, buf.data() + 8);
+    encode_be_u64(cursor.last_sync_timestamp, buf.data() + 12);
+    return buf;
+}
+
+static SyncCursor decode_cursor_value(const uint8_t* data) {
+    SyncCursor cursor;
+    cursor.seq_num = decode_be_u64(data);
+    cursor.round_count = decode_be_u32(data + 8);
+    cursor.last_sync_timestamp = decode_be_u64(data + 12);
+    return cursor;
+}
+
 template <size_t N>
 static mdbx::slice to_slice(const std::array<uint8_t, N>& arr) {
     return mdbx::slice(arr.data(), arr.size());
@@ -91,6 +134,7 @@ struct Storage::Impl {
     mdbx::map_handle expiry_map{0};
     mdbx::map_handle delegation_map{0};
     mdbx::map_handle tombstone_map{0};
+    mdbx::map_handle cursor_map{0};
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
 
@@ -109,7 +153,7 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 6;  // 5 sub-databases + 1 spare
+        operate_params.max_maps = 7;  // 6 sub-databases + 1 spare
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
@@ -124,6 +168,7 @@ struct Storage::Impl {
             expiry_map = txn.create_map("expiry");
             delegation_map = txn.create_map("delegation");
             tombstone_map = txn.create_map("tombstone");
+            cursor_map = txn.create_map("cursor");
             txn.commit();
         }
 
@@ -837,6 +882,174 @@ size_t Storage::run_expiry_scan() {
 uint64_t Storage::used_bytes() const {
     auto info = impl_->env.get_info();
     return info.mi_geo.current;
+}
+
+// =============================================================================
+// Sync cursor API
+// =============================================================================
+
+std::optional<SyncCursor> Storage::get_sync_cursor(
+    std::span<const uint8_t, 32> peer_hash,
+    std::span<const uint8_t, 32> namespace_id) {
+    try {
+        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto txn = impl_->env.start_read();
+        auto val = txn.get(impl_->cursor_map, to_slice(key), not_found_sentinel);
+        if (val.data() == nullptr) return std::nullopt;
+        if (val.length() != CURSOR_VALUE_SIZE) return std::nullopt;
+        return decode_cursor_value(static_cast<const uint8_t*>(val.data()));
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_sync_cursor: {}", e.what());
+        return std::nullopt;
+    }
+}
+
+void Storage::set_sync_cursor(
+    std::span<const uint8_t, 32> peer_hash,
+    std::span<const uint8_t, 32> namespace_id,
+    const SyncCursor& cursor) {
+    try {
+        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto val = encode_cursor_value(cursor);
+        auto txn = impl_->env.start_write();
+        txn.upsert(impl_->cursor_map, to_slice(key),
+                    mdbx::slice(val.data(), val.size()));
+        txn.commit();
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in set_sync_cursor: {}", e.what());
+    }
+}
+
+void Storage::delete_sync_cursor(
+    std::span<const uint8_t, 32> peer_hash,
+    std::span<const uint8_t, 32> namespace_id) {
+    try {
+        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto txn = impl_->env.start_write();
+        try {
+            txn.erase(impl_->cursor_map, to_slice(key));
+        } catch (const mdbx::exception&) {
+            // Not found -- not an error
+        }
+        txn.commit();
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in delete_sync_cursor: {}", e.what());
+    }
+}
+
+size_t Storage::delete_peer_cursors(std::span<const uint8_t, 32> peer_hash) {
+    size_t deleted = 0;
+    try {
+        // Collect keys to delete first, then erase them
+        std::vector<std::array<uint8_t, 64>> keys_to_delete;
+        {
+            auto rtxn = impl_->env.start_read();
+            auto cursor = rtxn.open_cursor(impl_->cursor_map);
+            auto lower = make_cursor_key(peer_hash.data(),
+                std::array<uint8_t, 32>{}.data());
+            auto seek = cursor.lower_bound(to_slice(lower));
+            while (seek.done) {
+                auto k = cursor.current(false).key;
+                if (k.length() != 64 ||
+                    std::memcmp(k.data(), peer_hash.data(), 32) != 0) {
+                    break;
+                }
+                std::array<uint8_t, 64> key;
+                std::memcpy(key.data(), k.data(), 64);
+                keys_to_delete.push_back(key);
+                seek = cursor.to_next(false);
+            }
+        }
+
+        if (!keys_to_delete.empty()) {
+            auto txn = impl_->env.start_write();
+            for (const auto& key : keys_to_delete) {
+                txn.erase(impl_->cursor_map, to_slice(key));
+                ++deleted;
+            }
+            txn.commit();
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in delete_peer_cursors: {}", e.what());
+    }
+    return deleted;
+}
+
+size_t Storage::reset_all_round_counters() {
+    size_t count = 0;
+    try {
+        auto txn = impl_->env.start_write();
+        auto cursor = txn.open_cursor(impl_->cursor_map);
+
+        auto result = cursor.to_first(false);
+        while (result.done) {
+            auto val = cursor.current(false).value;
+            if (val.length() == CURSOR_VALUE_SIZE) {
+                // Decode, zero round_count, re-encode
+                auto cur = decode_cursor_value(
+                    static_cast<const uint8_t*>(val.data()));
+                cur.round_count = 0;
+                auto new_val = encode_cursor_value(cur);
+                // Update the value in-place via cursor
+                cursor.upsert(cursor.current(false).key,
+                               mdbx::slice(new_val.data(), new_val.size()));
+                ++count;
+            }
+            result = cursor.to_next(false);
+        }
+
+        txn.commit();
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in reset_all_round_counters: {}", e.what());
+    }
+    return count;
+}
+
+std::vector<std::array<uint8_t, 32>> Storage::list_cursor_peers() {
+    std::vector<std::array<uint8_t, 32>> peers;
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->cursor_map);
+
+        auto result = cursor.to_first(false);
+        std::array<uint8_t, 32> last_peer{};
+        bool have_last = false;
+
+        while (result.done) {
+            auto k = cursor.current(false).key;
+            if (k.length() != 64) break;
+
+            std::array<uint8_t, 32> peer;
+            std::memcpy(peer.data(), k.data(), 32);
+
+            if (!have_last || peer != last_peer) {
+                peers.push_back(peer);
+                last_peer = peer;
+                have_last = true;
+            }
+
+            result = cursor.to_next(false);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in list_cursor_peers: {}", e.what());
+    }
+    return peers;
+}
+
+size_t Storage::cleanup_stale_cursors(
+    const std::vector<std::array<uint8_t, 32>>& known_peer_hashes) {
+    // Build a set for O(1) lookups
+    std::set<std::array<uint8_t, 32>> known_set(
+        known_peer_hashes.begin(), known_peer_hashes.end());
+
+    auto peers = list_cursor_peers();
+    size_t total_deleted = 0;
+    for (const auto& peer : peers) {
+        if (known_set.find(peer) == known_set.end()) {
+            total_deleted += delete_peer_cursors(peer);
+        }
+    }
+    return total_deleted;
 }
 
 } // namespace chromatindb::storage

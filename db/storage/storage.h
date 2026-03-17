@@ -33,6 +33,14 @@ struct NamespaceInfo {
     uint64_t latest_seq_num = 0;
 };
 
+/// Per-peer per-namespace sync cursor for resumption.
+/// Stored in the cursor sub-database and survives restarts.
+struct SyncCursor {
+    uint64_t seq_num = 0;            ///< Last synced sequence number.
+    uint32_t round_count = 0;        ///< Rounds since last full resync.
+    uint64_t last_sync_timestamp = 0; ///< Unix timestamp of last sync.
+};
+
 /// Clock function type for injectable time. Returns Unix timestamp in seconds.
 using Clock = std::function<uint64_t()>;
 
@@ -41,12 +49,13 @@ uint64_t system_clock_seconds();
 
 /// Persistent blob storage engine backed by libmdbx.
 ///
-/// Manages five sub-databases:
+/// Manages six sub-databases:
 /// - blobs:      [namespace:32][hash:32] -> FlatBuffer-encoded blob
 /// - sequence:   [namespace:32][seq_be:8] -> hash:32
 /// - expiry:     [expiry_ts_be:8][hash:32] -> namespace:32
 /// - delegation: [namespace:32][delegate_pk_hash:32] -> delegation_blob_hash:32
 /// - tombstone:  [namespace:32][target_hash:32] -> (empty, existence check only)
+/// - cursor:     [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
 ///
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class Storage {
@@ -143,6 +152,45 @@ public:
     /// Return the current database file size in bytes.
     /// Uses mdbx env info (O(1), authoritative).
     uint64_t used_bytes() const;
+
+    // =========================================================================
+    // Sync cursor API
+    // =========================================================================
+
+    /// Retrieve a sync cursor for a given peer+namespace pair.
+    /// @return The cursor if found, nullopt otherwise.
+    std::optional<SyncCursor> get_sync_cursor(
+        std::span<const uint8_t, 32> peer_hash,
+        std::span<const uint8_t, 32> namespace_id);
+
+    /// Store or update a sync cursor for a given peer+namespace pair.
+    void set_sync_cursor(
+        std::span<const uint8_t, 32> peer_hash,
+        std::span<const uint8_t, 32> namespace_id,
+        const SyncCursor& cursor);
+
+    /// Delete a sync cursor for a given peer+namespace pair.
+    void delete_sync_cursor(
+        std::span<const uint8_t, 32> peer_hash,
+        std::span<const uint8_t, 32> namespace_id);
+
+    /// Delete all cursors for a given peer (across all namespaces).
+    /// @return Number of cursors deleted.
+    size_t delete_peer_cursors(std::span<const uint8_t, 32> peer_hash);
+
+    /// Reset round_count to 0 for all cursors (used on SIGHUP).
+    /// Preserves seq_num and last_sync_timestamp.
+    /// @return Number of cursors reset.
+    size_t reset_all_round_counters();
+
+    /// List unique peer hashes that have stored cursors.
+    std::vector<std::array<uint8_t, 32>> list_cursor_peers();
+
+    /// Delete cursors for peers NOT in the known set.
+    /// Used at startup to clean up cursors for peers that have been removed.
+    /// @return Number of cursors deleted.
+    size_t cleanup_stale_cursors(
+        const std::vector<std::array<uint8_t, 32>>& known_peer_hashes);
 
 private:
     struct Impl;

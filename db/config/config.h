@@ -22,6 +22,8 @@ struct Config {
     std::vector<std::string> sync_namespaces;       // Hex namespace hashes to replicate (empty = all)
     std::vector<std::string> allowed_keys;          // Hex namespace hashes (64 chars each)
     std::vector<std::string> trusted_peers;         // IP addresses for lightweight handshake
+    uint32_t full_resync_interval = 10;             // Full resync every Nth sync round
+    uint64_t cursor_stale_seconds = 3600;           // Force full resync after this gap (seconds)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

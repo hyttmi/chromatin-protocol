@@ -34,6 +34,8 @@ Config load_config(const std::filesystem::path& path) {
     cfg.max_storage_bytes = j.value("max_storage_bytes", cfg.max_storage_bytes);
     cfg.rate_limit_bytes_per_sec = j.value("rate_limit_bytes_per_sec", cfg.rate_limit_bytes_per_sec);
     cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
+    cfg.full_resync_interval = j.value("full_resync_interval", cfg.full_resync_interval);
+    cfg.cursor_stale_seconds = j.value("cursor_stale_seconds", cfg.cursor_stale_seconds);
 
     if (j.contains("bootstrap_peers") && j["bootstrap_peers"].is_array()) {
         for (const auto& peer : j["bootstrap_peers"]) {
