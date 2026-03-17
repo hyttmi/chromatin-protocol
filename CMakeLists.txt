@@ -69,13 +69,6 @@ FetchContent_Declare(flatbuffers
   GIT_SHALLOW    TRUE
 )
 
-# -- Catch2 v3 (testing framework)
-FetchContent_Declare(Catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.7.1
-  GIT_SHALLOW    TRUE
-)
-
 # -- spdlog 1.15.1 (structured logging)
 set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(spdlog
@@ -109,7 +102,7 @@ FetchContent_Declare(asiocmake
   GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(liboqs sodium flatbuffers Catch2 spdlog json libmdbx asiocmake)
+FetchContent_MakeAvailable(liboqs sodium flatbuffers spdlog json libmdbx asiocmake)
 
 # liboqs copies headers to its build dir; expose that path for oqs/sha3.h etc.
 FetchContent_GetProperties(liboqs)
@@ -120,6 +113,7 @@ target_include_directories(oqs PUBLIC
 # =============================================================================
 # Library component (guards in db/CMakeLists.txt skip re-fetching)
 # =============================================================================
+include(CTest)
 add_subdirectory(db)
 
 # =============================================================================
@@ -139,40 +133,3 @@ target_link_libraries(chromatindb_bench PRIVATE chromatindb_lib)
 # =============================================================================
 add_executable(chromatindb_loadgen loadgen/loadgen_main.cpp)
 target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
-
-# =============================================================================
-# Test target
-# =============================================================================
-include(CTest)
-if(BUILD_TESTING)
-add_executable(chromatindb_tests
-  tests/crypto/test_hash.cpp
-  tests/crypto/test_signing.cpp
-  tests/crypto/test_kem.cpp
-  tests/crypto/test_aead.cpp
-  tests/crypto/test_kdf.cpp
-  tests/crypto/test_master_key.cpp
-  tests/wire/test_codec.cpp
-  tests/config/test_config.cpp
-  tests/identity/test_identity.cpp
-  tests/storage/test_storage.cpp
-  tests/engine/test_engine.cpp
-  tests/net/test_framing.cpp
-  tests/net/test_protocol.cpp
-  tests/net/test_handshake.cpp
-  tests/net/test_connection.cpp
-  tests/net/test_server.cpp
-  tests/sync/test_sync_protocol.cpp
-  tests/peer/test_peer_manager.cpp
-  tests/acl/test_access_control.cpp
-  tests/test_daemon.cpp
-)
-
-target_link_libraries(chromatindb_tests PRIVATE
-  chromatindb_lib
-  Catch2::Catch2WithMain
-)
-
-include(Catch)
-catch_discover_tests(chromatindb_tests)
-endif()

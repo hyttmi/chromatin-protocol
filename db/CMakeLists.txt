@@ -181,3 +181,56 @@ target_link_libraries(chromatindb_lib PUBLIC
   mdbx-static
   asio::asio
 )
+
+# =============================================================================
+# Standalone build support
+# =============================================================================
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  include(CTest)
+endif()
+
+# =============================================================================
+# Test target
+# =============================================================================
+if(BUILD_TESTING)
+  # -- Catch2 v3.7.1 (testing framework)
+  if(NOT TARGET Catch2::Catch2WithMain)
+    FetchContent_Declare(Catch2
+      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+      GIT_TAG        v3.7.1
+      GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(Catch2)
+  endif()
+
+  add_executable(chromatindb_tests
+    tests/acl/test_access_control.cpp
+    tests/config/test_config.cpp
+    tests/crypto/test_aead.cpp
+    tests/crypto/test_hash.cpp
+    tests/crypto/test_kdf.cpp
+    tests/crypto/test_kem.cpp
+    tests/crypto/test_master_key.cpp
+    tests/crypto/test_signing.cpp
+    tests/engine/test_engine.cpp
+    tests/identity/test_identity.cpp
+    tests/net/test_connection.cpp
+    tests/net/test_framing.cpp
+    tests/net/test_handshake.cpp
+    tests/net/test_protocol.cpp
+    tests/net/test_server.cpp
+    tests/peer/test_peer_manager.cpp
+    tests/storage/test_storage.cpp
+    tests/sync/test_sync_protocol.cpp
+    tests/wire/test_codec.cpp
+    tests/test_daemon.cpp
+  )
+
+  target_link_libraries(chromatindb_tests PRIVATE
+    chromatindb_lib
+    Catch2::Catch2WithMain
+  )
+
+  include(Catch)
+  catch_discover_tests(chromatindb_tests)
+endif()
