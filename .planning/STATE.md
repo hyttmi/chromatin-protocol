@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 34-01-PLAN.md
-last_updated: "2026-03-17T16:19:37.524Z"
-last_activity: 2026-03-17 -- Completed 34-01 cursor persistence layer + config extensions
+stopped_at: Completed 34-02-PLAN.md
+last_updated: "2026-03-17T16:56:31Z"
+last_activity: 2026-03-17 -- Completed 34-02 cursor-aware sync orchestration (Phase 34 complete)
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 5
-  completed_plans: 4
-  percent: 50
+  completed_plans: 5
+  percent: 60
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 34 (3 of 6 in v0.7.0) (Sync Resumption)
-Plan: 1 of 2 in current phase (COMPLETE)
-Status: 34-01 complete -- cursor persistence layer shipped
-Last activity: 2026-03-17 -- Completed 34-01 cursor persistence layer + config extensions
+Phase: 34 (3 of 6 in v0.7.0) (Sync Resumption) -- COMPLETE
+Plan: 2 of 2 in current phase (COMPLETE)
+Status: Phase 34 complete -- sync resumption fully shipped
+Last activity: 2026-03-17 -- Completed 34-02 cursor-aware sync orchestration
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [█████░░░░░] 50%
 | Phase 33 P02 | 14min | 2 tasks | 4 files |
 | Phase 34 P01 | 11min | 1 task (TDD) | 6 files |
 | Phase 34 P01 | 11min | 1 tasks | 6 files |
+| Phase 34 P02 | 35min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 34]: delete_peer_cursors uses read-then-write pattern to avoid mdbx cursor invalidation
 - [Phase 34]: Cursor value encoding: [seq_num_be:8][round_count_be:4][last_sync_ts_be:8] = 20 bytes
 - [Phase 34]: delete_peer_cursors uses read-then-write to avoid mdbx cursor invalidation after erase
+- [Phase 34]: Wire protocol unchanged for cursor sync -- optimization is purely local Phase C skip
+- [Phase 34]: Mutable cursor config members follow existing rate_limit_ pattern for SIGHUP reload
+- [Phase 34]: pubkey_hash in PersistedPeer enables startup cursor cleanup cross-reference
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-17T16:19:37.521Z
-Stopped at: Completed 34-01-PLAN.md
+Last session: 2026-03-17T16:56:31Z
+Stopped at: Completed 34-02-PLAN.md (Phase 34 complete)
 Resume file: None
