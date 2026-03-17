@@ -183,7 +183,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
-| 33. Crypto Throughput Optimization | 2/2 | Complete   | 2026-03-17 |
+| 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
 | 34. Sync Resumption | 0/TBD | Not started | - |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
