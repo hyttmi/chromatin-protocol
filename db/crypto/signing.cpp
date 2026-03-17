@@ -74,7 +74,9 @@ std::vector<uint8_t> Signer::sign(std::span<const uint8_t> message) const {
 bool Signer::verify(std::span<const uint8_t> message,
                     std::span<const uint8_t> signature,
                     std::span<const uint8_t> public_key) {
-    OQS_SIG* sig = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
+    // Process-lifetime cached context (one per thread, future-safe for thread pool).
+    // OQS_SIG_verify is read-only on the context -- safe to reuse.
+    thread_local OQS_SIG* sig = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
     if (!sig) {
         throw std::runtime_error("Failed to create ML-DSA-87 context for verification");
     }
@@ -82,7 +84,6 @@ bool Signer::verify(std::span<const uint8_t> message,
     OQS_STATUS rc = OQS_SIG_verify(sig, message.data(), message.size(),
                                     signature.data(), signature.size(),
                                     public_key.data());
-    OQS_SIG_free(sig);
     return rc == OQS_SUCCESS;
 }
 

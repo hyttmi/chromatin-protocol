@@ -2,6 +2,7 @@
 #include "db/wire/blob_generated.h"
 #include "db/crypto/hash.h"
 #include <flatbuffers/flatbuffers.h>
+#include <oqs/sha3.h>
 #include <cstring>
 #include <stdexcept>
 
@@ -57,39 +58,50 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
     return result;
 }
 
-std::vector<uint8_t> build_signing_input(
+std::array<uint8_t, 32> build_signing_input(
     std::span<const uint8_t> namespace_id,
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp) {
 
-    // Fixed layout: namespace(32) || data(var) || ttl_le(4) || timestamp_le(8)
-    std::vector<uint8_t> buf;
-    buf.reserve(namespace_id.size() + data.size() + 4 + 8);
+    // Incremental SHA3-256: hash namespace || data || ttl_le32 || timestamp_le64
+    // directly into the sponge -- zero intermediate allocation.
+    OQS_SHA3_sha3_256_inc_ctx ctx;
+    OQS_SHA3_sha3_256_inc_init(&ctx);
 
     // Namespace
-    buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), namespace_id.size());
 
-    // Data
-    buf.insert(buf.end(), data.begin(), data.end());
+    // Data (may be up to 100 MiB -- fed directly, no copy)
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
 
     // TTL as little-endian uint32
-    buf.push_back(static_cast<uint8_t>(ttl));
-    buf.push_back(static_cast<uint8_t>(ttl >> 8));
-    buf.push_back(static_cast<uint8_t>(ttl >> 16));
-    buf.push_back(static_cast<uint8_t>(ttl >> 24));
+    uint8_t ttl_le[4] = {
+        static_cast<uint8_t>(ttl),
+        static_cast<uint8_t>(ttl >> 8),
+        static_cast<uint8_t>(ttl >> 16),
+        static_cast<uint8_t>(ttl >> 24),
+    };
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_le, 4);
 
     // Timestamp as little-endian uint64
-    buf.push_back(static_cast<uint8_t>(timestamp));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 8));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 16));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 24));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 32));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 40));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 48));
-    buf.push_back(static_cast<uint8_t>(timestamp >> 56));
+    uint8_t ts_le[8] = {
+        static_cast<uint8_t>(timestamp),
+        static_cast<uint8_t>(timestamp >> 8),
+        static_cast<uint8_t>(timestamp >> 16),
+        static_cast<uint8_t>(timestamp >> 24),
+        static_cast<uint8_t>(timestamp >> 32),
+        static_cast<uint8_t>(timestamp >> 40),
+        static_cast<uint8_t>(timestamp >> 48),
+        static_cast<uint8_t>(timestamp >> 56),
+    };
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_le, 8);
 
-    return buf;
+    std::array<uint8_t, 32> hash{};
+    OQS_SHA3_sha3_256_inc_finalize(hash.data(), &ctx);
+    OQS_SHA3_sha3_256_inc_ctx_release(&ctx);
+
+    return hash;
 }
 
 std::array<uint8_t, 32> blob_hash(std::span<const uint8_t> encoded_blob) {
