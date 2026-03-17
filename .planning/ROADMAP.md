@@ -141,7 +141,10 @@ Plans:
   2. Sync cursors survive node restart (stored in libmdbx sub-database) and resume where they left off
   3. A periodic full hash-diff resync triggers every Nth round (configurable, default 10) to catch any cursor drift
   4. Cursor-based sync produces identical final state as full hash-list diff sync (no missing or extra blobs)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 34-01-PLAN.md — Cursor sub-database CRUD + config fields
+- [ ] 34-02-PLAN.md — Cursor-aware sync orchestration + metrics + tests
 
 ### Phase 35: Namespace Quotas
 **Goal**: Node operators can limit per-namespace resource usage with byte and blob count caps enforced atomically at ingest
@@ -184,7 +187,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 |-------|----------------|--------|-----------|
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
-| 34. Sync Resumption | 0/TBD | Not started | - |
+| 34. Sync Resumption | 0/2 | Not started | - |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
 | 37. General Cleanup | 0/TBD | Not started | - |
