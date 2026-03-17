@@ -17,9 +17,9 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 ### Performance
 
 - [ ] **PERF-01**: Redundant SHA3-256 hash + FlatBuffer re-encode eliminated from ingest pipeline (pre-computed hash passed through)
-- [ ] **PERF-02**: OQS_SIG context cached (static or thread_local) instead of created/destroyed per verify call
+- [x] **PERF-02**: OQS_SIG context cached (static or thread_local) instead of created/destroyed per verify call
 - [ ] **PERF-03**: Dedup check (has_blob) runs before signature verification on sync-received blobs, skipping crypto for already-stored blobs
-- [ ] **PERF-04**: Hash-then-sign protocol change — sign/verify over SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (~1 MiB for large blobs). Breaking change, acceptable pre-MVP.
+- [x] **PERF-04**: Hash-then-sign protocol change — sign/verify over SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (~1 MiB for large blobs). Breaking change, acceptable pre-MVP.
 - [ ] **PERF-05**: Sync receive path copy reduction — eliminate redundant .assign() copies in TransportCodec::decode and wire::decode_blob by passing encoded FlatBuffer bytes through to storage without intermediate decode/re-encode
 
 ### Sync Resumption
@@ -79,9 +79,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLEAN-03 | Phase 37 | Pending |
 | CLEAN-04 | Phase 37 | Pending |
 | PERF-01 | Phase 33 | Pending |
-| PERF-02 | Phase 33 | Pending |
+| PERF-02 | Phase 33 | Complete |
 | PERF-03 | Phase 33 | Pending |
-| PERF-04 | Phase 33 | Pending |
+| PERF-04 | Phase 33 | Complete |
 | PERF-05 | Phase 33 | Pending |
 | SYNC-01 | Phase 34 | Pending |
 | SYNC-02 | Phase 34 | Pending |

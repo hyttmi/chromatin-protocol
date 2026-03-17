@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 33 context gathered
-last_updated: "2026-03-17T13:40:50.290Z"
-last_activity: 2026-03-17 -- Completed 32-01 test relocation
+stopped_at: Completed 33-01-PLAN.md
+last_updated: "2026-03-17T14:07:00Z"
+last_activity: 2026-03-17 -- Completed 33-01 hash-then-sign + OQS_SIG caching
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 17
+  completed_phases: 2
+  total_plans: 2
+  completed_plans: 2
+  percent: 33
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 32 - Test Relocation
+**Current focus:** Phase 33 - Crypto Throughput Optimization
 
 ## Current Position
 
-Phase: 32 (1 of 6 in v0.7.0) (Test Relocation)
+Phase: 33 (2 of 6 in v0.7.0) (Crypto Throughput Optimization)
 Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 32 complete
-Last activity: 2026-03-17 -- Completed 32-01 test relocation
+Status: Phase 33 plan 01 complete
+Last activity: 2026-03-17 -- Completed 33-01 hash-then-sign + OQS_SIG caching
 
-Progress: [█░░░░░░░░░] 17%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [█░░░░░░░░░] 17%
 | v0.5.0 Hardening | 5 | 6 | 2 days | ~19 min |
 | v0.6.0 Validation | 5 | 6 | 2 days | ~5 min |
 | Phase 32 P01 | 15min | 2 tasks | 22 files |
+| Phase 33 P01 | 9min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -62,6 +63,8 @@ Recent decisions affecting current work:
 - v0.7.0: Sync cursors as optimization hints only; periodic full resync as safety net for drift
 - v0.7.0: Quota enforcement inside libmdbx write transaction to prevent check-then-act race
 - [Phase 32]: Catch2 FetchContent guarded inside db/CMakeLists.txt BUILD_TESTING block for component self-containment
+- [Phase 33]: Incremental SHA3-256 via liboqs OQS_SHA3_sha3_256_inc_* eliminates 1 MiB intermediate allocation
+- [Phase 33]: thread_local OQS_SIG* in Signer::verify() is future-safe for v0.8.0 thread pool offload
 
 ### Pending Todos
 
@@ -75,6 +78,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-17T13:40:50.287Z
-Stopped at: Phase 33 context gathered
-Resume file: .planning/phases/33-crypto-throughput-optimization/33-CONTEXT.md
+Last session: 2026-03-17T14:07:00Z
+Stopped at: Completed 33-01-PLAN.md
+Resume file: .planning/phases/33-crypto-throughput-optimization/33-01-SUMMARY.md
