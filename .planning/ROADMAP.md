@@ -97,7 +97,7 @@ Full details: [milestones/v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md)
 
 - [x] **Phase 32: Test Relocation** - Move all database tests into db/ for component self-containment (completed 2026-03-17)
 - [x] **Phase 33: Crypto Throughput Optimization** - Eliminate redundant hashing and allocation in the ingest/verify hot path (completed 2026-03-17)
-- [x] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (completed 2026-03-17)
+- [ ] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (gap closure in progress)
 - [ ] **Phase 35: Namespace Quotas** - Per-namespace byte and blob count limits enforced at ingest
 - [ ] **Phase 36: Deletion Benchmarks** - Tombstone creation, propagation, and GC performance in Docker suite
 - [ ] **Phase 37: General Cleanup** - Remove stale artifacts, update documentation, sweep dead code
@@ -141,10 +141,11 @@ Plans:
   2. Sync cursors survive node restart (stored in libmdbx sub-database) and resume where they left off
   3. A periodic full hash-diff resync triggers every Nth round (configurable, default 10) to catch any cursor drift
   4. Cursor-based sync produces identical final state as full hash-list diff sync (no missing or extra blobs)
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [ ] 34-01-PLAN.md — Cursor sub-database CRUD + config fields
 - [ ] 34-02-PLAN.md — Cursor-aware sync orchestration + metrics + tests
+- [ ] 34-03-PLAN.md — Gap closure: fix tombstone sync regression from cursor-aware sync
 
 ### Phase 35: Namespace Quotas
 **Goal**: Node operators can limit per-namespace resource usage with byte and blob count caps enforced atomically at ingest
@@ -187,7 +188,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 |-------|----------------|--------|-----------|
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
-| 34. Sync Resumption | 2/2 | Complete   | 2026-03-17 |
+| 34. Sync Resumption | 2/3 | Gap closure | - |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
 | 37. General Cleanup | 0/TBD | Not started | - |
