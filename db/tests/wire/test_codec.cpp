@@ -77,7 +77,7 @@ TEST_CASE("ForceDefaults encodes zero-value ttl", "[codec]") {
     REQUIRE(decoded.ttl == 0);
 }
 
-TEST_CASE("build_signing_input produces correct format", "[codec]") {
+TEST_CASE("build_signing_input produces SHA3-256 of canonical concatenation", "[codec]") {
     std::array<uint8_t, 32> ns{};
     ns[0] = 0xFF;
     ns[31] = 0x01;
@@ -87,28 +87,29 @@ TEST_CASE("build_signing_input produces correct format", "[codec]") {
 
     auto input = build_signing_input(ns, data, ttl, timestamp);
 
-    // Total: 32 + 2 + 4 + 8 = 46 bytes
-    REQUIRE(input.size() == 46);
+    // Returns a 32-byte SHA3-256 digest
+    REQUIRE(input.size() == 32);
 
-    // First 32 bytes: namespace
-    REQUIRE(input[0] == 0xFF);
-    REQUIRE(input[31] == 0x01);
+    // Build expected: SHA3-256 of the canonical concatenation
+    // namespace(32) || data(var) || ttl_le(4) || timestamp_le(8)
+    std::vector<uint8_t> concat;
+    concat.insert(concat.end(), ns.begin(), ns.end());
+    concat.insert(concat.end(), data.begin(), data.end());
+    concat.push_back(static_cast<uint8_t>(ttl));
+    concat.push_back(static_cast<uint8_t>(ttl >> 8));
+    concat.push_back(static_cast<uint8_t>(ttl >> 16));
+    concat.push_back(static_cast<uint8_t>(ttl >> 24));
+    concat.push_back(static_cast<uint8_t>(timestamp));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 8));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 16));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 24));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 32));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 40));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 48));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 56));
 
-    // Next 2 bytes: data
-    REQUIRE(input[32] == 0xAA);
-    REQUIRE(input[33] == 0xBB);
-
-    // Next 4 bytes: ttl little-endian (604800 = 0x00093A80)
-    REQUIRE(input[34] == 0x80);
-    REQUIRE(input[35] == 0x3A);
-    REQUIRE(input[36] == 0x09);
-    REQUIRE(input[37] == 0x00);
-
-    // Next 8 bytes: timestamp little-endian (1709500000 = 0x65E4E660)
-    REQUIRE(input[38] == 0x60);  // low byte
-    REQUIRE(input[39] == 0xE6);
-    REQUIRE(input[40] == 0xE4);
-    REQUIRE(input[41] == 0x65);
+    auto expected = chromatindb::crypto::sha3_256(concat);
+    REQUIRE(input == expected);
 }
 
 TEST_CASE("build_signing_input is independent of FlatBuffer encoding", "[codec]") {
@@ -118,9 +119,13 @@ TEST_CASE("build_signing_input is independent of FlatBuffer encoding", "[codec]"
     auto signing_input = build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
 
-    // Signing input should NOT be a subset of encoded blob
-    // (FlatBuffers uses different layout with offsets, vtables, etc.)
+    // Signing input is a 32-byte SHA3-256 digest, unrelated to FlatBuffer layout
+    REQUIRE(signing_input.size() == 32);
     REQUIRE(signing_input.size() != encoded.size());
+
+    // Hash of encoded blob is a different hash (over different input)
+    auto encoded_hash = blob_hash(encoded);
+    REQUIRE(signing_input != encoded_hash);
 }
 
 TEST_CASE("build_signing_input is deterministic for same logical content", "[codec]") {
