@@ -110,19 +110,23 @@ Full details: [milestones/v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md)
 **Requirements**: CLEAN-01
 **Success Criteria** (what must be TRUE):
   1. All database test source files live under db/tests/ (no test files for db/ remain in the top-level test directory)
-  2. `ctest -N` reports exactly 284 tests after relocation (same count as before)
+  2. `ctest -N` reports exactly 313 tests after relocation (same count as before)
   3. `cmake --build .` from the top-level project builds and discovers all tests without manual path fixups
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 32-01-PLAN.md — Relocate test files to db/tests/ and rewrite CMakeLists.txt
 
 ### Phase 33: Crypto Throughput Optimization
-**Goal**: Large blob (1 MiB) ingest and sync verification throughput measurably improved by eliminating redundant work in the hot path
+**Goal**: Large blob (1 MiB) ingest and sync verification throughput measurably improved by eliminating redundant work and copies in the hot path
 **Depends on**: Phase 32
-**Requirements**: PERF-01, PERF-02, PERF-03
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, PERF-05
 **Success Criteria** (what must be TRUE):
   1. Blob content hash is computed once during ingest and passed through to storage (no redundant SHA3-256 + FlatBuffer re-encode)
   2. OQS_SIG context for ML-DSA-87 is allocated once (static or thread_local) and reused across all verify calls
   3. Sync-received blobs that already exist locally skip signature verification entirely (has_blob check before crypto)
-  4. All 284+ tests pass with no regressions
+  4. ML-DSA-87 signs/verifies SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (protocol-breaking change)
+  5. Sync receive path avoids redundant .assign() copies — encoded FlatBuffer bytes passed through to storage without intermediate decode/re-encode where possible
+  6. All 313+ tests pass with no regressions
 **Plans**: TBD
 
 ### Phase 34: Sync Resumption
@@ -175,7 +179,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 32. Test Relocation | 0/TBD | Not started | - |
+| 32. Test Relocation | 0/1 | Not started | - |
 | 33. Crypto Throughput Optimization | 0/TBD | Not started | - |
 | 34. Sync Resumption | 0/TBD | Not started | - |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
