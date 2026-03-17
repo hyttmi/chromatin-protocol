@@ -9,7 +9,7 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 
 ### Cleanup
 
-- [ ] **CLEAN-01**: Tests relocated into db/ directory with CTest discovery preserved (284 tests before = 284 tests after)
+- [ ] **CLEAN-01**: Tests relocated into db/ directory with CTest discovery preserved (313 tests before = 313 tests after)
 - [ ] **CLEAN-02**: Old standalone benchmark binary (chromatindb_bench) removed from build
 - [ ] **CLEAN-03**: db/ README updated with current features, old benchmark data removed
 - [ ] **CLEAN-04**: Stale artifacts swept and removed (dead code, leftover files from previous milestones)
@@ -19,6 +19,8 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 - [ ] **PERF-01**: Redundant SHA3-256 hash + FlatBuffer re-encode eliminated from ingest pipeline (pre-computed hash passed through)
 - [ ] **PERF-02**: OQS_SIG context cached (static or thread_local) instead of created/destroyed per verify call
 - [ ] **PERF-03**: Dedup check (has_blob) runs before signature verification on sync-received blobs, skipping crypto for already-stored blobs
+- [ ] **PERF-04**: Hash-then-sign protocol change — sign/verify over SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (~1 MiB for large blobs). Breaking change, acceptable pre-MVP.
+- [ ] **PERF-05**: Sync receive path copy reduction — eliminate redundant .assign() copies in TransportCodec::decode and wire::decode_blob by passing encoded FlatBuffer bytes through to storage without intermediate decode/re-encode
 
 ### Sync Resumption
 
@@ -46,8 +48,7 @@ Deferred to v0.8.0+. Tracked but not in current roadmap.
 
 ### Performance (Advanced)
 
-- **PERF-04**: Crypto offload to asio::thread_pool for ML-DSA-87 verify (breaks >20 blobs/sec ceiling for 1 MiB)
-- **PERF-05**: thread_local buffer reuse for build_signing_input() to reduce allocation pressure
+- **PERF-06**: Crypto offload to asio::thread_pool for ML-DSA-87 verify (breaks >20 blobs/sec ceiling for 1 MiB)
 
 ### Sync (Advanced)
 
@@ -61,7 +62,7 @@ Explicitly excluded. Documented to prevent scope creep.
 |---------|--------|
 | Multithreaded ingest pipeline | All data structures are single-thread-only by design. Thread pool offload for crypto only (v0.8.0). |
 | Hardware crypto acceleration (SHA3-NI, AES-NI) | Requires CPU feature detection + runtime dispatch. ML-DSA-87 verify is the dominant cost, not SHA3. |
-| HashML-DSA (pre-hash signing) | Breaking protocol change, liboqs has no separate HashML-DSA API. Adopt if liboqs adds support later. |
+| HashML-DSA (FIPS 204 pre-hash mode) | liboqs has no separate HashML-DSA API. PERF-04 achieves the same effect (SHA3-256 pre-hash before sign/verify) without needing the formal HashML-DSA mode. |
 | Complex quota policies (tiered, time-based, burst) | YAGNI. Database is intentionally dumb. Relay layer owns sophisticated policies. |
 | Quota negotiation protocol | Quotas are node-local config, like max_storage_bytes. No new wire messages. |
 | Chunked/streaming blob verification | ML-DSA-87 requires full message. No incremental API in liboqs. |
@@ -80,6 +81,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-01 | Phase 33 | Pending |
 | PERF-02 | Phase 33 | Pending |
 | PERF-03 | Phase 33 | Pending |
+| PERF-04 | Phase 33 | Pending |
+| PERF-05 | Phase 33 | Pending |
 | SYNC-01 | Phase 34 | Pending |
 | SYNC-02 | Phase 34 | Pending |
 | SYNC-03 | Phase 34 | Pending |
@@ -93,10 +96,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BENCH-03 | Phase 36 | Pending |
 
 **Coverage:**
-- v0.7.0 requirements: 18 total
-- Mapped to phases: 18
+- v0.7.0 requirements: 20 total
+- Mapped to phases: 20
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after roadmap creation*
+*Last updated: 2026-03-17 — added PERF-04 (hash-then-sign), PERF-05 (sync copy reduction), removed future PERF-05 (obsoleted by hash-then-sign)*
