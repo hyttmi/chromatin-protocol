@@ -103,7 +103,22 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
         }
     }
 
-    // Step 3: Signature verification (most expensive)
+    // Step 2.5: Compute content hash + dedup check (before expensive crypto)
+    // Encode blob and hash ONCE -- reused for dedup, tombstone check, and storage.
+    auto encoded = wire::encode_blob(blob);
+    auto content_hash = wire::blob_hash(encoded);
+
+    // Dedup check: skip expensive ML-DSA-87 signature verification for already-stored blobs
+    if (storage_.has_blob(blob.namespace_id, content_hash)) {
+        WriteAck ack;
+        ack.blob_hash = content_hash;
+        ack.seq_num = 0;  // Not looked up for dedup short-circuit (safe: see RESEARCH.md Pitfall 5)
+        ack.status = IngestStatus::duplicate;
+        ack.replication_count = 1;
+        return IngestResult::success(std::move(ack));
+    }
+
+    // Step 3: Signature verification (most expensive -- only for NEW blobs)
     auto signing_input = wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
 
@@ -115,6 +130,7 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
     }
 
     // Step 3.5: Tombstone handling for incoming blobs
+    // Reuse already-computed content_hash and encoded -- no redundant encode/hash.
     if (wire::is_tombstone(blob.data)) {
         // Tombstone blob arriving via sync or direct ingest.
         // Delete the target blob if it exists, then store the tombstone.
@@ -124,8 +140,6 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
                        blob.namespace_id[0], blob.namespace_id[1]);
     } else {
         // Regular blob: check if a tombstone blocks it.
-        auto encoded = wire::encode_blob(blob);
-        auto content_hash = wire::blob_hash(encoded);
         if (storage_.has_tombstone_for(blob.namespace_id, content_hash)) {
             spdlog::debug("Ingest rejected: blob blocked by tombstone (ns {:02x}{:02x}...)",
                            blob.namespace_id[0], blob.namespace_id[1]);
@@ -134,8 +148,8 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
         }
     }
 
-    // Step 4: Store to storage layer
-    auto store_result = storage_.store_blob(blob);
+    // Step 4: Store to storage layer -- pass pre-computed hash and encoded bytes
+    auto store_result = storage_.store_blob(blob, content_hash, encoded);
 
     switch (store_result.status) {
         case storage::StoreResult::Status::Stored: {

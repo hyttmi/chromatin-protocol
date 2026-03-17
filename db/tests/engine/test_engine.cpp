@@ -221,7 +221,7 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     REQUIRE(result.ack->blob_hash != zero);
 }
 
-TEST_CASE("BlobEngine duplicate returns existing seq_num", "[engine]") {
+TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     BlobEngine engine(store);
@@ -235,7 +235,10 @@ TEST_CASE("BlobEngine duplicate returns existing seq_num", "[engine]") {
     REQUIRE(first.accepted);
     REQUIRE(second.accepted);
     REQUIRE(second.ack->status == IngestStatus::duplicate);
-    REQUIRE(second.ack->seq_num == first.ack->seq_num);
+    // Dedup short-circuit returns seq_num=0 (skips expensive seq_map scan).
+    // This is safe: no consumer requires valid seq_num for duplicate acks.
+    REQUIRE(second.ack->seq_num == 0);
+    REQUIRE(second.ack->blob_hash == first.ack->blob_hash);
 }
 
 TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
