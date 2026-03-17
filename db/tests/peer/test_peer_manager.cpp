@@ -1718,3 +1718,82 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     pm2.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
+
+// =============================================================================
+// Phase 34: Cursor-aware sync orchestration (Plan 02)
+// =============================================================================
+
+TEST_CASE("NodeMetrics has cursor counters default initialized", "[peer][metrics][cursor]") {
+    chromatindb::peer::NodeMetrics m;
+    REQUIRE(m.cursor_hits == 0);
+    REQUIRE(m.cursor_misses == 0);
+    REQUIRE(m.full_resyncs == 0);
+}
+
+TEST_CASE("PeerManager reload_config updates cursor config and resets round counters", "[peer][cursor][reload]") {
+    // Verify that reload_config picks up full_resync_interval and cursor_stale_seconds
+    // and that SIGHUP resets round counters.
+    TempDir tmp1;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    // Write initial config with default cursor fields
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14370", "full_resync_interval": 10, "cursor_stale_seconds": 3600})";
+    }
+
+    auto cfg1 = chromatindb::config::load_config(config_path);
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+    pm1.start();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // Set up some cursor data to test round counter reset
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xAA);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0xBB);
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 42;
+    cursor.round_count = 7;
+    cursor.last_sync_timestamp = 1000;
+    store1.set_sync_cursor(peer_hash, ns_id, cursor);
+
+    // Update config file with new cursor fields
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14370", "full_resync_interval": 5, "cursor_stale_seconds": 1800})";
+    }
+
+    // Trigger reload (simulates SIGHUP)
+    pm1.reload_config();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // Verify round counters were reset (SIGHUP forces full resync)
+    auto after = store1.get_sync_cursor(peer_hash, ns_id);
+    REQUIRE(after.has_value());
+    REQUIRE(after->round_count == 0);       // Reset by SIGHUP
+    REQUIRE(after->seq_num == 42);          // Preserved
+    REQUIRE(after->last_sync_timestamp == 1000); // Preserved
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
+}
+
+TEST_CASE("PersistedPeer stores pubkey_hash field", "[peer][cursor]") {
+    // Verify that PersistedPeer has a pubkey_hash field
+    chromatindb::peer::PersistedPeer pp;
+    pp.pubkey_hash = "aabbccdd";
+    REQUIRE(pp.pubkey_hash == "aabbccdd");
+}
