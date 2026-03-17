@@ -280,10 +280,16 @@ Storage::Storage(Storage&& other) noexcept = default;
 Storage& Storage::operator=(Storage&& other) noexcept = default;
 
 StoreResult Storage::store_blob(const wire::BlobData& blob) {
+    auto encoded = wire::encode_blob(blob);
+    auto hash = wire::blob_hash(encoded);
+    return store_blob(blob, hash, encoded);
+}
+
+StoreResult Storage::store_blob(const wire::BlobData& blob,
+                                const std::array<uint8_t, 32>& precomputed_hash,
+                                std::span<const uint8_t> precomputed_encoded) {
     try {
-        auto encoded = wire::encode_blob(blob);
-        auto hash = wire::blob_hash(encoded);
-        auto blob_key = make_blob_key(blob.namespace_id.data(), hash.data());
+        auto blob_key = make_blob_key(blob.namespace_id.data(), precomputed_hash.data());
         auto key_slice = to_slice(blob_key);
 
         auto txn = impl_->env.start_write();
@@ -306,7 +312,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
                 }
                 auto v = cursor.current(false).value;
                 if (v.length() == 32 &&
-                    std::memcmp(v.data(), hash.data(), 32) == 0) {
+                    std::memcmp(v.data(), precomputed_hash.data(), 32) == 0) {
                     existing_seq = decode_be_u64(
                         static_cast<const uint8_t*>(k.data()) + 32);
                     break;
@@ -318,13 +324,13 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
             StoreResult result;
             result.status = StoreResult::Status::Duplicate;
             result.seq_num = existing_seq;
-            result.blob_hash = hash;
+            result.blob_hash = precomputed_hash;
             return result;
         }
 
-        // Encrypt the encoded blob value (AD = 64-byte mdbx key)
+        // Encrypt the pre-computed encoded blob value (AD = 64-byte mdbx key)
         auto encrypted = impl_->encrypt_value(
-            std::span<const uint8_t>(encoded.data(), encoded.size()),
+            precomputed_encoded,
             std::span<const uint8_t>(blob_key.data(), blob_key.size()));
 
         // Store encrypted blob
@@ -335,13 +341,13 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
         uint64_t seq = impl_->next_seq_num(txn, blob.namespace_id.data());
         auto seq_key = make_seq_key(blob.namespace_id.data(), seq);
         txn.upsert(impl_->seq_map, to_slice(seq_key),
-                    mdbx::slice(hash.data(), hash.size()));
+                    mdbx::slice(precomputed_hash.data(), precomputed_hash.size()));
 
         // Store expiry entry (skip for TTL=0)
         if (blob.ttl > 0) {
             uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) +
                                    static_cast<uint64_t>(blob.ttl);
-            auto exp_key = make_expiry_key(expiry_time, hash.data());
+            auto exp_key = make_expiry_key(expiry_time, precomputed_hash.data());
             txn.upsert(impl_->expiry_map, to_slice(exp_key),
                         mdbx::slice(blob.namespace_id.data(),
                                     blob.namespace_id.size()));
@@ -355,7 +361,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
             auto deleg_key = make_blob_key(blob.namespace_id.data(), delegate_pk_hash.data());
             // Value: [delegation_blob_hash:32]
             txn.upsert(impl_->delegation_map, to_slice(deleg_key),
-                        mdbx::slice(hash.data(), hash.size()));
+                        mdbx::slice(precomputed_hash.data(), precomputed_hash.size()));
         }
 
         // Populate tombstone index if this is a tombstone blob
@@ -372,7 +378,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
         StoreResult result;
         result.status = StoreResult::Status::Stored;
         result.seq_num = seq;
-        result.blob_hash = hash;
+        result.blob_hash = precomputed_hash;
         return result;
 
     } catch (const std::exception& e) {

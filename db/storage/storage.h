@@ -74,6 +74,13 @@ public:
     /// @return Stored if new, Duplicate if already exists, Error on failure.
     StoreResult store_blob(const wire::BlobData& blob);
 
+    /// Store a blob with pre-computed content hash and encoded bytes.
+    /// Skips the internal encode_blob() + blob_hash() calls.
+    /// Used by engine.ingest() which has already computed these values.
+    StoreResult store_blob(const wire::BlobData& blob,
+                           const std::array<uint8_t, 32>& precomputed_hash,
+                           std::span<const uint8_t> precomputed_encoded);
+
     /// Retrieve a blob by namespace + content hash.
     /// @return The blob data if found, nullopt otherwise.
     std::optional<wire::BlobData> get_blob(
