@@ -127,7 +127,10 @@ Plans:
   4. ML-DSA-87 signs/verifies SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (protocol-breaking change)
   5. Sync receive path avoids redundant .assign() copies — encoded FlatBuffer bytes passed through to storage without intermediate decode/re-encode where possible
   6. All 313+ tests pass with no regressions
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 33-01-PLAN.md — Hash-then-sign protocol change + OQS_SIG context caching
+- [ ] 33-02-PLAN.md — Ingest pipeline optimization (dedup-before-crypto + store path)
 
 ### Phase 34: Sync Resumption
 **Goal**: Sync rounds between peers exchange only hashes for blobs added since the last successful sync, transforming cost from O(total_blobs) to O(new_blobs)
@@ -180,7 +183,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
-| 33. Crypto Throughput Optimization | 0/TBD | Not started | - |
+| 33. Crypto Throughput Optimization | 0/2 | Not started | - |
 | 34. Sync Resumption | 0/TBD | Not started | - |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
