@@ -32,6 +32,7 @@ struct PersistedPeer {
     std::string address;
     uint64_t last_seen = 0;     // Unix timestamp
     uint32_t fail_count = 0;
+    std::string pubkey_hash;    // SHA3-256(pubkey) hex string, empty = unknown
 };
 
 /// A sync message received from a peer, queued for processing.
@@ -68,6 +69,9 @@ struct NodeMetrics {
     uint64_t rate_limited = 0;             // Rate limit disconnections
     uint64_t peers_connected_total = 0;    // Total peer connections since startup
     uint64_t peers_disconnected_total = 0; // Total peer disconnections since startup
+    uint64_t cursor_hits = 0;             // Namespaces skipped via cursor match
+    uint64_t cursor_misses = 0;           // Namespaces requiring full hash diff
+    uint64_t full_resyncs = 0;            // Full resync rounds triggered
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.
@@ -239,6 +243,11 @@ private:
         uint32_t blob_size,
         bool is_tombstone);
 
+    // Cursor-aware sync helpers
+    enum class FullResyncReason { None, Periodic, TimeGap };
+    FullResyncReason check_full_resync(
+        const storage::SyncCursor& cursor, uint64_t now) const;
+
     // Helpers
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
     std::string peer_display_name(const net::Connection::Ptr& conn);
@@ -269,6 +278,8 @@ private:
     asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
+    uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
+    uint64_t cursor_stale_seconds_ = 3600;        // Force full resync after gap (Phase 34)
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;

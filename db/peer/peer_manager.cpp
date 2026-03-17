@@ -88,6 +88,10 @@ PeerManager::PeerManager(const config::Config& config,
     rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
     rate_limit_burst_ = config.rate_limit_burst;
 
+    // Initialize cursor config parameters
+    full_resync_interval_ = config.full_resync_interval;
+    cursor_stale_seconds_ = config.cursor_stale_seconds;
+
     // Initialize namespace filter from config
     for (const auto& hex : config.sync_namespaces) {
         sync_namespaces_.insert(hex_to_namespace(hex));
@@ -155,6 +159,22 @@ void PeerManager::start() {
 
     // Load persisted peers before starting server
     load_persisted_peers();
+
+    // Startup cursor cleanup: remove cursors for peers no longer known
+    {
+        std::vector<std::array<uint8_t, 32>> known_hashes;
+        for (const auto& pp : persisted_peers_) {
+            if (!pp.pubkey_hash.empty() && pp.pubkey_hash.size() == 64) {
+                known_hashes.push_back(hex_to_namespace(pp.pubkey_hash));
+            }
+        }
+        if (!known_hashes.empty()) {
+            auto removed = storage_.cleanup_stale_cursors(known_hashes);
+            if (removed > 0) {
+                spdlog::info("startup: removed {} cursor entries for unknown peers", removed);
+            }
+        }
+    }
 
     server_.start();
 
@@ -291,8 +311,17 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     // Track this peer's address
     known_addresses_.insert(info.address);
 
-    // Persist successful connection
+    // Persist successful connection and store pubkey hash for cursor cleanup
     update_persisted_peer(info.address, true);
+    {
+        auto pk_hash = crypto::sha3_256(conn->peer_pubkey());
+        auto pk_hex = to_hex(std::span<const uint8_t>(pk_hash.data(), pk_hash.size()), 32);
+        auto it = std::find_if(persisted_peers_.begin(), persisted_peers_.end(),
+                               [&info](const PersistedPeer& p) { return p.address == info.address; });
+        if (it != persisted_peers_.end()) {
+            it->pubkey_hash = pk_hex;
+        }
+    }
 
     // Only the initiator (outbound) side triggers sync on connect.
     // The responder (inbound) side waits for SyncRequest from the peer.
@@ -562,6 +591,20 @@ PeerManager::recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout) {
 // Sync orchestration
 // =============================================================================
 
+PeerManager::FullResyncReason PeerManager::check_full_resync(
+    const storage::SyncCursor& cursor, uint64_t now) const {
+    // Periodic: every Nth round (round_count 0 always triggers -- covers SIGHUP reset)
+    if (full_resync_interval_ > 0 &&
+        cursor.round_count % full_resync_interval_ == 0)
+        return FullResyncReason::Periodic;
+    // Time gap: too long since last sync
+    if (cursor_stale_seconds_ > 0 &&
+        cursor.last_sync_timestamp > 0 &&
+        now - cursor.last_sync_timestamp > cursor_stale_seconds_)
+        return FullResyncReason::TimeGap;
+    return FullResyncReason::None;
+}
+
 asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn) {
     auto* peer = find_peer(conn);
     if (!peer || peer->syncing) co_return;
@@ -622,6 +665,71 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     }
     auto peer_namespaces = sync::SyncProtocol::decode_namespace_list(ns_msg->payload);
 
+    // Cursor decision: determine which peer namespaces to skip in Phase C
+    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+    auto now_ts = static_cast<uint64_t>(std::time(nullptr));
+    std::set<std::array<uint8_t, 32>> cursor_skip_namespaces;
+    bool sync_is_full_resync = false;
+    uint64_t cursor_hits_this_round = 0;
+    uint64_t cursor_misses_this_round = 0;
+
+    // Build seq_num lookup from peer's NamespaceList
+    std::map<std::array<uint8_t, 32>, uint64_t> peer_ns_seq;
+    for (const auto& pns : peer_namespaces) {
+        peer_ns_seq[pns.namespace_id] = pns.latest_seq_num;
+    }
+
+    for (const auto& pns : peer_namespaces) {
+        auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+        if (cursor.has_value()) {
+            auto reason = check_full_resync(*cursor, now_ts);
+            if (reason != FullResyncReason::None) {
+                // Full resync round -- skip cursor optimization
+                sync_is_full_resync = true;
+                if (reason == FullResyncReason::Periodic) {
+                    spdlog::info("sync with {}: full resync (periodic, round {})",
+                                 conn->remote_address(), cursor->round_count);
+                } else {
+                    spdlog::warn("sync with {}: full resync (time gap, last={}s ago)",
+                                 conn->remote_address(),
+                                 now_ts - cursor->last_sync_timestamp);
+                }
+                break;  // Full resync applies to all namespaces
+            }
+        }
+    }
+
+    if (!sync_is_full_resync) {
+        for (const auto& pns : peer_namespaces) {
+            auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+            if (cursor.has_value()) {
+                if (cursor->seq_num == pns.latest_seq_num) {
+                    // CURSOR HIT: peer has no new blobs for this namespace
+                    cursor_skip_namespaces.insert(pns.namespace_id);
+                    cursor_hits_this_round++;
+                    spdlog::debug("sync cursor hit: ns={} seq={}", to_hex(pns.namespace_id), pns.latest_seq_num);
+                } else if (pns.latest_seq_num < cursor->seq_num) {
+                    // MISMATCH: remote seq went backwards -- reset this namespace's cursor
+                    spdlog::warn("sync cursor mismatch: ns={} remote_seq={} stored_seq={}, resetting",
+                                 to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                    storage_.delete_sync_cursor(peer_hash, pns.namespace_id);
+                    cursor_misses_this_round++;
+                } else {
+                    // CURSOR MISS: peer has new blobs
+                    cursor_misses_this_round++;
+                    spdlog::debug("sync cursor miss: ns={} remote_seq={} stored_seq={}",
+                                  to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                }
+            } else {
+                // No cursor: first sync with this peer for this namespace
+                cursor_misses_this_round++;
+            }
+        }
+    } else {
+        cursor_misses_this_round = peer_namespaces.size();
+        ++metrics_.full_resyncs;
+    }
+
     // Collect peer's hash lists
     std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
     while (true) {
@@ -643,6 +751,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     // Batches BlobRequests to MAX_HASHES_PER_REQUEST hashes per message.
     // Each BlobTransfer carries exactly one blob to keep memory bounded.
     // Uses BLOB_TRANSFER_TIMEOUT (120s) for blob transfers vs SYNC_TIMEOUT (30s) for control.
+    // Cursor-hit namespaces skip diff computation and blob requests.
 
     for (const auto& [ns, their_hashes] : peer_hashes) {
         // Namespace filter: skip requesting blobs from filtered namespaces
@@ -650,6 +759,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
             continue;
         }
+
+        // Cursor skip: if cursor hit, skip diff + blob requests for this namespace
+        if (cursor_skip_namespaces.count(ns)) {
+            ++metrics_.cursor_hits;
+            total_stats.namespaces_synced++;
+            continue;
+        }
+        ++metrics_.cursor_misses;
+
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
         if (missing.empty()) {
@@ -741,10 +859,24 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         }
     }
 
-    spdlog::info("Synced with peer {}: received {} blobs, sent {} blobs, {} namespaces",
+    // Post-sync cursor update: only update after successful sync completion (Pitfall 1)
+    for (const auto& pns : peer_namespaces) {
+        // Get existing cursor to preserve round_count continuity
+        auto old_cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+        storage::SyncCursor updated;
+        updated.seq_num = pns.latest_seq_num;
+        updated.round_count = (old_cursor ? old_cursor->round_count : 0) + 1;
+        updated.last_sync_timestamp = now_ts;
+        storage_.set_sync_cursor(peer_hash, pns.namespace_id, updated);
+    }
+
+    spdlog::info("Synced with peer {}: received {} blobs, sent {} blobs, {} namespaces "
+                 "(cursor: {} hits, {} misses{})",
                  conn->remote_address(),
                  total_stats.blobs_received, total_stats.blobs_sent,
-                 total_stats.namespaces_synced);
+                 total_stats.namespaces_synced,
+                 cursor_hits_this_round, cursor_misses_this_round,
+                 sync_is_full_resync ? ", full resync" : "");
 
     // Post-sync StorageFull signal: inform peer if we rejected blobs for capacity
     if (total_stats.storage_full_count > 0) {
@@ -814,6 +946,58 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
     auto peer_namespaces = sync::SyncProtocol::decode_namespace_list(ns_msg->payload);
 
+    // Cursor decision (same logic as initiator, independently applied)
+    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+    auto now_ts = static_cast<uint64_t>(std::time(nullptr));
+    std::set<std::array<uint8_t, 32>> cursor_skip_namespaces;
+    bool sync_is_full_resync = false;
+    uint64_t cursor_hits_this_round = 0;
+    uint64_t cursor_misses_this_round = 0;
+
+    for (const auto& pns : peer_namespaces) {
+        auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+        if (cursor.has_value()) {
+            auto reason = check_full_resync(*cursor, now_ts);
+            if (reason != FullResyncReason::None) {
+                sync_is_full_resync = true;
+                if (reason == FullResyncReason::Periodic) {
+                    spdlog::info("sync responder {}: full resync (periodic, round {})",
+                                 conn->remote_address(), cursor->round_count);
+                } else {
+                    spdlog::warn("sync responder {}: full resync (time gap, last={}s ago)",
+                                 conn->remote_address(),
+                                 now_ts - cursor->last_sync_timestamp);
+                }
+                break;
+            }
+        }
+    }
+
+    if (!sync_is_full_resync) {
+        for (const auto& pns : peer_namespaces) {
+            auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+            if (cursor.has_value()) {
+                if (cursor->seq_num == pns.latest_seq_num) {
+                    cursor_skip_namespaces.insert(pns.namespace_id);
+                    cursor_hits_this_round++;
+                    spdlog::debug("sync responder cursor hit: ns={} seq={}", to_hex(pns.namespace_id), pns.latest_seq_num);
+                } else if (pns.latest_seq_num < cursor->seq_num) {
+                    spdlog::warn("sync responder cursor mismatch: ns={} remote_seq={} stored_seq={}, resetting",
+                                 to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                    storage_.delete_sync_cursor(peer_hash, pns.namespace_id);
+                    cursor_misses_this_round++;
+                } else {
+                    cursor_misses_this_round++;
+                }
+            } else {
+                cursor_misses_this_round++;
+            }
+        }
+    } else {
+        cursor_misses_this_round = peer_namespaces.size();
+        ++metrics_.full_resyncs;
+    }
+
     std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
     while (true) {
         auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
@@ -832,12 +1016,22 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
     // Phase C: Compute diffs and exchange blobs one at a time.
     // Same structure as initiator: batched requests, individual transfers, adaptive timeout.
+    // Cursor-hit namespaces skip diff computation and blob requests.
     for (const auto& [ns, their_hashes] : peer_hashes) {
         // Namespace filter: skip requesting blobs from filtered namespaces
         if (!sync_namespaces_.empty() &&
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
             continue;
         }
+
+        // Cursor skip
+        if (cursor_skip_namespaces.count(ns)) {
+            ++metrics_.cursor_hits;
+            total_stats.namespaces_synced++;
+            continue;
+        }
+        ++metrics_.cursor_misses;
+
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
         if (missing.empty()) {
@@ -923,10 +1117,23 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         }
     }
 
-    spdlog::info("Sync responder {}: received {} blobs, sent {} blobs, {} namespaces",
+    // Post-sync cursor update (responder side, same as initiator)
+    for (const auto& pns : peer_namespaces) {
+        auto old_cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
+        storage::SyncCursor updated;
+        updated.seq_num = pns.latest_seq_num;
+        updated.round_count = (old_cursor ? old_cursor->round_count : 0) + 1;
+        updated.last_sync_timestamp = now_ts;
+        storage_.set_sync_cursor(peer_hash, pns.namespace_id, updated);
+    }
+
+    spdlog::info("Sync responder {}: received {} blobs, sent {} blobs, {} namespaces "
+                 "(cursor: {} hits, {} misses{})",
                  conn->remote_address(),
                  total_stats.blobs_received, total_stats.blobs_sent,
-                 total_stats.namespaces_synced);
+                 total_stats.namespaces_synced,
+                 cursor_hits_this_round, cursor_misses_this_round,
+                 sync_is_full_resync ? ", full resync" : "");
 
     // Post-sync StorageFull signal: inform peer if we rejected blobs for capacity
     if (total_stats.storage_full_count > 0) {
@@ -1092,6 +1299,15 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: sync_namespaces=all (unrestricted)");
     } else {
         spdlog::info("config reload: sync_namespaces={} namespaces", sync_namespaces_.size());
+    }
+
+    // Reload cursor config and reset round counters (force full resync on next round)
+    full_resync_interval_ = new_cfg.full_resync_interval;
+    cursor_stale_seconds_ = new_cfg.cursor_stale_seconds;
+    {
+        auto reset_count = storage_.reset_all_round_counters();
+        spdlog::warn("SIGHUP: reset {} cursor round counters (next sync will be full resync)",
+                     reset_count);
     }
 
     // Reload trusted_peers
@@ -1455,6 +1671,7 @@ void PeerManager::load_persisted_peers() {
             p.address = entry.value("address", "");
             p.last_seen = entry.value("last_seen", uint64_t(0));
             p.fail_count = entry.value("fail_count", uint32_t(0));
+            p.pubkey_hash = entry.value("pubkey_hash", std::string{});
             if (!p.address.empty() && p.fail_count < MAX_PERSIST_FAILURES) {
                 persisted_peers_.push_back(std::move(p));
             }
@@ -1492,11 +1709,15 @@ void PeerManager::save_persisted_peers() {
     nlohmann::json j;
     j["peers"] = nlohmann::json::array();
     for (const auto& p : persisted_peers_) {
-        j["peers"].push_back({
+        nlohmann::json entry = {
             {"address", p.address},
             {"last_seen", p.last_seen},
             {"fail_count", p.fail_count}
-        });
+        };
+        if (!p.pubkey_hash.empty()) {
+            entry["pubkey_hash"] = p.pubkey_hash;
+        }
+        j["peers"].push_back(std::move(entry));
     }
 
     auto path = peers_file_path();
@@ -1564,7 +1785,7 @@ void PeerManager::update_persisted_peer(const std::string& address, bool success
             it->fail_count++;
         }
     } else if (success) {
-        persisted_peers_.push_back({address, now, 0});
+        persisted_peers_.push_back({address, now, 0, {}});
     }
 
     save_persisted_peers();
@@ -1661,7 +1882,8 @@ void PeerManager::log_metrics_line() {
 
     spdlog::info("metrics: peers={} connected_total={} disconnected_total={} "
                  "blobs={} storage={:.1f}MiB "
-                 "syncs={} ingests={} rejections={} rate_limited={} uptime={}",
+                 "syncs={} ingests={} rejections={} rate_limited={} "
+                 "cursor_hits={} cursor_misses={} full_resyncs={} uptime={}",
                  peers_.size(),
                  metrics_.peers_connected_total,
                  metrics_.peers_disconnected_total,
@@ -1671,6 +1893,9 @@ void PeerManager::log_metrics_line() {
                  metrics_.ingests,
                  metrics_.rejections,
                  metrics_.rate_limited,
+                 metrics_.cursor_hits,
+                 metrics_.cursor_misses,
+                 metrics_.full_resyncs,
                  uptime);
 }
 
