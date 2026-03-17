@@ -491,6 +491,60 @@ TEST_CASE("load_config throws on invalid trusted_peers entries", "[config][trans
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Sync resumption: cursor config field tests
+// =============================================================================
+
+TEST_CASE("Default config has full_resync_interval 10", "[config][cursor]") {
+    Config cfg;
+    REQUIRE(cfg.full_resync_interval == 10);
+}
+
+TEST_CASE("Default config has cursor_stale_seconds 3600", "[config][cursor]") {
+    Config cfg;
+    REQUIRE(cfg.cursor_stale_seconds == 3600);
+}
+
+TEST_CASE("Config loads full_resync_interval from JSON", "[config][cursor]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_resync.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"full_resync_interval": 25})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.full_resync_interval == 25);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Config loads cursor_stale_seconds from JSON", "[config][cursor]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_stale.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"cursor_stale_seconds": 7200})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.cursor_stale_seconds == 7200);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Config omitting cursor fields uses defaults", "[config][cursor]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_cursor_defaults.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.full_resync_interval == 10);
+    REQUIRE(cfg.cursor_stale_seconds == 3600);
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
 

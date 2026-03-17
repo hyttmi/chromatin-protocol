@@ -1438,3 +1438,243 @@ TEST_CASE("Storage encryption at rest: master key auto-generated on first run", 
     REQUIRE((perms & fs::perms::group_read) == fs::perms::none);
     REQUIRE((perms & fs::perms::others_read) == fs::perms::none);
 }
+
+// =============================================================================
+// Sync cursor CRUD tests
+// =============================================================================
+
+TEST_CASE("set_sync_cursor then get_sync_cursor returns matching values", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xAA);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0x01);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 42;
+    cursor.round_count = 3;
+    cursor.last_sync_timestamp = 1700000000;
+
+    store.set_sync_cursor(peer_hash, ns_id, cursor);
+
+    auto result = store.get_sync_cursor(peer_hash, ns_id);
+    REQUIRE(result.has_value());
+    REQUIRE(result->seq_num == 42);
+    REQUIRE(result->round_count == 3);
+    REQUIRE(result->last_sync_timestamp == 1700000000);
+}
+
+TEST_CASE("get_sync_cursor for nonexistent key returns nullopt", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xBB);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0x02);
+
+    auto result = store.get_sync_cursor(peer_hash, ns_id);
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("delete_sync_cursor removes entry, subsequent get returns nullopt", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xCC);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0x03);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 100;
+    cursor.round_count = 5;
+    cursor.last_sync_timestamp = 1700000001;
+
+    store.set_sync_cursor(peer_hash, ns_id, cursor);
+    REQUIRE(store.get_sync_cursor(peer_hash, ns_id).has_value());
+
+    store.delete_sync_cursor(peer_hash, ns_id);
+    REQUIRE_FALSE(store.get_sync_cursor(peer_hash, ns_id).has_value());
+}
+
+TEST_CASE("delete_peer_cursors removes all entries for that peer across namespaces", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0xDD);
+
+    std::array<uint8_t, 32> ns1{};
+    ns1.fill(0x10);
+    std::array<uint8_t, 32> ns2{};
+    ns2.fill(0x20);
+    std::array<uint8_t, 32> ns3{};
+    ns3.fill(0x30);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 10;
+    cursor.round_count = 1;
+    cursor.last_sync_timestamp = 1700000002;
+
+    store.set_sync_cursor(peer_hash, ns1, cursor);
+    store.set_sync_cursor(peer_hash, ns2, cursor);
+    store.set_sync_cursor(peer_hash, ns3, cursor);
+
+    // Also set a cursor for a different peer to ensure it's not affected
+    std::array<uint8_t, 32> other_peer{};
+    other_peer.fill(0xEE);
+    store.set_sync_cursor(other_peer, ns1, cursor);
+
+    size_t deleted = store.delete_peer_cursors(peer_hash);
+    REQUIRE(deleted == 3);
+
+    REQUIRE_FALSE(store.get_sync_cursor(peer_hash, ns1).has_value());
+    REQUIRE_FALSE(store.get_sync_cursor(peer_hash, ns2).has_value());
+    REQUIRE_FALSE(store.get_sync_cursor(peer_hash, ns3).has_value());
+
+    // Other peer's cursor should still exist
+    REQUIRE(store.get_sync_cursor(other_peer, ns1).has_value());
+}
+
+TEST_CASE("list_cursor_peers returns unique peer hashes", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer1{};
+    peer1.fill(0x11);
+    std::array<uint8_t, 32> peer2{};
+    peer2.fill(0x22);
+
+    std::array<uint8_t, 32> ns1{};
+    ns1.fill(0xA0);
+    std::array<uint8_t, 32> ns2{};
+    ns2.fill(0xB0);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 1;
+    cursor.round_count = 0;
+    cursor.last_sync_timestamp = 1700000003;
+
+    // peer1 has cursors for two namespaces, peer2 for one
+    store.set_sync_cursor(peer1, ns1, cursor);
+    store.set_sync_cursor(peer1, ns2, cursor);
+    store.set_sync_cursor(peer2, ns1, cursor);
+
+    auto peers = store.list_cursor_peers();
+    REQUIRE(peers.size() == 2);
+
+    // Verify both peers are in the result (order may vary)
+    bool found_peer1 = false, found_peer2 = false;
+    for (const auto& p : peers) {
+        if (p == peer1) found_peer1 = true;
+        if (p == peer2) found_peer2 = true;
+    }
+    REQUIRE(found_peer1);
+    REQUIRE(found_peer2);
+}
+
+TEST_CASE("reset_all_round_counters zeroes round_count, preserves seq_num and timestamp", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> peer1{};
+    peer1.fill(0x33);
+    std::array<uint8_t, 32> peer2{};
+    peer2.fill(0x44);
+    std::array<uint8_t, 32> ns1{};
+    ns1.fill(0xC0);
+
+    chromatindb::storage::SyncCursor c1;
+    c1.seq_num = 50;
+    c1.round_count = 7;
+    c1.last_sync_timestamp = 1700000004;
+
+    chromatindb::storage::SyncCursor c2;
+    c2.seq_num = 100;
+    c2.round_count = 12;
+    c2.last_sync_timestamp = 1700000005;
+
+    store.set_sync_cursor(peer1, ns1, c1);
+    store.set_sync_cursor(peer2, ns1, c2);
+
+    size_t reset_count = store.reset_all_round_counters();
+    REQUIRE(reset_count == 2);
+
+    auto r1 = store.get_sync_cursor(peer1, ns1);
+    REQUIRE(r1.has_value());
+    REQUIRE(r1->seq_num == 50);
+    REQUIRE(r1->round_count == 0);
+    REQUIRE(r1->last_sync_timestamp == 1700000004);
+
+    auto r2 = store.get_sync_cursor(peer2, ns1);
+    REQUIRE(r2.has_value());
+    REQUIRE(r2->seq_num == 100);
+    REQUIRE(r2->round_count == 0);
+    REQUIRE(r2->last_sync_timestamp == 1700000005);
+}
+
+TEST_CASE("Cursor survives Storage reopen", "[storage][cursor]") {
+    TempDir tmp;
+
+    std::array<uint8_t, 32> peer_hash{};
+    peer_hash.fill(0x55);
+    std::array<uint8_t, 32> ns_id{};
+    ns_id.fill(0xD0);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 999;
+    cursor.round_count = 42;
+    cursor.last_sync_timestamp = 1700000006;
+
+    // Create cursor and close storage
+    {
+        Storage store(tmp.path.string());
+        store.set_sync_cursor(peer_hash, ns_id, cursor);
+    }
+
+    // Reopen and verify cursor persisted
+    {
+        Storage store(tmp.path.string());
+        auto result = store.get_sync_cursor(peer_hash, ns_id);
+        REQUIRE(result.has_value());
+        REQUIRE(result->seq_num == 999);
+        REQUIRE(result->round_count == 42);
+        REQUIRE(result->last_sync_timestamp == 1700000006);
+    }
+}
+
+TEST_CASE("cleanup_stale_cursors deletes cursors for unknown peers", "[storage][cursor]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> known_peer{};
+    known_peer.fill(0x66);
+    std::array<uint8_t, 32> stale_peer1{};
+    stale_peer1.fill(0x77);
+    std::array<uint8_t, 32> stale_peer2{};
+    stale_peer2.fill(0x88);
+
+    std::array<uint8_t, 32> ns1{};
+    ns1.fill(0xE0);
+
+    chromatindb::storage::SyncCursor cursor;
+    cursor.seq_num = 1;
+    cursor.round_count = 0;
+    cursor.last_sync_timestamp = 1700000007;
+
+    store.set_sync_cursor(known_peer, ns1, cursor);
+    store.set_sync_cursor(stale_peer1, ns1, cursor);
+    store.set_sync_cursor(stale_peer2, ns1, cursor);
+
+    // Only known_peer is in the known set
+    std::vector<std::array<uint8_t, 32>> known_set = {known_peer};
+    size_t deleted = store.cleanup_stale_cursors(known_set);
+    REQUIRE(deleted == 2);
+
+    REQUIRE(store.get_sync_cursor(known_peer, ns1).has_value());
+    REQUIRE_FALSE(store.get_sync_cursor(stale_peer1, ns1).has_value());
+    REQUIRE_FALSE(store.get_sync_cursor(stale_peer2, ns1).has_value());
+}
