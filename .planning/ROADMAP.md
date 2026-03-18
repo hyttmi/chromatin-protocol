@@ -169,7 +169,10 @@ Plans:
   1. Docker benchmark suite includes a scenario that creates tombstones and reports creation throughput (blobs/sec)
   2. Multi-node tombstone sync propagation latency is measured and reported (time from creation to presence on all nodes)
   3. Tombstone GC/expiry performance under load is measured (time to reclaim storage after tombstone TTL expires)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 36-01-PLAN.md — Extend loadgen with --delete mode, identity persistence, and blob hash output
+- [ ] 36-02-PLAN.md — Tombstone benchmark scenarios + report integration in run-benchmark.sh
 
 ### Phase 37: General Cleanup
 **Goal**: Stale artifacts from previous milestones are removed, documentation reflects current state, and the codebase is clean for the next milestone
@@ -193,5 +196,5 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
-| 36. Deletion Benchmarks | 0/TBD | Not started | - |
+| 36. Deletion Benchmarks | 0/2 | Not started | - |
 | 37. General Cleanup | 0/TBD | Not started | - |
