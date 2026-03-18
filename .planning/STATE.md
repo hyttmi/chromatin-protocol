@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 35 context gathered
-last_updated: "2026-03-18T13:25:34.083Z"
-last_activity: 2026-03-18 -- Phase 34 complete, transitioning to Phase 35
+status: executing
+stopped_at: Completed 35-01-PLAN.md
+last_updated: "2026-03-18T14:09:27Z"
+last_activity: 2026-03-18 -- Phase 35 plan 01 complete
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 6
-  completed_plans: 6
+  completed_plans: 7
   percent: 50
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-18)
 ## Current Position
 
 Phase: 35 (4 of 6 in v0.7.0) (Namespace Quotas)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-03-18 -- Phase 34 complete, transitioning to Phase 35
+Plan: 1 of 3 complete
+Status: Executing
+Last activity: 2026-03-18 -- Phase 35 plan 01 complete (quota storage foundation)
 
 Progress: [██████░░░░] 50% (3/6 phases complete)
 
@@ -56,6 +56,7 @@ Progress: [██████░░░░] 50% (3/6 phases complete)
 | Phase 34 P01 | 11min | 1 tasks | 6 files |
 | Phase 34 P02 | 35min | 2 tasks | 4 files |
 | Phase 34 P03 | 12min | 1 task | 2 files |
+| Phase 35 P01 | 26min | 2 tasks (TDD) | 9 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase 34]: Mutable cursor config members follow existing rate_limit_ pattern for SIGHUP reload
 - [Phase 34]: pubkey_hash in PersistedPeer enables startup cursor cleanup cross-reference
 - [Phase 34]: Zero-hash sentinel in seq_map preserves seq_num monotonicity for cursor change detection
+- [Phase 35]: Quota aggregate tracks encrypted envelope size (actual disk cost, not wire-encoded)
+- [Phase 35]: Tombstones exempt from quota increment (owners must always be able to delete)
+- [Phase 35]: max_maps increased from 7 to 8 for 7th named sub-database (quota)
 
 ### Pending Todos
 
@@ -91,6 +95,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T13:25:34.081Z
-Stopped at: Phase 35 context gathered
-Resume file: .planning/phases/35-namespace-quotas/35-CONTEXT.md
+Last session: 2026-03-18T14:09:27Z
+Stopped at: Completed 35-01-PLAN.md
+Resume file: .planning/phases/35-namespace-quotas/35-01-SUMMARY.md
