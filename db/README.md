@@ -94,7 +94,12 @@ Create a JSON config file and pass it with `--config`:
   "max_storage_bytes": 0,
   "rate_limit_bytes_per_sec": 0,
   "rate_limit_burst": 0,
-  "sync_namespaces": []
+  "sync_namespaces": [],
+  "full_resync_interval": 10,
+  "cursor_stale_seconds": 3600,
+  "namespace_quota_bytes": 0,
+  "namespace_quota_count": 0,
+  "namespace_quotas": {}
 }
 ```
 
@@ -110,6 +115,11 @@ Create a JSON config file and pass it with `--config`:
 - **rate_limit_bytes_per_sec** -- per-connection write rate limit for Data and Delete messages in bytes per second; peers exceeding the limit are disconnected immediately (default: `0` = disabled)
 - **rate_limit_burst** -- token bucket burst capacity in bytes; allows short bursts above the sustained rate (default: `0` = disabled)
 - **sync_namespaces** -- list of namespace hashes (64-char hex) to replicate; the node only syncs listed namespaces and silently drops Data/Delete messages for unlisted namespaces (default: `[]` = replicate all)
+- **full_resync_interval** -- full hash-diff resync every Nth sync round, overriding cursor-based skip (default: `10`)
+- **cursor_stale_seconds** -- force full resync with a peer after this many seconds since last sync (default: `3600`)
+- **namespace_quota_bytes** -- global default maximum bytes per namespace; the node rejects new blobs when a namespace exceeds this limit and sends QuotaExceeded to the peer (default: `0` = unlimited)
+- **namespace_quota_count** -- global default maximum blob count per namespace (default: `0` = unlimited)
+- **namespace_quotas** -- per-namespace quota overrides as a JSON object mapping namespace hash (64-char hex) to `{"max_bytes": N, "max_count": N}`; overrides the global defaults for listed namespaces (default: `{}` = use global defaults)
 
 ## Signals
 
@@ -117,7 +127,7 @@ chromatindb responds to the following Unix signals at runtime:
 
 - **SIGTERM** -- Graceful shutdown. Stops accepting new connections, drains in-flight coroutines, saves the persistent peer list, and exits cleanly. The shutdown is bounded; if draining takes too long, the process exits with a non-zero exit code.
 
-- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, and `sync_namespaces` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately.
+- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately.
 
 - **SIGUSR1** -- Metrics dump. Logs a snapshot of current runtime metrics via spdlog, including: active connections, storage bytes used, total blobs ingested, total sync rounds completed, total rejections, rate-limited disconnections, and uptime.
 
@@ -129,7 +139,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 24 message types covering handshake, keepalive, blob storage, sync, peer exchange, deletion, pub/sub, and storage signaling. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 27 message types covering handshake, keepalive, blob storage, sync, peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, and namespace quota enforcement. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## Scenarios
 
@@ -244,61 +254,9 @@ Connections between listed peers use a lightweight handshake with ML-DSA-87 iden
 
 **Writer-Controlled TTL** -- Each blob carries its own TTL set by the writer in the signed data. TTL=0 means permanent (no expiry). Blobs with TTL>0 are expired by the node's periodic scan. Tombstones also support writer-controlled TTL: permanent tombstones (TTL=0) persist indefinitely, while time-limited tombstones (TTL>0) are garbage-collected along with their index entries.
 
-## Performance
+**Sync Resumption** -- Per-peer per-namespace sequence number cursors track sync progress. Only namespaces with new blobs since the last sync exchange hash lists, reducing sync cost from O(total blobs) to O(new blobs). Cursors persist across node restarts via libmdbx. A periodic full hash-diff resync every Nth round (configurable) serves as a safety net against cursor drift.
 
-Results measured on AMD Ryzen 9 / Linux 6.18. Your numbers will vary.
-
-### Crypto Operations
-
-| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
-|-----------|------------|------------|----------|---------|
-| SHA3-256 (64 B) | 1000 | 0.3 | 0.3 | 3,018,394 |
-| SHA3-256 (1 KiB) | 1000 | 2.5 | 2.5 | 400,595 |
-| SHA3-256 (64 KiB) | 100 | 15.5 | 155.3 | 6,441 |
-| SHA3-256 (1 MiB) | 100 | 230.4 | 2,304.2 | 434 |
-| ML-DSA-87 keygen | 10 | 0.7 | 66.6 | 15,008 |
-| ML-DSA-87 sign (64 B) | 100 | 12.5 | 124.6 | 8,024 |
-| ML-DSA-87 verify (64 B) | 100 | 6.2 | 62.0 | 16,139 |
-| ML-KEM-1024 keygen | 10 | 0.2 | 17.5 | 57,068 |
-| ML-KEM-1024 encaps | 100 | 1.8 | 17.8 | 56,199 |
-| ML-KEM-1024 decaps | 100 | 2.1 | 20.9 | 47,774 |
-| ChaCha20-Poly1305 encrypt (64 B) | 1000 | 0.5 | 0.5 | 2,153,492 |
-| ChaCha20-Poly1305 encrypt (1 KiB) | 1000 | 2.4 | 2.4 | 422,826 |
-| ChaCha20-Poly1305 encrypt (64 KiB) | 100 | 12.7 | 127.3 | 7,856 |
-| ChaCha20-Poly1305 encrypt (1 MiB) | 100 | 203.7 | 2,036.6 | 491 |
-| ChaCha20-Poly1305 decrypt (64 B) | 1000 | 0.5 | 0.5 | 1,967,172 |
-| ChaCha20-Poly1305 decrypt (1 KiB) | 1000 | 2.4 | 2.4 | 422,393 |
-| ChaCha20-Poly1305 decrypt (64 KiB) | 100 | 12.6 | 126.0 | 7,938 |
-| ChaCha20-Poly1305 decrypt (1 MiB) | 100 | 204.0 | 2,040.2 | 490 |
-
-### Data Path
-
-| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
-|-----------|------------|------------|----------|---------|
-| Blob ingest (1 KiB) | 100 | 24.9 | 249.4 | 4,010 |
-| Blob ingest (64 KiB) | 100 | 94.3 | 942.6 | 1,061 |
-| Blob retrieve (1 KiB) | 1000 | 0.3 | 0.3 | 2,905,659 |
-| Blob retrieve (64 KiB) | 1000 | 1.4 | 1.4 | 726,372 |
-| Blob encode (1 KiB) | 1000 | 0.2 | 0.2 | 4,384,849 |
-| Blob decode (1 KiB) | 1000 | 0.2 | 0.2 | 5,958,233 |
-| Sync throughput (100x1KiB) | 10 | 149.2 | 149.2 | 6,704 |
-
-### Network Operations
-
-| Benchmark | Iterations | Total (ms) | Avg (us) | Ops/sec |
-|-----------|------------|------------|----------|---------|
-| PQ handshake (full) | 10 | 4.9 | 488.4 | 2,047 |
-| Notification dispatch | 100 | 12.5 | 125.1 | 7,996 |
-
-Post-quantum handshakes complete in under 500 us. Blob ingest (sign + validate + store) takes ~250 us for 1 KiB payloads. Sync transfers ~6,700 blobs/sec between two nodes (in-process, no TCP overhead). Notification callbacks fire within ~125 us of blob ingestion.
-
-### Running Benchmarks
-
-```bash
-cd build
-cmake .. && make -j$(nproc) chromatindb_bench
-./chromatindb_bench
-```
+**Namespace Quotas** -- Per-namespace byte and blob count limits enforced at ingest. When a write would exceed the configured quota, the node rejects the blob and sends a QuotaExceeded signal to the writing peer. Global defaults apply to all namespaces, with per-namespace overrides for differentiated limits. Quota configuration is reloadable via SIGHUP.
 
 ## License
 
