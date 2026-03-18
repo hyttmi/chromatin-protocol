@@ -8,7 +8,8 @@
 - ✅ **v0.4.0 Production Readiness** — Phases 16-21 (shipped 2026-03-13)
 - ✅ **v0.5.0 Hardening & Flexibility** — Phases 22-26 (shipped 2026-03-15)
 - ✅ **v0.6.0 Real-World Validation** — Phases 27-31 (shipped 2026-03-16)
-- [ ] **v0.7.0 Production Readiness** — Phases 32-37 (in progress)
+- ✅ **v0.7.0 Production Readiness** — Phases 32-37 (shipped 2026-03-18)
+- [ ] **v1.0.0 Performance & Production Readiness** — Phases 38-41 (in progress)
 
 ## Phases
 
@@ -91,113 +92,83 @@ Full details: [milestones/v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md)
 
 </details>
 
-### v0.7.0 Production Readiness (In Progress)
+<details>
+<summary>✅ v0.7.0 Production Readiness (Phases 32-37) — SHIPPED 2026-03-18</summary>
 
-**Milestone Goal:** Cleanup, performance optimization, and production-readiness features -- move tests into db/, fix large blob crypto bottleneck, add sync resumption with per-peer cursors, implement namespace quotas, benchmark deletion, and sweep stale artifacts.
+- [x] Phase 32: Test Relocation (1/1 plans) — completed 2026-03-17
+- [x] Phase 33: Crypto Throughput Optimization (2/2 plans) — completed 2026-03-17
+- [x] Phase 34: Sync Resumption (3/3 plans) — completed 2026-03-18
+- [x] Phase 35: Namespace Quotas (2/2 plans) — completed 2026-03-18
+- [x] Phase 36: Deletion Benchmarks (2/2 plans) — completed 2026-03-18
+- [x] Phase 37: General Cleanup (2/2 plans) — completed 2026-03-18
 
-- [x] **Phase 32: Test Relocation** - Move all database tests into db/ for component self-containment (completed 2026-03-17)
-- [x] **Phase 33: Crypto Throughput Optimization** - Eliminate redundant hashing and allocation in the ingest/verify hot path (completed 2026-03-17)
-- [x] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (completed 2026-03-18, gap closure done)
-- [x] **Phase 35: Namespace Quotas** - Per-namespace byte and blob count limits enforced at ingest (completed 2026-03-18)
-- [x] **Phase 36: Deletion Benchmarks** - Tombstone creation, propagation, and GC performance in Docker suite (completed 2026-03-18)
-- [x] **Phase 37: General Cleanup** - Remove stale artifacts, update documentation, sweep dead code (completed 2026-03-18)
+Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
+
+</details>
+
+### v1.0.0 Performance & Production Readiness (In Progress)
+
+**Milestone Goal:** Thread pool crypto offload to break the large-blob CPU bottleneck, cursor compaction for stale peers, connection retry with exponential backoff, and benchmark validation confirming throughput improvements. This is the "database layer is done" release.
+
+- [ ] **Phase 38: Thread Pool Crypto Offload** - ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool, freeing the event loop
+- [ ] **Phase 39: Cursor Compaction** - Stale peer cursors automatically pruned based on configurable retention
+- [ ] **Phase 40: Connection Retry** - Automatic reconnection to configured peers with exponential backoff and ACL-aware suppression
+- [ ] **Phase 41: Benchmark Validation** - Full benchmark suite re-run confirming thread pool throughput gains and no small-blob regression
 
 ## Phase Details
 
-### Phase 32: Test Relocation
-**Goal**: db/ is a fully self-contained CMake component with all its tests co-located
-**Depends on**: Nothing (first phase of v0.7.0)
-**Requirements**: CLEAN-01
+### Phase 38: Thread Pool Crypto Offload
+**Goal**: The event loop never blocks on ML-DSA-87 signature verification or SHA3-256 content hashing -- these CPU-bound operations run on worker threads while the event loop continues processing I/O
+**Depends on**: Nothing (first phase of v1.0.0)
+**Requirements**: PERF-06, PERF-07, PERF-08, PERF-09
 **Success Criteria** (what must be TRUE):
-  1. All database test source files live under db/tests/ (no test files for db/ remain in the top-level test directory)
-  2. `ctest -N` reports exactly 313 tests after relocation (same count as before)
-  3. `cmake --build .` from the top-level project builds and discovers all tests without manual path fixups
-**Plans**: 1 plan
-Plans:
-- [ ] 32-01-PLAN.md — Relocate test files to db/tests/ and rewrite CMakeLists.txt
+  1. A blob ingest or sync receive that triggers ML-DSA-87 verification does not block the event loop -- other connections continue processing during the verify
+  2. A blob ingest or sync receive that triggers SHA3-256 hashing does not block the event loop -- other connections continue processing during the hash
+  3. Connection-scoped AEAD state (ChaCha20-Poly1305 nonce counters) is never accessed from a thread pool worker -- only stateless crypto ops are offloaded
+  4. Thread pool worker count is configurable via config JSON and defaults to std::thread::hardware_concurrency()
+  5. All existing tests pass with thread pool enabled (no concurrency regressions)
+**Plans**: TBD
 
-### Phase 33: Crypto Throughput Optimization
-**Goal**: Large blob (1 MiB) ingest and sync verification throughput measurably improved by eliminating redundant work and copies in the hot path
-**Depends on**: Phase 32
-**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, PERF-05
+### Phase 39: Cursor Compaction
+**Goal**: Stale sync cursors from peers that have not connected for a configurable retention period are automatically pruned, preventing unbounded cursor storage growth
+**Depends on**: Phase 38
+**Requirements**: SYNC-05
 **Success Criteria** (what must be TRUE):
-  1. Blob content hash is computed once during ingest and passed through to storage (no redundant SHA3-256 + FlatBuffer re-encode)
-  2. OQS_SIG context for ML-DSA-87 is allocated once (static or thread_local) and reused across all verify calls
-  3. Sync-received blobs that already exist locally skip signature verification entirely (has_blob check before crypto)
-  4. ML-DSA-87 signs/verifies SHA3-256(namespace||data||ttl||timestamp) (32 bytes) instead of raw concatenation (protocol-breaking change)
-  5. Sync receive path avoids redundant .assign() copies — encoded FlatBuffer bytes passed through to storage without intermediate decode/re-encode where possible
-  6. All 313+ tests pass with no regressions
-**Plans**: 2 plans
-Plans:
-- [ ] 33-01-PLAN.md — Hash-then-sign protocol change + OQS_SIG context caching
-- [ ] 33-02-PLAN.md — Ingest pipeline optimization (dedup-before-crypto + store path)
+  1. Cursors for peers not seen within the retention period are deleted from the cursor sub-database during periodic compaction
+  2. Retention period is configurable in config JSON and reloadable via SIGHUP without restart
+  3. Active peer cursors are never pruned (only peers absent longer than retention period)
+**Plans**: TBD
 
-### Phase 34: Sync Resumption
-**Goal**: Sync rounds between peers exchange only hashes for blobs added since the last successful sync, transforming cost from O(total_blobs) to O(new_blobs)
-**Depends on**: Phase 33
-**Requirements**: SYNC-01, SYNC-02, SYNC-03, SYNC-04
+### Phase 40: Connection Retry
+**Goal**: Nodes automatically maintain connectivity to their configured and bootstrap peers by reconnecting after disconnection with backoff, without wasting resources on peers that have rejected us
+**Depends on**: Phase 38
+**Requirements**: CONN-01, CONN-02, CONN-03
 **Success Criteria** (what must be TRUE):
-  1. After a full sync round completes, a subsequent round with no new blobs exchanges zero hashes for unchanged namespaces
-  2. Sync cursors survive node restart (stored in libmdbx sub-database) and resume where they left off
-  3. A periodic full hash-diff resync triggers every Nth round (configurable, default 10) to catch any cursor drift
-  4. Cursor-based sync produces identical final state as full hash-list diff sync (no missing or extra blobs)
-**Plans**: 3 plans
-Plans:
-- [ ] 34-01-PLAN.md — Cursor sub-database CRUD + config fields
-- [ ] 34-02-PLAN.md — Cursor-aware sync orchestration + metrics + tests
-- [ ] 34-03-PLAN.md — Gap closure: fix tombstone sync regression from cursor-aware sync
+  1. When a configured/bootstrap peer disconnects, the node automatically attempts to reconnect without operator intervention
+  2. Reconnection attempts use exponential backoff (e.g., 1s, 2s, 4s, ...) up to a configurable maximum interval
+  3. A peer that sent an ACL rejection is not retried (reconnection suppressed until next config reload or restart)
+  4. Successful reconnection resumes normal sync and message exchange as if freshly connected
+**Plans**: TBD
 
-### Phase 35: Namespace Quotas
-**Goal**: Node operators can limit per-namespace resource usage with byte and blob count caps enforced atomically at ingest
-**Depends on**: Phase 33
-**Requirements**: QUOTA-01, QUOTA-02, QUOTA-03, QUOTA-04
+### Phase 41: Benchmark Validation
+**Goal**: The full Docker benchmark suite confirms that thread pool crypto offload delivers measurable throughput improvement for large blobs with no regression for small/medium blobs
+**Depends on**: Phase 38
+**Requirements**: BENCH-04, BENCH-05, BENCH-06
 **Success Criteria** (what must be TRUE):
-  1. A blob write that would exceed the namespace byte limit is rejected before storage, and the writer receives a clear quota-exceeded error
-  2. A blob write that would exceed the namespace blob count limit is rejected before storage, and the writer receives a clear quota-exceeded error
-  3. Namespace usage (bytes + count) is tracked in a materialized aggregate that is O(1) on the write path (no full-namespace scan)
-  4. Quota configuration is reloadable via SIGHUP without node restart
-**Plans**: 2 plans
-Plans:
-- [ ] 35-01-PLAN.md — Storage quota sub-database + Config extension + enum values
-- [ ] 35-02-PLAN.md — Engine quota enforcement + PeerManager wire handling + SIGHUP reload
-
-### Phase 36: Deletion Benchmarks
-**Goal**: Tombstone creation, sync propagation, and garbage collection performance are measured and baselined in the existing Docker benchmark suite
-**Depends on**: Phase 33
-**Requirements**: BENCH-01, BENCH-02, BENCH-03
-**Success Criteria** (what must be TRUE):
-  1. Docker benchmark suite includes a scenario that creates tombstones and reports creation throughput (blobs/sec)
-  2. Multi-node tombstone sync propagation latency is measured and reported (time from creation to presence on all nodes)
-  3. Tombstone GC/expiry performance under load is measured (time to reclaim storage after tombstone TTL expires)
-**Plans**: 2 plans
-Plans:
-- [ ] 36-01-PLAN.md — Extend loadgen with --delete mode, identity persistence, and blob hash output
-- [ ] 36-02-PLAN.md — Tombstone benchmark scenarios + report integration in run-benchmark.sh
-
-### Phase 37: General Cleanup
-**Goal**: Stale artifacts from previous milestones are removed, documentation reflects current state, and the codebase is clean for the next milestone
-**Depends on**: Phase 32, Phase 33, Phase 34, Phase 35, Phase 36
-**Requirements**: CLEAN-02, CLEAN-03, CLEAN-04
-**Success Criteria** (what must be TRUE):
-  1. The old standalone benchmark binary (chromatindb_bench) is removed from the CMake build and its source files deleted
-  2. db/README.md documents all current features (including v0.7.0 additions) with no references to removed benchmarks or outdated data
-  3. No stale artifacts remain (dead code paths, leftover files from previous milestones, unreferenced CMake targets)
-**Plans**: 2 plans
-Plans:
-- [ ] 37-01-PLAN.md — Remove benchmark binary, clean Dockerfile, update gitignore
-- [ ] 37-02-PLAN.md — Update README and PROTOCOL.md with v0.7.0 changes
+  1. The full 5-scenario Docker benchmark suite runs successfully with thread pool offload enabled
+  2. 1 MiB blob ingest/sync throughput is measurably improved over the v0.6.0 baseline (15.3 blobs/sec) with the improvement percentage quantified in the report
+  3. 1K and 100K blob throughput shows no regression from thread pool dispatch overhead (within 5% of baseline or better)
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 32 -> 33 -> 34 -> 35 -> 36 -> 37
-Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends on all prior phases.
+Phases 38 -> 39 -> 40 -> 41
+Note: Phases 39, 40, and 41 all depend on Phase 38 but not on each other. They are sequenced for clean execution.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
-| 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
-| 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
-| 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
-| 36. Deletion Benchmarks | 2/2 | Complete    | 2026-03-18 |
-| 37. General Cleanup | 2/2 | Complete    | 2026-03-18 |
+| 38. Thread Pool Crypto Offload | 0/TBD | Not started | - |
+| 39. Cursor Compaction | 0/TBD | Not started | - |
+| 40. Connection Retry | 0/TBD | Not started | - |
+| 41. Benchmark Validation | 0/TBD | Not started | - |

@@ -57,23 +57,23 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PERF-06 | — | Pending |
-| PERF-07 | — | Pending |
-| PERF-08 | — | Pending |
-| PERF-09 | — | Pending |
-| SYNC-05 | — | Pending |
-| CONN-01 | — | Pending |
-| CONN-02 | — | Pending |
-| CONN-03 | — | Pending |
-| BENCH-04 | — | Pending |
-| BENCH-05 | — | Pending |
-| BENCH-06 | — | Pending |
+| PERF-06 | Phase 38 | Pending |
+| PERF-07 | Phase 38 | Pending |
+| PERF-08 | Phase 38 | Pending |
+| PERF-09 | Phase 38 | Pending |
+| SYNC-05 | Phase 39 | Pending |
+| CONN-01 | Phase 40 | Pending |
+| CONN-02 | Phase 40 | Pending |
+| CONN-03 | Phase 40 | Pending |
+| BENCH-04 | Phase 41 | Pending |
+| BENCH-05 | Phase 41 | Pending |
+| BENCH-06 | Phase 41 | Pending |
 
 **Coverage:**
 - v1.0.0 requirements: 11 total
-- Mapped to phases: 0
-- Unmapped: 11
+- Mapped to phases: 11
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-18*
-*Last updated: 2026-03-18 after initial definition*
+*Last updated: 2026-03-18 after roadmap creation*
