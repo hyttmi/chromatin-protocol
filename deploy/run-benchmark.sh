@@ -177,6 +177,59 @@ run_loadgen() {
         2>/dev/null
 }
 
+run_loadgen_v() {
+    local volume_mount="$1"
+    local target_host="$2"
+    shift 2
+    docker run --rm -i --network "$NETWORK" \
+        -v "$volume_mount" \
+        --entrypoint chromatindb_loadgen \
+        chromatindb:latest \
+        --target "${target_host}:4200" "$@" \
+        2>/dev/null
+}
+
+get_storage_mib() {
+    local container="$1"
+    docker kill -s USR1 "$container" >/dev/null 2>&1 || true
+    sleep 1
+    docker logs "$container" 2>&1 | grep "metrics:" | tail -1 \
+        | grep -oP 'storage=\K[0-9.]+' || echo "999"
+}
+
+wait_for_gc_completion() {
+    local container="$1"
+    local max_storage_mib="$2"
+    local timeout_seconds="$3"
+    local start_ns
+    start_ns=$(date +%s%N)
+
+    while true; do
+        local storage_mib
+        storage_mib=$(get_storage_mib "$container")
+        local now_ns
+        now_ns=$(date +%s%N)
+        local elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
+
+        log "GC wait $container: storage=${storage_mib}MiB (target<=${max_storage_mib}) (${elapsed_ms}ms)"
+
+        local below
+        below=$(echo "$storage_mib <= $max_storage_mib" | bc -l)
+        if [[ "$below" == "1" ]]; then
+            echo "$elapsed_ms"
+            return 0
+        fi
+
+        if [[ $elapsed_ms -gt $(( timeout_seconds * 1000 )) ]]; then
+            log "ERROR: Timeout waiting for GC on $container (storage=${storage_mib}MiB after ${elapsed_ms}ms)"
+            echo "$elapsed_ms"
+            return 1
+        fi
+
+        sleep 3
+    done
+}
+
 # --- Helper Functions --------------------------------------------------------
 
 generate_trusted_configs() {
@@ -909,6 +962,269 @@ run_scenario_trusted_vs_pq() {
     log "Trusted vs PQ scenario complete"
 }
 
+# --- Tombstone Scenario Functions ---------------------------------------------
+
+run_scenario_tombstone_creation() {
+    # Measures tombstone creation throughput (BENCH-01).
+    # For each blob size: write blobs, then delete them.
+    # Tombstone data is always 36 bytes regardless of original blob size.
+
+    log "========================================="
+    log "Scenario: Tombstone Creation (BENCH-01)"
+    log "========================================="
+
+    local sizes=(1024 102400 1048576)
+    local labels=("1k" "100k" "1m")
+
+    for i in "${!sizes[@]}"; do
+        local size="${sizes[$i]}"
+        local label="${labels[$i]}"
+
+        log "--- Tombstone Creation: ${label} blobs (original size=${size} bytes) ---"
+
+        reset_topology
+
+        capture_stats "pre" "tombstone-creation-${label}"
+
+        # Create temp identity dir for write/delete pipeline
+        local identity_dir
+        identity_dir=$(mktemp -d)
+
+        # Phase 1: Write blobs (captures hashes, saves identity)
+        log "Write phase: count=$BLOB_COUNT rate=$RATE size=$size"
+        local write_output
+        write_output=$(run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+            --count "$BLOB_COUNT" --rate "$RATE" --size "$size" \
+            --ttl 3600 --drain-timeout 10 --identity-save /tmp/bench-id)
+
+        # Phase 2: Delete blobs (measure tombstone creation throughput)
+        local hashes
+        hashes=$(echo "$write_output" | jq -r '.blob_hashes[]')
+        log "Delete phase: ${BLOB_COUNT} tombstones"
+        local delete_output
+        delete_output=$(echo "$hashes" | run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+            --delete --hashes-from stdin --identity-file /tmp/bench-id --drain-timeout 10)
+
+        capture_stats "post" "tombstone-creation-${label}"
+
+        echo "$delete_output" > "$RESULTS_DIR/scenario-tombstone-creation-${label}.json"
+
+        # Log summary
+        local blobs_sec p50 p95 p99
+        blobs_sec=$(echo "$delete_output" | jq -r '.blobs_per_sec // "N/A"')
+        p50=$(echo "$delete_output" | jq -r '.latency_ms.p50 // "N/A"')
+        p95=$(echo "$delete_output" | jq -r '.latency_ms.p95 // "N/A"')
+        p99=$(echo "$delete_output" | jq -r '.latency_ms.p99 // "N/A"')
+
+        log "Result [${label}]: ${blobs_sec} tombstones/sec, latency p50=${p50}ms p95=${p95}ms p99=${p99}ms"
+        log "Written: $RESULTS_DIR/scenario-tombstone-creation-${label}.json"
+
+        rm -rf "$identity_dir"
+    done
+
+    log "Tombstone creation scenario complete"
+}
+
+run_scenario_tombstone_sync() {
+    # Measures tombstone sync propagation latency (BENCH-02).
+    # Write 200 blobs to node1, wait for convergence, then delete all 200.
+    # Tombstones get new seq_nums, so expected count = 200 + 200 = 400.
+
+    log "========================================="
+    log "Scenario: Tombstone Sync Propagation (BENCH-02)"
+    log "========================================="
+
+    reset_topology
+
+    capture_stats "pre" "tombstone-sync"
+
+    local identity_dir
+    identity_dir=$(mktemp -d)
+
+    # Write 200 blobs (1 KiB, TTL=3600) to node1
+    log "Write phase: $BLOB_COUNT blobs (1 KiB) to node1..."
+    local write_output
+    write_output=$(run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+        --count "$BLOB_COUNT" --rate "$RATE" --size 1024 \
+        --ttl 3600 --drain-timeout 10 --identity-save /tmp/bench-id)
+
+    # Wait for all 3 nodes to converge at 200 blobs
+    log "Waiting for blob convergence on all nodes..."
+    wait_for_convergence chromatindb-node1 "$BLOB_COUNT" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node2 "$BLOB_COUNT" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node3 "$BLOB_COUNT" 120 >/dev/null || true
+    log "All nodes converged at $BLOB_COUNT blobs"
+
+    # Delete all 200 blobs on node1
+    local hashes
+    hashes=$(echo "$write_output" | jq -r '.blob_hashes[]')
+    log "Delete phase: $BLOB_COUNT tombstones on node1..."
+    run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+        --delete --hashes-from stdin --identity-file /tmp/bench-id \
+        --drain-timeout 10 <<< "$hashes" >/dev/null
+
+    # Tombstones get new seq_nums: 200 blobs + 200 tombstones = 400
+    local expected_count=$(( BLOB_COUNT * 2 ))
+
+    # Measure 1-hop: node2 convergence at 400
+    log "Timing 1-hop tombstone sync (node2, target=$expected_count)..."
+    local sync_1hop_ms
+    if sync_1hop_ms=$(wait_for_convergence chromatindb-node2 "$expected_count" 120); then
+        log "Node2 converged in ${sync_1hop_ms}ms (1-hop)"
+    else
+        log "WARNING: Node2 tombstone sync timed out"
+        sync_1hop_ms=-1
+    fi
+
+    # Measure 2-hop: node3 convergence at 400
+    log "Timing 2-hop tombstone sync (node3, target=$expected_count)..."
+    local sync_2hop_ms
+    if sync_2hop_ms=$(wait_for_convergence chromatindb-node3 "$expected_count" 120); then
+        log "Node3 converged in ${sync_2hop_ms}ms (2-hop)"
+    else
+        log "WARNING: Node3 tombstone sync timed out"
+        sync_2hop_ms=-1
+    fi
+
+    capture_stats "post" "tombstone-sync"
+
+    # Build result JSON
+    local result
+    result=$(jq -n \
+        --argjson blob_count "$BLOB_COUNT" \
+        --argjson sync_1hop "$sync_1hop_ms" \
+        --argjson sync_2hop "$sync_2hop_ms" \
+        '{
+            scenario: "tombstone-sync",
+            blob_count: $blob_count,
+            sync_1hop_ms: $sync_1hop,
+            sync_2hop_ms: $sync_2hop,
+            sync_interval_seconds: 10
+        }')
+
+    echo "$result" > "$RESULTS_DIR/scenario-tombstone-sync.json"
+
+    log "Result: 1-hop=${sync_1hop_ms}ms, 2-hop=${sync_2hop_ms}ms"
+    log "Written: $RESULTS_DIR/scenario-tombstone-sync.json"
+
+    rm -rf "$identity_dir"
+
+    log "Tombstone sync scenario complete"
+}
+
+run_scenario_tombstone_gc() {
+    # Measures tombstone GC/expiry performance (BENCH-03).
+    # Write 200 blobs with TTL=30, create tombstones with TTL=30.
+    # Both blobs and tombstones expire and are GC'd.
+    #
+    # CRITICAL: get_blob_count() returns latest_seq_num (high-water, never decreases).
+    # GC measurement uses get_storage_mib() which tracks actual disk usage.
+
+    log "========================================="
+    log "Scenario: Tombstone GC/Expiry (BENCH-03)"
+    log "========================================="
+
+    reset_topology
+
+    capture_stats "pre" "tombstone-gc"
+
+    # Capture baseline storage before any data
+    local baseline_storage
+    baseline_storage=$(get_storage_mib chromatindb-node1)
+    log "Baseline storage (node1): ${baseline_storage}MiB"
+
+    local identity_dir
+    identity_dir=$(mktemp -d)
+
+    # Write 200 blobs (1 KiB, TTL=30) to node1
+    log "Write phase: $BLOB_COUNT blobs (1 KiB, TTL=30) to node1..."
+    local write_output
+    write_output=$(run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+        --count "$BLOB_COUNT" --rate "$RATE" --size 1024 \
+        --ttl 30 --drain-timeout 10 --identity-save /tmp/bench-id)
+
+    # Wait for all 3 nodes to converge at 200
+    log "Waiting for blob convergence on all nodes..."
+    wait_for_convergence chromatindb-node1 "$BLOB_COUNT" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node2 "$BLOB_COUNT" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node3 "$BLOB_COUNT" 120 >/dev/null || true
+    log "All nodes converged at $BLOB_COUNT blobs"
+
+    # Create 200 tombstones with TTL=30
+    local hashes
+    hashes=$(echo "$write_output" | jq -r '.blob_hashes[]')
+    log "Delete phase: $BLOB_COUNT tombstones (TTL=30) on node1..."
+    run_loadgen_v "$identity_dir:/tmp/bench-id" node1 \
+        --delete --hashes-from stdin --identity-file /tmp/bench-id \
+        --ttl 30 --drain-timeout 10 <<< "$hashes" >/dev/null
+
+    # Wait for tombstone sync: 200 blobs + 200 tombstones = 400
+    local expected_count=$(( BLOB_COUNT * 2 ))
+    log "Waiting for tombstone convergence on all nodes (target=$expected_count)..."
+    wait_for_convergence chromatindb-node1 "$expected_count" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node2 "$expected_count" 120 >/dev/null || true
+    wait_for_convergence chromatindb-node3 "$expected_count" 120 >/dev/null || true
+    log "All nodes converged at $expected_count entries"
+
+    # Wait for GC: both blobs (TTL=30) and tombstones (TTL=30) should expire.
+    # Expiry scan runs every 60s. Worst case: ~180 seconds from write.
+    local gc_threshold
+    gc_threshold=$(echo "$baseline_storage + 0.5" | bc -l)
+    log "GC threshold: ${gc_threshold}MiB (baseline + 0.5)"
+
+    log "Waiting for GC on all nodes (timeout=180s)..."
+    local gc_ms_node1 gc_ms_node2 gc_ms_node3
+    if gc_ms_node1=$(wait_for_gc_completion chromatindb-node1 "$gc_threshold" 180); then
+        log "Node1 GC complete in ${gc_ms_node1}ms"
+    else
+        log "WARNING: Node1 GC timed out"
+    fi
+    if gc_ms_node2=$(wait_for_gc_completion chromatindb-node2 "$gc_threshold" 180); then
+        log "Node2 GC complete in ${gc_ms_node2}ms"
+    else
+        log "WARNING: Node2 GC timed out"
+    fi
+    if gc_ms_node3=$(wait_for_gc_completion chromatindb-node3 "$gc_threshold" 180); then
+        log "Node3 GC complete in ${gc_ms_node3}ms"
+    else
+        log "WARNING: Node3 GC timed out"
+    fi
+
+    capture_stats "post" "tombstone-gc"
+
+    # Compute worst-case GC time
+    local gc_worst_ms
+    gc_worst_ms=$(jq -n --argjson a "$gc_ms_node1" --argjson b "$gc_ms_node2" --argjson c "$gc_ms_node3" \
+        '[$a, $b, $c] | max')
+
+    # Build result JSON
+    local result
+    result=$(jq -n \
+        --argjson blob_count "$BLOB_COUNT" \
+        --argjson gc_node1 "$gc_ms_node1" \
+        --argjson gc_node2 "$gc_ms_node2" \
+        --argjson gc_node3 "$gc_ms_node3" \
+        --argjson gc_worst "$gc_worst_ms" \
+        '{
+            scenario: "tombstone-gc",
+            blob_count: $blob_count,
+            ttl: 30,
+            gc_node1_ms: $gc_node1,
+            gc_node2_ms: $gc_node2,
+            gc_node3_ms: $gc_node3,
+            gc_worst_ms: $gc_worst
+        }')
+
+    echo "$result" > "$RESULTS_DIR/scenario-tombstone-gc.json"
+
+    log "Result: node1=${gc_ms_node1}ms, node2=${gc_ms_node2}ms, node3=${gc_ms_node3}ms, worst=${gc_worst_ms}ms"
+    log "Written: $RESULTS_DIR/scenario-tombstone-gc.json"
+
+    rm -rf "$identity_dir"
+
+    log "Tombstone GC scenario complete"
+}
+
 # --- Main --------------------------------------------------------------------
 
 main() {
@@ -944,6 +1260,11 @@ main() {
     # Additional scenarios (Plan 30-02)
     run_scenario_latejoin
     run_scenario_trusted_vs_pq
+
+    # Tombstone scenarios (Plan 36)
+    run_scenario_tombstone_creation
+    run_scenario_tombstone_sync
+    run_scenario_tombstone_gc
 
     # Generate report while containers are still available
     generate_report
