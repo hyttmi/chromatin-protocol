@@ -38,16 +38,10 @@ created: 2026-03-18
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 35-01-01 | 01 | 1 | QUOTA-03 | unit | `ctest -R "quota.*aggregate"` | No -- Wave 0 | pending |
-| 35-01-02 | 01 | 1 | QUOTA-03 | unit | `ctest -R "quota.*rebuild"` | No -- Wave 0 | pending |
-| 35-02-01 | 02 | 1 | QUOTA-01 | unit | `ctest -R "quota.*byte"` | No -- Wave 0 | pending |
-| 35-02-02 | 02 | 1 | QUOTA-02 | unit | `ctest -R "quota.*count"` | No -- Wave 0 | pending |
-| 35-02-03 | 02 | 1 | QUOTA-04 | unit | `ctest -R "quota.*exceeded"` | No -- Wave 0 | pending |
-| 35-03-01 | 03 | 2 | QUOTA-01/02 | unit | `ctest -R "quota.*tombstone"` | No -- Wave 0 | pending |
-| 35-03-02 | 03 | 2 | QUOTA-01/02 | unit | `ctest -R "quota.*override"` | No -- Wave 0 | pending |
-| 35-03-03 | 03 | 2 | QUOTA-01/02 | unit | `ctest -R "quota.*exempt"` | No -- Wave 0 | pending |
-| 35-04-01 | 04 | 2 | QUOTA-04 | unit | `ctest -R "config.*quota"` | No -- Wave 0 | pending |
-| 35-04-02 | 04 | 2 | QUOTA-04 | unit | `ctest -R "quota.*sighup"` | No -- Wave 0 | pending |
+| 35-01-01 | 01 | 1 | QUOTA-03 | unit | `ctest -R "quota" --output-on-failure` | No -- Wave 0 | pending |
+| 35-01-02 | 01 | 1 | QUOTA-04 | unit | `ctest -R "config.*quota\|quota.*config" --output-on-failure` | No -- Wave 0 | pending |
+| 35-02-01 | 02 | 2 | QUOTA-01/02 | unit | `ctest -R "engine.*quota\|quota.*engine" --output-on-failure` | No -- Wave 0 | pending |
+| 35-02-02 | 02 | 2 | QUOTA-04 | unit | `ctest -R "quota\|Quota" --output-on-failure` | No -- Wave 0 | pending |
 
 *Status: pending / green / red / flaky*
 
@@ -57,7 +51,7 @@ created: 2026-03-18
 
 - Existing infrastructure covers all phase requirements
 - Tests added inline with implementation (existing project pattern)
-- New tests go into existing files: `test_storage.cpp`, `test_engine.cpp`, `test_config.cpp`
+- New tests go into existing files: `test_storage.cpp`, `test_engine.cpp`, `test_config.cpp`, `test_peer_manager.cpp`
 
 ---
 
