@@ -1391,12 +1391,13 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
 TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engine][quota]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    // Set a byte quota of 1 byte -- any real blob exceeds this
-    BlobEngine engine(store, 0, 1, 0);
+    // Set byte quota to allow exactly one blob (a signed blob with ML-DSA-87 is ~7400 bytes encoded)
+    // Use 10000 bytes: enough for one blob, too small for two
+    BlobEngine engine(store, 0, 10000, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
-    // First ingest a blob to consume quota
+    // First ingest succeeds (under byte quota)
     auto blob1 = make_signed_blob(id, "fill-quota", 604800, 1000);
     auto r1 = engine.ingest(blob1);
     REQUIRE(r1.accepted);

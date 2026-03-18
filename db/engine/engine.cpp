@@ -3,6 +3,8 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/bin_to_hex.h>
 
+#include <cstring>
+
 #include "db/crypto/hash.h"
 #include "db/crypto/signing.h"
 #include "db/net/framing.h"
@@ -34,8 +36,58 @@ IngestResult IngestResult::rejection(IngestError err, std::string detail) {
 // BlobEngine
 // =============================================================================
 
-BlobEngine::BlobEngine(storage::Storage& store, uint64_t max_storage_bytes)
-    : storage_(store), max_storage_bytes_(max_storage_bytes) {}
+namespace {
+
+/// Convert 64-char hex string to 32-byte array.
+/// Caller must ensure hex.size() == 64 and all chars are valid hex.
+std::array<uint8_t, 32> hex_to_bytes32(const std::string& hex) {
+    std::array<uint8_t, 32> result{};
+    for (size_t i = 0; i < 32; ++i) {
+        auto byte_str = hex.substr(i * 2, 2);
+        result[i] = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+    }
+    return result;
+}
+
+} // anonymous namespace
+
+BlobEngine::BlobEngine(storage::Storage& store,
+                       uint64_t max_storage_bytes,
+                       uint64_t namespace_quota_bytes,
+                       uint64_t namespace_quota_count)
+    : storage_(store)
+    , max_storage_bytes_(max_storage_bytes)
+    , namespace_quota_bytes_(namespace_quota_bytes)
+    , namespace_quota_count_(namespace_quota_count) {}
+
+void BlobEngine::set_quota_config(
+    uint64_t quota_bytes, uint64_t quota_count,
+    const std::map<std::string, std::pair<std::optional<uint64_t>,
+        std::optional<uint64_t>>>& overrides) {
+    namespace_quota_bytes_ = quota_bytes;
+    namespace_quota_count_ = quota_count;
+    namespace_quota_overrides_.clear();
+    for (const auto& [hex_key, limits] : overrides) {
+        if (hex_key.size() == 64) {
+            namespace_quota_overrides_[hex_to_bytes32(hex_key)] = limits;
+        }
+    }
+}
+
+std::pair<uint64_t, uint64_t> BlobEngine::effective_quota(
+    std::span<const uint8_t, 32> namespace_id) const {
+    std::array<uint8_t, 32> ns_key;
+    std::memcpy(ns_key.data(), namespace_id.data(), 32);
+    auto it = namespace_quota_overrides_.find(ns_key);
+    if (it != namespace_quota_overrides_.end()) {
+        uint64_t byte_limit = it->second.first.has_value()
+            ? it->second.first.value() : namespace_quota_bytes_;
+        uint64_t count_limit = it->second.second.has_value()
+            ? it->second.second.value() : namespace_quota_count_;
+        return {byte_limit, count_limit};
+    }
+    return {namespace_quota_bytes_, namespace_quota_count_};
+}
 
 IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
     // Step 0: Size check (cheapest possible -- one integer comparison)
@@ -103,9 +155,31 @@ IngestResult BlobEngine::ingest(const wire::BlobData& blob) {
         }
     }
 
-    // Step 2.5: Compute content hash + dedup check (before expensive crypto)
-    // Encode blob and hash ONCE -- reused for dedup, tombstone check, and storage.
+    // Encode blob ONCE -- reused for quota check, dedup, tombstone check, and storage.
     auto encoded = wire::encode_blob(blob);
+
+    // Step 2a: Namespace quota check (after ownership, before dedup)
+    // Tombstones exempt: consistent with Step 0b capacity exemption
+    if (!wire::is_tombstone(blob.data)) {
+        auto [byte_limit, count_limit] = effective_quota(blob.namespace_id);
+        if (byte_limit > 0 || count_limit > 0) {
+            auto current = storage_.get_namespace_quota(blob.namespace_id);
+            if (byte_limit > 0 && current.total_bytes + encoded.size() > byte_limit) {
+                spdlog::warn("Ingest rejected: namespace byte quota exceeded ({} + {} > {})",
+                             current.total_bytes, encoded.size(), byte_limit);
+                return IngestResult::rejection(IngestError::quota_exceeded,
+                    "namespace byte quota exceeded");
+            }
+            if (count_limit > 0 && current.blob_count + 1 > count_limit) {
+                spdlog::warn("Ingest rejected: namespace count quota exceeded ({} + 1 > {})",
+                             current.blob_count, count_limit);
+                return IngestResult::rejection(IngestError::quota_exceeded,
+                    "namespace count quota exceeded");
+            }
+        }
+    }
+
+    // Step 2.5: Compute content hash + dedup check (before expensive crypto)
     auto content_hash = wire::blob_hash(encoded);
 
     // Dedup check: skip expensive ML-DSA-87 signature verification for already-stored blobs

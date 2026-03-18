@@ -2,9 +2,11 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "db/storage/storage.h"
@@ -61,7 +63,17 @@ public:
     /// Construct a BlobEngine backed by the given storage.
     /// @param store Reference to storage (must outlive this engine).
     /// @param max_storage_bytes Capacity limit in bytes (0 = unlimited).
-    explicit BlobEngine(storage::Storage& store, uint64_t max_storage_bytes = 0);
+    /// @param namespace_quota_bytes Global namespace byte limit (0 = unlimited).
+    /// @param namespace_quota_count Global namespace blob count limit (0 = unlimited).
+    explicit BlobEngine(storage::Storage& store,
+                        uint64_t max_storage_bytes = 0,
+                        uint64_t namespace_quota_bytes = 0,
+                        uint64_t namespace_quota_count = 0);
+
+    /// Update quota configuration (called on SIGHUP config reload).
+    void set_quota_config(uint64_t quota_bytes, uint64_t quota_count,
+                          const std::map<std::string, std::pair<std::optional<uint64_t>,
+                              std::optional<uint64_t>>>& overrides);
 
     /// Validate and ingest a blob.
     ///
@@ -109,8 +121,19 @@ public:
     std::vector<storage::NamespaceInfo> list_namespaces();
 
 private:
+    /// Resolve effective quota limits for a namespace (override > global).
+    /// Returns {byte_limit, count_limit} where 0 = unlimited.
+    std::pair<uint64_t, uint64_t> effective_quota(
+        std::span<const uint8_t, 32> namespace_id) const;
+
     storage::Storage& storage_;
     uint64_t max_storage_bytes_ = 0;
+    uint64_t namespace_quota_bytes_ = 0;
+    uint64_t namespace_quota_count_ = 0;
+    // Per-namespace overrides: key is raw 32-byte namespace hash
+    // Value: {optional max_bytes, optional max_count}
+    std::map<std::array<uint8_t, 32>, std::pair<std::optional<uint64_t>,
+             std::optional<uint64_t>>> namespace_quota_overrides_;
 };
 
 } // namespace chromatindb::engine
