@@ -31,8 +31,8 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 
 ### Namespace Quotas
 
-- [ ] **QUOTA-01**: Per-namespace maximum byte limit configurable and enforced at ingest
-- [ ] **QUOTA-02**: Per-namespace maximum blob count limit configurable and enforced at ingest
+- [x] **QUOTA-01**: Per-namespace maximum byte limit configurable and enforced at ingest
+- [x] **QUOTA-02**: Per-namespace maximum blob count limit configurable and enforced at ingest
 - [x] **QUOTA-03**: Namespace usage tracked via materialized aggregate in libmdbx sub-database (O(1) lookup on write path)
 - [x] **QUOTA-04**: Quota exceeded rejection signaled to writing peer with clear error
 
@@ -87,8 +87,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-02 | Phase 34 | Complete |
 | SYNC-03 | Phase 34 | Complete |
 | SYNC-04 | Phase 34 | Complete |
-| QUOTA-01 | Phase 35 | Pending |
-| QUOTA-02 | Phase 35 | Pending |
+| QUOTA-01 | Phase 35 | Complete |
+| QUOTA-02 | Phase 35 | Complete |
 | QUOTA-03 | Phase 35 | Complete |
 | QUOTA-04 | Phase 35 | Complete |
 | BENCH-01 | Phase 36 | Pending |

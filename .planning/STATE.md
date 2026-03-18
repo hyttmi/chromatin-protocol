@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 35-01-PLAN.md
-last_updated: "2026-03-18T14:09:27Z"
-last_activity: 2026-03-18 -- Phase 35 plan 01 complete
+stopped_at: Completed 35-02-PLAN.md
+last_updated: "2026-03-18T14:29:40Z"
+last_activity: 2026-03-18 -- Phase 35 plan 02 complete
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 6
-  completed_plans: 7
+  completed_plans: 8
   percent: 50
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-18)
 ## Current Position
 
 Phase: 35 (4 of 6 in v0.7.0) (Namespace Quotas)
-Plan: 1 of 3 complete
+Plan: 2 of 2 complete
 Status: Executing
-Last activity: 2026-03-18 -- Phase 35 plan 01 complete (quota storage foundation)
+Last activity: 2026-03-18 -- Phase 35 plan 02 complete (quota enforcement + wire signaling)
 
 Progress: [██████░░░░] 50% (3/6 phases complete)
 
@@ -57,6 +57,7 @@ Progress: [██████░░░░] 50% (3/6 phases complete)
 | Phase 34 P02 | 35min | 2 tasks | 4 files |
 | Phase 34 P03 | 12min | 1 task | 2 files |
 | Phase 35 P01 | 26min | 2 tasks (TDD) | 9 files |
+| Phase 35 P02 | 16min | 2 tasks (TDD) | 9 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - [Phase 35]: Quota aggregate tracks encrypted envelope size (actual disk cost, not wire-encoded)
 - [Phase 35]: Tombstones exempt from quota increment (owners must always be able to delete)
 - [Phase 35]: max_maps increased from 7 to 8 for 7th named sub-database (quota)
+- [Phase 35]: Step 2a early quota check uses encoded wire size as byte estimate (close proxy for disk cost)
+- [Phase 35]: QuotaExceeded wire message distinct from StorageFull (writers differentiate namespace vs global)
+- [Phase 35]: No strike for quota_exceeded rejections (legitimate, same pattern as storage_full)
 
 ### Pending Todos
 
@@ -95,6 +99,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T14:09:27Z
-Stopped at: Completed 35-01-PLAN.md
-Resume file: .planning/phases/35-namespace-quotas/35-01-SUMMARY.md
+Last session: 2026-03-18T14:29:40Z
+Stopped at: Completed 35-02-PLAN.md
+Resume file: .planning/phases/35-namespace-quotas/35-02-SUMMARY.md
