@@ -324,6 +324,25 @@ format_ingest_row() {
     echo "| ${display} | ${blobs_sec} | ${mib_sec} | ${p50} | ${p95} | ${p99} |"
 }
 
+format_tombstone_row() {
+    local label="$1"
+    local display="$2"
+    local file="$RESULTS_DIR/scenario-tombstone-creation-${label}.json"
+
+    if [[ ! -f "$file" ]]; then
+        echo "| ${display} | [not run] | [not run] | [not run] | [not run] |"
+        return
+    fi
+
+    local blobs_sec p50 p95 p99
+    blobs_sec=$(jq -r '.blobs_per_sec | . * 10 | round / 10' "$file")
+    p50=$(jq -r '.latency_ms.p50 | . * 100 | round / 100' "$file")
+    p95=$(jq -r '.latency_ms.p95 | . * 100 | round / 100' "$file")
+    p99=$(jq -r '.latency_ms.p99 | . * 100 | round / 100' "$file")
+
+    echo "| ${display} | ${blobs_sec} | ${p50} | ${p95} | ${p99} |"
+}
+
 compute_overhead() {
     local pq_val="$1"
     local trusted_val="$2"
@@ -420,6 +439,40 @@ generate_report() {
         # Simpler: just show ms
         catchup_time=$(jq -r '.catchup_ms' "$lj_file")
         catchup_time="${catchup_time}ms"
+    fi
+
+    # Step 3b: Tombstone executive summary values
+    local peak_tombstone_sec="[not run]"
+    local tombstone_sync_2hop="[not run]"
+    local gc_worst_ms="[not run]"
+
+    # Peak tombstone throughput across creation scenarios
+    local max_ts_blobs=0 has_ts=false
+    for label in 1k 100k 1m; do
+        local f="$RESULTS_DIR/scenario-tombstone-creation-${label}.json"
+        if [[ -f "$f" ]]; then
+            has_ts=true
+            local ts_bs
+            ts_bs=$(jq -r '.blobs_per_sec' "$f")
+            max_ts_blobs=$(jq -n --argjson a "$max_ts_blobs" --argjson b "$ts_bs" 'if $b > $a then $b else $a end')
+        fi
+    done
+    if [[ "$has_ts" == true ]]; then
+        peak_tombstone_sec=$(jq -n "$max_ts_blobs | . * 10 | round / 10" -r)
+    fi
+
+    # Tombstone sync 2-hop
+    local ts_sync_file="$RESULTS_DIR/scenario-tombstone-sync.json"
+    if [[ -f "$ts_sync_file" ]]; then
+        tombstone_sync_2hop=$(jq -r '.sync_2hop_ms' "$ts_sync_file")
+        tombstone_sync_2hop="${tombstone_sync_2hop}ms"
+    fi
+
+    # GC worst-case
+    local ts_gc_file="$RESULTS_DIR/scenario-tombstone-gc.json"
+    if [[ -f "$ts_gc_file" ]]; then
+        gc_worst_ms=$(jq -r '.gc_worst_ms' "$ts_gc_file")
+        gc_worst_ms="${gc_worst_ms}ms"
     fi
 
     # Step 4: Build ingest rows
@@ -542,6 +595,78 @@ ${tr_resources}"
         tvp_section="*Scenario not run.*"
     fi
 
+    # Step 8b: Build tombstone creation rows
+    local tombstone_row_1k tombstone_row_100k tombstone_row_1m
+    tombstone_row_1k=$(format_tombstone_row "1k" "1 KiB")
+    tombstone_row_100k=$(format_tombstone_row "100k" "100 KiB")
+    tombstone_row_1m=$(format_tombstone_row "1m" "1 MiB")
+
+    # Step 8c: Tombstone creation resource summary
+    local tombstone_creation_resources=""
+    for label in 1k 100k 1m; do
+        local res
+        res=$(format_resource_table "tombstone-creation-${label}")
+        tombstone_creation_resources="${tombstone_creation_resources}
+**Tombstone creation ${label}:**
+
+${res}
+"
+    done
+
+    # Step 8d: Tombstone sync section
+    local tombstone_sync_section=""
+    if [[ -f "$ts_sync_file" ]]; then
+        local ts_s1hop ts_s2hop ts_s_interval
+        ts_s1hop=$(jq -r '.sync_1hop_ms' "$ts_sync_file")
+        ts_s2hop=$(jq -r '.sync_2hop_ms' "$ts_sync_file")
+        ts_s_interval=$(jq -r '.sync_interval_seconds' "$ts_sync_file")
+
+        local ts_sync_resources
+        ts_sync_resources=$(format_resource_table "tombstone-sync")
+
+        tombstone_sync_section="| Metric | Value |
+|--------|-------|
+| 1-hop sync (node1 -> node2) | ${ts_s1hop}ms |
+| 2-hop sync (node1 -> node3) | ${ts_s2hop}ms |
+| Sync interval | ${ts_s_interval}s |
+| Blob count | ${BLOB_COUNT} |
+
+**Resource Usage:**
+
+${ts_sync_resources}"
+    else
+        tombstone_sync_section="*Scenario not run.*"
+    fi
+
+    # Step 8e: Tombstone GC section
+    local tombstone_gc_section=""
+    if [[ -f "$ts_gc_file" ]]; then
+        local gc_n1 gc_n2 gc_n3 gc_worst
+        gc_n1=$(jq -r '.gc_node1_ms' "$ts_gc_file")
+        gc_n2=$(jq -r '.gc_node2_ms' "$ts_gc_file")
+        gc_n3=$(jq -r '.gc_node3_ms' "$ts_gc_file")
+        gc_worst=$(jq -r '.gc_worst_ms' "$ts_gc_file")
+
+        local gc_resources
+        gc_resources=$(format_resource_table "tombstone-gc")
+
+        tombstone_gc_section="| Node | GC Time (ms) |
+|------|-------------|
+| node1 | ${gc_n1} |
+| node2 | ${gc_n2} |
+| node3 | ${gc_n3} |
+| **Worst** | **${gc_worst}** |
+
+Expiry scan runs every 60 seconds. GC latency includes up to 60s of scheduling delay.
+Both original blobs (TTL=30) and tombstones (TTL=30) are expired and reclaimed.
+
+**Resource Usage:**
+
+${gc_resources}"
+    else
+        tombstone_gc_section="*Scenario not run.*"
+    fi
+
     # Step 9: Raw data file listing
     local raw_files
     raw_files=$(ls -1 "$RESULTS_DIR"/*.json 2>/dev/null | while read -r f; do echo "- \`$(basename "$f")\`"; done)
@@ -563,6 +688,9 @@ ${tr_resources}"
 | Worst p99 latency | ${worst_p99}ms |
 | PQ vs trusted overhead (p50) | ${pq_overhead} |
 | Late-joiner catch-up | ${catchup_time} |
+| Peak tombstone throughput | ${peak_tombstone_sec} blobs/sec |
+| Tombstone sync (2-hop) | ${tombstone_sync_2hop} |
+| GC reclamation (worst) | ${gc_worst_ms} |
 
 ## System Profile
 
@@ -621,11 +749,35 @@ ${lj_section}
 
 ${tvp_section}
 
+## Tombstone Creation
+
+Tombstone data is always 36 bytes (4-byte magic + 32-byte target hash) regardless of original blob size.
+Write phase creates blobs of the indicated size; delete phase creates 36-byte tombstones for those blobs.
+
+| Original Blob Size | blobs/sec | p50 (ms) | p95 (ms) | p99 (ms) |
+|-------------------|-----------|----------|----------|----------|
+${tombstone_row_1k}
+${tombstone_row_100k}
+${tombstone_row_1m}
+
+**Resource Usage:**
+
+${tombstone_creation_resources}
+
+## Tombstone Sync Propagation
+
+${tombstone_sync_section}
+
+## Tombstone GC/Expiry
+
+${tombstone_gc_section}
+
 ## Caveats
 
 - **Sync latency includes sync_interval:** Sync is timer-driven (10s interval), not event-driven. Measured latency includes scheduling delay. Real propagation time is lower.
 - **Single run, no statistical significance:** These are single-run results establishing a baseline. Production benchmarking requires multiple runs with statistical analysis.
 - **Docker overhead:** All nodes run in Docker containers with overlay networking. Bare-metal performance will differ (typically faster).
+- **GC timing includes scan interval:** Expiry scan runs every 60 seconds. GC latency includes up to 60s of scheduling delay.
 
 ## Raw Data
 
@@ -640,6 +792,8 @@ EOF
 
     local ingest_1k="null" ingest_100k="null" ingest_1m="null"
     local sync_json="null" lj_json="null" tvp_json="null"
+    local ts_creation_1k="null" ts_creation_100k="null" ts_creation_1m="null"
+    local ts_sync="null" ts_gc="null"
 
     [[ -f "$RESULTS_DIR/scenario-ingest-1k.json" ]] && ingest_1k=$(cat "$RESULTS_DIR/scenario-ingest-1k.json")
     [[ -f "$RESULTS_DIR/scenario-ingest-100k.json" ]] && ingest_100k=$(cat "$RESULTS_DIR/scenario-ingest-100k.json")
@@ -647,6 +801,11 @@ EOF
     [[ -f "$RESULTS_DIR/scenario-sync-latency.json" ]] && sync_json=$(cat "$RESULTS_DIR/scenario-sync-latency.json")
     [[ -f "$RESULTS_DIR/scenario-latejoin.json" ]] && lj_json=$(cat "$RESULTS_DIR/scenario-latejoin.json")
     [[ -f "$RESULTS_DIR/scenario-trusted-vs-pq.json" ]] && tvp_json=$(cat "$RESULTS_DIR/scenario-trusted-vs-pq.json")
+    [[ -f "$RESULTS_DIR/scenario-tombstone-creation-1k.json" ]] && ts_creation_1k=$(cat "$RESULTS_DIR/scenario-tombstone-creation-1k.json")
+    [[ -f "$RESULTS_DIR/scenario-tombstone-creation-100k.json" ]] && ts_creation_100k=$(cat "$RESULTS_DIR/scenario-tombstone-creation-100k.json")
+    [[ -f "$RESULTS_DIR/scenario-tombstone-creation-1m.json" ]] && ts_creation_1m=$(cat "$RESULTS_DIR/scenario-tombstone-creation-1m.json")
+    [[ -f "$RESULTS_DIR/scenario-tombstone-sync.json" ]] && ts_sync=$(cat "$RESULTS_DIR/scenario-tombstone-sync.json")
+    [[ -f "$RESULTS_DIR/scenario-tombstone-gc.json" ]] && ts_gc=$(cat "$RESULTS_DIR/scenario-tombstone-gc.json")
 
     jq -n \
         --arg generated "$timestamp" \
@@ -661,6 +820,11 @@ EOF
         --argjson sync_latency "$sync_json" \
         --argjson latejoin "$lj_json" \
         --argjson trusted_vs_pq "$tvp_json" \
+        --argjson tombstone_creation_1k "$ts_creation_1k" \
+        --argjson tombstone_creation_100k "$ts_creation_100k" \
+        --argjson tombstone_creation_1m "$ts_creation_1m" \
+        --argjson tombstone_sync "$ts_sync" \
+        --argjson tombstone_gc "$ts_gc" \
         '{
             generated: $generated,
             commit: $commit,
@@ -678,7 +842,12 @@ EOF
                 ingest_1m: $ingest_1m,
                 sync_latency: $sync_latency,
                 latejoin: $latejoin,
-                trusted_vs_pq: $trusted_vs_pq
+                trusted_vs_pq: $trusted_vs_pq,
+                tombstone_creation_1k: $tombstone_creation_1k,
+                tombstone_creation_100k: $tombstone_creation_100k,
+                tombstone_creation_1m: $tombstone_creation_1m,
+                tombstone_sync: $tombstone_sync,
+                tombstone_gc: $tombstone_gc
             }
         }' > "$RESULTS_DIR/benchmark-summary.json"
 
