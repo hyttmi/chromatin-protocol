@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <random>
 
 #include "db/engine/engine.h"
@@ -12,6 +14,18 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Convert a 32-byte namespace hash to 64-char hex string (for quota override keys).
+std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
+    static constexpr char hex_chars[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (auto b : ns) {
+        result += hex_chars[(b >> 4) & 0xF];
+        result += hex_chars[b & 0xF];
+    }
+    return result;
+}
 
 /// Create a unique temporary directory for each test.
 struct TempDir {
@@ -1368,4 +1382,194 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
 
     auto result = engine.ingest(blob);
     REQUIRE(result.accepted);
+}
+
+// ============================================================================
+// Phase 35 Plan 02: BlobEngine namespace quota enforcement
+// ============================================================================
+
+TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set a byte quota of 1 byte -- any real blob exceeds this
+    BlobEngine engine(store, 0, 1, 0);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // First ingest a blob to consume quota
+    auto blob1 = make_signed_blob(id, "fill-quota", 604800, 1000);
+    auto r1 = engine.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    // Second blob should be rejected for byte quota
+    auto blob2 = make_signed_blob(id, "over-quota", 604800, 1001);
+    auto r2 = engine.ingest(blob2);
+    REQUIRE_FALSE(r2.accepted);
+    REQUIRE(r2.error.has_value());
+    REQUIRE(r2.error.value() == IngestError::quota_exceeded);
+}
+
+TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set a count quota of 1 blob per namespace
+    BlobEngine engine(store, 0, 0, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // First blob succeeds (count 0 + 1 <= 1)
+    auto blob1 = make_signed_blob(id, "first-blob", 604800, 1000);
+    auto r1 = engine.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    // Second blob should be rejected for count quota
+    auto blob2 = make_signed_blob(id, "second-blob", 604800, 1001);
+    auto r2 = engine.ingest(blob2);
+    REQUIRE_FALSE(r2.accepted);
+    REQUIRE(r2.error.has_value());
+    REQUIRE(r2.error.value() == IngestError::quota_exceeded);
+}
+
+TEST_CASE("BlobEngine allows ingest when under quota", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Generous quota: 100 MiB bytes, 1000 count
+    BlobEngine engine(store, 0, 100ULL * 1024 * 1024, 1000);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "under-quota");
+    auto result = engine.ingest(blob);
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Set count quota of 1 -- fill it, then tombstone should still work
+    BlobEngine engine(store, 0, 0, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Fill the count quota
+    auto blob = make_signed_blob(id, "fill-count-quota", 604800, 1000);
+    auto r1 = engine.ingest(blob);
+    REQUIRE(r1.accepted);
+
+    // Tombstone should bypass quota check
+    auto tombstone = make_signed_tombstone(id, r1.ack->blob_hash, 2000);
+    auto r2 = engine.ingest(tombstone);
+    // Tombstone must NOT be rejected with quota_exceeded
+    if (!r2.accepted) {
+        REQUIRE(r2.error.value() != IngestError::quota_exceeded);
+    }
+}
+
+TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Global quota: 1 byte -- would reject everything
+    BlobEngine engine(store, 0, 1, 0);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Set per-namespace override to allow much more
+    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
+    overrides[ns_hex] = {100ULL * 1024 * 1024, std::nullopt};  // 100 MiB override
+    engine.set_quota_config(1, 0, overrides);
+
+    // First blob should succeed (override allows it)
+    auto blob1 = make_signed_blob(id, "override-allowed-1", 604800, 1000);
+    auto r1 = engine.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    // Second blob should also succeed
+    auto blob2 = make_signed_blob(id, "override-allowed-2", 604800, 1001);
+    auto r2 = engine.ingest(blob2);
+    REQUIRE(r2.accepted);
+}
+
+TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Global byte quota: 1 byte (restrictive)
+    BlobEngine engine(store, 0, 1, 0);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Set override with max_bytes=0 (exempt from byte quota)
+    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
+    overrides[ns_hex] = {uint64_t(0), std::nullopt};  // 0 = unlimited bytes
+    engine.set_quota_config(1, 0, overrides);
+
+    // First blob should work
+    auto blob1 = make_signed_blob(id, "exempt-blob-1", 604800, 1000);
+    auto r1 = engine.ingest(blob1);
+    REQUIRE(r1.accepted);
+
+    // Second blob should also work (exempt namespace)
+    auto blob2 = make_signed_blob(id, "exempt-blob-2", 604800, 1001);
+    auto r2 = engine.ingest(blob2);
+    REQUIRE(r2.accepted);
+}
+
+TEST_CASE("BlobEngine zero override exempts namespace from global count quota", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Global count quota: 1 blob (restrictive)
+    BlobEngine engine(store, 0, 0, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Set override with max_count=0 (exempt from count quota)
+    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
+    overrides[ns_hex] = {std::nullopt, uint64_t(0)};  // 0 = unlimited count
+    engine.set_quota_config(0, 1, overrides);
+
+    // First blob succeeds
+    auto blob1 = make_signed_blob(id, "exempt-count-1", 604800, 1000);
+    REQUIRE(engine.ingest(blob1).accepted);
+
+    // Second blob also succeeds (exempt from count quota)
+    auto blob2 = make_signed_blob(id, "exempt-count-2", 604800, 1001);
+    REQUIRE(engine.ingest(blob2).accepted);
+}
+
+TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Both quotas set to 0 (unlimited) -- default behavior
+    BlobEngine engine(store, 0, 0, 0);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    for (int i = 0; i < 5; ++i) {
+        auto blob = make_signed_blob(id, "unlimited-" + std::to_string(i), 604800, 1000 + i);
+        REQUIRE(engine.ingest(blob).accepted);
+    }
+}
+
+TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    // Start with no quota
+    BlobEngine engine(store, 0, 0, 0);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // First blob succeeds (no quota)
+    auto blob1 = make_signed_blob(id, "before-quota", 604800, 1000);
+    REQUIRE(engine.ingest(blob1).accepted);
+
+    // Now set a count quota of 1 via set_quota_config (simulating SIGHUP)
+    std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> empty_overrides;
+    engine.set_quota_config(0, 1, empty_overrides);
+
+    // Second blob should be rejected (count quota = 1, already have 1)
+    auto blob2 = make_signed_blob(id, "after-quota", 604800, 1001);
+    auto r2 = engine.ingest(blob2);
+    REQUIRE_FALSE(r2.accepted);
+    REQUIRE(r2.error.value() == IngestError::quota_exceeded);
 }
