@@ -38,7 +38,7 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 
 ### Benchmarks
 
-- [ ] **BENCH-01**: Tombstone creation performance scenario added to Docker benchmark suite
+- [x] **BENCH-01**: Tombstone creation performance scenario added to Docker benchmark suite
 - [ ] **BENCH-02**: Tombstone sync propagation latency measured across multi-node topology
 - [ ] **BENCH-03**: Tombstone GC/expiry performance measured under load
 
@@ -91,7 +91,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUOTA-02 | Phase 35 | Complete |
 | QUOTA-03 | Phase 35 | Complete |
 | QUOTA-04 | Phase 35 | Complete |
-| BENCH-01 | Phase 36 | Pending |
+| BENCH-01 | Phase 36 | Complete |
 | BENCH-02 | Phase 36 | Pending |
 | BENCH-03 | Phase 36 | Pending |
 
