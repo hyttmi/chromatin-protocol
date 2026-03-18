@@ -200,4 +200,4 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
 | 36. Deletion Benchmarks | 2/2 | Complete    | 2026-03-18 |
-| 37. General Cleanup | 0/2 | Not started | - |
+| 37. General Cleanup | 1/2 | In Progress|  |

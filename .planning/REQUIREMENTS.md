@@ -11,8 +11,8 @@ Requirements for production readiness milestone. Each maps to roadmap phases.
 
 - [x] **CLEAN-01**: Tests relocated into db/ directory with CTest discovery preserved (313 tests before = 313 tests after)
 - [ ] **CLEAN-02**: Old standalone benchmark binary (chromatindb_bench) removed from build
-- [ ] **CLEAN-03**: db/ README updated with current features, old benchmark data removed
-- [ ] **CLEAN-04**: Stale artifacts swept and removed (dead code, leftover files from previous milestones)
+- [x] **CLEAN-03**: db/ README updated with current features, old benchmark data removed
+- [x] **CLEAN-04**: Stale artifacts swept and removed (dead code, leftover files from previous milestones)
 
 ### Performance
 
@@ -76,8 +76,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | CLEAN-01 | Phase 32 | Complete |
 | CLEAN-02 | Phase 37 | Pending |
-| CLEAN-03 | Phase 37 | Pending |
-| CLEAN-04 | Phase 37 | Pending |
+| CLEAN-03 | Phase 37 | Complete |
+| CLEAN-04 | Phase 37 | Complete |
 | PERF-01 | Phase 33 | Complete |
 | PERF-02 | Phase 33 | Complete |
 | PERF-03 | Phase 33 | Complete |

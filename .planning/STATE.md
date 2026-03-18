@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 37 context gathered
-last_updated: "2026-03-18T16:07:26.976Z"
-last_activity: 2026-03-18 -- Phase 36 plan 02 complete (tombstone benchmark scenarios)
+stopped_at: Completed 37-02-PLAN.md
+last_updated: "2026-03-18T16:24:37Z"
+last_activity: 2026-03-18 -- Phase 37 plan 02 complete (documentation update)
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-18)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 36 - Deletion Benchmarks
+**Current focus:** Phase 37 - General Cleanup
 
 ## Current Position
 
-Phase: 36 (5 of 6 in v0.7.0) (Deletion Benchmarks)
-Plan: 2 of 2 complete
-Status: Phase Complete
-Last activity: 2026-03-18 -- Phase 36 plan 02 complete (tombstone benchmark scenarios)
+Phase: 37 (6 of 6 in v0.7.0) (General Cleanup)
+Plan: 2 of 2 complete (37-02 documentation update)
+Status: Plan 37-02 Complete
+Last activity: 2026-03-18 -- Phase 37 plan 02 complete (documentation update)
 
-Progress: [██████████] 100% (10/10 plans complete)
+Progress: [██████████] 96% (24/25 plans complete)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [██████████] 100% (10/10 plans complete)
 | Phase 35 P02 | 16min | 2 tasks (TDD) | 9 files |
 | Phase 36 P01 | 4min | 2 tasks | 1 file |
 | Phase 36 P02 | 4min | 2 tasks | 1 files |
+| Phase 37 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 36]: DeleteAck (type 19) used for delete latency measurement, not Notification
 - [Phase 36]: Skip pub/sub subscription in delete mode (DeleteAck is direct from connected node)
 - [Phase 36]: GC polling uses storage MiB metric (not blob count seq_num which never decreases)
+- [Phase 37]: Removed Performance section entirely (stale benchmarks; data belongs in CI, not README)
+- [Phase 37]: Expanded Wire Protocol description to list all protocol categories for discoverability
 
 ### Pending Todos
 
@@ -105,6 +108,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T16:07:26.974Z
-Stopped at: Phase 37 context gathered
-Resume file: .planning/phases/37-general-cleanup/37-CONTEXT.md
+Last session: 2026-03-18T16:24:37Z
+Stopped at: Completed 37-02-PLAN.md
+Resume file: .planning/phases/37-general-cleanup/37-02-SUMMARY.md
