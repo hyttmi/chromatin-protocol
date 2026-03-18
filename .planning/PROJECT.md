@@ -59,6 +59,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Performance benchmark suite: ingest, sync, multi-hop, late-joiner, trusted-vs-PQ — v0.6.0
 - ✓ Structured benchmark report with hardware profiling and computed analysis — v0.6.0
 
+- ✓ Sync resumption with per-peer per-namespace cursors for O(new) sync — v0.7.0
+
 ### Active
 
 ## Current Milestone: v0.7.0 Production Readiness
@@ -171,6 +173,7 @@ Previous projects inform design:
 | SIGUSR1 + log grep for benchmark convergence polling | Uses existing metrics mechanism, no new API needed | ✓ Good — zero code changes to chromatindb |
 | Full compose restart between PQ/trusted benchmark runs | SIGHUP reloads config but existing connections keep handshake type | ✓ Good — fair comparison with fresh connections |
 | Runtime IP resolution via docker inspect for trusted_peers | Docker DNS names not accepted; IPs resolved at benchmark time | ✓ Good — dynamic, no hardcoded addresses |
+| Zero-hash sentinel in seq_map on blob deletion | Preserves seq_num monotonicity for cursor change detection; fix at storage root cause, not cursor symptom | ✓ Good — seq_map entries never deleted, all seq_num consumers see monotonic values |
 
 ---
-*Last updated: 2026-03-16 after v0.7.0 milestone start*
+*Last updated: 2026-03-18 after Phase 34*

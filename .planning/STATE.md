@@ -18,19 +18,19 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-16)
+See: .planning/PROJECT.md (updated 2026-03-18)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 34 - Sync Resumption
+**Current focus:** Phase 35 - Namespace Quotas
 
 ## Current Position
 
-Phase: 34 (3 of 6 in v0.7.0) (Sync Resumption) -- COMPLETE (gap closed)
-Plan: 3 of 3 in current phase (COMPLETE -- Plan 03 was gap closure)
-Status: Phase 34 complete -- sync resumption fully shipped, tombstone regression fixed
-Last activity: 2026-03-18 -- Completed 34-03 tombstone sync regression fix
+Phase: 35 (4 of 6 in v0.7.0) (Namespace Quotas)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-03-18 -- Phase 34 complete, transitioning to Phase 35
 
-Progress: [██████░░░░] 60%
+Progress: [██████░░░░] 50% (3/6 phases complete)
 
 ## Performance Metrics
 
@@ -87,12 +87,10 @@ None.
 
 ### Blockers/Concerns
 
-- Known: Large blob crypto throughput (15.3 blobs/sec, 96% CPU) -- addressed by Phase 33
-- Risk: Cursor staleness after deletions -- RESOLVED: seq_num monotonicity via zero-hash sentinel (Plan 03) + periodic full resync fallback (SYNC-04)
 - Risk: Quota check-then-act race across co_await -- mitigated by enforcement in write txn (QUOTA-03)
 
 ## Session Continuity
 
-Last session: 2026-03-18T03:14:28Z
-Stopped at: Completed 34-03-PLAN.md (Phase 34 gap closure complete)
+Last session: 2026-03-18
+Stopped at: Phase 34 complete, ready to plan Phase 35
 Resume file: None
