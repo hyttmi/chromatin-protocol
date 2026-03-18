@@ -189,6 +189,27 @@ std::string to_hex(std::span<const uint8_t> bytes) {
     return result;
 }
 
+/// Decode a 64-char hex string to a 32-byte array.
+std::array<uint8_t, 32> from_hex(const std::string& hex_str) {
+    std::array<uint8_t, 32> result{};
+    if (hex_str.size() != 64) {
+        throw std::runtime_error("from_hex: expected 64 hex chars, got " +
+                                 std::to_string(hex_str.size()));
+    }
+    for (size_t i = 0; i < 32; ++i) {
+        auto hi = hex_str[i * 2];
+        auto lo = hex_str[i * 2 + 1];
+        auto nibble = [](char c) -> uint8_t {
+            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
+            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
+            throw std::runtime_error(std::string("from_hex: invalid hex char '") + c + "'");
+        };
+        result[i] = static_cast<uint8_t>((nibble(hi) << 4) | nibble(lo));
+    }
+    return result;
+}
+
 // =============================================================================
 // Blob construction
 // =============================================================================
@@ -208,6 +229,24 @@ chromatindb::wire::BlobData make_signed_blob(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
     return blob;
+}
+
+/// Construct a signed tombstone BlobData for the given target hash.
+chromatindb::wire::BlobData make_tombstone_request(
+    const chromatindb::identity::NodeIdentity& id,
+    std::span<const uint8_t, 32> target_hash,
+    uint32_t ttl, uint64_t timestamp)
+{
+    chromatindb::wire::BlobData tombstone;
+    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    tombstone.data = chromatindb::wire::make_tombstone_data(target_hash);
+    tombstone.ttl = ttl;
+    tombstone.timestamp = timestamp;
+    auto signing_input = chromatindb::wire::build_signing_input(
+        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
+    tombstone.signature = id.sign(signing_input);
+    return tombstone;
 }
 
 // =============================================================================
@@ -284,13 +323,27 @@ public:
         : ioc_(ioc)
         , cfg_(cfg)
         , identity_(identity)
+        , delete_mode_(cfg.delete_mode)
         , timer_(ioc)
         , drain_timer_(ioc)
     {
     }
 
+    /// Set target hashes for delete mode (called from main before prepare).
+    void set_target_hashes(std::vector<std::array<uint8_t, 32>> hashes) {
+        target_hashes_ = std::move(hashes);
+    }
+
     /// Pre-generate random data pools and size class assignments.
     void prepare() {
+        if (delete_mode_) {
+            // In delete mode, tombstones are always 36 bytes (Small class).
+            // No random data pools needed.
+            size_classes_.assign(cfg_.count, SizeClass::Small);
+            spdlog::info("prepared {} tombstone assignments (delete mode)", cfg_.count);
+            return;
+        }
+
         // Pre-generate one random data buffer per size class
         std::mt19937 rng(42);
         auto fill_random = [&](std::vector<uint8_t>& buf, size_t sz) {
@@ -423,22 +476,26 @@ public:
     }
 
 private:
-    /// Subscribe to own namespace, then start the timed send loop.
+    /// Subscribe to own namespace (write mode), then start the timed send loop.
     asio::awaitable<void> subscribe_and_send(chromatindb::net::Connection::Ptr conn_ptr) {
-        // Subscribe to our namespace for notification ACKs
-        std::array<uint8_t, 32> ns_array{};
-        std::memcpy(ns_array.data(), identity_.namespace_id().data(), 32);
-        std::vector<std::array<uint8_t, 32>> namespaces = {ns_array};
-        auto ns_payload = chromatindb::peer::PeerManager::encode_namespace_list(namespaces);
+        if (!delete_mode_) {
+            // Write mode: subscribe to our namespace for notification ACKs
+            std::array<uint8_t, 32> ns_array{};
+            std::memcpy(ns_array.data(), identity_.namespace_id().data(), 32);
+            std::vector<std::array<uint8_t, 32>> namespaces = {ns_array};
+            auto ns_payload = chromatindb::peer::PeerManager::encode_namespace_list(namespaces);
 
-        auto ok = co_await conn_ptr->send_message(
-            chromatindb::wire::TransportMsgType_Subscribe,
-            std::span<const uint8_t>(ns_payload));
-        if (!ok) {
-            spdlog::error("failed to send Subscribe message");
-            co_return;
+            auto ok = co_await conn_ptr->send_message(
+                chromatindb::wire::TransportMsgType_Subscribe,
+                std::span<const uint8_t>(ns_payload));
+            if (!ok) {
+                spdlog::error("failed to send Subscribe message");
+                co_return;
+            }
+            spdlog::info("subscribed to own namespace for notification ACKs");
+        } else {
+            spdlog::info("delete mode: skipping subscription (using DeleteAck for latency)");
         }
-        spdlog::info("subscribed to own namespace for notification ACKs");
 
         // Pre-compute scheduled send times
         auto interval = std::chrono::nanoseconds(
@@ -449,18 +506,19 @@ private:
             schedule[i] = start_time + interval * static_cast<int64_t>(i);
         }
 
-        spdlog::info("starting send: {} blobs at {} blobs/sec", cfg_.count, cfg_.rate);
+        auto mode_label = delete_mode_ ? "tombstones" : "blobs";
+        spdlog::info("starting send: {} {} at {} /sec", cfg_.count, mode_label, cfg_.rate);
         first_send_time_ = start_time;
 
         // Timer-driven send loop
         for (uint64_t i = 0; i < cfg_.count; ++i) {
             // Check if we should stop (storage full or connection closed)
             if (storage_full_.load(std::memory_order_acquire)) {
-                spdlog::warn("stopping: node reported StorageFull after {} blobs", i);
+                spdlog::warn("stopping: node reported StorageFull after {} sends", i);
                 break;
             }
             if (connection_closed_.load(std::memory_order_acquire)) {
-                spdlog::warn("stopping: connection closed after {} blobs", i);
+                spdlog::warn("stopping: connection closed after {} sends", i);
                 break;
             }
 
@@ -472,31 +530,47 @@ private:
                 break;
             }
 
-            // Construct and send blob
-            auto data_size = get_data_size(size_classes_[i]);
-            const auto& data_buf = get_data_buffer(size_classes_[i]);
-
             // Use current microsecond timestamp for uniqueness
             auto now_us = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
                     .count());
 
-            auto blob = make_signed_blob(identity_, data_buf, cfg_.ttl, now_us);
-            auto encoded = chromatindb::wire::encode_blob(blob);
-            auto hash = chromatindb::wire::blob_hash(
-                std::span<const uint8_t>(encoded));
+            std::vector<uint8_t> encoded;
+            std::array<uint8_t, 32> hash{};
+            size_t data_size = 0;
+
+            if (delete_mode_) {
+                // Delete path: construct tombstone for target hash
+                auto tombstone = make_tombstone_request(
+                    identity_, target_hashes_[i], cfg_.ttl, now_us);
+                encoded = chromatindb::wire::encode_blob(tombstone);
+                hash = chromatindb::wire::blob_hash(
+                    std::span<const uint8_t>(encoded));
+                data_size = chromatindb::wire::TOMBSTONE_DATA_SIZE;
+            } else {
+                // Write path: construct random blob
+                data_size = get_data_size(size_classes_[i]);
+                const auto& data_buf = get_data_buffer(size_classes_[i]);
+                auto blob = make_signed_blob(identity_, data_buf, cfg_.ttl, now_us);
+                encoded = chromatindb::wire::encode_blob(blob);
+                hash = chromatindb::wire::blob_hash(
+                    std::span<const uint8_t>(encoded));
+            }
 
             // Record scheduled time for this blob (for latency measurement)
             auto hash_hex = to_hex(hash);
             pending_sends_[hash_hex] = schedule[i];
 
+            auto msg_type = delete_mode_
+                ? chromatindb::wire::TransportMsgType_Delete
+                : chromatindb::wire::TransportMsgType_Data;
+
             auto send_ok = co_await conn_ptr->send_message(
-                chromatindb::wire::TransportMsgType_Data,
-                std::span<const uint8_t>(encoded));
+                msg_type, std::span<const uint8_t>(encoded));
             if (!send_ok) {
                 ++send_errors_;
-                spdlog::warn("send failed for blob {}", i);
+                spdlog::warn("send failed for {} {}", mode_label, i);
                 continue;
             }
 
@@ -505,28 +579,30 @@ private:
             total_bytes_sent_ += data_size;
             last_send_time_ = Clock::now();
 
-            // Progress logging every 10% or every 100 blobs
+            // Progress logging every 10% or every 100
             if (cfg_.count >= 10 && (i + 1) % std::max(cfg_.count / 10, uint64_t{1}) == 0) {
-                spdlog::info("progress: {}/{} blobs sent", i + 1, cfg_.count);
+                spdlog::info("progress: {}/{} {} sent", i + 1, cfg_.count, mode_label);
             }
         }
 
-        spdlog::info("send complete: {} blobs sent, {} errors", blobs_sent_, send_errors_);
+        spdlog::info("send complete: {} {} sent, {} errors",
+                     blobs_sent_, mode_label, send_errors_);
 
-        // Drain phase: wait for remaining notifications
-        spdlog::info("draining notifications for {}s...", cfg_.drain_timeout);
+        // Drain phase: wait for remaining ACKs
+        auto ack_label = delete_mode_ ? "DeleteAcks" : "notifications";
+        spdlog::info("draining {} for {}s...", ack_label, cfg_.drain_timeout);
         drain_timer_.expires_after(std::chrono::seconds(cfg_.drain_timeout));
         auto [ec_drain] = co_await drain_timer_.async_wait(use_nothrow);
 
-        spdlog::info("drain complete: received {}/{} notifications",
-                     latencies_.size(), blobs_sent_);
+        spdlog::info("drain complete: received {}/{} {}",
+                     latencies_.size(), blobs_sent_, ack_label);
 
         // Close connection and stop io_context
         conn_->close();
         ioc_.stop();
     }
 
-    /// Handle incoming messages (Notification for ACK matching, StorageFull).
+    /// Handle incoming messages (Notification/DeleteAck for ACK matching, StorageFull).
     void handle_message(chromatindb::wire::TransportMsgType type,
                         std::vector<uint8_t> payload) {
         if (type == chromatindb::wire::TransportMsgType_StorageFull) {
@@ -535,12 +611,17 @@ private:
             return;
         }
 
+        if (type == chromatindb::wire::TransportMsgType_DeleteAck) {
+            handle_delete_ack(std::move(payload));
+            return;
+        }
+
         if (type == chromatindb::wire::TransportMsgType_Notification) {
             handle_notification(std::move(payload));
             return;
         }
 
-        // Ignore other message types (Ping/Pong, etc.)
+        // Ignore other message types (Ping/Pong, QuotaExceeded, etc.)
     }
 
     /// Parse notification payload and compute latency.
@@ -575,6 +656,37 @@ private:
         }
     }
 
+    /// Parse DeleteAck payload and compute latency.
+    void handle_delete_ack(std::vector<uint8_t> payload) {
+        // Format: [blob_hash:32][seq_num_be:8][status:1] = 41 bytes
+        if (payload.size() != 41) {
+            spdlog::warn("unexpected DeleteAck payload size: {}", payload.size());
+            return;
+        }
+
+        // Extract blob_hash (first 32 bytes)
+        std::array<uint8_t, 32> blob_hash{};
+        std::memcpy(blob_hash.data(), payload.data(), 32);
+        auto hash_hex = to_hex(blob_hash);
+
+        auto it = pending_sends_.find(hash_hex);
+        if (it == pending_sends_.end()) {
+            return;
+        }
+
+        auto scheduled_time = it->second;
+        auto now = Clock::now();
+        auto latency_ms = std::chrono::duration<double, std::milli>(
+            now - scheduled_time).count();
+        latencies_.push_back(latency_ms);
+        pending_sends_.erase(it);
+
+        // If all DeleteAcks received, cancel drain timer
+        if (latencies_.size() == blobs_sent_ && blobs_sent_ > 0) {
+            drain_timer_.cancel();
+        }
+    }
+
     /// Get the actual data size for a blob based on size class and config.
     size_t get_data_size(SizeClass sc) const {
         if (!cfg_.mixed) return cfg_.size;
@@ -603,10 +715,14 @@ private:
     asio::io_context& ioc_;
     const Config& cfg_;
     chromatindb::identity::NodeIdentity& identity_;
+    bool delete_mode_ = false;
     chromatindb::net::Connection::Ptr conn_;
 
     asio::steady_timer timer_;
     asio::steady_timer drain_timer_;
+
+    // Target hashes for delete mode (set from main before prepare)
+    std::vector<std::array<uint8_t, 32>> target_hashes_;
 
     // Pre-generated random data pools
     std::vector<uint8_t> pool_small_;
@@ -674,9 +790,31 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("namespace: {}", to_hex(identity.namespace_id()));
 
+    // In delete mode, read target hashes from stdin
+    std::vector<std::array<uint8_t, 32>> target_hashes;
+    if (cfg.delete_mode && cfg.hashes_from == "stdin") {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            // Skip empty lines
+            if (line.empty()) continue;
+            // Trim trailing whitespace/CR
+            while (!line.empty() && (line.back() == '\r' || line.back() == '\n' ||
+                                     line.back() == ' ')) {
+                line.pop_back();
+            }
+            if (line.empty()) continue;
+            target_hashes.push_back(from_hex(line));
+        }
+        cfg.count = target_hashes.size();
+        spdlog::info("read {} target hashes from stdin", target_hashes.size());
+    }
+
     asio::io_context ioc;
 
     LoadGenerator gen(ioc, cfg, identity);
+    if (cfg.delete_mode) {
+        gen.set_target_hashes(std::move(target_hashes));
+    }
     gen.prepare();
 
     // Spawn the main run coroutine
