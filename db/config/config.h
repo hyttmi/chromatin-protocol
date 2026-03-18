@@ -2,7 +2,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace chromatindb::config {
@@ -24,6 +27,13 @@ struct Config {
     std::vector<std::string> trusted_peers;         // IP addresses for lightweight handshake
     uint32_t full_resync_interval = 10;             // Full resync every Nth sync round
     uint64_t cursor_stale_seconds = 3600;           // Force full resync after this gap (seconds)
+    uint64_t namespace_quota_bytes = 0;             // Global default byte limit (0 = unlimited)
+    uint64_t namespace_quota_count = 0;             // Global default count limit (0 = unlimited)
+    // Per-namespace overrides: key is 64-char hex namespace hash.
+    // Value: {optional max_bytes, optional max_count}
+    // If optional has value: that value overrides global (0 = explicitly exempt)
+    // If optional has no value: inherit from global default
+    std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> namespace_quotas;
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

@@ -21,7 +21,8 @@ enum class IngestError {
     storage_error,        ///< Storage layer failed to write.
     tombstoned,           ///< Blob rejected because a tombstone exists for it.
     no_delegation,        ///< Delegate write rejected: no valid delegation exists.
-    storage_full          ///< Storage capacity exceeded (max_storage_bytes).
+    storage_full,         ///< Storage capacity exceeded (max_storage_bytes).
+    quota_exceeded        ///< Namespace quota exceeded (byte or count limit).
 };
 
 /// Status of a successful ingest.

@@ -545,6 +545,152 @@ TEST_CASE("Config omitting cursor fields uses defaults", "[config][cursor]") {
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 35: Namespace quota config tests
+// =============================================================================
+
+TEST_CASE("quota config defaults are zero (unlimited)", "[config][quota]") {
+    Config cfg;
+    REQUIRE(cfg.namespace_quota_bytes == 0);
+    REQUIRE(cfg.namespace_quota_count == 0);
+    REQUIRE(cfg.namespace_quotas.empty());
+}
+
+TEST_CASE("quota config parsed from JSON", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_quota.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"namespace_quota_bytes": 104857600, "namespace_quota_count": 1000})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.namespace_quota_bytes == 104857600);   // 100 MiB
+    REQUIRE(cfg.namespace_quota_count == 1000);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("namespace_quotas map parsed with per-namespace overrides", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_nsquota.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "namespace_quota_bytes": 1000000,
+            "namespace_quota_count": 500,
+            "namespace_quotas": {
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2": {
+                    "max_bytes": 5000000,
+                    "max_count": 2000
+                }
+            }
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.namespace_quota_bytes == 1000000);
+    REQUIRE(cfg.namespace_quota_count == 500);
+    REQUIRE(cfg.namespace_quotas.size() == 1);
+    auto it = cfg.namespace_quotas.find(
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+    REQUIRE(it != cfg.namespace_quotas.end());
+    REQUIRE(it->second.first.has_value());
+    REQUIRE(it->second.first.value() == 5000000);
+    REQUIRE(it->second.second.has_value());
+    REQUIRE(it->second.second.value() == 2000);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("namespace_quotas rejects non-64-char hex key", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_badnsquota.json";
+
+    SECTION("too short key") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"namespace_quotas": {"abcd": {"max_bytes": 1000}}})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    SECTION("non-hex key") {
+        {
+            std::ofstream f(tmp);
+            f << R"({"namespace_quotas": {"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz": {"max_bytes": 1000}}})";
+        }
+        REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("namespace_quotas partial override (max_bytes only)", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_partial_quota.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "namespace_quotas": {
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef": {
+                    "max_bytes": 9999999
+                }
+            }
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.namespace_quotas.size() == 1);
+    auto it = cfg.namespace_quotas.find(
+        "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+    REQUIRE(it != cfg.namespace_quotas.end());
+    REQUIRE(it->second.first.has_value());
+    REQUIRE(it->second.first.value() == 9999999);
+    REQUIRE_FALSE(it->second.second.has_value());  // max_count not set
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("namespace_quotas override with 0 means exempt", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_exempt_quota.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "namespace_quota_bytes": 1000000,
+            "namespace_quotas": {
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2": {
+                    "max_bytes": 0,
+                    "max_count": 0
+                }
+            }
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    auto it = cfg.namespace_quotas.find(
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+    REQUIRE(it != cfg.namespace_quotas.end());
+    // 0 is explicitly set, so has_value() == true and value() == 0
+    REQUIRE(it->second.first.has_value());
+    REQUIRE(it->second.first.value() == 0);
+    REQUIRE(it->second.second.has_value());
+    REQUIRE(it->second.second.value() == 0);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("missing quota fields use defaults", "[config][quota]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_quota.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.namespace_quota_bytes == 0);
+    REQUIRE(cfg.namespace_quota_count == 0);
+    REQUIRE(cfg.namespace_quotas.empty());
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
 

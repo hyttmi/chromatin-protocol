@@ -32,7 +32,9 @@ enum TransportMsgType : byte {
     StorageFull = 23,
     // Phase 25: Transport optimization
     TrustedHello = 24,
-    PQRequired = 25
+    PQRequired = 25,
+    // Phase 35: Namespace quota signaling
+    QuotaExceeded = 26
 }
 
 table TransportMessage {
