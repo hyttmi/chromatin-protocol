@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -115,6 +116,24 @@ static mdbx::slice to_slice(const std::array<uint8_t, N>& arr) {
 // Sentinel slice for "not found" results from txn.get() 3-arg overload.
 static const mdbx::slice not_found_sentinel;
 
+// Quota value: [total_bytes_be:8][blob_count_be:8] = 16 bytes
+static constexpr size_t QUOTA_VALUE_SIZE = 16;
+
+static std::array<uint8_t, QUOTA_VALUE_SIZE> encode_quota_value(
+    const NamespaceQuota& q) {
+    std::array<uint8_t, QUOTA_VALUE_SIZE> buf;
+    encode_be_u64(q.total_bytes, buf.data());
+    encode_be_u64(q.blob_count, buf.data() + 8);
+    return buf;
+}
+
+static NamespaceQuota decode_quota_value(const uint8_t* data) {
+    NamespaceQuota q;
+    q.total_bytes = decode_be_u64(data);
+    q.blob_count = decode_be_u64(data + 8);
+    return q;
+}
+
 // =============================================================================
 // Encryption at rest constants
 // =============================================================================
@@ -135,6 +154,7 @@ struct Storage::Impl {
     mdbx::map_handle delegation_map{0};
     mdbx::map_handle tombstone_map{0};
     mdbx::map_handle cursor_map{0};
+    mdbx::map_handle quota_map{0};
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
 
@@ -153,7 +173,7 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 7;  // 6 sub-databases + 1 spare
+        operate_params.max_maps = 8;  // 7 named sub-databases + 1 default
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
@@ -169,6 +189,7 @@ struct Storage::Impl {
             delegation_map = txn.create_map("delegation");
             tombstone_map = txn.create_map("tombstone");
             cursor_map = txn.create_map("cursor");
+            quota_map = txn.create_map("quota");
             txn.commit();
         }
 
@@ -318,7 +339,9 @@ Storage::Storage(const std::string& data_dir, Clock clock)
     : impl_(std::make_unique<Impl>(
           data_dir,
           crypto::load_or_generate_master_key(data_dir),
-          std::move(clock))) {}
+          std::move(clock))) {
+    rebuild_quota_aggregates();
+}
 
 Storage::~Storage() = default;
 Storage::Storage(Storage&& other) noexcept = default;
@@ -415,6 +438,23 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                 std::span<const uint8_t>(blob.data));
             auto ts_key = make_blob_key(blob.namespace_id.data(), target_hash.data());
             txn.upsert(impl_->tombstone_map, to_slice(ts_key), mdbx::slice());
+        }
+
+        // Increment namespace quota aggregate (tombstones exempt)
+        if (!wire::is_tombstone(blob.data)) {
+            auto ns_slice = mdbx::slice(blob.namespace_id.data(), 32);
+            auto existing_quota = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
+            NamespaceQuota current{};
+            if (existing_quota.data() != nullptr &&
+                existing_quota.length() == QUOTA_VALUE_SIZE) {
+                current = decode_quota_value(
+                    static_cast<const uint8_t*>(existing_quota.data()));
+            }
+            current.total_bytes += encrypted.size();
+            current.blob_count += 1;
+            auto new_val = encode_quota_value(current);
+            txn.upsert(impl_->quota_map, ns_slice,
+                        mdbx::slice(new_val.data(), new_val.size()));
         }
 
         txn.commit();
@@ -685,6 +725,9 @@ bool Storage::delete_blob_data(
             return false;
         }
 
+        // Capture encrypted size for quota decrement (before erase)
+        auto encrypted_size = existing.length();
+
         // Decrypt and decode to get TTL + timestamp for expiry cleanup
         auto decrypted = impl_->decrypt_value(
             std::span<const uint8_t>(
@@ -695,6 +738,28 @@ bool Storage::delete_blob_data(
 
         // Delete from blobs_map
         txn.erase(impl_->blobs_map, key_slice);
+
+        // Decrement namespace quota aggregate
+        {
+            auto ns_slice = mdbx::slice(ns.data(), 32);
+            auto existing_quota = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
+            if (existing_quota.data() != nullptr &&
+                existing_quota.length() == QUOTA_VALUE_SIZE) {
+                auto current = decode_quota_value(
+                    static_cast<const uint8_t*>(existing_quota.data()));
+                current.total_bytes = (current.total_bytes > encrypted_size)
+                    ? current.total_bytes - encrypted_size : 0;
+                current.blob_count = (current.blob_count > 0)
+                    ? current.blob_count - 1 : 0;
+                if (current.total_bytes == 0 && current.blob_count == 0) {
+                    txn.erase(impl_->quota_map, ns_slice);
+                } else {
+                    auto new_val = encode_quota_value(current);
+                    txn.upsert(impl_->quota_map, ns_slice,
+                                mdbx::slice(new_val.data(), new_val.size()));
+                }
+            }
+        }
 
         // Tombstone seq_map entry: replace hash with zero sentinel to preserve
         // seq_num monotonicity.  Erasing the entry would let next_seq_num()
@@ -839,6 +904,7 @@ size_t Storage::run_expiry_scan() {
             auto raw = txn.get(impl_->blobs_map, to_slice(blob_key),
                                not_found_sentinel);
             if (raw.data() != nullptr) {
+                auto encrypted_size = raw.length();
                 // Decrypt the value (AD = 64-byte mdbx key)
                 auto decrypted = impl_->decrypt_value(
                     std::span<const uint8_t>(
@@ -846,7 +912,8 @@ size_t Storage::run_expiry_scan() {
                     std::span<const uint8_t>(blob_key.data(), blob_key.size()));
                 auto decoded = wire::decode_blob(
                     std::span<const uint8_t>(decrypted.data(), decrypted.size()));
-                if (wire::is_tombstone(decoded.data)) {
+                bool is_tombstone = wire::is_tombstone(decoded.data);
+                if (is_tombstone) {
                     auto target_hash = wire::extract_tombstone_target(
                         std::span<const uint8_t>(decoded.data));
                     auto ts_key = make_blob_key(ns_ptr, target_hash.data());
@@ -861,6 +928,28 @@ size_t Storage::run_expiry_scan() {
                     txn.erase(impl_->blobs_map, to_slice(blob_key));
                 } catch (const mdbx::exception&) {
                     // Already deleted -- not an error
+                }
+                // Decrement namespace quota aggregate (tombstones were never counted)
+                if (!is_tombstone) {
+                    auto ns_qslice = mdbx::slice(ns_ptr, 32);
+                    auto existing_quota = txn.get(impl_->quota_map, ns_qslice,
+                                                  not_found_sentinel);
+                    if (existing_quota.data() != nullptr &&
+                        existing_quota.length() == QUOTA_VALUE_SIZE) {
+                        auto current = decode_quota_value(
+                            static_cast<const uint8_t*>(existing_quota.data()));
+                        current.total_bytes = (current.total_bytes > encrypted_size)
+                            ? current.total_bytes - encrypted_size : 0;
+                        current.blob_count = (current.blob_count > 0)
+                            ? current.blob_count - 1 : 0;
+                        if (current.total_bytes == 0 && current.blob_count == 0) {
+                            txn.erase(impl_->quota_map, ns_qslice);
+                        } else {
+                            auto new_val = encode_quota_value(current);
+                            txn.upsert(impl_->quota_map, ns_qslice,
+                                        mdbx::slice(new_val.data(), new_val.size()));
+                        }
+                    }
                 }
             }
 
@@ -1064,16 +1153,77 @@ size_t Storage::cleanup_stale_cursors(
 }
 
 // =============================================================================
-// Namespace quota API (stubs)
+// Namespace quota API
 // =============================================================================
 
 NamespaceQuota Storage::get_namespace_quota(
-    std::span<const uint8_t, 32> /*ns*/) {
-    return {};  // Stub: always returns zero
+    std::span<const uint8_t, 32> ns) {
+    try {
+        auto txn = impl_->env.start_read();
+        auto ns_slice = mdbx::slice(ns.data(), 32);
+        auto val = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
+        if (val.data() == nullptr || val.length() != QUOTA_VALUE_SIZE) {
+            return {};
+        }
+        return decode_quota_value(static_cast<const uint8_t*>(val.data()));
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_namespace_quota: {}", e.what());
+        return {};
+    }
 }
 
 void Storage::rebuild_quota_aggregates() {
-    // Stub: no-op
+    try {
+        auto txn = impl_->env.start_write();
+
+        // Clear existing quota entries
+        {
+            auto cursor = txn.open_cursor(impl_->quota_map);
+            auto result = cursor.to_first(false);
+            while (result.done) {
+                auto next = cursor.to_next(false);
+                cursor.erase();
+                result.done = next.done;
+            }
+        }
+
+        // Scan blobs_map: key = [namespace:32][hash:32], value = encrypted blob
+        std::map<std::array<uint8_t, 32>, NamespaceQuota> aggregates;
+        {
+            auto cursor = txn.open_cursor(impl_->blobs_map);
+            auto result = cursor.to_first(false);
+            while (result.done) {
+                auto current = cursor.current(false);
+                auto key = current.key;
+                auto val = current.value;
+
+                if (key.length() == 64 && val.length() > 0) {
+                    std::array<uint8_t, 32> ns_id{};
+                    std::memcpy(ns_id.data(), key.data(), 32);
+                    aggregates[ns_id].total_bytes += val.length();
+                    aggregates[ns_id].blob_count += 1;
+                }
+
+                result = cursor.to_next(false);
+            }
+        }
+
+        // Write aggregates to quota_map
+        size_t total_count = 0;
+        for (const auto& [ns_id, quota] : aggregates) {
+            auto ns_slice = mdbx::slice(ns_id.data(), 32);
+            auto val = encode_quota_value(quota);
+            txn.upsert(impl_->quota_map, ns_slice,
+                        mdbx::slice(val.data(), val.size()));
+            total_count += quota.blob_count;
+        }
+
+        txn.commit();
+        spdlog::info("Quota rebuild: {} namespaces, {} total blobs",
+                     aggregates.size(), total_count);
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in rebuild_quota_aggregates: {}", e.what());
+    }
 }
 
 } // namespace chromatindb::storage
