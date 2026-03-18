@@ -1,2 +1,3 @@
 build/
 deploy/results/
+deploy/configs/*-trusted.json

@@ -10,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY CMakeLists.txt ./
 COPY db/ db/
-COPY bench/ bench/
 COPY loadgen/ loadgen/
 
 RUN --mount=type=cache,target=/src/build/_deps \
@@ -19,8 +18,8 @@ RUN --mount=type=cache,target=/src/build/_deps \
       -DBUILD_TESTING=OFF \
       -DFETCHCONTENT_QUIET=ON \
       -DCMAKE_CXX_FLAGS="-Wno-restrict" \
-    && cmake --build build --target chromatindb chromatindb_bench chromatindb_loadgen \
-    && strip build/chromatindb build/chromatindb_bench build/chromatindb_loadgen
+    && cmake --build build --target chromatindb chromatindb_loadgen \
+    && strip build/chromatindb build/chromatindb_loadgen
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim
@@ -32,7 +31,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r chromatindb && useradd -r -g chromatindb chromatindb
 
 COPY --from=builder /src/build/chromatindb /usr/local/bin/
-COPY --from=builder /src/build/chromatindb_bench /usr/local/bin/
 COPY --from=builder /src/build/chromatindb_loadgen /usr/local/bin/
 
 RUN mkdir -p /data && chown chromatindb:chromatindb /data
