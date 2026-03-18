@@ -196,5 +196,5 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
-| 36. Deletion Benchmarks | 2/2 | Complete   | 2026-03-18 |
+| 36. Deletion Benchmarks | 2/2 | Complete    | 2026-03-18 |
 | 37. General Cleanup | 0/TBD | Not started | - |
