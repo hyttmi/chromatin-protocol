@@ -60,20 +60,23 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Structured benchmark report with hardware profiling and computed analysis — v0.6.0
 
 - ✓ Sync resumption with per-peer per-namespace cursors for O(new) sync — v0.7.0
+- ✓ Hash-then-sign protocol (ML-DSA-87 signs 32-byte SHA3-256 digest, not raw concatenation) — v0.7.0
+- ✓ Namespace storage quotas (per-namespace byte/count limits enforced at ingest) — v0.7.0
+- ✓ Crypto hot-path optimization (incremental SHA3, dedup-before-verify, OQS_SIG caching) — v0.7.0
+- ✓ Deletion benchmarks in Docker suite (tombstone create/sync/GC) — v0.7.0
+- ✓ Component self-containment (tests relocated into db/, stale artifacts removed) — v0.7.0
 
 ### Active
 
-## Current Milestone: v0.7.0 Production Readiness
+## Current Milestone: v1.0.0 Performance & Production Readiness
 
-**Goal:** Cleanup, performance optimization, and production-readiness features — move tests into db/, fix large blob crypto bottleneck, add deletion benchmarks, implement sync resumption and namespace quotas, and sweep stale leftovers.
+**Goal:** Thread pool crypto offload, cursor compaction, connection retry with backoff, and benchmark validation. This is the "database layer is done" release.
 
 **Target features:**
-- Test relocation into db/ (database-only tests belong with the component)
-- Large blob crypto throughput fix (1M+ blobs CPU-bound at 96%)
-- Deletion performance benchmarks in Docker suite
-- Sync resumption with per-peer cursors
-- Namespace storage quotas (per-namespace size/count limits)
-- General cleanup (remove old standalone benchmark, update db/ README, sweep stale artifacts)
+- Thread pool crypto offload (ML-DSA-87 verify + SHA3-256 hash off event loop)
+- Cursor compaction for stale peers
+- Connection retry with exponential backoff
+- Final benchmark validation (re-run suite, confirm throughput improvements)
 
 ### Out of Scope
 
@@ -93,18 +96,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v0.6.0 with 17,775 LOC C++20, 284 tests.
-Built across 16 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d).
-6 milestones, 31 phases, 63 plans, 14 requirements for v0.6.0 alone.
+Shipped v0.7.0 with 18,000+ LOC C++20, 313+ tests.
+Built across 18 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d).
+7 milestones, 37 phases, 75 plans, 20 requirements for v0.7.0 alone.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.6.0 SHIPPED): chromatindb** — database node with full feature set + Docker benchmarking infrastructure
+- **Layer 1 (v0.7.0 SHIPPED): chromatindb** — database node with full feature set, Docker benchmarking, sync cursors, namespace quotas
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
-**Known performance issue:** Large blob (1 MiB) crypto throughput bottleneck — 15.3 blobs/sec, 96% CPU on sync verification (ML-DSA-87 + SHA3-256). Small/medium blobs are fine (50+ blobs/sec). Must fix before 1.0.0.
+**Known performance issue:** Large blob (1 MiB) crypto throughput still CPU-bound on sync verification. v0.7.0 serial optimizations (incremental SHA3, dedup-before-verify, hash-then-sign) helped but thread pool offload needed to break the ceiling. Event loop is single-threaded — ML-DSA-87 verify blocks all I/O during large blob processing.
 
 Previous projects inform design:
 - **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
@@ -176,4 +179,4 @@ Previous projects inform design:
 | Zero-hash sentinel in seq_map on blob deletion | Preserves seq_num monotonicity for cursor change detection; fix at storage root cause, not cursor symptom | ✓ Good — seq_map entries never deleted, all seq_num consumers see monotonic values |
 
 ---
-*Last updated: 2026-03-18 after Phase 34*
+*Last updated: 2026-03-18 after milestone v1.0.0 start*
