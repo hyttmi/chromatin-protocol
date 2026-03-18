@@ -182,7 +182,10 @@ Plans:
   1. The old standalone benchmark binary (chromatindb_bench) is removed from the CMake build and its source files deleted
   2. db/README.md documents all current features (including v0.7.0 additions) with no references to removed benchmarks or outdated data
   3. No stale artifacts remain (dead code paths, leftover files from previous milestones, unreferenced CMake targets)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 37-01-PLAN.md — Remove benchmark binary, clean Dockerfile, update gitignore
+- [ ] 37-02-PLAN.md — Update README and PROTOCOL.md with v0.7.0 changes
 
 ## Progress
 
@@ -197,4 +200,4 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
 | 36. Deletion Benchmarks | 2/2 | Complete    | 2026-03-18 |
-| 37. General Cleanup | 0/TBD | Not started | - |
+| 37. General Cleanup | 0/2 | Not started | - |
