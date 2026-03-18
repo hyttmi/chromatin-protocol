@@ -85,6 +85,27 @@ The HKDF salt is `SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)
 
 Both sides verify the peer's signature over the session fingerprint. After verification, AEAD nonce counters increment to 1 for both directions.
 
+### Lightweight Handshake (Trusted Peers)
+
+Connections from localhost (127.0.0.1, ::1) or addresses listed in `trusted_peers` use a simplified handshake that skips ML-KEM-1024 key exchange. This reduces connection latency for trusted LAN deployments.
+
+```
+Initiator                              Responder
+    |                                      |
+    |--- [raw] TrustedHello ------------->|  ML-DSA-87 pubkey (2592 bytes) + signature
+    |                                      |  Responder checks trust list
+    |<-- [raw] TrustedHello --------------|  ML-DSA-87 pubkey (2592 bytes) + signature
+    |                                      |
+    |   Both derive session keys via HKDF-SHA256:
+    |     ikm    = SHA3-256(initiator_pubkey || responder_pubkey)
+    |     info1  = "chromatin-init-to-resp-v1"  -->  initiator-to-responder key
+    |     info2  = "chromatin-resp-to-init-v1"  -->  responder-to-initiator key
+    |                                      |
+    |   Session established (AEAD-encrypted from here).
+```
+
+If the responder does not recognize the initiator as trusted, it replies with `PQRequired (25)` instead of `TrustedHello`. The initiator then falls back to the full PQ handshake starting from KemPubkey.
+
 ### Step 3: Encrypted Session
 
 All subsequent messages are AEAD-encrypted `TransportMessage` frames using the established session keys. Nonce counters continue incrementing from where the handshake left off.
@@ -278,9 +299,13 @@ Each address is a `host:port` string. Nodes share up to 8 addresses per response
 
 **StorageFull** (`type = StorageFull (23)`): Empty payload. Sent by a node when it has reached its configured `max_storage_bytes` limit and cannot accept more blobs. Peers receiving this message suppress sync pushes (blob transfers) to the full node until the next reconnection.
 
+### Quota Signaling
+
+**QuotaExceeded** (`type = QuotaExceeded (26)`): Empty payload. Sent by a node when a blob write would exceed the configured per-namespace byte or count quota. Unlike StorageFull (which signals global capacity), QuotaExceeded indicates that the specific namespace has reached its limit. Other namespaces may still accept writes.
+
 ## Message Type Reference
 
-All 24 message types defined in the `TransportMsgType` enum:
+All 27 message types defined in the `TransportMsgType` enum:
 
 | Value | Name | Description |
 |-------|------|-------------|
@@ -308,3 +333,6 @@ All 24 message types defined in the `TransportMsgType` enum:
 | 21 | Unsubscribe | Pub/sub: unsubscribe from namespace notifications |
 | 22 | Notification | Pub/sub: blob ingested/deleted notification (77 bytes) |
 | 23 | StorageFull | Capacity signaling: node at storage limit (empty payload) |
+| 24 | TrustedHello | Lightweight handshake: trusted peer identity exchange (ML-DSA-87 pubkey + signature, no KEM) |
+| 25 | PQRequired | Lightweight handshake rejection: responder requires full PQ handshake (empty payload) |
+| 26 | QuotaExceeded | Quota signaling: namespace byte or count limit reached (empty payload) |
