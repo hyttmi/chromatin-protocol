@@ -156,7 +156,10 @@ Plans:
   2. A blob write that would exceed the namespace blob count limit is rejected before storage, and the writer receives a clear quota-exceeded error
   3. Namespace usage (bytes + count) is tracked in a materialized aggregate that is O(1) on the write path (no full-namespace scan)
   4. Quota configuration is reloadable via SIGHUP without node restart
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 35-01-PLAN.md — Storage quota sub-database + Config extension + enum values
+- [ ] 35-02-PLAN.md — Engine quota enforcement + PeerManager wire handling + SIGHUP reload
 
 ### Phase 36: Deletion Benchmarks
 **Goal**: Tombstone creation, sync propagation, and garbage collection performance are measured and baselined in the existing Docker benchmark suite
@@ -189,6 +192,6 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
-| 35. Namespace Quotas | 0/TBD | Not started | - |
+| 35. Namespace Quotas | 0/2 | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
 | 37. General Cleanup | 0/TBD | Not started | - |
