@@ -99,7 +99,7 @@ Full details: [milestones/v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md)
 - [x] **Phase 33: Crypto Throughput Optimization** - Eliminate redundant hashing and allocation in the ingest/verify hot path (completed 2026-03-17)
 - [x] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (completed 2026-03-18, gap closure done)
 - [x] **Phase 35: Namespace Quotas** - Per-namespace byte and blob count limits enforced at ingest (completed 2026-03-18)
-- [ ] **Phase 36: Deletion Benchmarks** - Tombstone creation, propagation, and GC performance in Docker suite
+- [x] **Phase 36: Deletion Benchmarks** - Tombstone creation, propagation, and GC performance in Docker suite (completed 2026-03-18)
 - [ ] **Phase 37: General Cleanup** - Remove stale artifacts, update documentation, sweep dead code
 
 ## Phase Details
@@ -196,5 +196,5 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
 | 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 2/2 | Complete    | 2026-03-18 |
-| 36. Deletion Benchmarks | 1/2 | In Progress|  |
+| 36. Deletion Benchmarks | 2/2 | Complete   | 2026-03-18 |
 | 37. General Cleanup | 0/TBD | Not started | - |

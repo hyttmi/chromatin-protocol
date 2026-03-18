@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 36-01-PLAN.md
-last_updated: "2026-03-18T15:49:15Z"
-last_activity: 2026-03-18 -- Phase 36 plan 01 complete (loadgen delete mode)
+status: completed
+stopped_at: Completed 36-02-PLAN.md
+last_updated: "2026-03-18T15:56:44.900Z"
+last_activity: 2026-03-18 -- Phase 36 plan 02 complete (tombstone benchmark scenarios)
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 10
-  completed_plans: 9
-  percent: 50
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-18)
 ## Current Position
 
 Phase: 36 (5 of 6 in v0.7.0) (Deletion Benchmarks)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-03-18 -- Phase 36 plan 01 complete (loadgen delete mode)
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-03-18 -- Phase 36 plan 02 complete (tombstone benchmark scenarios)
 
-Progress: [██████████] 96% (9/10 plans complete)
+Progress: [██████████] 100% (10/10 plans complete)
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [██████████] 96% (9/10 plans complete)
 | Phase 35 P01 | 26min | 2 tasks (TDD) | 9 files |
 | Phase 35 P02 | 16min | 2 tasks (TDD) | 9 files |
 | Phase 36 P01 | 4min | 2 tasks | 1 file |
+| Phase 36 P02 | 4min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,7 @@ Recent decisions affecting current work:
 - [Phase 36]: Identity persistence via directory (save_to/load_from) not seed-based determinism
 - [Phase 36]: DeleteAck (type 19) used for delete latency measurement, not Notification
 - [Phase 36]: Skip pub/sub subscription in delete mode (DeleteAck is direct from connected node)
+- [Phase 36]: GC polling uses storage MiB metric (not blob count seq_num which never decreases)
 
 ### Pending Todos
 
@@ -103,6 +105,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T15:49:15Z
-Stopped at: Completed 36-01-PLAN.md
-Resume file: .planning/phases/36-deletion-benchmarks/36-01-SUMMARY.md
+Last session: 2026-03-18T15:56:44.898Z
+Stopped at: Completed 36-02-PLAN.md
+Resume file: None
