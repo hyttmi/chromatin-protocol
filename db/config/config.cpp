@@ -36,6 +36,26 @@ Config load_config(const std::filesystem::path& path) {
     cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
     cfg.full_resync_interval = j.value("full_resync_interval", cfg.full_resync_interval);
     cfg.cursor_stale_seconds = j.value("cursor_stale_seconds", cfg.cursor_stale_seconds);
+    cfg.namespace_quota_bytes = j.value("namespace_quota_bytes", cfg.namespace_quota_bytes);
+    cfg.namespace_quota_count = j.value("namespace_quota_count", cfg.namespace_quota_count);
+
+    if (j.contains("namespace_quotas") && j["namespace_quotas"].is_object()) {
+        for (auto& [key, val] : j["namespace_quotas"].items()) {
+            if (key.size() != 64) {
+                throw std::runtime_error(
+                    "Invalid namespace_quotas key '" + key +
+                    "': expected 64 hex characters");
+            }
+            validate_allowed_keys({key});
+            auto& entry = cfg.namespace_quotas[key];
+            if (val.contains("max_bytes")) {
+                entry.first = val["max_bytes"].get<uint64_t>();
+            }
+            if (val.contains("max_count")) {
+                entry.second = val["max_count"].get<uint64_t>();
+            }
+        }
+    }
 
     if (j.contains("bootstrap_peers") && j["bootstrap_peers"].is_array()) {
         for (const auto& peer : j["bootstrap_peers"]) {
