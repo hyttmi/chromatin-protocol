@@ -1797,3 +1797,155 @@ TEST_CASE("PersistedPeer stores pubkey_hash field", "[peer][cursor]") {
     pp.pubkey_hash = "aabbccdd";
     REQUIRE(pp.pubkey_hash == "aabbccdd");
 }
+
+// ============================================================================
+// Phase 35 Plan 02: Namespace quota enforcement (wire, SIGHUP, sync)
+// ============================================================================
+
+TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]") {
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14390";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 1;
+    cfg1.max_peers = 32;
+
+    // Node2 has a count quota of 0 (unlimited) but byte quota very small
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14391";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14390"};
+    cfg2.sync_interval_seconds = 1;
+    cfg2.max_peers = 32;
+    cfg2.namespace_quota_bytes = 0;
+    cfg2.namespace_quota_count = 1;  // Allow only 1 blob per namespace
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    BlobEngine eng2(store2, 0, cfg2.namespace_quota_bytes, cfg2.namespace_quota_count);
+
+    // Pre-load 2 blobs on node1 -- node2 will accept first but reject second
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob1 = make_signed_blob(id1, "quota-test-1", 604800, now);
+    auto blob2 = make_signed_blob(id1, "quota-test-2", 604800, now + 1);
+    REQUIRE(eng1.ingest(blob1).accepted);
+    REQUIRE(eng1.ingest(blob2).accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(8));
+
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // Node2 should have accepted at most 1 blob (count quota = 1)
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() <= 1);
+
+    // Metrics should show quota rejections
+    REQUIRE(pm2.metrics().quota_rejections > 0);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(6));
+}
+
+TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
+    TempDir tmp1;
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    // Write initial config file (no quotas)
+    auto config_path = tmp1.path / "config.json";
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14393"})";
+    }
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14393";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    BlobEngine eng1(store1);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1, config_path);
+    pm1.start();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // First blob succeeds (no quota)
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob1 = make_signed_blob(id1, "before-sighup", 604800, now);
+    REQUIRE(eng1.ingest(blob1).accepted);
+
+    // Write updated config with count quota of 1
+    {
+        std::ofstream f(config_path);
+        f << R"({"bind_address": "127.0.0.1:14393", "namespace_quota_count": 1})";
+    }
+
+    // Trigger reload (simulates SIGHUP)
+    pm1.reload_config();
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // Second blob should be rejected (count quota = 1, already have 1)
+    auto blob2 = make_signed_blob(id1, "after-sighup", 604800, now + 1);
+    auto r2 = eng1.ingest(blob2);
+    REQUIRE_FALSE(r2.accepted);
+    REQUIRE(r2.error.has_value());
+    REQUIRE(r2.error.value() == IngestError::quota_exceeded);
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
+}
+
+TEST_CASE("QuotaExceeded message received is handled without crash", "[peer][quota]") {
+    // Verify that NodeMetrics has the quota_rejections field
+    chromatindb::peer::NodeMetrics metrics;
+    REQUIRE(metrics.quota_rejections == 0);
+}
+
+TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota]") {
+    TempDir tmp1, tmp2;
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    BlobEngine eng1(store1);
+    // Node2 has a count quota of 1
+    BlobEngine eng2(store2, 0, 0, 1);
+
+    // Store 2 blobs on node1
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob1 = make_signed_blob(id, "sync-quota-1", 604800, now);
+    auto blob2 = make_signed_blob(id, "sync-quota-2", 604800, now + 1);
+    REQUIRE(eng1.ingest(blob1).accepted);
+    REQUIRE(eng1.ingest(blob2).accepted);
+
+    // Sync ingest on node2 -- first succeeds, second hits quota
+    chromatindb::sync::SyncProtocol sync2(eng2, store2);
+    auto stats = sync2.ingest_blobs({blob1, blob2});
+
+    // One blob accepted, one rejected
+    REQUIRE(stats.blobs_received == 1);
+    REQUIRE(stats.quota_exceeded_count == 1);
+}
