@@ -72,6 +72,7 @@ struct NodeMetrics {
     uint64_t cursor_hits = 0;             // Namespaces skipped via cursor match
     uint64_t cursor_misses = 0;           // Namespaces requiring full hash diff
     uint64_t full_resyncs = 0;            // Full resync rounds triggered
+    uint64_t quota_rejections = 0;        // Namespace quota exceeded rejections
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.

@@ -505,6 +505,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_QuotaExceeded) {
+        spdlog::info("Peer {} reported namespace quota exceeded",
+                     peer_display_name(conn));
+        // Informational only -- no action needed (peer will reject our blobs for that namespace)
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob
         try {
@@ -536,6 +543,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
                         std::span<const uint8_t> empty{};
                         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
+                    }, asio::detached);
+                } else if (*result.error == engine::IngestError::quota_exceeded) {
+                    // Send QuotaExceeded to inform peer namespace is over quota
+                    spdlog::warn("Namespace quota exceeded, notifying peer {}",
+                                 peer_display_name(conn));
+                    ++metrics_.quota_rejections;
+                    asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+                        std::span<const uint8_t> empty{};
+                        co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
                     }, asio::detached);
                 } else {
                     spdlog::warn("invalid blob from peer {}: {}",
@@ -806,6 +822,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                     auto s = sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
+                    total_stats.quota_exceeded_count += s.quota_exceeded_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
                     // Skip outbound blob pushes if peer is full
@@ -884,6 +901,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
         spdlog::warn("Sent StorageFull to sync peer {} ({} blobs rejected)",
                      peer_display_name(conn), total_stats.storage_full_count);
+    }
+
+    // Post-sync QuotaExceeded signal: inform peer if we rejected blobs for namespace quota
+    if (total_stats.quota_exceeded_count > 0) {
+        std::span<const uint8_t> empty{};
+        co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
+        spdlog::warn("Sent QuotaExceeded to sync peer {} ({} blobs rejected)",
+                     peer_display_name(conn), total_stats.quota_exceeded_count);
+        metrics_.quota_rejections += total_stats.quota_exceeded_count;
     }
 
     // PEX exchange: send PeerListRequest and wait for response (inline, no concurrent send)
@@ -1064,6 +1090,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                     auto s = sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
+                    total_stats.quota_exceeded_count += s.quota_exceeded_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
                     // Skip outbound blob pushes if peer is full
@@ -1141,6 +1168,15 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
         spdlog::warn("Sent StorageFull to sync peer {} ({} blobs rejected)",
                      peer_display_name(conn), total_stats.storage_full_count);
+    }
+
+    // Post-sync QuotaExceeded signal: inform peer if we rejected blobs for namespace quota
+    if (total_stats.quota_exceeded_count > 0) {
+        std::span<const uint8_t> empty{};
+        co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
+        spdlog::warn("Sent QuotaExceeded to sync peer {} ({} blobs rejected)",
+                     peer_display_name(conn), total_stats.quota_exceeded_count);
+        metrics_.quota_rejections += total_stats.quota_exceeded_count;
     }
 
     // PEX exchange: wait for PeerListRequest from initiator, then respond (inline, no concurrent send)
@@ -1308,6 +1344,21 @@ void PeerManager::reload_config() {
         auto reset_count = storage_.reset_all_round_counters();
         spdlog::warn("SIGHUP: reset {} cursor round counters (next sync will be full resync)",
                      reset_count);
+    }
+
+    // Reload namespace quota config
+    engine_.set_quota_config(new_cfg.namespace_quota_bytes,
+                             new_cfg.namespace_quota_count,
+                             new_cfg.namespace_quotas);
+    if (new_cfg.namespace_quota_bytes > 0 || new_cfg.namespace_quota_count > 0) {
+        spdlog::info("config reload: namespace_quota_bytes={} namespace_quota_count={}",
+                     new_cfg.namespace_quota_bytes, new_cfg.namespace_quota_count);
+    } else {
+        spdlog::info("config reload: namespace quotas=disabled");
+    }
+    if (!new_cfg.namespace_quotas.empty()) {
+        spdlog::info("config reload: {} per-namespace quota overrides",
+                     new_cfg.namespace_quotas.size());
     }
 
     // Reload trusted_peers
@@ -1837,6 +1888,9 @@ void PeerManager::dump_metrics() {
         auto ns_hex = to_hex(peer.connection->peer_pubkey(), 4);
         spdlog::info("    {} (ns:{}...)", peer.address, ns_hex);
     }
+
+    // Quota metrics
+    spdlog::info("  quota_rejections: {}", metrics_.quota_rejections);
 
     // Per-namespace stats via list_namespaces()
     auto namespaces = storage_.list_namespaces();

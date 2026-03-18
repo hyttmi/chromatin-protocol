@@ -92,6 +92,7 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
     SyncStats stats;
     uint64_t now = clock_();
     uint32_t storage_full_count = 0;
+    uint32_t quota_exceeded_count = 0;
 
     for (const auto& blob : blobs) {
         // Skip expired blobs (SYNC-03)
@@ -119,6 +120,9 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
                 // Skip blob silently -- do not count as received, do not fire callback
                 storage_full_count++;
                 spdlog::debug("Sync blob skipped: storage full");
+            } else if (*result.error == engine::IngestError::quota_exceeded) {
+                quota_exceeded_count++;
+                spdlog::debug("Sync blob skipped: namespace quota exceeded");
             } else {
                 spdlog::warn("sync ingest rejected blob: {}",
                              result.error_detail.empty() ? "unknown" : result.error_detail);
@@ -127,6 +131,7 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
     }
 
     stats.storage_full_count = storage_full_count;
+    stats.quota_exceeded_count = quota_exceeded_count;
     return stats;
 }
 

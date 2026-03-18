@@ -98,6 +98,7 @@ chromatindb::wire::BlobData make_signed_tombstone(
 using chromatindb::acl::AccessControl;
 using chromatindb::config::Config;
 using chromatindb::engine::BlobEngine;
+using chromatindb::engine::IngestError;
 using chromatindb::identity::NodeIdentity;
 using chromatindb::peer::PeerManager;
 using chromatindb::storage::Storage;
@@ -1856,12 +1857,14 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
     REQUIRE(n2_blobs.size() <= 1);
 
-    // Metrics should show quota rejections
-    REQUIRE(pm2.metrics().quota_rejections > 0);
+    // Metrics should show quota rejections on node2 (sync receiver with count quota)
+    // The sync path may reject via the engine and track in SyncStats, or via Data message handler
+    auto quota_rej = pm2.metrics().quota_rejections;
+    REQUIRE(quota_rej > 0);
 
     pm1.stop();
     pm2.stop();
-    ioc.run_for(std::chrono::seconds(6));
+    ioc.run_for(std::chrono::seconds(8));
 }
 
 TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {

@@ -19,6 +19,7 @@ struct SyncStats {
     uint32_t blobs_received = 0;
     uint32_t namespaces_synced = 0;
     uint32_t storage_full_count = 0;
+    uint32_t quota_exceeded_count = 0;
 };
 
 /// Sync protocol logic: hash-list diff, expiry filtering, message encoding.
