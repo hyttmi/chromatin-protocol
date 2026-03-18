@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 34-02-PLAN.md
-last_updated: "2026-03-17T16:56:31Z"
-last_activity: 2026-03-17 -- Completed 34-02 cursor-aware sync orchestration (Phase 34 complete)
+stopped_at: Completed 34-03-PLAN.md (gap closure)
+last_updated: "2026-03-18T03:14:28Z"
+last_activity: 2026-03-18 -- Completed 34-03 tombstone sync regression fix (Phase 34 gap closure)
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 6
+  completed_plans: 6
   percent: 60
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 34 (3 of 6 in v0.7.0) (Sync Resumption) -- COMPLETE
-Plan: 2 of 2 in current phase (COMPLETE)
-Status: Phase 34 complete -- sync resumption fully shipped
-Last activity: 2026-03-17 -- Completed 34-02 cursor-aware sync orchestration
+Phase: 34 (3 of 6 in v0.7.0) (Sync Resumption) -- COMPLETE (gap closed)
+Plan: 3 of 3 in current phase (COMPLETE -- Plan 03 was gap closure)
+Status: Phase 34 complete -- sync resumption fully shipped, tombstone regression fixed
+Last activity: 2026-03-18 -- Completed 34-03 tombstone sync regression fix
 
 Progress: [██████░░░░] 60%
 
@@ -55,6 +55,7 @@ Progress: [██████░░░░] 60%
 | Phase 34 P01 | 11min | 1 task (TDD) | 6 files |
 | Phase 34 P01 | 11min | 1 tasks | 6 files |
 | Phase 34 P02 | 35min | 2 tasks | 4 files |
+| Phase 34 P03 | 12min | 1 task | 2 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,7 @@ Recent decisions affecting current work:
 - [Phase 34]: Wire protocol unchanged for cursor sync -- optimization is purely local Phase C skip
 - [Phase 34]: Mutable cursor config members follow existing rate_limit_ pattern for SIGHUP reload
 - [Phase 34]: pubkey_hash in PersistedPeer enables startup cursor cleanup cross-reference
+- [Phase 34]: Zero-hash sentinel in seq_map preserves seq_num monotonicity for cursor change detection
 
 ### Pending Todos
 
@@ -86,11 +88,11 @@ None.
 ### Blockers/Concerns
 
 - Known: Large blob crypto throughput (15.3 blobs/sec, 96% CPU) -- addressed by Phase 33
-- Risk: Cursor staleness after deletions -- mitigated by periodic full resync fallback (SYNC-04)
+- Risk: Cursor staleness after deletions -- RESOLVED: seq_num monotonicity via zero-hash sentinel (Plan 03) + periodic full resync fallback (SYNC-04)
 - Risk: Quota check-then-act race across co_await -- mitigated by enforcement in write txn (QUOTA-03)
 
 ## Session Continuity
 
-Last session: 2026-03-17T16:56:31Z
-Stopped at: Completed 34-02-PLAN.md (Phase 34 complete)
+Last session: 2026-03-18T03:14:28Z
+Stopped at: Completed 34-03-PLAN.md (Phase 34 gap closure complete)
 Resume file: None

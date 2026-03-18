@@ -97,7 +97,7 @@ Full details: [milestones/v0.6.0-ROADMAP.md](milestones/v0.6.0-ROADMAP.md)
 
 - [x] **Phase 32: Test Relocation** - Move all database tests into db/ for component self-containment (completed 2026-03-17)
 - [x] **Phase 33: Crypto Throughput Optimization** - Eliminate redundant hashing and allocation in the ingest/verify hot path (completed 2026-03-17)
-- [ ] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (gap closure in progress)
+- [x] **Phase 34: Sync Resumption** - Per-peer per-namespace cursors transform sync from O(total) to O(new) (completed 2026-03-18, gap closure done)
 - [ ] **Phase 35: Namespace Quotas** - Per-namespace byte and blob count limits enforced at ingest
 - [ ] **Phase 36: Deletion Benchmarks** - Tombstone creation, propagation, and GC performance in Docker suite
 - [ ] **Phase 37: General Cleanup** - Remove stale artifacts, update documentation, sweep dead code
@@ -188,7 +188,7 @@ Note: Phases 34, 35, 36 all depend on 33 but not on each other. Phase 37 depends
 |-------|----------------|--------|-----------|
 | 32. Test Relocation | 1/1 | Complete    | 2026-03-17 |
 | 33. Crypto Throughput Optimization | 2/2 | Complete    | 2026-03-17 |
-| 34. Sync Resumption | 2/3 | Gap closure | - |
+| 34. Sync Resumption | 3/3 | Complete    | 2026-03-18 |
 | 35. Namespace Quotas | 0/TBD | Not started | - |
 | 36. Deletion Benchmarks | 0/TBD | Not started | - |
 | 37. General Cleanup | 0/TBD | Not started | - |
