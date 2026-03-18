@@ -1063,4 +1063,17 @@ size_t Storage::cleanup_stale_cursors(
     return total_deleted;
 }
 
+// =============================================================================
+// Namespace quota API (stubs)
+// =============================================================================
+
+NamespaceQuota Storage::get_namespace_quota(
+    std::span<const uint8_t, 32> /*ns*/) {
+    return {};  // Stub: always returns zero
+}
+
+void Storage::rebuild_quota_aggregates() {
+    // Stub: no-op
+}
+
 } // namespace chromatindb::storage

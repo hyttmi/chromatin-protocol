@@ -47,15 +47,22 @@ using Clock = std::function<uint64_t()>;
 /// Default clock: system wall clock in seconds since epoch.
 uint64_t system_clock_seconds();
 
+/// Per-namespace usage aggregate for quota tracking.
+struct NamespaceQuota {
+    uint64_t total_bytes = 0;  ///< Total encrypted envelope bytes stored.
+    uint64_t blob_count = 0;   ///< Number of blobs stored.
+};
+
 /// Persistent blob storage engine backed by libmdbx.
 ///
-/// Manages six sub-databases:
+/// Manages seven sub-databases:
 /// - blobs:      [namespace:32][hash:32] -> FlatBuffer-encoded blob
 /// - sequence:   [namespace:32][seq_be:8] -> hash:32
 /// - expiry:     [expiry_ts_be:8][hash:32] -> namespace:32
 /// - delegation: [namespace:32][delegate_pk_hash:32] -> delegation_blob_hash:32
 /// - tombstone:  [namespace:32][target_hash:32] -> (empty, existence check only)
 /// - cursor:     [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
+/// - quota:      [namespace:32] -> [total_bytes_be:8][blob_count_be:8]
 ///
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class Storage {
@@ -192,6 +199,20 @@ public:
     /// @return Number of cursors deleted.
     size_t cleanup_stale_cursors(
         const std::vector<std::array<uint8_t, 32>>& known_peer_hashes);
+
+    // =========================================================================
+    // Namespace quota API
+    // =========================================================================
+
+    /// Get the current quota aggregate for a namespace.
+    /// O(1) read from the quota sub-database.
+    /// @return NamespaceQuota with total_bytes and blob_count (both 0 if unknown).
+    NamespaceQuota get_namespace_quota(std::span<const uint8_t, 32> ns);
+
+    /// Rebuild quota aggregates from actual stored blobs.
+    /// Clears the quota sub-database and recomputes from blobs_map.
+    /// Called on startup to ensure accuracy.
+    void rebuild_quota_aggregates();
 
 private:
     struct Impl;

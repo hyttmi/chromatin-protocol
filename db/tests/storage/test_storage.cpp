@@ -1678,3 +1678,225 @@ TEST_CASE("cleanup_stale_cursors deletes cursors for unknown peers", "[storage][
     REQUIRE_FALSE(store.get_sync_cursor(stale_peer1, ns1).has_value());
     REQUIRE_FALSE(store.get_sync_cursor(stale_peer2, ns1).has_value());
 }
+
+// =============================================================================
+// Phase 35: Namespace quota aggregate tests
+// =============================================================================
+
+TEST_CASE("get_namespace_quota returns zero for empty namespace", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0xA0);
+
+    auto quota = store.get_namespace_quota(std::span<const uint8_t, 32>(ns));
+    REQUIRE(quota.total_bytes == 0);
+    REQUIRE(quota.blob_count == 0);
+}
+
+TEST_CASE("store_blob increments quota aggregate", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0xA1, "quota-test-data");
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    auto quota = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota.blob_count == 1);
+    REQUIRE(quota.total_bytes > 0);
+
+    // Store a second blob in the same namespace
+    auto blob2 = make_test_blob(0xA1, "quota-test-data-2");
+    auto result2 = store.store_blob(blob2);
+    REQUIRE(result2.status == StoreResult::Status::Stored);
+
+    auto quota2 = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota2.blob_count == 2);
+    REQUIRE(quota2.total_bytes > quota.total_bytes);
+}
+
+TEST_CASE("store_blob duplicate does not increment quota", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0xA2, "dedup-quota-test");
+    auto r1 = store.store_blob(blob);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+
+    auto quota_after_first = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+
+    // Store same blob again (dedup)
+    auto r2 = store.store_blob(blob);
+    REQUIRE(r2.status == StoreResult::Status::Duplicate);
+
+    auto quota_after_dup = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota_after_dup.blob_count == quota_after_first.blob_count);
+    REQUIRE(quota_after_dup.total_bytes == quota_after_first.total_bytes);
+}
+
+TEST_CASE("store_blob tombstone does not increment quota", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a regular blob first
+    auto blob = make_test_blob(0xA3, "tombstone-quota-test");
+    auto blob_result = store.store_blob(blob);
+    REQUIRE(blob_result.status == StoreResult::Status::Stored);
+
+    auto quota_before = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+
+    // Store a tombstone targeting the blob
+    chromatindb::wire::BlobData tombstone;
+    tombstone.namespace_id = blob.namespace_id;
+    tombstone.pubkey = blob.pubkey;
+    tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
+    tombstone.ttl = 0;
+    tombstone.timestamp = 2000;
+    tombstone.signature.resize(4627, 0x42);
+    auto ts_result = store.store_blob(tombstone);
+    REQUIRE(ts_result.status == StoreResult::Status::Stored);
+
+    auto quota_after = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    // Tombstone should NOT increase quota
+    REQUIRE(quota_after.blob_count == quota_before.blob_count);
+    REQUIRE(quota_after.total_bytes == quota_before.total_bytes);
+}
+
+TEST_CASE("delete_blob_data decrements quota aggregate", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob = make_test_blob(0xA4, "delete-quota-test");
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    auto quota_before = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota_before.blob_count == 1);
+    REQUIRE(quota_before.total_bytes > 0);
+
+    // Delete the blob
+    REQUIRE(store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+
+    auto quota_after = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota_after.blob_count == 0);
+    REQUIRE(quota_after.total_bytes == 0);
+}
+
+TEST_CASE("run_expiry_scan decrements quota aggregate", "[storage][quota]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    // Store a blob with TTL=100
+    auto blob = make_test_blob(0xA5, "expiry-quota-test", 100, 1000);
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    auto quota_before = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota_before.blob_count == 1);
+    REQUIRE(quota_before.total_bytes > 0);
+
+    // Advance clock past expiry
+    fake_time = 1101;
+    REQUIRE(store.run_expiry_scan() == 1);
+
+    auto quota_after = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota_after.blob_count == 0);
+    REQUIRE(quota_after.total_bytes == 0);
+}
+
+TEST_CASE("rebuild_quota_aggregates matches actual storage", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store multiple blobs
+    auto blob1 = make_test_blob(0xA6, "rebuild-test-1");
+    auto blob2 = make_test_blob(0xA6, "rebuild-test-2");
+    store.store_blob(blob1);
+    store.store_blob(blob2);
+
+    // Get quota from normal increment path
+    auto quota_incremental = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob1.namespace_id));
+
+    // Rebuild from scratch
+    store.rebuild_quota_aggregates();
+
+    // Should match
+    auto quota_rebuilt = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob1.namespace_id));
+    REQUIRE(quota_rebuilt.blob_count == quota_incremental.blob_count);
+    REQUIRE(quota_rebuilt.total_bytes == quota_incremental.total_bytes);
+}
+
+TEST_CASE("rebuild_quota_aggregates clears stale entries", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store and delete a blob
+    auto blob = make_test_blob(0xA7, "stale-rebuild-test");
+    auto result = store.store_blob(blob);
+    REQUIRE(result.status == StoreResult::Status::Stored);
+
+    REQUIRE(store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(result.blob_hash)));
+
+    // Rebuild
+    store.rebuild_quota_aggregates();
+
+    // Namespace with no blobs should have zero quota
+    auto quota = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob.namespace_id));
+    REQUIRE(quota.blob_count == 0);
+    REQUIRE(quota.total_bytes == 0);
+}
+
+TEST_CASE("multiple namespaces tracked independently", "[storage][quota]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto blob_ns1 = make_test_blob(0xB0, "ns1-data");
+    auto blob_ns2 = make_test_blob(0xB1, "ns2-data-1");
+    auto blob_ns2b = make_test_blob(0xB1, "ns2-data-2");
+
+    store.store_blob(blob_ns1);
+    store.store_blob(blob_ns2);
+    store.store_blob(blob_ns2b);
+
+    auto quota_ns1 = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob_ns1.namespace_id));
+    auto quota_ns2 = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob_ns2.namespace_id));
+
+    REQUIRE(quota_ns1.blob_count == 1);
+    REQUIRE(quota_ns2.blob_count == 2);
+
+    // Deleting from ns1 shouldn't affect ns2
+    auto hash = compute_hash(blob_ns1);
+    store.delete_blob_data(
+        std::span<const uint8_t, 32>(blob_ns1.namespace_id),
+        std::span<const uint8_t, 32>(hash));
+
+    auto quota_ns1_after = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob_ns1.namespace_id));
+    auto quota_ns2_after = store.get_namespace_quota(
+        std::span<const uint8_t, 32>(blob_ns2.namespace_id));
+
+    REQUIRE(quota_ns1_after.blob_count == 0);
+    REQUIRE(quota_ns2_after.blob_count == 2);
+}
