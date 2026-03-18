@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -49,6 +50,10 @@ struct Config {
     bool mixed = false;
     uint32_t ttl = 3600;
     uint64_t drain_timeout = 5;
+    std::string identity_save_path;   // empty = don't save
+    std::string identity_file_path;   // empty = generate fresh
+    bool delete_mode = false;
+    std::string hashes_from;          // "stdin" = read target hashes from stdin
 };
 
 void print_usage(const char* prog) {
@@ -61,7 +66,11 @@ void print_usage(const char* prog) {
               << "  --size N             Blob data size in bytes (default: 1024, ignored in mixed mode)\n"
               << "  --mixed              Mixed-size mode: 70% 1K, 20% 100K, 10% 1M\n"
               << "  --ttl N              Blob TTL in seconds (default: 3600)\n"
-              << "  --drain-timeout N    Seconds to wait for ACK notifications after last send (default: 5)\n";
+              << "  --drain-timeout N    Seconds to wait for ACK notifications after last send (default: 5)\n"
+              << "  --identity-save DIR  Save identity keypair to directory after generation\n"
+              << "  --identity-file DIR  Load identity keypair from directory (node.key + node.pub)\n"
+              << "  --delete             Delete mode: send tombstones instead of blobs\n"
+              << "  --hashes-from stdin  Read target blob hashes from stdin (one hex hash per line)\n";
 }
 
 bool parse_args(int argc, char* argv[], Config& cfg) {
@@ -94,6 +103,14 @@ bool parse_args(int argc, char* argv[], Config& cfg) {
             cfg.ttl = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg == "--drain-timeout" && i + 1 < argc) {
             cfg.drain_timeout = std::stoull(argv[++i]);
+        } else if (arg == "--identity-save" && i + 1 < argc) {
+            cfg.identity_save_path = argv[++i];
+        } else if (arg == "--identity-file" && i + 1 < argc) {
+            cfg.identity_file_path = argv[++i];
+        } else if (arg == "--delete") {
+            cfg.delete_mode = true;
+        } else if (arg == "--hashes-from" && i + 1 < argc) {
+            cfg.hashes_from = argv[++i];
         }
     }
     if (!has_target) {
@@ -224,9 +241,14 @@ double percentile(std::vector<double>& sorted_latencies, double pct) {
     return sorted_latencies[idx];
 }
 
-nlohmann::json stats_to_json(const Stats& s, bool mixed) {
+nlohmann::json stats_to_json(const Stats& s, bool mixed, bool delete_mode,
+                             const std::vector<std::string>& blob_hashes) {
     nlohmann::json j;
-    j["scenario"] = mixed ? "mixed" : "fixed";
+    if (delete_mode) {
+        j["scenario"] = "delete";
+    } else {
+        j["scenario"] = mixed ? "mixed" : "fixed";
+    }
     j["total_blobs"] = s.total_blobs;
     j["duration_sec"] = s.duration_sec;
     j["blobs_per_sec"] = s.blobs_per_sec;
@@ -247,6 +269,7 @@ nlohmann::json stats_to_json(const Stats& s, bool mixed) {
     j["errors"] = s.errors;
     j["notifications_received"] = s.notifications_received;
     j["notifications_expected"] = s.notifications_expected;
+    j["blob_hashes"] = blob_hashes;
     return j;
 }
 
@@ -351,6 +374,9 @@ public:
             spdlog::error("connection handshake or message loop failed");
         }
     }
+
+    /// Get the collected blob hashes (hex strings).
+    const std::vector<std::string>& blob_hashes() const { return blob_hashes_; }
 
     /// Get the computed statistics after the run completes.
     Stats compute_stats() {
@@ -474,6 +500,7 @@ private:
                 continue;
             }
 
+            blob_hashes_.push_back(hash_hex);
             ++blobs_sent_;
             total_bytes_sent_ += data_size;
             last_send_time_ = Clock::now();
@@ -596,6 +623,9 @@ private:
     // Collected latencies (milliseconds)
     std::vector<double> latencies_;
 
+    // Collected blob hashes (hex strings) for downstream delete consumption
+    std::vector<std::string> blob_hashes_;
+
     // Counters
     uint64_t blobs_sent_ = 0;
     uint64_t send_errors_ = 0;
@@ -626,8 +656,22 @@ int main(int argc, char* argv[]) {
     spdlog::info("count: {}, rate: {}/s, size: {}, mixed: {}, ttl: {}s",
                  cfg.count, cfg.rate, cfg.size, cfg.mixed, cfg.ttl);
 
-    // Generate ephemeral identity for this load run
-    auto identity = chromatindb::identity::NodeIdentity::generate();
+    // Identity lifecycle: load from file or generate fresh
+    auto identity = [&]() {
+        if (!cfg.identity_file_path.empty()) {
+            spdlog::info("loading identity from {}", cfg.identity_file_path);
+            return chromatindb::identity::NodeIdentity::load_from(cfg.identity_file_path);
+        }
+        return chromatindb::identity::NodeIdentity::generate();
+    }();
+
+    // Persist identity if requested
+    if (!cfg.identity_save_path.empty()) {
+        std::filesystem::create_directories(cfg.identity_save_path);
+        identity.save_to(cfg.identity_save_path);
+        spdlog::info("identity saved to {}", cfg.identity_save_path);
+    }
+
     spdlog::info("namespace: {}", to_hex(identity.namespace_id()));
 
     asio::io_context ioc;
@@ -643,7 +687,7 @@ int main(int argc, char* argv[]) {
 
     // Compute and output stats
     auto stats = gen.compute_stats();
-    auto json = stats_to_json(stats, cfg.mixed);
+    auto json = stats_to_json(stats, cfg.mixed, cfg.delete_mode, gen.blob_hashes());
     std::cout << json.dump(2) << std::endl;
 
     spdlog::info("done");
