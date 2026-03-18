@@ -123,7 +123,8 @@ public:
 
     /// Delete a single blob by namespace + content hash.
     /// Removes from blobs_map and expiry_map (if entry exists).
-    /// Does NOT touch seq_map (gaps are expected per existing pattern).
+    /// Replaces seq_map entry with zero-hash sentinel to preserve seq_num
+    /// monotonicity (required for cursor-based sync change detection).
     /// @return true if found and deleted, false if not found.
     bool delete_blob_data(
         std::span<const uint8_t, 32> ns,

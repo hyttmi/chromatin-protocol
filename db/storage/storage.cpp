@@ -558,12 +558,16 @@ std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
             // Check namespace prefix
             if (std::memcmp(key_data.data(), ns.data(), 32) != 0) break;
 
-            // Read hash from value (32 bytes)
+            // Read hash from value (32 bytes); skip zero-hash sentinels left
+            // by delete_blob_data to preserve seq_num monotonicity
             auto val_data = cursor.current(false).value;
             if (val_data.length() == 32) {
-                std::array<uint8_t, 32> hash;
-                std::memcpy(hash.data(), val_data.data(), 32);
-                hashes.push_back(hash);
+                static constexpr std::array<uint8_t, 32> zero_hash{};
+                if (std::memcmp(val_data.data(), zero_hash.data(), 32) != 0) {
+                    std::array<uint8_t, 32> hash;
+                    std::memcpy(hash.data(), val_data.data(), 32);
+                    hashes.push_back(hash);
+                }
             }
 
             auto next = cursor.to_next(false);
@@ -692,8 +696,12 @@ bool Storage::delete_blob_data(
         // Delete from blobs_map
         txn.erase(impl_->blobs_map, key_slice);
 
-        // Delete from seq_map (scan for matching hash)
+        // Tombstone seq_map entry: replace hash with zero sentinel to preserve
+        // seq_num monotonicity.  Erasing the entry would let next_seq_num()
+        // recycle the same number, which breaks cursor-based change detection
+        // (cursor compares latest_seq_num to detect new data).
         {
+            static constexpr std::array<uint8_t, 32> zero_hash{};
             auto cursor = txn.open_cursor(impl_->seq_map);
             auto lower = make_seq_key(ns.data(), 1);
             auto seek = cursor.lower_bound(to_slice(lower));
@@ -706,7 +714,10 @@ bool Storage::delete_blob_data(
                 auto v = cursor.current(false).value;
                 if (v.length() == 32 &&
                     std::memcmp(v.data(), blob_hash.data(), 32) == 0) {
-                    cursor.erase();
+                    // Replace with zero sentinel instead of erasing
+                    txn.upsert(impl_->seq_map,
+                               mdbx::slice(k.data(), k.length()),
+                               mdbx::slice(zero_hash.data(), zero_hash.size()));
                     break;
                 }
                 seek = cursor.to_next(false);
