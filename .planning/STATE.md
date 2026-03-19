@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 40-02-PLAN.md (Phase 40 complete)
-last_updated: "2026-03-19T13:24:15.995Z"
-last_activity: 2026-03-19 — Completed Plan 02 (sync rate limit enforcement). Cooldown, session limit, byte accounting, 4 new tests, 408 total.
+stopped_at: Completed 41-01-PLAN.md (Phase 41 complete, v0.8.0 milestone complete)
+last_updated: "2026-03-19T14:59:00Z"
+last_activity: 2026-03-19 — Completed Plan 01 (benchmark validation). Reconciliation scaling scenario, v0.8.0 vs v0.6.0 comparison report, regression check.
 progress:
   total_phases: 4
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
-  percent: 71
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 40 - Sync Rate Limiting
+**Current focus:** Phase 41 - Benchmark Validation (complete)
 
 ## Current Position
 
-Phase: 40 (3 of 4) — Sync Rate Limiting
-Plan: 2 of 2
-Status: Phase Complete
-Last activity: 2026-03-19 — Completed Plan 02 (sync rate limit enforcement). Cooldown, session limit, byte accounting, 4 new tests, 408 total.
+Phase: 41 (4 of 4) — Benchmark Validation
+Plan: 1 of 1
+Status: Milestone Complete
+Last activity: 2026-03-19 — Completed Plan 01 (benchmark validation). Reconciliation scaling scenario, v0.8.0 vs v0.6.0 comparison report, regression check.
 
-Progress: [███████░░░] 71%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [███████░░░] 71%
 | Phase 39 P02 | 35min | 2 tasks | 4 files |
 | Phase 40 P01 | 29min | 2 tasks | 7 files |
 | Phase 40 P02 | 48min | 2 tasks | 2 files |
+| Phase 41 P01 | 5min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase 40]: send_sync_rejected uses co_spawn fire-and-forget pattern (consistent with notify_subscribers)
 - [Phase 40]: Universal byte accounting at top of on_peer_message; Data/Delete disconnect, SyncRequest reject, others route through
 - [Phase 40]: Closed mode in cooldown tests avoids PEX 5s timeout inflation
+- [Phase 41]: Fast-sync configs use sync_interval=2s, cooldown=0, full_resync_interval=0 for rapid reconciliation benchmarks
+- [Phase 41]: Reconciliation scaling uses 1000-blob preload + 10-blob delta to demonstrate O(diff)
+- [Phase 41]: Regression threshold at +/-5% of v0.6.0 baseline for small-namespace metrics
 
 ### Pending Todos
 
@@ -91,6 +95,6 @@ None -- research complete, all architectural decisions made.
 
 ## Session Continuity
 
-Last session: 2026-03-19T13:18:47Z
-Stopped at: Completed 40-02-PLAN.md (Phase 40 complete)
-Resume file: Phase 40 complete. Phase 41 next (if exists).
+Last session: 2026-03-19T14:53:22Z
+Stopped at: Completed 41-01-PLAN.md (Phase 41 complete, v0.8.0 milestone complete)
+Resume file: v0.8.0 milestone complete. All 4 phases (38-41) done.

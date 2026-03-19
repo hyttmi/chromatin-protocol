@@ -13,7 +13,7 @@ Requirements for protocol scalability. Fixes fundamental sync protocol flaw, har
 - [x] **SYNC-07**: Per-namespace reconciliation using custom range-based protocol replaces full hash list exchange (O(differences) not O(total_blobs))
 - [x] **SYNC-08**: Existing sync cursors coexist with reconciliation (unchanged namespaces skipped via cursor, reconciliation runs for all namespaces but cursor-hit namespaces skip blob requests)
 - [x] **SYNC-09**: Reconciliation wire messages include version byte for forward compatibility
-- [ ] **SYNC-10**: Docker benchmark confirms O(diff) improvement over hash-list baseline and no regression for small namespaces
+- [x] **SYNC-10**: Docker benchmark confirms O(diff) improvement over hash-list baseline and no regression for small namespaces
 
 ### Sync Rate Limiting
 
@@ -70,7 +70,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-07 | Phase 39 | Complete |
 | SYNC-08 | Phase 39 | Complete |
 | SYNC-09 | Phase 39 | Complete |
-| SYNC-10 | Phase 41 | Pending |
+| SYNC-10 | Phase 41 | Complete |
 | RATE-01 | Phase 40 | Complete |
 | RATE-02 | Phase 40 | Complete |
 | RATE-03 | Phase 40 | Complete |
