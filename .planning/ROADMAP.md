@@ -111,7 +111,7 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
 **Milestone Goal:** Fix the fundamental sync protocol scaling flaw (O(N) hash list exchange breaks at ~3.4M blobs per namespace), harden against sync-based abuse, and offload CPU-bound crypto to worker threads. The sync protocol must scale honestly before claiming production readiness.
 
 - [x] **Phase 38: Thread Pool Crypto Offload** - ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool, freeing the event loop (completed 2026-03-19)
-- [ ] **Phase 39: Negentropy Set Reconciliation** - Replace O(N) hash list exchange with O(differences) negentropy protocol per namespace
+- [ ] **Phase 39: Negentropy Set Reconciliation** - Replace O(N) hash list exchange with O(differences) custom XOR-fingerprint reconciliation protocol per namespace
 - [ ] **Phase 40: Sync Rate Limiting** - Metered sync initiation, byte-rate accounting, and concurrent session limits per peer
 - [ ] **Phase 41: Benchmark Validation** - Docker benchmark confirms O(diff) scaling improvement and no regression
 
@@ -131,19 +131,23 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
 
 Plans:
 - [x] 38-01-PLAN.md — Config, thread pool lifecycle, offload helper, plumbing pool ref through object graph
-- [ ] 38-02-PLAN.md — BlobEngine async conversion with two-dispatch crypto offload, caller updates
-- [ ] 38-03-PLAN.md — Connection handshake Signer::verify offload to thread pool
+- [x] 38-02-PLAN.md — BlobEngine async conversion with two-dispatch crypto offload, caller updates
+- [x] 38-03-PLAN.md — Connection handshake Signer::verify offload to thread pool
 
 ### Phase 39: Negentropy Set Reconciliation
-**Goal**: Namespace sync uses negentropy range-based set reconciliation instead of full hash list exchange, making sync cost proportional to differences (O(diff)) not total blobs (O(N)), and eliminating the ~3.4M blob MAX_FRAME_SIZE cliff
+**Goal**: Namespace sync uses custom XOR-fingerprint range-based set reconciliation instead of full hash list exchange, making sync cost proportional to differences (O(diff)) not total blobs (O(N)), and eliminating the ~3.4M blob MAX_FRAME_SIZE cliff
 **Depends on**: Phase 38
 **Requirements**: SYNC-06, SYNC-07, SYNC-08, SYNC-09
 **Success Criteria** (what must be TRUE):
-  1. negentropy is vendored into the source tree with SHA3-256 replacing its default SHA-256 (no OpenSSL dependency introduced)
+  1. Custom reconciliation module built with no external dependency (XOR-fingerprint range-based algorithm in ~400-500 lines of owned code)
   2. When two nodes sync a namespace with N blobs and D differences, wire traffic scales with D not N -- a namespace with 1M blobs and 10 new blobs does not exchange 32 MB of hashes
-  3. Sync cursors from v0.7.0 still skip unchanged namespaces entirely -- negentropy reconciliation only runs for namespaces where the cursor indicates new data
+  3. Sync cursors from v0.7.0 still skip unchanged namespaces entirely -- reconciliation only runs for namespaces where the cursor indicates new data
   4. Reconciliation wire messages carry a version byte so future protocol changes can coexist with older peers
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 39-01-PLAN.md — Reconciliation module (XOR fingerprint algorithm, encode/decode, wire protocol update, unit tests)
+- [ ] 39-02-PLAN.md — Sync flow integration (replace Phase B in initiator/responder, message routing, PROTOCOL.md)
 
 ### Phase 40: Sync Rate Limiting
 **Goal**: Sync requests are metered per peer to prevent resource exhaustion via repeated sync initiation, closing the abuse vector where sync messages bypass all existing rate limiting
@@ -156,24 +160,24 @@ Plans:
 **Plans**: TBD
 
 ### Phase 41: Benchmark Validation
-**Goal**: The Docker benchmark suite confirms that negentropy set reconciliation delivers O(diff) sync scaling, thread pool offload improves large-blob throughput, and neither change causes regression for small namespaces
+**Goal**: The Docker benchmark suite confirms that set reconciliation delivers O(diff) sync scaling, thread pool offload improves large-blob throughput, and neither change causes regression for small namespaces
 **Depends on**: Phase 38, Phase 39, Phase 40
 **Requirements**: SYNC-10
 **Success Criteria** (what must be TRUE):
   1. A benchmark scenario with a large namespace (1000+ blobs) and few new blobs (10) demonstrates sync wire traffic and time proportional to differences, not total namespace size
   2. 1 MiB blob ingest/sync throughput is measurably improved over the v0.6.0 baseline (15.3 blobs/sec) with the improvement percentage quantified in the report
-  3. Small namespace sync (under 100 blobs) shows no regression from negentropy or thread pool overhead (within 5% of baseline or better)
+  3. Small namespace sync (under 100 blobs) shows no regression from reconciliation or thread pool overhead (within 5% of baseline or better)
 **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
 Phases 38 -> 39 -> 40 -> 41
-Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (negentropy) is the largest change. Phase 40 (rate limiting) benefits from reconciliation being in place. Phase 41 (benchmarks) validates the full stack.
+Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (reconciliation) is the largest change. Phase 40 (rate limiting) benefits from reconciliation being in place. Phase 41 (benchmarks) validates the full stack.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 38. Thread Pool Crypto Offload | 3/3 | Complete    | 2026-03-19 |
-| 39. Negentropy Set Reconciliation | 0/TBD | Not started | - |
+| 39. Set Reconciliation | 0/2 | Not started | - |
 | 40. Sync Rate Limiting | 0/TBD | Not started | - |
 | 41. Benchmark Validation | 0/TBD | Not started | - |
