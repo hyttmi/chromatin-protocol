@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.8.0
 milestone_name: Protocol Scalability
-status: planning
-stopped_at: Defining requirements
+status: ready_to_execute
+stopped_at: Roadmap created, Phase 38 ready to execute
 last_updated: "2026-03-19"
-last_activity: 2026-03-19 — Milestone v0.8.0 started (v1.0.0 deferred for protocol fixes)
+last_activity: 2026-03-19 — Roadmap created for v0.8.0 (4 phases, 12 requirements)
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -21,14 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Defining v0.8.0 requirements
+**Current focus:** Phase 38 - Thread Pool Crypto Offload
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-19 — Milestone v0.8.0 started (v1.0.0 deferred — protocol scaling issues)
+Phase: 38 (1 of 4) — Thread Pool Crypto Offload
+Plan: Ready to execute plan 1 of 3
+Status: Planning complete, ready to execute
+Last activity: 2026-03-19 — Roadmap created for v0.8.0 Protocol Scalability
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -58,9 +60,9 @@ Recent decisions affecting current work:
 
 - v0.7.0: thread_local OQS_SIG* in Signer::verify() is future-safe for thread pool offload
 - v0.7.0: Serial crypto optimizations shipped; thread pool offload deferred to v1.0.0 (AEAD nonce safety)
-- v1.0.0: Only stateless ops (ML-DSA-87 verify, SHA3-256 hash) offloaded; AEAD state stays on event loop
-- v0.8.0: v1.0.0 deferred — sync protocol has O(N) hash list exchange flaw that must be fixed before "production ready"
-- v0.8.0: Phase 38 (thread pool crypto offload) carries forward from v1.0.0 — protocol-agnostic, universally needed
+- v0.8.0: v1.0.0 deferred -- sync protocol has O(N) hash list exchange flaw that must be fixed first
+- v0.8.0: Phase 38 (thread pool) carries forward from v1.0.0 -- protocol-agnostic, universally needed
+- v0.8.0: negentropy chosen for set reconciliation (header-only, SHA3-256 patch, no OpenSSL)
 
 ### Pending Todos
 
@@ -68,10 +70,10 @@ None.
 
 ### Blockers/Concerns
 
-- Sync set reconciliation algorithm choice (Merkle tree vs IBLT vs other) — needs research or design decision
+None -- research complete, all architectural decisions made.
 
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Defining requirements
-Resume file: —
+Stopped at: Roadmap created, Phase 38 has 3 plans ready to execute
+Resume file: None

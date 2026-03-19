@@ -65,14 +65,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SYNC-06 | TBD | Pending |
-| SYNC-07 | TBD | Pending |
-| SYNC-08 | TBD | Pending |
-| SYNC-09 | TBD | Pending |
-| SYNC-10 | TBD | Pending |
-| RATE-01 | TBD | Pending |
-| RATE-02 | TBD | Pending |
-| RATE-03 | TBD | Pending |
+| SYNC-06 | Phase 39 | Pending |
+| SYNC-07 | Phase 39 | Pending |
+| SYNC-08 | Phase 39 | Pending |
+| SYNC-09 | Phase 39 | Pending |
+| SYNC-10 | Phase 41 | Pending |
+| RATE-01 | Phase 40 | Pending |
+| RATE-02 | Phase 40 | Pending |
+| RATE-03 | Phase 40 | Pending |
 | PERF-06 | Phase 38 | Pending |
 | PERF-07 | Phase 38 | Pending |
 | PERF-08 | Phase 38 | Pending |
@@ -80,9 +80,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v0.8.0 requirements: 12 total
-- Mapped to phases: 4
-- Unmapped: 8 ⚠️
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-19*
-*Last updated: 2026-03-19 after v0.8.0 milestone start*
+*Last updated: 2026-03-19 after v0.8.0 roadmap creation*
