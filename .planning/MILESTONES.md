@@ -1,5 +1,27 @@
 # Milestones
 
+## v0.7.0 Production Readiness (Shipped: 2026-03-18)
+
+**Phases:** 6 (32-37) | **Plans:** 12 | **LOC:** 18,000+ C++
+**Tests:** 313+ tests | **Requirements:** 20/20
+**Timeline:** 2 days (2026-03-17 -> 2026-03-18)
+
+**Key accomplishments:**
+- Sync resumption with per-peer per-namespace cursors for O(new) sync
+- Hash-then-sign protocol (ML-DSA-87 signs 32-byte SHA3-256 digest, not raw concatenation)
+- Namespace storage quotas (per-namespace byte/count limits enforced at ingest)
+- Crypto hot-path optimization (incremental SHA3, dedup-before-verify, OQS_SIG caching)
+- Deletion benchmarks in Docker suite (tombstone create/sync/GC)
+- Component self-containment (tests relocated into db/, stale artifacts removed)
+
+**Known issue:**
+- Sync protocol has O(N) hash list exchange flaw — breaks at ~3.4M blobs/namespace. Addressed in v0.8.0.
+- Sync traffic bypasses rate limiting. Addressed in v0.8.0.
+
+**Archive:** [v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md) | [v0.7.0-REQUIREMENTS.md](milestones/v0.7.0-REQUIREMENTS.md)
+
+---
+
 ## v0.6.0 Real-World Validation (Shipped: 2026-03-16)
 
 **Phases:** 5 (27-31) | **Plans:** 6 | **Files:** 40 modified (+6,451 lines) | **LOC:** 17,775 C++
