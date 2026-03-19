@@ -29,6 +29,7 @@ struct Config {
     uint64_t cursor_stale_seconds = 3600;           // Force full resync after this gap (seconds)
     uint64_t namespace_quota_bytes = 0;             // Global default byte limit (0 = unlimited)
     uint64_t namespace_quota_count = 0;             // Global default count limit (0 = unlimited)
+    uint32_t worker_threads = 0;                    // Thread pool size (0 = auto-detect: hardware_concurrency)
     // Per-namespace overrides: key is 64-char hex namespace hash.
     // Value: {optional max_bytes, optional max_count}
     // If optional has value: that value overrides global (0 = explicitly exempt)

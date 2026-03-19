@@ -691,6 +691,54 @@ TEST_CASE("missing quota fields use defaults", "[config][quota]") {
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 38: worker_threads config tests
+// =============================================================================
+
+TEST_CASE("Default config has worker_threads 0 (auto-detect)", "[config][threadpool]") {
+    Config cfg;
+    REQUIRE(cfg.worker_threads == 0);
+}
+
+TEST_CASE("worker_threads parses from JSON", "[config][threadpool]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_workers.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"worker_threads": 4})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.worker_threads == 4);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("worker_threads defaults to 0 when missing from JSON", "[config][threadpool]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_workers.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.worker_threads == 0);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("worker_threads 0 in JSON means auto-detect", "[config][threadpool]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_zero_workers.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"worker_threads": 0})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.worker_threads == 0);
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
 

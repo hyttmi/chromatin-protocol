@@ -1,6 +1,7 @@
 #include "db/version.h"
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
+#include "db/crypto/thread_pool.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/logging/logging.h"
@@ -14,6 +15,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <thread>
 
 
 namespace {
@@ -117,6 +119,20 @@ int cmd_run(int argc, char* argv[]) {
     spdlog::info("max peers: {}", config.max_peers);
     spdlog::info("sync interval: {}s", config.sync_interval_seconds);
 
+    // Resolve and create thread pool for crypto offload
+    uint32_t hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 2;
+    if (config.worker_threads > hw) {
+        spdlog::warn("worker_threads {} exceeds hardware_concurrency {}, clamped",
+                     config.worker_threads, hw);
+    }
+    auto num_workers = chromatindb::crypto::resolve_worker_threads(config.worker_threads);
+    spdlog::info("worker threads: {}{}",
+                 num_workers,
+                 config.worker_threads == 0 ? " (auto-detected)" : " (configured)");
+
+    asio::thread_pool pool(num_workers);
+
     // Create components
     chromatindb::storage::Storage storage(config.data_dir);
     chromatindb::engine::BlobEngine engine(storage, config.max_storage_bytes,
@@ -137,6 +153,9 @@ int cmd_run(int argc, char* argv[]) {
 
     // Run event loop (expiry scanning now lives in PeerManager)
     ioc.run();
+
+    // Wait for in-flight crypto operations to complete
+    pool.join();
 
     return pm.exit_code();
 }

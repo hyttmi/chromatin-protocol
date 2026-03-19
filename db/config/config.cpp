@@ -38,6 +38,7 @@ Config load_config(const std::filesystem::path& path) {
     cfg.cursor_stale_seconds = j.value("cursor_stale_seconds", cfg.cursor_stale_seconds);
     cfg.namespace_quota_bytes = j.value("namespace_quota_bytes", cfg.namespace_quota_bytes);
     cfg.namespace_quota_count = j.value("namespace_quota_count", cfg.namespace_quota_count);
+    cfg.worker_threads = j.value("worker_threads", cfg.worker_threads);
 
     if (j.contains("namespace_quotas") && j["namespace_quotas"].is_object()) {
         for (auto& [key, val] : j["namespace_quotas"].items()) {
