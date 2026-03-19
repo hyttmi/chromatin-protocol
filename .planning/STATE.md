@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.8.0
-milestone_name: Protocol Scalability
+milestone: v1.0
+milestone_name: milestone
 status: executing
-stopped_at: Completed 38-01-PLAN.md
-last_updated: "2026-03-19"
-last_activity: 2026-03-19 — Completed Plan 01 of Phase 38 (thread pool infrastructure)
+stopped_at: Completed 38-03-PLAN.md (handshake verify offload)
+last_updated: "2026-03-19T07:55:51.534Z"
+last_activity: 2026-03-19 — Completed Plan 03 (handshake verify offload to thread pool)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 8
+  completed_plans: 2
+  percent: 96
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 ## Current Position
 
 Phase: 38 (1 of 4) — Thread Pool Crypto Offload
-Plan: Completed plan 1 of 3, ready for plan 2
+Plan: Completed plan 2 of 3 (01, 03), ready for plan 02
 Status: Executing
-Last activity: 2026-03-19 — Completed Plan 01 (thread pool infrastructure + plumbing)
+Last activity: 2026-03-19 — Completed Plan 03 (handshake verify offload to thread pool)
 
-Progress: [█░░░░░░░░░] 8%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [█░░░░░░░░░] 8%
 | v0.5.0 Hardening | 5 | 6 | 2 days | ~19 min |
 | v0.6.0 Validation | 5 | 6 | 2 days | ~5 min |
 | v0.7.0 Production Readiness | 6 | 12 | 2 days | ~13 min |
+| Phase 38 P03 | 9min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,7 @@ Recent decisions affecting current work:
 - v0.8.0: Phase 38 (thread pool) carries forward from v1.0.0 -- protocol-agnostic, universally needed
 - v0.8.0: negentropy chosen for set reconciliation (header-only, SHA3-256 patch, no OpenSSL)
 - v0.8.0: Pool ref as constructor param for owned objects, set_pool() for factory-created (Connection)
+- [Phase 38]: Handshake verify offload: capture by ref in offload lambda safe because coroutine is suspended
 
 ### Pending Todos
 
@@ -76,5 +78,5 @@ None -- research complete, all architectural decisions made.
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Completed 38-01-PLAN.md (thread pool infrastructure)
+Stopped at: Completed 38-03-PLAN.md (handshake verify offload)
 Resume file: None
