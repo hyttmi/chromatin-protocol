@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 38-03-PLAN.md (handshake verify offload)
-last_updated: "2026-03-19T07:55:51.534Z"
-last_activity: 2026-03-19 — Completed Plan 03 (handshake verify offload to thread pool)
+stopped_at: Completed 38-02-PLAN.md (engine crypto offload). Phase 38 fully complete.
+last_updated: "2026-03-19T08:05:11.262Z"
+last_activity: 2026-03-19 — Completed Plan 02 (engine crypto offload). Phase 38 fully complete.
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 96
+  completed_plans: 3
+  percent: 25
 ---
 
 # Project State
@@ -25,17 +25,17 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 
 ## Current Position
 
-Phase: 38 (1 of 4) — Thread Pool Crypto Offload
-Plan: Completed plan 2 of 3 (01, 03), ready for plan 02
+Phase: 38 (1 of 4) — Thread Pool Crypto Offload -- COMPLETE
+Plan: Completed 3 of 3 (all plans done)
 Status: Executing
-Last activity: 2026-03-19 — Completed Plan 03 (handshake verify offload to thread pool)
+Last activity: 2026-03-19 — Completed Plan 02 (engine crypto offload). Phase 38 fully complete.
 
-Progress: [██████████] 96%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 76 (across v1.0 - v0.8.0)
+- Total plans completed: 78 (across v1.0 - v0.8.0)
 - Average duration: ~16 min (historical)
 - Total execution time: ~22.4 hours
 
@@ -66,6 +66,8 @@ Recent decisions affecting current work:
 - v0.8.0: negentropy chosen for set reconciliation (header-only, SHA3-256 patch, no OpenSSL)
 - v0.8.0: Pool ref as constructor param for owned objects, set_pool() for factory-created (Connection)
 - [Phase 38]: Handshake verify offload: capture by ref in offload lambda safe because coroutine is suspended
+- [Phase 38]: Two-dispatch ingest pattern: blob_hash first (dedup gate), build_signing_input+verify bundled second. Duplicates skip expensive ML-DSA-87 verify.
+- [Phase 38]: All sha3_256 offloaded uniformly (including small pubkey-to-namespace). Per-size threshold deferred to PERF-11.
 
 ### Pending Todos
 
@@ -77,6 +79,6 @@ None -- research complete, all architectural decisions made.
 
 ## Session Continuity
 
-Last session: 2026-03-19
-Stopped at: Completed 38-03-PLAN.md (handshake verify offload)
+Last session: 2026-03-19T08:05:11.259Z
+Stopped at: Completed 38-02-PLAN.md (engine crypto offload). Phase 38 fully complete.
 Resume file: None

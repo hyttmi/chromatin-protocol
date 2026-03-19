@@ -24,7 +24,7 @@ Requirements for protocol scalability. Fixes fundamental sync protocol flaw, har
 ### Thread Pool Crypto Offload
 
 - [x] **PERF-06**: ML-DSA-87 signature verification dispatched to asio::thread_pool (event loop does not block during verify)
-- [ ] **PERF-07**: SHA3-256 content hash dispatched to asio::thread_pool (event loop does not block during hash)
+- [x] **PERF-07**: SHA3-256 content hash dispatched to asio::thread_pool (event loop does not block during hash)
 - [x] **PERF-08**: Connection-scoped AEAD state never accessed from thread pool workers (nonce safety by design)
 - [x] **PERF-09**: Thread pool worker count configurable at startup (default: hardware_concurrency)
 
@@ -74,7 +74,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RATE-02 | Phase 40 | Pending |
 | RATE-03 | Phase 40 | Pending |
 | PERF-06 | Phase 38 | Complete |
-| PERF-07 | Phase 38 | Pending |
+| PERF-07 | Phase 38 | Complete |
 | PERF-08 | Phase 38 | Complete |
 | PERF-09 | Phase 38 | Complete |
 
