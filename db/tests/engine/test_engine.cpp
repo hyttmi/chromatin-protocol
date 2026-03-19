@@ -5,6 +5,8 @@
 #include <random>
 
 #include <asio.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 
 #include "db/engine/engine.h"
 #include "db/crypto/hash.h"
@@ -16,6 +18,20 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Run an awaitable synchronously using a temporary io_context.
+/// Used in tests to call async BlobEngine methods.
+template <typename T>
+T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
+    asio::io_context ioc;
+    T result{};
+    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
+        result = co_await std::move(a);
+        co_return result;
+    }, asio::detached);
+    ioc.run();
+    return result;
+}
 
 /// Convert a 32-byte namespace hash to 64-char hex string (for quota override keys).
 std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
@@ -160,7 +176,7 @@ TEST_CASE("BlobEngine rejects blob with wrong pubkey size", "[engine]") {
     // Corrupt pubkey size
     blob.pubkey.resize(100);
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::malformed_blob);
@@ -178,7 +194,7 @@ TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     // Clear signature
     blob.signature.clear();
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::malformed_blob);
@@ -196,7 +212,7 @@ TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
     // Corrupt namespace_id
     blob.namespace_id.fill(0xFF);
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     // With delegation bypass, non-owner without delegation gets no_delegation
@@ -215,7 +231,7 @@ TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
     // Flip first byte of signature
     blob.signature[0] ^= 0xFF;
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::invalid_signature);
@@ -230,7 +246,7 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "valid-blob");
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
     REQUIRE(result.ack.has_value());
     REQUIRE(result.ack->seq_num == 1);
@@ -251,8 +267,8 @@ TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "dup-blob");
 
-    auto first = engine.ingest(blob);
-    auto second = engine.ingest(blob);
+    auto first = run_async(pool, engine.ingest(blob));
+    auto second = run_async(pool, engine.ingest(blob));
 
     REQUIRE(first.accepted);
     REQUIRE(second.accepted);
@@ -275,8 +291,8 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
     auto blob1 = make_signed_blob(id1, "ns1-blob");
     auto blob2 = make_signed_blob(id2, "ns2-blob");
 
-    auto result1 = engine.ingest(blob1);
-    auto result2 = engine.ingest(blob2);
+    auto result1 = run_async(pool, engine.ingest(blob1));
+    auto result2 = run_async(pool, engine.ingest(blob2));
 
     REQUIRE(result1.accepted);
     REQUIRE(result2.accepted);
@@ -301,9 +317,9 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     auto blob2 = make_signed_blob(id, "seq-range-2", 604800, 1001);
     auto blob3 = make_signed_blob(id, "seq-range-3", 604800, 1002);
 
-    auto r1 = engine.ingest(blob1);
-    auto r2 = engine.ingest(blob2);
-    auto r3 = engine.ingest(blob3);
+    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r3 = run_async(pool, engine.ingest(blob3));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
     REQUIRE(r3.accepted);
@@ -334,7 +350,7 @@ TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
         auto blob = make_signed_blob(id,
             "max-count-" + std::to_string(i), 604800,
             static_cast<uint64_t>(2000 + i));
-        auto r = engine.ingest(blob);
+        auto r = run_async(pool, engine.ingest(blob));
         REQUIRE(r.accepted);
     }
 
@@ -378,9 +394,9 @@ TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
     auto id2 = chromatindb::identity::NodeIdentity::generate();
     auto id3 = chromatindb::identity::NodeIdentity::generate();
 
-    auto r1 = engine.ingest(make_signed_blob(id1, "ns-list-1"));
-    auto r2 = engine.ingest(make_signed_blob(id2, "ns-list-2"));
-    auto r3 = engine.ingest(make_signed_blob(id3, "ns-list-3"));
+    auto r1 = run_async(pool, engine.ingest(make_signed_blob(id1, "ns-list-1")));
+    auto r2 = run_async(pool, engine.ingest(make_signed_blob(id2, "ns-list-2")));
+    auto r3 = run_async(pool, engine.ingest(make_signed_blob(id3, "ns-list-3")));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
     REQUIRE(r3.accepted);
@@ -408,7 +424,7 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
         auto blob = make_signed_blob(idA,
             "nsA-" + std::to_string(i), 604800,
             static_cast<uint64_t>(3000 + i));
-        REQUIRE(engine.ingest(blob).accepted);
+        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
     }
 
     // Ingest 2 blobs in namespace B
@@ -416,7 +432,7 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
         auto blob = make_signed_blob(idB,
             "nsB-" + std::to_string(i), 604800,
             static_cast<uint64_t>(4000 + i));
-        REQUIRE(engine.ingest(blob).accepted);
+        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
     }
 
     auto namespaces = engine.list_namespaces();
@@ -459,7 +475,7 @@ TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "get-by-hash");
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
 
     auto found = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
@@ -502,7 +518,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
         auto blob = make_signed_blob(idA,
             "e2e-A-" + std::to_string(i), 604800,
             static_cast<uint64_t>(5000 + i));
-        auto r = engine.ingest(blob);
+        auto r = run_async(pool, engine.ingest(blob));
         REQUIRE(r.accepted);
         REQUIRE(r.ack->status == IngestStatus::stored);
         acksA.push_back(r.ack.value());
@@ -514,7 +530,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
         auto blob = make_signed_blob(idB,
             "e2e-B-" + std::to_string(i), 604800,
             static_cast<uint64_t>(6000 + i));
-        auto r = engine.ingest(blob);
+        auto r = run_async(pool, engine.ingest(blob));
         REQUIRE(r.accepted);
         REQUIRE(r.ack->status == IngestStatus::stored);
         acksB.push_back(r.ack.value());
@@ -559,7 +575,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     // Set namespace to A's namespace (wrong for B's pubkey)
     std::memcpy(bad_blob.namespace_id.data(), idA.namespace_id().data(), 32);
 
-    auto bad_result = engine.ingest(bad_blob);
+    auto bad_result = run_async(pool, engine.ingest(bad_blob));
     REQUIRE_FALSE(bad_result.accepted);
     // With delegation bypass, non-owner without delegation gets no_delegation
     REQUIRE(bad_result.error.value() == IngestError::no_delegation);
@@ -586,7 +602,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.timestamp = 1000;
         blob.signature = {0x01};  // Invalid sig, but we should never reach sig check
 
-        auto result = engine.ingest(blob);
+        auto result = run_async(pool, engine.ingest(blob));
         REQUIRE_FALSE(result.accepted);
         REQUIRE(result.error.has_value());
         REQUIRE(result.error.value() == IngestError::oversized_blob);
@@ -601,7 +617,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.timestamp = 1000;
         blob.signature = {0x01};  // Invalid sig
 
-        auto result = engine.ingest(blob);
+        auto result = run_async(pool, engine.ingest(blob));
         // Should not be oversized_blob -- will fail on later validation step
         if (!result.accepted && result.error.has_value()) {
             REQUIRE(result.error.value() != IngestError::oversized_blob);
@@ -610,7 +626,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
 
     SECTION("blob with empty data is not rejected for size") {
         auto blob = make_signed_blob(id, "");
-        auto result = engine.ingest(blob);
+        auto result = run_async(pool, engine.ingest(blob));
         // Empty data is valid, should be accepted
         REQUIRE(result.accepted);
     }
@@ -625,7 +641,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         // Invalid signature -- if size check is first, we get oversized_blob, not invalid_signature
         blob.signature.resize(100, 0xFF);
 
-        auto result = engine.ingest(blob);
+        auto result = run_async(pool, engine.ingest(blob));
         REQUIRE_FALSE(result.accepted);
         REQUIRE(result.error.value() == IngestError::oversized_blob);
     }
@@ -639,7 +655,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.timestamp = 1000;
         blob.signature = {0x01};
 
-        auto result = engine.ingest(blob);
+        auto result = run_async(pool, engine.ingest(blob));
         REQUIRE_FALSE(result.accepted);
         // error_detail should contain the actual size
         REQUIRE(result.error_detail.find(std::to_string(chromatindb::net::MAX_BLOB_DATA_SIZE + 1)) != std::string::npos);
@@ -659,7 +675,7 @@ TEST_CASE("BlobEngine validation order: namespace/delegation before signature", 
     blob.namespace_id.fill(0xFF);
     blob.signature[0] ^= 0xFF;
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     // Should be no_delegation (namespace/delegation checked before signature), not invalid_signature
     REQUIRE(result.error.value() == IngestError::no_delegation);
@@ -711,7 +727,7 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
 
     // Ingest a blob first
     auto blob = make_signed_blob(id, "to-be-deleted");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
@@ -721,7 +737,7 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
 
     // Delete it
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
     REQUIRE(delete_result.ack.has_value());
     REQUIRE(delete_result.ack->status == IngestStatus::stored);
@@ -750,7 +766,7 @@ TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[en
     fake_hash.fill(0xBB);
 
     auto tombstone = make_signed_tombstone(id, fake_hash);
-    auto result = engine.delete_blob(tombstone);
+    auto result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(result.accepted);
     REQUIRE(result.ack->status == IngestStatus::stored);
 }
@@ -765,17 +781,17 @@ TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
 
     // Create a blob and delete it
     auto blob = make_signed_blob(id, "idempotent-delete");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto first_delete = engine.delete_blob(tombstone);
+    auto first_delete = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(first_delete.accepted);
     REQUIRE(first_delete.ack->status == IngestStatus::stored);
 
     // Delete again -- should return duplicate
-    auto second_delete = engine.delete_blob(tombstone);
+    auto second_delete = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(second_delete.accepted);
     REQUIRE(second_delete.ack->status == IngestStatus::duplicate);
 }
@@ -790,17 +806,17 @@ TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]
 
     // Create and ingest a blob
     auto blob = make_signed_blob(id, "will-be-blocked");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
     // Delete it
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Try to re-ingest the same blob -- should be blocked
-    auto re_ingest = engine.ingest(blob);
+    auto re_ingest = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(re_ingest.accepted);
     REQUIRE(re_ingest.error.has_value());
     REQUIRE(re_ingest.error.value() == IngestError::tombstoned);
@@ -823,11 +839,11 @@ TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
 
     // Create tombstone for it before it ever arrives
     auto tombstone = make_signed_tombstone(id, blob_content_hash);
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Now try to ingest the blob -- should be blocked
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(ingest_result.accepted);
     REQUIRE(ingest_result.error.value() == IngestError::tombstoned);
 }
@@ -842,7 +858,7 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
 
     // Ingest a regular blob
     auto blob = make_signed_blob(id, "sync-delete-target");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
@@ -852,7 +868,7 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
 
     // Create a tombstone and INGEST it (simulating sync receive)
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto tombstone_ingest = engine.ingest(tombstone);
+    auto tombstone_ingest = run_async(pool, engine.ingest(tombstone));
     REQUIRE(tombstone_ingest.accepted);
     REQUIRE(tombstone_ingest.ack->status == IngestStatus::stored);
 
@@ -878,7 +894,7 @@ TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
 
     // Ingest a blob owned by 'owner'
     auto blob = make_signed_blob(owner, "owned-blob");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     // Attacker tries to delete it -- tombstone has wrong namespace
@@ -886,7 +902,7 @@ TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
     // Override namespace to owner's namespace (simulating attack)
     std::memcpy(tombstone.namespace_id.data(), owner.namespace_id().data(), 32);
 
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE_FALSE(delete_result.accepted);
     REQUIRE(delete_result.error.value() == IngestError::namespace_mismatch);
 }
@@ -906,7 +922,7 @@ TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
     // Corrupt signature
     tombstone.signature[0] ^= 0xFF;
 
-    auto result = engine.delete_blob(tombstone);
+    auto result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::invalid_signature);
 }
@@ -922,11 +938,11 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
 
     // Create and delete a blob
     auto blob = make_signed_blob(id, "expiry-test", 604800, 1000);
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Advance time far past any TTL
@@ -954,7 +970,7 @@ TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]")
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = engine.ingest(deleg);
+    auto result = run_async(pool, engine.ingest(deleg));
     REQUIRE(result.accepted);
     REQUIRE(result.ack.has_value());
     REQUIRE(result.ack->status == IngestStatus::stored);
@@ -970,7 +986,7 @@ TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[e
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = engine.ingest(deleg);
+    auto result = run_async(pool, engine.ingest(deleg));
     REQUIRE(result.accepted);
 
     REQUIRE(store.has_valid_delegation(
@@ -988,8 +1004,8 @@ TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine]
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto first = engine.ingest(deleg);
-    auto second = engine.ingest(deleg);
+    auto first = run_async(pool, engine.ingest(deleg));
+    auto second = run_async(pool, engine.ingest(deleg));
 
     REQUIRE(first.accepted);
     REQUIRE(second.accepted);
@@ -1010,7 +1026,7 @@ TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]
     auto deleg = make_signed_delegation(attacker, delegate);
     std::memcpy(deleg.namespace_id.data(), owner.namespace_id().data(), 32);
 
-    auto result = engine.ingest(deleg);
+    auto result = run_async(pool, engine.ingest(deleg));
     REQUIRE_FALSE(result.accepted);
     // Attacker's pubkey doesn't own the namespace and has no delegation
     REQUIRE(result.error.value() == IngestError::no_delegation);
@@ -1028,7 +1044,7 @@ TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]")
     auto deleg = make_signed_delegation(owner, delegate);
     deleg.signature[0] ^= 0xFF;
 
-    auto result = engine.ingest(deleg);
+    auto result = run_async(pool, engine.ingest(deleg));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::invalid_signature);
 }
@@ -1043,7 +1059,7 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = engine.ingest(deleg);
+    auto result = run_async(pool, engine.ingest(deleg));
     REQUIRE(result.accepted);
 
     // Retrieve via get_blob -- proves it's a regular blob in storage
@@ -1072,11 +1088,11 @@ TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(engine.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
 
     // Delegate writes to owner's namespace
     auto blob = make_delegate_blob(owner, delegate, "delegate-write-1");
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
     REQUIRE(result.ack->status == IngestStatus::stored);
 }
@@ -1092,7 +1108,7 @@ TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegat
 
     // No delegation -- delegate tries to write
     auto blob = make_delegate_blob(owner, delegate, "no-delegation");
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1108,10 +1124,10 @@ TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delega
 
     // Owner creates delegation and a blob
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(engine.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
 
     auto blob = make_signed_blob(owner, "owner-blob");
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     // Delegate tries to delete -- uses delete_blob with delegate's key
@@ -1126,7 +1142,7 @@ TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delega
         del_req.namespace_id, del_req.data, del_req.ttl, del_req.timestamp);
     del_req.signature = delegate.sign(signing_input);
 
-    auto result = engine.delete_blob(del_req);
+    auto result = run_async(pool, engine.delete_blob(del_req));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::namespace_mismatch);
 }
@@ -1143,7 +1159,7 @@ TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
 
     // Owner delegates to delegate
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(engine.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
 
     // Delegate tries to create a delegation blob for 'other' in owner's namespace
     chromatindb::wire::BlobData fake_deleg;
@@ -1157,7 +1173,7 @@ TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
         fake_deleg.namespace_id, fake_deleg.data, fake_deleg.ttl, fake_deleg.timestamp);
     fake_deleg.signature = delegate.sign(signing_input);
 
-    auto result = engine.ingest(fake_deleg);
+    auto result = run_async(pool, engine.ingest(fake_deleg));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1173,7 +1189,7 @@ TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegat
 
     // Owner delegates
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(engine.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
 
     // Delegate tries to ingest a tombstone blob in owner's namespace
     std::array<uint8_t, 32> fake_target{};
@@ -1190,7 +1206,7 @@ TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegat
         tomb.namespace_id, tomb.data, tomb.ttl, tomb.timestamp);
     tomb.signature = delegate.sign(signing_input);
 
-    auto result = engine.ingest(tomb);
+    auto result = run_async(pool, engine.ingest(tomb));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1206,21 +1222,21 @@ TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegatio
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    auto deleg_result = engine.ingest(deleg);
+    auto deleg_result = run_async(pool, engine.ingest(deleg));
     REQUIRE(deleg_result.accepted);
 
     // Delegate can write
     auto blob1 = make_delegate_blob(owner, delegate, "before-revocation", 604800, 4000);
-    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Owner revokes by tombstoning the delegation blob
     auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash, 5000);
-    auto del_result = engine.delete_blob(tombstone);
+    auto del_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(del_result.accepted);
 
     // Delegate writes should now be rejected
     auto blob2 = make_delegate_blob(owner, delegate, "after-revocation", 604800, 6000);
-    auto result = engine.ingest(blob2);
+    auto result = run_async(pool, engine.ingest(blob2));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1236,28 +1252,28 @@ TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delega
 
     // 1. Delegate
     auto deleg1 = make_signed_delegation(owner, delegate, 3000);
-    auto deleg1_result = engine.ingest(deleg1);
+    auto deleg1_result = run_async(pool, engine.ingest(deleg1));
     REQUIRE(deleg1_result.accepted);
 
     // 2. Delegate writes
     auto blob1 = make_delegate_blob(owner, delegate, "round-1", 604800, 4000);
-    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // 3. Revoke
     auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash, 5000);
-    REQUIRE(engine.delete_blob(tombstone).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
 
     // 4. Delegate blocked
     auto blob2 = make_delegate_blob(owner, delegate, "blocked", 604800, 6000);
-    REQUIRE_FALSE(engine.ingest(blob2).accepted);
+    REQUIRE_FALSE(run_async(pool, engine.ingest(blob2)).accepted);
 
     // 5. Re-delegate (new timestamp -> new blob hash -> not blocked by old tombstone)
     auto deleg2 = make_signed_delegation(owner, delegate, 7000);
-    REQUIRE(engine.ingest(deleg2).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg2)).accepted);
 
     // 6. Delegate can write again
     auto blob3 = make_delegate_blob(owner, delegate, "round-2", 604800, 8000);
-    REQUIRE(engine.ingest(blob3).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
 }
 
 TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
@@ -1271,15 +1287,15 @@ TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
 
     // Delegate, write, revoke
     auto deleg = make_signed_delegation(owner, delegate);
-    auto deleg_result = engine.ingest(deleg);
+    auto deleg_result = run_async(pool, engine.ingest(deleg));
     REQUIRE(deleg_result.accepted);
 
     auto blob = make_delegate_blob(owner, delegate, "persists-after-revoke");
-    auto blob_result = engine.ingest(blob);
+    auto blob_result = run_async(pool, engine.ingest(blob));
     REQUIRE(blob_result.accepted);
 
     auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash, 5000);
-    REQUIRE(engine.delete_blob(tombstone).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
 
     // Delegate's blob should still be retrievable
     auto found = engine.get_blob(owner.namespace_id(), blob_result.ack->blob_hash);
@@ -1298,11 +1314,11 @@ TEST_CASE("Owner can still write after creating delegation", "[engine][delegatio
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(engine.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
 
     // Owner writes a regular blob -- should still work via ownership check
     auto blob = make_signed_blob(owner, "owner-still-writes");
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
 }
 
@@ -1319,27 +1335,27 @@ TEST_CASE("Multiple delegates: independent write and revocation", "[engine][dele
     // Delegate both
     auto deleg1 = make_signed_delegation(owner, delegate1, 3000);
     auto deleg2 = make_signed_delegation(owner, delegate2, 3001);
-    auto deleg1_result = engine.ingest(deleg1);
-    auto deleg2_result = engine.ingest(deleg2);
+    auto deleg1_result = run_async(pool, engine.ingest(deleg1));
+    auto deleg2_result = run_async(pool, engine.ingest(deleg2));
     REQUIRE(deleg1_result.accepted);
     REQUIRE(deleg2_result.accepted);
 
     // Both can write
     auto blob1 = make_delegate_blob(owner, delegate1, "d1-writes", 604800, 4000);
     auto blob2 = make_delegate_blob(owner, delegate2, "d2-writes", 604800, 4001);
-    REQUIRE(engine.ingest(blob1).accepted);
-    REQUIRE(engine.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
 
     // Revoke delegate1 only
     auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash, 5000);
-    REQUIRE(engine.delete_blob(tombstone).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
 
     // delegate1 blocked, delegate2 still works
     auto blob3 = make_delegate_blob(owner, delegate1, "d1-blocked", 604800, 6000);
-    REQUIRE_FALSE(engine.ingest(blob3).accepted);
+    REQUIRE_FALSE(run_async(pool, engine.ingest(blob3)).accepted);
 
     auto blob4 = make_delegate_blob(owner, delegate2, "d2-still-works", 604800, 6001);
-    REQUIRE(engine.ingest(blob4).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob4)).accepted);
 }
 
 // ============================================================================
@@ -1356,7 +1372,7 @@ TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "capacity-test");
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::storage_full);
@@ -1377,7 +1393,7 @@ TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]
     random_hash.fill(0xAB);
     auto tombstone = make_signed_tombstone(id, random_hash);
 
-    auto result = engine.ingest(tombstone);
+    auto result = run_async(pool, engine.ingest(tombstone));
     // Tombstone should NOT be rejected with storage_full.
     // It may fail for other reasons (like the target not existing), but
     // the key assertion is that it does NOT fail with storage_full.
@@ -1396,7 +1412,7 @@ TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[e
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "unlimited-test");
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
 }
 
@@ -1409,13 +1425,13 @@ TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "to-be-deleted");
-    auto ingest_result = unlimited_engine.ingest(blob);
+    auto ingest_result = run_async(pool, unlimited_engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     // Now create a capacity-limited engine and delete via tombstone
     BlobEngine limited_engine(store, pool, 1);
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto result = limited_engine.delete_blob(tombstone);
+    auto result = run_async(pool, limited_engine.delete_blob(tombstone));
     // delete_blob has no capacity check (it creates tombstones, which are inherently exempt)
     REQUIRE(result.accepted);
 }
@@ -1430,7 +1446,7 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "under-capacity-test");
 
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
 }
 
@@ -1450,12 +1466,12 @@ TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engi
 
     // First ingest succeeds (under byte quota)
     auto blob1 = make_signed_blob(id, "fill-quota", 604800, 1000);
-    auto r1 = engine.ingest(blob1);
+    auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should be rejected for byte quota
     auto blob2 = make_signed_blob(id, "over-quota", 604800, 1001);
-    auto r2 = engine.ingest(blob2);
+    auto r2 = run_async(pool, engine.ingest(blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1472,12 +1488,12 @@ TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[eng
 
     // First blob succeeds (count 0 + 1 <= 1)
     auto blob1 = make_signed_blob(id, "first-blob", 604800, 1000);
-    auto r1 = engine.ingest(blob1);
+    auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should be rejected for count quota
     auto blob2 = make_signed_blob(id, "second-blob", 604800, 1001);
-    auto r2 = engine.ingest(blob2);
+    auto r2 = run_async(pool, engine.ingest(blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1492,7 +1508,7 @@ TEST_CASE("BlobEngine allows ingest when under quota", "[engine][quota]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "under-quota");
-    auto result = engine.ingest(blob);
+    auto result = run_async(pool, engine.ingest(blob));
     REQUIRE(result.accepted);
 }
 
@@ -1507,12 +1523,12 @@ TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
 
     // Fill the count quota
     auto blob = make_signed_blob(id, "fill-count-quota", 604800, 1000);
-    auto r1 = engine.ingest(blob);
+    auto r1 = run_async(pool, engine.ingest(blob));
     REQUIRE(r1.accepted);
 
     // Tombstone should bypass quota check
     auto tombstone = make_signed_tombstone(id, r1.ack->blob_hash, 2000);
-    auto r2 = engine.ingest(tombstone);
+    auto r2 = run_async(pool, engine.ingest(tombstone));
     // Tombstone must NOT be rejected with quota_exceeded
     if (!r2.accepted) {
         REQUIRE(r2.error.value() != IngestError::quota_exceeded);
@@ -1536,12 +1552,12 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
 
     // First blob should succeed (override allows it)
     auto blob1 = make_signed_blob(id, "override-allowed-1", 604800, 1000);
-    auto r1 = engine.ingest(blob1);
+    auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should also succeed
     auto blob2 = make_signed_blob(id, "override-allowed-2", 604800, 1001);
-    auto r2 = engine.ingest(blob2);
+    auto r2 = run_async(pool, engine.ingest(blob2));
     REQUIRE(r2.accepted);
 }
 
@@ -1562,12 +1578,12 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
 
     // First blob should work
     auto blob1 = make_signed_blob(id, "exempt-blob-1", 604800, 1000);
-    auto r1 = engine.ingest(blob1);
+    auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should also work (exempt namespace)
     auto blob2 = make_signed_blob(id, "exempt-blob-2", 604800, 1001);
-    auto r2 = engine.ingest(blob2);
+    auto r2 = run_async(pool, engine.ingest(blob2));
     REQUIRE(r2.accepted);
 }
 
@@ -1588,11 +1604,11 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
 
     // First blob succeeds
     auto blob1 = make_signed_blob(id, "exempt-count-1", 604800, 1000);
-    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Second blob also succeeds (exempt from count quota)
     auto blob2 = make_signed_blob(id, "exempt-count-2", 604800, 1001);
-    REQUIRE(engine.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
 }
 
 TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") {
@@ -1606,7 +1622,7 @@ TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") 
 
     for (int i = 0; i < 5; ++i) {
         auto blob = make_signed_blob(id, "unlimited-" + std::to_string(i), 604800, 1000 + i);
-        REQUIRE(engine.ingest(blob).accepted);
+        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
     }
 }
 
@@ -1621,7 +1637,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
 
     // First blob succeeds (no quota)
     auto blob1 = make_signed_blob(id, "before-quota", 604800, 1000);
-    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Now set a count quota of 1 via set_quota_config (simulating SIGHUP)
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> empty_overrides;
@@ -1629,7 +1645,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
 
     // Second blob should be rejected (count quota = 1, already have 1)
     auto blob2 = make_signed_blob(id, "after-quota", 604800, 1001);
-    auto r2 = engine.ingest(blob2);
+    auto r2 = run_async(pool, engine.ingest(blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
 }

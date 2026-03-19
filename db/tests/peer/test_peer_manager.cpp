@@ -15,10 +15,25 @@
 #include "db/wire/codec.h"
 
 #include <asio.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Run an awaitable synchronously using a temporary io_context.
+template <typename T>
+T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
+    asio::io_context ioc;
+    T result{};
+    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
+        result = co_await std::move(a);
+        co_return result;
+    }, asio::detached);
+    ioc.run();
+    return result;
+}
 
 struct TempDir {
     fs::path path;
@@ -249,7 +264,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
 
     // Store a blob in node1 -- should NOT reach node2 because node2 is unauthorized
     auto blob1 = make_signed_blob(id1, "closed-secret", 604800, now);
-    auto r1 = eng1.ingest(blob1);
+    auto r1 = run_async(pool, eng1.ingest(blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -317,7 +332,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
 
     // Store a blob in node1
     auto blob1 = make_signed_blob(id1, "closed-authorized", 604800, now);
-    auto r1 = eng1.ingest(blob1);
+    auto r1 = run_async(pool, eng1.ingest(blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -563,7 +578,7 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
 
     // Store a blob in A -- C should NOT get it via PEX discovery
     auto blob_a = make_signed_blob(id_a, "closed-pex-test", 604800, now);
-    auto r_a = eng_a.ingest(blob_a);
+    auto r_a = run_async(pool, eng_a.ingest(blob_a));
     REQUIRE(r_a.accepted);
 
     asio::io_context ioc;
@@ -789,7 +804,7 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     // Ingest a blob on node1 BEFORE subscription -- should NOT trigger notification
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob_pre = make_signed_blob(id1, "pre-subscribe", 604800, now);
-    auto result_pre = eng1.ingest(blob_pre);
+    auto result_pre = run_async(pool, eng1.ingest(blob_pre));
     REQUIRE(result_pre.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -881,7 +896,7 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     // Verify: ingest without subscriptions produces no notifications
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "hello-no-sub", 604800, now);
-    auto r1 = eng1.ingest(blob1);
+    auto r1 = run_async(pool, eng1.ingest(blob1));
     REQUIRE(r1.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -938,7 +953,7 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     // Store a blob in node2 before starting (will be synced to node1)
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id2, "sync-notify-test", 604800, now);
-    auto r = eng2.ingest(blob);
+    auto r = run_async(pool, eng2.ingest(blob));
     REQUIRE(r.accepted);
 
     pm1.start();
@@ -1014,7 +1029,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     // Store a blob in node1
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "will-be-tombstoned", 604800, now);
-    auto r = eng1.ingest(blob);
+    auto r = run_async(pool, eng1.ingest(blob));
     REQUIRE(r.accepted);
     auto blob_hash = r.ack->blob_hash;
 
@@ -1031,7 +1046,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
 
     // Delete the blob on node1 via tombstone
     auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
-    auto del_result = eng1.delete_blob(tombstone);
+    auto del_result = run_async(pool, eng1.delete_blob(tombstone));
     REQUIRE(del_result.accepted);
 
     // Let sync propagate the tombstone to node2
@@ -1085,7 +1100,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     // Ingest directly on the engine -- no peer connection, no subscription
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id, "no-subscribers", 604800, now);
-    auto r = eng.ingest(blob);
+    auto r = run_async(pool, eng.ingest(blob));
     REQUIRE(r.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -1164,7 +1179,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
 
     // Store a blob in node1
     auto blob = make_signed_blob(id1, "delete-me", 604800, now);
-    auto ingest_result = eng1.ingest(blob);
+    auto ingest_result = run_async(pool, eng1.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto blob_hash = ingest_result.ack->blob_hash;
 
@@ -1188,7 +1203,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
 
     // Now delete the blob on node1 via tombstone
     auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
-    auto delete_result = eng1.delete_blob(tombstone);
+    auto delete_result = run_async(pool, eng1.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Let sync propagate the tombstone to node2.
@@ -1253,7 +1268,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         // Pre-load blob before starting PeerManagers so first sync hits storage full
         uint64_t now = static_cast<uint64_t>(std::time(nullptr));
         auto blob = make_signed_blob(id1, "test-storage-full", 604800, now);
-        auto r = eng1.ingest(blob);
+        auto r = run_async(pool, eng1.ingest(blob));
         REQUIRE(r.accepted);
 
         asio::io_context ioc;
@@ -1321,8 +1336,8 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         // Store multiple blobs in node1
         auto blob1 = make_signed_blob(id1, "full-test-1", 604800, now);
         auto blob2 = make_signed_blob(id1, "full-test-2", 604800, now + 1);
-        auto r1 = eng1.ingest(blob1);
-        auto r2 = eng1.ingest(blob2);
+        auto r1 = run_async(pool, eng1.ingest(blob1));
+        auto r2 = run_async(pool, eng1.ingest(blob2));
         REQUIRE(r1.accepted);
         REQUIRE(r2.accepted);
 
@@ -1386,7 +1401,7 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
 
     // Store a blob in node1 -- will be synced to node2
     auto blob1 = make_signed_blob(id1, "metrics-test", 604800, now);
-    auto r1 = eng1.ingest(blob1);
+    auto r1 = run_async(pool, eng1.ingest(blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -1495,7 +1510,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight l
     // This blob (>100 bytes payload) will be synced to node1 via BlobTransfer
     std::string large_payload(500, 'X');  // 500 bytes > 100 byte burst
     auto blob = make_signed_blob(id2, large_payload, 604800, now);
-    auto r = eng2.ingest(blob);
+    auto r = run_async(pool, eng2.ingest(blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -1703,8 +1718,8 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     // Store blobs from two different identities on node1
     auto blob_allowed = make_signed_blob(id1, "allowed-blob", 604800, now);
     auto blob_filtered = make_signed_blob(id3, "filtered-blob", 604800, now);
-    auto r1 = eng1.ingest(blob_allowed);
-    auto r2 = eng1.ingest(blob_filtered);
+    auto r1 = run_async(pool, eng1.ingest(blob_allowed));
+    auto r2 = run_async(pool, eng1.ingest(blob_filtered));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
 
@@ -1857,8 +1872,8 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "quota-test-1", 604800, now);
     auto blob2 = make_signed_blob(id1, "quota-test-2", 604800, now + 1);
-    REQUIRE(eng1.ingest(blob1).accepted);
-    REQUIRE(eng1.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(blob2)).accepted);
 
     asio::io_context ioc;
     AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
@@ -1921,7 +1936,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     // First blob succeeds (no quota)
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "before-sighup", 604800, now);
-    REQUIRE(eng1.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
 
     // Write updated config with count quota of 1
     {
@@ -1935,7 +1950,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
 
     // Second blob should be rejected (count quota = 1, already have 1)
     auto blob2 = make_signed_blob(id1, "after-sighup", 604800, now + 1);
-    auto r2 = eng1.ingest(blob2);
+    auto r2 = run_async(pool, eng1.ingest(blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1966,12 +1981,12 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id, "sync-quota-1", 604800, now);
     auto blob2 = make_signed_blob(id, "sync-quota-2", 604800, now + 1);
-    REQUIRE(eng1.ingest(blob1).accepted);
-    REQUIRE(eng1.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(blob2)).accepted);
 
     // Sync ingest on node2 -- first succeeds, second hits quota
     chromatindb::sync::SyncProtocol sync2(eng2, store2, pool);
-    auto stats = sync2.ingest_blobs({blob1, blob2});
+    auto stats = run_async(pool, sync2.ingest_blobs({blob1, blob2}));
 
     // One blob accepted, one rejected
     REQUIRE(stats.blobs_received == 1);

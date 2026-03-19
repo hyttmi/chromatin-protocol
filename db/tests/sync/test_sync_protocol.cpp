@@ -5,6 +5,8 @@
 #include <cstring>
 
 #include <asio.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 
 #include "db/sync/sync_protocol.h"
 #include "db/engine/engine.h"
@@ -16,6 +18,20 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Run an awaitable synchronously using a temporary io_context.
+/// Used in tests to call async BlobEngine and SyncProtocol methods.
+template <typename T>
+T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
+    asio::io_context ioc;
+    T result{};
+    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
+        result = co_await std::move(a);
+        co_return result;
+    }, asio::detached);
+    ioc.run();
+    return result;
+}
 
 /// Create a unique temporary directory for each test.
 struct TempDir {
@@ -171,15 +187,15 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
 
     // Ingest a non-expired blob (timestamp=9000, ttl=604800 => expires at 613800)
     auto blob1 = make_signed_blob(id, "non-expired", 604800, 9000);
-    REQUIRE(engine.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Ingest an expired blob (timestamp=1, ttl=100 => expires at 101, way before now=10000)
     auto blob2 = make_signed_blob(id, "expired", 100, 1);
-    REQUIRE(engine.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
 
     // Ingest a permanent blob (ttl=0)
     auto blob3 = make_signed_blob(id, "permanent", 0, 5000);
-    REQUIRE(engine.ingest(blob3).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
 
     SyncProtocol sync(engine, store, pool, test_clock);
     auto hashes = sync.collect_namespace_hashes(id.namespace_id());
@@ -253,12 +269,12 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     // Store blobs in engine1 (from id1)
     auto blob_a = make_signed_blob(id1, "blob-A", 604800, 9000);
     auto blob_b = make_signed_blob(id1, "blob-B", 604800, 9001);
-    REQUIRE(engine1.ingest(blob_a).accepted);
-    REQUIRE(engine1.ingest(blob_b).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob_a)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob_b)).accepted);
 
     // Store a different blob in engine2 (from id2)
     auto blob_c = make_signed_blob(id2, "blob-C", 604800, 9002);
-    REQUIRE(engine2.ingest(blob_c).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(blob_c)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -280,7 +296,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto transfer_blobs = sync1.get_blobs_by_hashes(id1.namespace_id(), missing_on_2);
     REQUIRE(transfer_blobs.size() == 2);
 
-    auto stats_2 = sync2.ingest_blobs(transfer_blobs);
+    auto stats_2 = run_async(pool, sync2.ingest_blobs(transfer_blobs));
     REQUIRE(stats_2.blobs_received == 2);
 
     // 3. For id2's namespace: sync2 has hashes, sync1 has none
@@ -293,7 +309,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto transfer_blobs_2 = sync2.get_blobs_by_hashes(id2.namespace_id(), missing_on_1);
     REQUIRE(transfer_blobs_2.size() == 1);
 
-    auto stats_1 = sync1.ingest_blobs(transfer_blobs_2);
+    auto stats_1 = run_async(pool, sync1.ingest_blobs(transfer_blobs_2));
     REQUIRE(stats_1.blobs_received == 1);
 
     // 4. Verify both engines now have the union (3 blobs total)
@@ -317,11 +333,11 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
 
     // Store a non-expired blob
     auto blob_ok = make_signed_blob(id, "not-expired", 604800, 9000);
-    REQUIRE(engine1.ingest(blob_ok).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob_ok)).accepted);
 
     // Store an expired blob (timestamp=1, ttl=100 => expired at 101)
     auto blob_expired = make_signed_blob(id, "already-expired", 100, 1);
-    REQUIRE(engine1.ingest(blob_expired).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob_expired)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -331,7 +347,7 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     REQUIRE(hashes.size() == 2);  // Both blobs in index
 
     // Expired blob ingestion on the receiving side is skipped
-    auto stats = sync2.ingest_blobs({blob_expired});
+    auto stats = run_async(pool, sync2.ingest_blobs({blob_expired}));
     REQUIRE(stats.blobs_received == 0);  // Expired, not ingested
 }
 
@@ -349,8 +365,8 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
 
     // Both engines have the same blob
     auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
-    REQUIRE(engine1.ingest(blob).accepted);
-    REQUIRE(engine2.ingest(blob).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -377,7 +393,7 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
 
     // Engine1 has data, engine2 has nothing
     auto blob = make_signed_blob(id, "only-on-one-side", 604800, 9000);
-    REQUIRE(engine1.ingest(blob).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -496,12 +512,12 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
 
     // Store a regular blob
     auto blob = make_signed_blob(id, "to-be-deleted", 604800, 9000);
-    auto ingest_result = engine.ingest(blob);
+    auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     // Delete it via tombstone
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash, 9500);
-    auto delete_result = engine.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     SyncProtocol sync(engine, store, pool, test_clock);
@@ -527,14 +543,14 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
 
     // Both nodes have the same blob
     auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
-    auto ingest1 = engine1.ingest(blob);
+    auto ingest1 = run_async(pool, engine1.ingest(blob));
     REQUIRE(ingest1.accepted);
-    REQUIRE(engine2.ingest(blob).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
     auto blob_hash = ingest1.ack->blob_hash;
 
     // Node1 deletes the blob
     auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
-    auto delete_result = engine1.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Simulate sync: node1 sends its hashes to node2
@@ -554,7 +570,7 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
 
     // Ingest the tombstone on node2
-    auto stats = sync2.ingest_blobs(transfer);
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
     REQUIRE(stats.blobs_received == 1);
 
     // Original blob should now be deleted on node2
@@ -576,18 +592,18 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
 
     // Create blob on node1
     auto blob = make_signed_blob(id, "will-be-blocked", 604800, 9000);
-    auto ingest_result = engine1.ingest(blob);
+    auto ingest_result = run_async(pool, engine1.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto blob_hash = ingest_result.ack->blob_hash;
 
     // Node2 receives a tombstone for this blob before the blob itself arrives
     auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
-    auto tombstone_ingest = engine2.ingest(tombstone);
+    auto tombstone_ingest = run_async(pool, engine2.ingest(tombstone));
     REQUIRE(tombstone_ingest.accepted);
 
     // Now try to sync the original blob to node2 via ingest_blobs
     SyncProtocol sync2(engine2, store2, pool, test_clock);
-    auto stats = sync2.ingest_blobs({blob});
+    auto stats = run_async(pool, sync2.ingest_blobs({blob}));
 
     // Blob should be rejected (tombstoned)
     REQUIRE(stats.blobs_received == 0);
@@ -684,7 +700,7 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
 
     // Node1: owner creates delegation
     auto deleg = make_signed_delegation_sync(owner, delegate);
-    auto deleg_result = engine1.ingest(deleg);
+    auto deleg_result = run_async(pool, engine1.ingest(deleg));
     REQUIRE(deleg_result.accepted);
 
     // Sync: node1 sends delegation to node2
@@ -701,7 +717,7 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
     REQUIRE(transfer.size() == 1);
     REQUIRE(chromatindb::wire::is_delegation(transfer[0].data));
 
-    auto stats = sync2.ingest_blobs(transfer);
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
     REQUIRE(stats.blobs_received == 1);
 
     // Node2 should now recognize the delegation (DELEG-03)
@@ -724,10 +740,10 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
 
     // Node1: owner delegates, delegate writes
     auto deleg = make_signed_delegation_sync(owner, delegate);
-    REQUIRE(engine1.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
 
     auto delegate_blob = make_delegate_blob_sync(owner, delegate, "sync-delegate-data");
-    REQUIRE(engine1.ingest(delegate_blob).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(delegate_blob)).accepted);
 
     // Sync everything from node1 to node2
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -753,7 +769,7 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
         }
     }
 
-    auto stats = sync2.ingest_blobs(ordered_transfer);
+    auto stats = run_async(pool, sync2.ingest_blobs(ordered_transfer));
     REQUIRE(stats.blobs_received == 2);
 
     // Node2 should have both the delegation and the delegate-written blob
@@ -787,8 +803,8 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Both nodes have the delegation
     auto deleg = make_signed_delegation_sync(owner, delegate);
-    REQUIRE(engine1.ingest(deleg).accepted);
-    REQUIRE(engine2.ingest(deleg).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(deleg)).accepted);
 
     auto deleg_hash = engine1.get_blobs_since(owner.namespace_id(), 0);
     REQUIRE(!deleg_hash.empty());
@@ -803,7 +819,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Node1: owner revokes by tombstoning
     auto tombstone = make_signed_tombstone(owner, deleg_content_hash, 9500);
-    auto delete_result = engine1.delete_blob(tombstone);
+    auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
     // Sync tombstone from node1 to node2
@@ -820,7 +836,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     REQUIRE(transfer.size() == 1);
     REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
 
-    auto stats = sync2.ingest_blobs(transfer);
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
     REQUIRE(stats.blobs_received == 1);
 
     // Delegation should be revoked on node2
@@ -829,7 +845,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Delegate writes to node2 should now fail
     auto delegate_blob = make_delegate_blob_sync(owner, delegate, "post-revocation");
-    auto result = engine2.ingest(delegate_blob);
+    auto result = run_async(pool, engine2.ingest(delegate_blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);
 }
@@ -855,7 +871,7 @@ TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "
 
     // Store a blob on node1
     auto blob = make_signed_blob(id1, "cursor-test-blob", 604800, 9000);
-    REQUIRE(engine1.ingest(blob).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
 
     // Simulate "peer hash" for node1 (as seen by node2)
     auto peer_hash = sha3_256(id1.public_key());
@@ -902,9 +918,9 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
 
     // Store blobs in two namespaces
     auto blob1 = make_signed_blob(id1, "ns1-blob", 604800, 9000);
-    REQUIRE(engine1.ingest(blob1).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob1)).accepted);
     auto blob2 = make_signed_blob(id2, "ns2-blob", 604800, 9001);
-    REQUIRE(engine1.ingest(blob2).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob2)).accepted);
 
     // Get initial seq_nums
     auto ns_list = store1.list_namespaces();
@@ -923,7 +939,7 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
 
     // Add a new blob to namespace 1 only
     auto blob3 = make_signed_blob(id1, "ns1-new-blob", 604800, 9002);
-    REQUIRE(engine1.ingest(blob3).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(blob3)).accepted);
 
     // Re-read namespace list
     auto ns_list2 = store1.list_namespaces();

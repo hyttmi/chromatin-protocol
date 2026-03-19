@@ -453,21 +453,21 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_Delete) {
-        // Delete message -- process as blob deletion, send ack via coroutine
-        try {
-            auto blob = wire::decode_blob(payload);
-            // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
-            if (!sync_namespaces_.empty() &&
-                sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
-                spdlog::debug("dropping delete for filtered namespace from {}",
-                              conn->remote_address());
-                return;
-            }
-            auto result = engine_.delete_blob(blob);
-            if (result.accepted && result.ack.has_value()) {
-                // Build DeleteAck payload: [blob_hash:32][seq_num_be:8][status:1]
-                auto ack = result.ack.value();
-                asio::co_spawn(ioc_, [conn, ack]() -> asio::awaitable<void> {
+        // Delete message -- process as blob deletion via coroutine (engine is async)
+        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                auto blob = wire::decode_blob(payload);
+                // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
+                if (!sync_namespaces_.empty() &&
+                    sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
+                    spdlog::debug("dropping delete for filtered namespace from {}",
+                                  conn->remote_address());
+                    co_return;
+                }
+                auto result = co_await engine_.delete_blob(blob);
+                if (result.accepted && result.ack.has_value()) {
+                    // Build DeleteAck payload: [blob_hash:32][seq_num_be:8][status:1]
+                    auto ack = result.ack.value();
                     std::vector<uint8_t> ack_payload(41);
                     std::memcpy(ack_payload.data(), ack.blob_hash.data(), 32);
                     for (int i = 7; i >= 0; --i) {
@@ -477,26 +477,26 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
                                                  std::span<const uint8_t>(ack_payload));
-                }, asio::detached);
-                // Notify subscribers about tombstone
-                if (ack.status == engine::IngestStatus::stored) {
-                    notify_subscribers(
-                        blob.namespace_id,
-                        ack.blob_hash,
-                        ack.seq_num,
-                        static_cast<uint32_t>(blob.data.size()),
-                        true);  // tombstone notification
+                    // Notify subscribers about tombstone
+                    if (ack.status == engine::IngestStatus::stored) {
+                        notify_subscribers(
+                            blob.namespace_id,
+                            ack.blob_hash,
+                            ack.seq_num,
+                            static_cast<uint32_t>(blob.data.size()),
+                            true);  // tombstone notification
+                    }
+                } else if (result.error.has_value()) {
+                    spdlog::warn("delete rejected from {}: {}",
+                                 conn->remote_address(), result.error_detail);
+                    record_strike(conn, result.error_detail);
                 }
-            } else if (result.error.has_value()) {
-                spdlog::warn("delete rejected from {}: {}",
-                             conn->remote_address(), result.error_detail);
-                record_strike(conn, result.error_detail);
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed delete from {}: {}",
+                             conn->remote_address(), e.what());
+                record_strike(conn, e.what());
             }
-        } catch (const std::exception& e) {
-            spdlog::warn("malformed delete from {}: {}",
-                         conn->remote_address(), e.what());
-            record_strike(conn, e.what());
-        }
+        }, asio::detached);
         return;
     }
 
@@ -518,58 +518,56 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_Data) {
-        // Data message -- try to ingest as a blob
-        try {
-            auto blob = wire::decode_blob(payload);
-            // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
-            if (!sync_namespaces_.empty() &&
-                sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
-                spdlog::debug("dropping data for filtered namespace from {}",
-                              conn->remote_address());
-                return;
-            }
-            auto result = engine_.ingest(blob);
-            if (result.accepted && result.ack.has_value() &&
-                result.ack->status == engine::IngestStatus::stored) {
-                notify_subscribers(
-                    blob.namespace_id,
-                    result.ack->blob_hash,
-                    result.ack->seq_num,
-                    static_cast<uint32_t>(blob.data.size()),
-                    wire::is_tombstone(blob.data));
-                ++metrics_.ingests;
-            } else if (result.accepted) {
-                ++metrics_.ingests;  // Duplicate or already-known blob
-            } else if (!result.accepted && result.error.has_value()) {
-                ++metrics_.rejections;
-                if (*result.error == engine::IngestError::storage_full) {
-                    // Send StorageFull to inform peer we cannot accept blobs
-                    spdlog::warn("Storage full, notifying peer {}", peer_display_name(conn));
-                    asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+        // Data message -- try to ingest as a blob via coroutine (engine is async)
+        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                auto blob = wire::decode_blob(payload);
+                // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
+                if (!sync_namespaces_.empty() &&
+                    sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
+                    spdlog::debug("dropping data for filtered namespace from {}",
+                                  conn->remote_address());
+                    co_return;
+                }
+                auto result = co_await engine_.ingest(blob);
+                if (result.accepted && result.ack.has_value() &&
+                    result.ack->status == engine::IngestStatus::stored) {
+                    notify_subscribers(
+                        blob.namespace_id,
+                        result.ack->blob_hash,
+                        result.ack->seq_num,
+                        static_cast<uint32_t>(blob.data.size()),
+                        wire::is_tombstone(blob.data));
+                    ++metrics_.ingests;
+                } else if (result.accepted) {
+                    ++metrics_.ingests;  // Duplicate or already-known blob
+                } else if (!result.accepted && result.error.has_value()) {
+                    ++metrics_.rejections;
+                    if (*result.error == engine::IngestError::storage_full) {
+                        // Send StorageFull to inform peer we cannot accept blobs
+                        spdlog::warn("Storage full, notifying peer {}", peer_display_name(conn));
                         std::span<const uint8_t> empty{};
                         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
-                    }, asio::detached);
-                } else if (*result.error == engine::IngestError::quota_exceeded) {
-                    // Send QuotaExceeded to inform peer namespace is over quota
-                    spdlog::warn("Namespace quota exceeded, notifying peer {}",
-                                 peer_display_name(conn));
-                    ++metrics_.quota_rejections;
-                    asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+                    } else if (*result.error == engine::IngestError::quota_exceeded) {
+                        // Send QuotaExceeded to inform peer namespace is over quota
+                        spdlog::warn("Namespace quota exceeded, notifying peer {}",
+                                     peer_display_name(conn));
+                        ++metrics_.quota_rejections;
                         std::span<const uint8_t> empty{};
                         co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
-                    }, asio::detached);
-                } else {
-                    spdlog::warn("invalid blob from peer {}: {}",
-                                 conn->remote_address(),
-                                 result.error_detail.empty() ? "validation failed" : result.error_detail);
-                    record_strike(conn, result.error_detail);
+                    } else {
+                        spdlog::warn("invalid blob from peer {}: {}",
+                                     conn->remote_address(),
+                                     result.error_detail.empty() ? "validation failed" : result.error_detail);
+                        record_strike(conn, result.error_detail);
+                    }
                 }
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed data message from peer {}: {}",
+                             conn->remote_address(), e.what());
+                record_strike(conn, e.what());
             }
-        } catch (const std::exception& e) {
-            spdlog::warn("malformed data message from peer {}: {}",
-                         conn->remote_address(), e.what());
-            record_strike(conn, e.what());
-        }
+        }, asio::detached);
         return;
     }
 
@@ -824,7 +822,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = sync_proto_.ingest_blobs(blobs);
+                    auto s = co_await sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
@@ -1092,7 +1090,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = sync_proto_.ingest_blobs(blobs);
+                    auto s = co_await sync_proto_.ingest_blobs(blobs);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;

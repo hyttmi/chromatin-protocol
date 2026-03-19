@@ -4,6 +4,7 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
+#include <asio/awaitable.hpp>
 #include <asio/thread_pool.hpp>
 
 #include <array>
@@ -26,9 +27,9 @@ struct SyncStats {
 
 /// Sync protocol logic: hash-list diff, expiry filtering, message encoding.
 ///
-/// This class is intentionally NOT a coroutine class. It provides synchronous
-/// helper methods for the sync algorithm. The async orchestration (sending
-/// messages over connections) lives in PeerManager.
+/// ingest_blobs() is a coroutine (co_awaits async BlobEngine::ingest).
+/// Other methods remain synchronous helpers for the sync algorithm.
+/// The async orchestration (sending messages over connections) lives in PeerManager.
 ///
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class SyncProtocol {
@@ -73,7 +74,8 @@ public:
 
     /// Ingest received blobs. Validates and stores each non-expired blob.
     /// Returns stats: how many were accepted.
-    SyncStats ingest_blobs(const std::vector<wire::BlobData>& blobs);
+    /// Coroutine: co_awaits async BlobEngine::ingest() for each blob.
+    asio::awaitable<SyncStats> ingest_blobs(const std::vector<wire::BlobData>& blobs);
 
     // =========================================================================
     // Message encoding/decoding for sync protocol

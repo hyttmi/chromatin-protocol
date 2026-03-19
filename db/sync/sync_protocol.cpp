@@ -89,7 +89,7 @@ void SyncProtocol::set_on_blob_ingested(OnBlobIngested callback) {
     on_blob_ingested_ = std::move(callback);
 }
 
-SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
+asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
     SyncStats stats;
     uint64_t now = clock_();
     uint32_t storage_full_count = 0;
@@ -102,7 +102,7 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
             continue;
         }
 
-        auto result = engine_.ingest(blob);
+        auto result = co_await engine_.ingest(blob);
         if (result.accepted) {
             stats.blobs_received++;
             // Notify subscribers about successful sync-received ingest
@@ -133,7 +133,7 @@ SyncStats SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
 
     stats.storage_full_count = storage_full_count;
     stats.quota_exceeded_count = quota_exceeded_count;
-    return stats;
+    co_return stats;
 }
 
 // =============================================================================

@@ -13,10 +13,25 @@
 #include "db/wire/codec.h"
 
 #include <asio.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Run an awaitable synchronously using a temporary io_context.
+template <typename T>
+T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
+    asio::io_context ioc;
+    T result{};
+    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
+        result = co_await std::move(a);
+        co_return result;
+    }, asio::detached);
+    ioc.run();
+    return result;
+}
 
 struct TempDir {
     fs::path path;
@@ -177,12 +192,12 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
 
     // Store a blob in node1 (signed by id1)
     auto blob1 = make_signed_blob(id1, "e2e-from-node1", 604800, now);
-    auto r1 = eng1.ingest(blob1);
+    auto r1 = run_async(pool, eng1.ingest(blob1));
     REQUIRE(r1.accepted);
 
     // Store a different blob in node2 (signed by id2) -- tests bidirectional sync
     auto blob2 = make_signed_blob(id2, "e2e-from-node2", 604800, now + 1);
-    auto r2 = eng2.ingest(blob2);
+    auto r2 = run_async(pool, eng2.ingest(blob2));
     REQUIRE(r2.accepted);
 
     // Create PeerManagers on shared io_context
@@ -243,12 +258,12 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
 
     // Store an expired blob in node1 (ttl=1, timestamp=1 => expired a long time ago)
     auto expired_blob = make_signed_blob(id1, "should-not-sync", 1, 1);
-    auto r1 = eng1.ingest(expired_blob);
+    auto r1 = run_async(pool, eng1.ingest(expired_blob));
     REQUIRE(r1.accepted);
 
     // Store a valid blob in node1 -- proves sync works for non-expired blobs
     auto valid_blob = make_signed_blob(id1, "should-sync", 604800, now);
-    auto r2 = eng1.ingest(valid_blob);
+    auto r2 = run_async(pool, eng1.ingest(valid_blob));
     REQUIRE(r2.accepted);
 
     asio::io_context ioc;
@@ -322,7 +337,7 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
 
     // Store a blob in Node A -- Node C should eventually get it through discovery
     auto blob_a = make_signed_blob(id_a, "from-node-a", 604800, now);
-    auto r_a = eng_a.ingest(blob_a);
+    auto r_a = run_async(pool, eng_a.ingest(blob_a));
     REQUIRE(r_a.accepted);
 
     // Create PeerManagers on shared io_context
