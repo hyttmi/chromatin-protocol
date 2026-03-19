@@ -127,7 +127,12 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
   3. Connection-scoped AEAD state (ChaCha20-Poly1305 nonce counters) is never accessed from a thread pool worker -- only stateless crypto ops are offloaded
   4. Thread pool worker count is configurable via config JSON and defaults to std::thread::hardware_concurrency()
   5. All existing tests pass with thread pool enabled (no concurrency regressions)
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 38-01-PLAN.md — Config, thread pool lifecycle, offload helper, plumbing pool ref through object graph
+- [ ] 38-02-PLAN.md — BlobEngine async conversion with two-dispatch crypto offload, caller updates
+- [ ] 38-03-PLAN.md — Connection handshake Signer::verify offload to thread pool
 
 ### Phase 39: Cursor Compaction
 **Goal**: Stale sync cursors from peers that have not connected for a configurable retention period are automatically pruned, preventing unbounded cursor storage growth
@@ -168,7 +173,7 @@ Note: Phases 39, 40, and 41 all depend on Phase 38 but not on each other. They a
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 38. Thread Pool Crypto Offload | 0/TBD | Not started | - |
+| 38. Thread Pool Crypto Offload | 0/3 | Planning complete | - |
 | 39. Cursor Compaction | 0/TBD | Not started | - |
 | 40. Connection Retry | 0/TBD | Not started | - |
 | 41. Benchmark Validation | 0/TBD | Not started | - |
