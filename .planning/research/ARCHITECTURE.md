@@ -1,538 +1,557 @@
-# Architecture Patterns
+# Architecture Patterns: v0.8.0 Protocol Scalability
 
-**Domain:** Sync resumption, namespace quotas, crypto throughput, and cleanup for chromatindb
-**Researched:** 2026-03-16
+**Domain:** Sync set reconciliation, sync rate limiting, and thread pool crypto offload for chromatindb
+**Researched:** 2026-03-19
 
 ## Recommended Architecture
 
-v0.7.0 modifies four existing components (Storage, Engine, SyncProtocol, PeerManager) and relocates tests. No new source directories. No new dependencies. No protocol changes to the FlatBuffers transport schema.
+v0.8.0 modifies four existing components (SyncProtocol, PeerManager, Engine, Config) and adds two new pieces: a vendored negentropy library (header-only, SHA3-patched) and a CryptoPool thread pool service. No new libmdbx sub-databases. One new wire message type (Reconcile = 27).
 
 ```
 db/
-  storage/storage.h     (MODIFIED - new quota_map, sync_cursor_map sub-databases)
-  storage/storage.cpp   (MODIFIED - quota tracking, cursor persistence, hash caching)
-  engine/engine.h       (MODIFIED - quota enforcement on ingest)
-  engine/engine.cpp     (MODIFIED - quota check, pre-computed hash threading)
-  sync/sync_protocol.h  (MODIFIED - cursor-aware hash collection)
-  sync/sync_protocol.cpp (MODIFIED - cursor-based diff, skip already-synced)
-  peer/peer_manager.h   (MODIFIED - cursor state in PeerInfo)
-  peer/peer_manager.cpp (MODIFIED - cursor read/write around sync rounds)
-  crypto/signing.h      (MODIFIED - static OQS_SIG context, optional pre-hash verify)
-  crypto/signing.cpp    (MODIFIED - eliminate per-call OQS_SIG_new allocation)
-  config/config.h       (MODIFIED - namespace_quotas config field)
-  config/config.cpp     (MODIFIED - parse namespace_quotas)
-  tests/                (NEW directory - relocated from top-level tests/)
-  CMakeLists.txt        (MODIFIED - Catch2 dependency, test target)
+  thread_pool/
+    thread_pool.h               (NEW - CryptoPool service with co_await offload)
+    thread_pool.cpp             (NEW - implementation)
 
-CMakeLists.txt          (MODIFIED - remove test sources, update paths)
-tests/                  (DELETED - moved into db/tests/)
+  vendor/
+    negentropy/                 (NEW - vendored header-only, SHA-256 -> SHA3-256 patch)
+      negentropy.h
+      negentropy/
+        types.h                 (PATCHED - SHA3-256 via db/crypto/hash.h replaces OpenSSL SHA-256)
+        encoding.h
+        storage/
+          base.h
+          Vector.h
 
-deploy/
-  benchmark/            (MODIFIED - add deletion benchmark scenario)
+  sync/
+    sync_protocol.h             (MODIFIED - add reconcile encode/decode, remove diff_hashes)
+    sync_protocol.cpp           (MODIFIED - reconciliation logic replaces hash-list diff)
+    reconciliation.h            (NEW - materialize_namespace() for negentropy Vector)
+    reconciliation.cpp          (NEW - implementation)
+
+  peer/peer_manager.h           (MODIFIED - CryptoPool& ref, sync cooldown state in PeerInfo)
+  peer/peer_manager.cpp         (MODIFIED - Phase N reconciliation, crypto offload, sync rate check)
+  engine/engine.h               (MODIFIED - ingest_async() with CryptoPool)
+  engine/engine.cpp             (MODIFIED - two-dispatch crypto offload pipeline)
+  config/config.h               (MODIFIED - thread_pool_workers, sync_rate_limit_per_min)
+  config/config.cpp             (MODIFIED - parse new fields)
+  schemas/transport.fbs         (MODIFIED - Reconcile = 27)
 ```
 
 ### Component Modification Map
 
 | Component | What Changes | Why |
 |-----------|-------------|-----|
-| `Storage` | +2 sub-databases (sync_cursor_map, quota_map), quota tracking in store_blob/delete_blob_data, cursor read/write methods, blob hash returned from store without re-computation | Sync cursors and quotas need persistent state; hash caching eliminates redundant SHA3 |
-| `Engine` | Quota enforcement before crypto validation (Step 0c), pass pre-computed blob hash through pipeline | Quotas are cheaper than sig verify; hash sharing eliminates 1 MiB re-hash |
-| `SyncProtocol` | Cursor-aware collect_namespace_hashes (seq_num > cursor), report new cursor position | Sync resumption: only exchange hashes for blobs since last sync |
-| `PeerManager` | Persist cursor per peer pubkey, load on connect, save after sync, cursor in PeerInfo | Cursor state must survive reconnect; pubkey is stable peer identity |
-| `Signer::verify` | Static thread_local OQS_SIG context (not per-call allocation) | Eliminates 1 allocation + init per verify call |
-| `Config` | `namespace_quotas` map in config struct | Operator-configurable per-namespace limits |
+| `SyncProtocol` | Add `encode_reconcile()` / `decode_reconcile()`. Remove `diff_hashes()`. | Reconcile messages replace HashList; hash-list diff logic is dead code. |
+| `PeerManager` | Store `CryptoPool&`. Phase N reconciliation replaces HashList exchange. Per-peer sync cooldown. Route Reconcile messages to sync inbox. | Three features all touch sync orchestration. |
+| `BlobEngine` | New `ingest_async(blob, pool)` with `co_await pool.offload()` for verify + hash. | Thread-safe crypto offload requires separating verify from storage mutation. |
+| `Config` | `thread_pool_workers` (uint32, default hardware_concurrency). `sync_rate_limit_per_min` (uint32, default 0 = unlimited). | New features need configuration. |
+| `transport.fbs` | `Reconcile = 27` in TransportMsgType enum. | Wire protocol for negentropy reconciliation messages. |
+| `PeerInfo` | `last_sync_window_start`, `sync_count_in_window` fields. | Per-peer sync rate tracking. |
 
-### Data Flow Changes
+## Data Flow: Sync Protocol (New)
 
-**Current ingest pipeline (1 MiB blob, sync path):**
+**Before (v0.7.0):**
 ```
-decode blob from wire
-  -> SHA3-256(pubkey) [2.5 KB]                          ~0ms
-  -> build_signing_input: copy ns(32)+data(1M)+ttl+ts   ~0.3ms (memcpy 1M)
-  -> OQS_SIG_verify(signing_input)                       ~2ms (internally hashes 1M+)
-  -> encode_blob -> SHA3-256(encoded) [tombstone check]  ~1.5ms (encode 1M + hash 1M)
-  -> store_blob:
-       encode_blob AGAIN -> SHA3-256(encoded) AGAIN      ~1.5ms (REDUNDANT)
-       encrypt_value (ChaCha20-Poly1305)                  ~0.5ms
-       write to mdbx                                      ~0.1ms
-                                                     TOTAL: ~6ms per blob
-```
-
-**Proposed ingest pipeline:**
-```
-decode blob from wire
-  -> SHA3-256(pubkey) [2.5 KB]                          ~0ms
-  -> build_signing_input: ref ns+data, no copy           ~0ms (span, not vector)
-  -> OQS_SIG_verify(signing_input)                       ~2ms (unavoidable)
-  -> encode_blob -> SHA3-256(encoded) [tombstone check]  ~1.5ms
-  -> store_blob_with_hash(blob, pre_computed_hash):
-       encode_blob -> skip hash (already have it)         ~0.8ms (encode only, no re-hash)
-       encrypt_value (ChaCha20-Poly1305)                  ~0.5ms
-       write to mdbx                                      ~0.1ms
-                                                     TOTAL: ~4.9ms per blob
+Initiator                              Responder
+  |                                      |
+  |--- SyncRequest ------------------>   |
+  |<-- SyncAccept -------------------    |
+  |                                      |
+  |--- NamespaceList (all ns+seq) -->    |   Phase A: both sides
+  |--- HashList(ns1, ALL hashes) --->    |   send ALL hashes for
+  |--- HashList(ns2, ALL hashes) --->    |   ALL namespaces
+  |--- SyncComplete ---------------->    |
+  |                                      |
+  |<-- NamespaceList (all ns+seq) ---    |   Phase B: same, O(N)
+  |<-- HashList(ns1, ALL hashes) ----    |
+  |<-- SyncComplete -----------------    |
+  |                                      |
+  |  [diff_hashes: unordered_set]        |   Phase C: exchange
+  |--- BlobRequest(batch) ---------->    |   missing blobs
+  |<-- BlobTransfer(one) -----------     |   one at a time
 ```
 
-Savings: ~1.1ms per 1 MiB blob (18% reduction). At 15 blobs/sec, this lifts throughput to ~18 blobs/sec. Not transformative, but free and correct.
-
-The real bottleneck is `OQS_SIG_verify` (2ms per call for 1 MiB messages) plus `SHA3-256` on 1 MiB encoded blobs (1.5ms). These are inherently serial on the single io_context thread. The only way to break this ceiling is to offload crypto to a thread pool, which is a v0.8.0 concern (complex interaction with coroutine model).
-
-## New Sub-Databases
-
-Storage currently manages 5 sub-databases in libmdbx. v0.7.0 adds 2 more.
-
-### sync_cursor_map
-
-**Purpose:** Persist per-peer sync cursor positions across reconnections.
-
+**After (v0.8.0):**
 ```
-Key:   [peer_pubkey_hash:32][namespace:32]    (64 bytes)
-Value: [seq_num:u64BE]                         (8 bytes)
-```
-
-**Why peer_pubkey_hash, not raw pubkey:** ML-DSA-87 pubkeys are 2,592 bytes. Using SHA3-256(pubkey) as a 32-byte identifier keeps keys compact and B-tree friendly. The peer_pubkey is already available in PeerInfo -- hash it once at connect time.
-
-**Operations:**
-- `get_sync_cursor(peer_hash, namespace)` -> optional<uint64_t>
-- `set_sync_cursor(peer_hash, namespace, seq_num)` -> void
-- `clear_sync_cursors(peer_hash)` -> void (for manual reset)
-
-**Lifecycle:** Written after each successful sync round. Read at sync start. Never expires (cursor is only meaningful while peer exists in the network, but stale cursors just cause a full resync -- harmless).
-
-### quota_map
-
-**Purpose:** Track per-namespace storage usage for quota enforcement.
-
-```
-Key:   [namespace:32]                         (32 bytes)
-Value: [blob_count:u64BE][total_bytes:u64BE]  (16 bytes)
+Initiator                              Responder
+  |                                      |
+  |--- SyncRequest ------------------>   |
+  |<-- SyncAccept -------------------    |
+  |                                      |
+  |--- NamespaceList (all ns+seq) -->    |   Phase A: namespace exchange
+  |<-- NamespaceList (all ns+seq) ---    |   (cursor check: skip unchanged)
+  |                                      |
+  [for each namespace where seq changed:]
+  |                                      |
+  |  [build Vector from seq_map]         |   Phase N: reconciliation
+  |--- Reconcile(ns, ne.initiate()) ->   |   ~few KB fingerprints
+  |<-- Reconcile(ns, ne.reconcile()) -   |   ~few KB fingerprints
+  |--- Reconcile(ns, ne.reconcile()) ->  |   refinement round (if needed)
+  |<-- Reconcile(ns, done + IDs) ----    |   individual differing IDs
+  |                                      |
+  |--- SyncComplete ---------------->    |   end of reconciliation
+  |                                      |
+  [initiator knows: haveIds + needIds]   |   Phase C: blob exchange
+  |--- BlobRequest(batch) ---------->    |   request needed blobs
+  |<-- BlobTransfer(one) -----------     |   one at a time
+  |--- BlobTransfer(one) ----------->    |   push blobs peer needs
 ```
 
-**Operations:**
-- `get_namespace_usage(namespace)` -> {count, bytes}
-- Increment on `store_blob` (atomically in same write txn)
-- Decrement on `delete_blob_data` and `run_expiry_scan` (atomically)
+**Key differences:**
+1. NamespaceList is exchanged bidirectionally before any per-namespace work (cursor comparison happens here).
+2. Per-namespace reconciliation runs only for namespaces with seq_num changes (cursor miss).
+3. Reconciliation is multi-round-trip: 2-3 round-trips per namespace, each message ~few KB.
+4. Blob exchange is driven by negentropy have/need IDs, not hash-list diff.
+5. Total wire overhead for 1M blobs, 10 differences: ~50-100 KB (vs 32 MB before).
 
-**Why a dedicated sub-database, not computed on-demand:** Computing namespace usage requires scanning the entire seq_map for a namespace + fetching each blob's size from blobs_map. For a namespace with 10K blobs, this is O(10K) reads per ingest -- unacceptable. The quota_map maintains a running total, making enforcement O(1).
+### Why Negentropy (Not Merkle Tree, Not IBLT)
 
-**Consistency:** The quota_map is updated in the same mdbx write transaction as the blob store/delete, so it is always consistent. No separate reconciliation needed.
+**Negentropy** because:
+1. **O(diff) communication** -- only differences transmitted. A single new blob in a 1M-blob namespace costs ~50 KB fingerprints, not 32 MB of hashes.
+2. **Stateless server** -- no persistent tree per-namespace. Responder builds Vector from seq_map on-the-fly. No new libmdbx sub-databases.
+3. **Frame size limit native** -- negentropy constructor accepts `frameSizeLimit`, automatically splits large reconciliations into additional round trips. Solves the "3.4M blobs breaks 110 MiB frame" problem permanently.
+4. **Proven at scale** -- strfry relay syncs 10M+ element datasets in production (Nostr NIP-77).
+5. **Header-only C++** -- vendor headers, patch one SHA-256 call. No new library dependencies.
+6. **Logarithmic round trips** -- ~2.5 for 1M elements, ~4 for 1B elements.
+7. **Composes with cursor optimization** -- cursor hit skips entire namespace. Cursor miss enters negentropy instead of full hash dump.
 
-## Sync Resumption Design
+**Not Merkle tree** because:
+- Requires persistent per-namespace tree (new sub-database, write amplification on every ingest)
+- Per-connection state during sync (snapshot or copy-on-write)
+- Vulnerable to adversarial tree imbalance (DoS via crafted data)
+- More implementation complexity for equivalent O(diff) result
 
-### Current Sync Protocol (Phase A/B/C)
+**Not IBLT** because:
+- Requires estimating diff size in advance (wrong estimate = full retransmission fallback)
+- Less battle-tested for general set reconciliation at scale
+- More complex parameter tuning (filter size, hash count)
 
+**Confidence: HIGH** -- negentropy is the proven choice in the decentralized data sync space.
+
+### Negentropy Integration Details
+
+**SHA-256 replacement:** The negentropy C++ library is header-only with one dependency: SHA-256 from OpenSSL. chromatindb prohibits OpenSSL. The SHA-256 is used only in `Accumulator::getFingerprint()` in `types.h`: it hashes the 32-byte accumulator + varint count, truncated to 16 bytes. Replace this single call with `OQS_SHA3_sha3_256()` (already available via liboqs).
+
+This breaks interoperability with standard negentropy implementations. Acceptable because chromatindb speaks its own protocol -- no cross-protocol sync requirement.
+
+**Negentropy data model mapping:**
 ```
-Initiator                          Responder
-    |-- SyncRequest ----------------->|
-    |<------------- SyncAccept -------|
-    |                                 |
-    |-- NamespaceList --------------->|   Phase A: both sides
-    |-- HashList (ns1) -------------->|   send ALL hashes for
-    |-- HashList (ns2) -------------->|   ALL namespaces
-    |-- SyncComplete ---------------->|
-    |                                 |
-    |<----------- NamespaceList ------|
-    |<----------- HashList (ns1) ----|
-    |<----------- HashList (ns2) ----|
-    |<----------- SyncComplete ------|
-    |                                 |
-    |-- BlobRequest (missing) ------->|   Phase C: exchange
-    |<----------- BlobTransfer -------|   missing blobs
-```
-
-**Problem:** For a namespace with 100K blobs, `get_hashes_by_namespace` reads all 100K hashes from seq_map every sync round. This is O(N) per namespace per sync, even when only 3 new blobs exist since the last sync.
-
-### Proposed Sync Resumption
-
-```
-Initiator                          Responder
-    |-- SyncRequest ----------------->|
-    |<------------- SyncAccept -------|
-    |                                 |
-    |-- NamespaceList --------------->|   Phase A: same as before
-    |-- HashList (ns1, since=4500)-->|   BUT: only hashes with
-    |-- HashList (ns2, since=0) ---->|   seq_num > stored cursor
-    |-- SyncComplete ---------------->|   (since=0 for new namespaces)
-    |                                 |
-    |<----------- NamespaceList ------|
-    |<----------- HashList (ns1) ----|   Responder also sends
-    |<----------- HashList (ns2) ----|   only new hashes if it
-    |<----------- SyncComplete ------|   has a cursor for this peer
-    |                                 |
-    |-- BlobRequest (missing) ------->|   Phase C: unchanged
-    |<----------- BlobTransfer -------|
+Negentropy concept    chromatindb equivalent
+-----------------    ----------------------
+timestamp (u64)      seq_num (monotonic per-namespace, u64, in seq_map)
+id (32 bytes)        blob content hash (SHA3-256, 32 bytes, in seq_map values)
+sorted order         seq_map already sorted by (namespace, seq_num) in libmdbx
 ```
 
-**Key insight: No protocol changes needed.** The `NamespaceList` already includes `latest_seq_num` per namespace. The receiver compares incoming `latest_seq_num` against its stored cursor to decide whether a full or incremental hash exchange is needed. The `HashList` format is unchanged -- it just contains fewer hashes.
+**Storage adapter approach: Pre-materialize Vector from seq_map.**
 
-**Implementation in SyncProtocol:**
+At reconciliation start for each namespace, read (seq_num, hash) pairs from seq_map into `negentropy::storage::Vector`. Filter zero-hash sentinels (v0.7.0 deletion markers). Memory: 40 bytes/blob (8-byte timestamp + 32-byte hash). For 1M blobs: ~38 MiB. Acceptable because reconciliation is one-namespace-at-a-time and the vector is freed immediately after.
 
 ```cpp
-// NEW: collect hashes since a cursor position
-std::vector<std::array<uint8_t, 32>> collect_namespace_hashes_since(
+// db/sync/reconciliation.h
+namespace chromatindb::sync {
+
+/// Materialize a namespace's blob inventory into negentropy Vector format.
+/// Reads seq_map entries, filters zero-hash sentinels.
+negentropy::storage::Vector materialize_namespace(
+    storage::Storage& storage,
+    std::span<const uint8_t, 32> namespace_id);
+
+/// Encode a Reconcile message payload: [namespace_id:32][negentropy_bytes:var]
+std::vector<uint8_t> encode_reconcile(
     std::span<const uint8_t, 32> namespace_id,
-    uint64_t since_seq);
+    const std::string& negentropy_msg);
+
+/// Decode a Reconcile message payload.
+std::pair<std::array<uint8_t, 32>, std::string>
+    decode_reconcile(std::span<const uint8_t> payload);
+
+} // namespace chromatindb::sync
 ```
 
-This reuses `Storage::get_hashes_by_namespace` but starts the cursor seek at `since_seq + 1` instead of seq 1.
+**Zero-hash sentinel handling:** v0.7.0 writes all-zeros hashes into seq_map when blobs are deleted (preserving seq_num monotonicity for cursor change detection). The materialization function must filter these: `if (hash == zero_array) continue;`. This is critical -- negentropy would treat zero-hash entries as real items and produce incorrect diffs.
 
-**Implementation in PeerManager (initiator side):**
+**No schema changes needed:** seq_map already provides sorted iteration. The Vector is a read-only materialization. No new sub-databases in libmdbx.
 
-```cpp
-// In run_sync_with_peer, before hash collection:
-for (const auto& ns_info : our_namespaces) {
-    uint64_t cursor = storage_.get_sync_cursor(peer_hash, ns_info.namespace_id);
-    auto hashes = sync_proto_.collect_namespace_hashes_since(
-        ns_info.namespace_id, cursor);
-    // ... send HashList as before
-}
+### Wire Format Changes
 
-// After successful sync:
-for (const auto& ns_info : peer_namespaces) {
-    storage_.set_sync_cursor(peer_hash, ns_info.namespace_id,
-                              ns_info.latest_seq_num);
-}
+Add to `transport.fbs`:
+```flatbuffers
+Reconcile = 27      // Negentropy reconciliation message
 ```
 
-**Edge cases:**
-- **First sync with a peer:** cursor = 0, sends all hashes (full sync, same as today).
-- **Peer has new namespace we've never seen:** cursor = 0 for that namespace.
-- **Peer deleted blobs since last sync:** Tombstones have their own seq_nums. Cursor still works because tombstones are blobs in the seq index.
-- **Node restarted, peer reconnects:** Cursor persisted in sync_cursor_map, survives restart.
-- **Stale cursor (peer rolled back):** Worst case: we miss some blobs. Next full sync (cursor clear or periodic full resync) catches them. Acceptable for v0.7.0.
-
-**Periodic full resync:** Every Nth sync round (configurable, default 10), ignore cursors and do a full hash exchange. This catches any cursor drift or missed blobs. Simple, defensive.
-
-### Hash Encoding Change for Cursor Support
-
-The current `encode_hash_list` format is `[ns:32B][count:u32BE][hash1:32B]...`. To support cursor-aware sync, the responder needs to know the cursor position so it can compute the diff correctly.
-
-Two options:
-1. **Encode the cursor in NamespaceList:** Extend NamespaceList entries to include a `since_seq` field alongside `latest_seq_num`. This changes the wire format.
-2. **Receiver computes diff from full context:** The receiver already has the initiator's `latest_seq_num` from NamespaceList. It can compare against its own cursor for that peer to decide what to send.
-
-**Recommendation: Option 2.** No wire format changes. The responder maintains its own cursor for the initiator (by peer pubkey hash) and uses it to filter its hash list. Both sides independently use their own cursors. The diff algorithm in Phase C handles any asymmetry.
-
-## Namespace Quotas Design
-
-### Enforcement Points
-
-Quotas must be enforced at every data entry point:
-
-1. **Client writes (`TransportMsgType_Data`):** Checked in `Engine::ingest()` before signature verification (Step 0c, after size check and capacity check).
-2. **Sync ingest (`SyncProtocol::ingest_blobs`):** Also goes through `Engine::ingest()`. Same path.
-3. **Delete writes (`TransportMsgType_Delete`):** Tombstones are small (36 bytes) and exempt from quotas, like they are from global capacity checks. They reduce namespace usage by deleting the target blob.
-
-```cpp
-// In Engine::ingest(), after storage_full check:
-// Step 0c: Namespace quota check
-if (!namespace_quotas_.empty() && !wire::is_tombstone(blob.data)) {
-    auto it = namespace_quotas_.find(blob.namespace_id);
-    if (it != namespace_quotas_.end()) {
-        auto usage = storage_.get_namespace_usage(blob.namespace_id);
-        if (it->second.max_bytes > 0 && usage.bytes >= it->second.max_bytes) {
-            return IngestResult::rejection(IngestError::quota_exceeded, ...);
-        }
-        if (it->second.max_count > 0 && usage.count >= it->second.max_count) {
-            return IngestResult::rejection(IngestError::quota_exceeded, ...);
-        }
-    }
-}
+Reconcile message payload:
+```
+[namespace_id:32][negentropy_msg_bytes:variable]
 ```
 
-### Config Format
+The 32-byte namespace prefix identifies which namespace. The rest is raw negentropy protocol bytes (self-describing: version byte 0x61 + range sequences). Same pattern as other binary payloads (NamespaceList, HashList, BlobRequest).
 
-```json
-{
-  "namespace_quotas": {
-    "default": {
-      "max_bytes": 1073741824,
-      "max_count": 0
-    },
-    "abcdef0123456789...": {
-      "max_bytes": 10737418240,
-      "max_count": 100000
-    }
+**Frame size safety:** Set negentropy `frameSizeLimit` to `MAX_FRAME_SIZE - 36` (32-byte prefix + headroom). Negentropy automatically splits into additional round trips when a single message would exceed the limit.
+
+### Reconciliation Integration in PeerManager
+
+```
+PeerManager::run_sync_with_peer()     (initiator)
+  |
+  +-- NamespaceList exchange           (existing, unchanged)
+  +-- Cursor optimization              (existing, unchanged -- skip cursor-hit namespaces)
+  |
+  +-- Phase N (NEW): for each namespace needing sync:
+  |     +-- materialize_namespace() -> negentropy::storage::Vector
+  |     +-- Negentropy<Vector> ne(storage, frameSizeLimit)
+  |     +-- msg = ne.initiate()
+  |     +-- Loop: send Reconcile(ns, msg)
+  |     |         recv Reconcile response
+  |     |         next = ne.reconcile(response, have, need)
+  |     |         collect have_ids (peer needs from us)
+  |     |         collect need_ids (we need from peer)
+  |     |         if (!next) break
+  |     |         msg = *next
+  |
+  +-- SyncComplete
+  |
+  +-- Phase C: BlobRequest/BlobTransfer for need_ids (existing pattern)
+  |     +-- Also push BlobTransfer for have_ids
+  |
+  +-- Post-sync: cursor update, capacity signals, PEX
+
+PeerManager::handle_sync_as_responder()
+  |
+  +-- NamespaceList exchange           (existing, unchanged)
+  +-- Phase N: for each incoming Reconcile(ns, msg):
+  |     +-- materialize_namespace() -> Vector
+  |     +-- ne.reconcile(msg) -> response
+  |     +-- send Reconcile(ns, response)
+  +-- Phase C: respond to BlobRequests (existing pattern)
+```
+
+**Message routing:** `on_peer_message()` routes `TransportMsgType_Reconcile` to the sync inbox (same as HashList, BlobRequest, etc. today).
+
+**Removed code:** `diff_hashes()` in SyncProtocol becomes dead code. HashList send/receive in sync flow is removed. `collect_namespace_hashes()` is replaced by `materialize_namespace()`.
+
+## Data Flow: Crypto Offload Pipeline
+
+```
+io_context thread:
+  receive_blob_from_peer()
+    |
+    v
+  Step 0-2: cheap checks (size, capacity, structural, namespace, quota)
+    |  [all fast, stay on io_context]
+    v
+  co_await crypto_pool_.offload([&]() {
+    |  io_context thread is FREE for other connections
+    |
+    |  Worker thread:
+    |    auto encoded = wire::encode_blob(blob);     // FlatBuffer serialize
+    |    auto hash = wire::blob_hash(encoded);        // SHA3-256
+    |    auto signing_input = wire::build_signing_input(...);
+    |    bool ok = crypto::Signer::verify(signing_input, sig, pubkey);
+    |    return VerifyResult{ok, hash, std::move(encoded)};
+  });
+    |
+    v  [back on io_context -- coroutine resumed]
+  if (result.ok) {
+    dedup_check = storage_.has_blob(ns, result.hash);   // mdbx read
+    tombstone_check = ...                                 // mdbx read
+    storage_.store_blob(blob, result.hash, result.encoded); // mdbx write
   }
-}
 ```
 
-- `"default"` applies to any namespace not explicitly listed.
-- Per-namespace overrides by hex namespace ID (64 chars).
-- `0` = unlimited (no quota for that dimension).
-- Empty `namespace_quotas` = no quotas (backward compatible).
-- Quotas are hot-reloadable via SIGHUP.
+**Thread boundary rule:** Everything before and after the `co_await offload()` runs on io_context. The lambda captures blob data by reference (blob is alive on the coroutine stack). Only stateless crypto work runs on pool workers.
 
-### New IngestError Variant
+**What crosses the boundary:**
+- INTO pool: `const wire::BlobData&` (by reference, coroutine suspended, blob on stack)
+- OUT of pool: `bool valid`, `array<uint8_t, 32> content_hash`, `vector<uint8_t> encoded`
+- NEVER crosses: `Storage&`, `Engine&`, `Connection::Ptr`, `PeerInfo*`
+
+### CryptoPool Service
 
 ```cpp
-enum class IngestError {
-    // ... existing ...
-    quota_exceeded    ///< Namespace quota (bytes or count) exceeded.
+// db/thread_pool/thread_pool.h
+namespace chromatindb::pool {
+
+class CryptoPool {
+public:
+    explicit CryptoPool(uint32_t worker_count);
+    ~CryptoPool();
+
+    /// Offload a callable to thread pool, co_await result, resume on io_context.
+    template<typename F>
+    asio::awaitable<std::invoke_result_t<F>> offload(F&& func);
+
+private:
+    asio::thread_pool pool_;
 };
+
+} // namespace chromatindb::pool
 ```
 
-No new protocol message type. The rejection is handled the same as `storage_full` -- the peer gets no explicit error message (the Data message is simply not acknowledged with a WriteAck). For sync, the blob is silently skipped like `storage_full` blobs.
+**offload() implementation pattern (two approaches, choose during implementation):**
 
-## Crypto Throughput Optimization
-
-### Bottleneck Analysis
-
-From the v0.6.0 benchmark report, 1 MiB blob sync reaches 96% CPU on node2 at 15.3 blobs/sec. The CPU is spent on:
-
-1. **ML-DSA-87 verify (~2ms):** Internally hashes the signing input (~1 MiB). Unavoidable per-blob cost.
-2. **SHA3-256 blob hash for dedup/tombstone check (~1.5ms):** Requires encoding to FlatBuffer first, then hashing the encoded output.
-3. **SHA3-256 blob hash AGAIN in store_blob (~1.5ms):** `store_blob` re-encodes and re-hashes because it doesn't receive the pre-computed hash.
-4. **ChaCha20-Poly1305 DARE encryption (~0.5ms):** Encrypts the encoded blob for at-rest storage.
-5. **build_signing_input allocation (~0.3ms):** Copies 1 MiB into a new vector.
-
-### Optimization Strategy (ordered by impact/complexity ratio)
-
-**Optimization 1: Eliminate redundant blob hash (HIGH impact, LOW complexity)**
-
-`Engine::ingest()` computes `blob_hash(encode_blob(blob))` at step 3.5 for tombstone check. Then `Storage::store_blob()` computes it again. Pass the pre-computed hash through.
-
-New Storage method:
+Approach A (co_spawn across executors):
 ```cpp
-StoreResult store_blob(const wire::BlobData& blob,
-                       std::optional<std::array<uint8_t, 32>> precomputed_hash = std::nullopt);
-```
-
-If `precomputed_hash` is provided, skip the re-encode + re-hash. Saves ~1.5ms per 1 MiB blob.
-
-**Optimization 2: Eliminate per-call OQS_SIG allocation (MEDIUM impact, LOW complexity)**
-
-`Signer::verify()` creates a new `OQS_SIG*` context on every call via `OQS_SIG_new()`, then frees it. This involves memory allocation and algorithm initialization. Use a `thread_local static` context instead:
-
-```cpp
-bool Signer::verify(std::span<const uint8_t> message,
-                    std::span<const uint8_t> signature,
-                    std::span<const uint8_t> public_key) {
-    thread_local OQS_SIG* sig = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
-    // sig is allocated once per thread, reused across calls
-    OQS_STATUS rc = OQS_SIG_verify(sig, message.data(), message.size(),
-                                    signature.data(), signature.size(),
-                                    public_key.data());
-    return rc == OQS_SUCCESS;
+template<typename F>
+asio::awaitable<std::invoke_result_t<F>> CryptoPool::offload(F&& func) {
+    using R = std::invoke_result_t<F>;
+    co_return co_await asio::co_spawn(pool_.get_executor(),
+        [f = std::forward<F>(func)]() -> asio::awaitable<R> { co_return f(); },
+        asio::use_awaitable);
 }
 ```
 
-Since chromatindb runs on a single io_context thread, `thread_local` is equivalent to a static singleton here. No thread-safety concerns.
-
-**Optimization 3: Avoid signing input copy (LOW impact, LOW complexity)**
-
-`build_signing_input()` allocates a vector and copies ns(32) + data(1MiB) + ttl(4) + ts(8). For 1 MiB blobs, this is a 1 MiB allocation + memcpy.
-
-Alternative: use the OQS incremental signing API (if available) or compute the hash incrementally using SHA3 IUF (Init/Update/Finalize) API and pass the pre-hashed digest to ML-DSA.
-
-However, ML-DSA-87 in "pure" mode requires the full message for verification -- it internally computes `mu = SHAKE256(tr || M')` where `M'` includes the full message. Pre-hashing would require switching to HashML-DSA mode (FIPS 204 Algorithm 5), which uses a different OID and is a different signature scheme. This is NOT backward compatible with existing signatures.
-
-**Recommendation: Skip optimization 3 for v0.7.0.** The 0.3ms memcpy savings is small. Switching to HashML-DSA would require re-signing all existing blobs (protocol-breaking change). The IUF approach would only help if liboqs exposes an incremental verify API, which it does not (the `OQS_SIG_verify` API requires contiguous message bytes).
-
-**Optimization 4: Skip encode_blob in tombstone check path (MEDIUM impact, LOW complexity)**
-
-In `Engine::ingest()`, the tombstone check path (`is_tombstone` is false) does:
+Approach B (post + post round-trip):
 ```cpp
-auto encoded = wire::encode_blob(blob);
-auto content_hash = wire::blob_hash(encoded);
-if (storage_.has_tombstone_for(blob.namespace_id, content_hash)) { ... }
+template<typename F>
+asio::awaitable<std::invoke_result_t<F>> CryptoPool::offload(F&& func) {
+    using R = std::invoke_result_t<F>;
+    auto executor = co_await asio::this_coro::executor;
+    co_await asio::post(pool_.get_executor(), asio::use_awaitable);
+    // Now running on pool thread
+    R result = func();
+    co_await asio::post(executor, asio::use_awaitable);
+    // Now running on io_context thread
+    co_return result;
+}
 ```
 
-This encodes the entire blob just to get its hash. But the hash is also needed later in `store_blob`. Restructure to compute the hash once and pass it through:
+**Confidence: MEDIUM** -- both patterns are documented but the exact Standalone Asio (not Boost) behavior with C++20 coroutines needs validation during implementation. Approach B is more explicit about executor switching.
 
+### BlobEngine Async Pipeline
+
+Current `ingest()` (synchronous, blocks event loop):
+```
+Step 0:  Size check               ~0ms
+Step 0b: Capacity check           ~0ms
+Step 1:  Structural checks        ~0ms
+Step 2:  Namespace/delegation     ~0ms  (SHA3-256 of 2.5 KB pubkey)
+Step 2a: Quota check              ~0ms
+Step 2.5: encode + hash           ~1.5ms  (SHA3-256 of up to 100 MiB blob)
+         Dedup check              ~0ms
+Step 3:  ML-DSA verify            ~2ms   (signature verification)
+Step 3.5: Tombstone handling      ~0ms
+Step 4:  Store                    ~0.1ms
+                             TOTAL: ~3.6ms blocking io_context per 1 MiB blob
+```
+
+New `ingest_async()` (crypto offloaded):
+```
+Step 0-2a: cheap checks           ~0ms   (io_context)
+Step 2.5+3: encode + hash + verify   ~3.5ms (OFFLOADED to pool worker)
+           [io_context FREE for ~3.5ms]
+Step 3.5-4: tombstone + store     ~0.1ms (io_context, after co_await returns)
+```
+
+With N worker threads, the node can process N blobs' crypto in parallel while the io_context handles I/O for all connections. For a 6-core machine: theoretical ~6x throughput for CPU-bound blob verification.
+
+### thread_local OQS_SIG Safety
+
+`Signer::verify()` uses `thread_local static OQS_SIG*` (v0.7.0 optimization). With thread pool offload, `verify()` now runs on worker threads. `thread_local` is correct: each worker gets its own OQS_SIG context. No mutex needed.
+
+## Sync Rate Limiting Design
+
+### Problem
+
+Current rate limiting bypasses sync messages entirely (peer_manager.cpp line 437: only Data/Delete are checked). A malicious peer can:
+1. Spam SyncRequest to force expensive materialization + reconciliation
+2. Trigger CPU-bound crypto verification via sync blob ingestion
+3. Exhaust memory by forcing concurrent namespace materializations
+
+### Solution: Per-Peer Sync Cooldown
+
+Rate-limit sync round initiation (SyncRequest messages), not individual sync messages within a round. Granularity is "sync rounds per time window" because:
+- A sync round has bounded cost (reconciliation per namespace, bounded by frame size)
+- Individual messages are small (negentropy messages < 1 KiB typically)
+- Throttling mid-sync would waste completed work
+
+### Implementation
+
+PeerInfo additions:
 ```cpp
-auto encoded = wire::encode_blob(blob);
-auto content_hash = wire::blob_hash(encoded);
-// Use content_hash for tombstone check
-if (storage_.has_tombstone_for(blob.namespace_id, content_hash)) { ... }
-// Pass to store_blob to avoid re-computation
-auto store_result = storage_.store_blob(blob, content_hash);
+uint64_t last_sync_window_start = 0;   // steady_clock ms
+uint32_t sync_count_in_window = 0;     // Rounds in current 60s window
 ```
 
-This is essentially the same as Optimization 1 but viewed from the caller side.
-
-### Summary of Achievable Gains
-
-| Optimization | Savings per 1 MiB blob | Complexity | Ship in v0.7.0? |
-|-------------|----------------------|------------|-----------------|
-| Pass pre-computed hash to store_blob | ~1.5ms | Low | Yes |
-| Static OQS_SIG context | ~0.1-0.3ms | Low | Yes |
-| Avoid signing input copy (HashML-DSA) | ~0.3ms | High (protocol break) | No |
-| Thread pool for crypto | ~4ms (parallelism) | High (coroutine interaction) | No, v0.8.0 |
-
-**Expected result:** From 15.3 blobs/sec to ~18-20 blobs/sec for 1 MiB blobs. The fundamental ceiling is the ML-DSA verify call (~2ms) which cannot be optimized without parallelism.
-
-## Test Relocation
-
-### Current Structure
-
-```
-chromatin-protocol/
-  CMakeLists.txt          <- owns tests/*, links Catch2
-  tests/
-    crypto/test_hash.cpp
-    crypto/test_signing.cpp
-    ...20 test files...
-  db/
-    CMakeLists.txt        <- no test target, no Catch2 dep
-    crypto/hash.h
-    ...
+Config addition:
+```cpp
+uint32_t sync_rate_limit_per_min = 0;  // Max sync rounds per peer per minute (0 = unlimited)
 ```
 
-### Target Structure
-
+Rate check in `on_peer_message()`:
+```cpp
+if (type == TransportMsgType_SyncRequest) {
+    auto* peer = find_peer(conn);
+    if (peer && !peer->syncing) {
+        if (sync_rate_limit_per_min_ > 0) {
+            auto now = steady_clock_ms();
+            if (now - peer->last_sync_window_start >= 60000) {
+                peer->last_sync_window_start = now;
+                peer->sync_count_in_window = 0;
+            }
+            if (peer->sync_count_in_window >= sync_rate_limit_per_min_) {
+                ++metrics_.sync_rate_limited;
+                record_strike(conn, "sync rate limit exceeded");
+                return;  // Silently drop
+            }
+            peer->sync_count_in_window++;
+        }
+        // Proceed with sync...
+    }
+}
 ```
-chromatin-protocol/
-  CMakeLists.txt          <- no test sources, delegates to db/
-  db/
-    CMakeLists.txt        <- owns tests/*, links Catch2
-    tests/
-      crypto/test_hash.cpp
-      crypto/test_signing.cpp
-      ...20 test files...
-    crypto/hash.h
-    ...
+
+Metrics addition: `uint64_t sync_rate_limited = 0;` in NodeMetrics.
+
+**Confidence: HIGH** -- follows the exact pattern of existing Data/Delete rate limiting.
+
+## Patterns to Follow
+
+### Pattern 1: Two-Dispatch Executor Switching
+
+**What:** Offload CPU-bound work to thread pool, resume on io_context.
+**When:** Any crypto operation > 100us on hot path.
+**Example:**
+```cpp
+auto [valid, hash] = co_await crypto_pool_.offload([&]() {
+    auto encoded = wire::encode_blob(blob);
+    auto h = wire::blob_hash(encoded);
+    auto si = wire::build_signing_input(blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    bool ok = crypto::Signer::verify(si, blob.signature, blob.pubkey);
+    return std::make_pair(ok, h);
+});
+// Back on io_context -- safe to access storage
+if (valid) storage_.store_blob(blob, hash, encoded);
 ```
 
-### Migration Strategy
+### Pattern 2: Per-Namespace Reconciliation Loop
 
-1. `git mv tests/ db/tests/` -- preserves history.
-2. Add Catch2 FetchContent to `db/CMakeLists.txt` (guarded with `if(NOT TARGET Catch2::Catch2WithMain)`).
-3. Add test target in `db/CMakeLists.txt`:
-```cmake
-if(BUILD_TESTING)
-  add_executable(chromatindb_tests
-    tests/crypto/test_hash.cpp
-    ...
-  )
-  target_link_libraries(chromatindb_tests PRIVATE
-    chromatindb_lib
-    Catch2::Catch2WithMain
-  )
-  include(Catch)
-  catch_discover_tests(chromatindb_tests)
-endif()
+**What:** Multi-round negentropy reconciliation as async coroutine loop.
+**When:** During sync Phase N, for each namespace with seq_num changes.
+**Example:**
+```cpp
+auto items = sync::materialize_namespace(storage_, namespace_id);
+Negentropy<negentropy::storage::Vector> ne(items, FRAME_SIZE_LIMIT);
+auto msg = ne.initiate();
+std::vector<std::string> all_have, all_need;
+while (true) {
+    co_await conn->send_message(TransportMsgType_Reconcile,
+        sync::encode_reconcile(namespace_id, msg));
+    auto resp = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+    if (!resp || resp->type != TransportMsgType_Reconcile) break;
+    auto [ns, resp_bytes] = sync::decode_reconcile(resp->payload);
+    std::vector<std::string> have, need;
+    auto next = ne.reconcile(resp_bytes, have, need);
+    all_have.insert(all_have.end(), have.begin(), have.end());
+    all_need.insert(all_need.end(), need.begin(), need.end());
+    if (!next) break;
+    msg = *next;
+}
 ```
-4. Remove test sources and Catch2 from top-level `CMakeLists.txt`.
-5. Top-level `CMakeLists.txt` still has `add_subdirectory(db)` which now includes the test target.
 
-**No include path changes needed.** Tests already use `#include "db/..."` paths because `chromatindb_lib` exports `${CMAKE_CURRENT_SOURCE_DIR}/..` as a public include directory.
+### Pattern 3: Fresh Storage View per Reconciliation
 
-**Build behavior is identical.** `cmake --build build` from the top level still discovers and runs all tests via CTest. The only change is the physical file location and which CMakeLists.txt owns the test target.
+**What:** Rebuild negentropy Vector from seq_map at the start of each sync round.
+**When:** Every reconciliation for every namespace.
+**Why:** Storage changes between syncs. Negentropy's design advantage is stateless servers -- lean into it rather than maintaining persistent trees.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Storing Full Blob Hash in sync_cursor_map
+### Anti-Pattern 1: Passing Connection or PeerInfo to Thread Pool
 
-**What:** Using the last-seen blob hash as the cursor instead of seq_num.
+**What:** Capturing `Connection::Ptr` or `PeerInfo*` in pool lambda.
+**Why bad:** Connection contains AEAD nonce counters (send_counter_, recv_counter_) -- io_context-only. PeerInfo has non-thread-safe containers. Data races + nonce reuse.
+**Instead:** Copy only needed bytes into lambda. Return results by value.
 
-**Why bad:** Hash-based cursors require scanning to find the hash's position in the sequence. Seq_num is monotonically increasing and directly seekable via libmdbx cursor `lower_bound`.
+### Anti-Pattern 2: Storage Access from Thread Pool
 
-**Instead:** Use seq_num as cursor. It's the natural ordering key in the seq_map and supports O(log n) seek.
+**What:** Calling any Storage method from a pool worker.
+**Why bad:** libmdbx transactions are thread-bound. Write transactions are single-writer on io_context. Even read transactions from pool threads can corrupt reader table.
+**Instead:** Read all needed data on io_context before posting to pool. Crypto needs only in-memory blob data.
 
-### Anti-Pattern 2: Computing Quota Usage by Scanning on Every Ingest
+### Anti-Pattern 3: Persistent Negentropy B-Tree
 
-**What:** Counting blobs and summing sizes by iterating the seq_map/blobs_map on each ingest call.
+**What:** Maintaining BTreeLMDB alongside libmdbx blob storage.
+**Why bad:** Write amplification (every ingest updates tree). Consistency risk (two databases). Data duplication. New dependency (lmdbxx bindings).
+**Instead:** Build Vector per-sync-round from seq_map. Construction cost is O(N) -- same as current hash collection -- but reconciliation saves are O(diff) wire overhead vs O(N).
 
-**Why bad:** O(N) per ingest where N = blobs in namespace. For a namespace with 100K blobs, this adds ~50ms per ingest -- far worse than the crypto bottleneck.
+### Anti-Pattern 4: Single-Frame Reconciliation
 
-**Instead:** Maintain a running total in quota_map, updated atomically in the same write transaction as blob store/delete.
+**What:** Trying to fit entire reconciliation into one message.
+**Why bad:** Recreates the MAX_FRAME_SIZE cliff for large namespaces.
+**Instead:** Use negentropy's frameSizeLimit. Multiple round trips are cheap and automatic.
 
-### Anti-Pattern 3: Protocol-Level Cursor Exchange
+### Anti-Pattern 5: Fine-Grained Sync Rate Limiting
 
-**What:** Adding a new `SyncCursor` message type to the transport schema so peers negotiate cursor positions explicitly.
+**What:** Rate-limiting individual Reconcile/BlobTransfer messages within a round.
+**Why bad:** Interrupting mid-sync wastes all completed work. Negentropy is multi-round -- throttling one message kills entire reconciliation.
+**Instead:** Rate-limit SyncRequest initiation. Let accepted rounds complete.
 
-**Why bad:** Adds protocol complexity, requires schema changes, creates backward compatibility concerns. The cursor is a local optimization -- each side independently decides what to send.
+### Anti-Pattern 6: Thread Pool for AEAD Operations
 
-**Instead:** Each peer maintains its own cursor for each remote peer. The existing NamespaceList + HashList protocol is unchanged. Fewer hashes in the HashList is transparent to the receiver.
+**What:** Offloading ChaCha20-Poly1305 encrypt/decrypt to thread pool.
+**Why bad:** AEAD uses connection-scoped nonce counters. Concurrent access = nonce reuse = security break.
+**Instead:** AEAD stays on io_context. ChaCha20 is fast (~0.5ms for 100 MiB). Bottleneck is ML-DSA verify + SHA3 hash.
 
-### Anti-Pattern 4: Pre-Hash ML-DSA for Backward Compatibility
+### Anti-Pattern 7: HashList as Fallback
 
-**What:** Switching from pure ML-DSA to HashML-DSA to avoid passing full messages to OQS_SIG_verify.
-
-**Why bad:** HashML-DSA uses a different signature algorithm (FIPS 204 Algorithm 4/5 vs Algorithm 2/3). Existing signatures would not verify under HashML-DSA. This is a protocol-breaking change that invalidates all stored blobs.
-
-**Instead:** Accept the ML-DSA verify cost as a fixed per-blob overhead. Optimize around it (eliminate redundant hashing, reduce allocations). Defer parallelism to v0.8.0.
-
-### Anti-Pattern 5: Moving Tests Without git mv
-
-**What:** Copying test files to db/tests/ and deleting the originals.
-
-**Why bad:** Loses git history for 20 files with 6 milestones of evolution. `git log --follow` won't work.
-
-**Instead:** `git mv tests/ db/tests/` in a dedicated commit. Git tracks the rename, history is preserved.
-
-## Build Order (Dependency-Aware)
-
-```
-Phase 1: Test relocation (tests/ -> db/tests/)
-  Prereq: none
-  Modifies: db/CMakeLists.txt, CMakeLists.txt
-  Risk: LOW (git mv, CMake update)
-  Tests: All 284 existing tests pass at same location
-
-Phase 2: Crypto throughput optimization
-  Prereq: none (independent of Phase 1)
-  Modifies: db/crypto/signing.cpp, db/engine/engine.cpp, db/storage/storage.h+cpp
-  Risk: LOW (eliminate redundant work, no behavior change)
-  Tests: Existing ingest/storage/signing tests + new benchmark comparison
-
-Phase 3: Sync resumption
-  Prereq: Phase 2 (hash caching in storage is a natural foundation)
-  Modifies: db/storage/storage.h+cpp, db/sync/sync_protocol.h+cpp,
-            db/peer/peer_manager.h+cpp
-  Risk: MEDIUM (new persistent state, cursor edge cases)
-  Tests: New cursor persistence tests, multi-peer sync resumption tests
-
-Phase 4: Namespace quotas
-  Prereq: Phase 2 (quota_map follows same pattern as hash caching)
-  Modifies: db/storage/storage.h+cpp, db/engine/engine.h+cpp,
-            db/config/config.h+cpp
-  Risk: LOW (simple counter tracking, well-isolated)
-  Tests: Quota enforcement tests, quota + expiry interaction, SIGHUP reload
-
-Phase 5: Deletion benchmarks
-  Prereq: Phase 1 (tests relocated), deletion feature (already shipped)
-  Modifies: deploy/benchmark/ scripts
-  Risk: LOW (new benchmark scenario only)
-  Tests: Benchmark produces deletion throughput numbers
-
-Phase 6: General cleanup
-  Prereq: all above phases complete
-  Modifies: various (remove stale artifacts, update READMEs)
-  Risk: LOW
-  Tests: Build succeeds, all tests pass
-```
-
-**Ordering rationale:**
-- Test relocation first because it is zero-risk and unblocks clean db/ self-containment.
-- Crypto throughput before sync resumption because the storage changes (hash passing) inform the storage API changes needed for cursors.
-- Sync resumption before quotas because cursors add a sub-database, establishing the pattern that quotas follow.
-- Deletion benchmarks late because they depend on everything else being stable.
-- Cleanup last because it sweeps up anything missed.
-
-**Phases 1 and 2 can run in parallel** (no file overlap). Phases 3 and 4 can also run in parallel after Phase 2 (different parts of the ingest pipeline).
+**What:** Falling back to HashList exchange if reconciliation fails.
+**Why bad:** Two code paths doubles testing and maintenance. Negentropy doesn't "fail" recoverbly -- connection breaks cause full sync retry anyway.
+**Instead:** Remove HashList-based sync entirely. Keep enum value for wire stability, never send it.
 
 ## Scalability Considerations
 
-| Concern | 1K blobs/ns | 100K blobs/ns | 1M blobs/ns |
-|---------|------------|---------------|-------------|
-| Sync hash exchange (no cursor) | 32 KB | 3.2 MB | 32 MB per sync round |
-| Sync hash exchange (with cursor, 10 new) | 320 B | 320 B | 320 B |
-| Quota lookup | O(1) | O(1) | O(1) |
-| Cursor storage per peer per ns | 72 B | 72 B | 72 B |
-| Cursor storage 100 peers x 50 ns | 360 KB | 360 KB | 360 KB |
+| Concern | 10K blobs/ns | 100K blobs/ns | 1M blobs/ns | 10M blobs/ns |
+|---------|-------------|---------------|-------------|--------------|
+| Reconciliation wire (10 diffs) | ~1 KB | ~5 KB | ~50 KB | ~200 KB |
+| Current HashList wire | 320 KB | 3.2 MB | 32 MB | 320 MB (BREAKS) |
+| Vector construction time | <1ms | ~10ms | ~100ms | ~1s |
+| Vector memory | ~400 KB | ~4 MB | ~38 MB | ~380 MB |
+| Reconciliation rounds | 1-2 | 2-3 | 2-3 | 3-4 |
+| Thread pool benefit (1 MiB blobs) | Negligible | Significant | Critical | Critical |
+| Thread pool: 6-core throughput | ~90 blobs/s | ~90 blobs/s | ~90 blobs/s | ~90 blobs/s |
+| Thread pool: 1-core (current) | ~18 blobs/s | ~18 blobs/s | ~18 blobs/s | ~18 blobs/s |
 
-Sync resumption transforms sync from O(total_blobs) to O(new_blobs) per round. For a mature network with 100K blobs per namespace and 10 new blobs per sync interval, this is a 10,000x reduction in hash exchange volume.
+**10M+ blob namespaces:** Vector materialization (~380 MB, ~1s) becomes the bottleneck. Mitigation: port negentropy's BTreeLMDB to libmdbx. This is future work -- v0.8.0 targets 100K-1M range.
+
+## Build Order (Dependency-Aware)
+
+### Dependency Graph
+
+```
+Thread Pool (Phase 1) -- foundational, no dependencies
+    |
+    +---> BlobEngine Async (Phase 2) -- needs thread pool
+    |
+    |         Sync Rate Limiting (Phase 3) -- independent
+    |         Negentropy Vendor + Adapter (Phase 4) -- independent
+    |              |
+    +--------------+
+            |
+            v
+    Sync Protocol Integration (Phase 5) -- needs thread pool + negentropy + async ingest
+            |
+            v
+    Benchmark Validation (Phase 6) -- needs everything
+```
+
+### Suggested Phase Order
+
+1. **Thread Pool Foundation** -- CryptoPool, config, offload helper, unit tests
+2. **BlobEngine Async Ingest** -- ingest_async, PeerManager caller updates, all tests pass
+3. **Sync Rate Limiting** -- PeerInfo state, config, SyncRequest rate check, metrics
+4. **Negentropy Vendor + Storage Adapter** -- vendored headers, SHA3 patch, materialize_namespace, encode/decode_reconcile, Reconcile = 27 wire type, unit tests
+5. **Sync Protocol Integration** -- Phase N replaces HashList in run_sync_with_peer/handle_sync_as_responder, message routing, integration tests
+6. **Benchmark Validation** -- Docker suite, bandwidth comparison, throughput comparison
+
+**Critical path:** 1 -> 2 -> 5 -> 6. Phases 3 and 4 are parallelizable but sequenced for clean execution.
 
 ## Sources
 
-- Existing codebase: all source files listed above were read directly -- HIGH confidence
-- v0.6.0 benchmark report (`deploy/results/REPORT.md`): CPU bottleneck data -- HIGH confidence
-- libmdbx sub-database pattern: follows existing 5-map pattern in storage.cpp -- HIGH confidence
-- ML-DSA verify behavior: liboqs source + [FIPS 204 specification](https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.204.pdf) -- HIGH confidence
-- ML-DSA pre-hash incompatibility: [NIST PQC FAQ](https://csrc.nist.gov/csrc/media/Projects/post-quantum-cryptography/documents/faq/fips204-sec6-03192025.pdf) and [NIST PQC Forum discussion](https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/GMMKmejELfQ) -- HIGH confidence
-- OQS_SIG_new allocation overhead: [liboqs source](https://github.com/open-quantum-safe/liboqs) -- HIGH confidence
-- SHA3 incremental API in liboqs: [liboqs SHA3 implementation](https://github.com/open-quantum-safe/liboqs/blob/f88e6237c53d481200f9bf80c7c5fe9cde5f6a74/src/common/sha3/xkcp_sha3.c) -- MEDIUM confidence (API exists, but ML-DSA verify does not expose incremental interface)
-- libmdbx cursor operations: [libmdbx GitHub](https://github.com/erthink/libmdbx) -- HIGH confidence
-- [IBM HashML-DSA implementation](https://github.com/IBM/hashMLDSA) -- confirms pre-hash is a distinct algorithm -- HIGH confidence
-- [ML-DSA benchmark comparison](https://medium.com/@moeghifar/post-quantum-digital-signatures-the-benchmark-of-ml-dsa-against-ecdsa-and-eddsa-d4406a5918d9) -- MEDIUM confidence (single author benchmark)
+- [Negentropy reference implementation (C++ header-only)](https://github.com/hoytech/negentropy) -- HIGH confidence
+- [Range-Based Set Reconciliation specification](https://logperiodic.com/rbsr.html) -- HIGH confidence
+- [NIP-77: Negentropy syncing for Nostr](https://nips.nostr.com/77) -- MEDIUM confidence
+- [Asio C++20 coroutines](https://think-async.com/Asio/asio-1.22.0/doc/asio/overview/core/cpp20_coroutines.html) -- HIGH confidence
+- [Asio thread_pool + coroutines (issue #1508)](https://github.com/chriskohlhoff/asio/issues/1508) -- MEDIUM confidence
+- Codebase: `db/sync/sync_protocol.h+cpp`, `db/peer/peer_manager.h+cpp`, `db/engine/engine.h+cpp`, `db/storage/storage.h`, `db/wire/codec.h`, `db/net/framing.h`, `db/schemas/transport.fbs` -- HIGH confidence
