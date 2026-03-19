@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.8.0
-milestone_name: Protocol Scalability
-status: completed
-stopped_at: "Milestone v0.8.0 archived. All 4 phases (38-41) complete, 12/12 requirements satisfied."
-last_updated: "2026-03-19T16:20:13.555Z"
-last_activity: 2026-03-19 — Milestone v0.8.0 completed and archived.
+milestone: v0.9.0
+milestone_name: Connection Resilience & Hardening
+status: defining_requirements
+stopped_at: "Milestone v0.9.0 started. Defining requirements."
+last_updated: "2026-03-19T17:00:00.000Z"
+last_activity: 2026-03-19 — Milestone v0.9.0 started
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,13 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Planning next milestone (v0.9.0)
+**Current focus:** v0.9.0 Connection Resilience & Hardening
 
 ## Current Position
 
-Milestone: v0.8.0 Protocol Scalability — SHIPPED 2026-03-19
-Status: Archived
-Next: v0.9.0 (connection resilience + cursor compaction)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-19 — Milestone v0.9.0 started
 
 ## Performance Metrics
 
@@ -61,10 +62,10 @@ None.
 
 ### Blockers/Concerns
 
-None -- milestone complete, ready for next.
+None -- defining requirements.
 
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Milestone v0.8.0 archived.
-Resume: `/gsd:new-milestone` to start v0.9.0.
+Stopped at: Defining v0.9.0 requirements.
+Resume: Continue requirements definition and roadmap creation.

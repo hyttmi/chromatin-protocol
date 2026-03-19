@@ -73,7 +73,25 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(No active milestone — next: v0.9.0 Connection Resilience + Cursor Compaction)
+## Current Milestone: v0.9.0 Connection Resilience & Hardening
+
+**Goal:** Harden the database layer for production readiness — connection resilience, storage integrity, operational tooling, and documentation completeness. Penultimate milestone before v1.0.0.
+
+**Target features:**
+- Connection retry with exponential backoff + ACL-aware reconnection suppression
+- Keepalive timeout for dead peer detection
+- Cursor compaction (age-based pruning of stale peer cursors)
+- Tombstone GC investigation and fix (storage reclamation)
+- Startup integrity scan for storage consistency
+- libmdbx crash recovery audit (verify guarantees, test unclean shutdown)
+- Quota enforcement verification under delegation writes
+- Version injection via CMake (replace stale version.h)
+- Config validation fail-fast (reject malformed config on startup)
+- Complete metrics logging (emit missing counters)
+- Structured log format for monitoring
+- File logging (configurable file sink)
+- Timer cleanup (on_shutdown consistency)
+- Documentation updates (README + protocol docs current with v0.8.0+v0.9.0)
 
 ### Out of Scope
 
@@ -185,4 +203,4 @@ Previous projects inform design:
 | Pool ref as constructor param / set_pool() for factory | Owned objects get pool in constructor; Connection (factory-created) gets set_pool() | ✓ Good — clean ownership semantics |
 
 ---
-*Last updated: 2026-03-19 after v0.8.0 milestone completion*
+*Last updated: 2026-03-19 after v0.9.0 milestone start*
