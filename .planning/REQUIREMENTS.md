@@ -17,9 +17,9 @@ Requirements for protocol scalability. Fixes fundamental sync protocol flaw, har
 
 ### Sync Rate Limiting
 
-- [ ] **RATE-01**: Sync initiation frequency limited per peer (configurable cooldown)
-- [ ] **RATE-02**: Sync messages included in per-peer byte-rate token bucket (extends existing rate limiter)
-- [ ] **RATE-03**: Concurrent sync sessions limited per peer (configurable max)
+- [x] **RATE-01**: Sync initiation frequency limited per peer (configurable cooldown)
+- [x] **RATE-02**: Sync messages included in per-peer byte-rate token bucket (extends existing rate limiter)
+- [x] **RATE-03**: Concurrent sync sessions limited per peer (configurable max)
 
 ### Thread Pool Crypto Offload
 
@@ -71,9 +71,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-08 | Phase 39 | Complete |
 | SYNC-09 | Phase 39 | Complete |
 | SYNC-10 | Phase 41 | Pending |
-| RATE-01 | Phase 40 | Pending |
-| RATE-02 | Phase 40 | Pending |
-| RATE-03 | Phase 40 | Pending |
+| RATE-01 | Phase 40 | Complete |
+| RATE-02 | Phase 40 | Complete |
+| RATE-03 | Phase 40 | Complete |
 | PERF-06 | Phase 38 | Complete |
 | PERF-07 | Phase 38 | Complete |
 | PERF-08 | Phase 38 | Complete |

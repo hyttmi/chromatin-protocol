@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 40 context gathered
-last_updated: "2026-03-19T10:52:36.909Z"
-last_activity: 2026-03-19 — Completed Plan 02 (sync integration). Reconciliation-based Phase B in both initiator and responder, 400 tests.
+stopped_at: Completed 40-01-PLAN.md
+last_updated: "2026-03-19T12:27:15.000Z"
+last_activity: 2026-03-19 — Completed Plan 01 (sync rate limit infrastructure). SyncRejected=30, config fields, PeerManager helpers, 404 tests.
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
-  percent: 42
+  total_plans: 7
+  completed_plans: 6
+  percent: 57
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 39 - Negentropy Set Reconciliation
+**Current focus:** Phase 40 - Sync Rate Limiting
 
 ## Current Position
 
-Phase: 39 (2 of 4) — Negentropy Set Reconciliation
-Plan: 2 of 2
+Phase: 40 (3 of 4) — Sync Rate Limiting
+Plan: 1 of 2
 Status: Executing
-Last activity: 2026-03-19 — Completed Plan 02 (sync integration). Reconciliation-based Phase B in both initiator and responder, 400 tests.
+Last activity: 2026-03-19 — Completed Plan 01 (sync rate limit infrastructure). SyncRejected=30, config fields, PeerManager helpers, 404 tests.
 
-Progress: [█████░░░░░] 42%
+Progress: [██████░░░░] 57%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 78 (across v1.0 - v0.8.0)
+- Total plans completed: 79 (across v1.0 - v0.8.0)
 - Average duration: ~16 min (historical)
-- Total execution time: ~22.4 hours
+- Total execution time: ~22.9 hours
 
 **By Milestone:**
 
@@ -53,6 +53,7 @@ Progress: [█████░░░░░] 42%
 | Phase 38 P03 | 9min | 1 tasks | 1 files |
 | Phase 39 P01 | 18min | 1 tasks | 11 files |
 | Phase 39 P02 | 35min | 2 tasks | 4 files |
+| Phase 40 P01 | 29min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,8 @@ Recent decisions affecting current work:
 - [Phase 39]: Range matching requires BOTH XOR fingerprint AND count to agree (empty-set safety, Pitfall 4)
 - [Phase 39]: ReconcileItems as final-exchange signal to break ItemList echo loop in network protocol
 - [Phase 39]: Always reconcile all namespaces; cursor skip only affects Phase C blob requests (bidirectional correctness)
+- [Phase 40]: SyncRejected payload is single reason byte (0x01=cooldown, 0x02=session_limit, 0x03=byte_rate)
+- [Phase 40]: send_sync_rejected uses co_spawn fire-and-forget pattern (consistent with notify_subscribers)
 
 ### Pending Todos
 
@@ -85,6 +88,6 @@ None -- research complete, all architectural decisions made.
 
 ## Session Continuity
 
-Last session: 2026-03-19T10:52:36.906Z
-Stopped at: Phase 40 context gathered
-Resume file: .planning/phases/40-sync-rate-limiting/40-CONTEXT.md
+Last session: 2026-03-19T12:27:15.000Z
+Stopped at: Completed 40-01-PLAN.md
+Resume file: .planning/phases/40-sync-rate-limiting/40-02-PLAN.md
