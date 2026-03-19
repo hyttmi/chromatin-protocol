@@ -211,7 +211,7 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     pm2.start();
 
     // Run for enough time to connect + complete full sync protocol exchange
-    // (SyncRequest -> SyncAccept -> NamespaceList -> HashLists -> SyncComplete -> BlobRequest -> BlobTransfer)
+    // (SyncRequest -> SyncAccept -> NamespaceList -> Reconciliation -> SyncComplete -> BlobRequest -> BlobTransfer)
     ioc.run_for(std::chrono::seconds(8));
 
     // Verify node2 received node1's blob (SYNC-01 + SYNC-02: hash-list diff + bidirectional)

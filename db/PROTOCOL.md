@@ -183,19 +183,54 @@ Wire format: [count: 4 bytes BE uint32]
 
 Each entry is 40 bytes (32-byte namespace ID + 8-byte sequence number). Both sides use the sequence numbers to determine which namespaces need syncing: if the peer has a higher sequence number for a namespace, that namespace has new blobs.
 
-### Phase B: Hash Diff
+### Phase B: Set Reconciliation
 
-For each namespace that needs syncing, both sides exchange their full list of blob hashes:
+For each namespace that needs syncing, the initiator drives a multi-round range-based set reconciliation protocol. Both sides sort their blob hashes lexicographically and exchange XOR fingerprints over ranges, recursively splitting mismatched ranges until differences are isolated.
+
+The initiator sends a `ReconcileInit` message to start reconciliation for each namespace:
 
 ```
-Wire format: [namespace_id: 32 bytes]
-             [count: 4 bytes BE uint32]
-             [hash: 32 bytes]
-             [hash: 32 bytes]
-             ...
+ReconcileInit (type 27):
+[version: 1 byte (0x01)]
+[namespace_id: 32 bytes]
+[count: 4 bytes BE uint32]
+[fingerprint: 32 bytes]
 ```
 
-Sent as a `TransportMessage` with `type = HashList (12)`. Each side computes the set difference: blob hashes the peer has that we do not. These are the blobs we need to request.
+The `version` byte enables forward-compatible protocol evolution. The `count` and `fingerprint` describe the initiator's full hash set for this namespace (count = number of hashes, fingerprint = XOR of all hashes).
+
+The responder compares its own fingerprint and count against the received values. If they match, the namespace is identical and the responder sends an empty `ReconcileRanges` to signal completion. If they differ, the responder splits the mismatched range and responds with sub-range fingerprints:
+
+```
+ReconcileRanges (type 28):
+[namespace_id: 32 bytes]
+[range_count: 4 bytes BE uint32]
+for each range:
+    [upper_bound: 32 bytes]
+    [mode: 1 byte]  (0=Skip, 1=Fingerprint, 2=ItemList)
+    if mode == 1 (Fingerprint):
+        [count: 4 bytes BE uint32]
+        [fingerprint: 32 bytes]
+    if mode == 2 (ItemList):
+        [count: 4 bytes BE uint32]
+        [hash: 32 bytes] * count
+```
+
+Range lower bounds are implicit (the previous range's upper bound, or all-zeros for the first range). Mode values:
+- **Skip (0):** Range is identical on both sides; no action needed.
+- **Fingerprint (1):** Sub-range fingerprint for further comparison.
+- **ItemList (2):** Direct list of hashes in this range (used when item count falls below the split threshold of 16).
+
+The protocol exchanges `ReconcileRanges` back and forth until all ranges are resolved. When one side receives ranges containing only Skip and ItemList modes (no Fingerprint), it performs the final item exchange: it collects the peer's items from the ItemList ranges and sends its own items for those ranges via `ReconcileItems`:
+
+```
+ReconcileItems (type 29):
+[namespace_id: 32 bytes]
+[count: 4 bytes BE uint32]
+[hash: 32 bytes] * count
+```
+
+After all namespaces are reconciled, the initiator sends `SyncComplete (15)` to signal the end of Phase B. The reconciliation produces a bidirectional diff: both sides now know which hashes they are missing and can request them in Phase C.
 
 ### Phase C: Blob Transfer
 
@@ -218,8 +253,6 @@ BlobTransfer wire format: [count: 4 bytes BE uint32]
 ```
 
 Each blob is a FlatBuffers-encoded `Blob` (as described in the blob schema above). The receiving side validates each blob (signature, namespace, expiry) before storing it.
-
-After all blob transfers complete, both sides exchange `SyncComplete` messages (empty payload, `type = SyncComplete (15)`).
 
 Inline peer exchange (PEX) follows immediately after sync completes.
 
@@ -305,7 +338,7 @@ Each address is a `host:port` string. Nodes share up to 8 addresses per response
 
 ## Message Type Reference
 
-All 27 message types defined in the `TransportMsgType` enum:
+All message types defined in the `TransportMsgType` enum:
 
 | Value | Name | Description |
 |-------|------|-------------|
@@ -321,10 +354,10 @@ All 27 message types defined in the `TransportMsgType` enum:
 | 9 | SyncRequest | Sync initiation (empty payload) |
 | 10 | SyncAccept | Sync acceptance (empty payload) |
 | 11 | NamespaceList | Sync Phase A: namespace IDs with sequence numbers |
-| 12 | HashList | Sync Phase B: per-namespace blob hash list |
+| 12 | _(removed)_ | _(was HashList, replaced by reconciliation in Phase 39)_ |
 | 13 | BlobRequest | Sync Phase C: request blobs by hash (max 64 per message) |
 | 14 | BlobTransfer | Sync Phase C: requested blob data |
-| 15 | SyncComplete | Sync finished (empty payload) |
+| 15 | SyncComplete | Sync finished / end of Phase B (empty payload) |
 | 16 | PeerListRequest | PEX: request known peer addresses (empty payload) |
 | 17 | PeerListResponse | PEX: list of known peer addresses |
 | 18 | Delete | Blob deletion: FlatBuffer-encoded tombstone Blob |
@@ -336,3 +369,6 @@ All 27 message types defined in the `TransportMsgType` enum:
 | 24 | TrustedHello | Lightweight handshake: trusted peer identity exchange (ML-DSA-87 pubkey + signature, no KEM) |
 | 25 | PQRequired | Lightweight handshake rejection: responder requires full PQ handshake (empty payload) |
 | 26 | QuotaExceeded | Quota signaling: namespace byte or count limit reached (empty payload) |
+| 27 | ReconcileInit | Sync Phase B: start per-namespace reconciliation (version + namespace + count + fingerprint) |
+| 28 | ReconcileRanges | Sync Phase B: range fingerprints/items for reconciliation |
+| 29 | ReconcileItems | Sync Phase B: final item exchange after ranges resolved |

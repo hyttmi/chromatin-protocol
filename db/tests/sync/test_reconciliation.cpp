@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <random>
+#include <set>
 
 namespace {
 
@@ -471,4 +472,194 @@ TEST_CASE("process_ranges: empty set vs fingerprint range", "[reconciliation]") 
     REQUIRE(result.response_ranges.size() == 1);
     REQUIRE(result.response_ranges[0].mode == RangeMode::ItemList);
     REQUIRE(result.response_ranges[0].items.empty());
+}
+
+// ============================================================================
+// Integration: network-style reconciliation simulation
+// ============================================================================
+
+namespace {
+
+/// Simulate network-style reconciliation between two sorted hash sets.
+/// Unlike reconcile_local (which is a clean simulation), this mirrors the
+/// actual network protocol used by peer_manager.cpp:
+///   1. "Initiator" sends full-range fingerprint
+///   2. Sides exchange ReconcileRanges back and forth
+///   3. When one side receives all-resolved ranges (no Fingerprint), it sends
+///      ReconcileItems as the final exchange
+///
+/// Returns (initiator_missing, responder_missing).
+std::pair<std::vector<Hash32>, std::vector<Hash32>> reconcile_network_style(
+    const std::vector<Hash32>& init_sorted,
+    const std::vector<Hash32>& resp_sorted)
+{
+    Hash32 max_hash;
+    max_hash.fill(0xFF);
+
+    // Step 1: Initiator sends ReconcileInit
+    auto init_fp = xor_fingerprint(init_sorted, 0, init_sorted.size());
+    auto init_count = static_cast<uint32_t>(init_sorted.size());
+
+    // Step 2: Responder processes init as a single full-range Fingerprint
+    RangeEntry init_range;
+    init_range.upper_bound = max_hash;
+    init_range.mode = RangeMode::Fingerprint;
+    init_range.count = init_count;
+    init_range.fingerprint = init_fp;
+
+    auto resp_result = process_ranges(resp_sorted, {init_range});
+    std::vector<Hash32> init_peer_items;  // Items initiator learns from responder
+    std::vector<Hash32> resp_peer_items;  // Items responder learns from initiator
+
+    if (resp_result.complete) {
+        // Fingerprints matched -- no diff
+        return {{}, {}};
+    }
+
+    // Responder sends its ranges; initiator processes; back and forth
+    std::vector<RangeEntry> current_ranges = std::move(resp_result.response_ranges);
+    bool initiator_turn = true;  // Initiator processes next
+
+    for (uint32_t round = 0; round < MAX_RECONCILE_ROUNDS; ++round) {
+        const auto& processor = initiator_turn ? init_sorted : resp_sorted;
+
+        // Check if all ranges are resolved (no Fingerprint)
+        bool has_fingerprint = false;
+        for (const auto& r : current_ranges) {
+            if (r.mode == RangeMode::Fingerprint) {
+                has_fingerprint = true;
+                break;
+            }
+        }
+
+        if (!has_fingerprint) {
+            // Final exchange: extract items and send our items back
+            auto& peer_items = initiator_turn ? init_peer_items : resp_peer_items;
+            auto& our_items_out = initiator_turn ? resp_peer_items : init_peer_items;
+
+            for (const auto& r : current_ranges) {
+                if (r.mode == RangeMode::ItemList) {
+                    peer_items.insert(peer_items.end(), r.items.begin(), r.items.end());
+                }
+            }
+
+            // Send our items for the ItemList ranges
+            Hash32 lower{};
+            for (const auto& r : current_ranges) {
+                if (r.mode == RangeMode::ItemList) {
+                    auto [b, e] = range_indices(processor, lower, r.upper_bound);
+                    for (size_t idx = b; idx < e; ++idx) {
+                        our_items_out.push_back(processor[idx]);
+                    }
+                }
+                lower = r.upper_bound;
+            }
+            break;
+        }
+
+        auto result = process_ranges(processor, current_ranges);
+
+        auto& peer_items = initiator_turn ? init_peer_items : resp_peer_items;
+        peer_items.insert(peer_items.end(), result.have_items.begin(), result.have_items.end());
+
+        current_ranges = std::move(result.response_ranges);
+        initiator_turn = !initiator_turn;
+    }
+
+    // Compute diffs
+    std::set<Hash32> init_set(init_sorted.begin(), init_sorted.end());
+    std::set<Hash32> resp_set(resp_sorted.begin(), resp_sorted.end());
+
+    std::vector<Hash32> init_missing;
+    for (const auto& h : init_peer_items) {
+        if (init_set.find(h) == init_set.end()) init_missing.push_back(h);
+    }
+    std::vector<Hash32> resp_missing;
+    for (const auto& h : resp_peer_items) {
+        if (resp_set.find(h) == resp_set.end()) resp_missing.push_back(h);
+    }
+    return {init_missing, resp_missing};
+}
+
+}  // anonymous namespace
+
+TEST_CASE("network-style reconciliation: identical sets", "[reconciliation][integration]") {
+    auto hashes = make_random_hashes(100);
+    auto [init_miss, resp_miss] = reconcile_network_style(hashes, hashes);
+    REQUIRE(init_miss.empty());
+    REQUIRE(resp_miss.empty());
+}
+
+TEST_CASE("network-style reconciliation: one side empty", "[reconciliation][integration]") {
+    auto set_a = make_random_hashes(30, 10);
+    std::vector<Hash32> empty_set;
+
+    auto [init_miss, resp_miss] = reconcile_network_style(empty_set, set_a);
+    std::sort(init_miss.begin(), init_miss.end());
+    REQUIRE(init_miss.size() == set_a.size());
+    REQUIRE(init_miss == set_a);
+    REQUIRE(resp_miss.empty());
+}
+
+TEST_CASE("network-style reconciliation: disjoint sets", "[reconciliation][integration]") {
+    auto set_a = make_random_hashes(20, 20);
+    auto set_b = make_random_hashes(20, 21);
+
+    auto [init_miss, resp_miss] = reconcile_network_style(set_a, set_b);
+    std::sort(init_miss.begin(), init_miss.end());
+    std::sort(resp_miss.begin(), resp_miss.end());
+    REQUIRE(init_miss.size() == set_b.size());
+    REQUIRE(init_miss == set_b);
+    REQUIRE(resp_miss.size() == set_a.size());
+    REQUIRE(resp_miss == set_a);
+}
+
+TEST_CASE("network-style reconciliation: small diff in large sets", "[reconciliation][integration]") {
+    auto base = make_random_hashes(500, 30);
+    auto set_a = base;
+    auto set_b = base;
+
+    // Remove 3 items from set_a, add 2 unique items
+    std::vector<Hash32> removed_a = {set_a[100], set_a[250], set_a[400]};
+    set_a.erase(set_a.begin() + 400);
+    set_a.erase(set_a.begin() + 250);
+    set_a.erase(set_a.begin() + 100);
+
+    Hash32 extra_a1, extra_a2;
+    extra_a1.fill(0);
+    extra_a1[0] = 0xFE;
+    extra_a1[1] = 0x01;
+    extra_a2.fill(0);
+    extra_a2[0] = 0xFE;
+    extra_a2[1] = 0x02;
+    set_a.push_back(extra_a1);
+    set_a.push_back(extra_a2);
+    std::sort(set_a.begin(), set_a.end());
+
+    auto [init_miss, resp_miss] = reconcile_network_style(set_a, set_b);
+    std::sort(init_miss.begin(), init_miss.end());
+    std::sort(resp_miss.begin(), resp_miss.end());
+    std::sort(removed_a.begin(), removed_a.end());
+    std::vector<Hash32> expected_resp_miss = {extra_a1, extra_a2};
+    std::sort(expected_resp_miss.begin(), expected_resp_miss.end());
+
+    REQUIRE(init_miss.size() == 3);
+    REQUIRE(init_miss == removed_a);
+    REQUIRE(resp_miss.size() == 2);
+    REQUIRE(resp_miss == expected_resp_miss);
+}
+
+TEST_CASE("network-style reconciliation: single item each side", "[reconciliation][integration]") {
+    Hash32 h_a;
+    h_a.fill(0x11);
+    Hash32 h_b;
+    h_b.fill(0x22);
+    std::vector<Hash32> set_a = {h_a};
+    std::vector<Hash32> set_b = {h_b};
+
+    auto [init_miss, resp_miss] = reconcile_network_style(set_a, set_b);
+    REQUIRE(init_miss.size() == 1);
+    REQUIRE(init_miss[0] == h_b);
+    REQUIRE(resp_miss.size() == 1);
+    REQUIRE(resp_miss[0] == h_a);
 }
