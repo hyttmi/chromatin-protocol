@@ -160,8 +160,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 40-01-PLAN.md — Wire protocol (SyncRejected=30), config fields, PeerInfo/NodeMetrics extensions, PeerManager infrastructure
-- [ ] 40-02-PLAN.md — Enforcement logic (cooldown, session limit, byte accounting, budget cutoff) and integration tests
+- [x] 40-01-PLAN.md — Wire protocol (SyncRejected=30), config fields, PeerInfo/NodeMetrics extensions, PeerManager infrastructure
+- [x] 40-02-PLAN.md — Enforcement logic (cooldown, session limit, byte accounting, budget cutoff) and integration tests
 
 ### Phase 41: Benchmark Validation
 **Goal**: The Docker benchmark suite confirms that set reconciliation delivers O(diff) sync scaling, thread pool offload improves large-blob throughput, and neither change causes regression for small namespaces
@@ -171,7 +171,10 @@ Plans:
   1. A benchmark scenario with a large namespace (1000+ blobs) and few new blobs (10) demonstrates sync wire traffic and time proportional to differences, not total namespace size
   2. 1 MiB blob ingest/sync throughput is measurably improved over the v0.6.0 baseline (15.3 blobs/sec) with the improvement percentage quantified in the report
   3. Small namespace sync (under 100 blobs) shows no regression from reconciliation or thread pool overhead (within 5% of baseline or better)
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 41-01-PLAN.md — Reconciliation scaling scenario, baseline archive, v0.8.0 comparison report, benchmark run
 
 ## Progress
 
@@ -184,4 +187,4 @@ Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (
 | 38. Thread Pool Crypto Offload | 3/3 | Complete    | 2026-03-19 |
 | 39. Set Reconciliation | 2/2 | Complete    | 2026-03-19 |
 | 40. Sync Rate Limiting | 2/2 | Complete    | 2026-03-19 |
-| 41. Benchmark Validation | 0/TBD | Not started | - |
+| 41. Benchmark Validation | 0/1 | Not started | - |
