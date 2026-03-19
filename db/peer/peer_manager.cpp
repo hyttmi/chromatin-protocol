@@ -375,16 +375,76 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
 void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                    wire::TransportMsgType type,
                                    std::vector<uint8_t> payload) {
+    // Universal byte accounting: all message types consume token bucket bytes (Phase 40).
+    // Placed BEFORE message-type dispatch so every message is metered.
+    // Ping/Pong are handled in Connection::message_loop and never reach here.
+    if (rate_limit_bytes_per_sec_ > 0) {
+        auto* peer = find_peer(conn);
+        if (peer && !try_consume_tokens(*peer, payload.size(),
+                                         rate_limit_bytes_per_sec_, rate_limit_burst_)) {
+            // Bucket exhausted -- behavior depends on message type
+            if (type == wire::TransportMsgType_Data || type == wire::TransportMsgType_Delete) {
+                // Phase 18 behavior preserved: disconnect on Data/Delete exceed
+                ++metrics_.rate_limited;
+                spdlog::warn("rate limit exceeded by peer {} ({} bytes, limit {}B/s), disconnecting",
+                             conn->remote_address(), payload.size(), rate_limit_bytes_per_sec_);
+                asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);
+                return;
+            }
+            if (type == wire::TransportMsgType_SyncRequest) {
+                // Reject new sync initiation when byte budget exceeded
+                send_sync_rejected(conn, SYNC_REJECT_BYTE_RATE);
+                ++metrics_.sync_rejections;
+                spdlog::debug("sync request from {} rejected: byte rate exceeded",
+                              conn->remote_address());
+                return;
+            }
+            // All other messages (sync in-progress, control): route normally.
+            // Mid-sync cutoff handled at namespace boundary by initiator/responder.
+            spdlog::debug("byte budget exceeded for peer {} (type={}), routing anyway",
+                          conn->remote_address(), static_cast<int>(type));
+        }
+    }
+
     // Handle sync messages
     if (type == wire::TransportMsgType_SyncRequest) {
         // Peer wants to sync with us -- handle as responder
         auto* peer = find_peer(conn);
-        if (peer && !peer->syncing) {
-            peer->sync_inbox.clear();  // Fresh sync session
-            asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-                co_await handle_sync_as_responder(conn);
-            }, asio::detached);
+        if (!peer) return;
+
+        // Step 0: Cooldown check (cheapest validation first)
+        if (sync_cooldown_seconds_ > 0) {
+            auto now_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            uint64_t elapsed_ms = now_ms - peer->last_sync_initiated;
+            uint64_t cooldown_ms = static_cast<uint64_t>(sync_cooldown_seconds_) * 1000;
+            if (peer->last_sync_initiated > 0 && elapsed_ms < cooldown_ms) {
+                send_sync_rejected(conn, SYNC_REJECT_COOLDOWN);
+                ++metrics_.sync_rejections;
+                spdlog::debug("sync request from {} rejected: cooldown ({} ms remaining)",
+                              conn->remote_address(), cooldown_ms - elapsed_ms);
+                return;
+            }
         }
+
+        // Step 1: Session limit check
+        if (peer->syncing) {
+            send_sync_rejected(conn, SYNC_REJECT_SESSION_LIMIT);
+            ++metrics_.sync_rejections;
+            spdlog::debug("sync request from {} rejected: session limit",
+                          conn->remote_address());
+            return;
+        }
+
+        // Both checks passed -- accept sync and update timestamp
+        peer->last_sync_initiated = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        peer->sync_inbox.clear();  // Fresh sync session
+        asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
+            co_await handle_sync_as_responder(conn);
+        }, asio::detached);
         return;
     }
 
@@ -407,6 +467,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_SyncAccept ||
+        type == wire::TransportMsgType_SyncRejected ||
         type == wire::TransportMsgType_NamespaceList ||
         type == wire::TransportMsgType_ReconcileInit ||
         type == wire::TransportMsgType_ReconcileRanges ||
@@ -448,21 +509,6 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                          peer->subscribed_namespaces.size());
         }
         return;
-    }
-
-    // Rate limiting: check before Data/Delete processing (Step 0 pattern).
-    // Sync messages (BlobTransfer, SyncRequest, etc.) are never rate-checked.
-    if ((type == wire::TransportMsgType_Data || type == wire::TransportMsgType_Delete) &&
-        rate_limit_bytes_per_sec_ > 0) {
-        auto* peer = find_peer(conn);
-        if (peer && !try_consume_tokens(*peer, payload.size(),
-                                         rate_limit_bytes_per_sec_, rate_limit_burst_)) {
-            ++metrics_.rate_limited;
-            spdlog::warn("rate limit exceeded by peer {} ({} bytes, limit {}B/s), disconnecting",
-                         conn->remote_address(), payload.size(), rate_limit_bytes_per_sec_);
-            asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);
-            return;
-        }
     }
 
     if (type == wire::TransportMsgType_Delete) {
@@ -653,10 +699,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_return;
     }
 
-    // Wait for SyncAccept
+    // Wait for SyncAccept (or SyncRejected)
     auto accept_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
     if (!accept_msg || accept_msg->type != wire::TransportMsgType_SyncAccept) {
-        spdlog::warn("sync with {}: no SyncAccept received", conn->remote_address());
+        if (accept_msg && accept_msg->type == wire::TransportMsgType_SyncRejected) {
+            uint8_t reason = accept_msg->payload.empty() ? 0 : accept_msg->payload[0];
+            spdlog::info("sync with {}: rejected (reason={})", conn->remote_address(), reason);
+        } else {
+            spdlog::warn("sync with {}: no SyncAccept received", conn->remote_address());
+        }
         peer->syncing = false;
         co_return;
     }
@@ -750,6 +801,13 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     max_hash.fill(0xFF);
 
     for (const auto& ns : all_namespaces) {
+        // Byte budget check: if token bucket is exhausted, stop starting new namespaces
+        if (rate_limit_bytes_per_sec_ > 0 && peer->bucket_tokens == 0) {
+            spdlog::info("sync with {}: byte budget exhausted after {} namespaces, sending SyncComplete early",
+                         conn->remote_address(), missing_per_ns.size());
+            break;  // Fall through to SyncComplete
+        }
+
         // Namespace filter
         if (!sync_namespaces_.empty() &&
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
@@ -1131,6 +1189,15 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     std::map<std::array<uint8_t, 32>, std::vector<sync::Hash32>> ns_hash_cache;
 
     while (true) {
+        // Byte budget check (responder): silently stop if budget exhausted
+        // Per CONTEXT.md: "stop responding silently, let initiator hit SYNC_TIMEOUT (30s)"
+        if (rate_limit_bytes_per_sec_ > 0 && peer->bucket_tokens == 0) {
+            spdlog::info("sync responder {}: byte budget exhausted, stopping silently",
+                         conn->remote_address());
+            peer->syncing = false;
+            co_return;  // Initiator will timeout after 30s
+        }
+
         auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
         if (!msg) {
             spdlog::warn("sync responder {}: timeout during Phase B", conn->remote_address());

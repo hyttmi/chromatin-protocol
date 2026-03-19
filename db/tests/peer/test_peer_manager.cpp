@@ -997,6 +997,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:14287";
@@ -1004,6 +1005,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     cfg2.bootstrap_peers = {"127.0.0.1:14286"};
     cfg2.sync_interval_seconds = 3;
     cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -1161,6 +1163,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:14271";
@@ -1168,6 +1171,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     cfg2.bootstrap_peers = {"127.0.0.1:14270"};
     cfg2.sync_interval_seconds = 3;
     cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -1698,6 +1702,7 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:14341";
@@ -1705,6 +1710,7 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     cfg2.bootstrap_peers = {"127.0.0.1:14340"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
     cfg2.sync_namespaces = {id1_ns_hex};  // Only replicate id1's namespace
 
     Storage store1(tmp1.path.string());
