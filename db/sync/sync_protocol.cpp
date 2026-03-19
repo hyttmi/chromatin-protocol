@@ -3,7 +3,6 @@
 #include <spdlog/spdlog.h>
 
 #include <cstring>
-#include <unordered_set>
 
 namespace chromatindb::sync {
 
@@ -33,32 +32,6 @@ std::vector<std::array<uint8_t, 32>> SyncProtocol::collect_namespace_hashes(
     // Expiry filtering is not done here; expired blobs synced to peers
     // are harmless -- the peer's expiry scanner handles cleanup.
     return storage_.get_hashes_by_namespace(namespace_id);
-}
-
-// =============================================================================
-// Hash-list diff
-// =============================================================================
-
-std::vector<std::array<uint8_t, 32>> SyncProtocol::diff_hashes(
-    const std::vector<std::array<uint8_t, 32>>& ours,
-    const std::vector<std::array<uint8_t, 32>>& theirs) {
-    // Build a set of our hashes for O(1) lookup
-    std::unordered_set<std::string> our_set;
-    our_set.reserve(ours.size());
-    for (const auto& h : ours) {
-        our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
-    }
-
-    // Find hashes in theirs not in ours
-    std::vector<std::array<uint8_t, 32>> missing;
-    for (const auto& h : theirs) {
-        std::string key(reinterpret_cast<const char*>(h.data()), h.size());
-        if (our_set.find(key) == our_set.end()) {
-            missing.push_back(h);
-        }
-    }
-
-    return missing;
 }
 
 // =============================================================================
@@ -223,7 +196,7 @@ std::vector<storage::NamespaceInfo> SyncProtocol::decode_namespace_list(
     return result;
 }
 
-std::vector<uint8_t> SyncProtocol::encode_hash_list(
+std::vector<uint8_t> SyncProtocol::encode_blob_request(
     std::span<const uint8_t, 32> namespace_id,
     const std::vector<std::array<uint8_t, 32>>& hashes) {
     // Format: [ns:32B][count:u32BE][hash1:32B]...[hashN:32B]
@@ -240,7 +213,7 @@ std::vector<uint8_t> SyncProtocol::encode_hash_list(
 }
 
 std::pair<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>>
-SyncProtocol::decode_hash_list(std::span<const uint8_t> payload) {
+SyncProtocol::decode_blob_request(std::span<const uint8_t> payload) {
     std::array<uint8_t, 32> ns{};
     std::vector<std::array<uint8_t, 32>> hashes;
 

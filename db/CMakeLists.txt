@@ -164,6 +164,7 @@ add_library(chromatindb_lib STATIC
   net/connection.cpp
   net/server.cpp
   sync/sync_protocol.cpp
+  sync/reconciliation.cpp
   peer/peer_manager.cpp
   acl/access_control.cpp
 )
@@ -221,6 +222,7 @@ if(BUILD_TESTING)
     tests/net/test_server.cpp
     tests/peer/test_peer_manager.cpp
     tests/storage/test_storage.cpp
+    tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp

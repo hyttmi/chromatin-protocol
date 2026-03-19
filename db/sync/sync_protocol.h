@@ -50,11 +50,6 @@ public:
     std::vector<std::array<uint8_t, 32>> collect_namespace_hashes(
         std::span<const uint8_t, 32> namespace_id);
 
-    /// Compute the set difference: hashes in `theirs` not present in `ours`.
-    static std::vector<std::array<uint8_t, 32>> diff_hashes(
-        const std::vector<std::array<uint8_t, 32>>& ours,
-        const std::vector<std::array<uint8_t, 32>>& theirs);
-
     /// Retrieve blobs by their content hashes from a specific namespace.
     std::vector<wire::BlobData> get_blobs_by_hashes(
         std::span<const uint8_t, 32> namespace_id,
@@ -90,15 +85,15 @@ public:
     static std::vector<storage::NamespaceInfo> decode_namespace_list(
         std::span<const uint8_t> payload);
 
-    /// Encode a hash list for a specific namespace.
+    /// Encode a blob request for a specific namespace.
     /// Wire format: [ns:32B][count:u32BE][hash1:32B]...[hashN:32B]
-    static std::vector<uint8_t> encode_hash_list(
+    static std::vector<uint8_t> encode_blob_request(
         std::span<const uint8_t, 32> namespace_id,
         const std::vector<std::array<uint8_t, 32>>& hashes);
 
-    /// Decode a hash list. Returns (namespace_id, hashes).
+    /// Decode a blob request. Returns (namespace_id, hashes).
     static std::pair<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>>
-        decode_hash_list(std::span<const uint8_t> payload);
+        decode_blob_request(std::span<const uint8_t> payload);
 
     /// Encode blobs for transfer.
     /// Wire format: [count:u32BE][len1:u32BE][blob1_flatbuf]...[lenN:u32BE][blobN_flatbuf]

@@ -33,7 +33,6 @@ enum TransportMsgType : int8_t {
   TransportMsgType_SyncRequest = 9,
   TransportMsgType_SyncAccept = 10,
   TransportMsgType_NamespaceList = 11,
-  TransportMsgType_HashList = 12,
   TransportMsgType_BlobRequest = 13,
   TransportMsgType_BlobTransfer = 14,
   TransportMsgType_SyncComplete = 15,
@@ -48,11 +47,14 @@ enum TransportMsgType : int8_t {
   TransportMsgType_TrustedHello = 24,
   TransportMsgType_PQRequired = 25,
   TransportMsgType_QuotaExceeded = 26,
+  TransportMsgType_ReconcileInit = 27,
+  TransportMsgType_ReconcileRanges = 28,
+  TransportMsgType_ReconcileItems = 29,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_QuotaExceeded
+  TransportMsgType_MAX = TransportMsgType_ReconcileItems
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[27] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[29] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -66,7 +68,6 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[27] {
     TransportMsgType_SyncRequest,
     TransportMsgType_SyncAccept,
     TransportMsgType_NamespaceList,
-    TransportMsgType_HashList,
     TransportMsgType_BlobRequest,
     TransportMsgType_BlobTransfer,
     TransportMsgType_SyncComplete,
@@ -80,13 +81,16 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[27] {
     TransportMsgType_StorageFull,
     TransportMsgType_TrustedHello,
     TransportMsgType_PQRequired,
-    TransportMsgType_QuotaExceeded
+    TransportMsgType_QuotaExceeded,
+    TransportMsgType_ReconcileInit,
+    TransportMsgType_ReconcileRanges,
+    TransportMsgType_ReconcileItems
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[28] = {
+  static const char * const names[31] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -99,7 +103,7 @@ inline const char * const *EnumNamesTransportMsgType() {
     "SyncRequest",
     "SyncAccept",
     "NamespaceList",
-    "HashList",
+    "",
     "BlobRequest",
     "BlobTransfer",
     "SyncComplete",
@@ -114,13 +118,16 @@ inline const char * const *EnumNamesTransportMsgType() {
     "TrustedHello",
     "PQRequired",
     "QuotaExceeded",
+    "ReconcileInit",
+    "ReconcileRanges",
+    "ReconcileItems",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_QuotaExceeded)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_ReconcileItems)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

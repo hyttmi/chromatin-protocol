@@ -14,7 +14,6 @@ enum TransportMsgType : byte {
     SyncRequest = 9,
     SyncAccept = 10,
     NamespaceList = 11,
-    HashList = 12,
     BlobRequest = 13,
     BlobTransfer = 14,
     SyncComplete = 15,
@@ -34,7 +33,11 @@ enum TransportMsgType : byte {
     TrustedHello = 24,
     PQRequired = 25,
     // Phase 35: Namespace quota signaling
-    QuotaExceeded = 26
+    QuotaExceeded = 26,
+    // Phase 39: Set reconciliation
+    ReconcileInit = 27,
+    ReconcileRanges = 28,
+    ReconcileItems = 29
 }
 
 table TransportMessage {

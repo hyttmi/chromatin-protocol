@@ -3,6 +3,7 @@
 #include <fstream>
 #include <random>
 #include <cstring>
+#include <unordered_set>
 
 #include <asio.hpp>
 #include <asio/co_spawn.hpp>
@@ -18,6 +19,26 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+/// Compute set difference: hashes in `theirs` not in `ours`.
+/// Local test helper replacing the removed diff_hashes().
+std::vector<std::array<uint8_t, 32>> diff_hashes(
+    const std::vector<std::array<uint8_t, 32>>& ours,
+    const std::vector<std::array<uint8_t, 32>>& theirs) {
+    std::unordered_set<std::string> our_set;
+    our_set.reserve(ours.size());
+    for (const auto& h : ours) {
+        our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+    }
+    std::vector<std::array<uint8_t, 32>> missing;
+    for (const auto& h : theirs) {
+        std::string key(reinterpret_cast<const char*>(h.data()), h.size());
+        if (our_set.find(key) == our_set.end()) {
+            missing.push_back(h);
+        }
+    }
+    return missing;
+}
 
 /// Run an awaitable synchronously using a temporary io_context.
 /// Used in tests to call async BlobEngine and SyncProtocol methods.
@@ -205,49 +226,7 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     REQUIRE(hashes.size() == 3);
 }
 
-// ============================================================================
-// diff_hashes
-// ============================================================================
-
-TEST_CASE("diff_hashes", "[sync]") {
-    std::array<uint8_t, 32> h1{}, h2{}, h3{};
-    h1.fill(0x01);
-    h2.fill(0x02);
-    h3.fill(0x03);
-
-    SECTION("identifies missing hashes") {
-        std::vector<std::array<uint8_t, 32>> ours = {h1, h2};
-        std::vector<std::array<uint8_t, 32>> theirs = {h1, h2, h3};
-
-        auto missing = SyncProtocol::diff_hashes(ours, theirs);
-        REQUIRE(missing.size() == 1);
-        REQUIRE(missing[0] == h3);
-    }
-
-    SECTION("empty diff when identical") {
-        std::vector<std::array<uint8_t, 32>> ours = {h1, h2};
-        std::vector<std::array<uint8_t, 32>> theirs = {h1, h2};
-
-        auto missing = SyncProtocol::diff_hashes(ours, theirs);
-        REQUIRE(missing.empty());
-    }
-
-    SECTION("all missing when ours is empty") {
-        std::vector<std::array<uint8_t, 32>> ours;
-        std::vector<std::array<uint8_t, 32>> theirs = {h1, h2, h3};
-
-        auto missing = SyncProtocol::diff_hashes(ours, theirs);
-        REQUIRE(missing.size() == 3);
-    }
-
-    SECTION("no missing when theirs is empty") {
-        std::vector<std::array<uint8_t, 32>> ours = {h1, h2};
-        std::vector<std::array<uint8_t, 32>> theirs;
-
-        auto missing = SyncProtocol::diff_hashes(ours, theirs);
-        REQUIRE(missing.empty());
-    }
-}
+// diff_hashes removed in Phase 39 -- replaced by reconciliation module
 
 // ============================================================================
 // Bidirectional sync
@@ -289,7 +268,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto hashes_2_ns1 = sync2.collect_namespace_hashes(id1.namespace_id());
 
     // Engine2 needs what engine1 has in id1's namespace
-    auto missing_on_2 = SyncProtocol::diff_hashes(hashes_2_ns1, hashes_1_ns1);
+    auto missing_on_2 = diff_hashes(hashes_2_ns1, hashes_1_ns1);
     REQUIRE(missing_on_2.size() == 2);  // blob_a and blob_b
 
     // Transfer missing blobs
@@ -303,7 +282,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto hashes_1_ns2 = sync1.collect_namespace_hashes(id2.namespace_id());
     auto hashes_2_ns2 = sync2.collect_namespace_hashes(id2.namespace_id());
 
-    auto missing_on_1 = SyncProtocol::diff_hashes(hashes_1_ns2, hashes_2_ns2);
+    auto missing_on_1 = diff_hashes(hashes_1_ns2, hashes_2_ns2);
     REQUIRE(missing_on_1.size() == 1);  // blob_c
 
     auto transfer_blobs_2 = sync2.get_blobs_by_hashes(id2.namespace_id(), missing_on_1);
@@ -375,7 +354,7 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
 
     // Diff should be empty -- both sides have the same data
-    auto missing = SyncProtocol::diff_hashes(hashes1, hashes2);
+    auto missing = diff_hashes(hashes1, hashes2);
     REQUIRE(missing.empty());
 }
 
@@ -404,7 +383,7 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
 
     // Full diff: everything from engine1 is missing on engine2
     auto hashes1 = sync1.collect_namespace_hashes(id.namespace_id());
-    auto missing = SyncProtocol::diff_hashes(hashes2, hashes1);
+    auto missing = diff_hashes(hashes2, hashes1);
     REQUIRE(missing.size() == 1);
 }
 
@@ -442,7 +421,7 @@ TEST_CASE("namespace list empty round-trip", "[sync][codec]") {
     REQUIRE(decoded.empty());
 }
 
-TEST_CASE("hash list encode/decode round-trip", "[sync][codec]") {
+TEST_CASE("blob request encode/decode round-trip", "[sync][codec]") {
     std::array<uint8_t, 32> ns{};
     ns.fill(0xCC);
 
@@ -453,8 +432,8 @@ TEST_CASE("hash list encode/decode round-trip", "[sync][codec]") {
     hashes.push_back(h1);
     hashes.push_back(h2);
 
-    auto encoded = SyncProtocol::encode_hash_list(ns, hashes);
-    auto [decoded_ns, decoded_hashes] = SyncProtocol::decode_hash_list(encoded);
+    auto encoded = SyncProtocol::encode_blob_request(ns, hashes);
+    auto [decoded_ns, decoded_hashes] = SyncProtocol::decode_blob_request(encoded);
 
     REQUIRE(decoded_ns == ns);
     REQUIRE(decoded_hashes.size() == 2);
@@ -561,7 +540,7 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
 
     // Node2 needs the tombstone (it has the original blob but not the tombstone)
-    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    auto missing_on_2 = diff_hashes(hashes2, hashes1);
     REQUIRE(missing_on_2.size() == 1);  // The tombstone
 
     // Transfer the tombstone to node2
@@ -710,7 +689,7 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
 
-    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    auto missing_on_2 = diff_hashes(hashes2, hashes1);
     REQUIRE(missing_on_2.size() == 1);
 
     auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);
@@ -752,7 +731,7 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
 
-    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    auto missing_on_2 = diff_hashes(hashes2, hashes1);
     REQUIRE(missing_on_2.size() == 2);  // delegation blob + delegate-written blob
 
     auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);
@@ -829,7 +808,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
 
-    auto missing_on_2 = SyncProtocol::diff_hashes(hashes2, hashes1);
+    auto missing_on_2 = diff_hashes(hashes2, hashes1);
     REQUIRE(missing_on_2.size() == 1);  // Just the tombstone
 
     auto transfer = sync1.get_blobs_by_hashes(owner.namespace_id(), missing_on_2);

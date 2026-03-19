@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <map>
 #include <sstream>
+#include <unordered_set>
 
 namespace chromatindb::peer {
 
@@ -397,7 +398,9 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_SyncAccept ||
         type == wire::TransportMsgType_NamespaceList ||
-        type == wire::TransportMsgType_HashList ||
+        type == wire::TransportMsgType_ReconcileInit ||
+        type == wire::TransportMsgType_ReconcileRanges ||
+        type == wire::TransportMsgType_ReconcileItems ||
         type == wire::TransportMsgType_BlobRequest ||
         type == wire::TransportMsgType_BlobTransfer ||
         type == wire::TransportMsgType_SyncComplete ||
@@ -663,8 +666,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
     for (const auto& ns_info : our_namespaces) {
         auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
-        auto hl_payload = sync::SyncProtocol::encode_hash_list(ns_info.namespace_id, hashes);
-        if (!co_await conn->send_message(wire::TransportMsgType_HashList, hl_payload)) {
+        auto hl_payload = sync::SyncProtocol::encode_blob_request(ns_info.namespace_id, hashes);
+        if (!co_await conn->send_message(wire::TransportMsgType_ReconcileItems, hl_payload)) {
             peer->syncing = false;
             co_return;
         }
@@ -754,14 +757,14 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     while (true) {
         auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
         if (!msg) {
-            spdlog::warn("sync with {}: timeout waiting for HashList/SyncComplete",
+            spdlog::warn("sync with {}: timeout waiting for ReconcileItems/SyncComplete",
                          conn->remote_address());
             peer->syncing = false;
             co_return;
         }
         if (msg->type == wire::TransportMsgType_SyncComplete) break;
-        if (msg->type == wire::TransportMsgType_HashList) {
-            auto [ns, hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+        if (msg->type == wire::TransportMsgType_ReconcileItems) {
+            auto [ns, hashes] = sync::SyncProtocol::decode_blob_request(msg->payload);
             peer_hashes[ns] = std::move(hashes);
         }
     }
@@ -788,7 +791,21 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         ++metrics_.cursor_misses;
 
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
-        auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
+        // Compute set difference: hashes in theirs not in ours
+        std::vector<std::array<uint8_t, 32>> missing;
+        {
+            std::unordered_set<std::string> our_set;
+            our_set.reserve(our_hashes.size());
+            for (const auto& h : our_hashes) {
+                our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+            }
+            for (const auto& h : their_hashes) {
+                std::string key(reinterpret_cast<const char*>(h.data()), h.size());
+                if (our_set.find(key) == our_set.end()) {
+                    missing.push_back(h);
+                }
+            }
+        }
         if (missing.empty()) {
             total_stats.namespaces_synced++;
             continue;
@@ -802,7 +819,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 missing.begin() + static_cast<ptrdiff_t>(i),
                 missing.begin() + static_cast<ptrdiff_t>(batch_end));
 
-            auto req_payload = sync::SyncProtocol::encode_hash_list(ns, batch);
+            auto req_payload = sync::SyncProtocol::encode_blob_request(ns, batch);
             if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
                 peer->syncing = false;
                 co_return;
@@ -834,7 +851,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                         continue;
                     }
                     auto [req_ns, requested_hashes] =
-                        sync::SyncProtocol::decode_hash_list(msg->payload);
+                        sync::SyncProtocol::decode_blob_request(msg->payload);
                     for (const auto& hash : requested_hashes) {
                         auto blob = engine_.get_blob(req_ns, hash);
                         if (blob.has_value()) {
@@ -863,7 +880,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 continue;
             }
             auto [req_ns, requested_hashes] =
-                sync::SyncProtocol::decode_hash_list(msg->payload);
+                sync::SyncProtocol::decode_blob_request(msg->payload);
             for (const auto& hash : requested_hashes) {
                 auto blob = engine_.get_blob(req_ns, hash);
                 if (blob.has_value()) {
@@ -960,8 +977,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
     for (const auto& ns_info : our_namespaces) {
         auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
-        auto hl_payload = sync::SyncProtocol::encode_hash_list(ns_info.namespace_id, hashes);
-        co_await conn->send_message(wire::TransportMsgType_HashList, hl_payload);
+        auto hl_payload = sync::SyncProtocol::encode_blob_request(ns_info.namespace_id, hashes);
+        co_await conn->send_message(wire::TransportMsgType_ReconcileItems, hl_payload);
     }
 
     co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty);
@@ -1031,14 +1048,14 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     while (true) {
         auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
         if (!msg) {
-            spdlog::warn("sync responder {}: timeout waiting for HashList/SyncComplete",
+            spdlog::warn("sync responder {}: timeout waiting for ReconcileItems/SyncComplete",
                          conn->remote_address());
             peer->syncing = false;
             co_return;
         }
         if (msg->type == wire::TransportMsgType_SyncComplete) break;
-        if (msg->type == wire::TransportMsgType_HashList) {
-            auto [ns, hashes] = sync::SyncProtocol::decode_hash_list(msg->payload);
+        if (msg->type == wire::TransportMsgType_ReconcileItems) {
+            auto [ns, hashes] = sync::SyncProtocol::decode_blob_request(msg->payload);
             peer_hashes[ns] = std::move(hashes);
         }
     }
@@ -1062,7 +1079,21 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         ++metrics_.cursor_misses;
 
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
-        auto missing = sync::SyncProtocol::diff_hashes(our_hashes, their_hashes);
+        // Compute set difference: hashes in theirs not in ours
+        std::vector<std::array<uint8_t, 32>> missing;
+        {
+            std::unordered_set<std::string> our_set;
+            our_set.reserve(our_hashes.size());
+            for (const auto& h : our_hashes) {
+                our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+            }
+            for (const auto& h : their_hashes) {
+                std::string key(reinterpret_cast<const char*>(h.data()), h.size());
+                if (our_set.find(key) == our_set.end()) {
+                    missing.push_back(h);
+                }
+            }
+        }
         if (missing.empty()) {
             total_stats.namespaces_synced++;
             continue;
@@ -1075,7 +1106,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 missing.begin() + static_cast<ptrdiff_t>(i),
                 missing.begin() + static_cast<ptrdiff_t>(batch_end));
 
-            auto req_payload = sync::SyncProtocol::encode_hash_list(ns, batch);
+            auto req_payload = sync::SyncProtocol::encode_blob_request(ns, batch);
             co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
 
             uint32_t expected = static_cast<uint32_t>(batch.size());
@@ -1102,7 +1133,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                         continue;
                     }
                     auto [req_ns, requested_hashes] =
-                        sync::SyncProtocol::decode_hash_list(msg->payload);
+                        sync::SyncProtocol::decode_blob_request(msg->payload);
                     for (const auto& hash : requested_hashes) {
                         auto blob = engine_.get_blob(req_ns, hash);
                         if (blob.has_value()) {
@@ -1131,7 +1162,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 continue;
             }
             auto [req_ns, requested_hashes] =
-                sync::SyncProtocol::decode_hash_list(msg->payload);
+                sync::SyncProtocol::decode_blob_request(msg->payload);
             for (const auto& hash : requested_hashes) {
                 auto blob = engine_.get_blob(req_ns, hash);
                 if (blob.has_value()) {
