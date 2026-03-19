@@ -1,6 +1,7 @@
 #include "db/net/connection.h"
 
 #include "db/crypto/signing.h"
+#include "db/crypto/thread_pool.h"
 
 #include <sodium.h>
 #include <spdlog/spdlog.h>
@@ -294,8 +295,17 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
         std::vector<uint8_t> resp_sig(resp_decoded->payload.begin() + 4 + rpk_size,
                                        resp_decoded->payload.end());
 
-        bool valid = crypto::Signer::verify(
-            session_keys_.session_fingerprint, resp_sig, resp_pk);
+        bool valid;
+        if (pool_) {
+            valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+                [&]() {
+                    return crypto::Signer::verify(
+                        session_keys_.session_fingerprint, resp_sig, resp_pk);
+                });
+        } else {
+            valid = crypto::Signer::verify(
+                session_keys_.session_fingerprint, resp_sig, resp_pk);
+        }
         if (!valid) {
             spdlog::warn("handshake: peer auth signature invalid (fallback)");
             co_return false;
@@ -384,8 +394,17 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
     std::vector<uint8_t> resp_sig(decoded->payload.begin() + 4 + rpk_size,
                                    decoded->payload.end());
 
-    bool valid = crypto::Signer::verify(
-        session_keys_.session_fingerprint, resp_sig, resp_pk);
+    bool valid;
+    if (pool_) {
+        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+            [&]() {
+                return crypto::Signer::verify(
+                    session_keys_.session_fingerprint, resp_sig, resp_pk);
+            });
+    } else {
+        valid = crypto::Signer::verify(
+            session_keys_.session_fingerprint, resp_sig, resp_pk);
+    }
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid");
         co_return false;
@@ -508,8 +527,17 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
     std::vector<uint8_t> init_sig(decoded->payload.begin() + 4 + ipk_size,
                                    decoded->payload.end());
 
-    bool valid = crypto::Signer::verify(
-        session_keys_.session_fingerprint, init_sig, init_pk);
+    bool valid;
+    if (pool_) {
+        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+            [&]() {
+                return crypto::Signer::verify(
+                    session_keys_.session_fingerprint, init_sig, init_pk);
+            });
+    } else {
+        valid = crypto::Signer::verify(
+            session_keys_.session_fingerprint, init_sig, init_pk);
+    }
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid (fallback)");
         co_return false;
@@ -589,8 +617,17 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
     std::vector<uint8_t> init_sig(decoded->payload.begin() + 4 + ipk_size,
                                    decoded->payload.end());
 
-    bool valid = crypto::Signer::verify(
-        session_keys_.session_fingerprint, init_sig, init_pk);
+    bool valid;
+    if (pool_) {
+        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+            [&]() {
+                return crypto::Signer::verify(
+                    session_keys_.session_fingerprint, init_sig, init_pk);
+            });
+    } else {
+        valid = crypto::Signer::verify(
+            session_keys_.session_fingerprint, init_sig, init_pk);
+    }
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid");
         co_return false;
