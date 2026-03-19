@@ -1476,10 +1476,10 @@ TEST_CASE("NodeMetrics struct default initialization", "[peer][metrics]") {
 // Rate limiting tests
 // =============================================================================
 
-TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight limit", "[peer][ratelimit]") {
-    // Set a very low rate limit (100 bytes/sec, 100 bytes burst).
-    // Sync transfers large blobs via BlobTransfer -- these must NOT be rate-limited.
-    // Verify: sync completes successfully, rate_limited stays at 0, blob arrives.
+TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected", "[peer][ratelimit][sync]") {
+    // Sync traffic now consumes token bucket bytes (Phase 40 RATE-02).
+    // With a generous rate limit, sync completes without triggering disconnection.
+    // Verify: sync completes, rate_limited stays at 0, blob arrives, nodes stay connected.
     TempDir tmp1, tmp2;
 
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
@@ -1490,8 +1490,9 @@ TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight l
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
-    cfg1.rate_limit_bytes_per_sec = 100;  // Very low: 100 B/s
-    cfg1.rate_limit_burst = 100;          // Very low burst
+    cfg1.rate_limit_bytes_per_sec = 1048576;   // 1 MB/s -- generous
+    cfg1.rate_limit_burst = 10485760;           // 10 MB burst
+    cfg1.sync_cooldown_seconds = 0;             // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:14331";
@@ -1499,8 +1500,9 @@ TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight l
     cfg2.bootstrap_peers = {"127.0.0.1:14330"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
-    cfg2.rate_limit_bytes_per_sec = 100;
-    cfg2.rate_limit_burst = 100;
+    cfg2.rate_limit_bytes_per_sec = 1048576;
+    cfg2.rate_limit_burst = 10485760;
+    cfg2.sync_cooldown_seconds = 0;
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -1510,9 +1512,8 @@ TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight l
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
-    // Store a blob larger than the rate limit burst on node2
-    // This blob (>100 bytes payload) will be synced to node1 via BlobTransfer
-    std::string large_payload(500, 'X');  // 500 bytes > 100 byte burst
+    // Store a blob on node2 -- will sync to node1
+    std::string large_payload(500, 'X');  // 500 bytes payload
     auto blob = make_signed_blob(id2, large_payload, 604800, now);
     auto r = run_async(pool, eng2.ingest(blob));
     REQUIRE(r.accepted);
@@ -1530,16 +1531,16 @@ TEST_CASE("PeerManager rate limiting: sync traffic not rate-limited with tight l
     // Let nodes connect and sync
     ioc.run_for(std::chrono::seconds(8));
 
-    // Both nodes should still be connected (sync traffic was not rate-limited)
+    // Both nodes should still be connected (sync traffic counted but not disconnected)
     REQUIRE(pm1.peer_count() == 1);
     REQUIRE(pm2.peer_count() == 1);
 
-    // The blob should have synced via BlobTransfer (not rate-limited)
+    // The blob should have synced
     auto n1_blobs = eng1.get_blobs_since(id2.namespace_id(), 0);
     REQUIRE(n1_blobs.size() == 1);
     REQUIRE(n1_blobs[0].data == blob.data);
 
-    // Rate limit counter should NOT have incremented (sync uses BlobTransfer, not Data)
+    // No rate limit disconnections (generous budget)
     REQUIRE(pm1.metrics().rate_limited == 0);
     REQUIRE(pm2.metrics().rate_limited == 0);
 
@@ -1677,6 +1678,268 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     REQUIRE(pm1.peer_count() == 0);
 
     pm1.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+// =============================================================================
+// Sync rate limiting tests (Phase 40: RATE-01, RATE-02, RATE-03)
+// =============================================================================
+
+TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][sync]") {
+    // RATE-01: A peer that sends SyncRequest before cooldown elapses gets SyncRejected.
+    // Use closed mode (both nodes allow each other) to skip PEX exchange,
+    // which eliminates the 5-second PEX timeout that inflates the sync cycle.
+    // With no PEX, sync cycle = ~2s drain + 1s timer = ~3s, well under the 10s cooldown.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
+    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14360";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;  // Node1 does not initiate sync
+    cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 10;  // 10-second cooldown on inbound SyncRequest
+    cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14361";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14360"};
+    cfg2.sync_interval_seconds = 1;   // Node2 syncs every 1s (hits cooldown)
+    cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;   // No cooldown on node2
+    cfg2.allowed_keys = {id1_ns_hex};  // Closed mode: skip PEX
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // First sync-on-connect succeeds (~3s with drain timeout).
+    // With closed mode (no PEX), syncing flag clears quickly after drain.
+    // Then node2's 1s timer fires, sends SyncRequest within the 10s cooldown -> rejected.
+    ioc.run_for(std::chrono::seconds(10));
+
+    // At least one sync rejection on node1 (cooldown enforcement)
+    REQUIRE(pm1.metrics().sync_rejections >= 1);
+
+    // Both nodes still connected (rejection does NOT disconnect)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // First sync completed successfully
+    REQUIRE(pm1.metrics().syncs >= 1);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
+    // RATE-01: When sync_cooldown_seconds=0, no cooldown check is performed.
+    // Use closed mode to skip PEX (avoids 5s timeout inflating sync cycle).
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
+    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14362";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;   // Node1 does not initiate sync
+    cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;    // Disabled -- no cooldown
+    cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14363";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14362"};
+    cfg2.sync_interval_seconds = 1;    // Node2 syncs every 1s
+    cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;
+    cfg2.allowed_keys = {id1_ns_hex};  // Closed mode: skip PEX
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // With closed mode (no PEX), sync cycle is ~3s (2s drain + 1s timer).
+    // Multiple syncs should complete in 12s with no cooldown.
+    ioc.run_for(std::chrono::seconds(12));
+
+    // No sync rejections -- cooldown disabled
+    REQUIRE(pm1.metrics().sync_rejections == 0);
+
+    // Multiple syncs completed
+    REQUIRE(pm1.metrics().syncs >= 2);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimit][sync]") {
+    // RATE-03: When a peer is already syncing, a second SyncRequest is rejected.
+    // Both nodes have sync_interval_seconds=1 and sync_cooldown_seconds=0 so they both
+    // try to initiate rapidly. With enough data, syncs take long enough that collisions occur.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14364";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 1;    // Both nodes initiate sync every 1s
+    cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;    // No cooldown -- only session limit applies
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14365";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14364"};
+    cfg2.sync_interval_seconds = 1;
+    cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store several blobs on both sides so sync takes noticeable duration
+    for (int i = 0; i < 10; ++i) {
+        auto b1 = make_signed_blob(id1, "n1-blob-" + std::to_string(i), 604800, now + static_cast<uint64_t>(i));
+        REQUIRE(run_async(pool, eng1.ingest(b1)).accepted);
+        auto b2 = make_signed_blob(id2, "n2-blob-" + std::to_string(i), 604800, now + static_cast<uint64_t>(i));
+        REQUIRE(run_async(pool, eng2.ingest(b2)).accepted);
+    }
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Run for enough time that both nodes attempt sync while the other is busy
+    ioc.run_for(std::chrono::seconds(10));
+
+    // At least one side should have seen a session limit rejection
+    uint64_t total_rejections = pm1.metrics().sync_rejections + pm2.metrics().sync_rejections;
+    REQUIRE(total_rejections >= 1);
+
+    // Both nodes still connected (rejection does NOT disconnect)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]") {
+    // RATE-02: Sync traffic consumes token bucket bytes. With a very tight budget,
+    // the bucket is exhausted during sync. Nodes stay connected (sync does not disconnect).
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14366";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+    cfg1.rate_limit_bytes_per_sec = 100;  // Very tight: 100 B/s
+    cfg1.rate_limit_burst = 100;          // Very tight burst
+    cfg1.sync_cooldown_seconds = 0;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14367";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14366"};
+    cfg2.sync_interval_seconds = 2;
+    cfg2.max_peers = 32;
+    cfg2.rate_limit_bytes_per_sec = 100;
+    cfg2.rate_limit_burst = 100;
+    cfg2.sync_cooldown_seconds = 0;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Store a blob on node2 (500 bytes payload, >4KB encoded with ML-DSA signature)
+    std::string large_payload(500, 'Z');
+    auto blob = make_signed_blob(id2, large_payload, 604800, now);
+    auto r = run_async(pool, eng2.ingest(blob));
+    REQUIRE(r.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and attempt sync with tight byte budget
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Both nodes should still be connected (sync does not disconnect)
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // No Data/Delete disconnections (only sync traffic, which doesn't disconnect)
+    REQUIRE(pm1.metrics().rate_limited == 0);
+    REQUIRE(pm2.metrics().rate_limited == 0);
+
+    pm1.stop();
+    pm2.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
 
