@@ -252,6 +252,9 @@ private:
     FullResyncReason check_full_resync(
         const storage::SyncCursor& cursor, uint64_t now) const;
 
+    // Sync rate limiting (Phase 40)
+    void send_sync_rejected(net::Connection::Ptr conn, uint8_t reason);
+
     // Helpers
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
     std::string peer_display_name(const net::Connection::Ptr& conn);
@@ -286,6 +289,8 @@ private:
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
     uint64_t cursor_stale_seconds_ = 3600;        // Force full resync after gap (Phase 34)
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
+    uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
+    uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;

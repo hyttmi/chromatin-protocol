@@ -50,11 +50,12 @@ enum TransportMsgType : int8_t {
   TransportMsgType_ReconcileInit = 27,
   TransportMsgType_ReconcileRanges = 28,
   TransportMsgType_ReconcileItems = 29,
+  TransportMsgType_SyncRejected = 30,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_ReconcileItems
+  TransportMsgType_MAX = TransportMsgType_SyncRejected
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[29] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[30] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -84,13 +85,14 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[29] {
     TransportMsgType_QuotaExceeded,
     TransportMsgType_ReconcileInit,
     TransportMsgType_ReconcileRanges,
-    TransportMsgType_ReconcileItems
+    TransportMsgType_ReconcileItems,
+    TransportMsgType_SyncRejected
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[31] = {
+  static const char * const names[32] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -121,13 +123,14 @@ inline const char * const *EnumNamesTransportMsgType() {
     "ReconcileInit",
     "ReconcileRanges",
     "ReconcileItems",
+    "SyncRejected",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_ReconcileItems)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_SyncRejected)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

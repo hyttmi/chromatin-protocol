@@ -66,6 +66,11 @@ std::array<uint8_t, 32> hex_to_namespace(const std::string& hex) {
     return result;
 }
 
+// Sync rejection reason bytes (SyncRejected payload)
+constexpr uint8_t SYNC_REJECT_COOLDOWN = 0x01;
+constexpr uint8_t SYNC_REJECT_SESSION_LIMIT = 0x02;
+constexpr uint8_t SYNC_REJECT_BYTE_RATE = 0x03;
+
 } // anonymous namespace
 
 PeerManager::PeerManager(const config::Config& config,
@@ -91,6 +96,10 @@ PeerManager::PeerManager(const config::Config& config,
     // Initialize rate limit parameters from config
     rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
     rate_limit_burst_ = config.rate_limit_burst;
+
+    // Initialize sync rate limit parameters from config
+    sync_cooldown_seconds_ = config.sync_cooldown_seconds;
+    max_sync_sessions_ = config.max_sync_sessions;
 
     // Initialize cursor config parameters
     full_resync_interval_ = config.full_resync_interval;
@@ -1535,6 +1544,17 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: rate_limit=disabled");
     }
 
+    // Reload sync rate limit parameters
+    sync_cooldown_seconds_ = new_cfg.sync_cooldown_seconds;
+    max_sync_sessions_ = new_cfg.max_sync_sessions;
+    if (sync_cooldown_seconds_ > 0) {
+        spdlog::info("config reload: sync_cooldown={}s max_sync_sessions={}",
+                     sync_cooldown_seconds_, max_sync_sessions_);
+    } else {
+        spdlog::info("config reload: sync_cooldown=disabled max_sync_sessions={}",
+                     max_sync_sessions_);
+    }
+
     // Reload sync_namespaces
     try {
         config::validate_allowed_keys(new_cfg.sync_namespaces);
@@ -2074,6 +2094,18 @@ std::string PeerManager::peer_display_name(const net::Connection::Ptr& conn) {
 }
 
 // =============================================================================
+// Sync rate limiting helpers (Phase 40)
+// =============================================================================
+
+void PeerManager::send_sync_rejected(net::Connection::Ptr conn, uint8_t reason) {
+    std::vector<uint8_t> payload = { reason };
+    asio::co_spawn(ioc_, [conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        co_await conn->send_message(wire::TransportMsgType_SyncRejected,
+                                     std::span<const uint8_t>(payload));
+    }, asio::detached);
+}
+
+// =============================================================================
 // SIGUSR1 metrics dump
 // =============================================================================
 
@@ -2106,6 +2138,7 @@ void PeerManager::dump_metrics() {
 
     // Quota metrics
     spdlog::info("  quota_rejections: {}", metrics_.quota_rejections);
+    spdlog::info("  sync_rejections: {}", metrics_.sync_rejections);
 
     // Per-namespace stats via list_namespaces()
     auto namespaces = storage_.list_namespaces();
