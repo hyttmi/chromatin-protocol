@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 40-01-PLAN.md
-last_updated: "2026-03-19T12:27:15.000Z"
-last_activity: 2026-03-19 — Completed Plan 01 (sync rate limit infrastructure). SyncRejected=30, config fields, PeerManager helpers, 404 tests.
+stopped_at: Completed 40-02-PLAN.md
+last_updated: "2026-03-19T13:18:47Z"
+last_activity: 2026-03-19 — Completed Plan 02 (sync rate limit enforcement). Cooldown, session limit, byte accounting, 4 new tests, 408 total.
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 6
-  percent: 57
+  completed_plans: 7
+  percent: 71
 ---
 
 # Project State
@@ -26,16 +26,16 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 ## Current Position
 
 Phase: 40 (3 of 4) — Sync Rate Limiting
-Plan: 1 of 2
-Status: Executing
-Last activity: 2026-03-19 — Completed Plan 01 (sync rate limit infrastructure). SyncRejected=30, config fields, PeerManager helpers, 404 tests.
+Plan: 2 of 2
+Status: Phase Complete
+Last activity: 2026-03-19 — Completed Plan 02 (sync rate limit enforcement). Cooldown, session limit, byte accounting, 4 new tests, 408 total.
 
-Progress: [██████░░░░] 57%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 79 (across v1.0 - v0.8.0)
+- Total plans completed: 80 (across v1.0 - v0.8.0)
 - Average duration: ~16 min (historical)
 - Total execution time: ~22.9 hours
 
@@ -54,6 +54,7 @@ Progress: [██████░░░░] 57%
 | Phase 39 P01 | 18min | 1 tasks | 11 files |
 | Phase 39 P02 | 35min | 2 tasks | 4 files |
 | Phase 40 P01 | 29min | 2 tasks | 7 files |
+| Phase 40 P02 | 48min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,8 @@ Recent decisions affecting current work:
 - [Phase 39]: Always reconcile all namespaces; cursor skip only affects Phase C blob requests (bidirectional correctness)
 - [Phase 40]: SyncRejected payload is single reason byte (0x01=cooldown, 0x02=session_limit, 0x03=byte_rate)
 - [Phase 40]: send_sync_rejected uses co_spawn fire-and-forget pattern (consistent with notify_subscribers)
+- [Phase 40]: Universal byte accounting at top of on_peer_message; Data/Delete disconnect, SyncRequest reject, others route through
+- [Phase 40]: Closed mode in cooldown tests avoids PEX 5s timeout inflation
 
 ### Pending Todos
 
@@ -88,6 +91,6 @@ None -- research complete, all architectural decisions made.
 
 ## Session Continuity
 
-Last session: 2026-03-19T12:27:15.000Z
-Stopped at: Completed 40-01-PLAN.md
-Resume file: .planning/phases/40-sync-rate-limiting/40-02-PLAN.md
+Last session: 2026-03-19T13:18:47Z
+Stopped at: Completed 40-02-PLAN.md (Phase 40 complete)
+Resume file: Phase 40 complete. Phase 41 next (if exists).

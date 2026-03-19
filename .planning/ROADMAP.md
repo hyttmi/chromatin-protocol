@@ -112,7 +112,7 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
 
 - [x] **Phase 38: Thread Pool Crypto Offload** - ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool, freeing the event loop (completed 2026-03-19)
 - [x] **Phase 39: Negentropy Set Reconciliation** - Replace O(N) hash list exchange with O(differences) custom XOR-fingerprint reconciliation protocol per namespace (completed 2026-03-19)
-- [ ] **Phase 40: Sync Rate Limiting** - Metered sync initiation, byte-rate accounting, and concurrent session limits per peer
+- [x] **Phase 40: Sync Rate Limiting** - Metered sync initiation, byte-rate accounting, and concurrent session limits per peer (completed 2026-03-19)
 - [ ] **Phase 41: Benchmark Validation** - Docker benchmark confirms O(diff) scaling improvement and no regression
 
 ## Phase Details
@@ -183,5 +183,5 @@ Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (
 |-------|----------------|--------|-----------|
 | 38. Thread Pool Crypto Offload | 3/3 | Complete    | 2026-03-19 |
 | 39. Set Reconciliation | 2/2 | Complete    | 2026-03-19 |
-| 40. Sync Rate Limiting | 1/2 | In Progress|  |
+| 40. Sync Rate Limiting | 2/2 | Complete   | 2026-03-19 |
 | 41. Benchmark Validation | 0/TBD | Not started | - |
