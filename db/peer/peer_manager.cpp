@@ -1,4 +1,5 @@
 #include "db/peer/peer_manager.h"
+#include "db/sync/reconciliation.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -664,21 +665,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         co_return;
     }
 
-    for (const auto& ns_info : our_namespaces) {
-        auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
-        auto hl_payload = sync::SyncProtocol::encode_blob_request(ns_info.namespace_id, hashes);
-        if (!co_await conn->send_message(wire::TransportMsgType_ReconcileItems, hl_payload)) {
-            peer->syncing = false;
-            co_return;
-        }
-    }
-
-    if (!co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty)) {
-        peer->syncing = false;
-        co_return;
-    }
-
-    // Phase B: Receive peer's data
+    // Phase A (continued): Receive peer's NamespaceList
     auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
         spdlog::warn("sync with {}: expected NamespaceList", conn->remote_address());
@@ -687,7 +674,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     }
     auto peer_namespaces = sync::SyncProtocol::decode_namespace_list(ns_msg->payload);
 
-    // Cursor decision: determine which peer namespaces to skip in Phase C
+    // Cursor decision: determine which namespaces to skip
     auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
     auto now_ts = static_cast<uint64_t>(std::time(nullptr));
     std::set<std::array<uint8_t, 32>> cursor_skip_namespaces;
@@ -695,18 +682,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     uint64_t cursor_hits_this_round = 0;
     uint64_t cursor_misses_this_round = 0;
 
-    // Build seq_num lookup from peer's NamespaceList
-    std::map<std::array<uint8_t, 32>, uint64_t> peer_ns_seq;
-    for (const auto& pns : peer_namespaces) {
-        peer_ns_seq[pns.namespace_id] = pns.latest_seq_num;
-    }
-
     for (const auto& pns : peer_namespaces) {
         auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
         if (cursor.has_value()) {
             auto reason = check_full_resync(*cursor, now_ts);
             if (reason != FullResyncReason::None) {
-                // Full resync round -- skip cursor optimization
                 sync_is_full_resync = true;
                 if (reason == FullResyncReason::Periodic) {
                     spdlog::info("sync with {}: full resync (periodic, round {})",
@@ -716,7 +696,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                                  conn->remote_address(),
                                  now_ts - cursor->last_sync_timestamp);
                 }
-                break;  // Full resync applies to all namespaces
+                break;
             }
         }
     }
@@ -726,24 +706,20 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             auto cursor = storage_.get_sync_cursor(peer_hash, pns.namespace_id);
             if (cursor.has_value()) {
                 if (cursor->seq_num == pns.latest_seq_num) {
-                    // CURSOR HIT: peer has no new blobs for this namespace
                     cursor_skip_namespaces.insert(pns.namespace_id);
                     cursor_hits_this_round++;
                     spdlog::debug("sync cursor hit: ns={} seq={}", to_hex(pns.namespace_id), pns.latest_seq_num);
                 } else if (pns.latest_seq_num < cursor->seq_num) {
-                    // MISMATCH: remote seq went backwards -- reset this namespace's cursor
                     spdlog::warn("sync cursor mismatch: ns={} remote_seq={} stored_seq={}, resetting",
                                  to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
                     storage_.delete_sync_cursor(peer_hash, pns.namespace_id);
                     cursor_misses_this_round++;
                 } else {
-                    // CURSOR MISS: peer has new blobs
                     cursor_misses_this_round++;
                     spdlog::debug("sync cursor miss: ns={} remote_seq={} stored_seq={}",
                                   to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
                 }
             } else {
-                // No cursor: first sync with this peer for this namespace
                 cursor_misses_this_round++;
             }
         }
@@ -752,66 +728,173 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         ++metrics_.full_resyncs;
     }
 
-    // Collect peer's hash lists
-    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
-    while (true) {
-        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
-        if (!msg) {
-            spdlog::warn("sync with {}: timeout waiting for ReconcileItems/SyncComplete",
-                         conn->remote_address());
-            peer->syncing = false;
-            co_return;
-        }
-        if (msg->type == wire::TransportMsgType_SyncComplete) break;
-        if (msg->type == wire::TransportMsgType_ReconcileItems) {
-            auto [ns, hashes] = sync::SyncProtocol::decode_blob_request(msg->payload);
-            peer_hashes[ns] = std::move(hashes);
-        }
-    }
+    // Phase B: Set Reconciliation (initiator drives)
+    // Build union of namespaces from both sides for reconciliation
+    std::set<std::array<uint8_t, 32>> all_namespaces;
+    for (const auto& ns_info : our_namespaces) all_namespaces.insert(ns_info.namespace_id);
+    for (const auto& pns : peer_namespaces) all_namespaces.insert(pns.namespace_id);
 
-    // Phase C: Compute diffs and exchange blobs one at a time.
-    // Batches BlobRequests to MAX_HASHES_PER_REQUEST hashes per message.
-    // Each BlobTransfer carries exactly one blob to keep memory bounded.
-    // Uses BLOB_TRANSFER_TIMEOUT (120s) for blob transfers vs SYNC_TIMEOUT (30s) for control.
-    // Cursor-hit namespaces skip diff computation and blob requests.
+    // Collect missing hashes per namespace (what WE need from peer)
+    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> missing_per_ns;
 
-    for (const auto& [ns, their_hashes] : peer_hashes) {
-        // Namespace filter: skip requesting blobs from filtered namespaces
+    sync::Hash32 max_hash;
+    max_hash.fill(0xFF);
+
+    for (const auto& ns : all_namespaces) {
+        // Namespace filter
         if (!sync_namespaces_.empty() &&
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
             continue;
         }
 
-        // Cursor skip: if cursor hit, skip diff + blob requests for this namespace
-        if (cursor_skip_namespaces.count(ns)) {
+        bool cursor_hit = cursor_skip_namespaces.count(ns) > 0;
+        if (cursor_hit) {
             ++metrics_.cursor_hits;
-            total_stats.namespaces_synced++;
-            continue;
+        } else {
+            ++metrics_.cursor_misses;
         }
-        ++metrics_.cursor_misses;
 
+        // Snapshot our hashes ONCE (Pitfall 6: stale hash vector)
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
-        // Compute set difference: hashes in theirs not in ours
-        std::vector<std::array<uint8_t, 32>> missing;
-        {
-            std::unordered_set<std::string> our_set;
-            our_set.reserve(our_hashes.size());
-            for (const auto& h : our_hashes) {
-                our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+        std::sort(our_hashes.begin(), our_hashes.end());
+
+        auto our_fp = sync::xor_fingerprint(our_hashes, 0, our_hashes.size());
+
+        // Send ReconcileInit for this namespace
+        sync::ReconcileInit init;
+        init.version = sync::RECONCILE_VERSION;
+        std::memcpy(init.namespace_id.data(), ns.data(), 32);
+        init.count = static_cast<uint32_t>(our_hashes.size());
+        init.fingerprint = our_fp;
+
+        auto init_payload = sync::encode_reconcile_init(init);
+        if (!co_await conn->send_message(wire::TransportMsgType_ReconcileInit, init_payload)) {
+            peer->syncing = false;
+            co_return;
+        }
+
+        // Multi-round reconciliation loop
+        // Collect all items the peer reveals via ItemList ranges
+        std::vector<sync::Hash32> peer_items;
+
+        for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
+            auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+            if (!msg) {
+                spdlog::warn("sync with {}: timeout during reconciliation for ns={}",
+                             conn->remote_address(), to_hex(ns));
+                peer->syncing = false;
+                co_return;
             }
-            for (const auto& h : their_hashes) {
-                std::string key(reinterpret_cast<const char*>(h.data()), h.size());
-                if (our_set.find(key) == our_set.end()) {
-                    missing.push_back(h);
+
+            if (msg->type == wire::TransportMsgType_ReconcileRanges) {
+                auto decoded = sync::decode_reconcile_ranges(msg->payload);
+                if (!decoded) {
+                    spdlog::warn("sync with {}: invalid ReconcileRanges", conn->remote_address());
+                    peer->syncing = false;
+                    co_return;
+                }
+
+                // Empty ranges = reconciliation done for this namespace
+                if (decoded->ranges.empty()) break;
+
+                // Check if all ranges are resolved (no Fingerprint ranges).
+                // If so, this is the responder's final exchange -- extract items
+                // and send our items back via ReconcileItems, then done.
+                bool has_fingerprint = false;
+                for (const auto& r : decoded->ranges) {
+                    if (r.mode == sync::RangeMode::Fingerprint) {
+                        has_fingerprint = true;
+                        break;
+                    }
+                }
+
+                if (!has_fingerprint) {
+                    // Final exchange: collect peer items from ItemList ranges
+                    for (const auto& r : decoded->ranges) {
+                        if (r.mode == sync::RangeMode::ItemList) {
+                            peer_items.insert(peer_items.end(),
+                                              r.items.begin(), r.items.end());
+                        }
+                    }
+                    // Send our items for the resolved ranges so the peer can diff
+                    // Collect all our items across the resolved ranges
+                    sync::Hash32 lower = sync::Hash32{};
+                    std::vector<sync::Hash32> our_range_items;
+                    for (const auto& r : decoded->ranges) {
+                        if (r.mode == sync::RangeMode::ItemList) {
+                            auto [b, e] = sync::range_indices(our_hashes, lower, r.upper_bound);
+                            for (size_t idx = b; idx < e; ++idx) {
+                                our_range_items.push_back(our_hashes[idx]);
+                            }
+                        }
+                        lower = r.upper_bound;
+                    }
+                    auto items_payload = sync::encode_reconcile_items(ns, our_range_items);
+                    if (!co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
+                                                     items_payload)) {
+                        peer->syncing = false;
+                        co_return;
+                    }
+                    break;
+                }
+
+                auto result = sync::process_ranges(our_hashes, decoded->ranges);
+                peer_items.insert(peer_items.end(),
+                                  result.have_items.begin(), result.have_items.end());
+
+                // Send our response ranges
+                auto resp_payload = sync::encode_reconcile_ranges(ns, result.response_ranges);
+                if (!co_await conn->send_message(wire::TransportMsgType_ReconcileRanges,
+                                                 resp_payload)) {
+                    peer->syncing = false;
+                    co_return;
+                }
+            } else if (msg->type == wire::TransportMsgType_ReconcileItems) {
+                // ReconcileItems = responder's final item exchange for this namespace
+                auto decoded = sync::decode_reconcile_items(msg->payload);
+                if (decoded) {
+                    peer_items.insert(peer_items.end(),
+                                      decoded->items.begin(), decoded->items.end());
+                }
+                break;  // Namespace reconciliation done
+            } else {
+                spdlog::warn("sync with {}: unexpected message type {} during reconciliation",
+                             conn->remote_address(), static_cast<int>(msg->type));
+                break;
+            }
+        }
+
+        // Compute diff: peer items we don't have (only request if not cursor-hit)
+        if (!cursor_hit) {
+            std::vector<std::array<uint8_t, 32>> missing;
+            {
+                std::unordered_set<std::string> our_set;
+                our_set.reserve(our_hashes.size());
+                for (const auto& h : our_hashes) {
+                    our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+                }
+                for (const auto& h : peer_items) {
+                    std::string key(reinterpret_cast<const char*>(h.data()), h.size());
+                    if (our_set.find(key) == our_set.end()) {
+                        missing.push_back(h);
+                    }
                 }
             }
+            if (!missing.empty()) {
+                missing_per_ns[ns] = std::move(missing);
+            }
         }
-        if (missing.empty()) {
-            total_stats.namespaces_synced++;
-            continue;
-        }
+        total_stats.namespaces_synced++;
+    }
 
-        // Send BlobRequests in batches of MAX_HASHES_PER_REQUEST
+    // Signal end of Phase B: all namespaces reconciled
+    if (!co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty)) {
+        peer->syncing = false;
+        co_return;
+    }
+
+    // Phase C: Exchange blobs one at a time using existing BlobRequest/BlobTransfer
+    for (const auto& [ns, missing] : missing_per_ns) {
         for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
             size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
                                         missing.size());
@@ -825,8 +908,6 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 co_return;
             }
 
-            // Receive individual BlobTransfers for this batch.
-            // Also handle interleaved BlobRequests from peer.
             uint32_t expected = static_cast<uint32_t>(batch.size());
             uint32_t received = 0;
             while (received < expected) {
@@ -834,7 +915,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 if (!msg) {
                     spdlog::warn("sync: timeout waiting for blob transfer from {}",
                                  conn->remote_address());
-                    break;  // Skip remaining, continue next batch
+                    break;
                 }
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
@@ -845,7 +926,6 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
-                    // Skip outbound blob pushes if peer is full
                     if (peer->peer_is_full) {
                         spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
                         continue;
@@ -865,8 +945,6 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 }
             }
         }
-
-        total_stats.namespaces_synced++;
     }
 
     // Handle remaining BlobRequests from peer (they may still need our blobs)
@@ -874,7 +952,6 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
-            // Skip outbound blob pushes if peer is full
             if (peer->peer_is_full) {
                 spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
                 continue;
@@ -965,7 +1042,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     std::span<const uint8_t> empty{};
     co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty);
 
-    // Phase A: Send our data (filtered by sync_namespaces)
+    // Phase A: Send our NamespaceList (filtered by sync_namespaces)
     auto our_namespaces = engine_.list_namespaces();
     if (!sync_namespaces_.empty()) {
         std::erase_if(our_namespaces, [this](const storage::NamespaceInfo& ns) {
@@ -975,15 +1052,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
 
-    for (const auto& ns_info : our_namespaces) {
-        auto hashes = sync_proto_.collect_namespace_hashes(ns_info.namespace_id);
-        auto hl_payload = sync::SyncProtocol::encode_blob_request(ns_info.namespace_id, hashes);
-        co_await conn->send_message(wire::TransportMsgType_ReconcileItems, hl_payload);
-    }
-
-    co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty);
-
-    // Phase B: Receive peer's data
+    // Phase A (continued): Receive peer's NamespaceList
     auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
         spdlog::warn("sync responder {}: expected NamespaceList", conn->remote_address());
@@ -1044,61 +1113,177 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         ++metrics_.full_resyncs;
     }
 
-    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> peer_hashes;
+    // Phase B: Respond to initiator-driven reconciliation
+    // The initiator sends ReconcileInit for each namespace, or SyncComplete when done.
+    // For each namespace, we exchange ReconcileRanges until resolved.
+    std::map<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>> missing_per_ns;
+
+    // Cache sorted hash vectors per namespace (Pitfall 6: snapshot once)
+    std::map<std::array<uint8_t, 32>, std::vector<sync::Hash32>> ns_hash_cache;
+
     while (true) {
         auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
         if (!msg) {
-            spdlog::warn("sync responder {}: timeout waiting for ReconcileItems/SyncComplete",
-                         conn->remote_address());
+            spdlog::warn("sync responder {}: timeout during Phase B", conn->remote_address());
             peer->syncing = false;
             co_return;
         }
+
         if (msg->type == wire::TransportMsgType_SyncComplete) break;
-        if (msg->type == wire::TransportMsgType_ReconcileItems) {
-            auto [ns, hashes] = sync::SyncProtocol::decode_blob_request(msg->payload);
-            peer_hashes[ns] = std::move(hashes);
+
+        if (msg->type == wire::TransportMsgType_ReconcileInit) {
+            auto init = sync::decode_reconcile_init(msg->payload);
+            if (!init) {
+                spdlog::warn("sync responder {}: invalid ReconcileInit", conn->remote_address());
+                continue;
+            }
+
+            std::array<uint8_t, 32> ns = init->namespace_id;
+
+            bool cursor_hit = cursor_skip_namespaces.count(ns) > 0;
+            if (cursor_hit) {
+                ++metrics_.cursor_hits;
+            } else {
+                ++metrics_.cursor_misses;
+            }
+
+            // Snapshot our hashes for this namespace (sorted)
+            auto& our_hashes = ns_hash_cache[ns];
+            if (our_hashes.empty()) {
+                auto raw = sync_proto_.collect_namespace_hashes(ns);
+                our_hashes.assign(raw.begin(), raw.end());
+                std::sort(our_hashes.begin(), our_hashes.end());
+            }
+
+            // Build initial full-range from the init message
+            sync::Hash32 max_hash;
+            max_hash.fill(0xFF);
+
+            sync::RangeEntry init_range;
+            init_range.upper_bound = max_hash;
+            init_range.mode = sync::RangeMode::Fingerprint;
+            init_range.count = init->count;
+            init_range.fingerprint = init->fingerprint;
+
+            auto result = sync::process_ranges(our_hashes, {init_range});
+
+            // Collect peer items revealed in the init
+            std::vector<sync::Hash32> peer_items;
+            peer_items.insert(peer_items.end(),
+                              result.have_items.begin(), result.have_items.end());
+
+            if (result.complete) {
+                // Fingerprint+count matched -- send empty ranges to signal done
+                auto done_payload = sync::encode_reconcile_ranges(ns, {});
+                co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, done_payload);
+            } else {
+                // Send our response ranges
+                auto resp_payload = sync::encode_reconcile_ranges(ns, result.response_ranges);
+                co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, resp_payload);
+
+                // Multi-round loop within this namespace
+                for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
+                    auto rmsg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+                    if (!rmsg) {
+                        spdlog::warn("sync responder {}: timeout during reconciliation for ns={}",
+                                     conn->remote_address(), to_hex(ns));
+                        peer->syncing = false;
+                        co_return;
+                    }
+
+                    if (rmsg->type == wire::TransportMsgType_ReconcileRanges) {
+                        auto decoded = sync::decode_reconcile_ranges(rmsg->payload);
+                        if (!decoded) {
+                            spdlog::warn("sync responder {}: invalid ReconcileRanges",
+                                         conn->remote_address());
+                            break;
+                        }
+
+                        // Empty ranges = namespace done
+                        if (decoded->ranges.empty()) break;
+
+                        // Check if all ranges are resolved (no Fingerprint)
+                        bool has_fingerprint = false;
+                        for (const auto& r : decoded->ranges) {
+                            if (r.mode == sync::RangeMode::Fingerprint) {
+                                has_fingerprint = true;
+                                break;
+                            }
+                        }
+
+                        if (!has_fingerprint) {
+                            // Final exchange: collect peer items, send ours, done
+                            for (const auto& r : decoded->ranges) {
+                                if (r.mode == sync::RangeMode::ItemList) {
+                                    peer_items.insert(peer_items.end(),
+                                                      r.items.begin(), r.items.end());
+                                }
+                            }
+                            sync::Hash32 lower = sync::Hash32{};
+                            std::vector<sync::Hash32> our_range_items;
+                            for (const auto& r : decoded->ranges) {
+                                if (r.mode == sync::RangeMode::ItemList) {
+                                    auto [b, e] = sync::range_indices(our_hashes, lower,
+                                                                      r.upper_bound);
+                                    for (size_t idx = b; idx < e; ++idx) {
+                                        our_range_items.push_back(our_hashes[idx]);
+                                    }
+                                }
+                                lower = r.upper_bound;
+                            }
+                            auto items_payload = sync::encode_reconcile_items(ns,
+                                                                              our_range_items);
+                            co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
+                                                        items_payload);
+                            break;
+                        }
+
+                        auto rresult = sync::process_ranges(our_hashes, decoded->ranges);
+                        peer_items.insert(peer_items.end(),
+                                          rresult.have_items.begin(), rresult.have_items.end());
+
+                        auto rp = sync::encode_reconcile_ranges(ns, rresult.response_ranges);
+                        co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, rp);
+                    } else if (rmsg->type == wire::TransportMsgType_ReconcileItems) {
+                        // ReconcileItems = initiator's final item exchange for this namespace
+                        auto decoded = sync::decode_reconcile_items(rmsg->payload);
+                        if (decoded) {
+                            peer_items.insert(peer_items.end(),
+                                              decoded->items.begin(), decoded->items.end());
+                        }
+                        break;  // Namespace reconciliation done
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Compute diff: peer items we don't have (only request if not cursor-hit)
+            if (!cursor_hit) {
+                std::vector<std::array<uint8_t, 32>> missing;
+                {
+                    std::unordered_set<std::string> our_set;
+                    our_set.reserve(our_hashes.size());
+                    for (const auto& h : our_hashes) {
+                        our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
+                    }
+                    for (const auto& h : peer_items) {
+                        std::string key(reinterpret_cast<const char*>(h.data()), h.size());
+                        if (our_set.find(key) == our_set.end()) {
+                            missing.push_back(h);
+                        }
+                    }
+                }
+                if (!missing.empty()) {
+                    missing_per_ns[ns] = std::move(missing);
+                }
+            }
+            total_stats.namespaces_synced++;
         }
     }
 
-    // Phase C: Compute diffs and exchange blobs one at a time.
-    // Same structure as initiator: batched requests, individual transfers, adaptive timeout.
-    // Cursor-hit namespaces skip diff computation and blob requests.
-    for (const auto& [ns, their_hashes] : peer_hashes) {
-        // Namespace filter: skip requesting blobs from filtered namespaces
-        if (!sync_namespaces_.empty() &&
-            sync_namespaces_.find(ns) == sync_namespaces_.end()) {
-            continue;
-        }
-
-        // Cursor skip
-        if (cursor_skip_namespaces.count(ns)) {
-            ++metrics_.cursor_hits;
-            total_stats.namespaces_synced++;
-            continue;
-        }
-        ++metrics_.cursor_misses;
-
-        auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
-        // Compute set difference: hashes in theirs not in ours
-        std::vector<std::array<uint8_t, 32>> missing;
-        {
-            std::unordered_set<std::string> our_set;
-            our_set.reserve(our_hashes.size());
-            for (const auto& h : our_hashes) {
-                our_set.insert(std::string(reinterpret_cast<const char*>(h.data()), h.size()));
-            }
-            for (const auto& h : their_hashes) {
-                std::string key(reinterpret_cast<const char*>(h.data()), h.size());
-                if (our_set.find(key) == our_set.end()) {
-                    missing.push_back(h);
-                }
-            }
-        }
-        if (missing.empty()) {
-            total_stats.namespaces_synced++;
-            continue;
-        }
-
+    // Phase C: Exchange blobs one at a time
+    for (const auto& [ns, missing] : missing_per_ns) {
         for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
             size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
                                         missing.size());
@@ -1127,7 +1312,6 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
                     received++;
                 } else if (msg->type == wire::TransportMsgType_BlobRequest) {
-                    // Skip outbound blob pushes if peer is full
                     if (peer->peer_is_full) {
                         spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
                         continue;
@@ -1147,8 +1331,6 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 }
             }
         }
-
-        total_stats.namespaces_synced++;
     }
 
     // Handle remaining BlobRequests from peer
@@ -1156,7 +1338,6 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
-            // Skip outbound blob pushes if peer is full
             if (peer->peer_is_full) {
                 spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
                 continue;
