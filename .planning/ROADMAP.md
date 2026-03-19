@@ -130,7 +130,7 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
 **Plans**: 3 plans
 
 Plans:
-- [ ] 38-01-PLAN.md — Config, thread pool lifecycle, offload helper, plumbing pool ref through object graph
+- [x] 38-01-PLAN.md — Config, thread pool lifecycle, offload helper, plumbing pool ref through object graph
 - [ ] 38-02-PLAN.md — BlobEngine async conversion with two-dispatch crypto offload, caller updates
 - [ ] 38-03-PLAN.md — Connection handshake Signer::verify offload to thread pool
 
@@ -173,7 +173,7 @@ Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 38. Thread Pool Crypto Offload | 0/3 | Planning complete | - |
+| 38. Thread Pool Crypto Offload | 1/3 | Executing | - |
 | 39. Negentropy Set Reconciliation | 0/TBD | Not started | - |
 | 40. Sync Rate Limiting | 0/TBD | Not started | - |
 | 41. Benchmark Validation | 0/TBD | Not started | - |

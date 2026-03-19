@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.8.0
 milestone_name: Protocol Scalability
-status: ready_to_execute
-stopped_at: Roadmap created, Phase 38 ready to execute
+status: executing
+stopped_at: Completed 38-01-PLAN.md
 last_updated: "2026-03-19"
-last_activity: 2026-03-19 — Roadmap created for v0.8.0 (4 phases, 12 requirements)
+last_activity: 2026-03-19 — Completed Plan 01 of Phase 38 (thread pool infrastructure)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 8
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 ## Current Position
 
 Phase: 38 (1 of 4) — Thread Pool Crypto Offload
-Plan: Ready to execute plan 1 of 3
-Status: Planning complete, ready to execute
-Last activity: 2026-03-19 — Roadmap created for v0.8.0 Protocol Scalability
+Plan: Completed plan 1 of 3, ready for plan 2
+Status: Executing
+Last activity: 2026-03-19 — Completed Plan 01 (thread pool infrastructure + plumbing)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 75 (across v1.0 - v0.7.0)
+- Total plans completed: 76 (across v1.0 - v0.8.0)
 - Average duration: ~16 min (historical)
-- Total execution time: ~22 hours
+- Total execution time: ~22.4 hours
 
 **By Milestone:**
 
@@ -63,6 +63,7 @@ Recent decisions affecting current work:
 - v0.8.0: v1.0.0 deferred -- sync protocol has O(N) hash list exchange flaw that must be fixed first
 - v0.8.0: Phase 38 (thread pool) carries forward from v1.0.0 -- protocol-agnostic, universally needed
 - v0.8.0: negentropy chosen for set reconciliation (header-only, SHA3-256 patch, no OpenSSL)
+- v0.8.0: Pool ref as constructor param for owned objects, set_pool() for factory-created (Connection)
 
 ### Pending Todos
 
@@ -75,5 +76,5 @@ None -- research complete, all architectural decisions made.
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Roadmap created, Phase 38 has 3 plans ready to execute
+Stopped at: Completed 38-01-PLAN.md (thread pool infrastructure)
 Resume file: None
