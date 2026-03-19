@@ -10,8 +10,8 @@ Requirements for protocol scalability. Fixes fundamental sync protocol flaw, har
 ### Set Reconciliation
 
 - [x] **SYNC-06**: Negentropy library vendored with SHA3-256 replacing OpenSSL SHA-256 (no OpenSSL dependency)
-- [ ] **SYNC-07**: Per-namespace reconciliation using negentropy replaces full hash list exchange (O(differences) not O(total_blobs))
-- [ ] **SYNC-08**: Existing sync cursors coexist with negentropy (unchanged namespaces skipped via cursor, negentropy used only when namespace has new data)
+- [x] **SYNC-07**: Per-namespace reconciliation using negentropy replaces full hash list exchange (O(differences) not O(total_blobs))
+- [x] **SYNC-08**: Existing sync cursors coexist with negentropy (unchanged namespaces skipped via cursor, negentropy used only when namespace has new data)
 - [x] **SYNC-09**: Reconciliation wire messages include version byte for forward compatibility
 - [ ] **SYNC-10**: Docker benchmark confirms O(diff) improvement over hash-list baseline and no regression for small namespaces
 
@@ -66,8 +66,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | SYNC-06 | Phase 39 | Complete |
-| SYNC-07 | Phase 39 | Pending |
-| SYNC-08 | Phase 39 | Pending |
+| SYNC-07 | Phase 39 | Complete |
+| SYNC-08 | Phase 39 | Complete |
 | SYNC-09 | Phase 39 | Complete |
 | SYNC-10 | Phase 41 | Pending |
 | RATE-01 | Phase 40 | Pending |
