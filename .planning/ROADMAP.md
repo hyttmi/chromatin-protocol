@@ -146,8 +146,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 39-01-PLAN.md — Reconciliation module (XOR fingerprint algorithm, encode/decode, wire protocol update, unit tests)
-- [ ] 39-02-PLAN.md — Sync flow integration (replace Phase B in initiator/responder, message routing, PROTOCOL.md)
+- [x] 39-01-PLAN.md — Reconciliation module (XOR fingerprint algorithm, encode/decode, wire protocol update, unit tests)
+- [x] 39-02-PLAN.md — Sync flow integration (replace Phase B in initiator/responder, message routing, PROTOCOL.md)
 
 ### Phase 40: Sync Rate Limiting
 **Goal**: Sync requests are metered per peer to prevent resource exhaustion via repeated sync initiation, closing the abuse vector where sync messages bypass all existing rate limiting

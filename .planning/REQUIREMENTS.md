@@ -9,9 +9,9 @@ Requirements for protocol scalability. Fixes fundamental sync protocol flaw, har
 
 ### Set Reconciliation
 
-- [x] **SYNC-06**: Negentropy library vendored with SHA3-256 replacing OpenSSL SHA-256 (no OpenSSL dependency)
-- [x] **SYNC-07**: Per-namespace reconciliation using negentropy replaces full hash list exchange (O(differences) not O(total_blobs))
-- [x] **SYNC-08**: Existing sync cursors coexist with negentropy (unchanged namespaces skipped via cursor, negentropy used only when namespace has new data)
+- [x] **SYNC-06**: Custom XOR-fingerprint range-based reconciliation module built with no external dependency
+- [x] **SYNC-07**: Per-namespace reconciliation using custom range-based protocol replaces full hash list exchange (O(differences) not O(total_blobs))
+- [x] **SYNC-08**: Existing sync cursors coexist with reconciliation (unchanged namespaces skipped via cursor, reconciliation runs for all namespaces but cursor-hit namespaces skip blob requests)
 - [x] **SYNC-09**: Reconciliation wire messages include version byte for forward compatibility
 - [ ] **SYNC-10**: Docker benchmark confirms O(diff) improvement over hash-list baseline and no regression for small namespaces
 
@@ -53,8 +53,9 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Persistent Merkle tree | Write amplification on every blob ingest. negentropy Vector (in-memory per sync) avoids this. |
-| IBLT (Invertible Bloom Lookup Table) | Capacity estimation failures require fallback. Negentropy is deterministic. |
+| Persistent Merkle tree | Write amplification on every blob ingest. In-memory sorted vectors per sync avoids this. |
+| IBLT (Invertible Bloom Lookup Table) | Capacity estimation failures require fallback. Range-based reconciliation is deterministic. |
+| Negentropy (external library) | SHA3-256 patching hassle. Custom XOR-fingerprint reconciliation is simpler (~500 LOC) with zero dependency. |
 | Multithreaded ingest pipeline | Data structures are single-thread-only by design. Only stateless crypto ops offloaded. |
 | Hardware crypto acceleration (SHA3-NI) | Requires CPU feature detection + runtime dispatch. Thread pool offload is the higher-value fix. |
 | Peer reputation / scoring | YAGNI. Rate limiting + ACL is sufficient. |

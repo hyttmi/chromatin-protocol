@@ -65,7 +65,7 @@ Recent decisions affecting current work:
 - v0.7.0: Serial crypto optimizations shipped; thread pool offload deferred to v1.0.0 (AEAD nonce safety)
 - v0.8.0: v1.0.0 deferred -- sync protocol has O(N) hash list exchange flaw that must be fixed first
 - v0.8.0: Phase 38 (thread pool) carries forward from v1.0.0 -- protocol-agnostic, universally needed
-- v0.8.0: negentropy chosen for set reconciliation (header-only, SHA3-256 patch, no OpenSSL)
+- v0.8.0: Custom XOR-fingerprint reconciliation replaces negentropy (dropped due to SHA3-256 patching hassle, ~500 LOC custom vs 1000+ LOC dependency)
 - v0.8.0: Pool ref as constructor param for owned objects, set_pool() for factory-created (Connection)
 - [Phase 38]: Handshake verify offload: capture by ref in offload lambda safe because coroutine is suspended
 - [Phase 38]: Two-dispatch ingest pattern: blob_hash first (dedup gate), build_signing_input+verify bundled second. Duplicates skip expensive ML-DSA-87 verify.
