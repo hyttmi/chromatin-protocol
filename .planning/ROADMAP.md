@@ -138,11 +138,11 @@ Full details: [milestones/v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md)
   1. Node log output on startup shows the correct v0.9.0 version string derived from CMake, not a hardcoded value
   2. Node refuses to start and prints a human-readable error when config contains invalid values (wrong types, out-of-range numbers, missing required fields)
   3. All existing timers (expiry, sync, flush, metrics, pex) are cancelled through a single cancel_all_timers() path in both stop() and on_shutdown, with no orphaned timers after shutdown
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 42-01: TBD
-- [ ] 42-02: TBD
+- [ ] 42-01-PLAN.md -- Version injection (CMake configure_file) + timer cleanup (cancel_all_timers)
+- [ ] 42-02-PLAN.md -- Config validation (validate_config with accumulated errors, type mismatch handling, unknown key warning)
 
 ### Phase 43: Storage & Logging
 **Goal**: Node provides production-grade observability (structured logs, file output, complete metrics) and maintains healthy storage (cursor compaction, tombstone GC, integrity verification)
@@ -196,7 +196,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 42. Foundation | 0/TBD | Not started | - |
+| 42. Foundation | 0/2 | Not started | - |
 | 43. Storage & Logging | 0/TBD | Not started | - |
 | 44. Network Resilience | 0/TBD | Not started | - |
 | 45. Verification & Documentation | 0/TBD | Not started | - |
