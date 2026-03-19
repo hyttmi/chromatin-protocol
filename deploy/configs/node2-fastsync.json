@@ -1,0 +1,8 @@
+{
+  "bind_address": "0.0.0.0:4200",
+  "bootstrap_peers": ["node1:4200"],
+  "log_level": "info",
+  "sync_interval_seconds": 2,
+  "sync_cooldown_seconds": 0,
+  "full_resync_interval": 0
+}

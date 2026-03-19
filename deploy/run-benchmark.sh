@@ -89,6 +89,38 @@ reset_topology() {
     fi
 }
 
+reset_topology_fastsync() {
+    log "Resetting topology with fast-sync configs (down -v, up -d)..."
+    local COMPOSE_FASTSYNC="docker compose -f $COMPOSE_FILE -f $SCRIPT_DIR/docker-compose.fastsync.yml -p chromatindb"
+    $COMPOSE_FASTSYNC down -v 2>/dev/null || true
+    if $COMPOSE_FASTSYNC up -d --wait 2>/dev/null; then
+        log "Fast-sync topology ready (--wait succeeded)"
+    else
+        # Fallback: poll healthcheck status for each node
+        log "Fallback: polling healthcheck status for fast-sync..."
+        local timeout=30
+        local start
+        start=$(date +%s)
+        for node in chromatindb-node1 chromatindb-node2 chromatindb-node3; do
+            while true; do
+                local status
+                status=$(docker inspect --format '{{.State.Health.Status}}' "$node" 2>/dev/null || echo "missing")
+                if [[ "$status" == "healthy" ]]; then
+                    log "$node is healthy (fast-sync)"
+                    break
+                fi
+                local elapsed=$(( $(date +%s) - start ))
+                if [[ $elapsed -gt $timeout ]]; then
+                    log "ERROR: Timeout waiting for $node to become healthy (fast-sync, status: $status)"
+                    exit 1
+                fi
+                sleep 1
+            done
+        done
+        log "Fast-sync topology ready (polling fallback)"
+    fi
+}
+
 capture_stats() {
     local phase="$1"
     local label="$2"
@@ -1394,6 +1426,92 @@ run_scenario_tombstone_gc() {
     log "Tombstone GC scenario complete"
 }
 
+# --- Reconciliation Scenario Functions ----------------------------------------
+
+run_scenario_reconciliation_scaling() {
+    # Measures reconciliation scaling behavior (SYNC-10).
+    # Validates that sync time is proportional to delta size, not namespace size.
+    # With O(diff) reconciliation, syncing 10 new blobs on a 1000-blob namespace
+    # should take roughly the same time as syncing 10 blobs on an empty namespace.
+
+    log "========================================="
+    log "Scenario: Reconciliation Scaling (SYNC-10)"
+    log "========================================="
+
+    local LARGE_COUNT=1000
+    local DELTA_COUNT=10
+
+    # --- Phase 1: Preload ---
+    log "--- Phase 1: Preload ($LARGE_COUNT blobs) ---"
+
+    reset_topology_fastsync
+
+    capture_stats "pre" "reconcile-scaling"
+
+    log "Ingesting $LARGE_COUNT blobs (1 KiB) to node1 at rate 100..."
+    run_loadgen node1 --count "$LARGE_COUNT" --rate 100 --size 1024 --drain-timeout 30 >/dev/null
+
+    log "Waiting for node2 convergence at $LARGE_COUNT blobs..."
+    local preload_convergence_ms
+    if preload_convergence_ms=$(wait_for_convergence chromatindb-node2 "$LARGE_COUNT" 300); then
+        log "Preload convergence in ${preload_convergence_ms}ms"
+    else
+        log "ERROR: Preload convergence timed out"
+        return 1
+    fi
+
+    # --- Phase 2: Delta ---
+    log "--- Phase 2: Delta ($DELTA_COUNT blobs on $LARGE_COUNT-blob namespace) ---"
+
+    local target_count=$(( LARGE_COUNT + DELTA_COUNT ))
+
+    log "Ingesting $DELTA_COUNT additional blobs (1 KiB) to node1..."
+    run_loadgen node1 --count "$DELTA_COUNT" --rate 100 --size 1024 --drain-timeout 10 >/dev/null
+
+    log "Timing delta sync to node2 (target=$target_count)..."
+    local delta_sync_ms
+    if delta_sync_ms=$(wait_for_convergence chromatindb-node2 "$target_count" 120); then
+        log "Delta sync converged in ${delta_sync_ms}ms"
+    else
+        log "WARNING: Delta sync timed out"
+        delta_sync_ms=-1
+    fi
+
+    capture_stats "post" "reconcile-scaling"
+
+    # Build result JSON
+    local result
+    result=$(jq -n \
+        --arg scenario "reconcile-scaling" \
+        --argjson preload_blobs "$LARGE_COUNT" \
+        --argjson delta_blobs "$DELTA_COUNT" \
+        --argjson preload_convergence_ms "$preload_convergence_ms" \
+        --argjson delta_sync_ms "$delta_sync_ms" \
+        '{
+            scenario: $scenario,
+            preload_blobs: $preload_blobs,
+            delta_blobs: $delta_blobs,
+            preload_convergence_ms: $preload_convergence_ms,
+            delta_sync_ms: $delta_sync_ms,
+            sync_interval_seconds: 2
+        }')
+
+    echo "$result" > "$RESULTS_DIR/scenario-reconcile-scaling.json"
+
+    # Calculate sync interval multiple
+    local interval_mult
+    interval_mult=$(jq -n -r --argjson ms "$delta_sync_ms" '($ms / 2000) | . * 10 | round / 10')
+
+    log "Result: preload=${preload_convergence_ms}ms, delta=${delta_sync_ms}ms (${interval_mult}x sync_interval)"
+    log "Written: $RESULTS_DIR/scenario-reconcile-scaling.json"
+
+    # Cleanup: tear down fastsync topology
+    local COMPOSE_FASTSYNC="docker compose -f $COMPOSE_FILE -f $SCRIPT_DIR/docker-compose.fastsync.yml -p chromatindb"
+    $COMPOSE_FASTSYNC down -v 2>/dev/null || true
+
+    log "Reconciliation scaling scenario complete"
+}
+
 # --- Main --------------------------------------------------------------------
 
 main() {
@@ -1434,6 +1552,9 @@ main() {
     run_scenario_tombstone_creation
     run_scenario_tombstone_sync
     run_scenario_tombstone_gc
+
+    # Reconciliation scenario (Plan 41)
+    run_scenario_reconciliation_scaling
 
     # Generate report while containers are still available
     generate_report
