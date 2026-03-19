@@ -157,7 +157,11 @@ Plans:
   1. A peer that initiates sync more frequently than the configured cooldown is rejected with a rate-limit response -- the node does not begin reconciliation
   2. Sync message bytes (including reconciliation rounds) count against the existing per-peer byte-rate token bucket -- a peer cannot bypass bandwidth limits via sync traffic
   3. A peer cannot open more than the configured maximum number of concurrent sync sessions -- excess sync requests are rejected
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 40-01-PLAN.md — Wire protocol (SyncRejected=30), config fields, PeerInfo/NodeMetrics extensions, PeerManager infrastructure
+- [ ] 40-02-PLAN.md — Enforcement logic (cooldown, session limit, byte accounting, budget cutoff) and integration tests
 
 ### Phase 41: Benchmark Validation
 **Goal**: The Docker benchmark suite confirms that set reconciliation delivers O(diff) sync scaling, thread pool offload improves large-blob throughput, and neither change causes regression for small namespaces
@@ -179,5 +183,5 @@ Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (
 |-------|----------------|--------|-----------|
 | 38. Thread Pool Crypto Offload | 3/3 | Complete    | 2026-03-19 |
 | 39. Set Reconciliation | 2/2 | Complete    | 2026-03-19 |
-| 40. Sync Rate Limiting | 0/TBD | Not started | - |
+| 40. Sync Rate Limiting | 0/2 | Not started | - |
 | 41. Benchmark Validation | 0/TBD | Not started | - |
