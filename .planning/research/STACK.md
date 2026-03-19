@@ -1,427 +1,452 @@
-# Technology Stack: v0.8.0 Protocol Scalability
+# Technology Stack: v0.9.0 Connection Resilience & Hardening
 
-**Project:** chromatindb v0.8.0
+**Project:** chromatindb v0.9.0
 **Researched:** 2026-03-19
 **Confidence:** HIGH
 
 ## Executive Summary
 
-v0.8.0 addresses a fundamental protocol scaling flaw: the current sync protocol exchanges the full hash list for every namespace with changes (O(N) in total blobs, not differences). A namespace with 1M blobs forces 32 MB of hashes on the wire for a single new blob, and ~3.4M blobs hits MAX_FRAME_SIZE (110 MiB) and breaks the connection entirely. This is not a performance optimization -- it is a correctness issue at scale.
+v0.9.0 is a hardening milestone. The core thesis: **zero new dependencies**. Every feature in scope -- connection resilience, structured logging, file logging, config validation, CMake version injection, crash recovery audit, cursor compaction, tombstone GC fix, startup integrity scan -- is achievable with the existing stack. The codebase already has the right libraries; it needs deeper use of their capabilities.
 
-The recommended approach is **negentropy** -- a header-only C++ library implementing Range-Based Set Reconciliation (RBSR). Negentropy replaces the full hash list exchange with an O(differences) protocol requiring O(log N) round-trips. It is battle-tested in the Nostr ecosystem (strfry relay syncs 10M+ element datasets in production), MIT-licensed, header-only with a single external dependency (OpenSSL SHA-256) that is trivially replaceable with the existing SHA3-256 from liboqs.
+The only recommended change is a **spdlog version bump** from v1.15.1 to v1.15.1+ (staying on v1.15.x is fine; upgrading to v1.16.0 or v1.17.0 is optional and low-risk). spdlog v1.15.1 already supports file sinks, rotating file sinks, multi-sink loggers, and JSON pattern formatting -- all needed for structured/file logging. No API changes needed from a bump.
 
-For sync rate limiting, no new library is needed -- the existing token bucket rate limiter (v0.4.0) is extended to cover sync message types. For thread pool crypto offload, `asio::thread_pool` (already bundled in Standalone Asio 1.38.0) provides the offload mechanism, using the `dispatch`/`post` pattern to bridge between io_context coroutines and worker threads.
+Connection resilience (auto-reconnect with exponential backoff, keepalive timeout, ACL-aware suppression) uses `asio::steady_timer` -- already the established pattern in the codebase (timer-cancel pattern for sync inbox, expiry timer, sync timer). No new networking primitives needed.
 
-**One new dependency: negentropy (header-only, MIT). Zero new compiled dependencies. Zero version bumps.**
+CMake version injection uses `configure_file()` -- a built-in CMake command. No external tooling.
+
+Config validation is pure C++ logic using nlohmann/json (already a dependency). No JSON Schema library needed -- the config struct is simple enough that hand-written validation is clearer, faster, and avoids a new dependency.
+
+libmdbx crash recovery audit is a code review task, not a library addition. The current configuration (`durability::robust_synchronous`, `mode::write_mapped_io`) is the correct default for data integrity. The audit verifies this is used correctly and tests unclean shutdown scenarios.
 
 ## Recommended Stack
 
-### Set Reconciliation: negentropy (RBSR)
+### No New Dependencies
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| negentropy | latest master (header-only) | Replace O(N) hash list exchange with O(differences) set reconciliation | Battle-tested in Nostr (strfry, 10M+ elements). Header-only C++. Supports frame size limits. LMDB storage backend exists (adaptable to libmdbx). MIT license. |
+| Feature | Implementation | Existing Dependency | Why No New Dep |
+|---------|---------------|-------------------|---------------|
+| Auto-reconnect + backoff | `asio::steady_timer` coroutine loop | Standalone Asio 1.38.0 | Timer-cancel pattern already proven in codebase |
+| Keepalive timeout | `asio::steady_timer` per-connection watchdog | Standalone Asio 1.38.0 | Same as sync inbox timer pattern |
+| File logging | `spdlog::sinks::rotating_file_sink_mt` | spdlog 1.15.1 | Built-in sink, just needs wiring |
+| Structured log format | `spdlog::set_pattern()` with JSON template | spdlog 1.15.1 | Pattern string change, no code dep |
+| Config validation | Hand-written checks in `config.cpp` | nlohmann/json 3.11.3 | ~100 LOC of range/type checks beats a schema validator dep |
+| CMake version injection | `configure_file()` + `execute_process(git describe)` | CMake 3.20 (built-in) | Standard CMake feature |
+| Cursor compaction | Storage API + steady_timer | libmdbx 0.13.11 + Asio | Already have `cleanup_stale_cursors()` and `delete_peer_cursors()` |
+| Tombstone GC fix | Debug + fix existing `run_expiry_scan()` | libmdbx 0.13.11 | Bug in existing code, not a missing capability |
+| Startup integrity scan | Read transaction scan on open | libmdbx 0.13.11 | Same pattern as existing `validate_no_unencrypted_data()` |
+| Crash recovery audit | Code review + test | libmdbx 0.13.11 | Verify existing flags, add kill-9 tests |
+| Delegation quota verification | Logic fix in `BlobEngine::ingest()` | Existing code | Ensure delegate writes count against owner namespace quota |
+| Timer cleanup | Audit `on_shutdown` paths | Standalone Asio 1.38.0 | Cancel all active timers in drain |
+| Metrics logging | Additional `spdlog::info()` calls | spdlog 1.15.1 | Emit counters already tracked in-memory |
 
-**Why negentropy over alternatives:**
+### Version Recommendations
 
-| Approach | Verdict | Reason |
-|----------|---------|--------|
-| **negentropy (RBSR)** | RECOMMENDED | O(log N) rounds, O(differences) bandwidth. Stateless (no per-connection tree state). DoS-resistant (adversarial data cannot force worst-case). Header-only. Production-proven at scale. |
-| Merkle trees | REJECTED | Require rigid tree structure stored per-dataset. Copy-on-write snapshots needed for concurrent syncs. Adversarial data can construct deliberately unfavorable tree shapes. More complex to implement than RBSR for similar average-case performance. |
-| IBLT (Invertible Bloom Lookup Tables) | REJECTED | Require advance estimate of difference count (reconciliation fails if exceeded). False-positive risks. Susceptible to targeted DoS. Available C++ implementations (gavinandresen/IBLT_Cplusplus) are unmaintained research code, not production-ready. |
-| minisketch (PinSketch/BCH) | REJECTED | Maximum element size is 64 bits. Our blob hashes are 256 bits (SHA3-256). Would require hashing hashes, adding collision risk. Decoding is O(n^2). Requires advance capacity estimate. Does not scale beyond ~4096 differences. |
-| Custom O(N) optimization | REJECTED | Could compress hash lists with delta encoding or bloom filter pre-check, but these are band-aids. The fundamental issue is exchanging all N hashes when only D << N are different. Only set reconciliation fixes this. |
+| Technology | Current | Recommended | Action | Rationale |
+|------------|---------|-------------|--------|-----------|
+| spdlog | v1.15.1 | v1.15.1 (keep) or v1.17.0 (optional) | Optional bump | v1.15.1 has all needed features. v1.17.0 brings fmt 12.1.0 bump and minor fixes. Low risk either way. |
+| libmdbx | v0.13.11 | v0.13.11 (keep) | No change | Latest stable release as of 2026-01. v0.13.11 is the final open-source release before MithrilDB transition. Pinning is correct. |
+| Standalone Asio | 1.38.0 | 1.38.0 (keep) | No change | All needed coroutine/timer features present. |
+| nlohmann/json | 3.11.3 | 3.11.3 (keep) | No change | Config parsing works. No new JSON features needed. |
+| Catch2 | v3.7.1 | v3.7.1 (keep) | No change | Test framework is stable. |
+| All others | Current | Current | No change | liboqs, libsodium, FlatBuffers, xxHash unchanged. |
 
-**How negentropy works:**
+## Feature-by-Feature Stack Details
 
-1. Both sides sort their items by (timestamp, id). Items are 64-bit timestamp + 256-bit ID (our SHA3-256 content hashes).
-2. Initiator sends fingerprints covering ranges of their sorted dataset.
-3. Responder compares fingerprints. Matching ranges are skipped. Mismatched ranges are recursively split.
-4. After O(log N) round-trips, both sides know exactly which IDs the other is missing.
-5. Actual blob transfer follows (using existing one-blob-at-a-time protocol).
+### 1. Connection Resilience (Auto-Reconnect + Exponential Backoff)
 
-**Bandwidth comparison for 1M blobs, 10 differences:**
-- Current protocol: 32 MB (all 1M hashes x 32 bytes)
-- negentropy: ~50-100 KB (fingerprints for log16(1M) ~ 5 levels, then 10 IDs)
+**Implementation:** Coroutine loop in `PeerManager` using `asio::steady_timer`.
 
-**negentropy C++ API overview:**
-
+**Pattern:**
 ```cpp
-#include "negentropy.h"
-#include "negentropy/storage/Vector.h"
-
-// Build sorted set of items
-negentropy::storage::Vector storage;
-for (auto& [hash, timestamp] : our_blobs) {
-    storage.insert(timestamp, hash.data());  // 64-bit ts + 32-byte id
-}
-storage.seal();  // sorts and deduplicates
-
-// Initiator side
-Negentropy ne(storage, frameSizeLimit);
-std::string msg = ne.initiate();
-// send msg to peer...
-
-// After receiving response:
-std::vector<std::string> haveIds, needIds;
-auto next = ne.reconcile(response, haveIds, needIds);
-// haveIds = what we have that peer needs
-// needIds = what peer has that we need
-// if next.has_value(), send *next and repeat
-```
-
-**OpenSSL dependency replacement:**
-
-negentropy uses OpenSSL SHA-256 in exactly one place: `Accumulator::getFingerprint()`, which calls `SHA256()` on a ~40-byte input (accumulator state + varint count). This is trivially replaceable:
-
-```cpp
-// Original (negentropy/types.h):
-#include <openssl/sha.h>
-SHA256(input_data, input_size, hash);
-
-// Replacement using liboqs SHA3-256:
-#include "db/crypto/hash.h"
-auto digest = chromatindb::crypto::sha3_256(input_data, input_size);
-```
-
-The fingerprint only needs to be a collision-resistant hash of the accumulator state. SHA3-256 is strictly stronger than SHA-256 for this purpose. Since negentropy is header-only, we patch the single `#include <openssl/sha.h>` line and the one `SHA256()` call site. No functional change.
-
-**Alternative: vendor negentropy types.h with the SHA3-256 patch applied.** Since it is MIT-licensed header-only code, vendoring is the clean approach. Place in `db/vendor/negentropy/` with the SHA-256 -> SHA3-256 substitution.
-
-**Storage backend choice: Vector (not BTreeLMDB)**
-
-negentropy offers four storage backends:
-- **Vector**: In-memory sorted array. Built from seq_map scan. O(N) construction, O(1) fingerprint via linear scan of tree nodes.
-- **BTreeMem**: In-memory B+tree. Supports insert/erase without re-sealing. Logarithmic fingerprint computation.
-- **BTreeLMDB**: Persistent B+tree backed by LMDB. Same as BTreeMem but persisted.
-- **SubRange**: Proxy for partial sync over a subset of the dataset.
-
-**Use Vector because:**
-1. chromatindb already has the definitive dataset in libmdbx. No need to maintain a parallel persistent index.
-2. Vector is constructed per-sync-round from the existing `get_hashes_by_namespace()` call (which reads seq_map). This is already O(N) -- the same cost we pay today.
-3. BTreeLMDB would require maintaining a second sorted index that must be kept in sync with the primary storage. This adds write amplification on every ingest and creates consistency risk.
-4. Vector construction for 1M items is fast (sort 1M x 40-byte structs ~ 100ms). This runs once per sync initiation, not per round-trip.
-5. BTreeMem/BTreeLMDB are useful when the dataset changes between reconciliation rounds. For chromatindb, the dataset is snapshotted at sync start -- mutations during sync are handled by the next round.
-
-**Frame size limit integration:**
-
-negentropy supports a `frameSizeLimit` constructor parameter. Set this to match chromatindb's MAX_FRAME_SIZE (110 MiB) or lower. When the reconciliation message would exceed the limit, negentropy truncates the response and marks remaining ranges for the next round-trip. This naturally bounds per-message wire overhead.
-
-**Timestamp mapping:**
-
-negentropy items require a 64-bit timestamp for sorting. chromatindb blobs already have a `timestamp` field (Unix seconds, set by the writer). Use this directly. For blobs with identical timestamps, negentropy sorts lexically by ID (the 32-byte content hash), which provides deterministic ordering.
-
-### Sync Rate Limiting
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| Existing token bucket (PeerInfo) | v0.4.0 (existing) | Extend to cover sync message types | The rate limiter already exists for Data/Delete messages. Sync messages (SyncRequest, BlobTransfer, etc.) are currently explicitly exempted. Extending coverage is a code change, not a library change. |
-
-**Current state:**
-```cpp
-// peer_manager.cpp line 436-437:
-// Sync messages (BlobTransfer, SyncRequest, etc.) are never rate-checked.
-if ((type == TransportMsgType_Data || type == TransportMsgType_Delete) &&
-    rate_limit_bytes_per_sec_ > 0) {
-```
-
-**What needs to change:**
-
-The issue is not just rate limiting sync _data_ (BlobTransfer payloads) -- it is rate limiting sync _initiation_. A malicious peer can repeatedly send SyncRequest, forcing the node to construct Vector storage, compute fingerprints, and send responses. This is a CPU and I/O amplification vector.
-
-Two separate rate limits are needed:
-
-1. **Sync initiation rate limit**: Max SyncRequest messages per peer per time window. A simple counter + cooldown (not token bucket). Example: max 1 SyncRequest per 30 seconds per peer. Exceeding triggers a strike.
-
-2. **Sync data rate limit**: BlobTransfer messages during sync counted against the existing token bucket. This prevents a peer from triggering unlimited blob transfers via reconciliation.
-
-**No new library needed.** The cooldown-based rate limiter is 10 lines of code in PeerInfo:
-```cpp
-struct PeerInfo {
-    // ... existing ...
-    uint64_t last_sync_request_time = 0;  // steady_clock ms
-};
-```
-
-**Config additions:**
-```json
-{
-    "sync_cooldown_seconds": 30
+// Reconnect coroutine per outbound peer
+asio::awaitable<void> reconnect_loop(std::string endpoint) {
+    uint32_t attempt = 0;
+    while (!draining_) {
+        auto delay = std::min(base_delay * (1 << attempt), max_delay);
+        asio::steady_timer timer(co_await asio::this_coro::executor);
+        timer.expires_after(delay);
+        co_await timer.async_wait(asio::use_awaitable);
+        // Attempt connection...
+        if (success) attempt = 0; else ++attempt;
+    }
 }
 ```
 
-### Thread Pool Crypto Offload
+**Key design points:**
+- Base delay: 1s. Max delay cap: 60s. Backoff: exponential (1, 2, 4, 8, 16, 32, 60, 60...).
+- ACL-aware suppression: if peer was rejected by ACL (silent TCP close from remote), suppress reconnect entirely (or use very long backoff like 10min). Detection: connection succeeds at TCP level but remote closes immediately after handshake.
+- Jitter: add random 0-25% jitter to prevent thundering herd on network partition recovery.
+- Reset on successful sync: attempt counter resets to 0 after a successful message exchange, not just TCP connect.
+- Cancel on shutdown: the timer is cancelled in `on_shutdown`, breaking the loop.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| `asio::thread_pool` | 1.38.0 (existing in Standalone Asio) | Offload ML-DSA-87 verify + SHA3-256 hash to worker threads | Event loop is single-threaded. ML-DSA-87 verify blocks all I/O during large blob processing. Thread pool enables parallel verification while I/O continues. |
+**No new deps.** `asio::steady_timer` is the same primitive used for sync interval timer and expiry timer.
 
-**The pattern (dispatch-based executor switching):**
+### 2. Keepalive Timeout (Dead Peer Detection)
 
+**Implementation:** Per-connection `asio::steady_timer` watchdog, reset on any received message.
+
+**Pattern:**
 ```cpp
-// In a coroutine running on io_context:
-auto executor = co_await asio::this_coro::executor;  // io_context executor
-
-// Offload CPU-bound work to thread pool:
-auto [valid, blob_hash] = co_await asio::co_spawn(
-    crypto_pool_,
-    [&blob]() -> asio::awaitable<std::pair<bool, Hash>> {
-        auto hash = crypto::sha3_256(blob.data);
-        bool valid = crypto::verify(blob);
-        co_return {valid, hash};
-    },
-    asio::use_awaitable
-);
-
-// Execution resumes here on the crypto_pool_ thread.
-// Post back to io_context for storage write:
-co_await asio::post(executor, asio::use_awaitable);
-// Now on io_context thread -- safe to call storage_.store_blob()
+// In PeerInfo or connection message loop:
+asio::steady_timer keepalive_timer(executor);
+keepalive_timer.expires_after(std::chrono::seconds(120));
+// On every received message: keepalive_timer.expires_after(120s);
+// If timer fires: peer is dead, close connection.
 ```
 
-**Why `co_spawn` on thread_pool + `post` back, not `dispatch`:**
+**Key design points:**
+- Timeout: 120s (2 minutes). Configurable via `keepalive_timeout_seconds` config field.
+- No ping/pong protocol messages: the existing sync cycle (default 60s) generates traffic. If no message arrives in 2x the sync interval, peer is dead.
+- TCP keepalive as fallback: optionally set `asio::socket_base::keep_alive(true)` on sockets, but application-level timeout is primary.
+- Timer reset on ANY received frame (data, sync, PEX, etc.), not just keepalive-specific messages.
 
-The `co_spawn(pool, ...)` pattern runs the entire lambda on a pool thread. When we `co_await` this from the io_context coroutine, the io_context coroutine suspends until the pool work completes. The io_context thread is free to process other I/O during this time. After the pool work completes, `asio::post(executor, use_awaitable)` explicitly switches execution back to the io_context thread.
+**No new deps.** Same timer pattern as existing codebase.
 
-**Why this is safe:**
-- `crypto::sha3_256()` is a pure function (no mutable state).
-- `crypto::verify()` uses a `thread_local` OQS_SIG context (from v0.7.0 optimization).
-- `storage_.store_blob()` is NOT thread-safe (single libmdbx write transaction) -- must run on io_context thread.
-- The `co_await` suspension point is explicit -- no accidental interleaving.
+### 3. Structured Log Format
 
-**Thread pool sizing:**
+**Implementation:** JSON pattern string in `spdlog::set_pattern()`.
 
+**Current pattern:** `[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v`
+
+**Proposed structured pattern (when enabled):**
+```
+{"ts":"%Y-%m-%dT%H:%M:%S.%fZ","level":"%l","logger":"%n","tid":"%t","msg":"%v"}
+```
+
+**Key design points:**
+- Config field: `"log_format": "text"` (default) or `"log_format": "json"`. Text format stays human-readable for development; JSON for production/monitoring.
+- spdlog's `%f` gives microsecond precision in ISO 8601 format.
+- Thread ID (`%t`) included because the codebase uses `asio::thread_pool` for crypto offload.
+- No custom formatter class needed -- spdlog's pattern syntax is sufficient for flat JSON lines.
+- Escaping: spdlog does NOT JSON-escape the `%v` payload. Messages must not contain unescaped quotes/newlines. Since all log messages are programmer-controlled format strings (not user input), this is acceptable. If a message includes user data (hex pubkeys, addresses), those are already safe ASCII.
+
+**No new deps.** Pattern change only. spdlog v1.15.1 supports this.
+
+### 4. File Logging
+
+**Implementation:** Multi-sink logger with `spdlog::sinks::rotating_file_sink_mt` + existing `stdout_color_sink_mt`.
+
+**Key code change in `logging.cpp`:**
 ```cpp
-asio::thread_pool crypto_pool_{
-    std::max(1u, std::thread::hardware_concurrency() - 1)
-};
+#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+
+void init(const std::string& level, const std::string& log_file) {
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+
+    std::vector<spdlog::sink_ptr> sinks = {console_sink};
+
+    if (!log_file.empty()) {
+        // 10 MiB per file, 3 rotated files
+        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            log_file, 10 * 1024 * 1024, 3);
+        sinks.push_back(file_sink);
+    }
+
+    auto logger = std::make_shared<spdlog::logger>("chromatindb", sinks.begin(), sinks.end());
+    spdlog::set_default_logger(logger);
+}
 ```
 
-Reserve one core for the io_context thread. On a 6-core Ryzen 5 5600U (benchmark machine), this gives 5 worker threads for parallel verification.
+**Config fields:**
+- `"log_file": ""` (default: empty = no file logging, stderr only)
+- `"log_max_size_mb": 10` (max file size before rotation, default 10 MiB)
+- `"log_max_files": 3` (number of rotated files to keep)
 
-**Expected improvement:**
-- Current: 15 blobs/sec at 1 MiB (single-threaded, v0.7.0 serial optimizations applied)
-- Target: 60-75 blobs/sec (5 parallel verifications, limited by storage write serialization)
-- Actual improvement depends on verification time vs. storage write time ratio
+**Key design points:**
+- `rotating_file_sink_mt` (thread-safe) because crypto pool threads may log.
+- Rotation prevents unbounded disk usage -- essential for a daemon.
+- Both sinks share the same pattern (text or JSON per `log_format`).
+- File sink level can match console or be set independently (console=warn, file=debug for production).
 
-**Integration point:** `BlobEngine::ingest()` or `SyncProtocol::ingest_blobs()`. The verification step (SHA3-256 hash + ML-DSA-87 verify) is extracted into a pure function and posted to the crypto pool. The storage write remains on the io_context thread.
+**No new deps.** `rotating_file_sink_mt` is built into spdlog. Just needs the include.
 
-### Build/Configuration Changes
+### 5. CMake Version Injection
 
-| Change | Current | New | Reason |
-|--------|---------|-----|--------|
-| New dependency | (none) | negentropy (header-only, vendored) | Set reconciliation protocol |
-| New vendored dir | (none) | `db/vendor/negentropy/` | Vendored with SHA-256 -> SHA3-256 patch |
-| Wire protocol | SyncRequest + NamespaceList + HashList + BlobTransfer | SyncRequest + Reconcile + BlobRequest + BlobTransfer | New Reconcile message type replaces NamespaceList + HashList |
-| Config fields | (none) | `sync_cooldown_seconds` | Sync initiation rate limit |
-| Max frame integration | MAX_FRAME_SIZE = 110 MiB | Same, passed to negentropy constructor | Bounds reconciliation message size |
+**Implementation:** `configure_file()` with `git describe` in CMakeLists.txt.
 
-**Wire protocol changes:**
-
-The current sync protocol uses:
-- `SyncRequest` (initiator -> responder: "let's sync")
-- `SyncAccept` (responder -> initiator: "ready")
-- `NamespaceList` (both sides: "here are my namespaces + seq_nums")
-- `HashList` (both sides: "here are all hashes for namespace X")
-- `BlobRequest` (both sides: "send me these hashes")
-- `BlobTransfer` (both sides: "here's the blob")
-- `SyncComplete` (both sides: "done with my side")
-
-The new protocol replaces NamespaceList + HashList with negentropy reconciliation messages:
-- `SyncRequest` (unchanged)
-- `SyncAccept` (unchanged)
-- `Reconcile` (new: both sides, carries negentropy wire protocol messages per namespace)
-- `BlobRequest` (unchanged)
-- `BlobTransfer` (unchanged)
-- `SyncComplete` (unchanged)
-
-The negentropy protocol is namespace-scoped: one reconciliation per namespace. The outer protocol iterates namespaces (using cursor-based seq_num comparison from v0.7.0 to skip unchanged namespaces), then runs negentropy reconciliation for each namespace that has changes.
-
-### Dependencies NOT Added
-
-| Considered | Why Not |
-|------------|---------|
-| OpenSSL | negentropy's only dependency. Replaced with existing SHA3-256 from liboqs. Project constraint: no OpenSSL. |
-| LMDB (liblmdb) | negentropy has a BTreeLMDB backend using LMDB. Not needed -- using Vector backend with data from libmdbx. Would add a second memory-mapped database engine. |
-| minisketch (bitcoin-core) | 64-bit element limit. Our hashes are 256-bit. Requires capacity estimation. Does not scale beyond ~4096 differences. |
-| Any IBLT library | Requires difference count estimation. Failure mode when estimate is wrong. Research-quality C++ implementations only. |
-| External Merkle tree library | No standard C++ Merkle tree library exists for set reconciliation. Would need custom implementation. RBSR is simpler and more flexible. |
-| Intel TBB / taskflow | `asio::thread_pool` is sufficient for "post work, await result" pattern. Adding a parallel framework dependency for one use case is overkill. |
-| Boost | `asio::thread_pool` + `asio::post` provides everything needed without pulling in Boost. |
-
-## Detailed Integration Points
-
-### 1. Negentropy Vendoring and Patch
-
-**Directory structure:**
-```
-db/vendor/negentropy/
-  negentropy.h              -- main header (patched)
-  negentropy/
-    types.h                 -- patched: SHA-256 -> SHA3-256
-    encoding.h              -- unmodified
-    storage/
-      base.h                -- unmodified
-      Vector.h              -- unmodified (primary backend)
-```
-
-**Patch scope (types.h only):**
-
-1. Remove `#include <openssl/sha.h>`
-2. Add `#include "db/crypto/hash.h"`
-3. Replace `SHA256(...)` call in `Accumulator::getFingerprint()`:
-
+**New file: `db/version.h.in` (template):**
 ```cpp
-// Before:
-unsigned char hash[SHA256_DIGEST_LENGTH];
-SHA256(reinterpret_cast<unsigned char*>(input.data()), input.size(), hash);
+#pragma once
 
-// After:
-auto digest = chromatindb::crypto::sha3_256(
-    reinterpret_cast<const uint8_t*>(input.data()), input.size());
+// Auto-generated by CMake. Do not edit.
+#define CHROMATINDB_VERSION "@CHROMATINDB_VERSION@"
+#define CHROMATINDB_VERSION_MAJOR @CHROMATINDB_VERSION_MAJOR@
+#define CHROMATINDB_VERSION_MINOR @CHROMATINDB_VERSION_MINOR@
+#define CHROMATINDB_VERSION_PATCH @CHROMATINDB_VERSION_PATCH@
+#define CHROMATINDB_GIT_HASH "@CHROMATINDB_GIT_HASH@"
+
+static constexpr const char* VERSION = CHROMATINDB_VERSION;
 ```
 
-4. Copy first `FINGERPRINT_SIZE` (16) bytes from the 32-byte SHA3-256 digest.
-
-This is a ~5-line diff. The fingerprint only needs to be a collision-resistant digest of the accumulator state; SHA3-256 truncated to 16 bytes provides 128-bit collision resistance, matching the original SHA-256 truncation.
-
-**Build integration:**
-
+**CMakeLists.txt additions:**
 ```cmake
-# In db/CMakeLists.txt:
-target_include_directories(chromatindb_lib PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/vendor
+# Version from project() directive
+project(chromatindb VERSION 0.9.0 LANGUAGES C CXX)
+
+# Git hash for build identification
+execute_process(
+    COMMAND git describe --always --dirty
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE CHROMATINDB_GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT CHROMATINDB_GIT_HASH)
+    set(CHROMATINDB_GIT_HASH "unknown")
+endif()
+
+set(CHROMATINDB_VERSION "${PROJECT_VERSION}")
+set(CHROMATINDB_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CHROMATINDB_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CHROMATINDB_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/db/version.h.in
+    ${CMAKE_CURRENT_SOURCE_DIR}/db/version.h
+    @ONLY
 )
 ```
 
-No new FetchContent. No new compiled sources. Header-only.
+**Key design points:**
+- Replace hand-edited `db/version.h` (currently stuck at "0.6.0") with generated file.
+- `version.h.in` is the source of truth, `version.h` is generated (add to `.gitignore`).
+- `git describe --always --dirty` gives short hash + dirty flag for dev builds.
+- `project(VERSION)` in CMake is the canonical version source. Tags match: `v0.9.0`.
+- `@ONLY` prevents CMake from expanding `${...}` variables in the template (safety).
+- Output to source dir (not build dir) so `#include "db/version.h"` works without include path changes. Alternatively, output to build dir and add it to include paths -- either approach works.
 
-### 2. Sync Protocol Restructure
+**No new deps.** `configure_file()` and `execute_process()` are built-in CMake commands.
 
-**New message type in transport.fbs:**
-```flatbuffers
-// Add to TransportMsgType enum:
-Reconcile = 27,  // negentropy reconciliation message
-```
+### 6. Config Validation (Fail-Fast)
 
-**Reconcile message wire format:**
-```
-[namespace_id:32][payload_length:u32BE][negentropy_payload:variable]
-```
+**Implementation:** Validation function in `config.cpp` called after `load_config()`.
 
-Multiple Reconcile messages may be sent per sync round (one per namespace needing reconciliation). The negentropy payload is opaque bytes produced by `Negentropy::initiate()` or `Negentropy::reconcile()`.
+**What to validate:**
 
-**Sync flow (initiator):**
-```
-1. Send SyncRequest
-2. Receive SyncAccept
-3. For each namespace (cursor check: skip if seq unchanged):
-   a. Build negentropy::storage::Vector from get_hashes_by_namespace()
-   b. Create Negentropy(storage, frameSizeLimit)
-   c. Send Reconcile(namespace, ne.initiate())
-   d. Receive Reconcile(namespace, response)
-   e. Call ne.reconcile(response, haveIds, needIds)
-   f. If not done, goto (c) with next message
-   g. haveIds -> BlobTransfer (send blobs peer needs)
-   h. needIds -> BlobRequest (request blobs we need)
-4. Send SyncComplete
-```
+| Field | Validation | Current State |
+|-------|-----------|---------------|
+| `bind_address` | Must contain `:` separator, port must be 1-65535 | No validation |
+| `max_peers` | Must be >= 1 | No validation |
+| `sync_interval_seconds` | Must be >= 5 (prevent thrashing) | No validation |
+| `max_storage_bytes` | 0 or >= 1 MiB (prevent nonsensical tiny limits) | No validation |
+| `rate_limit_bytes_per_sec` | 0 or >= 1024 (at least 1 KiB/s if enabled) | No validation |
+| `rate_limit_burst` | If rate limiting enabled, burst >= rate (at least 1s worth) | No validation |
+| `full_resync_interval` | Must be >= 1 | No validation |
+| `cursor_stale_seconds` | Must be >= 60 | No validation |
+| `worker_threads` | 0 or 1-256 (sane range) | Clamped at runtime but not validated |
+| `sync_cooldown_seconds` | 0 or >= 5 | No validation |
+| `max_sync_sessions` | Must be >= 1 | No validation |
+| `namespace_quota_bytes` | No constraint (0 = unlimited is valid) | OK |
+| `namespace_quota_count` | No constraint (0 = unlimited is valid) | OK |
+| `log_level` | Must be one of: trace, debug, info, warn, warning, error, err, critical | Silently defaults to info |
+| `log_file` | If non-empty, parent directory must exist or be creatable | New field |
+| `log_format` | Must be "text" or "json" | New field |
+| `keepalive_timeout_seconds` | 0 (disabled) or >= 30 | New field |
 
-**Round-trip analysis:**
-- For well-synced peers (few differences): 1-2 round-trips per namespace
-- For divergent peers (many differences): 3-4 round-trips per namespace
-- For 1M blobs with 10 differences: ~3 round-trips vs. 1 round-trip (current) BUT current round-trip sends 32 MB while negentropy sends ~100 KB total
+**Approach:** Single `validate_config(const Config&)` function that throws `std::runtime_error` with a human-readable message on the first invalid field. Called in `cmd_run()` immediately after `parse_args()`, before any component construction. Fail fast, fail loud.
 
-### 3. Thread Pool Integration in PeerManager
+**Why NOT json-schema-validator:** That library (pboettch/json-schema-validator) adds a FetchContent dependency, requires JSON Schema draft-7 definition maintenance, and is overkill for ~20 fields with simple range checks. The validation logic is ~100 LOC of `if` statements. YAGNI.
 
+**No new deps.** Pure C++ logic using existing nlohmann/json for type checking.
+
+### 7. libmdbx Crash Recovery Audit
+
+**Current configuration (verified from `storage.cpp:178-179`):**
 ```cpp
-class PeerManager {
-    // ... existing ...
-    asio::thread_pool crypto_pool_;  // New: sized to hardware_concurrency() - 1
-};
+operate_params.mode = mdbx::env::mode::write_mapped_io;
+operate_params.durability = mdbx::env::durability::robust_synchronous;
 ```
 
-**Constructor initialization:**
-```cpp
-PeerManager::PeerManager(...)
-    : // ... existing initializers ...
-    , crypto_pool_(std::max(1u, std::thread::hardware_concurrency() - 1))
-{ }
-```
+**Analysis:**
 
-**Shutdown:**
-```cpp
-void PeerManager::stop() {
-    // ... existing stop logic ...
-    crypto_pool_.join();  // Wait for in-flight crypto to complete
-}
-```
+| Setting | Value | Meaning | Correctness |
+|---------|-------|---------|-------------|
+| `mode` | `write_mapped_io` | Memory-mapped writes (WRITEMAP) | CORRECT -- fastest write mode that still supports crash safety |
+| `durability` | `robust_synchronous` | Full fsync after every commit | CORRECT -- maximum durability. Data survives power loss. |
 
-### 4. Config Changes
+**libmdbx durability modes (from most to least safe):**
 
-```cpp
-struct Config {
-    // ... existing ...
-    uint32_t sync_cooldown_seconds = 30;   // Min seconds between sync requests per peer
-};
-```
+| Mode | Crash Safety | Write Speed | Notes |
+|------|-------------|-------------|-------|
+| `robust_synchronous` | Full (current) | Slowest | Data always consistent after crash. Never lose committed transactions. |
+| `half_synchronous_weak_last` | Good | Medium | May lose last transaction after crash but DB is consistent. |
+| `lazy_weak_tail` | OK | Fast | May lose several recent transactions. DB consistent. |
+| `whole_fragile` | UNSAFE | Fastest | DB may corrupt on crash. Never use for production. |
 
-Hot-reloadable via SIGHUP (same pattern as other config values).
+**Audit tasks (code review, no deps):**
+1. Verify `robust_synchronous` is used everywhere (not overridden).
+2. Verify no `MDBX_UTTERLY_NOSYNC` or `MDBX_NOSYNC` flags anywhere.
+3. Test: kill -9 during write transaction, verify DB opens cleanly.
+4. Test: kill -9 during commit, verify no data corruption.
+5. Verify `mdbx::env_managed` destructor is called on graceful shutdown (flushes).
+6. Document: libmdbx's copy-on-write B-tree means no WAL needed. Committed transactions are always durable. Uncommitted transactions are lost on crash (expected and correct).
+
+**No new deps.** Code review + test scenarios.
+
+### 8. Startup Integrity Scan
+
+**Implementation:** Read-only transaction scan at startup, after `env_managed` opens.
+
+**What to verify:**
+1. All blobs in `blobs_map` decrypt successfully (DARE envelope valid, AEAD tag verifies).
+2. All `seq_map` entries point to existing blobs in `blobs_map` (or are zero-hash sentinels for deletions).
+3. All `expiry_map` entries reference existing blobs.
+4. All `quota_map` aggregates match actual blob data (already done: `rebuild_quota_aggregates()`).
+5. `delegation_map` entries reference existing delegation blobs.
+
+**Existing precedent:** `validate_no_unencrypted_data()` already scans `blobs_map` at startup. The integrity scan extends this pattern.
+
+**Key design points:**
+- Full scan at startup is acceptable: even at 100K blobs, a read-only cursor scan over keys (not values) completes in milliseconds. Value-level validation (decrypt check) is heavier but runs once.
+- Log warnings for inconsistencies rather than aborting (self-healing: delete orphaned index entries).
+- Optionally skip with `--skip-integrity-check` CLI flag for fast restart after known-clean shutdown.
+
+**No new deps.** libmdbx read transaction + existing crypto.
+
+### 9. Cursor Compaction
+
+**Implementation:** Periodic `asio::steady_timer` that calls existing `cleanup_stale_cursors()`.
+
+**Existing API (already in storage.h):**
+- `cleanup_stale_cursors(known_peer_hashes)` -- deletes cursors for unknown peers.
+- `delete_peer_cursors(peer_hash)` -- deletes all cursors for a specific peer.
+- `list_cursor_peers()` -- lists all peers with stored cursors.
+
+**What's needed:**
+- Timer-driven compaction: every N minutes (e.g., 60), scan cursors. Delete cursors where `last_sync_timestamp` is older than `cursor_stale_seconds` (already a config field, default 3600s).
+- On peer disconnect: mark peer as "last seen" time. If peer hasn't reconnected within stale threshold, cursors are eligible for cleanup.
+
+**No new deps.** Combines existing storage API + timer pattern.
+
+### 10. Tombstone GC Fix
+
+**Known issue:** "Tombstone GC not reclaiming storage in Docker benchmarks (storage grows instead of shrinking)."
+
+**Investigation approach (no new deps):**
+1. Trace `run_expiry_scan()` execution: is it finding expired tombstones? Are tombstones being stored with TTL > 0?
+2. Check if tombstone blobs have their own expiry entries in `expiry_map`.
+3. Verify `delete_blob_data()` actually removes blob bytes from `blobs_map` and the mdbx database file shrinks (or at least frees pages internally -- libmdbx may not shrink the file but should reuse pages).
+4. Key insight: libmdbx with `write_mapped_io` mode may not physically shrink the database file even after deletions. The freed pages are reused for new writes. This is **expected behavior** for mmap-based databases. The "storage grows" observation may not be a bug -- it's how mmap databases work. The file size represents high-water mark, not current data size.
+5. If actual data is not being deleted: trace through tombstone creation -> expiry entry -> expiry scan -> delete_blob_data chain.
+
+**No new deps.** Debugging existing code.
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Set reconciliation | negentropy (RBSR) | Merkle tree | Rigid structure, adversarial worst-case, requires per-connection state snapshots |
-| Set reconciliation | negentropy (RBSR) | IBLT | Requires capacity estimation, failure when exceeded, no production C++ library |
-| Set reconciliation | negentropy (RBSR) | minisketch | 64-bit element limit (our hashes are 256-bit), O(n^2) decode |
-| Set reconciliation | negentropy (RBSR) | Custom bloom filter pre-check | Band-aid. Still O(N) for false-positive resolution. Does not fix the fundamental issue. |
-| negentropy backend | Vector (in-memory) | BTreeLMDB (persistent) | Would duplicate data already in libmdbx. Write amplification on every ingest. Consistency risk. |
-| negentropy hash | SHA3-256 (from liboqs) | Keep SHA-256 (add OpenSSL) | Project constraint: no OpenSSL. SHA3-256 already available. |
-| Sync rate limit | Counter + cooldown | Token bucket for sync messages | Token bucket is for throughput control. Sync initiation needs frequency control. Simpler mechanism is correct. |
-| Crypto offload | asio::thread_pool | std::jthread + std::future | No executor integration. Cannot co_await futures natively in Asio coroutines. |
-| Crypto offload | asio::thread_pool | Dedicated thread with lock-free queue | Over-engineered. asio::thread_pool + post/co_spawn provides the same with less code and proven correctness. |
+| Structured logging | spdlog JSON pattern | structlog (spdlog+json fork) | Extra dependency for something spdlog handles natively with a pattern string. |
+| Structured logging | spdlog JSON pattern | structured_spdlog (fork) | Unmaintained fork. Not worth the risk. |
+| Config validation | Hand-written checks | pboettch/json-schema-validator | New FetchContent dep, JSON Schema draft-7 maintenance, overkill for ~20 fields. |
+| Config validation | Hand-written checks | nlohmann/json SAX parser | Over-engineering. Current DOM approach is fine for small configs. |
+| File logging | spdlog rotating_file_sink | spdlog daily_file_sink | Daily rotation is less useful for a daemon that may run for months. Size-based rotation is more predictable. |
+| File logging | spdlog rotating_file_sink | spdlog basic_file_sink | No rotation = unbounded file growth. Unacceptable for a daemon. |
+| Keepalive | Application-level timer | TCP SO_KEEPALIVE | TCP keepalive has OS-level defaults (often 2 hours), not configurable per-socket on all platforms without setsockopt. Application-level timeout is more predictable and testable. |
+| Keepalive | Application-level timer | Custom ping/pong wire messages | Requires protocol change (new message types). Sync cycle already generates periodic traffic. Unnecessary complexity. |
+| Version injection | CMake configure_file | Compile-time __DATE__/__TIME__ | Not reproducible. Different every build. Can't extract semver from it. |
+| Version injection | CMake configure_file | External script generating version.h | Extra build step. CMake handles this natively. |
+| Reconnect backoff | Exponential with jitter | Linear backoff | Too slow to recover from brief outages. Exponential reaches steady state faster. |
+| Reconnect backoff | Exponential with jitter | Fixed interval | Thundering herd problem when multiple peers recover simultaneously. |
 
-## Current Dependency Versions
+## What NOT to Add
 
-| Dependency | Version | Status | Changed? |
-|------------|---------|--------|----------|
-| liboqs | 0.15.0 | Current | No |
-| libsodium (cmake wrapper) | master | Tracks upstream | No |
-| FlatBuffers | 25.2.10 | Current | No |
-| Catch2 | 3.7.1 | Current | No |
-| spdlog | 1.15.1 | Current | No |
-| nlohmann/json | 3.11.3 | Current | No |
-| libmdbx | 0.13.11 | Current | No |
-| Standalone Asio | 1.38.0 | Current | No |
-| **negentropy** | **latest master** | **NEW (header-only, vendored)** | **Yes** |
+| Technology | Why Not |
+|------------|---------|
+| JSON Schema validator | Overkill for config validation. Hand-written is clearer. |
+| Boost.Log | Entire Boost dependency for something spdlog handles. |
+| gRPC/HTTP health checks | Out of scope. Binary protocol only. |
+| Prometheus client library | Out of scope for v0.9.0. Metrics are log-based. |
+| Custom log framework | spdlog is proven. Don't reinvent. |
+| fmt (standalone) | Already bundled inside spdlog. |
+| Any new FetchContent dependency | Zero new deps is the goal. |
+
+## Integration Points
+
+### New Config Fields (config.h additions)
+
+```cpp
+// Connection resilience
+uint32_t keepalive_timeout_seconds = 120;  // 0 = disabled
+uint32_t reconnect_base_delay_seconds = 1;
+uint32_t reconnect_max_delay_seconds = 60;
+
+// Logging
+std::string log_file;                       // Empty = stderr only
+std::string log_format = "text";            // "text" or "json"
+uint32_t log_max_size_mb = 10;
+uint32_t log_max_files = 3;
+```
+
+### logging::init() Signature Change
+
+```cpp
+// Current:
+void init(const std::string& level = "info");
+
+// New:
+struct LogConfig {
+    std::string level = "info";
+    std::string format = "text";   // "text" or "json"
+    std::string file;              // empty = no file
+    uint32_t max_size_mb = 10;
+    uint32_t max_files = 3;
+};
+void init(const LogConfig& config);
+```
+
+### version.h Change
+
+```
+// Current (hand-edited, stale at 0.6.0):
+#define VERSION_MAJOR "0"
+#define VERSION_MINOR "6"
+#define VERSION_PATCH "0"
+
+// New (CMake-generated from version.h.in):
+#define CHROMATINDB_VERSION "0.9.0"
+#define CHROMATINDB_GIT_HASH "acefff8-dirty"
+```
+
+## Installation
+
+No changes to installation. No new `FetchContent_Declare` blocks.
+
+```bash
+# Existing (unchanged):
+cmake -B build
+cmake --build build
+```
+
+Optional spdlog bump (if desired):
+```cmake
+# In db/CMakeLists.txt, change:
+GIT_TAG v1.15.1
+# To:
+GIT_TAG v1.17.0
+```
 
 ## Confidence Assessment
 
 | Area | Confidence | Reason |
-|------|------------|--------|
-| negentropy suitability | HIGH | Production-proven in strfry (Nostr), 10M+ element datasets. C++ header-only. MIT license. RBSR algorithm published and peer-reviewed (arXiv 2212.13567). |
-| OpenSSL removal from negentropy | HIGH | Single SHA256() call in types.h. Trivial replacement with existing sha3_256(). Fingerprint only needs collision resistance; SHA3-256 is stronger. |
-| Vector backend choice | HIGH | chromatindb owns definitive data in libmdbx. Vector is reconstructed per-sync from existing seq_map scan. No parallel index to maintain. |
-| Sync rate limiting approach | HIGH | Counter + cooldown is standard for frequency control. Existing token bucket handles throughput. Two concerns, two mechanisms. |
-| Thread pool crypto offload | HIGH | `asio::thread_pool` confirmed in Asio 1.38.0. `co_spawn` + `post` pattern documented in Asio. ML-DSA-87 verify is a pure function safe for concurrent execution. |
-| Wire protocol changes | MEDIUM | New Reconcile message type required. Namespace-scoped reconciliation adds per-namespace round-trips. Need careful timeout handling for multi-round reconciliation. |
+|------|-----------|--------|
+| No new deps needed | HIGH | All features verified achievable with existing stack. spdlog file sinks, Asio timers, CMake configure_file -- all well-documented, widely used. |
+| spdlog JSON pattern | HIGH | Verified via spdlog wiki and issue #1797. Pattern string approach is documented and supported. |
+| spdlog file sink | HIGH | `rotating_file_sink_mt` is a core spdlog feature, documented in wiki and examples. |
+| CMake version injection | HIGH | `configure_file()` + `execute_process(git describe)` is the standard CMake pattern. Dozens of references confirm. |
+| libmdbx crash safety | HIGH | `robust_synchronous` + `write_mapped_io` verified as correct combination from libmdbx README. Copy-on-write B-tree means no WAL needed. |
+| libmdbx file size behavior | MEDIUM | mmap databases typically don't shrink files. Need to verify this is the tombstone GC "bug" explanation. May require `mdbx_env_shrink()` or accept as expected behavior. |
+| Config validation approach | HIGH | Hand-written validation for ~20 fields is straightforward. No ambiguity. |
+| Keepalive without ping/pong | HIGH | Sync cycle generates traffic every 60s. 120s timeout means peer is truly dead if no messages arrive. |
 
 ## Sources
 
-- [negentropy GitHub repository](https://github.com/hoytech/negentropy) -- C++ header-only RBSR implementation, MIT license
-- [Range-Based Set Reconciliation (RBSR) detailed analysis](https://logperiodic.com/rbsr.html) -- Comprehensive technical overview by the author
-- [RBSR academic paper (arXiv 2212.13567)](https://arxiv.org/abs/2212.13567) -- Formal algorithm description and analysis
-- [Aljoscha Meyer's set-reconciliation description](https://github.com/AljoschaMeyer/set-reconciliation) -- Original informal algorithm description
-- [strfry Nostr relay (production user of negentropy)](https://github.com/hoytech/strfry) -- Production deployment at 10M+ elements
-- [NIP-77: Negentropy syncing for Nostr](https://nips.nostr.com/77) -- Protocol standardization in Nostr
-- [minisketch library (bitcoin-core)](https://github.com/bitcoin-core/minisketch) -- Evaluated and rejected (64-bit element limit)
-- [gavinandresen/IBLT_Cplusplus](https://github.com/gavinandresen/IBLT_Cplusplus) -- Evaluated and rejected (unmaintained, no capacity guarantees)
-- [Asio C++20 coroutines documentation](https://think-async.com/Asio/asio-1.22.0/doc/asio/overview/core/cpp20_coroutines.html)
-- [Asio thread_pool reference](https://think-async.com/Asio/asio-1.22.0/doc/asio/reference/thread_pool.html)
-- [Asio issue #1508 -- coroutines with thread pools](https://github.com/chriskohlhoff/asio/issues/1508)
-- [Make it Async: dispatch-based executor switching pattern](https://blog.vito.nyc/posts/make-it-async/)
-- [libmdbx vs LMDB API compatibility](https://github.com/erthink/libmdbx)
-- Codebase verification: `db/sync/sync_protocol.h` (current O(N) hash list exchange)
-- Codebase verification: `db/peer/peer_manager.cpp` (sync message rate limiting gap at line 436)
-- Codebase verification: `db/crypto/hash.h` (SHA3-256 API for negentropy patch)
+- [spdlog Wiki - Sinks](https://github.com/gabime/spdlog/wiki/Sinks)
+- [spdlog Wiki - JSON Logging Setup](https://github.com/gabime/spdlog/issues/1797)
+- [spdlog v1.15.1 Example Code](https://github.com/gabime/spdlog/blob/v1.x/example/example.cpp)
+- [spdlog Releases](https://github.com/gabime/spdlog/releases)
+- [libmdbx README - Crash Recovery](https://github.com/erthink/libmdbx/blob/master/README.md)
+- [libmdbx GitHub - ACID Guarantees](https://github.com/erthink/libmdbx)
+- [CMake Version Injection via Git](https://www.marcusfolkesson.se/blog/git-version-in-cmake/)
+- [CMake configure_file Best Practices](https://dev.to/khozaei/automating-semver-with-git-and-cmake-2hji)
+- [Asio C++20 Coroutines - Timeout Example](https://beta.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/coroutines/timeout.cpp)
+- [Asio 201 - Timeouts and Cancellation](https://cppalliance.org/asio/2023/01/02/Asio201Timeouts.html)
