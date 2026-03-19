@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v0.9.0
 milestone_name: Connection Resilience & Hardening
-status: defining_requirements
-stopped_at: "Milestone v0.9.0 started. Defining requirements."
-last_updated: "2026-03-19T17:00:00.000Z"
-last_activity: 2026-03-19 — Milestone v0.9.0 started
+status: ready_to_plan
+stopped_at: "Roadmap created. Phase 42 ready to plan."
+last_updated: "2026-03-19T18:00:00.000Z"
+last_activity: 2026-03-19 — Roadmap created for v0.9.0 (4 phases, 16 requirements)
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,14 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.9.0 Connection Resilience & Hardening
+**Current focus:** v0.9.0 Phase 42 (Foundation)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-19 — Milestone v0.9.0 started
+Phase: 42 of 45 (Foundation)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-19 — Roadmap created for v0.9.0
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -56,16 +58,24 @@ Last activity: 2026-03-19 — Milestone v0.9.0 started
 
 All decisions logged in PROJECT.md Key Decisions table.
 
+Research key findings for v0.9.0:
+- Zero new dependencies needed -- all features use existing stack
+- Receiver-side inactivity timeout for keepalive (NOT Ping sender) to avoid AEAD nonce desync
+- ACL reconnect bug: handshake_ok set before ACL check causes tight retry loop
+- Tombstone GC likely mmap file-size measurement issue, needs empirical verification
+- Timer cleanup is prerequisite for keepalive (extract cancel_all_timers() first)
+- Config validation must come before adding new config fields
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-None -- defining requirements.
+None.
 
 ## Session Continuity
 
 Last session: 2026-03-19
-Stopped at: Defining v0.9.0 requirements.
-Resume: Continue requirements definition and roadmap creation.
+Stopped at: Roadmap created for v0.9.0. Phase 42 ready to plan.
+Resume: `/gsd:plan-phase 42`

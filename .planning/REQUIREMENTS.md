@@ -60,28 +60,28 @@ Deferred to v1.0.0 (integration tests + hardening).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONN-01 | — | Pending |
-| CONN-02 | — | Pending |
-| CONN-03 | — | Pending |
-| STOR-01 | — | Pending |
-| STOR-02 | — | Pending |
-| STOR-03 | — | Pending |
-| STOR-04 | — | Pending |
-| STOR-05 | — | Pending |
-| OPS-01 | — | Pending |
-| OPS-02 | — | Pending |
-| OPS-03 | — | Pending |
-| OPS-04 | — | Pending |
-| OPS-05 | — | Pending |
-| OPS-06 | — | Pending |
-| DOCS-01 | — | Pending |
-| DOCS-02 | — | Pending |
+| CONN-01 | Phase 44 | Pending |
+| CONN-02 | Phase 44 | Pending |
+| CONN-03 | Phase 44 | Pending |
+| STOR-01 | Phase 43 | Pending |
+| STOR-02 | Phase 43 | Pending |
+| STOR-03 | Phase 43 | Pending |
+| STOR-04 | Phase 45 | Pending |
+| STOR-05 | Phase 45 | Pending |
+| OPS-01 | Phase 42 | Pending |
+| OPS-02 | Phase 42 | Pending |
+| OPS-03 | Phase 43 | Pending |
+| OPS-04 | Phase 43 | Pending |
+| OPS-05 | Phase 43 | Pending |
+| OPS-06 | Phase 42 | Pending |
+| DOCS-01 | Phase 45 | Pending |
+| DOCS-02 | Phase 45 | Pending |
 
 **Coverage:**
 - v0.9.0 requirements: 16 total
-- Mapped to phases: 0
-- Unmapped: 16 ⚠️
+- Mapped to phases: 16
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-19*
-*Last updated: 2026-03-19 after initial definition*
+*Last updated: 2026-03-19 after roadmap creation*
