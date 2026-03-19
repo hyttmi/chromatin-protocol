@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v0.8.0
+milestone_name: Protocol Scalability
 status: planning
-stopped_at: Phase 38 context gathered
-last_updated: "2026-03-19T03:11:02.168Z"
-last_activity: 2026-03-18 — Roadmap created for v1.0.0 (4 phases, 11 requirements)
+stopped_at: Defining requirements
+last_updated: "2026-03-19"
+last_activity: 2026-03-19 — Milestone v0.8.0 started (v1.0.0 deferred for protocol fixes)
 progress:
-  total_phases: 4
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,19 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-18)
+See: .planning/PROJECT.md (updated 2026-03-19)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 38 - Thread Pool Crypto Offload
+**Current focus:** Defining v0.8.0 requirements
 
 ## Current Position
 
-Phase: 38 of 41 (Thread Pool Crypto Offload) — first of 4 in v1.0.0
+Phase: Not started (defining requirements)
 Plan: —
-Status: Ready to plan
-Last activity: 2026-03-18 — Roadmap created for v1.0.0 (4 phases, 11 requirements)
-
-Progress: [░░░░░░░░░░] 0%
+Status: Defining requirements
+Last activity: 2026-03-19 — Milestone v0.8.0 started (v1.0.0 deferred — protocol scaling issues)
 
 ## Performance Metrics
 
@@ -61,6 +59,8 @@ Recent decisions affecting current work:
 - v0.7.0: thread_local OQS_SIG* in Signer::verify() is future-safe for thread pool offload
 - v0.7.0: Serial crypto optimizations shipped; thread pool offload deferred to v1.0.0 (AEAD nonce safety)
 - v1.0.0: Only stateless ops (ML-DSA-87 verify, SHA3-256 hash) offloaded; AEAD state stays on event loop
+- v0.8.0: v1.0.0 deferred — sync protocol has O(N) hash list exchange flaw that must be fixed before "production ready"
+- v0.8.0: Phase 38 (thread pool crypto offload) carries forward from v1.0.0 — protocol-agnostic, universally needed
 
 ### Pending Todos
 
@@ -68,10 +68,10 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- Sync set reconciliation algorithm choice (Merkle tree vs IBLT vs other) — needs research or design decision
 
 ## Session Continuity
 
-Last session: 2026-03-19T03:11:02.157Z
-Stopped at: Phase 38 context gathered
-Resume file: .planning/phases/38-thread-pool-crypto-offload/38-CONTEXT.md
+Last session: 2026-03-19
+Stopped at: Defining requirements
+Resume file: —

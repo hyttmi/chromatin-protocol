@@ -68,15 +68,14 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-## Current Milestone: v1.0.0 Performance & Production Readiness
+## Current Milestone: v0.8.0 Protocol Scalability
 
-**Goal:** Thread pool crypto offload, cursor compaction, connection retry with backoff, and benchmark validation. This is the "database layer is done" release.
+**Goal:** Fix fundamental sync protocol scaling flaw (O(N) hash list exchange) and harden against sync-based abuse, while offloading CPU-bound crypto to worker threads. Protocol must be honest before claiming production readiness.
 
 **Target features:**
+- Efficient sync set reconciliation (replace O(N) hash list exchange with O(differences) algorithm)
+- Sync rate limiting (metered sync requests per peer to prevent reflection attacks)
 - Thread pool crypto offload (ML-DSA-87 verify + SHA3-256 hash off event loop)
-- Cursor compaction for stale peers
-- Connection retry with exponential backoff
-- Final benchmark validation (re-run suite, confirm throughput improvements)
 
 ### Out of Scope
 
@@ -108,6 +107,8 @@ Three-layer architecture (building bottom-up):
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
 **Known performance issue:** Large blob (1 MiB) crypto throughput still CPU-bound on sync verification. v0.7.0 serial optimizations (incremental SHA3, dedup-before-verify, hash-then-sign) helped but thread pool offload needed to break the ceiling. Event loop is single-threaded — ML-DSA-87 verify blocks all I/O during large blob processing.
+
+**Known protocol issue (v0.8.0 target):** Sync Phase B requires exchanging the full hash list for any namespace with new data. O(N) in total blobs, not differences. A namespace with 1M blobs forces 32 MB of hashes on the wire for a single new blob. ~3.4M blobs hits MAX_FRAME_SIZE (110 MiB) and breaks the connection. Needs set reconciliation (Merkle tree, IBLT, or similar). Additionally, sync requests bypass rate limiting, enabling resource exhaustion via repeated sync initiation.
 
 Previous projects inform design:
 - **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
@@ -179,4 +180,4 @@ Previous projects inform design:
 | Zero-hash sentinel in seq_map on blob deletion | Preserves seq_num monotonicity for cursor change detection; fix at storage root cause, not cursor symptom | ✓ Good — seq_map entries never deleted, all seq_num consumers see monotonic values |
 
 ---
-*Last updated: 2026-03-18 after milestone v1.0.0 start*
+*Last updated: 2026-03-19 after milestone v0.8.0 start (v1.0.0 deferred — protocol issues must be fixed first)*
