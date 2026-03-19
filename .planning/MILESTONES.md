@@ -1,5 +1,26 @@
 # Milestones
 
+## v0.8.0 Protocol Scalability (Shipped: 2026-03-19)
+
+**Phases:** 4 (38-41) | **Plans:** 8 | **Commits:** 51 | **LOC:** 22,003 C++ (+8,844)
+**Tests:** 408 tests | **Requirements:** 12/12
+**Timeline:** 1 day (2026-03-19)
+**Git range:** 74 files changed, 10,871 insertions, 2,027 deletions
+
+**Key accomplishments:**
+- Thread pool crypto offload: ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool via two-dispatch ingest pattern
+- Custom XOR-fingerprint set reconciliation: O(diff) sync replacing O(N) hash list exchange (~550 LOC, zero external dependencies)
+- 3 new wire messages (ReconcileInit=27, ReconcileRanges=28, ReconcileItems=29), HashList=12 removed
+- Sync rate limiting: per-peer cooldown, session limit, and universal byte accounting with SyncRejected=30 wire type
+- Benchmark validated: 1 MiB ingest 33.1 blobs/sec (+116% over v0.6.0 baseline), O(diff) confirmed (1050ms for 10 blobs on 1000-blob namespace)
+
+**Tech debt:**
+- max_sync_sessions_ config values > 1 have no effect (boolean syncing flag, effective max=1). By design, field for future expansion.
+
+**Archive:** [v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md) | [v0.8.0-REQUIREMENTS.md](milestones/v0.8.0-REQUIREMENTS.md)
+
+---
+
 ## v0.7.0 Production Readiness (Shipped: 2026-03-18)
 
 **Phases:** 6 (32-37) | **Plans:** 12 | **LOC:** 18,000+ C++

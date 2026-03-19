@@ -2,6 +2,52 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v0.8.0 — Protocol Scalability
+
+**Shipped:** 2026-03-19
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~1
+
+### What Was Built
+- Thread pool crypto offload: ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool with two-dispatch ingest pattern
+- Custom XOR-fingerprint range-based set reconciliation: O(diff) sync replacing O(N) hash list exchange (~550 LOC, zero dependencies)
+- 3 new wire message types (ReconcileInit=27, ReconcileRanges=28, ReconcileItems=29), HashList=12 removed
+- Sync rate limiting: per-peer cooldown, concurrent session limit, universal byte accounting with SyncRejected=30
+- Benchmark validation: +116% large-blob throughput, O(diff) confirmed at 1050ms for 10/1000 delta
+
+### What Worked
+- Entire milestone completed in a single day — 4 phases, 8 plans, 51 commits
+- Phase dependency ordering was correct: thread pool (protocol-agnostic) → reconciliation (largest change) → rate limiting (benefits from reconciliation) → benchmarks (validates stack)
+- Two-dispatch ingest pattern was an elegant optimization discovered during implementation — duplicates skip expensive ML-DSA-87 verify entirely
+- Custom reconciliation was simpler than expected: ~550 LOC vs estimated 400-500, and zero external dependency headaches
+- The "always reconcile, cursor skip only in Phase C" fix was caught immediately by daemon E2E tests — good test coverage from v1.0 paid off
+
+### What Was Inefficient
+- ReconcileItems echo loop was a design gap not caught during planning — discovered during integration testing
+- Cursor-hit namespace skip was explicitly planned but incorrect for bidirectional sync — the plan had a fundamental correctness bug
+- Negentropy was researched and planned before being dropped for custom solution — research time partially wasted
+
+### Patterns Established
+- Two-dispatch crypto offload: cheap hash first → dedup gate → expensive verify only for new blobs
+- ReconcileItems as protocol termination signal (breaks echo loop)
+- has_fingerprint check for convergence detection
+- Universal byte accounting placement (top of message handler, not per-type)
+- co_spawn wrapping for non-coroutine callbacks that need async operations
+- Closed mode in tests to eliminate PEX timeout interference with sync timing
+
+### Key Lessons
+1. Custom algorithms can be simpler than integrating external libraries when the domain is well-understood (reconciliation: ~550 LOC custom vs ~1000 LOC dependency + patching)
+2. Planning can have correctness bugs — the cursor skip plan was wrong about bidirectional semantics. E2E tests caught it, not the plan review
+3. Wire protocol removal (HashList) requires updating all callers immediately — can't leave compilation gaps
+4. One-day milestones are achievable when building on a stable foundation with comprehensive test coverage
+5. Thread pool offload for stateless crypto is straightforward; the hard part is ensuring stateful AEAD is never accessed from workers
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~1 across 1 day
+- Notable: Fastest milestone overall — 4 phases in 1 day. Average ~24 min/plan including research and planning.
+
+---
+
 ## Milestone: v0.5.0 — Hardening & Flexibility
 
 **Shipped:** 2026-03-15
@@ -204,6 +250,9 @@
 | v3.0 | ~3 | 4 | Fastest per-plan avg (~15 min) — pattern reuse accelerated delivery |
 | v0.4.0 | ~5 | 6 | Production hardening — storage limits, metrics, rate limiting |
 | v0.5.0 | ~2 | 5 | Cleanest milestone — DARE, trusted peers, configurable TTL in 2 days |
+| v0.6.0 | ~2 | 5 | Docker benchmark infrastructure — end-to-end validation pipeline |
+| v0.7.0 | ~2 | 6 | Sync cursors + crypto hot-path — largest protocol evolution |
+| v0.8.0 | ~1 | 4 | Fastest milestone (1 day) — custom reconciliation + thread pool offload |
 
 ### Cumulative Quality
 
@@ -214,6 +263,9 @@
 | v3.0 | 255 | 14,152 | ~70 | 16/16 |
 | v0.4.0 | 284 | 14,523 | ~70 | 22/22 |
 | v0.5.0 | 284 | 17,124 | 66 | 13/13 |
+| v0.6.0 | 284 | 17,775 | ~70 | 14/14 |
+| v0.7.0 | 313 | 18,000+ | ~75 | 20/20 |
+| v0.8.0 | 408 | 22,003 | ~80 | 12/12 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -225,3 +277,5 @@
 6. Algorithm stripping for liboqs resolved in v3.0 — should have been done earlier (2 milestones of slow builds)
 7. Writer-controlled policy (TTL, delegation) keeps the database layer dumb — application logic belongs in higher layers
 8. Trust negotiation with graceful fallback is better than hard failure — validated in v0.5.0 transport optimization
+9. Custom algorithms beat external dependencies when the domain is well-understood — validated in v0.8.0 reconciliation (~550 LOC vs 1000+ LOC dep)
+10. Plans can have correctness bugs — E2E tests catch what plan reviews miss (v0.8.0 cursor skip bug)

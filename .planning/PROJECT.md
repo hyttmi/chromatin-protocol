@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A decentralized, post-quantum secure database node with access control and data-at-rest encryption. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via hash-list diff sync. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB with configurable per-blob TTL and is designed to be technically unstoppable.
+A decentralized, post-quantum secure database node with access control, data-at-rest encryption, and scalable sync. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via O(diff) set reconciliation. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB with configurable per-blob TTL, thread-pool crypto offload, and sync rate limiting. Designed to be technically unstoppable.
 
 The database layer is intentionally dumb — it stores signed blobs, verifies ownership, encrypts at rest, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
 
@@ -66,16 +66,14 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Deletion benchmarks in Docker suite (tombstone create/sync/GC) — v0.7.0
 - ✓ Component self-containment (tests relocated into db/, stale artifacts removed) — v0.7.0
 
+- ✓ Thread pool crypto offload (ML-DSA-87 verify + SHA3-256 hash dispatched to asio::thread_pool) — v0.8.0
+- ✓ Custom XOR-fingerprint set reconciliation replacing O(N) hash list exchange with O(diff) — v0.8.0
+- ✓ Sync rate limiting (per-peer cooldown, session limit, universal byte accounting) — v0.8.0
+- ✓ Benchmark validated: +116% large-blob throughput, O(diff) confirmed — v0.8.0
+
 ### Active
 
-## Current Milestone: v0.8.0 Protocol Scalability
-
-**Goal:** Fix fundamental sync protocol scaling flaw (O(N) hash list exchange) and harden against sync-based abuse, while offloading CPU-bound crypto to worker threads. Protocol must be honest before claiming production readiness.
-
-**Target features:**
-- Efficient sync set reconciliation (replace O(N) hash list exchange with O(differences) algorithm)
-- Sync rate limiting (metered sync requests per peer to prevent reflection attacks)
-- Thread pool crypto offload (ML-DSA-87 verify + SHA3-256 hash off event loop)
+(No active milestone — next: v0.9.0 Connection Resilience + Cursor Compaction)
 
 ### Out of Scope
 
@@ -95,20 +93,21 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v0.7.0 with 18,000+ LOC C++20, 313+ tests.
-Built across 18 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d).
-7 milestones, 37 phases, 75 plans, 20 requirements for v0.7.0 alone.
+Shipped v0.8.0 with 22,003 LOC C++20, 408 tests.
+Built across 19 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d).
+8 milestones, 41 phases, 80 plans, 155 requirements total.
 
-Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
+Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.7.0 SHIPPED): chromatindb** — database node with full feature set, Docker benchmarking, sync cursors, namespace quotas
+- **Layer 1 (v0.8.0 SHIPPED): chromatindb** — database node with full feature set, O(diff) sync, thread pool crypto, Docker benchmarking
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
-**Known performance issue:** Large blob (1 MiB) crypto throughput still CPU-bound on sync verification. v0.7.0 serial optimizations (incremental SHA3, dedup-before-verify, hash-then-sign) helped but thread pool offload needed to break the ceiling. Event loop is single-threaded — ML-DSA-87 verify blocks all I/O during large blob processing.
-
-**Known protocol issue (v0.8.0 target):** Sync Phase B requires exchanging the full hash list for any namespace with new data. O(N) in total blobs, not differences. A namespace with 1M blobs forces 32 MB of hashes on the wire for a single new blob. ~3.4M blobs hits MAX_FRAME_SIZE (110 MiB) and breaks the connection. Needs set reconciliation (Merkle tree, IBLT, or similar). Additionally, sync requests bypass rate limiting, enabling resource exhaustion via repeated sync initiation.
+**Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
+- 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
+- Reconciliation scaling: 1050ms for 10-blob delta on 1000-blob namespace (O(diff) confirmed)
+- Small namespace: no regression within 5% threshold
 
 Previous projects inform design:
 - **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
@@ -178,6 +177,12 @@ Previous projects inform design:
 | Full compose restart between PQ/trusted benchmark runs | SIGHUP reloads config but existing connections keep handshake type | ✓ Good — fair comparison with fresh connections |
 | Runtime IP resolution via docker inspect for trusted_peers | Docker DNS names not accepted; IPs resolved at benchmark time | ✓ Good — dynamic, no hardcoded addresses |
 | Zero-hash sentinel in seq_map on blob deletion | Preserves seq_num monotonicity for cursor change detection; fix at storage root cause, not cursor symptom | ✓ Good — seq_map entries never deleted, all seq_num consumers see monotonic values |
+| Two-dispatch ingest pattern | blob_hash offload first (dedup gate), then build_signing_input+verify bundled. Duplicates skip ML-DSA-87. | ✓ Good — eliminates expensive verify for duplicate blobs |
+| Custom XOR-fingerprint reconciliation (not negentropy) | SHA3-256 patching hassle for negentropy; ~550 LOC custom vs 1000+ LOC dep | ✓ Good — zero dependencies, O(diff) confirmed |
+| ReconcileItems as final-exchange signal | Breaks ItemList echo loop in network protocol | ✓ Good — deterministic termination |
+| Always reconcile, cursor skip only in Phase C | Bidirectional correctness: peer must discover what it is missing | ✓ Good — fixed subtle bidirectional sync bug |
+| Universal byte accounting at top of on_peer_message | All messages metered uniformly; differentiated response per type | ✓ Good — sync traffic no longer bypasses rate limiter |
+| Pool ref as constructor param / set_pool() for factory | Owned objects get pool in constructor; Connection (factory-created) gets set_pool() | ✓ Good — clean ownership semantics |
 
 ---
-*Last updated: 2026-03-19 after milestone v0.8.0 start (v1.0.0 deferred — protocol issues must be fixed first)*
+*Last updated: 2026-03-19 after v0.8.0 milestone completion*

@@ -9,7 +9,7 @@
 - ✅ **v0.5.0 Hardening & Flexibility** — Phases 22-26 (shipped 2026-03-15)
 - ✅ **v0.6.0 Real-World Validation** — Phases 27-31 (shipped 2026-03-16)
 - ✅ **v0.7.0 Production Readiness** — Phases 32-37 (shipped 2026-03-18)
-- [ ] **v0.8.0 Protocol Scalability** — Phases 38-41 (in progress)
+- ✅ **v0.8.0 Protocol Scalability** — Phases 38-41 (shipped 2026-03-19)
 
 ## Phases
 
@@ -106,85 +106,14 @@ Full details: [milestones/v0.7.0-ROADMAP.md](milestones/v0.7.0-ROADMAP.md)
 
 </details>
 
-### v0.8.0 Protocol Scalability (In Progress)
+<details>
+<summary>✅ v0.8.0 Protocol Scalability (Phases 38-41) — SHIPPED 2026-03-19</summary>
 
-**Milestone Goal:** Fix the fundamental sync protocol scaling flaw (O(N) hash list exchange breaks at ~3.4M blobs per namespace), harden against sync-based abuse, and offload CPU-bound crypto to worker threads. The sync protocol must scale honestly before claiming production readiness.
+- [x] Phase 38: Thread Pool Crypto Offload (3/3 plans) — completed 2026-03-19
+- [x] Phase 39: Set Reconciliation (2/2 plans) — completed 2026-03-19
+- [x] Phase 40: Sync Rate Limiting (2/2 plans) — completed 2026-03-19
+- [x] Phase 41: Benchmark Validation (1/1 plan) — completed 2026-03-19
 
-- [x] **Phase 38: Thread Pool Crypto Offload** - ML-DSA-87 verify and SHA3-256 hash dispatched to asio::thread_pool, freeing the event loop (completed 2026-03-19)
-- [x] **Phase 39: Negentropy Set Reconciliation** - Replace O(N) hash list exchange with O(differences) custom XOR-fingerprint reconciliation protocol per namespace (completed 2026-03-19)
-- [x] **Phase 40: Sync Rate Limiting** - Metered sync initiation, byte-rate accounting, and concurrent session limits per peer (completed 2026-03-19)
-- [x] **Phase 41: Benchmark Validation** - Docker benchmark confirms O(diff) scaling improvement and no regression (completed 2026-03-19)
+Full details: [milestones/v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md)
 
-## Phase Details
-
-### Phase 38: Thread Pool Crypto Offload
-**Goal**: The event loop never blocks on ML-DSA-87 signature verification or SHA3-256 content hashing -- these CPU-bound operations run on worker threads while the event loop continues processing I/O
-**Depends on**: Nothing (first phase of v0.8.0)
-**Requirements**: PERF-06, PERF-07, PERF-08, PERF-09
-**Success Criteria** (what must be TRUE):
-  1. A blob ingest or sync receive that triggers ML-DSA-87 verification does not block the event loop -- other connections continue processing during the verify
-  2. A blob ingest or sync receive that triggers SHA3-256 hashing does not block the event loop -- other connections continue processing during the hash
-  3. Connection-scoped AEAD state (ChaCha20-Poly1305 nonce counters) is never accessed from a thread pool worker -- only stateless crypto ops are offloaded
-  4. Thread pool worker count is configurable via config JSON and defaults to std::thread::hardware_concurrency()
-  5. All existing tests pass with thread pool enabled (no concurrency regressions)
-**Plans**: 3 plans
-
-Plans:
-- [x] 38-01-PLAN.md — Config, thread pool lifecycle, offload helper, plumbing pool ref through object graph
-- [x] 38-02-PLAN.md — BlobEngine async conversion with two-dispatch crypto offload, caller updates
-- [x] 38-03-PLAN.md — Connection handshake Signer::verify offload to thread pool
-
-### Phase 39: Negentropy Set Reconciliation
-**Goal**: Namespace sync uses custom XOR-fingerprint range-based set reconciliation instead of full hash list exchange, making sync cost proportional to differences (O(diff)) not total blobs (O(N)), and eliminating the ~3.4M blob MAX_FRAME_SIZE cliff
-**Depends on**: Phase 38
-**Requirements**: SYNC-06, SYNC-07, SYNC-08, SYNC-09
-**Success Criteria** (what must be TRUE):
-  1. Custom reconciliation module built with no external dependency (XOR-fingerprint range-based algorithm in ~400-500 lines of owned code)
-  2. When two nodes sync a namespace with N blobs and D differences, wire traffic scales with D not N -- a namespace with 1M blobs and 10 new blobs does not exchange 32 MB of hashes
-  3. Sync cursors from v0.7.0 still skip unchanged namespaces entirely -- reconciliation only runs for namespaces where the cursor indicates new data
-  4. Reconciliation wire messages carry a version byte so future protocol changes can coexist with older peers
-**Plans**: 2 plans
-
-Plans:
-- [x] 39-01-PLAN.md — Reconciliation module (XOR fingerprint algorithm, encode/decode, wire protocol update, unit tests)
-- [x] 39-02-PLAN.md — Sync flow integration (replace Phase B in initiator/responder, message routing, PROTOCOL.md)
-
-### Phase 40: Sync Rate Limiting
-**Goal**: Sync requests are metered per peer to prevent resource exhaustion via repeated sync initiation, closing the abuse vector where sync messages bypass all existing rate limiting
-**Depends on**: Phase 39
-**Requirements**: RATE-01, RATE-02, RATE-03
-**Success Criteria** (what must be TRUE):
-  1. A peer that initiates sync more frequently than the configured cooldown is rejected with a rate-limit response -- the node does not begin reconciliation
-  2. Sync message bytes (including reconciliation rounds) count against the existing per-peer byte-rate token bucket -- a peer cannot bypass bandwidth limits via sync traffic
-  3. A peer cannot open more than the configured maximum number of concurrent sync sessions -- excess sync requests are rejected
-**Plans**: 2 plans
-
-Plans:
-- [x] 40-01-PLAN.md — Wire protocol (SyncRejected=30), config fields, PeerInfo/NodeMetrics extensions, PeerManager infrastructure
-- [x] 40-02-PLAN.md — Enforcement logic (cooldown, session limit, byte accounting, budget cutoff) and integration tests
-
-### Phase 41: Benchmark Validation
-**Goal**: The Docker benchmark suite confirms that set reconciliation delivers O(diff) sync scaling, thread pool offload improves large-blob throughput, and neither change causes regression for small namespaces
-**Depends on**: Phase 38, Phase 39, Phase 40
-**Requirements**: SYNC-10
-**Success Criteria** (what must be TRUE):
-  1. A benchmark scenario with a large namespace (1000+ blobs) and few new blobs (10) demonstrates sync wire traffic and time proportional to differences, not total namespace size
-  2. 1 MiB blob ingest/sync throughput is measurably improved over the v0.6.0 baseline (15.3 blobs/sec) with the improvement percentage quantified in the report
-  3. Small namespace sync (under 100 blobs) shows no regression from reconciliation or thread pool overhead (within 5% of baseline or better)
-**Plans**: 1 plan
-
-Plans:
-- [ ] 41-01-PLAN.md — Reconciliation scaling scenario, baseline archive, v0.8.0 comparison report, benchmark run
-
-## Progress
-
-**Execution Order:**
-Phases 38 -> 39 -> 40 -> 41
-Note: Phase 38 (thread pool) is protocol-agnostic and executes first. Phase 39 (reconciliation) is the largest change. Phase 40 (rate limiting) benefits from reconciliation being in place. Phase 41 (benchmarks) validates the full stack.
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 38. Thread Pool Crypto Offload | 3/3 | Complete    | 2026-03-19 |
-| 39. Set Reconciliation | 2/2 | Complete    | 2026-03-19 |
-| 40. Sync Rate Limiting | 2/2 | Complete    | 2026-03-19 |
-| 41. Benchmark Validation | 1/1 | Complete    | 2026-03-19 |
+</details>
