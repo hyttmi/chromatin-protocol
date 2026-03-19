@@ -1,11 +1,25 @@
 # Requirements: chromatindb
 
-**Defined:** 2026-03-18
+**Defined:** 2026-03-19
 **Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## v1.0.0 Requirements
+## v0.8.0 Requirements
 
-Requirements for the "database layer is done" release. Each maps to roadmap phases.
+Requirements for protocol scalability. Fixes fundamental sync protocol flaw, hardens against sync abuse, offloads CPU-bound crypto.
+
+### Set Reconciliation
+
+- [ ] **SYNC-06**: Negentropy library vendored with SHA3-256 replacing OpenSSL SHA-256 (no OpenSSL dependency)
+- [ ] **SYNC-07**: Per-namespace reconciliation using negentropy replaces full hash list exchange (O(differences) not O(total_blobs))
+- [ ] **SYNC-08**: Existing sync cursors coexist with negentropy (unchanged namespaces skipped via cursor, negentropy used only when namespace has new data)
+- [ ] **SYNC-09**: Reconciliation wire messages include version byte for forward compatibility
+- [ ] **SYNC-10**: Docker benchmark confirms O(diff) improvement over hash-list baseline and no regression for small namespaces
+
+### Sync Rate Limiting
+
+- [ ] **RATE-01**: Sync initiation frequency limited per peer (configurable cooldown)
+- [ ] **RATE-02**: Sync messages included in per-peer byte-rate token bucket (extends existing rate limiter)
+- [ ] **RATE-03**: Concurrent sync sessions limited per peer (configurable max)
 
 ### Thread Pool Crypto Offload
 
@@ -14,30 +28,24 @@ Requirements for the "database layer is done" release. Each maps to roadmap phas
 - [ ] **PERF-08**: Connection-scoped AEAD state never accessed from thread pool workers (nonce safety by design)
 - [ ] **PERF-09**: Thread pool worker count configurable at startup (default: hardware_concurrency)
 
-### Cursor Compaction
-
-- [ ] **SYNC-05**: Stale peer cursors automatically pruned based on configurable retention period (SIGHUP-reloadable)
-
-### Connection Resilience
-
-- [ ] **CONN-01**: Node automatically reconnects to configured/bootstrap peers after disconnection
-- [ ] **CONN-02**: Reconnection uses exponential backoff with configurable max interval
-- [ ] **CONN-03**: Reconnection suppressed for peers that sent ACL rejection (no retry against peers that won't accept us)
-
-### Benchmark Validation
-
-- [ ] **BENCH-04**: Full Docker benchmark suite re-run with thread pool offload enabled
-- [ ] **BENCH-05**: 1 MiB blob throughput compared against v0.6.0 baseline (15.3 blobs/sec) with improvement quantified
-- [ ] **BENCH-06**: Small/medium blob throughput confirmed with no regression from thread pool overhead
-
 ## Future Requirements
 
-Deferred beyond v1.0.0. Tracked but not in current roadmap.
+Deferred beyond v0.8.0. Tracked but not in current roadmap.
 
 ### Performance (Advanced)
 
 - **PERF-10**: Adaptive thread pool sizing based on load (scale workers up/down)
 - **PERF-11**: Per-blob size threshold for thread pool dispatch (skip offload for small blobs where dispatch overhead > crypto cost)
+
+### Cursor Compaction (deferred from v1.0.0)
+
+- **SYNC-05**: Stale peer cursors automatically pruned based on configurable retention period (SIGHUP-reloadable)
+
+### Connection Resilience (deferred from v1.0.0)
+
+- **CONN-01**: Node automatically reconnects to configured/bootstrap peers after disconnection
+- **CONN-02**: Reconnection uses exponential backoff with configurable max interval
+- **CONN-03**: Reconnection suppressed for peers that sent ACL rejection
 
 ## Out of Scope
 
@@ -45,11 +53,11 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
+| Persistent Merkle tree | Write amplification on every blob ingest. negentropy Vector (in-memory per sync) avoids this. |
+| IBLT (Invertible Bloom Lookup Table) | Capacity estimation failures require fallback. Negentropy is deterministic. |
 | Multithreaded ingest pipeline | Data structures are single-thread-only by design. Only stateless crypto ops offloaded. |
 | Hardware crypto acceleration (SHA3-NI) | Requires CPU feature detection + runtime dispatch. Thread pool offload is the higher-value fix. |
-| Connection pooling / multiplexing | One connection per peer is sufficient. Retry with backoff handles disconnects. |
-| Peer reputation / scoring | YAGNI. ACL rejection suppression is sufficient for v1.0.0. |
-| Adaptive backoff based on network conditions | Exponential backoff with max cap is sufficient. Relay layer can implement smarter strategies. |
+| Peer reputation / scoring | YAGNI. Rate limiting + ACL is sufficient. |
 
 ## Traceability
 
@@ -57,23 +65,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| SYNC-06 | TBD | Pending |
+| SYNC-07 | TBD | Pending |
+| SYNC-08 | TBD | Pending |
+| SYNC-09 | TBD | Pending |
+| SYNC-10 | TBD | Pending |
+| RATE-01 | TBD | Pending |
+| RATE-02 | TBD | Pending |
+| RATE-03 | TBD | Pending |
 | PERF-06 | Phase 38 | Pending |
 | PERF-07 | Phase 38 | Pending |
 | PERF-08 | Phase 38 | Pending |
 | PERF-09 | Phase 38 | Pending |
-| SYNC-05 | Phase 39 | Pending |
-| CONN-01 | Phase 40 | Pending |
-| CONN-02 | Phase 40 | Pending |
-| CONN-03 | Phase 40 | Pending |
-| BENCH-04 | Phase 41 | Pending |
-| BENCH-05 | Phase 41 | Pending |
-| BENCH-06 | Phase 41 | Pending |
 
 **Coverage:**
-- v1.0.0 requirements: 11 total
-- Mapped to phases: 11
-- Unmapped: 0
+- v0.8.0 requirements: 12 total
+- Mapped to phases: 4
+- Unmapped: 8 ⚠️
 
 ---
-*Requirements defined: 2026-03-18*
-*Last updated: 2026-03-18 after roadmap creation*
+*Requirements defined: 2026-03-19*
+*Last updated: 2026-03-19 after v0.8.0 milestone start*
