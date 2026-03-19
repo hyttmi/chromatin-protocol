@@ -22,7 +22,7 @@ Every blob is cryptographically signed by its author using ML-DSA-87. Peers esta
 
 Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace** is derived as `SHA3-256(public_key)`, providing a unique, verifiable identifier. **Blobs** are signed data units that belong to a namespace; each blob carries a signature, TTL (writer-controlled, per-blob), and timestamp. Blobs are content-addressed by their SHA3-256 hash and stored in libmdbx, an ACID key-value store.
 
-**Sync** works via a hash-list diff protocol: peers exchange lists of what they have, compute the difference, and request what they are missing. One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted. **Encryption at rest** protects stored blob payloads with ChaCha20-Poly1305 using a key derived from a node-local master key via HKDF-SHA256.
+**Sync** works via range-based set reconciliation: peers exchange XOR fingerprints over sorted hash ranges, recursively splitting mismatched ranges until differences are isolated, then transfer only the missing blobs. Sync cost is O(differences), not O(total blobs). One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted. **Encryption at rest** protects stored blob payloads with ChaCha20-Poly1305 using a key derived from a node-local master key via HKDF-SHA256.
 
 **Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones block future arrival of the deleted blob; they can be permanent (TTL=0) or time-limited (TTL>0), in which case they are garbage-collected by the expiry scanner. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
 
@@ -99,7 +99,8 @@ Create a JSON config file and pass it with `--config`:
   "cursor_stale_seconds": 3600,
   "namespace_quota_bytes": 0,
   "namespace_quota_count": 0,
-  "namespace_quotas": {}
+  "namespace_quotas": {},
+  "worker_threads": 0
 }
 ```
 
@@ -115,11 +116,12 @@ Create a JSON config file and pass it with `--config`:
 - **rate_limit_bytes_per_sec** -- per-connection write rate limit for Data and Delete messages in bytes per second; peers exceeding the limit are disconnected immediately (default: `0` = disabled)
 - **rate_limit_burst** -- token bucket burst capacity in bytes; allows short bursts above the sustained rate (default: `0` = disabled)
 - **sync_namespaces** -- list of namespace hashes (64-char hex) to replicate; the node only syncs listed namespaces and silently drops Data/Delete messages for unlisted namespaces (default: `[]` = replicate all)
-- **full_resync_interval** -- full hash-diff resync every Nth sync round, overriding cursor-based skip (default: `10`)
+- **full_resync_interval** -- full reconciliation resync every Nth sync round, overriding cursor-based skip (default: `10`)
 - **cursor_stale_seconds** -- force full resync with a peer after this many seconds since last sync (default: `3600`)
 - **namespace_quota_bytes** -- global default maximum bytes per namespace; the node rejects new blobs when a namespace exceeds this limit and sends QuotaExceeded to the peer (default: `0` = unlimited)
 - **namespace_quota_count** -- global default maximum blob count per namespace (default: `0` = unlimited)
 - **namespace_quotas** -- per-namespace quota overrides as a JSON object mapping namespace hash (64-char hex) to `{"max_bytes": N, "max_count": N}`; overrides the global defaults for listed namespaces (default: `{}` = use global defaults)
+- **worker_threads** -- number of thread pool workers for CPU-bound crypto offload (ML-DSA-87 verify, SHA3-256 hash); clamped to `hardware_concurrency()` if set higher (default: `0` = auto-detect via `hardware_concurrency()`)
 
 ## Signals
 
@@ -139,7 +141,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 27 message types covering handshake, keepalive, blob storage, sync, peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, and namespace quota enforcement. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 29 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, and namespace quota enforcement. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## Scenarios
 
@@ -228,7 +230,7 @@ Connections between listed peers use a lightweight handshake with ML-DSA-87 iden
 
 **Post-Quantum Transport** -- All peer-to-peer traffic is encrypted with ChaCha20-Poly1305 AEAD using session keys derived from an ML-KEM-1024 key exchange. The 4-step handshake provides mutual authentication and forward secrecy against quantum adversaries.
 
-**Sync Replication** -- Peers automatically replicate blobs via a hash-list diff protocol. One blob is in flight at a time per connection, bounding memory usage regardless of dataset size.
+**Sync Replication** -- Peers automatically replicate blobs via range-based set reconciliation. XOR fingerprints over sorted hash ranges isolate differences in O(diff) wire traffic, not O(total blobs). One blob is in flight at a time per connection, bounding memory usage regardless of dataset size.
 
 **Blob Deletion** -- Namespace owners permanently delete blobs by issuing signed tombstones. Tombstones replicate across the network via sync and block future arrival of the deleted blob.
 
@@ -254,7 +256,9 @@ Connections between listed peers use a lightweight handshake with ML-DSA-87 iden
 
 **Writer-Controlled TTL** -- Each blob carries its own TTL set by the writer in the signed data. TTL=0 means permanent (no expiry). Blobs with TTL>0 are expired by the node's periodic scan. Tombstones also support writer-controlled TTL: permanent tombstones (TTL=0) persist indefinitely, while time-limited tombstones (TTL>0) are garbage-collected along with their index entries.
 
-**Sync Resumption** -- Per-peer per-namespace sequence number cursors track sync progress. Only namespaces with new blobs since the last sync exchange hash lists, reducing sync cost from O(total blobs) to O(new blobs). Cursors persist across node restarts via libmdbx. A periodic full hash-diff resync every Nth round (configurable) serves as a safety net against cursor drift.
+**Sync Resumption** -- Per-peer per-namespace sequence number cursors track sync progress. Cursor-hit namespaces (no new blobs) skip blob requests entirely. When new data exists, range-based reconciliation identifies only the missing blobs in O(diff) wire traffic. Cursors persist across node restarts via libmdbx. A periodic full reconciliation resync every Nth round (configurable) serves as a safety net against cursor drift.
+
+**Thread Pool Crypto Offload** -- CPU-bound cryptographic operations (ML-DSA-87 signature verification, SHA3-256 content hashing) are dispatched to a configurable thread pool, freeing the event loop for I/O. Connection-scoped AEAD state is never accessed from worker threads (nonce safety by design).
 
 **Namespace Quotas** -- Per-namespace byte and blob count limits enforced at ingest. When a write would exceed the configured quota, the node rejects the blob and sends a QuotaExceeded signal to the writing peer. Global defaults apply to all namespaces, with per-namespace overrides for differentiated limits. Quota configuration is reloadable via SIGHUP.
 
