@@ -9,8 +9,9 @@ namespace chromatindb::sync {
 
 SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
                            storage::Storage& storage,
+                           asio::thread_pool& pool,
                            storage::Clock clock)
-    : engine_(engine), storage_(storage), clock_(clock) {}
+    : engine_(engine), storage_(storage), pool_(pool), clock_(clock) {}
 
 // =============================================================================
 // Expiry check

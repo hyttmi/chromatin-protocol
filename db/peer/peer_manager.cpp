@@ -71,6 +71,7 @@ PeerManager::PeerManager(const config::Config& config,
                          engine::BlobEngine& engine,
                          storage::Storage& storage,
                          asio::io_context& ioc,
+                         asio::thread_pool& pool,
                          acl::AccessControl& acl,
                          const std::filesystem::path& config_path)
     : config_(config)
@@ -78,9 +79,10 @@ PeerManager::PeerManager(const config::Config& config,
     , engine_(engine)
     , storage_(storage)
     , ioc_(ioc)
+    , pool_(pool)
     , acl_(acl)
     , server_(config, identity, ioc)
-    , sync_proto_(engine, storage)
+    , sync_proto_(engine, storage, pool)
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path) {
@@ -116,6 +118,9 @@ PeerManager::PeerManager(const config::Config& config,
     server_.set_trust_check([this](const asio::ip::address& addr) {
         return is_trusted_address(addr);
     });
+
+    // Wire thread pool for crypto offload
+    server_.set_pool(pool);
 
     // Wire server callbacks
     server_.set_accept_filter([this]() { return should_accept_connection(); });

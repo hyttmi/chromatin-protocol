@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include <asio/thread_pool.hpp>
+
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -62,10 +64,12 @@ class BlobEngine {
 public:
     /// Construct a BlobEngine backed by the given storage.
     /// @param store Reference to storage (must outlive this engine).
+    /// @param pool Thread pool for crypto offload (must outlive this engine).
     /// @param max_storage_bytes Capacity limit in bytes (0 = unlimited).
     /// @param namespace_quota_bytes Global namespace byte limit (0 = unlimited).
     /// @param namespace_quota_count Global namespace blob count limit (0 = unlimited).
     explicit BlobEngine(storage::Storage& store,
+                        asio::thread_pool& pool,
                         uint64_t max_storage_bytes = 0,
                         uint64_t namespace_quota_bytes = 0,
                         uint64_t namespace_quota_count = 0);
@@ -127,6 +131,7 @@ private:
         std::span<const uint8_t, 32> namespace_id) const;
 
     storage::Storage& storage_;
+    asio::thread_pool& pool_;
     uint64_t max_storage_bytes_ = 0;
     uint64_t namespace_quota_bytes_ = 0;
     uint64_t namespace_quota_count_ = 0;

@@ -122,11 +122,12 @@ TEST_CASE("daemon starts with unreachable bootstrap peers", "[daemon]") {
 
     auto id = NodeIdentity::load_or_generate(tmp.path);
     Storage store(tmp.path.string());
-    BlobEngine eng(store);
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
 
     asio::io_context ioc;
     AccessControl acl(cfg.allowed_keys, id.namespace_id());
-    PeerManager pm(cfg, id, eng, store, ioc, acl);
+    PeerManager pm(cfg, id, eng, store, ioc, pool, acl);
 
     // Should not throw
     REQUIRE_NOTHROW(pm.start());
@@ -167,8 +168,9 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     // Create storages + engines
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
-    BlobEngine eng1(store1);
-    BlobEngine eng2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
 
     // Use current time for blob timestamps so they are not considered expired during sync
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -187,8 +189,8 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     asio::io_context ioc;
     AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
-    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     pm1.start();
     pm2.start();
@@ -233,8 +235,9 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
-    BlobEngine eng1(store1);
-    BlobEngine eng2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
@@ -251,8 +254,8 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     asio::io_context ioc;
     AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
-    PeerManager pm1(cfg1, id1, eng1, store1, ioc, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, acl2);
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     pm1.start();
     pm2.start();
@@ -310,9 +313,10 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
     Storage store_a(tmp1.path.string());
     Storage store_b(tmp2.path.string());
     Storage store_c(tmp3.path.string());
-    BlobEngine eng_a(store_a);
-    BlobEngine eng_b(store_b);
-    BlobEngine eng_c(store_c);
+    asio::thread_pool pool{1};
+    BlobEngine eng_a(store_a, pool);
+    BlobEngine eng_b(store_b, pool);
+    BlobEngine eng_c(store_c, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
@@ -326,9 +330,9 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
     AccessControl acl_a(cfg_a.allowed_keys, id_a.namespace_id());
     AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
     AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
-    PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, acl_a);
-    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, acl_b);
-    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, acl_c);
+    PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, pool, acl_a);
+    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, pool, acl_b);
+    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, pool, acl_c);
 
     // Start nodes: A first, then B, then C (natural bootstrap order)
     pm_a.start();

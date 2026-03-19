@@ -135,7 +135,7 @@ int cmd_run(int argc, char* argv[]) {
 
     // Create components
     chromatindb::storage::Storage storage(config.data_dir);
-    chromatindb::engine::BlobEngine engine(storage, config.max_storage_bytes,
+    chromatindb::engine::BlobEngine engine(storage, pool, config.max_storage_bytes,
                                            config.namespace_quota_bytes,
                                            config.namespace_quota_count);
     if (!config.namespace_quotas.empty()) {
@@ -146,7 +146,7 @@ int cmd_run(int argc, char* argv[]) {
     asio::io_context ioc;
 
     chromatindb::acl::AccessControl acl(config.allowed_keys, identity.namespace_id());
-    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, acl, config.config_path);
+    chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, pool, acl, config.config_path);
     pm.start();
 
     spdlog::info("daemon started");

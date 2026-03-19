@@ -91,6 +91,7 @@ public:
                 engine::BlobEngine& engine,
                 storage::Storage& storage,
                 asio::io_context& ioc,
+                asio::thread_pool& pool,
                 acl::AccessControl& acl,
                 const std::filesystem::path& config_path = {});
 
@@ -258,6 +259,7 @@ private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
     asio::io_context& ioc_;
+    asio::thread_pool& pool_;
     acl::AccessControl& acl_;
 
     net::Server server_;

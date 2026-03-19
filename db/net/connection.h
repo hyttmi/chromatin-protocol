@@ -81,6 +81,9 @@ public:
     /// This is where PeerManager should set up message routing and start sync.
     void on_ready(ReadyCallback cb) { ready_cb_ = std::move(cb); }
 
+    /// Set thread pool reference for crypto offload.
+    void set_pool(asio::thread_pool& pool) { pool_ = &pool; }
+
     /// Trust-check function type: returns true if the IP address is trusted.
     using TrustCheck = std::function<bool(const asio::ip::address&)>;
 
@@ -136,6 +139,8 @@ private:
     std::vector<uint8_t> peer_pubkey_;
 
     std::string remote_addr_;
+
+    asio::thread_pool* pool_ = nullptr;
 
     MessageCallback message_cb_;
     CloseCallback close_cb_;

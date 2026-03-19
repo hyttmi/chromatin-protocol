@@ -4,6 +4,8 @@
 #include <optional>
 #include <random>
 
+#include <asio.hpp>
+
 #include "db/engine/engine.h"
 #include "db/crypto/hash.h"
 #include "db/identity/identity.h"
@@ -149,7 +151,8 @@ using chromatindb::storage::Storage;
 TEST_CASE("BlobEngine rejects blob with wrong pubkey size", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "wrong-pubkey-size");
@@ -166,7 +169,8 @@ TEST_CASE("BlobEngine rejects blob with wrong pubkey size", "[engine]") {
 TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "empty-sig");
@@ -183,7 +187,8 @@ TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
 TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "wrong-namespace");
@@ -201,7 +206,8 @@ TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
 TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "bad-sig");
@@ -218,7 +224,8 @@ TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
 TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "valid-blob");
@@ -238,7 +245,8 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
 TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "dup-blob");
@@ -258,7 +266,8 @@ TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
 TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
@@ -282,7 +291,8 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
 TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -314,7 +324,8 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
 TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -343,7 +354,8 @@ TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
 TEST_CASE("get_blobs_since for unknown namespace returns empty", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     // Query a namespace that has no blobs stored
     std::array<uint8_t, 32> fake_ns{};
@@ -358,7 +370,8 @@ TEST_CASE("get_blobs_since for unknown namespace returns empty", "[engine][query
 TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     // Generate 3 identities, ingest 1 blob each
     auto id1 = chromatindb::identity::NodeIdentity::generate();
@@ -384,7 +397,8 @@ TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
 TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto idA = chromatindb::identity::NodeIdentity::generate();
     auto idB = chromatindb::identity::NodeIdentity::generate();
@@ -428,7 +442,8 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
 TEST_CASE("list_namespaces empty storage returns empty", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto namespaces = engine.list_namespaces();
     REQUIRE(namespaces.empty());
@@ -439,7 +454,8 @@ TEST_CASE("list_namespaces empty storage returns empty", "[engine][query]") {
 TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "get-by-hash");
@@ -456,7 +472,8 @@ TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
 TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Don't ingest anything -- query a fake hash
@@ -472,7 +489,8 @@ TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
 TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integration]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     // Generate 2 identities
     auto idA = chromatindb::identity::NodeIdentity::generate();
@@ -554,7 +572,8 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
 TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -630,7 +649,8 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
 TEST_CASE("BlobEngine validation order: namespace/delegation before signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "order-check");
@@ -684,7 +704,8 @@ TEST_CASE("Tombstone utility functions", "[engine][tombstone]") {
 TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -719,7 +740,8 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
 TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -736,7 +758,8 @@ TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[en
 TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -760,7 +783,8 @@ TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
 TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -785,7 +809,8 @@ TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]
 TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -810,7 +835,8 @@ TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
 TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -844,7 +870,8 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
 TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
@@ -867,7 +894,8 @@ TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
 TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -887,7 +915,8 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
     TempDir tmp;
     uint64_t fake_now = 100000;
     Storage store(tmp.path.string(), [&]() { return fake_now; });
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -918,7 +947,8 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
 TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -933,7 +963,8 @@ TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]")
 TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -950,7 +981,8 @@ TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[e
 TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -967,7 +999,8 @@ TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine]
 TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
@@ -986,7 +1019,8 @@ TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]
 TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1002,7 +1036,8 @@ TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]")
 TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1029,7 +1064,8 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
 TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1048,7 +1084,8 @@ TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation
 TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1063,7 +1100,8 @@ TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegat
 TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1096,7 +1134,8 @@ TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delega
 TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1126,7 +1165,8 @@ TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
 TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1158,7 +1198,8 @@ TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegat
 TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1187,7 +1228,8 @@ TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegatio
 TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1221,7 +1263,8 @@ TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delega
 TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1247,7 +1290,8 @@ TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
 TEST_CASE("Owner can still write after creating delegation", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -1265,7 +1309,8 @@ TEST_CASE("Owner can still write after creating delegation", "[engine][delegatio
 TEST_CASE("Multiple delegates: independent write and revocation", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
@@ -1305,7 +1350,8 @@ TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") 
     TempDir tmp;
     Storage store(tmp.path.string());
     // Set max_storage_bytes = 1 byte -- any real database exceeds this immediately
-    BlobEngine engine(store, 1);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "capacity-test");
@@ -1321,7 +1367,8 @@ TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]
     TempDir tmp;
     Storage store(tmp.path.string());
     // Set max_storage_bytes = 1 byte -- database already exceeds this
-    BlobEngine engine(store, 1);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1343,7 +1390,8 @@ TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[e
     TempDir tmp;
     Storage store(tmp.path.string());
     // Default: max_storage_bytes = 0 (unlimited)
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "unlimited-test");
@@ -1356,7 +1404,8 @@ TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]
     TempDir tmp;
     Storage store(tmp.path.string());
     // Ingest a blob first (with generous limit), then lower limit and delete
-    BlobEngine unlimited_engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine unlimited_engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "to-be-deleted");
@@ -1364,7 +1413,7 @@ TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]
     REQUIRE(ingest_result.accepted);
 
     // Now create a capacity-limited engine and delete via tombstone
-    BlobEngine limited_engine(store, 1);
+    BlobEngine limited_engine(store, pool, 1);
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
     auto result = limited_engine.delete_blob(tombstone);
     // delete_blob has no capacity check (it creates tombstones, which are inherently exempt)
@@ -1375,7 +1424,8 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
     TempDir tmp;
     Storage store(tmp.path.string());
     // Set generous limit: 1 GiB
-    BlobEngine engine(store, 1ULL << 30);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 1ULL << 30);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "under-capacity-test");
@@ -1393,7 +1443,8 @@ TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engi
     Storage store(tmp.path.string());
     // Set byte quota to allow exactly one blob (a signed blob with ML-DSA-87 is ~7400 bytes encoded)
     // Use 10000 bytes: enough for one blob, too small for two
-    BlobEngine engine(store, 0, 10000, 0);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 10000, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1414,7 +1465,8 @@ TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[eng
     TempDir tmp;
     Storage store(tmp.path.string());
     // Set a count quota of 1 blob per namespace
-    BlobEngine engine(store, 0, 0, 1);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1435,7 +1487,8 @@ TEST_CASE("BlobEngine allows ingest when under quota", "[engine][quota]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     // Generous quota: 100 MiB bytes, 1000 count
-    BlobEngine engine(store, 0, 100ULL * 1024 * 1024, 1000);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 100ULL * 1024 * 1024, 1000);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "under-quota");
@@ -1447,7 +1500,8 @@ TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     // Set count quota of 1 -- fill it, then tombstone should still work
-    BlobEngine engine(store, 0, 0, 1);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1469,7 +1523,8 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
     TempDir tmp;
     Storage store(tmp.path.string());
     // Global quota: 1 byte -- would reject everything
-    BlobEngine engine(store, 0, 1, 0);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1494,7 +1549,8 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
     TempDir tmp;
     Storage store(tmp.path.string());
     // Global byte quota: 1 byte (restrictive)
-    BlobEngine engine(store, 0, 1, 0);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1519,7 +1575,8 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
     TempDir tmp;
     Storage store(tmp.path.string());
     // Global count quota: 1 blob (restrictive)
-    BlobEngine engine(store, 0, 0, 1);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1542,7 +1599,8 @@ TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") 
     TempDir tmp;
     Storage store(tmp.path.string());
     // Both quotas set to 0 (unlimited) -- default behavior
-    BlobEngine engine(store, 0, 0, 0);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -1556,7 +1614,8 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     // Start with no quota
-    BlobEngine engine(store, 0, 0, 0);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 

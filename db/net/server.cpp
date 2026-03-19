@@ -122,6 +122,7 @@ asio::awaitable<void> Server::accept_loop() {
 
         auto conn = Connection::create_inbound(std::move(socket), identity_);
         if (trust_check_) conn->set_trust_check(trust_check_);
+        if (pool_) conn->set_pool(*pool_);
         connections_.push_back(conn);
 
         conn->on_close([this](Connection::Ptr c, bool graceful) {
@@ -171,6 +172,7 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
 
     auto conn = Connection::create_outbound(std::move(socket), identity_);
     if (trust_check_) conn->set_trust_check(trust_check_);
+    if (pool_) conn->set_pool(*pool_);
     connections_.push_back(conn);
 
     // Set on_close WITHOUT reconnect -- we handle reconnect after run() returns
@@ -233,6 +235,7 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
 
         auto conn = Connection::create_outbound(std::move(socket), identity_);
         if (trust_check_) conn->set_trust_check(trust_check_);
+        if (pool_) conn->set_pool(*pool_);
         connections_.push_back(conn);
 
         conn->on_close([this](Connection::Ptr c, bool /*graceful*/) {
@@ -288,6 +291,7 @@ void Server::connect_once(const std::string& address) {
 
         auto conn = Connection::create_outbound(std::move(socket), identity_);
         if (trust_check_) conn->set_trust_check(trust_check_);
+        if (pool_) conn->set_pool(*pool_);
         connections_.push_back(conn);
 
         conn->on_close([this](Connection::Ptr c, bool /*graceful*/) {

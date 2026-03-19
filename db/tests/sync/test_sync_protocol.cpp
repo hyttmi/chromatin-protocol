@@ -4,6 +4,8 @@
 #include <random>
 #include <cstring>
 
+#include <asio.hpp>
+
 #include "db/sync/sync_protocol.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
@@ -159,7 +161,8 @@ TEST_CASE("is_blob_expired", "[sync]") {
 TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     TempDir tmp;
     Storage store(tmp.path.string(), test_clock);
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -178,7 +181,7 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     auto blob3 = make_signed_blob(id, "permanent", 0, 5000);
     REQUIRE(engine.ingest(blob3).accepted);
 
-    SyncProtocol sync(engine, store, test_clock);
+    SyncProtocol sync(engine, store, pool, test_clock);
     auto hashes = sync.collect_namespace_hashes(id.namespace_id());
 
     // Index-only reads return ALL hashes including expired -- expiry is handled
@@ -240,8 +243,9 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
@@ -256,8 +260,8 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto blob_c = make_signed_blob(id2, "blob-C", 604800, 9002);
     REQUIRE(engine2.ingest(blob_c).accepted);
 
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     // Simulate sync:
     // 1. Exchange namespace lists
@@ -305,8 +309,9 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -318,8 +323,8 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     auto blob_expired = make_signed_blob(id, "already-expired", 100, 1);
     REQUIRE(engine1.ingest(blob_expired).accepted);
 
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     // Collect hashes -- index-only reads include all hashes (expired too)
     auto hashes = sync1.collect_namespace_hashes(id.namespace_id());
@@ -336,8 +341,9 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -346,8 +352,8 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     REQUIRE(engine1.ingest(blob).accepted);
     REQUIRE(engine2.ingest(blob).accepted);
 
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(id.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
@@ -363,8 +369,9 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -372,8 +379,8 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     auto blob = make_signed_blob(id, "only-on-one-side", 604800, 9000);
     REQUIRE(engine1.ingest(blob).accepted);
 
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     // Engine2 has no hashes for this namespace
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
@@ -482,7 +489,8 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
     test_clock_value = 10000;
 
     Storage store(tmp.path.string(), test_clock);
-    BlobEngine engine(store);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -496,7 +504,7 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
     auto delete_result = engine.delete_blob(tombstone);
     REQUIRE(delete_result.accepted);
 
-    SyncProtocol sync(engine, store, test_clock);
+    SyncProtocol sync(engine, store, pool, test_clock);
     auto hashes = sync.collect_namespace_hashes(id.namespace_id());
 
     // Tombstone is stored as a blob, so it appears in hash collection.
@@ -511,8 +519,9 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -529,8 +538,8 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     REQUIRE(delete_result.accepted);
 
     // Simulate sync: node1 sends its hashes to node2
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(id.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(id.namespace_id());
@@ -559,8 +568,9 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
@@ -576,7 +586,7 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
     REQUIRE(tombstone_ingest.accepted);
 
     // Now try to sync the original blob to node2 via ingest_blobs
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
     auto stats = sync2.ingest_blobs({blob});
 
     // Blob should be rejected (tombstoned)
@@ -665,8 +675,9 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -677,8 +688,8 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
     REQUIRE(deleg_result.accepted);
 
     // Sync: node1 sends delegation to node2
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
@@ -704,8 +715,9 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -718,8 +730,8 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
     REQUIRE(engine1.ingest(delegate_blob).accepted);
 
     // Sync everything from node1 to node2
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
@@ -766,8 +778,9 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
@@ -794,8 +807,8 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     REQUIRE(delete_result.accepted);
 
     // Sync tombstone from node1 to node2
-    SyncProtocol sync1(engine1, store1, test_clock);
-    SyncProtocol sync2(engine2, store2, test_clock);
+    SyncProtocol sync1(engine1, store1, pool, test_clock);
+    SyncProtocol sync2(engine2, store2, pool, test_clock);
 
     auto hashes1 = sync1.collect_namespace_hashes(owner.namespace_id());
     auto hashes2 = sync2.collect_namespace_hashes(owner.namespace_id());
@@ -834,8 +847,9 @@ TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
-    BlobEngine engine1(store1);
-    BlobEngine engine2(store2);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
+    BlobEngine engine2(store2, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
 
@@ -880,7 +894,8 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
     test_clock_value = 10000;
 
     Storage store1(tmp1.path.string(), test_clock);
-    BlobEngine engine1(store1);
+    asio::thread_pool pool{1};
+    BlobEngine engine1(store1, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();

@@ -52,6 +52,9 @@ public:
     /// Set callback invoked before drain starts (PeerManager saves peers here).
     void set_on_shutdown(ShutdownCallback cb) { on_shutdown_ = std::move(cb); }
 
+    /// Set thread pool reference for crypto offload (forwarded to connections).
+    void set_pool(asio::thread_pool& pool) { pool_ = &pool; }
+
     /// Trust-check function type for lightweight handshake.
     using TrustCheck = std::function<bool(const asio::ip::address&)>;
 
@@ -102,6 +105,7 @@ private:
     AcceptFilter accept_filter_;
     ShutdownCallback on_shutdown_;
     TrustCheck trust_check_;
+    asio::thread_pool* pool_ = nullptr;
     int exit_code_ = 0;
 };
 

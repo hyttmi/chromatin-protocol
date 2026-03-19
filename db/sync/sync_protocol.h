@@ -4,6 +4,8 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
+#include <asio/thread_pool.hpp>
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -31,10 +33,11 @@ struct SyncStats {
 /// Thread safety: NOT thread-safe. Caller must synchronize access.
 class SyncProtocol {
 public:
-    /// Construct with a BlobEngine, Storage, and injectable clock.
+    /// Construct with a BlobEngine, Storage, thread pool, and injectable clock.
     /// Storage is used for index-only hash reads during sync.
     explicit SyncProtocol(engine::BlobEngine& engine,
                           storage::Storage& storage,
+                          asio::thread_pool& pool,
                           storage::Clock clock = storage::system_clock_seconds);
 
     /// Check if a blob has expired given the current time.
@@ -112,6 +115,7 @@ public:
 private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
+    asio::thread_pool& pool_;
     storage::Clock clock_;
     OnBlobIngested on_blob_ingested_;
 };

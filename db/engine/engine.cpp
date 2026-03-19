@@ -52,10 +52,12 @@ std::array<uint8_t, 32> hex_to_bytes32(const std::string& hex) {
 } // anonymous namespace
 
 BlobEngine::BlobEngine(storage::Storage& store,
+                       asio::thread_pool& pool,
                        uint64_t max_storage_bytes,
                        uint64_t namespace_quota_bytes,
                        uint64_t namespace_quota_count)
     : storage_(store)
+    , pool_(pool)
     , max_storage_bytes_(max_storage_bytes)
     , namespace_quota_bytes_(namespace_quota_bytes)
     , namespace_quota_count_(namespace_quota_count) {}
