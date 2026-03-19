@@ -739,6 +739,64 @@ TEST_CASE("worker_threads 0 in JSON means auto-detect", "[config][threadpool]") 
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 40: Sync rate limiting config tests
+// =============================================================================
+
+TEST_CASE("Config loads sync_cooldown_seconds from JSON", "[config][syncratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_sync_cooldown.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"sync_cooldown_seconds": 10})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_cooldown_seconds == 10);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Config defaults sync_cooldown_seconds=30 and max_sync_sessions=1", "[config][syncratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_sync_defaults.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_cooldown_seconds == 30);
+    REQUIRE(cfg.max_sync_sessions == 1);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Config loads max_sync_sessions from JSON", "[config][syncratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_max_sync.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"max_sync_sessions": 3})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.max_sync_sessions == 3);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("Config sync rate limit fields default when missing from JSON", "[config][syncratelimit]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_sync_ratelimit.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_cooldown_seconds == 30);
+    REQUIRE(cfg.max_sync_sessions == 1);
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config][nsfilter]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_nsfilter.json";
 

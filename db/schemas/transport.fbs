@@ -37,7 +37,9 @@ enum TransportMsgType : byte {
     // Phase 39: Set reconciliation
     ReconcileInit = 27,
     ReconcileRanges = 28,
-    ReconcileItems = 29
+    ReconcileItems = 29,
+    // Phase 40: Sync rate limiting
+    SyncRejected = 30
 }
 
 table TransportMessage {

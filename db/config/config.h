@@ -30,6 +30,8 @@ struct Config {
     uint64_t namespace_quota_bytes = 0;             // Global default byte limit (0 = unlimited)
     uint64_t namespace_quota_count = 0;             // Global default count limit (0 = unlimited)
     uint32_t worker_threads = 0;                    // Thread pool size (0 = auto-detect: hardware_concurrency)
+    uint32_t sync_cooldown_seconds = 30;            // Min seconds between incoming sync requests per peer (0 = disabled)
+    uint32_t max_sync_sessions = 1;                 // Max concurrent sync sessions per peer
     // Per-namespace overrides: key is 64-char hex namespace hash.
     // Value: {optional max_bytes, optional max_count}
     // If optional has value: that value overrides global (0 = explicitly exempt)

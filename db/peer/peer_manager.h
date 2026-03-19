@@ -58,6 +58,7 @@ struct PeerInfo {
     // Phase 18: Token bucket rate limiting (resets on reconnect via PeerInfo recreation)
     uint64_t bucket_tokens = 0;        // Available throughput tokens (bytes)
     uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
+    uint64_t last_sync_initiated = 0;  // steady_clock ms since epoch (0 = never synced as responder)
 };
 
 /// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
@@ -73,6 +74,7 @@ struct NodeMetrics {
     uint64_t cursor_misses = 0;           // Namespaces requiring full hash diff
     uint64_t full_resyncs = 0;            // Full resync rounds triggered
     uint64_t quota_rejections = 0;        // Namespace quota exceeded rejections
+    uint64_t sync_rejections = 0;          // Sync rate limit rejections (cooldown + session + byte rate)
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.

@@ -39,6 +39,8 @@ Config load_config(const std::filesystem::path& path) {
     cfg.namespace_quota_bytes = j.value("namespace_quota_bytes", cfg.namespace_quota_bytes);
     cfg.namespace_quota_count = j.value("namespace_quota_count", cfg.namespace_quota_count);
     cfg.worker_threads = j.value("worker_threads", cfg.worker_threads);
+    cfg.sync_cooldown_seconds = j.value("sync_cooldown_seconds", cfg.sync_cooldown_seconds);
+    cfg.max_sync_sessions = j.value("max_sync_sessions", cfg.max_sync_sessions);
 
     if (j.contains("namespace_quotas") && j["namespace_quotas"].is_object()) {
         for (auto& [key, val] : j["namespace_quotas"].items()) {
