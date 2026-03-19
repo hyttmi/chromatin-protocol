@@ -9,8 +9,10 @@
 #include <utility>
 #include <vector>
 
+#include <asio/awaitable.hpp>
 #include <asio/thread_pool.hpp>
 
+#include "db/crypto/thread_pool.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -83,12 +85,15 @@ public:
     ///
     /// Validation pipeline (fail-fast, cheap to expensive):
     /// 1. Structural checks (pubkey size, signature non-empty)
-    /// 2. Namespace ownership (SHA3-256(pubkey) == namespace_id)
-    /// 3. Signature verification (ML-DSA-87)
-    /// 4. Store to storage layer
+    /// 2. Namespace ownership (SHA3-256(pubkey) == namespace_id) -- offloaded to pool
+    /// 3. Content hash (blob_hash) -- offloaded to pool, dedup check on event loop
+    /// 4. Signature verification (build_signing_input + verify) -- offloaded to pool
+    /// 5. Store to storage layer
+    ///
+    /// Two-dispatch pattern: duplicates pay only one pool round-trip (blob_hash).
     ///
     /// @return IngestResult with WriteAck on success or error on rejection.
-    IngestResult ingest(const wire::BlobData& blob);
+    asio::awaitable<IngestResult> ingest(const wire::BlobData& blob);
 
     /// Delete a blob by creating a signed tombstone.
     ///
@@ -102,7 +107,7 @@ public:
     ///
     /// Validation: same pipeline as ingest (structural -> namespace -> signature).
     /// On success: deletes target blob if present, stores tombstone, returns ack.
-    IngestResult delete_blob(const wire::BlobData& delete_request);
+    asio::awaitable<IngestResult> delete_blob(const wire::BlobData& delete_request);
 
     /// Query blobs in a namespace since a given seq_num.
     /// Returns blobs with seq_num > since_seq in ascending order.
