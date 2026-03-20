@@ -48,6 +48,7 @@ Config load_config(const std::filesystem::path& path) {
         cfg.log_max_size_mb = j.value("log_max_size_mb", cfg.log_max_size_mb);
         cfg.log_max_files = j.value("log_max_files", cfg.log_max_files);
         cfg.log_format = j.value("log_format", cfg.log_format);
+        cfg.inactivity_timeout_seconds = j.value("inactivity_timeout_seconds", cfg.inactivity_timeout_seconds);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -63,7 +64,7 @@ Config load_config(const std::filesystem::path& path) {
         "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
-        "log_format"
+        "log_format", "inactivity_timeout_seconds"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -274,6 +275,10 @@ void validate_config(const Config& cfg) {
     if (cfg.log_max_files < 1) {
         errors.push_back("log_max_files must be >= 1 (got " +
                           std::to_string(cfg.log_max_files) + ")");
+    }
+    if (cfg.inactivity_timeout_seconds != 0 && cfg.inactivity_timeout_seconds < 30) {
+        errors.push_back("inactivity_timeout_seconds must be 0 (disabled) or >= 30 (got " +
+                          std::to_string(cfg.inactivity_timeout_seconds) + ")");
     }
 
     // log_level validation

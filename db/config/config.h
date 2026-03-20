@@ -41,6 +41,7 @@ struct Config {
     uint32_t log_max_size_mb = 10;                   // Max size per log file in MiB before rotation
     uint32_t log_max_files = 3;                      // Max number of rotated log files
     std::string log_format = "text";                 // Log format: "text" or "json"
+    uint32_t inactivity_timeout_seconds = 120;       // 0 = disabled, minimum 30 when enabled
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

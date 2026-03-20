@@ -1092,6 +1092,77 @@ TEST_CASE("load_config: missing log fields use defaults", "[config][logging]") {
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 44: Inactivity timeout config tests (CONN-03)
+// =============================================================================
+
+TEST_CASE("Config defaults: inactivity_timeout_seconds is 120", "[config][inactivity]") {
+    Config cfg;
+    REQUIRE(cfg.inactivity_timeout_seconds == 120);
+}
+
+TEST_CASE("validate_config: inactivity_timeout_seconds=0 passes (disabled)", "[config][inactivity]") {
+    Config cfg;
+    cfg.inactivity_timeout_seconds = 0;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: inactivity_timeout_seconds=30 passes (minimum)", "[config][inactivity]") {
+    Config cfg;
+    cfg.inactivity_timeout_seconds = 30;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: inactivity_timeout_seconds=120 passes (default)", "[config][inactivity]") {
+    Config cfg;
+    cfg.inactivity_timeout_seconds = 120;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: inactivity_timeout_seconds=15 throws (below minimum)", "[config][inactivity]") {
+    Config cfg;
+    cfg.inactivity_timeout_seconds = 15;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("inactivity_timeout_seconds"));
+    }
+}
+
+TEST_CASE("validate_config: inactivity_timeout_seconds=1 throws (below minimum)", "[config][inactivity]") {
+    Config cfg;
+    cfg.inactivity_timeout_seconds = 1;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("inactivity_timeout_seconds"));
+    }
+}
+
+TEST_CASE("load_config reads inactivity_timeout_seconds from JSON", "[config][inactivity]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_inactivity.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"inactivity_timeout_seconds": 60})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.inactivity_timeout_seconds == 60);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: missing inactivity_timeout_seconds uses default 120", "[config][inactivity]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_inactivity.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.inactivity_timeout_seconds == 120);
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_unknown_keys.json";
     {
