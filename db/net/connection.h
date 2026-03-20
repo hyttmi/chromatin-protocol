@@ -96,6 +96,11 @@ public:
     /// Remote peer address string (set at construction time).
     const std::string& remote_address() const { return remote_addr_; }
 
+    /// Original connect address (e.g., "host:port" from bootstrap/PEX).
+    /// Empty for inbound connections.
+    void set_connect_address(const std::string& a) { connect_address_ = a; }
+    const std::string& connect_address() const { return connect_address_; }
+
 private:
     Connection(asio::ip::tcp::socket socket,
                const identity::NodeIdentity& identity,
@@ -139,6 +144,7 @@ private:
     std::vector<uint8_t> peer_pubkey_;
 
     std::string remote_addr_;
+    std::string connect_address_;
 
     asio::thread_pool* pool_ = nullptr;
 

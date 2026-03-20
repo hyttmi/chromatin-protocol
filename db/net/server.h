@@ -11,10 +11,18 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace chromatindb::net {
+
+/// Per-address reconnect state: tracks backoff delay and ACL rejection count.
+struct ReconnectState {
+    int delay_sec = 1;
+    int acl_rejection_count = 0;
+};
 
 /// TCP server: accepts inbound connections, connects to peers, manages lifecycles.
 class Server {
@@ -64,8 +72,31 @@ public:
     /// Exit code: 0 = clean shutdown, 1 = forced/timeout.
     int exit_code() const { return exit_code_; }
 
-    /// Connect to a peer once (no reconnect on failure). For discovered peers.
+    /// Connect to a peer with automatic reconnect on disconnect.
+    /// Despite the name, now enters reconnect_loop. Name preserved for call-site compatibility.
     void connect_once(const std::string& address);
+
+    /// Notify that a peer at the given address was ACL-rejected.
+    /// Increments the rejection counter; triggers extended backoff after threshold.
+    void notify_acl_rejected(const std::string& address);
+
+    /// Reset all per-address reconnect state and cancel sleeping reconnect timers.
+    /// Called by PeerManager on SIGHUP to allow immediate retry.
+    void clear_reconnect_state();
+
+    /// ACL rejection threshold before extended backoff.
+    static constexpr int ACL_REJECTION_THRESHOLD = 3;
+
+    /// Extended backoff duration (seconds) for ACL-rejected peers.
+    static constexpr int EXTENDED_BACKOFF_SEC = 600;
+
+    /// Normal max backoff (seconds).
+    static constexpr int MAX_BACKOFF_SEC = 60;
+
+    /// Access reconnect state (for testing).
+    const std::unordered_map<std::string, ReconnectState>& reconnect_state() const {
+        return reconnect_state_;
+    }
 
 private:
     /// Accept inbound connections in a loop.
@@ -107,6 +138,11 @@ private:
     TrustCheck trust_check_;
     asio::thread_pool* pool_ = nullptr;
     int exit_code_ = 0;
+
+    // Reconnect state: per-address backoff tracking and ACL rejection counts
+    std::unordered_map<std::string, ReconnectState> reconnect_state_;
+    std::mt19937 rng_{std::random_device{}()};
+    std::unordered_map<std::string, asio::steady_timer*> reconnect_timers_;
 };
 
 } // namespace chromatindb::net

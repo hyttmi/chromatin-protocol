@@ -6,8 +6,116 @@
 #include <asio.hpp>
 #include <thread>
 #include <chrono>
+#include <random>
 
 using namespace chromatindb::net;
+
+// =============================================================================
+// Reconnect state unit tests
+// =============================================================================
+
+TEST_CASE("ReconnectState default values", "[server][reconnect]") {
+    ReconnectState state;
+    REQUIRE(state.delay_sec == 1);
+    REQUIRE(state.acl_rejection_count == 0);
+}
+
+TEST_CASE("notify_acl_rejected increments rejection count", "[server][reconnect]") {
+    auto identity = chromatindb::identity::NodeIdentity::generate();
+    chromatindb::config::Config cfg;
+    cfg.bind_address = "127.0.0.1:44220";
+
+    asio::io_context ioc;
+    Server server(cfg, identity, ioc);
+
+    server.notify_acl_rejected("peer1:4200");
+    REQUIRE(server.reconnect_state().count("peer1:4200") == 1);
+    REQUIRE(server.reconnect_state().at("peer1:4200").acl_rejection_count == 1);
+
+    server.notify_acl_rejected("peer1:4200");
+    REQUIRE(server.reconnect_state().at("peer1:4200").acl_rejection_count == 2);
+}
+
+TEST_CASE("ACL rejection threshold triggers extended backoff", "[server][reconnect]") {
+    auto identity = chromatindb::identity::NodeIdentity::generate();
+    chromatindb::config::Config cfg;
+    cfg.bind_address = "127.0.0.1:44221";
+
+    asio::io_context ioc;
+    Server server(cfg, identity, ioc);
+
+    for (int i = 0; i < Server::ACL_REJECTION_THRESHOLD; ++i) {
+        server.notify_acl_rejected("peer1:4200");
+    }
+
+    auto& state = server.reconnect_state().at("peer1:4200");
+    REQUIRE(state.acl_rejection_count == Server::ACL_REJECTION_THRESHOLD);
+    REQUIRE(state.delay_sec == Server::EXTENDED_BACKOFF_SEC);
+}
+
+TEST_CASE("clear_reconnect_state resets all per-address state", "[server][reconnect]") {
+    auto identity = chromatindb::identity::NodeIdentity::generate();
+    chromatindb::config::Config cfg;
+    cfg.bind_address = "127.0.0.1:44222";
+
+    asio::io_context ioc;
+    Server server(cfg, identity, ioc);
+
+    // Build up some state
+    server.notify_acl_rejected("peer1:4200");
+    server.notify_acl_rejected("peer1:4200");
+    server.notify_acl_rejected("peer1:4200");
+    server.notify_acl_rejected("peer2:4200");
+
+    REQUIRE(server.reconnect_state().size() == 2);
+
+    server.clear_reconnect_state();
+
+    REQUIRE(server.reconnect_state().empty());
+}
+
+TEST_CASE("connect_once now enters reconnect path", "[server][reconnect]") {
+    auto identity = chromatindb::identity::NodeIdentity::generate();
+    chromatindb::config::Config cfg;
+    cfg.bind_address = "127.0.0.1:44223";
+
+    asio::io_context ioc;
+    Server server(cfg, identity, ioc);
+    server.start();
+
+    // connect_once should create reconnect state for the address
+    server.connect_once("127.0.0.1:44299");
+
+    // Let io_context run briefly so the reconnect_loop coroutine starts
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    // The reconnect loop should have created state for this address
+    REQUIRE(server.reconnect_state().count("127.0.0.1:44299") == 1);
+
+    server.stop();
+    ioc.run_for(std::chrono::seconds(6));
+}
+
+TEST_CASE("Connection connect_address round-trip", "[connection][reconnect]") {
+    // Verify that connect_address get/set works correctly
+    auto identity = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44224));
+    asio::ip::tcp::socket sock(ioc);
+    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44224));
+
+    auto conn = Connection::create_outbound(std::move(sock), identity);
+    REQUIRE(conn->connect_address().empty());
+
+    conn->set_connect_address("myhost:4200");
+    REQUIRE(conn->connect_address() == "myhost:4200");
+}
+
+// =============================================================================
+// Original server tests
+// =============================================================================
 
 TEST_CASE("Server starts and accepts inbound connection", "[server]") {
     auto identity = chromatindb::identity::NodeIdentity::generate();
