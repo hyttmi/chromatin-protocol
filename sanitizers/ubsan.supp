@@ -1,0 +1,3 @@
+# UndefinedBehaviorSanitizer suppressions for third-party libraries.
+# Usage: UBSAN_OPTIONS=suppressions=sanitizers/ubsan.supp
+# Only suppress third-party findings -- all db/ code must be clean.

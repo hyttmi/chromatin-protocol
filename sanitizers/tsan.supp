@@ -1,0 +1,3 @@
+# ThreadSanitizer suppressions for third-party libraries.
+# Usage: TSAN_OPTIONS=suppressions=sanitizers/tsan.supp
+# Only suppress third-party findings -- all db/ code must be clean.

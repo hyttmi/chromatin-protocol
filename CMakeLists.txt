@@ -25,10 +25,23 @@ set(CMAKE_BUILD_TYPE Debug)
 # =============================================================================
 # Optional sanitizer support
 # =============================================================================
-option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
-if(ENABLE_ASAN)
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+set(SANITIZER "" CACHE STRING "Sanitizer to enable: asan, tsan, or ubsan (mutually exclusive)")
+set_property(CACHE SANITIZER PROPERTY STRINGS "" "asan" "tsan" "ubsan")
+
+if(SANITIZER STREQUAL "asan")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls)
     add_link_options(-fsanitize=address)
+    message(STATUS "AddressSanitizer enabled")
+elseif(SANITIZER STREQUAL "tsan")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+    message(STATUS "ThreadSanitizer enabled")
+elseif(SANITIZER STREQUAL "ubsan")
+    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=undefined)
+    message(STATUS "UndefinedBehaviorSanitizer enabled")
+elseif(NOT SANITIZER STREQUAL "")
+    message(FATAL_ERROR "Unknown SANITIZER value: ${SANITIZER}. Use asan, tsan, or ubsan.")
 endif()
 
 # =============================================================================

@@ -1,0 +1,3 @@
+# AddressSanitizer suppressions for third-party libraries.
+# Usage: ASAN_OPTIONS=suppressions=sanitizers/asan.supp
+# Only suppress third-party findings -- all db/ code must be clean.
