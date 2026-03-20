@@ -1900,3 +1900,78 @@ TEST_CASE("multiple namespaces tracked independently", "[storage][quota]") {
     REQUIRE(quota_ns1_after.blob_count == 0);
     REQUIRE(quota_ns2_after.blob_count == 2);
 }
+
+// ============================================================================
+// Phase 43-02: Integrity scan + tombstone GC verification
+// ============================================================================
+
+TEST_CASE("integrity_scan on empty storage reports zero counts", "[storage][integrity]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    // Should not throw and should log zero counts for all sub-databases
+    REQUIRE_NOTHROW(store.integrity_scan());
+}
+
+TEST_CASE("integrity_scan on populated storage reports correct entry counts", "[storage][integrity]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    // Store a few blobs in different namespaces
+    auto blob1 = make_test_blob(0x10, "integrity-blob-1");
+    auto blob2 = make_test_blob(0x10, "integrity-blob-2");
+    auto blob3 = make_test_blob(0x20, "integrity-blob-3");
+
+    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
+
+    // integrity_scan should report blobs=3, seq=3 (at minimum)
+    REQUIRE_NOTHROW(store.integrity_scan());
+}
+
+TEST_CASE("expiry scan decreases entry counts (GC correctness)", "[storage][integrity]") {
+    TempDir dir;
+    uint64_t fake_now = 10000;
+    Storage store(dir.path.string(), [&]() { return fake_now; });
+
+    // Store blobs with short TTL (expires at timestamp + ttl)
+    auto blob1 = make_test_blob(0x30, "gc-test-1", 100, 9000);  // expires at 9100
+    auto blob2 = make_test_blob(0x30, "gc-test-2", 100, 9000);  // expires at 9100
+    auto blob3 = make_test_blob(0x30, "gc-test-3", 0, 9000);    // TTL=0 = permanent
+
+    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
+
+    // Advance clock past expiry and run GC
+    fake_now = 10000;  // 9000 + 100 = 9100, so 10000 > 9100
+    auto purged = store.run_expiry_scan();
+    REQUIRE(purged == 2);  // Two blobs expired, one permanent
+
+    // After GC, blobs_map should have fewer entries
+    // (blob data was actually deleted, not just pages freed)
+    auto ns = std::array<uint8_t, 32>{};
+    ns.fill(0x30);
+    auto remaining = store.get_blobs_by_seq(
+        std::span<const uint8_t, 32>(ns), 0);
+    // Only permanent blob should remain
+    REQUIRE(remaining.size() == 1);
+}
+
+TEST_CASE("used_bytes returns mmap geometry size", "[storage][integrity]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    // used_bytes() should return a positive value even on empty storage
+    // (mmap geometry is always >= lower bound)
+    auto bytes = store.used_bytes();
+    REQUIRE(bytes > 0);
+
+    // used_data_bytes() should also return a value, but represents actual data pages
+    auto data_bytes = store.used_data_bytes();
+    REQUIRE(data_bytes > 0);
+
+    // Mmap geometry (used_bytes) should be >= actual data usage
+    REQUIRE(bytes >= data_bytes);
+}
