@@ -94,8 +94,15 @@ int cmd_run(int argc, char* argv[]) {
         args.push_back(argv[i]);
     }
 
-    auto config = chromatindb::config::parse_args(
-        static_cast<int>(args.size()), args.data());
+    chromatindb::config::Config config;
+    try {
+        config = chromatindb::config::parse_args(
+            static_cast<int>(args.size()), args.data());
+        chromatindb::config::validate_config(config);
+    } catch (const std::runtime_error& e) {
+        std::cerr << e.what() << std::endl;
+        return 1;
+    }
 
     // Initialize logging
     chromatindb::logging::init(config.log_level);
