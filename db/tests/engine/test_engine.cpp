@@ -1649,3 +1649,170 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
 }
+
+// ============================================================================
+// Phase 45 Plan 01: Delegation quota enforcement verification (STOR-05)
+// ============================================================================
+
+TEST_CASE("Delegate write counts against owner namespace quota", "[engine][quota][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Count quota of 3: delegation blob (1) + delegate blob (2) + owner blob (3) = full
+    BlobEngine engine(store, pool, 0, 0, 3);
+
+    // Owner creates delegation (counts as blob #1 in owner's namespace)
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto r0 = run_async(pool, engine.ingest(deleg));
+    REQUIRE(r0.accepted);
+
+    // Delegate writes blob (counts as blob #2 in OWNER's namespace)
+    auto blob1 = make_delegate_blob(owner, delegate, "delegate-data-1", 604800, 4000);
+    auto r1 = run_async(pool, engine.ingest(blob1));
+    REQUIRE(r1.accepted);
+
+    // Verify quota usage on owner's namespace includes both blobs
+    auto quota = store.get_namespace_quota(owner.namespace_id());
+    REQUIRE(quota.blob_count == 2);  // delegation blob + delegate's blob
+}
+
+TEST_CASE("Owner at count quota rejects delegate write", "[engine][quota][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Count quota of 3
+    BlobEngine engine(store, pool, 0, 0, 3);
+
+    // Owner creates delegation (blob #1)
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+
+    // Delegate writes blob (blob #2)
+    auto blob1 = make_delegate_blob(owner, delegate, "d1", 604800, 4000);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+
+    // Owner writes blob (blob #3 -- at quota)
+    auto blob2 = make_signed_blob(owner, "o1", 604800, 4001);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+
+    // Delegate's 2nd write should be rejected (quota full)
+    auto blob3 = make_delegate_blob(owner, delegate, "d2", 604800, 4002);
+    auto r3 = run_async(pool, engine.ingest(blob3));
+    REQUIRE_FALSE(r3.accepted);
+    REQUIRE(r3.error.has_value());
+    REQUIRE(r3.error.value() == IngestError::quota_exceeded);
+}
+
+TEST_CASE("Mixed owner and delegate writes fill quota", "[engine][quota][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Count quota of 4: delegation (1) + owner (2) + delegate (3) + owner (4) = full
+    BlobEngine engine(store, pool, 0, 0, 4);
+
+    // Delegation blob (#1)
+    auto deleg = make_signed_delegation(owner, delegate);
+    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+
+    // Owner writes (#2)
+    auto blob1 = make_signed_blob(owner, "owner-1", 604800, 4000);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+
+    // Delegate writes (#3)
+    auto blob2 = make_delegate_blob(owner, delegate, "delegate-1", 604800, 4001);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+
+    // Owner writes (#4 -- fills quota)
+    auto blob3 = make_signed_blob(owner, "owner-2", 604800, 4002);
+    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+
+    // Next write from owner should be rejected
+    auto blob4 = make_signed_blob(owner, "owner-3", 604800, 4003);
+    auto r4 = run_async(pool, engine.ingest(blob4));
+    REQUIRE_FALSE(r4.accepted);
+    REQUIRE(r4.error.value() == IngestError::quota_exceeded);
+
+    // Next write from delegate should also be rejected
+    auto blob5 = make_delegate_blob(owner, delegate, "delegate-2", 604800, 4004);
+    auto r5 = run_async(pool, engine.ingest(blob5));
+    REQUIRE_FALSE(r5.accepted);
+    REQUIRE(r5.error.value() == IngestError::quota_exceeded);
+}
+
+TEST_CASE("Multiple delegates all count against owner quota", "[engine][quota][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    // Count quota of 5: 2 delegation blobs + 3 data blobs = full
+    BlobEngine engine(store, pool, 0, 0, 5);
+
+    // Delegate both (2 delegation blobs)
+    auto deleg1 = make_signed_delegation(owner, delegate1, 3000);
+    auto deleg2 = make_signed_delegation(owner, delegate2, 3001);
+    REQUIRE(run_async(pool, engine.ingest(deleg1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(deleg2)).accepted);
+
+    // Each delegate writes one blob (2 data blobs = 4 total)
+    auto blob1 = make_delegate_blob(owner, delegate1, "d1-writes", 604800, 4000);
+    auto blob2 = make_delegate_blob(owner, delegate2, "d2-writes", 604800, 4001);
+    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+
+    // Owner writes one more (blob #5 = at quota)
+    auto blob3 = make_signed_blob(owner, "owner-writes", 604800, 4002);
+    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+
+    // Any further write from either delegate should be rejected
+    auto blob4 = make_delegate_blob(owner, delegate1, "d1-over", 604800, 4003);
+    auto r4 = run_async(pool, engine.ingest(blob4));
+    REQUIRE_FALSE(r4.accepted);
+    REQUIRE(r4.error.value() == IngestError::quota_exceeded);
+
+    auto blob5 = make_delegate_blob(owner, delegate2, "d2-over", 604800, 4004);
+    auto r5 = run_async(pool, engine.ingest(blob5));
+    REQUIRE_FALSE(r5.accepted);
+    REQUIRE(r5.error.value() == IngestError::quota_exceeded);
+}
+
+TEST_CASE("Delegate blob bytes count against owner byte quota", "[engine][quota][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate = chromatindb::identity::NodeIdentity::generate();
+
+    // Set byte quota: allow exactly 2 blobs worth of bytes.
+    // A signed blob with ML-DSA-87 is ~7400 bytes encoded. Use 20000 bytes
+    // to allow delegation blob + one data blob, but reject a second data blob.
+    BlobEngine engine(store, pool, 0, 20000, 0);
+
+    // Owner creates delegation (uses ~7400 bytes of owner's byte quota)
+    auto deleg = make_signed_delegation(owner, delegate);
+    auto r0 = run_async(pool, engine.ingest(deleg));
+    REQUIRE(r0.accepted);
+
+    // Delegate writes one blob (uses another ~7400 bytes -- still under 20000)
+    auto blob1 = make_delegate_blob(owner, delegate, "delegate-byte-1", 604800, 4000);
+    auto r1 = run_async(pool, engine.ingest(blob1));
+    REQUIRE(r1.accepted);
+
+    // Third blob should exceed byte quota (3 * ~7400 > 20000)
+    auto blob2 = make_delegate_blob(owner, delegate, "delegate-byte-2", 604800, 4001);
+    auto r2 = run_async(pool, engine.ingest(blob2));
+    REQUIRE_FALSE(r2.accepted);
+    REQUIRE(r2.error.has_value());
+    REQUIRE(r2.error.value() == IngestError::quota_exceeded);
+}
