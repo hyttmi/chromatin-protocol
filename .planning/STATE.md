@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0.0
 milestone_name: Database Layer Done
-status: defining_requirements
+status: ready_to_plan
 stopped_at: null
-last_updated: "2026-03-20T11:00:00Z"
-last_activity: 2026-03-20 -- Milestone v1.0.0 started
+last_updated: "2026-03-20T12:00:00Z"
+last_activity: 2026-03-20 -- Roadmap created (7 phases, 54 requirements)
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,14 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 — integration tests, sanitizers, open-source release
+**Current focus:** v1.0.0 Phase 46 -- Sanitizers & Bug Fix
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-20 — Milestone v1.0.0 started
+Phase: 46 of 52 (Sanitizers & Bug Fix)
+Plan: Ready to plan phase 46
+Status: Ready to plan
+Last activity: 2026-03-20 -- Roadmap created (7 phases, 54 requirements mapped)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -63,4 +65,5 @@ None.
 
 ### Blockers/Concerns
 
-Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via PEX") -- SIGSEGV on master before Phase 44. Must fix in v1.0.0.
+- Pre-existing PEX test SIGSEGV (test_daemon.cpp:296) -- targeted for Phase 46 (FIX-01)
+- Sanitizers may reveal additional bugs requiring fixes before integration tests proceed

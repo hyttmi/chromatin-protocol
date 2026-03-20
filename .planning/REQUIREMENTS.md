@@ -1,7 +1,7 @@
 # Requirements: chromatindb
 
 **Defined:** 2026-03-20
-**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 
 ## v1.0.0 Requirements
 
@@ -9,96 +9,96 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Cryptographic Integrity & Transport
 
-- [ ] **CRYPT-01**: Docker test verifies immutable content addressing — blob hash matches independent SHA3-256(namespace||data||ttl||timestamp) recomputation on synced peer
-- [ ] **CRYPT-02**: Docker test verifies author non-repudiation — ML-DSA-87 signature on blob from Node A independently verified on Node B using blob's pubkey
-- [ ] **CRYPT-03**: Docker test verifies payload tamper-proofing — single bit flip in data.mdb causes AEAD authentication failure, node refuses to serve corrupted blob
-- [ ] **CRYPT-04**: Docker test verifies forward secrecy — captured PQ handshake traffic cannot be decrypted using long-term ML-DSA-87 identity keys
-- [ ] **CRYPT-05**: Docker test verifies MITM rejection — injected node substituting KEM keys causes session fingerprint mismatch and handshake failure on both sides
-- [ ] **CRYPT-06**: Docker test verifies trusted peer bypass — lightweight handshake skips KEM but still verifies ML-DSA-87 identity; wrong identity key rejected even if IP is in trusted_peers
+- [ ] **CRYPT-01**: Docker test verifies immutable content addressing -- blob hash matches independent SHA3-256(namespace||data||ttl||timestamp) recomputation on synced peer
+- [ ] **CRYPT-02**: Docker test verifies author non-repudiation -- ML-DSA-87 signature on blob from Node A independently verified on Node B using blob's pubkey
+- [ ] **CRYPT-03**: Docker test verifies payload tamper-proofing -- single bit flip in data.mdb causes AEAD authentication failure, node refuses to serve corrupted blob
+- [ ] **CRYPT-04**: Docker test verifies forward secrecy -- captured PQ handshake traffic cannot be decrypted using long-term ML-DSA-87 identity keys
+- [ ] **CRYPT-05**: Docker test verifies MITM rejection -- injected node substituting KEM keys causes session fingerprint mismatch and handshake failure on both sides
+- [ ] **CRYPT-06**: Docker test verifies trusted peer bypass -- lightweight handshake skips KEM but still verifies ML-DSA-87 identity; wrong identity key rejected even if IP is in trusted_peers
 
 ### Access Control
 
-- [ ] **ACL-01**: Docker test verifies closed-garden enforcement — unauthorized node disconnected after handshake, no application-layer messages exchanged (packet capture verification)
-- [ ] **ACL-02**: Docker test verifies namespace sovereignty — write with non-owning key and no delegation rejected immediately, no data written to storage
-- [ ] **ACL-03**: Docker test verifies delegation write — delegate can write to owner's namespace on any cluster node; delegate cannot delete (write-only)
-- [ ] **ACL-04**: Docker test verifies revocation propagation — tombstoned delegation blob syncs to all peers, revoked delegate's subsequent writes immediately rejected
-- [ ] **ACL-05**: Docker test verifies SIGHUP ACL reload — newly added key can connect without restart; removed key's active connection dropped
+- [ ] **ACL-01**: Docker test verifies closed-garden enforcement -- unauthorized node disconnected after handshake, no application-layer messages exchanged (packet capture verification)
+- [ ] **ACL-02**: Docker test verifies namespace sovereignty -- write with non-owning key and no delegation rejected immediately, no data written to storage
+- [ ] **ACL-03**: Docker test verifies delegation write -- delegate can write to owner's namespace on any cluster node; delegate cannot delete (write-only)
+- [ ] **ACL-04**: Docker test verifies revocation propagation -- tombstoned delegation blob syncs to all peers, revoked delegate's subsequent writes immediately rejected
+- [ ] **ACL-05**: Docker test verifies SIGHUP ACL reload -- newly added key can connect without restart; removed key's active connection dropped
 
 ### Disaster Recovery & Forensics
 
-- [ ] **DR-01**: Docker test verifies DARE forensics — hex inspection of data.mdb shows no plaintext blob content, namespace IDs, or public keys; all data high-entropy
-- [ ] **DR-02**: Docker test verifies master key dependency — daemon refuses to open database without master.key
-- [ ] **DR-03**: Docker test verifies master key rotation (negative) — Node B cannot read Node A's data.mdb using Node B's master.key
-- [ ] **DR-04**: Docker test verifies data directory migration — full data_dir copy to new machine resumes operation (connections, blob serving, sync, cursor state)
-- [ ] **DR-05**: Docker test verifies crash recovery — kill -9 during active sync, restart recovers without data loss, MDBX transactions intact, cursors allow resumption
+- [ ] **DR-01**: Docker test verifies DARE forensics -- hex inspection of data.mdb shows no plaintext blob content, namespace IDs, or public keys; all data high-entropy
+- [ ] **DR-02**: Docker test verifies master key dependency -- daemon refuses to open database without master.key
+- [ ] **DR-03**: Docker test verifies master key rotation (negative) -- Node B cannot read Node A's data.mdb using Node B's master.key
+- [ ] **DR-04**: Docker test verifies data directory migration -- full data_dir copy to new machine resumes operation (connections, blob serving, sync, cursor state)
+- [ ] **DR-05**: Docker test verifies crash recovery -- kill -9 during active sync, restart recovers without data loss, MDBX transactions intact, cursors allow resumption
 
 ### Network Resilience
 
-- [ ] **NET-01**: Docker test verifies eventual consistency — 5-node mesh, network partition via iptables, heal, all nodes converge to identical blob set via XOR fingerprint verification
-- [ ] **NET-02**: Docker test verifies split-brain writes — 4-node cluster partitioned into halves, different blobs written to each half, heal results in union of all blobs
-- [ ] **NET-03**: Docker test verifies large blob integrity — blobs at 1K, 100K, 1M, 10M, 100M sizes synced across cluster, hash verified on each peer
-- [ ] **NET-04**: Docker test verifies sync cursor resumption — node stopped/restarted syncs only new blobs (verified via wire traffic), not full re-sync
-- [ ] **NET-05**: Docker test verifies sync recovery after crash — kill -9 during reconciliation, restart completes sync without manual intervention, no duplicates or missing blobs
-- [ ] **NET-06**: Docker test verifies late-joiner at scale — new node catches up to 10,000 blobs across multiple namespaces, blob counts and fingerprints match
+- [ ] **NET-01**: Docker test verifies eventual consistency -- 5-node mesh, network partition via iptables, heal, all nodes converge to identical blob set via XOR fingerprint verification
+- [ ] **NET-02**: Docker test verifies split-brain writes -- 4-node cluster partitioned into halves, different blobs written to each half, heal results in union of all blobs
+- [ ] **NET-03**: Docker test verifies large blob integrity -- blobs at 1K, 100K, 1M, 10M, 100M sizes synced across cluster, hash verified on each peer
+- [ ] **NET-04**: Docker test verifies sync cursor resumption -- node stopped/restarted syncs only new blobs (verified via wire traffic), not full re-sync
+- [ ] **NET-05**: Docker test verifies sync recovery after crash -- kill -9 during reconciliation, restart completes sync without manual intervention, no duplicates or missing blobs
+- [ ] **NET-06**: Docker test verifies late-joiner at scale -- new node catches up to 10,000 blobs across multiple namespaces, blob counts and fingerprints match
 
 ### Resource Exhaustion & DoS
 
-- [ ] **DOS-01**: Docker test verifies write rate limiting — flooding peer disconnected, other peers continue operating normally
-- [ ] **DOS-02**: Docker test verifies sync rate limiting — excess sync initiations rejected with SyncRejected, byte-rate accounting includes sync traffic
-- [ ] **DOS-03**: Docker test verifies concurrent session limit — excess sync sessions rejected, existing sessions complete normally
-- [ ] **DOS-04**: Docker test verifies storage full signaling — StorageFull broadcast to all peers, peers stop pushing data, accepts data again after space freed
-- [ ] **DOS-05**: Docker test verifies namespace quota enforcement — writes rejected after quota hit, other namespaces unaffected
-- [ ] **DOS-06**: Docker test verifies thread pool under load — saturated ML-DSA-87 verifications don't starve event loop; new connections accepted, health checks pass
+- [ ] **DOS-01**: Docker test verifies write rate limiting -- flooding peer disconnected, other peers continue operating normally
+- [ ] **DOS-02**: Docker test verifies sync rate limiting -- excess sync initiations rejected with SyncRejected, byte-rate accounting includes sync traffic
+- [ ] **DOS-03**: Docker test verifies concurrent session limit -- excess sync sessions rejected, existing sessions complete normally
+- [ ] **DOS-04**: Docker test verifies storage full signaling -- StorageFull broadcast to all peers, peers stop pushing data, accepts data again after space freed
+- [ ] **DOS-05**: Docker test verifies namespace quota enforcement -- writes rejected after quota hit, other namespaces unaffected
+- [ ] **DOS-06**: Docker test verifies thread pool under load -- saturated ML-DSA-87 verifications don't starve event loop; new connections accepted, health checks pass
 
 ### Operational Signaling
 
-- [ ] **OPS-01**: Docker test verifies SIGHUP config reload — changed rate_limit_bytes_per_sec applies immediately; changed allowed_keys disconnects disallowed peers
-- [ ] **OPS-02**: Docker test verifies SIGUSR1 metrics dump — output includes all expected fields (peers, blobs, storage, syncs, ingests, rejections, rate_limited, cursor_hits, cursor_misses, full_resyncs, uptime)
-- [ ] **OPS-03**: Docker test verifies SIGTERM graceful shutdown — in-flight MDBX transactions complete/abort cleanly, restart shows no corruption
+- [ ] **OPS-01**: Docker test verifies SIGHUP config reload -- changed rate_limit_bytes_per_sec applies immediately; changed allowed_keys disconnects disallowed peers
+- [ ] **OPS-02**: Docker test verifies SIGUSR1 metrics dump -- output includes all expected fields (peers, blobs, storage, syncs, ingests, rejections, rate_limited, cursor_hits, cursor_misses, full_resyncs, uptime)
+- [ ] **OPS-03**: Docker test verifies SIGTERM graceful shutdown -- in-flight MDBX transactions complete/abort cleanly, restart shows no corruption
 
 ### Tombstone & TTL Lifecycle
 
-- [ ] **TTL-01**: Docker test verifies tombstone propagation — 100 blobs deleted via tombstones, all peers stop serving original data after sync
-- [ ] **TTL-02**: Docker test verifies tombstone TTL expiry — tombstones with TTL=60 expire and are GC'd, tombstone_map entries removed, storage decreases
-- [ ] **TTL-03**: Docker test verifies TTL=0 permanent blobs — blobs with TTL=0 never expired or collected regardless of age
-- [ ] **TTL-04**: Docker test verifies delegate cannot delete — delegate with valid delegation blob has tombstone rejected; only namespace owner can delete
+- [ ] **TTL-01**: Docker test verifies tombstone propagation -- 100 blobs deleted via tombstones, all peers stop serving original data after sync
+- [ ] **TTL-02**: Docker test verifies tombstone TTL expiry -- tombstones with TTL=60 expire and are GC'd, tombstone_map entries removed, storage decreases
+- [ ] **TTL-03**: Docker test verifies TTL=0 permanent blobs -- blobs with TTL=0 never expired or collected regardless of age
+- [ ] **TTL-04**: Docker test verifies delegate cannot delete -- delegate with valid delegation blob has tombstone rejected; only namespace owner can delete
 
 ### Set Reconciliation Protocol
 
-- [ ] **RECON-01**: Docker test verifies O(diff) scaling — 10 new blobs on 10,000-blob namespace, wire traffic proportional to ~10 blobs not ~10,000
-- [ ] **RECON-02**: Docker test verifies empty namespace skip — identical namespaces on two nodes, sync detects zero differences via cursor check, no ReconcileInit sent
-- [ ] **RECON-03**: Docker test verifies version byte forward compat — ReconcileInit with unknown version byte rejected gracefully, no crash or state corruption
-- [ ] **RECON-04**: Docker test verifies large difference set — Node A has 5000 blobs, Node B has 0, reconciliation transfers all 5000 with no duplicates or missed blobs
+- [ ] **RECON-01**: Docker test verifies O(diff) scaling -- 10 new blobs on 10,000-blob namespace, wire traffic proportional to ~10 blobs not ~10,000
+- [ ] **RECON-02**: Docker test verifies empty namespace skip -- identical namespaces on two nodes, sync detects zero differences via cursor check, no ReconcileInit sent
+- [ ] **RECON-03**: Docker test verifies version byte forward compat -- ReconcileInit with unknown version byte rejected gracefully, no crash or state corruption
+- [ ] **RECON-04**: Docker test verifies large difference set -- Node A has 5000 blobs, Node B has 0, reconciliation transfers all 5000 with no duplicates or missed blobs
 
 ### E2E Messaging Primitives
 
-- [ ] **E2E-01**: Docker test verifies async message delivery — blob written while recipient disconnected, recipient reconnects, receives blob via sync + pub/sub notification
-- [ ] **E2E-02**: Docker test verifies history backfill — relay node joins namespace after 1000 messages, reconciliation backfills all blobs with no gaps, sequence numbers monotonic
-- [ ] **E2E-03**: Docker test verifies delete for everyone — tombstone propagates to all cluster nodes within one sync interval, no node serves original blob
-- [ ] **E2E-04**: Docker test verifies multi-namespace isolation — two namespaces on same cluster, messages never cross namespaces, verified via fingerprint comparison
+- [ ] **E2E-01**: Docker test verifies async message delivery -- blob written while recipient disconnected, recipient reconnects, receives blob via sync + pub/sub notification
+- [ ] **E2E-02**: Docker test verifies history backfill -- relay node joins namespace after 1000 messages, reconciliation backfills all blobs with no gaps, sequence numbers monotonic
+- [ ] **E2E-03**: Docker test verifies delete for everyone -- tombstone propagates to all cluster nodes within one sync interval, no node serves original blob
+- [ ] **E2E-04**: Docker test verifies multi-namespace isolation -- two namespaces on same cluster, messages never cross namespaces, verified via fingerprint comparison
 
 ### Stress & Chaos
 
-- [ ] **STRESS-01**: Docker test verifies long-running stability (4h) — 3-node cluster, continuous ingest at 10 blobs/sec mixed sizes, memory bounded, blob counts consistent, no crashes
-- [ ] **STRESS-02**: Docker test verifies peer churn — 5-node cluster, random node kill/restart every 30s for 30 minutes, all nodes converge to identical blob set
-- [ ] **STRESS-03**: Docker test verifies rapid namespace creation — 1000 namespaces with 10 blobs each, all sync correctly, cursor storage bounded
-- [ ] **STRESS-04**: Docker test verifies concurrent everything — 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, SIGUSR1 metrics; no deadlocks, crashes, or corruption
+- [ ] **STRESS-01**: Docker test verifies long-running stability (4h) -- 3-node cluster, continuous ingest at 10 blobs/sec mixed sizes, memory bounded, blob counts consistent, no crashes
+- [ ] **STRESS-02**: Docker test verifies peer churn -- 5-node cluster, random node kill/restart every 30s for 30 minutes, all nodes converge to identical blob set
+- [ ] **STRESS-03**: Docker test verifies rapid namespace creation -- 1000 namespaces with 10 blobs each, all sync correctly, cursor storage bounded
+- [ ] **STRESS-04**: Docker test verifies concurrent everything -- 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, SIGUSR1 metrics; no deadlocks, crashes, or corruption
 
 ### Sanitizer & Security
 
 - [ ] **SAN-01**: Full Catch2 test suite passes under AddressSanitizer (ASAN) with zero findings
 - [ ] **SAN-02**: Full Catch2 test suite passes under ThreadSanitizer (TSAN) with zero data races
 - [ ] **SAN-03**: Full Catch2 test suite passes under UndefinedBehaviorSanitizer (UBSAN) with zero findings
-- [ ] **SAN-04**: Docker test verifies protocol fuzzing — malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
-- [ ] **SAN-05**: Docker test verifies handshake fuzzing — malformed messages at each PQ handshake stage cause clean disconnect, no crashes
+- [ ] **SAN-04**: Docker test verifies protocol fuzzing -- malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
+- [ ] **SAN-05**: Docker test verifies handshake fuzzing -- malformed messages at each PQ handshake stage cause clean disconnect, no crashes
 
 ### Connection Topology
 
-- [ ] **TOPO-01**: Docker test verifies duplicate-connection dedup — two nodes configured as each other's peer, simultaneous connect produces exactly one logical connection, sync works correctly
+- [ ] **TOPO-01**: Docker test verifies duplicate-connection dedup -- two nodes configured as each other's peer, simultaneous connect produces exactly one logical connection, sync works correctly
 
 ### Bug Fixes
 
-- [ ] **FIX-01**: PEX test SIGSEGV (test_daemon.cpp:296) fixed — coroutine lifetime during teardown resolved, "three nodes: peer discovery via PEX" test passes reliably
+- [ ] **FIX-01**: PEX test SIGSEGV (test_daemon.cpp:296) fixed -- coroutine lifetime during teardown resolved, "three nodes: peer discovery via PEX" test passes reliably
 
 ## Future Requirements
 
@@ -124,17 +124,68 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmapper) | | |
+| SAN-01 | Phase 46 | Pending |
+| SAN-02 | Phase 46 | Pending |
+| SAN-03 | Phase 46 | Pending |
+| FIX-01 | Phase 46 | Pending |
+| CRYPT-01 | Phase 47 | Pending |
+| CRYPT-02 | Phase 47 | Pending |
+| CRYPT-03 | Phase 47 | Pending |
+| CRYPT-04 | Phase 47 | Pending |
+| CRYPT-05 | Phase 47 | Pending |
+| CRYPT-06 | Phase 47 | Pending |
+| ACL-01 | Phase 48 | Pending |
+| ACL-02 | Phase 48 | Pending |
+| ACL-03 | Phase 48 | Pending |
+| ACL-04 | Phase 48 | Pending |
+| ACL-05 | Phase 48 | Pending |
+| TOPO-01 | Phase 48 | Pending |
+| NET-01 | Phase 49 | Pending |
+| NET-02 | Phase 49 | Pending |
+| NET-03 | Phase 49 | Pending |
+| NET-04 | Phase 49 | Pending |
+| NET-05 | Phase 49 | Pending |
+| NET-06 | Phase 49 | Pending |
+| RECON-01 | Phase 49 | Pending |
+| RECON-02 | Phase 49 | Pending |
+| RECON-03 | Phase 49 | Pending |
+| RECON-04 | Phase 49 | Pending |
+| OPS-01 | Phase 50 | Pending |
+| OPS-02 | Phase 50 | Pending |
+| OPS-03 | Phase 50 | Pending |
+| DR-01 | Phase 50 | Pending |
+| DR-02 | Phase 50 | Pending |
+| DR-03 | Phase 50 | Pending |
+| DR-04 | Phase 50 | Pending |
+| DR-05 | Phase 50 | Pending |
+| DOS-01 | Phase 50 | Pending |
+| DOS-02 | Phase 50 | Pending |
+| DOS-03 | Phase 50 | Pending |
+| DOS-04 | Phase 50 | Pending |
+| DOS-05 | Phase 50 | Pending |
+| DOS-06 | Phase 50 | Pending |
+| TTL-01 | Phase 51 | Pending |
+| TTL-02 | Phase 51 | Pending |
+| TTL-03 | Phase 51 | Pending |
+| TTL-04 | Phase 51 | Pending |
+| E2E-01 | Phase 51 | Pending |
+| E2E-02 | Phase 51 | Pending |
+| E2E-03 | Phase 51 | Pending |
+| E2E-04 | Phase 51 | Pending |
+| STRESS-01 | Phase 52 | Pending |
+| STRESS-02 | Phase 52 | Pending |
+| STRESS-03 | Phase 52 | Pending |
+| STRESS-04 | Phase 52 | Pending |
+| SAN-04 | Phase 52 | Pending |
+| SAN-05 | Phase 52 | Pending |
 
 **Coverage:**
 - v1.0.0 requirements: 54 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 54
+- Mapped to phases: 54
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-20*
-*Last updated: 2026-03-20 after initial definition*
+*Last updated: 2026-03-20 after roadmap creation*
