@@ -1,7 +1,9 @@
 #include "db/config/config.h"
 #include <asio.hpp>
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
 #include <fstream>
+#include <set>
 #include <stdexcept>
 
 namespace chromatindb::config {
@@ -25,22 +27,44 @@ Config load_config(const std::filesystem::path& path) {
         throw std::runtime_error("Invalid JSON in config file '" + path.string() + "': " + e.what());
     }
 
-    cfg.bind_address = j.value("bind_address", cfg.bind_address);
-    cfg.storage_path = j.value("storage_path", cfg.storage_path);
-    cfg.data_dir = j.value("data_dir", cfg.data_dir);
-    cfg.log_level = j.value("log_level", cfg.log_level);
-    cfg.max_peers = j.value("max_peers", cfg.max_peers);
-    cfg.sync_interval_seconds = j.value("sync_interval_seconds", cfg.sync_interval_seconds);
-    cfg.max_storage_bytes = j.value("max_storage_bytes", cfg.max_storage_bytes);
-    cfg.rate_limit_bytes_per_sec = j.value("rate_limit_bytes_per_sec", cfg.rate_limit_bytes_per_sec);
-    cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
-    cfg.full_resync_interval = j.value("full_resync_interval", cfg.full_resync_interval);
-    cfg.cursor_stale_seconds = j.value("cursor_stale_seconds", cfg.cursor_stale_seconds);
-    cfg.namespace_quota_bytes = j.value("namespace_quota_bytes", cfg.namespace_quota_bytes);
-    cfg.namespace_quota_count = j.value("namespace_quota_count", cfg.namespace_quota_count);
-    cfg.worker_threads = j.value("worker_threads", cfg.worker_threads);
-    cfg.sync_cooldown_seconds = j.value("sync_cooldown_seconds", cfg.sync_cooldown_seconds);
-    cfg.max_sync_sessions = j.value("max_sync_sessions", cfg.max_sync_sessions);
+    try {
+        cfg.bind_address = j.value("bind_address", cfg.bind_address);
+        cfg.storage_path = j.value("storage_path", cfg.storage_path);
+        cfg.data_dir = j.value("data_dir", cfg.data_dir);
+        cfg.log_level = j.value("log_level", cfg.log_level);
+        cfg.max_peers = j.value("max_peers", cfg.max_peers);
+        cfg.sync_interval_seconds = j.value("sync_interval_seconds", cfg.sync_interval_seconds);
+        cfg.max_storage_bytes = j.value("max_storage_bytes", cfg.max_storage_bytes);
+        cfg.rate_limit_bytes_per_sec = j.value("rate_limit_bytes_per_sec", cfg.rate_limit_bytes_per_sec);
+        cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
+        cfg.full_resync_interval = j.value("full_resync_interval", cfg.full_resync_interval);
+        cfg.cursor_stale_seconds = j.value("cursor_stale_seconds", cfg.cursor_stale_seconds);
+        cfg.namespace_quota_bytes = j.value("namespace_quota_bytes", cfg.namespace_quota_bytes);
+        cfg.namespace_quota_count = j.value("namespace_quota_count", cfg.namespace_quota_count);
+        cfg.worker_threads = j.value("worker_threads", cfg.worker_threads);
+        cfg.sync_cooldown_seconds = j.value("sync_cooldown_seconds", cfg.sync_cooldown_seconds);
+        cfg.max_sync_sessions = j.value("max_sync_sessions", cfg.max_sync_sessions);
+    } catch (const nlohmann::json::type_error& e) {
+        throw std::runtime_error(
+            std::string("Config type error: ") + e.what() +
+            " (check field types in config file)");
+    }
+
+    // Warn on unknown config keys (forward compatibility)
+    static const std::set<std::string> known_keys = {
+        "bind_address", "storage_path", "data_dir", "bootstrap_peers",
+        "log_level", "max_peers", "sync_interval_seconds", "max_storage_bytes",
+        "rate_limit_bytes_per_sec", "rate_limit_burst", "sync_namespaces",
+        "allowed_keys", "trusted_peers", "full_resync_interval",
+        "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
+        "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
+        "namespace_quotas"
+    };
+    for (const auto& [key, _] : j.items()) {
+        if (known_keys.find(key) == known_keys.end()) {
+            spdlog::warn("unknown config key '{}' (ignored)", key);
+        }
+    }
 
     if (j.contains("namespace_quotas") && j["namespace_quotas"].is_object()) {
         for (auto& [key, val] : j["namespace_quotas"].items()) {
@@ -187,6 +211,85 @@ void validate_trusted_peers(const std::vector<std::string>& peers) {
                     "Invalid trusted_peer '" + peer + "': not a valid IP address");
             }
         }
+    }
+}
+
+void validate_config(const Config& cfg) {
+    std::vector<std::string> errors;
+
+    // Numeric range validation
+    if (cfg.max_peers < 1) {
+        errors.push_back("max_peers must be >= 1 (got " +
+                          std::to_string(cfg.max_peers) + ")");
+    }
+    if (cfg.sync_interval_seconds < 1) {
+        errors.push_back("sync_interval_seconds must be >= 1 (got " +
+                          std::to_string(cfg.sync_interval_seconds) + ")");
+    }
+    if (cfg.max_storage_bytes != 0 && cfg.max_storage_bytes < 1048576) {
+        errors.push_back("max_storage_bytes must be 0 (unlimited) or >= 1048576 (1 MiB) (got " +
+                          std::to_string(cfg.max_storage_bytes) + ")");
+    }
+    if (cfg.rate_limit_bytes_per_sec != 0 && cfg.rate_limit_bytes_per_sec < 1024) {
+        errors.push_back("rate_limit_bytes_per_sec must be 0 (disabled) or >= 1024 (got " +
+                          std::to_string(cfg.rate_limit_bytes_per_sec) + ")");
+    }
+    if (cfg.rate_limit_bytes_per_sec > 0 && cfg.rate_limit_burst < cfg.rate_limit_bytes_per_sec) {
+        errors.push_back("rate_limit_burst must be >= rate_limit_bytes_per_sec when rate limiting is enabled (got burst=" +
+                          std::to_string(cfg.rate_limit_burst) + ", rate=" +
+                          std::to_string(cfg.rate_limit_bytes_per_sec) + ")");
+    }
+    if (cfg.full_resync_interval < 1) {
+        errors.push_back("full_resync_interval must be >= 1 (got " +
+                          std::to_string(cfg.full_resync_interval) + ")");
+    }
+    if (cfg.cursor_stale_seconds < 60) {
+        errors.push_back("cursor_stale_seconds must be >= 60 (got " +
+                          std::to_string(cfg.cursor_stale_seconds) + ")");
+    }
+    if (cfg.worker_threads > 256) {
+        errors.push_back("worker_threads must be 0 (auto-detect) or 1-256 (got " +
+                          std::to_string(cfg.worker_threads) + ")");
+    }
+    if (cfg.max_sync_sessions < 1) {
+        errors.push_back("max_sync_sessions must be >= 1 (got " +
+                          std::to_string(cfg.max_sync_sessions) + ")");
+    }
+
+    // log_level validation
+    static const std::set<std::string> valid_levels = {
+        "trace", "debug", "info", "warn", "warning", "error", "err", "critical"
+    };
+    if (valid_levels.find(cfg.log_level) == valid_levels.end()) {
+        errors.push_back("log_level must be one of: trace, debug, info, warn, warning, error, err, critical (got '" +
+                          cfg.log_level + "')");
+    }
+
+    // bind_address validation
+    auto colon_pos = cfg.bind_address.rfind(':');
+    if (colon_pos == std::string::npos) {
+        errors.push_back("bind_address must contain ':' separating host and port (got '" +
+                          cfg.bind_address + "')");
+    } else {
+        auto port_str = cfg.bind_address.substr(colon_pos + 1);
+        try {
+            unsigned long port = std::stoul(port_str);
+            if (port < 1 || port > 65535) {
+                errors.push_back("bind_address port must be 1-65535 (got " +
+                                  std::to_string(port) + ")");
+            }
+        } catch (...) {
+            errors.push_back("bind_address port is not a valid number (got '" +
+                              port_str + "')");
+        }
+    }
+
+    if (!errors.empty()) {
+        std::string msg = "Configuration errors:\n";
+        for (const auto& err : errors) {
+            msg += "  - " + err + "\n";
+        }
+        throw std::runtime_error(msg);
     }
 }
 
