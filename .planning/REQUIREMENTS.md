@@ -15,9 +15,9 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 
 ### Storage Hardening
 
-- [ ] **STOR-01**: Tombstone GC correctly reclaims storage — root cause identified and fixed (or documented if mmap behavior)
-- [ ] **STOR-02**: Node automatically prunes cursor entries for peers not seen within configurable age threshold
-- [ ] **STOR-03**: Node performs read-only integrity scan of all sub-databases at startup, logging any inconsistencies
+- [x] **STOR-01**: Tombstone GC correctly reclaims storage — root cause identified and fixed (or documented if mmap behavior)
+- [x] **STOR-02**: Node automatically prunes cursor entries for peers not seen within configurable age threshold
+- [x] **STOR-03**: Node performs read-only integrity scan of all sub-databases at startup, logging any inconsistencies
 - [ ] **STOR-04**: libmdbx crash recovery verified via kill-9 test scenarios with data integrity checks post-restart
 - [ ] **STOR-05**: Delegate writes are correctly counted against the namespace owner's quota
 
@@ -25,7 +25,7 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 
 - [x] **OPS-01**: Version string injected by CMake at build time (version.h removed, no manual version bumps)
 - [x] **OPS-02**: Node rejects invalid config at startup with human-readable error messages (ranges, types, formats)
-- [ ] **OPS-03**: All tracked metrics counters (rate_limited, peers_connected_total, peers_disconnected_total) emitted in periodic and SIGUSR1 log output
+- [x] **OPS-03**: All tracked metrics counters (rate_limited, peers_connected_total, peers_disconnected_total) emitted in periodic and SIGUSR1 log output
 - [x] **OPS-04**: Log output available in structured JSON format for machine parsing
 - [x] **OPS-05**: Node can log to rotating file in addition to stdout (configurable path, max size, max files)
 - [x] **OPS-06**: All timers (expiry, sync, flush, metrics, pex) cancelled consistently in both stop() and on_shutdown paths
@@ -63,14 +63,14 @@ Deferred to v1.0.0 (integration tests + hardening).
 | CONN-01 | Phase 44 | Pending |
 | CONN-02 | Phase 44 | Pending |
 | CONN-03 | Phase 44 | Pending |
-| STOR-01 | Phase 43 | Pending |
-| STOR-02 | Phase 43 | Pending |
-| STOR-03 | Phase 43 | Pending |
+| STOR-01 | Phase 43 | Complete |
+| STOR-02 | Phase 43 | Complete |
+| STOR-03 | Phase 43 | Complete |
 | STOR-04 | Phase 45 | Pending |
 | STOR-05 | Phase 45 | Pending |
 | OPS-01 | Phase 42 | Complete |
 | OPS-02 | Phase 42 | Complete |
-| OPS-03 | Phase 43 | Pending |
+| OPS-03 | Phase 43 | Complete |
 | OPS-04 | Phase 43 | Complete |
 | OPS-05 | Phase 43 | Complete |
 | OPS-06 | Phase 42 | Complete |

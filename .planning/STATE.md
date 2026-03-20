@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 43-01-PLAN.md
-last_updated: "2026-03-20T04:38:35Z"
-last_activity: 2026-03-20 -- Phase 43 plan 01 complete (file logging + JSON format)
+stopped_at: Completed 43-02-PLAN.md
+last_updated: "2026-03-20T04:52:58Z"
+last_activity: 2026-03-20 -- Phase 43 complete (storage health + metrics)
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 25
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
+  percent: 50
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 43 of 45 (Storage & Logging)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-03-20 -- Phase 43 plan 01 complete (file logging + JSON format)
+Plan: 2 of 2 complete
+Status: Phase 43 complete
+Last activity: 2026-03-20 -- Phase 43 complete (storage health + metrics)
 
-Progress: [##........] 25%
+Progress: [#####.....] 50%
 
 ## Performance Metrics
 
@@ -77,6 +77,13 @@ Phase 43-01 decisions:
 - Graceful fallback on file open failure: warn to stderr, continue console-only
 - Removed std::call_once -- init() called once at startup, call_once prevented re-init
 
+Phase 43-02 decisions:
+- Tombstone GC NOT a bug: used_bytes() is mmap geometry, freed pages reused internally
+- used_data_bytes() = mi_last_pgno * pagesize for accurate B-tree occupancy metric
+- Integrity scan informational only (logs warnings, no startup refusal)
+- Cursor compaction hardcoded to 6h (YAGNI, no config option)
+- Scoped read txn pattern: close txn before calling methods that open their own
+
 ### Pending Todos
 
 None.
@@ -87,6 +94,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T04:38:35Z
-Stopped at: Completed 43-01-PLAN.md
-Resume file: .planning/phases/43-storage-logging/43-01-SUMMARY.md
+Last session: 2026-03-20T04:52:58Z
+Stopped at: Completed 43-02-PLAN.md
+Resume file: .planning/phases/43-storage-logging/43-02-SUMMARY.md
