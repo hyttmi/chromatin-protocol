@@ -9,8 +9,8 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 
 ### Connection Resilience
 
-- [ ] **CONN-01**: Node auto-reconnects to all outbound peers on disconnect with exponential backoff (1s→60s) and jitter
-- [ ] **CONN-02**: Node suppresses reconnection attempts to peers that rejected the connection via ACL
+- [x] **CONN-01**: Node auto-reconnects to all outbound peers on disconnect with exponential backoff (1s→60s) and jitter
+- [x] **CONN-02**: Node suppresses reconnection attempts to peers that rejected the connection via ACL
 - [ ] **CONN-03**: Node detects and disconnects dead peers via inactivity timeout (no messages received within deadline)
 
 ### Storage Hardening
@@ -60,8 +60,8 @@ Deferred to v1.0.0 (integration tests + hardening).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONN-01 | Phase 44 | Pending |
-| CONN-02 | Phase 44 | Pending |
+| CONN-01 | Phase 44 | Complete |
+| CONN-02 | Phase 44 | Complete |
 | CONN-03 | Phase 44 | Pending |
 | STOR-01 | Phase 43 | Complete |
 | STOR-02 | Phase 43 | Complete |

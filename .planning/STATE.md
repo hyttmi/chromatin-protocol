@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 44 context gathered
-last_updated: "2026-03-20T05:25:30.650Z"
-last_activity: 2026-03-20 -- Phase 43 complete (storage health + metrics)
+stopped_at: Completed 44-01-PLAN.md
+last_updated: "2026-03-20T06:29:53.625Z"
+last_activity: 2026-03-20 -- Phase 44 plan 01 complete (auto-reconnect with ACL backoff)
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 50
+  total_plans: 6
+  completed_plans: 5
+  percent: 62
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v0.9.0 Phase 43 (Storage & Logging)
+**Current focus:** v0.9.0 Phase 44 (Network Resilience)
 
 ## Current Position
 
-Phase: 43 of 45 (Storage & Logging)
-Plan: 2 of 2 complete
-Status: Phase 43 complete
-Last activity: 2026-03-20 -- Phase 43 complete (storage health + metrics)
+Phase: 44 of 45 (Network Resilience)
+Plan: 1 of 2 complete
+Status: Phase 44 plan 01 complete
+Last activity: 2026-03-20 -- Phase 44 plan 01 complete (auto-reconnect with ACL backoff)
 
-Progress: [#####.....] 50%
+Progress: [######....] 62%
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [#####.....] 50%
 | v0.6.0 Validation | 5 | 6 | 2 days | ~5 min |
 | v0.7.0 Production Readiness | 6 | 12 | 2 days | ~13 min |
 | v0.8.0 Protocol Scalability | 4 | 8 | 1 day | ~24 min |
+| Phase 44 P01 | 48min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -84,16 +85,23 @@ Phase 43-02 decisions:
 - Cursor compaction hardcoded to 6h (YAGNI, no config option)
 - Scoped read txn pattern: close txn before calling methods that open their own
 
+Phase 44-01 decisions:
+- Value copies instead of references across co_await to prevent dangling on Server destruction
+- Direct method call (notify_acl_rejected) instead of callback for ACL signaling
+- connect_address on Connection for address mapping through handshake
+- Duplicate reconnect_loop prevention via reconnect_state_ membership check
+- First reconnect attempt is immediate (no delay) for newly discovered peers
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-None.
+Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via PEX") -- SIGSEGV on master before Phase 44. Deferred to v1.0.0 integration tests.
 
 ## Session Continuity
 
-Last session: 2026-03-20T05:25:30.648Z
-Stopped at: Phase 44 context gathered
-Resume file: .planning/phases/44-network-resilience/44-CONTEXT.md
+Last session: 2026-03-20T06:29:53.623Z
+Stopped at: Completed 44-01-PLAN.md
+Resume file: None
