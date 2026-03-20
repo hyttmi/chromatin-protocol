@@ -154,12 +154,11 @@ Plans:
   3. Periodic and SIGUSR1 log output includes all tracked metrics counters (rate_limited, peers_connected_total, peers_disconnected_total, and byte/tombstone counters)
   4. Node automatically prunes cursor entries for peers not seen within configurable age threshold, preventing unbounded cursor storage growth
   5. Node performs a read-only integrity scan of all sub-databases at startup, logging any inconsistencies found; tombstone GC root cause is identified and resolved (fixed or documented as mmap behavior)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 43-01: TBD
-- [ ] 43-02: TBD
-- [ ] 43-03: TBD
+- [ ] 43-01-PLAN.md -- File logging (rotating file sink, multi-sink setup) + structured JSON log format + config fields + validation
+- [ ] 43-02-PLAN.md -- Integrity scan + tombstone GC verification + cursor compaction timer + metrics completeness
 
 ### Phase 44: Network Resilience
 **Goal**: Node maintains persistent connectivity to its peer network -- automatically reconnecting on disconnect, suppressing reconnection to ACL-rejecting peers, and detecting dead peers via inactivity timeout
@@ -197,6 +196,6 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 42. Foundation | 2/2 | Complete    | 2026-03-20 |
-| 43. Storage & Logging | 0/TBD | Not started | - |
+| 43. Storage & Logging | 0/2 | Not started | - |
 | 44. Network Resilience | 0/TBD | Not started | - |
 | 45. Verification & Documentation | 0/TBD | Not started | - |
