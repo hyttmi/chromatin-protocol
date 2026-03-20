@@ -197,5 +197,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 42. Foundation | 2/2 | Complete    | 2026-03-20 |
 | 43. Storage & Logging | 2/2 | Complete    | 2026-03-20 |
-| 44. Network Resilience | 2/2 | Complete   | 2026-03-20 |
+| 44. Network Resilience | 2/2 | Complete    | 2026-03-20 |
 | 45. Verification & Documentation | 0/TBD | Not started | - |
