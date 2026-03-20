@@ -132,8 +132,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
 
     // Step 2: Namespace ownership OR delegation check
     // Offload SHA3-256(pubkey) to thread pool (uniform model: all sha3_256 offloaded)
-    auto caller_ex = co_await asio::this_coro::executor;
-    auto derived_ns = co_await crypto::offload(pool_, caller_ex, [&blob]() {
+    auto derived_ns = co_await crypto::offload(pool_, [&blob]() {
         return crypto::sha3_256(blob.pubkey);
     });
     bool is_owner = (derived_ns == blob.namespace_id);
@@ -189,7 +188,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
     }
 
     // Step 2.5: First dispatch -- blob_hash offloaded to thread pool
-    auto content_hash = co_await crypto::offload(pool_, caller_ex, [&encoded]() {
+    auto content_hash = co_await crypto::offload(pool_, [&encoded]() {
         return wire::blob_hash(encoded);
     });
 
@@ -206,7 +205,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
 
     // Step 3: Second dispatch -- build_signing_input + verify BUNDLED (most expensive)
     // Only for NEW blobs that passed dedup check.
-    auto [signing_input, verify_ok] = co_await crypto::offload(pool_, caller_ex, [&blob]() {
+    auto [signing_input, verify_ok] = co_await crypto::offload(pool_, [&blob]() {
         auto si = wire::build_signing_input(
             blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
         bool ok = crypto::Signer::verify(si, blob.signature, blob.pubkey);
@@ -296,8 +295,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& dele
 
     // Step 2: Namespace ownership check
     // Offload SHA3-256(pubkey) to thread pool (uniform model: all sha3_256 offloaded)
-    auto caller_ex = co_await asio::this_coro::executor;
-    auto derived_ns = co_await crypto::offload(pool_, caller_ex, [&delete_request]() {
+    auto derived_ns = co_await crypto::offload(pool_, [&delete_request]() {
         return crypto::sha3_256(delete_request.pubkey);
     });
     if (derived_ns != delete_request.namespace_id) {
@@ -306,7 +304,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& dele
     }
 
     // Step 3: Single dispatch -- build_signing_input + verify bundled
-    auto [signing_input, verify_ok] = co_await crypto::offload(pool_, caller_ex,
+    auto [signing_input, verify_ok] = co_await crypto::offload(pool_,
         [&delete_request]() {
             auto si = wire::build_signing_input(
                 delete_request.namespace_id, delete_request.data,

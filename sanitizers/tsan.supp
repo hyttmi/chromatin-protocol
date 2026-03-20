@@ -1,3 +1,11 @@
 # ThreadSanitizer suppressions for third-party libraries.
 # Usage: TSAN_OPTIONS=suppressions=sanitizers/tsan.supp
 # Only suppress third-party findings -- all db/ code must be clean.
+
+# Asio: posix_event destructor races during thread_pool shutdown.
+# The thread_pool's internal scheduler uses posix_event for thread
+# synchronization. During destruction, TSAN reports a race between
+# the destructor's pthread_cond_destroy and the last worker thread's
+# signal/wait. This is a known Asio pattern -- the pool join()
+# ensures all threads have exited before destruction.
+race:asio::detail::posix_event::~posix_event

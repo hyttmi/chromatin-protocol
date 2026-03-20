@@ -686,6 +686,12 @@ void PeerManager::route_sync_message(PeerInfo* peer, wire::TransportMsgType type
 
 asio::awaitable<std::optional<SyncMessage>>
 PeerManager::recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout) {
+    // Ensure we're on the io_context thread before accessing sync_inbox.
+    // After co_await offload() (crypto thread pool), the coroutine may be
+    // running on the pool thread. The timer co_await below will transfer us
+    // back, but the fast path (inbox non-empty) must also be on the right thread.
+    co_await asio::post(ioc_, asio::use_awaitable);
+
     if (!peer->sync_inbox.empty()) {
         auto msg = std::move(peer->sync_inbox.front());
         peer->sync_inbox.pop_front();

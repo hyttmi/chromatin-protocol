@@ -297,7 +297,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
 
         bool valid;
         if (pool_) {
-            valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+            valid = co_await crypto::offload(*pool_,
                 [&]() {
                     return crypto::Signer::verify(
                         session_keys_.session_fingerprint, resp_sig, resp_pk);
@@ -396,7 +396,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
 
     bool valid;
     if (pool_) {
-        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+        valid = co_await crypto::offload(*pool_,
             [&]() {
                 return crypto::Signer::verify(
                     session_keys_.session_fingerprint, resp_sig, resp_pk);
@@ -529,7 +529,7 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
 
     bool valid;
     if (pool_) {
-        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+        valid = co_await crypto::offload(*pool_,
             [&]() {
                 return crypto::Signer::verify(
                     session_keys_.session_fingerprint, init_sig, init_pk);
@@ -619,7 +619,7 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
 
     bool valid;
     if (pool_) {
-        valid = co_await crypto::offload(*pool_, co_await asio::this_coro::executor,
+        valid = co_await crypto::offload(*pool_,
             [&]() {
                 return crypto::Signer::verify(
                     session_keys_.session_fingerprint, init_sig, init_pk);

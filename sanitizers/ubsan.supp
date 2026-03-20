@@ -1,3 +1,10 @@
 # UndefinedBehaviorSanitizer suppressions for third-party libraries.
 # Usage: UBSAN_OPTIONS=suppressions=sanitizers/ubsan.supp
 # Only suppress third-party findings -- all db/ code must be clean.
+
+# libmdbx: intentional misaligned uint64_t stores in memory-mapped page headers.
+# MDBX uses packed struct access for mmap'd B-tree pages. Safe on x86/x64
+# (all our target platforms), technically UB per C11 6.3.2.3.
+# NOTE: UBSAN runtime suppressions have limited check-type support.
+# Alignment is suppressed via -fno-sanitize=alignment in CMakeLists.txt
+# for the libmdbx target only (see target_compile_options for mdbx).

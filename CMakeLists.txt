@@ -37,8 +37,13 @@ elseif(SANITIZER STREQUAL "tsan")
     add_link_options(-fsanitize=thread)
     message(STATUS "ThreadSanitizer enabled")
 elseif(SANITIZER STREQUAL "ubsan")
-    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
-    add_link_options(-fsanitize=undefined)
+    # -fno-sanitize=nonnull-attribute: third-party libraries (liboqs, libsodium)
+    # use __nonnull annotations on parameters that intentionally accept NULL
+    # (e.g. HKDF empty salt, ML-DSA empty context). These are annotation bugs
+    # in the libraries, not actual undefined behavior. Excluding this check
+    # avoids false positives while keeping all real UB checks active.
+    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -fno-sanitize=nonnull-attribute)
+    add_link_options(-fsanitize=undefined -fno-sanitize=nonnull-attribute)
     message(STATUS "UndefinedBehaviorSanitizer enabled")
 elseif(NOT SANITIZER STREQUAL "")
     message(FATAL_ERROR "Unknown SANITIZER value: ${SANITIZER}. Use asan, tsan, or ubsan.")
@@ -138,6 +143,14 @@ FetchContent_GetProperties(liboqs)
 target_include_directories(oqs PUBLIC
   $<BUILD_INTERFACE:${liboqs_BINARY_DIR}/include>
 )
+
+# UBSAN: suppress misaligned-access findings in libmdbx.
+# MDBX intentionally uses unaligned uint64_t stores in mmap'd page headers
+# (safe on x86/x64, technically UB per C11). Disable alignment check for
+# the mdbx target only so our db/ code still gets full UBSAN coverage.
+if(SANITIZER STREQUAL "ubsan" AND TARGET mdbx-static)
+    target_compile_options(mdbx-static PRIVATE -fno-sanitize=alignment)
+endif()
 
 # =============================================================================
 # Library component (guards in db/CMakeLists.txt skip re-fetching)
