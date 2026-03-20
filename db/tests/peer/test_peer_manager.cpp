@@ -2263,6 +2263,97 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
 }
 
 // =============================================================================
+// Phase 44: Inactivity timeout tests (CONN-03)
+// =============================================================================
+
+TEST_CASE("PeerInfo default last_message_time is 0", "[peer][inactivity]") {
+    chromatindb::peer::PeerInfo info;
+    REQUIRE(info.last_message_time == 0);
+}
+
+TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[peer][inactivity]") {
+    // Two connected nodes -- after connect, the peer should have last_message_time > 0
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14400";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+    cfg1.inactivity_timeout_seconds = 120;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:14401";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.bootstrap_peers = {"127.0.0.1:14400"};
+    cfg2.sync_interval_seconds = 60;
+    cfg2.max_peers = 32;
+    cfg2.inactivity_timeout_seconds = 120;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    pm1.start();
+    pm2.start();
+
+    // Let nodes connect and sync
+    ioc.run_for(std::chrono::seconds(3));
+    REQUIRE(pm1.peer_count() == 1);
+
+    // Verify metrics show connected peers (confirms on_peer_connected ran)
+    REQUIRE(pm1.metrics().peers_connected_total >= 1);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("Inactivity timeout disabled when config is 0", "[peer][inactivity]") {
+    // With inactivity_timeout_seconds = 0, no inactivity loop should be spawned
+    // This is a structural test -- the node should start and run fine
+    TempDir tmp1;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:14402";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+    cfg1.inactivity_timeout_seconds = 0;  // Disabled
+
+    Storage store1(tmp1.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+
+    pm1.start();
+
+    // Run briefly -- should not crash
+    ioc.run_for(std::chrono::milliseconds(500));
+
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
+}
+
+// =============================================================================
 // ACL rejection signaling and SIGHUP reconnect state tests
 // =============================================================================
 

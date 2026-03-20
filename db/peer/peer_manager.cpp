@@ -228,6 +228,11 @@ void PeerManager::start() {
 
     // Start cursor compaction timer (6h)
     asio::co_spawn(ioc_, cursor_compaction_loop(), asio::detached);
+
+    // Inactivity sweep: only spawn when enabled (non-zero timeout)
+    if (config_.inactivity_timeout_seconds > 0) {
+        asio::co_spawn(ioc_, inactivity_check_loop(), asio::detached);
+    }
 }
 
 void PeerManager::cancel_all_timers() {
@@ -237,6 +242,7 @@ void PeerManager::cancel_all_timers() {
     if (flush_timer_) flush_timer_->cancel();
     if (metrics_timer_) metrics_timer_->cancel();
     if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
+    if (inactivity_timer_) inactivity_timer_->cancel();
 }
 
 void PeerManager::stop() {
@@ -299,6 +305,9 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     info.bucket_last_refill = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    // Initialize last_message_time for inactivity detection (CONN-03)
+    info.last_message_time = info.bucket_last_refill;
 
     // Check if this connection is to a bootstrap peer
     // Note: remote_address includes port, bootstrap_addresses may not match exactly
@@ -383,6 +392,17 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
 void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                    wire::TransportMsgType type,
                                    std::vector<uint8_t> payload) {
+    // Track last message time for inactivity detection (CONN-03).
+    // Placed at the very top so ALL messages (even rate-limited ones) update the timestamp.
+    {
+        auto* peer = find_peer(conn);
+        if (peer) {
+            peer->last_message_time = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+    }
+
     // Universal byte accounting: all message types consume token bucket bytes (Phase 40).
     // Placed BEFORE message-type dispatch so every message is metered.
     // Ping/Pong are handled in Connection::message_loop and never reach here.
@@ -2312,6 +2332,37 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
         auto removed = storage_.cleanup_stale_cursors(connected);
         if (removed > 0) {
             spdlog::info("cursor compaction: removed {} entries for disconnected peers", removed);
+        }
+    }
+}
+
+asio::awaitable<void> PeerManager::inactivity_check_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        inactivity_timer_ = &timer;
+        timer.expires_after(std::chrono::seconds(30));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        inactivity_timer_ = nullptr;
+        if (ec || stopping_) co_return;
+
+        auto now_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        uint64_t timeout_ms = static_cast<uint64_t>(config_.inactivity_timeout_seconds) * 1000;
+
+        std::vector<net::Connection::Ptr> to_close;
+        for (const auto& peer : peers_) {
+            if (peer.last_message_time > 0 &&
+                (now_ms - peer.last_message_time) > timeout_ms) {
+                spdlog::warn("inactivity timeout: disconnecting {} ({}s idle)",
+                             peer.address,
+                             (now_ms - peer.last_message_time) / 1000);
+                to_close.push_back(peer.connection);
+            }
+        }
+        for (auto& conn : to_close) {
+            conn->close();
         }
     }
 }

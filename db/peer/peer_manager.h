@@ -59,6 +59,7 @@ struct PeerInfo {
     uint64_t bucket_tokens = 0;        // Available throughput tokens (bytes)
     uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
     uint64_t last_sync_initiated = 0;  // steady_clock ms since epoch (0 = never synced as responder)
+    uint64_t last_message_time = 0;   // steady_clock ms since epoch (0 = not yet set)
 };
 
 /// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
@@ -234,6 +235,9 @@ private:
     // Cursor compaction (prune cursors for disconnected peers)
     asio::awaitable<void> cursor_compaction_loop();
 
+    // Inactivity detection (disconnect dead peers)
+    asio::awaitable<void> inactivity_check_loop();
+
     // Helpers
     uint64_t compute_uptime_seconds() const;
 
@@ -292,6 +296,7 @@ private:
     asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
     asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
+    asio::steady_timer* inactivity_timer_ = nullptr;         // Timer-cancel pattern for inactivity sweep
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
