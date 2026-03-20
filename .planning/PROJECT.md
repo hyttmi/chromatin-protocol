@@ -71,6 +71,10 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Sync rate limiting (per-peer cooldown, session limit, universal byte accounting) — v0.8.0
 - ✓ Benchmark validated: +116% large-blob throughput, O(diff) confirmed — v0.8.0
 
+- ✓ CMake version injection (build-time version from project(VERSION), git hash) — v0.9.0
+- ✓ Startup config validation (fail-fast with accumulated error messages) — v0.9.0
+- ✓ Timer cleanup (consolidated cancel_all_timers() for shutdown consistency) — v0.9.0
+
 ### Active
 
 ## Current Milestone: v0.9.0 Connection Resilience & Hardening
@@ -201,6 +205,8 @@ Previous projects inform design:
 | Always reconcile, cursor skip only in Phase C | Bidirectional correctness: peer must discover what it is missing | ✓ Good — fixed subtle bidirectional sync bug |
 | Universal byte accounting at top of on_peer_message | All messages metered uniformly; differentiated response per type | ✓ Good — sync traffic no longer bypasses rate limiter |
 | Pool ref as constructor param / set_pool() for factory | Owned objects get pool in constructor; Connection (factory-created) gets set_pool() | ✓ Good — clean ownership semantics |
+| configure_file output to source dir | Generates db/version.h in source tree so existing #include paths work without CMake include dir changes | ✓ Good — zero consumer changes |
+| Error accumulation in config validation | validate_config collects all errors in vector, throws single exception — operator sees everything in one restart | ✓ Good — better operator experience |
 
 ---
-*Last updated: 2026-03-19 after v0.9.0 milestone start*
+*Last updated: 2026-03-20 after Phase 42*
