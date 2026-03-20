@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include "db/config/config.h"
 #include <fstream>
 #include <filesystem>
@@ -815,6 +816,179 @@ TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config
         }
         REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
     }
+
+    std::filesystem::remove(tmp);
+}
+
+// =============================================================================
+// Phase 42: Config validation tests (validate_config)
+// =============================================================================
+
+using Catch::Matchers::ContainsSubstring;
+
+TEST_CASE("validate_config: default Config passes", "[config][validation]") {
+    Config cfg;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: max_peers=0 throws", "[config][validation]") {
+    Config cfg;
+    cfg.max_peers = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("max_peers"));
+    }
+}
+
+TEST_CASE("validate_config: sync_interval_seconds=0 throws", "[config][validation]") {
+    Config cfg;
+    cfg.sync_interval_seconds = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("sync_interval_seconds"));
+    }
+}
+
+TEST_CASE("validate_config: max_storage_bytes non-zero below 1 MiB throws", "[config][validation]") {
+    Config cfg;
+    cfg.max_storage_bytes = 100;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("max_storage_bytes"));
+    }
+}
+
+TEST_CASE("validate_config: max_storage_bytes=0 passes (unlimited)", "[config][validation]") {
+    Config cfg;
+    cfg.max_storage_bytes = 0;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: rate_limit_bytes_per_sec non-zero below 1024 throws", "[config][validation]") {
+    Config cfg;
+    cfg.rate_limit_bytes_per_sec = 500;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: rate_limit_burst < rate_limit_bytes_per_sec throws", "[config][validation]") {
+    Config cfg;
+    cfg.rate_limit_bytes_per_sec = 2048;
+    cfg.rate_limit_burst = 1024;  // burst < rate
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: rate_limit disabled (0) passes", "[config][validation]") {
+    Config cfg;
+    cfg.rate_limit_bytes_per_sec = 0;
+    cfg.rate_limit_burst = 0;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: full_resync_interval=0 throws", "[config][validation]") {
+    Config cfg;
+    cfg.full_resync_interval = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: cursor_stale_seconds=30 (below 60) throws", "[config][validation]") {
+    Config cfg;
+    cfg.cursor_stale_seconds = 30;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: worker_threads=300 (above 256) throws", "[config][validation]") {
+    Config cfg;
+    cfg.worker_threads = 300;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: worker_threads=0 passes (auto-detect)", "[config][validation]") {
+    Config cfg;
+    cfg.worker_threads = 0;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: max_sync_sessions=0 throws", "[config][validation]") {
+    Config cfg;
+    cfg.max_sync_sessions = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: invalid log_level throws", "[config][validation]") {
+    Config cfg;
+    cfg.log_level = "verbose";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("log_level"));
+    }
+}
+
+TEST_CASE("validate_config: valid log_levels pass", "[config][validation]") {
+    for (const auto& level : {"trace", "debug", "info", "warn", "warning", "error", "err", "critical"}) {
+        Config cfg;
+        cfg.log_level = level;
+        REQUIRE_NOTHROW(validate_config(cfg));
+    }
+}
+
+TEST_CASE("validate_config: bind_address missing colon throws", "[config][validation]") {
+    Config cfg;
+    cfg.bind_address = "0.0.0.0";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: bind_address port=0 throws", "[config][validation]") {
+    Config cfg;
+    cfg.bind_address = "0.0.0.0:0";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: bind_address port=70000 throws", "[config][validation]") {
+    Config cfg;
+    cfg.bind_address = "0.0.0.0:70000";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: multiple errors accumulates all", "[config][validation]") {
+    Config cfg;
+    cfg.max_peers = 0;
+    cfg.sync_interval_seconds = 0;
+    cfg.log_level = "verbose";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        REQUIRE_THAT(msg, ContainsSubstring("max_peers"));
+        REQUIRE_THAT(msg, ContainsSubstring("sync_interval_seconds"));
+        REQUIRE_THAT(msg, ContainsSubstring("log_level"));
+    }
+}
+
+TEST_CASE("load_config: type mismatch throws readable error", "[config][validation]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_type_mismatch.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"max_peers": "thirty"})";
+    }
+
+    REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
+    try { load_config(tmp); } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        // Should be human-readable, not a raw nlohmann exception
+        REQUIRE_THAT(msg, ContainsSubstring("type"));
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_unknown_keys.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200", "unknown_future_field": 42, "another_mystery": true})";
+    }
+
+    // Should not throw -- unknown keys are warned, not rejected
+    REQUIRE_NOTHROW(load_config(tmp));
 
     std::filesystem::remove(tmp);
 }

@@ -57,4 +57,9 @@ void validate_allowed_keys(const std::vector<std::string>& keys);
 /// @throws std::runtime_error if any entry is malformed.
 void validate_trusted_peers(const std::vector<std::string>& peers);
 
+/// Validate all config field values (ranges, types, formats).
+/// Accumulates all errors and throws std::runtime_error with all of them.
+/// @throws std::runtime_error if any validation fails.
+void validate_config(const Config& cfg);
+
 } // namespace chromatindb::config
