@@ -18,8 +18,8 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 - [x] **STOR-01**: Tombstone GC correctly reclaims storage — root cause identified and fixed (or documented if mmap behavior)
 - [x] **STOR-02**: Node automatically prunes cursor entries for peers not seen within configurable age threshold
 - [x] **STOR-03**: Node performs read-only integrity scan of all sub-databases at startup, logging any inconsistencies
-- [ ] **STOR-04**: libmdbx crash recovery verified via kill-9 test scenarios with data integrity checks post-restart
-- [ ] **STOR-05**: Delegate writes are correctly counted against the namespace owner's quota
+- [x] **STOR-04**: libmdbx crash recovery verified via kill-9 test scenarios with data integrity checks post-restart
+- [x] **STOR-05**: Delegate writes are correctly counted against the namespace owner's quota
 
 ### Operational
 
@@ -66,8 +66,8 @@ Deferred to v1.0.0 (integration tests + hardening).
 | STOR-01 | Phase 43 | Complete |
 | STOR-02 | Phase 43 | Complete |
 | STOR-03 | Phase 43 | Complete |
-| STOR-04 | Phase 45 | Pending |
-| STOR-05 | Phase 45 | Pending |
+| STOR-04 | Phase 45 | Complete |
+| STOR-05 | Phase 45 | Complete |
 | OPS-01 | Phase 42 | Complete |
 | OPS-02 | Phase 42 | Complete |
 | OPS-03 | Phase 43 | Complete |

@@ -53,6 +53,7 @@ Progress: [##########] 98%
 | v0.8.0 Protocol Scalability | 4 | 8 | 1 day | ~24 min |
 | Phase 44 P01 | 48min | 2 tasks | 6 files |
 | Phase 44 P02 | 11min | 2 tasks | 6 files |
+| Phase 45 P01 | 14min | 2 tasks | 2 files |
 | Phase 45 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
@@ -97,6 +98,11 @@ Phase 44-01 decisions:
 - [Phase 44]: Timestamp update at top of on_peer_message before rate limiting prevents false disconnects
 - [Phase 44]: conn->close() not close_gracefully() for dead peers (cannot process goodbye)
 
+Phase 45-01 decisions:
+- Crash test uses SIGUSR1 metrics dump for blob count verification (same as run-benchmark.sh)
+- Stale reader check is informational (always-pass) since libmdbx auto-clears in single-process mode
+- Delegation quota tests verify existing behavior -- no production code changes needed
+
 Phase 45-02 decisions:
 - No structural README changes -- extended in place per user preference
 
@@ -110,6 +116,6 @@ Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via 
 
 ## Session Continuity
 
-Last session: 2026-03-20T07:42:45Z
-Stopped at: Completed 45-02-PLAN.md
+Last session: 2026-03-20T07:55:15Z
+Stopped at: Completed 45-01-PLAN.md (crash recovery + delegation quota verification)
 Resume file: None
