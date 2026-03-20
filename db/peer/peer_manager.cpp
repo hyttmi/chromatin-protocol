@@ -200,12 +200,7 @@ void PeerManager::start() {
         save_persisted_peers();  // Save while connection list is still accurate
         sighup_signal_.cancel();
         sigusr1_signal_.cancel();
-        // Cancel all timers — must match PeerManager::stop()
-        if (expiry_timer_) expiry_timer_->cancel();
-        if (sync_timer_) sync_timer_->cancel();
-        if (pex_timer_) pex_timer_->cancel();
-        if (flush_timer_) flush_timer_->cancel();
-        if (metrics_timer_) metrics_timer_->cancel();
+        cancel_all_timers();
     });
 
     // Connect to persisted peers (in addition to bootstrap peers from server_.start())
@@ -232,15 +227,19 @@ void PeerManager::start() {
     asio::co_spawn(ioc_, metrics_timer_loop(), asio::detached);
 }
 
-void PeerManager::stop() {
-    stopping_ = true;
-    sighup_signal_.cancel();
-    sigusr1_signal_.cancel();
+void PeerManager::cancel_all_timers() {
     if (expiry_timer_) expiry_timer_->cancel();
     if (sync_timer_) sync_timer_->cancel();
     if (pex_timer_) pex_timer_->cancel();
     if (flush_timer_) flush_timer_->cancel();
     if (metrics_timer_) metrics_timer_->cancel();
+}
+
+void PeerManager::stop() {
+    stopping_ = true;
+    sighup_signal_.cancel();
+    sigusr1_signal_.cancel();
+    cancel_all_timers();
     server_.stop();
 }
 

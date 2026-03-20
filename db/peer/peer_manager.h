@@ -255,6 +255,10 @@ private:
     // Sync rate limiting (Phase 40)
     void send_sync_rejected(net::Connection::Ptr conn, uint8_t reason);
 
+    /// Cancel all periodic timers. Called from stop() and on_shutdown.
+    /// Must not throw (called from signal handler context in on_shutdown).
+    void cancel_all_timers();
+
     // Helpers
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
     std::string peer_display_name(const net::Connection::Ptr& conn);
