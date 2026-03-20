@@ -37,6 +37,10 @@ struct Config {
     // If optional has value: that value overrides global (0 = explicitly exempt)
     // If optional has no value: inherit from global default
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> namespace_quotas;
+    std::string log_file;                            // Log file path (empty = console only)
+    uint32_t log_max_size_mb = 10;                   // Max size per log file in MiB before rotation
+    uint32_t log_max_files = 3;                      // Max number of rotated log files
+    std::string log_format = "text";                 // Log format: "text" or "json"
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

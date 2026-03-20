@@ -44,6 +44,10 @@ Config load_config(const std::filesystem::path& path) {
         cfg.worker_threads = j.value("worker_threads", cfg.worker_threads);
         cfg.sync_cooldown_seconds = j.value("sync_cooldown_seconds", cfg.sync_cooldown_seconds);
         cfg.max_sync_sessions = j.value("max_sync_sessions", cfg.max_sync_sessions);
+        cfg.log_file = j.value("log_file", cfg.log_file);
+        cfg.log_max_size_mb = j.value("log_max_size_mb", cfg.log_max_size_mb);
+        cfg.log_max_files = j.value("log_max_files", cfg.log_max_files);
+        cfg.log_format = j.value("log_format", cfg.log_format);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -58,7 +62,8 @@ Config load_config(const std::filesystem::path& path) {
         "allowed_keys", "trusted_peers", "full_resync_interval",
         "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
-        "namespace_quotas"
+        "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
+        "log_format"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -254,6 +259,21 @@ void validate_config(const Config& cfg) {
     if (cfg.max_sync_sessions < 1) {
         errors.push_back("max_sync_sessions must be >= 1 (got " +
                           std::to_string(cfg.max_sync_sessions) + ")");
+    }
+
+    // log_format validation
+    static const std::set<std::string> valid_formats = {"text", "json"};
+    if (valid_formats.find(cfg.log_format) == valid_formats.end()) {
+        errors.push_back("log_format must be one of: text, json (got '" +
+                          cfg.log_format + "')");
+    }
+    if (cfg.log_max_size_mb < 1) {
+        errors.push_back("log_max_size_mb must be >= 1 (got " +
+                          std::to_string(cfg.log_max_size_mb) + ")");
+    }
+    if (cfg.log_max_files < 1) {
+        errors.push_back("log_max_files must be >= 1 (got " +
+                          std::to_string(cfg.log_max_files) + ")");
     }
 
     // log_level validation

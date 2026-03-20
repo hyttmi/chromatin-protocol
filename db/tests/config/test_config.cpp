@@ -980,6 +980,118 @@ TEST_CASE("load_config: type mismatch throws readable error", "[config][validati
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 43: Logging config field tests
+// =============================================================================
+
+TEST_CASE("Config defaults: log fields", "[config][logging]") {
+    Config cfg;
+    REQUIRE(cfg.log_file == "");
+    REQUIRE(cfg.log_max_size_mb == 10);
+    REQUIRE(cfg.log_max_files == 3);
+    REQUIRE(cfg.log_format == "text");
+}
+
+TEST_CASE("validate_config: log_format text passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_format = "text";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: log_format json passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_format = "json";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: log_format yaml throws", "[config][logging]") {
+    Config cfg;
+    cfg.log_format = "yaml";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("log_format"));
+    }
+}
+
+TEST_CASE("validate_config: log_max_size_mb=0 throws", "[config][logging]") {
+    Config cfg;
+    cfg.log_max_size_mb = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("log_max_size_mb"));
+    }
+}
+
+TEST_CASE("validate_config: log_max_size_mb=10 passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_max_size_mb = 10;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: log_max_files=0 throws", "[config][logging]") {
+    Config cfg;
+    cfg.log_max_files = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("log_max_files"));
+    }
+}
+
+TEST_CASE("validate_config: log_max_files=3 passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_max_files = 3;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: log_file empty passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_file = "";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: log_file non-empty passes", "[config][logging]") {
+    Config cfg;
+    cfg.log_file = "/var/log/chromatindb.log";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("load_config parses log config fields from JSON", "[config][logging]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_logcfg.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "log_file": "/tmp/chromatindb.log",
+            "log_max_size_mb": 50,
+            "log_max_files": 5,
+            "log_format": "json"
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.log_file == "/tmp/chromatindb.log");
+    REQUIRE(cfg.log_max_size_mb == 50);
+    REQUIRE(cfg.log_max_files == 5);
+    REQUIRE(cfg.log_format == "json");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: missing log fields use defaults", "[config][logging]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_logcfg.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.log_file == "");
+    REQUIRE(cfg.log_max_size_mb == 10);
+    REQUIRE(cfg.log_max_files == 3);
+    REQUIRE(cfg.log_format == "text");
+
+    std::filesystem::remove(tmp);
+}
+
 TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_unknown_keys.json";
     {
