@@ -23,12 +23,12 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 
 ### Operational
 
-- [ ] **OPS-01**: Version string injected by CMake at build time (version.h removed, no manual version bumps)
+- [x] **OPS-01**: Version string injected by CMake at build time (version.h removed, no manual version bumps)
 - [x] **OPS-02**: Node rejects invalid config at startup with human-readable error messages (ranges, types, formats)
 - [ ] **OPS-03**: All tracked metrics counters (rate_limited, peers_connected_total, peers_disconnected_total) emitted in periodic and SIGUSR1 log output
 - [ ] **OPS-04**: Log output available in structured JSON format for machine parsing
 - [ ] **OPS-05**: Node can log to rotating file in addition to stdout (configurable path, max size, max files)
-- [ ] **OPS-06**: All timers (expiry, sync, flush, metrics, pex) cancelled consistently in both stop() and on_shutdown paths
+- [x] **OPS-06**: All timers (expiry, sync, flush, metrics, pex) cancelled consistently in both stop() and on_shutdown paths
 
 ### Documentation
 
@@ -68,12 +68,12 @@ Deferred to v1.0.0 (integration tests + hardening).
 | STOR-03 | Phase 43 | Pending |
 | STOR-04 | Phase 45 | Pending |
 | STOR-05 | Phase 45 | Pending |
-| OPS-01 | Phase 42 | Pending |
+| OPS-01 | Phase 42 | Complete |
 | OPS-02 | Phase 42 | Complete |
 | OPS-03 | Phase 43 | Pending |
 | OPS-04 | Phase 43 | Pending |
 | OPS-05 | Phase 43 | Pending |
-| OPS-06 | Phase 42 | Pending |
+| OPS-06 | Phase 42 | Complete |
 | DOCS-01 | Phase 45 | Pending |
 | DOCS-02 | Phase 45 | Pending |
 

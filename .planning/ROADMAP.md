@@ -123,7 +123,7 @@ Full details: [milestones/v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md)
 
 **Milestone Goal:** Harden the database layer for production readiness -- connection resilience, storage integrity, operational tooling, and documentation completeness. Penultimate milestone before v1.0.0.
 
-- [ ] **Phase 42: Foundation** - Version injection, config validation, timer cleanup
+- [x] **Phase 42: Foundation** - Version injection, config validation, timer cleanup (completed 2026-03-20)
 - [ ] **Phase 43: Storage & Logging** - Storage hardening, structured logging, file sink, metrics completeness
 - [ ] **Phase 44: Network Resilience** - Auto-reconnect with backoff, ACL-aware suppression, keepalive timeout
 - [ ] **Phase 45: Verification & Documentation** - Crash recovery audit, delegation quota verification, docs update
@@ -196,7 +196,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 42. Foundation | 1/2 | In Progress|  |
+| 42. Foundation | 2/2 | Complete   | 2026-03-20 |
 | 43. Storage & Logging | 0/TBD | Not started | - |
 | 44. Network Resilience | 0/TBD | Not started | - |
 | 45. Verification & Documentation | 0/TBD | Not started | - |

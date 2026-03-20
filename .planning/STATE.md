@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 42-02-PLAN.md
-last_updated: "2026-03-20T03:26:10Z"
-last_activity: 2026-03-20 — Completed 42-02 config validation
+stopped_at: Completed 42-01-PLAN.md
+last_updated: "2026-03-20T03:32:27Z"
+last_activity: 2026-03-20 — Completed 42-01 version injection and timer cleanup
 progress:
   total_phases: 4
   completed_phases: 0
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 Phase: 42 of 45 (Foundation)
 Plan: 2 of 2 in current phase
 Status: Phase complete -- ready for verification
-Last activity: 2026-03-20 -- Completed 42-02 config validation
+Last activity: 2026-03-20 -- Completed 42-01 version injection and timer cleanup
 
 Progress: [##........] 25%
 
@@ -70,6 +70,9 @@ Phase 42 execution decisions:
 - Error accumulation pattern: validate_config collects all errors before throwing
 - Unknown config keys warned via spdlog, not rejected (forward compatibility pre-1.0)
 - validate_config called before logging::init, uses std::cerr for error output
+- configure_file outputs to source dir (not build dir) to preserve include path resolution
+- ERROR_QUIET on git describe for Docker builds without .git directory
+- VERSION constant name preserved so main.cpp requires zero changes
 
 ### Pending Todos
 
@@ -81,6 +84,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T03:26:10Z
-Stopped at: Completed 42-02-PLAN.md
+Last session: 2026-03-20T03:32:27Z
+Stopped at: Completed 42-01-PLAN.md
 Resume: Phase 42 complete, proceed to phase 43
