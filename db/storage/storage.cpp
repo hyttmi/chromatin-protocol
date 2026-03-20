@@ -980,8 +980,60 @@ size_t Storage::run_expiry_scan() {
 }
 
 uint64_t Storage::used_bytes() const {
+    // Returns mmap file geometry (mi_geo.current), NOT actual data volume.
+    // Freed pages are reused internally by libmdbx's B-tree garbage collector.
+    // The file only physically shrinks when freed space exceeds shrink_threshold
+    // (4 MiB). This is correct mmap database behavior, not a bug.
     auto info = impl_->env.get_info();
     return info.mi_geo.current;
+}
+
+uint64_t Storage::used_data_bytes() const {
+    auto info = impl_->env.get_info();
+    // mi_last_pgno is the last used page number (0-based).
+    // Multiply by page size to get actual B-tree data occupancy.
+    return (info.mi_last_pgno + 1) * info.mi_dxb_pagesize;
+}
+
+void Storage::integrity_scan() {
+    try {
+        // Collect stats in a scoped read transaction, then release it
+        // before calling list_namespaces() (which opens its own read txn).
+        uint64_t blobs_entries, seq_entries, expiry_entries, tombstone_entries;
+        uint64_t cursor_entries, delegation_entries, quota_entries;
+        {
+            auto txn = impl_->env.start_read();
+            blobs_entries = txn.get_map_stat(impl_->blobs_map).ms_entries;
+            seq_entries = txn.get_map_stat(impl_->seq_map).ms_entries;
+            expiry_entries = txn.get_map_stat(impl_->expiry_map).ms_entries;
+            tombstone_entries = txn.get_map_stat(impl_->tombstone_map).ms_entries;
+            cursor_entries = txn.get_map_stat(impl_->cursor_map).ms_entries;
+            delegation_entries = txn.get_map_stat(impl_->delegation_map).ms_entries;
+            quota_entries = txn.get_map_stat(impl_->quota_map).ms_entries;
+        }
+
+        spdlog::info("integrity scan: blobs={} seq={} expiry={} tombstone={} "
+                     "cursor={} delegation={} quota={}",
+                     blobs_entries, seq_entries, expiry_entries,
+                     tombstone_entries, cursor_entries, delegation_entries,
+                     quota_entries);
+
+        // Cross-reference checks
+        if (seq_entries > 0 && blobs_entries == 0) {
+            spdlog::warn("integrity scan: seq_map has {} entries but blobs_map "
+                         "is empty (possible data loss)", seq_entries);
+        }
+
+        // Check quota_map vs namespace count (list_namespaces opens its own txn)
+        auto namespaces = list_namespaces();
+        if (quota_entries != namespaces.size() && !namespaces.empty()) {
+            spdlog::warn("integrity scan: quota_map has {} entries but {} "
+                         "namespaces found (possible stale quota state)",
+                         quota_entries, namespaces.size());
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("integrity scan failed: {}", e.what());
+    }
 }
 
 // =============================================================================

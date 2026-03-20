@@ -142,6 +142,8 @@ int cmd_run(int argc, char* argv[]) {
 
     // Create components
     chromatindb::storage::Storage storage(config.data_dir);
+    storage.integrity_scan();
+
     chromatindb::engine::BlobEngine engine(storage, pool, config.max_storage_bytes,
                                            config.namespace_quota_bytes,
                                            config.namespace_quota_count);

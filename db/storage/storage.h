@@ -157,9 +157,24 @@ public:
     /// @return Number of blobs purged.
     size_t run_expiry_scan();
 
-    /// Return the current database file size in bytes.
-    /// Uses mdbx env info (O(1), authoritative).
+    /// Return the current mmap geometry size in bytes.
+    /// Uses mdbx env info mi_geo.current (O(1), authoritative).
+    /// Note: This is the mmap file geometry, NOT the actual data volume.
+    /// Freed pages are reused internally by libmdbx's B-tree garbage collector.
+    /// The file only physically shrinks when freed space exceeds shrink_threshold
+    /// (4 MiB). This is correct mmap database behavior, not a bug.
     uint64_t used_bytes() const;
+
+    /// Return the actual data size (mi_last_pgno * pagesize), which reflects
+    /// B-tree occupancy rather than mmap file geometry (used_bytes()).
+    /// More accurate for storage reporting since it excludes pre-allocated
+    /// but unused mmap pages.
+    uint64_t used_data_bytes() const;
+
+    /// Perform a read-only integrity scan of all sub-databases at startup.
+    /// Logs entry counts and any cross-reference inconsistencies as warnings.
+    /// Does NOT refuse to start on inconsistencies -- informational only.
+    void integrity_scan();
 
     // =========================================================================
     // Sync cursor API
