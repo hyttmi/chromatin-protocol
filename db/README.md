@@ -100,7 +100,14 @@ Create a JSON config file and pass it with `--config`:
   "namespace_quota_bytes": 0,
   "namespace_quota_count": 0,
   "namespace_quotas": {},
-  "worker_threads": 0
+  "worker_threads": 0,
+  "sync_cooldown_seconds": 30,
+  "max_sync_sessions": 1,
+  "log_file": "",
+  "log_max_size_mb": 10,
+  "log_max_files": 3,
+  "log_format": "text",
+  "inactivity_timeout_seconds": 120
 }
 ```
 
@@ -122,6 +129,13 @@ Create a JSON config file and pass it with `--config`:
 - **namespace_quota_count** -- global default maximum blob count per namespace (default: `0` = unlimited)
 - **namespace_quotas** -- per-namespace quota overrides as a JSON object mapping namespace hash (64-char hex) to `{"max_bytes": N, "max_count": N}`; overrides the global defaults for listed namespaces (default: `{}` = use global defaults)
 - **worker_threads** -- number of thread pool workers for CPU-bound crypto offload (ML-DSA-87 verify, SHA3-256 hash); clamped to `hardware_concurrency()` if set higher (default: `0` = auto-detect via `hardware_concurrency()`)
+- **sync_cooldown_seconds** -- minimum seconds between incoming sync requests per peer; peers syncing more frequently receive SyncRejected (default: `30`, `0` = disabled)
+- **max_sync_sessions** -- maximum concurrent sync sessions per peer (default: `1`)
+- **log_file** -- path for rotating log file output; the node logs to both console and file when set (default: `""` = console only)
+- **log_max_size_mb** -- maximum size per log file in MiB before rotation (default: `10`)
+- **log_max_files** -- maximum number of rotated log files to retain (default: `3`)
+- **log_format** -- log output format: `"text"` for human-readable or `"json"` for structured machine-parseable output (default: `"text"`)
+- **inactivity_timeout_seconds** -- disconnect peers that send no messages within this many seconds; set to `0` to disable (default: `120`, minimum `30` when enabled)
 
 ## Signals
 
@@ -129,7 +143,7 @@ chromatindb responds to the following Unix signals at runtime:
 
 - **SIGTERM** -- Graceful shutdown. Stops accepting new connections, drains in-flight coroutines, saves the persistent peer list, and exits cleanly. The shutdown is bounded; if draining takes too long, the process exits with a non-zero exit code.
 
-- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately.
+- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately. SIGHUP also resets all ACL reconnection backoff counters, allowing immediate retry to peers that were previously rejecting connections.
 
 - **SIGUSR1** -- Metrics dump. Logs a snapshot of current runtime metrics via spdlog, including: active connections, storage bytes used, total blobs ingested, total sync rounds completed, total rejections, rate-limited disconnections, and uptime.
 
@@ -141,7 +155,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 29 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, and namespace quota enforcement. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 30 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, and sync rate limiting. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## Scenarios
 
@@ -224,6 +238,37 @@ For multi-node setups on a trusted LAN, skip the PQ handshake overhead between n
 
 Connections between listed peers use a lightweight handshake with ML-DSA-87 identity verification but no ML-KEM-1024 key exchange. Localhost connections are always trusted implicitly. Reload the trusted peer list at runtime with `SIGHUP`.
 
+### Logging Configuration
+
+Production monitoring setup with JSON-formatted rotating file logs:
+
+```json
+{
+  "data_dir": "./data",
+  "log_level": "info",
+  "log_file": "/var/log/chromatindb/node.log",
+  "log_max_size_mb": 50,
+  "log_max_files": 5,
+  "log_format": "json"
+}
+```
+
+### Resilient Node
+
+Hostile network configuration with auto-reconnect, dead peer detection, and rate limiting:
+
+```json
+{
+  "data_dir": "./data",
+  "bootstrap_peers": ["peer1.example.com:4200", "peer2.example.com:4200"],
+  "max_peers": 64,
+  "inactivity_timeout_seconds": 120,
+  "sync_cooldown_seconds": 30,
+  "rate_limit_bytes_per_sec": 1048576,
+  "rate_limit_burst": 5242880
+}
+```
+
 ## Features
 
 **Signed Blob Storage** -- Every blob is cryptographically signed by its author using ML-DSA-87. The node verifies the signature against the blob's namespace before accepting it. Blobs are content-addressed by SHA3-256 hash and stored in an ACID key-value store (libmdbx).
@@ -261,6 +306,22 @@ Connections between listed peers use a lightweight handshake with ML-DSA-87 iden
 **Thread Pool Crypto Offload** -- CPU-bound cryptographic operations (ML-DSA-87 signature verification, SHA3-256 content hashing) are dispatched to a configurable thread pool, freeing the event loop for I/O. Connection-scoped AEAD state is never accessed from worker threads (nonce safety by design).
 
 **Namespace Quotas** -- Per-namespace byte and blob count limits enforced at ingest. When a write would exceed the configured quota, the node rejects the blob and sends a QuotaExceeded signal to the writing peer. Global defaults apply to all namespaces, with per-namespace overrides for differentiated limits. Quota configuration is reloadable via SIGHUP.
+
+**Config Validation** -- The node validates all configuration fields at startup and rejects invalid values with human-readable error messages. Validation checks types, ranges, and formats, accumulating all errors before reporting. Invalid configuration prevents startup.
+
+**Structured Logging** -- Log output can be emitted in JSON format for machine parsing by setting `log_format` to `"json"`. Each log entry includes timestamp, level, logger name, and message fields.
+
+**File Logging** -- The node can log to a rotating file in addition to stdout. Configure `log_file` with a path to enable. Files rotate at `log_max_size_mb` and the node retains `log_max_files` rotated files. If the file path is invalid, the node falls back to console-only logging with a warning.
+
+**Cursor Compaction** -- Stale sync cursor entries for peers not seen within a configurable age threshold are automatically pruned every 6 hours, preventing unbounded cursor storage growth over long uptimes.
+
+**Startup Integrity Scan** -- On startup, the node performs a read-only scan of all sub-databases, logging entry counts and cross-reference consistency. The scan is informational and does not prevent startup.
+
+**Auto-Reconnect** -- When an outbound peer disconnects, the node automatically reconnects with exponential backoff (1s to 60s) and random jitter. The first reconnect attempt is immediate. Discovered peers (via PEX) also survive disconnection.
+
+**ACL-Aware Reconnection** -- When a peer rejects connections via ACL (connects, handshakes, disconnects with zero messages), the node enters extended backoff (600s) after 3 consecutive rejections. Sending SIGHUP resets all rejection counters for immediate retry.
+
+**Inactivity Timeout** -- The node monitors all connected peers for message activity. Peers that send no messages within the configurable `inactivity_timeout_seconds` deadline are disconnected and their resources freed. This is receiver-side detection only (no Ping/Pong messages).
 
 ## License
 
