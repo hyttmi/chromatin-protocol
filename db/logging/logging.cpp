@@ -1,10 +1,12 @@
 #include "db/logging/logging.h"
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
-#include <mutex>
+#include <fmt/core.h>
+#include <vector>
 
 namespace chromatindb::logging {
 
-static std::once_flag init_flag;
+static std::vector<spdlog::sink_ptr> shared_sinks;
 static spdlog::level::level_enum global_level = spdlog::level::info;
 
 static spdlog::level::level_enum parse_level(const std::string& level) {
@@ -17,23 +19,57 @@ static spdlog::level::level_enum parse_level(const std::string& level) {
     return spdlog::level::info;
 }
 
-void init(const std::string& level) {
+void init(const std::string& level,
+          const std::string& log_file,
+          uint32_t max_size_mb,
+          uint32_t max_files,
+          const std::string& log_format) {
     global_level = parse_level(level);
+    shared_sinks.clear();
 
-    std::call_once(init_flag, [&]() {
-        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
-        spdlog::set_level(global_level);
-    });
+    // Console sink (always present)
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+    shared_sinks.push_back(console_sink);
 
-    // Allow level updates even after first init
-    spdlog::set_level(global_level);
+    // File sink (optional)
+    if (!log_file.empty()) {
+        try {
+            auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                log_file,
+                static_cast<std::size_t>(max_size_mb) * 1024 * 1024,
+                max_files);
+            shared_sinks.push_back(file_sink);
+        } catch (const spdlog::spdlog_ex& ex) {
+            fmt::print(stderr, "warning: failed to open log file '{}': {} (falling back to console only)\n",
+                       log_file, ex.what());
+        }
+    }
+
+    // Set pattern on all sinks (same format for both)
+    std::string pattern;
+    if (log_format == "json") {
+        pattern = R"({"ts":"%Y-%m-%dT%H:%M:%S.%e","level":"%l","logger":"%n","msg":"%v"})";
+    } else {
+        pattern = "[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v";
+    }
+    for (auto& sink : shared_sinks) {
+        sink->set_pattern(pattern);
+    }
+
+    // Create default logger from shared sinks
+    auto default_logger = std::make_shared<spdlog::logger>("",
+        shared_sinks.begin(), shared_sinks.end());
+    default_logger->set_level(global_level);
+    spdlog::set_default_logger(default_logger);
 }
 
 std::shared_ptr<spdlog::logger> get_logger(const std::string& name) {
     auto logger = spdlog::get(name);
     if (!logger) {
-        logger = spdlog::stderr_color_mt(name);
+        logger = std::make_shared<spdlog::logger>(name,
+            shared_sinks.begin(), shared_sinks.end());
         logger->set_level(global_level);
+        spdlog::register_logger(logger);
     }
     return logger;
 }

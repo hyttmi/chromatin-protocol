@@ -105,7 +105,11 @@ int cmd_run(int argc, char* argv[]) {
     }
 
     // Initialize logging
-    chromatindb::logging::init(config.log_level);
+    chromatindb::logging::init(config.log_level,
+                                config.log_file,
+                                config.log_max_size_mb,
+                                config.log_max_files,
+                                config.log_format);
 
     spdlog::info("chromatindb {}", VERSION);
     spdlog::info("bind: {}", config.bind_address);
