@@ -231,6 +231,9 @@ private:
     asio::awaitable<void> metrics_timer_loop();
     void log_metrics_line();
 
+    // Cursor compaction (prune cursors for disconnected peers)
+    asio::awaitable<void> cursor_compaction_loop();
+
     // Helpers
     uint64_t compute_uptime_seconds() const;
 
@@ -288,6 +291,7 @@ private:
     asio::steady_timer* pex_timer_ = nullptr;     // Timer-cancel pattern for PEX loop
     asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
     asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
+    asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)

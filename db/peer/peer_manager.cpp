@@ -225,6 +225,9 @@ void PeerManager::start() {
 
     // Start periodic metrics log timer (60s)
     asio::co_spawn(ioc_, metrics_timer_loop(), asio::detached);
+
+    // Start cursor compaction timer (6h)
+    asio::co_spawn(ioc_, cursor_compaction_loop(), asio::detached);
 }
 
 void PeerManager::cancel_all_timers() {
@@ -233,6 +236,7 @@ void PeerManager::cancel_all_timers() {
     if (pex_timer_) pex_timer_->cancel();
     if (flush_timer_) flush_timer_->cancel();
     if (metrics_timer_) metrics_timer_->cancel();
+    if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
 }
 
 void PeerManager::stop() {
@@ -2251,7 +2255,8 @@ void PeerManager::log_metrics_line() {
     spdlog::info("metrics: peers={} connected_total={} disconnected_total={} "
                  "blobs={} storage={:.1f}MiB "
                  "syncs={} ingests={} rejections={} rate_limited={} "
-                 "cursor_hits={} cursor_misses={} full_resyncs={} uptime={}",
+                 "cursor_hits={} cursor_misses={} full_resyncs={} "
+                 "quota_rejections={} sync_rejections={} uptime={}",
                  peers_.size(),
                  metrics_.peers_connected_total,
                  metrics_.peers_disconnected_total,
@@ -2264,6 +2269,8 @@ void PeerManager::log_metrics_line() {
                  metrics_.cursor_hits,
                  metrics_.cursor_misses,
                  metrics_.full_resyncs,
+                 metrics_.quota_rejections,
+                 metrics_.sync_rejections,
                  uptime);
 }
 
@@ -2271,6 +2278,35 @@ uint64_t PeerManager::compute_uptime_seconds() const {
     auto now = std::chrono::steady_clock::now();
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count());
+}
+
+// =============================================================================
+// Cursor compaction (prune cursors for disconnected peers)
+// =============================================================================
+
+asio::awaitable<void> PeerManager::cursor_compaction_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        cursor_compaction_timer_ = &timer;
+        timer.expires_after(std::chrono::hours(6));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        cursor_compaction_timer_ = nullptr;
+        if (ec || stopping_) co_return;
+
+        // Build set of currently-connected peer pubkey hashes
+        std::vector<std::array<uint8_t, 32>> connected;
+        for (const auto& peer : peers_) {
+            if (peer.connection && !peer.connection->peer_pubkey().empty()) {
+                auto hash = crypto::sha3_256(peer.connection->peer_pubkey());
+                connected.push_back(hash);
+            }
+        }
+        auto removed = storage_.cleanup_stale_cursors(connected);
+        if (removed > 0) {
+            spdlog::info("cursor compaction: removed {} entries for disconnected peers", removed);
+        }
+    }
 }
 
 } // namespace chromatindb::peer
