@@ -420,7 +420,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 return;
             }
             if (type == wire::TransportMsgType_SyncRequest) {
-                // Reject new sync initiation when byte budget exceeded
+                // Reject new sync initiation when byte budget exceeded.
+                // If peer is already syncing, silently drop to avoid concurrent write.
+                auto* sync_peer = find_peer(conn);
+                if (sync_peer && sync_peer->syncing) {
+                    ++metrics_.sync_rejections;
+                    spdlog::debug("sync request from {} dropped: byte rate exceeded + session active",
+                                  conn->remote_address());
+                    return;
+                }
                 send_sync_rejected(conn, SYNC_REJECT_BYTE_RATE);
                 ++metrics_.sync_rejections;
                 spdlog::debug("sync request from {} rejected: byte rate exceeded",
@@ -440,7 +448,19 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         auto* peer = find_peer(conn);
         if (!peer) return;
 
-        // Step 0: Cooldown check (cheapest validation first)
+        // Step 0: Session limit check -- must be first.
+        // When peer->syncing, the sync initiator coroutine owns the connection's
+        // send path. Sending SyncRejected via a detached coroutine would race with
+        // the initiator's writes, causing AEAD nonce desync. Silently drop instead;
+        // the remote initiator will timeout (5s) and retry next interval.
+        if (peer->syncing) {
+            ++metrics_.sync_rejections;
+            spdlog::debug("sync request from {} dropped: session active (avoiding concurrent write)",
+                          conn->remote_address());
+            return;
+        }
+
+        // Step 1: Cooldown check
         if (sync_cooldown_seconds_ > 0) {
             auto now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -454,15 +474,6 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                               conn->remote_address(), cooldown_ms - elapsed_ms);
                 return;
             }
-        }
-
-        // Step 1: Session limit check
-        if (peer->syncing) {
-            send_sync_rejected(conn, SYNC_REJECT_SESSION_LIMIT);
-            ++metrics_.sync_rejections;
-            spdlog::debug("sync request from {} rejected: session limit",
-                          conn->remote_address());
-            return;
         }
 
         // Both checks passed -- accept sync and update timestamp

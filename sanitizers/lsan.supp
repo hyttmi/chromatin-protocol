@@ -1,0 +1,18 @@
+# LeakSanitizer suppressions for third-party libraries.
+# Usage: LSAN_OPTIONS=suppressions=sanitizers/lsan.supp
+# Only suppress third-party findings -- all db/ code must be clean.
+
+# liboqs: ML-DSA-87 signature context allocations not freed when test
+# coroutines are cancelled early (test teardown vs ioc.run_for timeout).
+leak:OQS_SIG_new
+leak:OQS_MEM_malloc
+
+# asio: resolver results and coroutine frame allocations leaked when
+# ioc.run_for() terminates before all reconnect_loop coroutines finish.
+leak:basic_resolver_results
+leak:resolve_query_op
+
+# asio: coroutine frame allocations from handshake/reconnect coroutines
+# not fully cleaned up when ioc scope ends during test teardown.
+leak:awaitable_handler
+leak:awaitable_frame

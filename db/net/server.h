@@ -103,10 +103,10 @@ private:
     asio::awaitable<void> accept_loop();
 
     /// Connect to a single peer address.
-    asio::awaitable<void> connect_to_peer(const std::string& address);
+    asio::awaitable<void> connect_to_peer(std::string address);
 
     /// Reconnect loop with exponential backoff.
-    asio::awaitable<void> reconnect_loop(const std::string& address);
+    asio::awaitable<void> reconnect_loop(std::string address);
 
     /// Drain all connections and stop.
     asio::awaitable<void> drain(std::chrono::seconds timeout);

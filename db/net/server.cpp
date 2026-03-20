@@ -151,7 +151,7 @@ asio::awaitable<void> Server::accept_loop() {
 // Outbound connection
 // =============================================================================
 
-asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
+asio::awaitable<void> Server::connect_to_peer(std::string address) {
     auto [host, port] = parse_address(address);
 
     asio::ip::tcp::resolver resolver(ioc_);
@@ -221,7 +221,7 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
     }
 }
 
-asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
+asio::awaitable<void> Server::reconnect_loop(std::string address) {
     // Ensure entry exists (no reference held across co_await -- avoids dangling on destruction)
     reconnect_state_[address];
     bool first_attempt = true;

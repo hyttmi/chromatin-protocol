@@ -166,7 +166,13 @@ struct Storage::Impl {
         mdbx::env_managed::create_parameters create_params;
         create_params.geometry.size_lower = 1 * mdbx::env::geometry::MiB;
         create_params.geometry.size_now = mdbx::env::geometry::default_value;
+#if defined(__SANITIZE_ADDRESS__) || defined(__has_feature) && __has_feature(address_sanitizer)
+        // ASAN shadow memory consumes 1/8 of virtual address space.
+        // Reduce upper limit to avoid MDBX_TOO_LARGE on mmap.
+        create_params.geometry.size_upper = 1LL * mdbx::env::geometry::GiB;
+#else
         create_params.geometry.size_upper = 64LL * mdbx::env::geometry::GiB;
+#endif
         create_params.geometry.growth_step = 1 * mdbx::env::geometry::MiB;
         create_params.geometry.shrink_threshold = 4 * mdbx::env::geometry::MiB;
         create_params.use_subdirectory = false;
