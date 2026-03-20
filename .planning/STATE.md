@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 44-01-PLAN.md
-last_updated: "2026-03-20T06:29:53.625Z"
-last_activity: 2026-03-20 -- Phase 44 plan 01 complete (auto-reconnect with ACL backoff)
+stopped_at: Completed 44-02-PLAN.md
+last_updated: "2026-03-20T06:44:15.663Z"
+last_activity: 2026-03-20 -- Phase 44 plan 02 complete (inactivity timeout)
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 62
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 44 of 45 (Network Resilience)
-Plan: 1 of 2 complete
-Status: Phase 44 plan 01 complete
-Last activity: 2026-03-20 -- Phase 44 plan 01 complete (auto-reconnect with ACL backoff)
+Plan: 2 of 2 complete
+Status: Phase 44 complete
+Last activity: 2026-03-20 -- Phase 44 plan 02 complete (inactivity timeout)
 
 Progress: [######....] 62%
 
@@ -52,6 +52,7 @@ Progress: [######....] 62%
 | v0.7.0 Production Readiness | 6 | 12 | 2 days | ~13 min |
 | v0.8.0 Protocol Scalability | 4 | 8 | 1 day | ~24 min |
 | Phase 44 P01 | 48min | 2 tasks | 6 files |
+| Phase 44 P02 | 11min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Phase 44-01 decisions:
 - connect_address on Connection for address mapping through handshake
 - Duplicate reconnect_loop prevention via reconnect_state_ membership check
 - First reconnect attempt is immediate (no delay) for newly discovered peers
+- [Phase 44]: Receiver-side inactivity detection (not Ping sender) to avoid AEAD nonce desync
+- [Phase 44]: Timestamp update at top of on_peer_message before rate limiting prevents false disconnects
+- [Phase 44]: conn->close() not close_gracefully() for dead peers (cannot process goodbye)
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via 
 
 ## Session Continuity
 
-Last session: 2026-03-20T06:29:53.623Z
-Stopped at: Completed 44-01-PLAN.md
+Last session: 2026-03-20T06:44:15.661Z
+Stopped at: Completed 44-02-PLAN.md
 Resume file: None

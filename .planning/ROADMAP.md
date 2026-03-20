@@ -125,7 +125,7 @@ Full details: [milestones/v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md)
 
 - [x] **Phase 42: Foundation** - Version injection, config validation, timer cleanup (completed 2026-03-20)
 - [x] **Phase 43: Storage & Logging** - Storage hardening, structured logging, file sink, metrics completeness (completed 2026-03-20)
-- [ ] **Phase 44: Network Resilience** - Auto-reconnect with backoff, ACL-aware suppression, keepalive timeout
+- [x] **Phase 44: Network Resilience** - Auto-reconnect with backoff, ACL-aware suppression, keepalive timeout (completed 2026-03-20)
 - [ ] **Phase 45: Verification & Documentation** - Crash recovery audit, delegation quota verification, docs update
 
 ## Phase Details
@@ -197,5 +197,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 42. Foundation | 2/2 | Complete    | 2026-03-20 |
 | 43. Storage & Logging | 2/2 | Complete    | 2026-03-20 |
-| 44. Network Resilience | 1/2 | In Progress|  |
+| 44. Network Resilience | 2/2 | Complete   | 2026-03-20 |
 | 45. Verification & Documentation | 0/TBD | Not started | - |
