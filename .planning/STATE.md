@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0.0
 milestone_name: Database Layer Done
-status: ready_to_plan
-stopped_at: null
-last_updated: "2026-03-20T12:00:00Z"
-last_activity: 2026-03-20 -- Roadmap created (7 phases, 54 requirements)
+status: in_progress
+stopped_at: "Completed 46-01-PLAN.md"
+last_updated: "2026-03-20T13:31:15Z"
+last_activity: 2026-03-20 -- Completed 46-01 (ASAN clean pass, 3 bugs fixed)
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 7
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 46 of 52 (Sanitizers & Bug Fix)
-Plan: Ready to plan phase 46
-Status: Ready to plan
-Last activity: 2026-03-20 -- Roadmap created (7 phases, 54 requirements mapped)
+Plan: 2 of 2 (46-02 next)
+Status: In progress
+Last activity: 2026-03-20 -- Completed 46-01 (ASAN clean pass, 3 bugs fixed)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [▓░░░░░░░░░] 7%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 88 (across v1.0 - v0.9.0)
-- Average duration: ~16 min (historical)
-- Total execution time: ~24 hours
+- Total plans completed: 89 (across v1.0 - v1.0.0)
+- Average duration: ~17 min (historical)
+- Total execution time: ~26.4 hours
 
 **By Milestone:**
 
@@ -59,11 +59,15 @@ Progress: [░░░░░░░░░░] 0%
 
 All decisions logged in PROJECT.md Key Decisions table.
 
+- Coroutine params must be by value (not const ref) -- stack-use-after-scope pitfall
+- MDBX geometry.size_upper reduced to 1 GiB under ASAN (__SANITIZE_ADDRESS__)
+- SyncRequest silently dropped when peer->syncing to avoid AEAD nonce desync from concurrent writes
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-- Pre-existing PEX test SIGSEGV (test_daemon.cpp:296) -- targeted for Phase 46 (FIX-01)
-- Sanitizers may reveal additional bugs requiring fixes before integration tests proceed
+- Pre-existing PEX test SIGSEGV (test_daemon.cpp:296) -- targeted for Phase 46 Plan 02 (FIX-01)
+- ASAN pass complete; TSAN and UBSAN passes needed in Plan 02

@@ -240,7 +240,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 46. Sanitizers & Bug Fix | 0/2 | Planned | - |
+| 46. Sanitizers & Bug Fix | 1/2 | In progress | - |
 | 47. Crypto & Transport Verification | 0/? | Not started | - |
 | 48. Access Control & Topology | 0/? | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |

@@ -86,7 +86,7 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Sanitizer & Security
 
-- [ ] **SAN-01**: Full Catch2 test suite passes under AddressSanitizer (ASAN) with zero findings
+- [x] **SAN-01**: Full Catch2 test suite passes under AddressSanitizer (ASAN) with zero findings
 - [ ] **SAN-02**: Full Catch2 test suite passes under ThreadSanitizer (TSAN) with zero data races
 - [ ] **SAN-03**: Full Catch2 test suite passes under UndefinedBehaviorSanitizer (UBSAN) with zero findings
 - [ ] **SAN-04**: Docker test verifies protocol fuzzing -- malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
@@ -126,7 +126,7 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAN-01 | Phase 46 | Pending |
+| SAN-01 | Phase 46 | Complete |
 | SAN-02 | Phase 46 | Pending |
 | SAN-03 | Phase 46 | Pending |
 | FIX-01 | Phase 46 | Pending |
