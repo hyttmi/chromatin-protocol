@@ -32,8 +32,8 @@ Requirements for Connection Resilience & Hardening milestone. Each maps to roadm
 
 ### Documentation
 
-- [ ] **DOCS-01**: README updated with all v0.9.0 features (connection resilience, logging, config validation, storage hardening)
-- [ ] **DOCS-02**: Protocol documentation current with v0.8.0 wire changes (reconciliation messages, rate limiting) and v0.9.0 keepalive behavior
+- [x] **DOCS-01**: README updated with all v0.9.0 features (connection resilience, logging, config validation, storage hardening)
+- [x] **DOCS-02**: Protocol documentation current with v0.8.0 wire changes (reconciliation messages, rate limiting) and v0.9.0 keepalive behavior
 
 ## Future Requirements
 
@@ -74,8 +74,8 @@ Deferred to v1.0.0 (integration tests + hardening).
 | OPS-04 | Phase 43 | Complete |
 | OPS-05 | Phase 43 | Complete |
 | OPS-06 | Phase 42 | Complete |
-| DOCS-01 | Phase 45 | Pending |
-| DOCS-02 | Phase 45 | Pending |
+| DOCS-01 | Phase 45 | Complete |
+| DOCS-02 | Phase 45 | Complete |
 
 **Coverage:**
 - v0.9.0 requirements: 16 total
