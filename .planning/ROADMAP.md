@@ -168,11 +168,11 @@ Plans:
   1. When an outbound peer disconnects, the node automatically reconnects with exponential backoff (1s to 60s) and random jitter, without operator intervention
   2. When a peer rejects the connection via ACL (pattern: connects, handshakes, disconnects quickly with zero messages), the node enters extended backoff (600s) after repeated rejections and resets on SIGHUP
   3. When a connected peer stops sending any messages for longer than the configurable inactivity timeout, the node disconnects that peer and frees the connection resources
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 44-01: TBD
-- [ ] 44-02: TBD
+- [ ] 44-01-PLAN.md -- Auto-reconnect with jitter + ACL rejection suppression + handshake_ok bug fix + discovered peer reconnect
+- [ ] 44-02-PLAN.md -- Inactivity timeout config field + periodic sweep timer + last_message_time tracking
 
 ### Phase 45: Verification & Documentation
 **Goal**: All prior phases are empirically validated (crash recovery, delegation quotas) and the project documentation is current with v0.8.0 and v0.9.0 changes
@@ -197,5 +197,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 42. Foundation | 2/2 | Complete    | 2026-03-20 |
 | 43. Storage & Logging | 2/2 | Complete    | 2026-03-20 |
-| 44. Network Resilience | 0/TBD | Not started | - |
+| 44. Network Resilience | 0/2 | Not started | - |
 | 45. Verification & Documentation | 0/TBD | Not started | - |
