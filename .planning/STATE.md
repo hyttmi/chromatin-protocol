@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0.0
 milestone_name: Database Layer Done
 status: in_progress
-stopped_at: "Completed 46-01-PLAN.md"
-last_updated: "2026-03-20T13:31:15Z"
-last_activity: 2026-03-20 -- Completed 46-01 (ASAN clean pass, 3 bugs fixed)
+stopped_at: "Completed 46-02-PLAN.md"
+last_updated: "2026-03-20T19:41:27Z"
+last_activity: 2026-03-20 -- Completed 46-02 (TSAN/UBSAN clean, PEX fix, 50-run reliability)
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 7
+  completed_plans: 2
+  percent: 14
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 
 ## Current Position
 
-Phase: 46 of 52 (Sanitizers & Bug Fix)
-Plan: 2 of 2 (46-02 next)
-Status: In progress
-Last activity: 2026-03-20 -- Completed 46-01 (ASAN clean pass, 3 bugs fixed)
+Phase: 46 of 52 (Sanitizers & Bug Fix) -- COMPLETE
+Plan: 2 of 2 (all plans complete)
+Status: Phase 46 complete
+Last activity: 2026-03-20 -- Completed 46-02 (TSAN/UBSAN clean, PEX fix verified, 50-run reliability)
 
-Progress: [▓░░░░░░░░░] 7%
+Progress: [▓▓░░░░░░░░] 14%
 
 ## Performance Metrics
 
@@ -62,6 +62,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - Coroutine params must be by value (not const ref) -- stack-use-after-scope pitfall
 - MDBX geometry.size_upper reduced to 1 GiB under ASAN (__SANITIZE_ADDRESS__)
 - SyncRequest silently dropped when peer->syncing to avoid AEAD nonce desync from concurrent writes
+- recv_sync_msg must co_await asio::post(ioc_) before accessing sync_inbox (offload resumes on pool thread)
+- UBSAN nonnull-attribute excluded globally (liboqs/libsodium annotation bugs)
+- PEX SIGSEGV root cause was AEAD nonce desync (fixed in 46-01, not a teardown issue)
 
 ### Pending Todos
 
@@ -69,5 +72,5 @@ None.
 
 ### Blockers/Concerns
 
-- Pre-existing PEX test SIGSEGV (test_daemon.cpp:296) -- targeted for Phase 46 Plan 02 (FIX-01)
-- ASAN pass complete; TSAN and UBSAN passes needed in Plan 02
+- Pre-existing full-suite hang in release build when running all 469 tests together (port conflict in test infrastructure) -- deferred
+- Phase 46 complete (ASAN, TSAN, UBSAN all clean); ready for next phase

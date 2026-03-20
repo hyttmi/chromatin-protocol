@@ -87,8 +87,8 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 ### Sanitizer & Security
 
 - [x] **SAN-01**: Full Catch2 test suite passes under AddressSanitizer (ASAN) with zero findings
-- [ ] **SAN-02**: Full Catch2 test suite passes under ThreadSanitizer (TSAN) with zero data races
-- [ ] **SAN-03**: Full Catch2 test suite passes under UndefinedBehaviorSanitizer (UBSAN) with zero findings
+- [x] **SAN-02**: Full Catch2 test suite passes under ThreadSanitizer (TSAN) with zero data races
+- [x] **SAN-03**: Full Catch2 test suite passes under UndefinedBehaviorSanitizer (UBSAN) with zero findings
 - [ ] **SAN-04**: Docker test verifies protocol fuzzing -- malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
 - [ ] **SAN-05**: Docker test verifies handshake fuzzing -- malformed messages at each PQ handshake stage cause clean disconnect, no crashes
 
@@ -98,7 +98,7 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Bug Fixes
 
-- [ ] **FIX-01**: PEX test SIGSEGV (test_daemon.cpp:296) fixed -- coroutine lifetime during teardown resolved, "three nodes: peer discovery via PEX" test passes reliably
+- [x] **FIX-01**: PEX test SIGSEGV (test_daemon.cpp:296) fixed -- coroutine lifetime during teardown resolved, "three nodes: peer discovery via PEX" test passes reliably
 
 ## Future Requirements
 
@@ -127,9 +127,9 @@ Explicitly excluded. Documented to prevent scope creep.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | SAN-01 | Phase 46 | Complete |
-| SAN-02 | Phase 46 | Pending |
-| SAN-03 | Phase 46 | Pending |
-| FIX-01 | Phase 46 | Pending |
+| SAN-02 | Phase 46 | Complete |
+| SAN-03 | Phase 46 | Complete |
+| FIX-01 | Phase 46 | Complete |
 | CRYPT-01 | Phase 47 | Pending |
 | CRYPT-02 | Phase 47 | Pending |
 | CRYPT-03 | Phase 47 | Pending |

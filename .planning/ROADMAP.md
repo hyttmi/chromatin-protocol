@@ -136,7 +136,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 
 **Milestone Goal:** Prove chromatindb works correctly under adversarial conditions via Docker-based integration tests, sanitizer passes, and fixing whatever breaks. 54 requirements across 7 phases.
 
-- [ ] **Phase 46: Sanitizers & Bug Fix** - ASAN/TSAN/UBSAN passes on Catch2 suite + PEX SIGSEGV fix
+- [x] **Phase 46: Sanitizers & Bug Fix** - ASAN/TSAN/UBSAN passes on Catch2 suite + PEX SIGSEGV fix (completed 2026-03-20)
 - [ ] **Phase 47: Crypto & Transport Verification** - Docker integration tests for cryptographic integrity and PQ transport security
 - [ ] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup
 - [ ] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation
@@ -150,7 +150,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 **Goal**: All existing unit tests pass under memory, thread, and UB sanitizers with zero findings, and the pre-existing PEX coroutine SIGSEGV is resolved
 **Depends on**: Phase 45 (v0.9.0 complete)
 **Requirements**: SAN-01, SAN-02, SAN-03, FIX-01
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 46-01-PLAN.md — CMake SANITIZER enum + ASAN clean pass
@@ -240,7 +240,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 46. Sanitizers & Bug Fix | 1/2 | In progress | - |
+| 46. Sanitizers & Bug Fix | 2/2 | Complete   | 2026-03-20 |
 | 47. Crypto & Transport Verification | 0/? | Not started | - |
 | 48. Access Control & Topology | 0/? | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
