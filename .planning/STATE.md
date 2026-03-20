@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.9.0
-milestone_name: Connection Resilience & Hardening
-status: completed
-stopped_at: Milestone v0.9.0 archived
-last_updated: "2026-03-20T10:30:00Z"
-last_activity: 2026-03-20 -- v0.9.0 milestone completed and archived
+milestone: v1.0.0
+milestone_name: Database Layer Done
+status: defining_requirements
+stopped_at: null
+last_updated: "2026-03-20T11:00:00Z"
+last_activity: 2026-03-20 -- Milestone v1.0.0 started
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Planning v1.0.0 (integration tests + sanitizers + hardening)
+**Current focus:** v1.0.0 — integration tests, sanitizers, open-source release
 
 ## Current Position
 
-Milestone: v0.9.0 complete, archived
-Next: v1.0.0 — integration test suite, sanitizer passes, "database layer is done"
-
-Progress: [##########] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-20 — Milestone v1.0.0 started
 
 ## Performance Metrics
 
@@ -63,10 +63,4 @@ None.
 
 ### Blockers/Concerns
 
-Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via PEX") -- SIGSEGV on master before Phase 44. Deferred to v1.0.0 integration tests.
-
-## Session Continuity
-
-Last session: 2026-03-20T10:30:00Z
-Stopped at: v0.9.0 milestone archived
-Resume file: None
+Pre-existing PEX test failure (test_daemon.cpp "three nodes: peer discovery via PEX") -- SIGSEGV on master before Phase 44. Must fix in v1.0.0.

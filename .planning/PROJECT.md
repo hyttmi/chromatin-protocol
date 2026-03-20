@@ -88,7 +88,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(None — next milestone v1.0.0 will define requirements)
+See REQUIREMENTS.md for v1.0.0 requirements.
+
+## Current Milestone: v1.0.0 Database Layer Done
+
+**Goal:** Prove chromatindb works correctly under adversarial conditions via Docker-based integration tests, sanitizer passes, and fixing whatever breaks — then open-source.
+
+**Target features:**
+- Full integration test suite from db/TESTS.md (~52 system-level tests across 12 categories)
+- ASAN/TSAN/UBSAN sanitizer passes on full Catch2 test suite
+- Duplicate-connection dedup verification (symmetric 2-node topology)
+- Fix all issues discovered by tests and sanitizers
+- PEX test SIGSEGV fix (pre-existing, deferred from v0.4.0)
 
 ### Out of Scope
 
@@ -119,7 +130,7 @@ Three-layer architecture (building bottom-up):
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
 
-**Next milestone:** v1.0.0 — integration test suite (Docker-based system tests), sanitizer passes (ASAN/TSAN/UBSAN), and fixes for whatever breaks. "Database layer is done" release.
+**Current milestone:** v1.0.0 — integration test suite (Docker-based system tests from db/TESTS.md), sanitizer passes (ASAN/TSAN/UBSAN), fix what breaks, open-source release.
 
 **Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
 - 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
@@ -210,4 +221,4 @@ Previous projects inform design:
 | Timestamp update at top of on_peer_message | Before rate limiting check — prevents false inactivity disconnects during rate-limited sessions | ✓ Good — correct ordering |
 
 ---
-*Last updated: 2026-03-20 after v0.9.0 milestone*
+*Last updated: 2026-03-20 after v1.0.0 milestone start*
