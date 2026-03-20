@@ -58,6 +58,11 @@ void Server::stop() {
     // Invoke pre-drain callback (PeerManager saves peers here)
     if (on_shutdown_) on_shutdown_();
 
+    // Cancel all sleeping reconnect timers so reconnect_loop coroutines exit
+    for (auto& [addr, timer] : reconnect_timers_) {
+        if (timer) timer->cancel();
+    }
+
     // Cancel acceptor
     asio::error_code ec;
     acceptor_.close(ec);
@@ -182,9 +187,8 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
         if (on_disconnected_) on_disconnected_(c);
     });
 
-    // Snapshot ACL rejection count
-    auto& state = reconnect_state_[address];
-    int prev_acl_count = state.acl_rejection_count;
+    // Snapshot ACL rejection count (no reference held across co_await)
+    int prev_acl_count = reconnect_state_[address].acl_rejection_count;
 
     // Notify on_connected after handshake succeeds (before message loop)
     bool handshake_ok = false;
@@ -196,7 +200,8 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
     auto ok = co_await conn->run();
 
     // Check if ACL rejection happened during this attempt
-    bool was_acl_rejected = state.acl_rejection_count > prev_acl_count;
+    bool was_acl_rejected =
+        reconnect_state_[address].acl_rejection_count > prev_acl_count;
 
     if (ok && !was_acl_rejected) {
         // Connection ran and closed normally. Enter reconnect loop.
@@ -217,43 +222,60 @@ asio::awaitable<void> Server::connect_to_peer(const std::string& address) {
 }
 
 asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
-    auto& state = reconnect_state_[address];
+    // Ensure entry exists (no reference held across co_await -- avoids dangling on destruction)
+    reconnect_state_[address];
+    bool first_attempt = true;
+    // reconnect_loop active for this address
 
     while (!draining_) {
-        // Compute effective delay with jitter
-        int effective_delay = state.delay_sec;
-        if (state.acl_rejection_count >= ACL_REJECTION_THRESHOLD) {
-            effective_delay = EXTENDED_BACKOFF_SEC;
-        } else if (state.delay_sec > 1) {
-            std::uniform_int_distribution<int> dist(0, state.delay_sec / 2);
-            int jitter = dist(rng_);
-            effective_delay = std::min(state.delay_sec + jitter, MAX_BACKOFF_SEC);
+        // Read state by value at each iteration (safe across co_await)
+        auto cur = reconnect_state_[address];
+
+        // First attempt connects immediately (delay_sec=1 means no wait on first try).
+        // Subsequent attempts wait with jitter.
+        if (!first_attempt || cur.delay_sec > 1 ||
+            cur.acl_rejection_count >= ACL_REJECTION_THRESHOLD) {
+
+            // Compute effective delay with jitter
+            int effective_delay = cur.delay_sec;
+            if (cur.acl_rejection_count >= ACL_REJECTION_THRESHOLD) {
+                effective_delay = EXTENDED_BACKOFF_SEC;
+            } else if (cur.delay_sec > 1) {
+                std::uniform_int_distribution<int> dist(0, cur.delay_sec / 2);
+                int jitter = dist(rng_);
+                effective_delay = std::min(cur.delay_sec + jitter, MAX_BACKOFF_SEC);
+            }
+
+            spdlog::info("reconnecting to {} in {}s", address, effective_delay);
+
+            asio::steady_timer timer(ioc_);
+            reconnect_timers_[address] = &timer;
+            timer.expires_after(std::chrono::seconds(effective_delay));
+            auto [ec] = co_await timer.async_wait(use_nothrow);
+            reconnect_timers_[address] = nullptr;
+            if (ec || draining_) co_return;
         }
-
-        spdlog::info("reconnecting to {} in {}s", address, effective_delay);
-
-        asio::steady_timer timer(ioc_);
-        reconnect_timers_[address] = &timer;
-        timer.expires_after(std::chrono::seconds(effective_delay));
-        auto [ec] = co_await timer.async_wait(use_nothrow);
-        reconnect_timers_[address] = nullptr;
-        if (ec || draining_) co_return;
+        first_attempt = false;
 
         // Try to connect
         auto [host, port] = parse_address(address);
         asio::ip::tcp::resolver resolver(ioc_);
         auto [ec_resolve, endpoints] = co_await resolver.async_resolve(
             host, port, use_nothrow);
+        if (draining_) co_return;
         if (ec_resolve) {
-            state.delay_sec = std::min(state.delay_sec * 2, MAX_BACKOFF_SEC);
+            reconnect_state_[address].delay_sec = std::min(
+                reconnect_state_[address].delay_sec * 2, MAX_BACKOFF_SEC);
             continue;
         }
 
         asio::ip::tcp::socket socket(ioc_);
         auto [ec_connect, ep] = co_await asio::async_connect(
             socket, endpoints, use_nothrow);
+        if (draining_) co_return;
         if (ec_connect) {
-            state.delay_sec = std::min(state.delay_sec * 2, MAX_BACKOFF_SEC);
+            reconnect_state_[address].delay_sec = std::min(
+                reconnect_state_[address].delay_sec * 2, MAX_BACKOFF_SEC);
             continue;
         }
 
@@ -271,7 +293,7 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
         });
 
         // Snapshot ACL rejection count before running connection
-        int prev_acl_count = state.acl_rejection_count;
+        int prev_acl_count = reconnect_state_[address].acl_rejection_count;
 
         // Notify on_connected after handshake succeeds (before message loop)
         bool handshake_ok = false;
@@ -282,13 +304,16 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
 
         auto ok = co_await conn->run();
 
+        if (draining_) co_return;
+
         // Check if ACL rejection happened during this attempt
-        bool was_acl_rejected = state.acl_rejection_count > prev_acl_count;
+        bool was_acl_rejected =
+            reconnect_state_[address].acl_rejection_count > prev_acl_count;
 
         if ((ok || handshake_ok) && !was_acl_rejected) {
             // Successful connection ran and closed normally. Reset backoff.
-            state.delay_sec = 1;
-            state.acl_rejection_count = 0;
+            reconnect_state_[address].delay_sec = 1;
+            reconnect_state_[address].acl_rejection_count = 0;
             continue;
         }
 
@@ -297,8 +322,9 @@ asio::awaitable<void> Server::reconnect_loop(const std::string& address) {
         }
 
         // ACL rejection or handshake failure: increase backoff (unless already in extended)
-        if (state.acl_rejection_count < ACL_REJECTION_THRESHOLD) {
-            state.delay_sec = std::min(state.delay_sec * 2, MAX_BACKOFF_SEC);
+        if (reconnect_state_[address].acl_rejection_count < ACL_REJECTION_THRESHOLD) {
+            reconnect_state_[address].delay_sec = std::min(
+                reconnect_state_[address].delay_sec * 2, MAX_BACKOFF_SEC);
         }
     }
 }
@@ -328,6 +354,10 @@ void Server::clear_reconnect_state() {
 void Server::connect_once(const std::string& address) {
     // Note: despite name, now reconnects. Name preserved for call-site compatibility.
     if (draining_) return;
+    // Skip if a reconnect loop is already active for this address
+    if (reconnect_state_.count(address)) return;
+    // Mark as active immediately to prevent duplicate spawns before coroutine starts
+    reconnect_state_[address];
     asio::co_spawn(ioc_, reconnect_loop(address), asio::detached);
 }
 

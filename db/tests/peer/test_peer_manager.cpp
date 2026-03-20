@@ -2261,3 +2261,35 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
     REQUIRE(stats.blobs_received == 1);
     REQUIRE(stats.quota_exceeded_count == 1);
 }
+
+// =============================================================================
+// ACL rejection signaling and SIGHUP reconnect state tests
+// =============================================================================
+
+TEST_CASE("connect_address is empty for inbound connections", "[peer][reconnect]") {
+    // Inbound connections (from accept_loop) don't set connect_address
+    auto id = NodeIdentity::generate();
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44230));
+    asio::ip::tcp::socket sock(ioc);
+    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44230));
+
+    auto conn = chromatindb::net::Connection::create_inbound(std::move(sock), id);
+    REQUIRE(conn->connect_address().empty());
+}
+
+TEST_CASE("connect_address set on outbound connections", "[peer][reconnect]") {
+    auto id = NodeIdentity::generate();
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44231));
+    asio::ip::tcp::socket sock(ioc);
+    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44231));
+
+    auto conn = chromatindb::net::Connection::create_outbound(std::move(sock), id);
+    conn->set_connect_address("myhost:4200");
+    REQUIRE(conn->connect_address() == "myhost:4200");
+}

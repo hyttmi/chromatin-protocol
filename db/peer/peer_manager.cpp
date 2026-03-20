@@ -278,6 +278,11 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     if (!acl_.is_allowed(std::span<const uint8_t, 32>(peer_ns))) {
         auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
         spdlog::warn("access denied: namespace={} ip={}", full_hex, conn->remote_address());
+        // Signal ACL rejection to Server for backoff tracking (outbound only)
+        if (!conn->connect_address().empty()) {
+            server_.notify_acl_rejected(conn->connect_address());
+        }
+        ++metrics_.peers_disconnected_total;
         conn->close();  // Silent close, no goodbye
         return;
     }
@@ -1560,6 +1565,8 @@ asio::awaitable<void> PeerManager::sighup_loop() {
 void PeerManager::handle_sighup() {
     spdlog::info("SIGHUP received, reloading config...");
     reload_config();
+    server_.clear_reconnect_state();
+    spdlog::info("reconnect state cleared (ACL rejection counters reset)");
 }
 
 bool PeerManager::is_trusted_address(const asio::ip::address& addr) const {
