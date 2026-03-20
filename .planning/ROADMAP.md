@@ -183,11 +183,11 @@ Plans:
   2. Delegate writes are confirmed to count against the namespace owner's quota (not the delegate's), with test coverage proving quota enforcement under delegation
   3. README documents all v0.9.0 features (connection resilience, logging configuration, config validation, storage hardening) with usage examples
   4. Protocol documentation is current with v0.8.0 wire changes (reconciliation messages, rate limiting) and v0.9.0 keepalive behavior
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 45-01: TBD
-- [ ] 45-02: TBD
+- [ ] 45-01-PLAN.md -- Crash recovery test script (Docker kill-9 scenarios) + delegation quota verification (Catch2 unit tests)
+- [ ] 45-02-PLAN.md -- README update (v0.9.0 features, config fields, scenarios) + protocol doc update (SyncRejected, rate limiting, inactivity detection)
 
 ## Progress
 
@@ -198,4 +198,4 @@ Plans:
 | 42. Foundation | 2/2 | Complete    | 2026-03-20 |
 | 43. Storage & Logging | 2/2 | Complete    | 2026-03-20 |
 | 44. Network Resilience | 2/2 | Complete    | 2026-03-20 |
-| 45. Verification & Documentation | 0/TBD | Not started | - |
+| 45. Verification & Documentation | 0/2 | Not started | - |
