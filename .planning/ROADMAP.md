@@ -10,7 +10,7 @@
 - ✅ **v0.6.0 Real-World Validation** — Phases 27-31 (shipped 2026-03-16)
 - ✅ **v0.7.0 Production Readiness** — Phases 32-37 (shipped 2026-03-18)
 - ✅ **v0.8.0 Protocol Scalability** — Phases 38-41 (shipped 2026-03-19)
-- **v0.9.0 Connection Resilience & Hardening** — Phases 42-45 (in progress)
+- ✅ **v0.9.0 Connection Resilience & Hardening** — Phases 42-45 (shipped 2026-03-20)
 
 ## Phases
 
@@ -119,83 +119,14 @@ Full details: [milestones/v0.8.0-ROADMAP.md](milestones/v0.8.0-ROADMAP.md)
 
 </details>
 
-### v0.9.0 Connection Resilience & Hardening (In Progress)
+<details>
+<summary>v0.9.0 Connection Resilience & Hardening (Phases 42-45) — SHIPPED 2026-03-20</summary>
 
-**Milestone Goal:** Harden the database layer for production readiness -- connection resilience, storage integrity, operational tooling, and documentation completeness. Penultimate milestone before v1.0.0.
+- [x] Phase 42: Foundation (2/2 plans) — completed 2026-03-20
+- [x] Phase 43: Storage & Logging (2/2 plans) — completed 2026-03-20
+- [x] Phase 44: Network Resilience (2/2 plans) — completed 2026-03-20
+- [x] Phase 45: Verification & Documentation (2/2 plans) — completed 2026-03-20
 
-- [x] **Phase 42: Foundation** - Version injection, config validation, timer cleanup (completed 2026-03-20)
-- [x] **Phase 43: Storage & Logging** - Storage hardening, structured logging, file sink, metrics completeness (completed 2026-03-20)
-- [x] **Phase 44: Network Resilience** - Auto-reconnect with backoff, ACL-aware suppression, keepalive timeout (completed 2026-03-20)
-- [x] **Phase 45: Verification & Documentation** - Crash recovery audit, delegation quota verification, docs update (completed 2026-03-20)
+Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 
-## Phase Details
-
-### Phase 42: Foundation
-**Goal**: Node starts with correct version identification, rejects invalid configuration at startup, and has a single consistent timer cancellation path for safe shutdown
-**Depends on**: Phase 41 (v0.8.0 complete)
-**Requirements**: OPS-01, OPS-02, OPS-06
-**Success Criteria** (what must be TRUE):
-  1. Node log output on startup shows the correct v0.9.0 version string derived from CMake, not a hardcoded value
-  2. Node refuses to start and prints a human-readable error when config contains invalid values (wrong types, out-of-range numbers, missing required fields)
-  3. All existing timers (expiry, sync, flush, metrics, pex) are cancelled through a single cancel_all_timers() path in both stop() and on_shutdown, with no orphaned timers after shutdown
-**Plans**: 2 plans
-
-Plans:
-- [ ] 42-01-PLAN.md -- Version injection (CMake configure_file) + timer cleanup (cancel_all_timers)
-- [ ] 42-02-PLAN.md -- Config validation (validate_config with accumulated errors, type mismatch handling, unknown key warning)
-
-### Phase 43: Storage & Logging
-**Goal**: Node provides production-grade observability (structured logs, file output, complete metrics) and maintains healthy storage (cursor compaction, tombstone GC, integrity verification)
-**Depends on**: Phase 42 (config validation in place for new log/storage config fields)
-**Requirements**: STOR-01, STOR-02, STOR-03, OPS-03, OPS-04, OPS-05
-**Success Criteria** (what must be TRUE):
-  1. Node can log to a rotating file in addition to stdout, configured via config fields (path, max size, max files), with graceful fallback to console-only if path is invalid
-  2. Node can emit logs in structured JSON format suitable for machine parsing when configured to do so
-  3. Periodic and SIGUSR1 log output includes all tracked metrics counters (rate_limited, peers_connected_total, peers_disconnected_total, and byte/tombstone counters)
-  4. Node automatically prunes cursor entries for peers not seen within configurable age threshold, preventing unbounded cursor storage growth
-  5. Node performs a read-only integrity scan of all sub-databases at startup, logging any inconsistencies found; tombstone GC root cause is identified and resolved (fixed or documented as mmap behavior)
-**Plans**: 2 plans
-
-Plans:
-- [ ] 43-01-PLAN.md -- File logging (rotating file sink, multi-sink setup) + structured JSON log format + config fields + validation
-- [ ] 43-02-PLAN.md -- Integrity scan + tombstone GC verification + cursor compaction timer + metrics completeness
-
-### Phase 44: Network Resilience
-**Goal**: Node maintains persistent connectivity to its peer network -- automatically reconnecting on disconnect, suppressing reconnection to ACL-rejecting peers, and detecting dead peers via inactivity timeout
-**Depends on**: Phase 43 (improved logging for debugging network state machine; timer cleanup from Phase 42 for new timers)
-**Requirements**: CONN-01, CONN-02, CONN-03
-**Success Criteria** (what must be TRUE):
-  1. When an outbound peer disconnects, the node automatically reconnects with exponential backoff (1s to 60s) and random jitter, without operator intervention
-  2. When a peer rejects the connection via ACL (pattern: connects, handshakes, disconnects quickly with zero messages), the node enters extended backoff (600s) after repeated rejections and resets on SIGHUP
-  3. When a connected peer stops sending any messages for longer than the configurable inactivity timeout, the node disconnects that peer and frees the connection resources
-**Plans**: 2 plans
-
-Plans:
-- [ ] 44-01-PLAN.md -- Auto-reconnect with jitter + ACL rejection suppression + handshake_ok bug fix + discovered peer reconnect
-- [ ] 44-02-PLAN.md -- Inactivity timeout config field + periodic sweep timer + last_message_time tracking
-
-### Phase 45: Verification & Documentation
-**Goal**: All prior phases are empirically validated (crash recovery, delegation quotas) and the project documentation is current with v0.8.0 and v0.9.0 changes
-**Depends on**: Phase 44 (all implementation complete; verification covers full milestone scope)
-**Requirements**: STOR-04, STOR-05, DOCS-01, DOCS-02
-**Success Criteria** (what must be TRUE):
-  1. libmdbx crash recovery is verified via kill-9 test scenarios: node restarts cleanly after unclean shutdown with all previously-committed data intact and no stale reader slots
-  2. Delegate writes are confirmed to count against the namespace owner's quota (not the delegate's), with test coverage proving quota enforcement under delegation
-  3. README documents all v0.9.0 features (connection resilience, logging configuration, config validation, storage hardening) with usage examples
-  4. Protocol documentation is current with v0.8.0 wire changes (reconciliation messages, rate limiting) and v0.9.0 keepalive behavior
-**Plans**: 2 plans
-
-Plans:
-- [ ] 45-01-PLAN.md -- Crash recovery test script (Docker kill-9 scenarios) + delegation quota verification (Catch2 unit tests)
-- [ ] 45-02-PLAN.md -- README update (v0.9.0 features, config fields, scenarios) + protocol doc update (SyncRejected, rate limiting, inactivity detection)
-
-## Progress
-
-**Execution Order:** Phases 42 -> 43 -> 44 -> 45
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 42. Foundation | 2/2 | Complete    | 2026-03-20 |
-| 43. Storage & Logging | 2/2 | Complete    | 2026-03-20 |
-| 44. Network Resilience | 2/2 | Complete    | 2026-03-20 |
-| 45. Verification & Documentation | 2/2 | Complete    | 2026-03-20 |
+</details>

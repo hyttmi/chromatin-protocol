@@ -2,6 +2,55 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v0.9.0 — Connection Resilience & Hardening
+
+**Shipped:** 2026-03-20
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~1
+
+### What Was Built
+- CMake version injection replacing stale hardcoded version.h, plus startup config validation with error accumulation
+- Consolidated cancel_all_timers() for safe shutdown (7 timers including new cursor compaction + inactivity)
+- Multi-sink logging: rotating file + console, JSON structured format, shared sinks vector
+- Storage hardening: startup integrity scan (7 sub-databases), cursor compaction (6h), tombstone GC root cause documented
+- Auto-reconnect with jittered exponential backoff (1s-60s) for all outbound peers including PEX-discovered
+- ACL-aware reconnect suppression: 3 rejections → 600s extended backoff, SIGHUP reset
+- Receiver-side inactivity timeout (configurable, default 120s) for dead peer detection
+- Crash recovery verified via Docker kill-9 tests; delegation quota enforcement verified (5 Catch2 tests)
+- Complete documentation update: README (25 config fields, 8 features) + PROTOCOL.md (SyncRejected, rate limiting, inactivity)
+
+### What Worked
+- Entire milestone completed in 1 day — 4 phases, 8 plans, same velocity as v0.8.0
+- Phase ordering was optimal: foundation (config/timers) → storage/logging → network (builds on both) → verification/docs (covers all)
+- cancel_all_timers() pattern from Phase 42 immediately paid off in Phase 43 (cursor timer) and Phase 44 (inactivity timer) — one line each
+- Receiver-side inactivity detection was the right design call: zero wire protocol changes, avoids AEAD nonce desync
+- Tombstone GC investigation resolved a long-standing mystery (not a bug, mmap geometry) with minimal effort
+- Milestone audit caught two real integration issues (used_data_bytes orphaned, README inaccuracy) — both trivially fixed
+
+### What Was Inefficient
+- Pre-existing PEX test SIGSEGV was a distraction during Phase 44 — confirmed pre-existing but cost investigation time
+- ROADMAP.md still had v0.9.0 success criteria using "configurable age threshold" for cursor compaction when implementation used connected-set — planning/implementation divergence caught by audit
+
+### Patterns Established
+- Value copies across co_await for coroutine safety (reconnect_loop)
+- Direct method call for cross-component signaling (notify_acl_rejected, clear_reconnect_state)
+- Timestamp update at top of message handler (before rate limiting) to prevent false inactivity disconnects
+- Scoped read txn pattern for libmdbx (close txn before methods that open their own)
+- Error accumulation pattern for config validation (all failures at once)
+
+### Key Lessons
+1. Foundation phases (config, timers, logging) have compounding returns — invest early
+2. Receiver-side detection is almost always simpler than sender-side probing for protocol extensions
+3. "Not a bug" is a valid and valuable finding — tombstone GC investigation closed a known issue with documentation
+4. Planning/implementation divergence happens silently — milestone audit is the last defense
+5. One-day milestones remain achievable at 22K+ LOC when building on a stable foundation
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~1 across 1 day
+- Notable: Second consecutive 1-day milestone. Average ~19 min/plan — steady velocity maintained.
+
+---
+
 ## Milestone: v0.8.0 — Protocol Scalability
 
 **Shipped:** 2026-03-19
@@ -253,6 +302,7 @@
 | v0.6.0 | ~2 | 5 | Docker benchmark infrastructure — end-to-end validation pipeline |
 | v0.7.0 | ~2 | 6 | Sync cursors + crypto hot-path — largest protocol evolution |
 | v0.8.0 | ~1 | 4 | Fastest milestone (1 day) — custom reconciliation + thread pool offload |
+| v0.9.0 | ~1 | 4 | Second 1-day milestone — connection resilience, storage hardening, operational tooling |
 
 ### Cumulative Quality
 
@@ -266,6 +316,7 @@
 | v0.6.0 | 284 | 17,775 | ~70 | 14/14 |
 | v0.7.0 | 313 | 18,000+ | ~75 | 20/20 |
 | v0.8.0 | 408 | 22,003 | ~80 | 12/12 |
+| v0.9.0 | 408+ | 22,467 | ~85 | 16/16 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -279,3 +330,5 @@
 8. Trust negotiation with graceful fallback is better than hard failure — validated in v0.5.0 transport optimization
 9. Custom algorithms beat external dependencies when the domain is well-understood — validated in v0.8.0 reconciliation (~550 LOC vs 1000+ LOC dep)
 10. Plans can have correctness bugs — E2E tests catch what plan reviews miss (v0.8.0 cursor skip bug)
+11. Foundation phases (config, timers, logging) compound — v0.9.0 Phase 42 patterns used immediately by Phases 43+44
+12. Planning/implementation divergence happens silently — milestone audit is the last defense (v0.9.0 README vs cursor compaction)

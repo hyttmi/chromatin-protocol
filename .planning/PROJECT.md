@@ -74,28 +74,21 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ CMake version injection (build-time version from project(VERSION), git hash) — v0.9.0
 - ✓ Startup config validation (fail-fast with accumulated error messages) — v0.9.0
 - ✓ Timer cleanup (consolidated cancel_all_timers() for shutdown consistency) — v0.9.0
+- ✓ Auto-reconnect with jittered exponential backoff (1s-60s) for all outbound peers — v0.9.0
+- ✓ ACL-aware reconnect suppression (3 rejections → 600s backoff, SIGHUP reset) — v0.9.0
+- ✓ Receiver-side inactivity timeout for dead peer detection (configurable, default 120s) — v0.9.0
+- ✓ Rotating file logging with JSON structured format option — v0.9.0
+- ✓ Startup integrity scan of all 7 sub-databases — v0.9.0
+- ✓ Cursor compaction timer (6h, prunes disconnected peers) — v0.9.0
+- ✓ Tombstone GC root cause documented (mmap geometry, not a bug) — v0.9.0
+- ✓ Complete metrics output including quota/sync rejection counters — v0.9.0
+- ✓ Crash recovery verified via Docker kill-9 test scenarios — v0.9.0
+- ✓ Delegation quota enforcement verified (owner-attribution confirmed) — v0.9.0
+- ✓ README + protocol docs current with v0.8.0 and v0.9.0 changes — v0.9.0
 
 ### Active
 
-## Current Milestone: v0.9.0 Connection Resilience & Hardening
-
-**Goal:** Harden the database layer for production readiness — connection resilience, storage integrity, operational tooling, and documentation completeness. Penultimate milestone before v1.0.0.
-
-**Target features:**
-- Connection retry with exponential backoff + ACL-aware reconnection suppression
-- Keepalive timeout for dead peer detection
-- Cursor compaction (age-based pruning of stale peer cursors)
-- Tombstone GC investigation and fix (storage reclamation)
-- Startup integrity scan for storage consistency
-- libmdbx crash recovery audit (verify guarantees, test unclean shutdown)
-- Quota enforcement verification under delegation writes
-- Version injection via CMake (replace stale version.h)
-- Config validation fail-fast (reject malformed config on startup)
-- Complete metrics logging (emit missing counters)
-- Structured log format for monitoring
-- File logging (configurable file sink)
-- Timer cleanup (on_shutdown consistency)
-- Documentation updates (README + protocol docs current with v0.8.0+v0.9.0)
+(None — next milestone v1.0.0 will define requirements)
 
 ### Out of Scope
 
@@ -115,16 +108,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v0.8.0 with 22,003 LOC C++20, 408 tests.
-Built across 19 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d).
-8 milestones, 41 phases, 80 plans, 155 requirements total.
+Shipped v0.9.0 with 22,467 LOC C++20, 408+ tests.
+Built across 20 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d).
+9 milestones, 45 phases, 88 plans, 171 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.8.0 SHIPPED): chromatindb** — database node with full feature set, O(diff) sync, thread pool crypto, Docker benchmarking
+- **Layer 1 (v0.9.0 SHIPPED): chromatindb** — production-hardened database node with connection resilience, operational tooling, and complete documentation
 - **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
 - **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
+
+**Next milestone:** v1.0.0 — integration test suite (Docker-based system tests), sanitizer passes (ASAN/TSAN/UBSAN), and fixes for whatever breaks. "Database layer is done" release.
 
 **Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
 - 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
@@ -207,6 +202,12 @@ Previous projects inform design:
 | Pool ref as constructor param / set_pool() for factory | Owned objects get pool in constructor; Connection (factory-created) gets set_pool() | ✓ Good — clean ownership semantics |
 | configure_file output to source dir | Generates db/version.h in source tree so existing #include paths work without CMake include dir changes | ✓ Good — zero consumer changes |
 | Error accumulation in config validation | validate_config collects all errors in vector, throws single exception — operator sees everything in one restart | ✓ Good — better operator experience |
+| Shared sinks vector for logging | All loggers (default + named) use same sink set from init() — consistent file+console output | ✓ Good — no sink drift |
+| Tombstone GC is mmap geometry, not a bug | used_bytes() returns mmap file size; freed pages reused internally. used_data_bytes() added for accurate B-tree metric | ✓ Good — documented, accurate metric available |
+| Cursor compaction hardcoded 6h, connected-set criterion | YAGNI on config; prune any disconnected peer's cursors, not age-based | ✓ Good — simple, no config complexity |
+| Reconnect with value copies across co_await | Prevents dangling refs on Server destruction during coroutine suspension | ✓ Good — fixed subtle lifetime bug |
+| Receiver-side inactivity (not Ping sender) | Avoids AEAD nonce desync from bidirectional keepalive messages; zero wire protocol changes | ✓ Good — simpler, safer |
+| Timestamp update at top of on_peer_message | Before rate limiting check — prevents false inactivity disconnects during rate-limited sessions | ✓ Good — correct ordering |
 
 ---
-*Last updated: 2026-03-20 after Phase 42*
+*Last updated: 2026-03-20 after v0.9.0 milestone*

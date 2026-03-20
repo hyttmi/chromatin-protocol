@@ -313,7 +313,7 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 
 **File Logging** -- The node can log to a rotating file in addition to stdout. Configure `log_file` with a path to enable. Files rotate at `log_max_size_mb` and the node retains `log_max_files` rotated files. If the file path is invalid, the node falls back to console-only logging with a warning.
 
-**Cursor Compaction** -- Stale sync cursor entries for peers not seen within a configurable age threshold are automatically pruned every 6 hours, preventing unbounded cursor storage growth over long uptimes.
+**Cursor Compaction** -- Sync cursor entries for peers not currently connected are automatically pruned every 6 hours, preventing unbounded cursor storage growth over long uptimes.
 
 **Startup Integrity Scan** -- On startup, the node performs a read-only scan of all sub-databases, logging entry counts and cross-reference consistency. The scan is informational and does not prevent startup.
 

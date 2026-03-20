@@ -1,5 +1,31 @@
 # Milestones
 
+## v0.9.0 Connection Resilience & Hardening (Shipped: 2026-03-20)
+
+**Phases:** 4 (42-45) | **Plans:** 8 | **LOC:** 22,467 C++ (+464)
+**Tests:** 408+ tests | **Requirements:** 16/16
+**Timeline:** 1 day (2026-03-20)
+**Git range:** 57 files changed, 7,007 insertions, 184 deletions
+
+**Key accomplishments:**
+- CMake version injection (configure_file template) replacing stale hardcoded version.h
+- Startup config validation with error accumulation (all failures reported at once)
+- Production-grade logging: rotating file sink, JSON structured format, multi-sink architecture
+- Storage hardening: startup integrity scan (7 sub-databases), cursor compaction timer (6h), tombstone GC root cause documented (mmap geometry)
+- Auto-reconnect with jittered exponential backoff (1s-60s) for all outbound peers including PEX-discovered
+- ACL-aware reconnect suppression (3 rejections → 600s extended backoff, SIGHUP reset)
+- Receiver-side inactivity timeout for dead peer detection (configurable, default 120s)
+- Crash recovery verified via Docker kill-9 test scenarios with data integrity checks
+- Delegation quota enforcement verified (5 Catch2 tests proving owner-attribution)
+- Complete documentation update: README (25 config fields, 8 new features) + PROTOCOL.md (SyncRejected, rate limiting, inactivity detection)
+
+**Tech debt:**
+- Pre-existing PEX test SIGSEGV (test_daemon.cpp:296) — coroutine lifetime during teardown, deferred to v1.0.0
+
+**Archive:** [v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md) | [v0.9.0-REQUIREMENTS.md](milestones/v0.9.0-REQUIREMENTS.md)
+
+---
+
 ## v0.8.0 Protocol Scalability (Shipped: 2026-03-19)
 
 **Phases:** 4 (38-41) | **Plans:** 8 | **Commits:** 51 | **LOC:** 22,003 C++ (+8,844)

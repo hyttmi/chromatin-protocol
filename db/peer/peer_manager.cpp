@@ -2267,7 +2267,7 @@ asio::awaitable<void> PeerManager::metrics_timer_loop() {
 }
 
 void PeerManager::log_metrics_line() {
-    auto storage_bytes = storage_.used_bytes();
+    auto storage_bytes = storage_.used_data_bytes();
     auto storage_mib = static_cast<double>(storage_bytes) / (1024.0 * 1024.0);
     auto uptime = compute_uptime_seconds();
 
