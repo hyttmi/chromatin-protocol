@@ -150,12 +150,17 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 **Goal**: All existing unit tests pass under memory, thread, and UB sanitizers with zero findings, and the pre-existing PEX coroutine SIGSEGV is resolved
 **Depends on**: Phase 45 (v0.9.0 complete)
 **Requirements**: SAN-01, SAN-02, SAN-03, FIX-01
+**Plans:** 2 plans
+
+Plans:
+- [ ] 46-01-PLAN.md — CMake SANITIZER enum + ASAN clean pass
+- [ ] 46-02-PLAN.md — PEX SIGSEGV fix + TSAN/UBSAN passes + 50-run reliability validation
+
 **Success Criteria** (what must be TRUE):
   1. `cmake --build` with `-fsanitize=address` succeeds and the full Catch2 test suite runs to completion with zero ASAN findings
   2. `cmake --build` with `-fsanitize=thread` succeeds and the full Catch2 test suite runs to completion with zero data race reports
   3. `cmake --build` with `-fsanitize=undefined` succeeds and the full Catch2 test suite runs to completion with zero UB findings
   4. The "three nodes: peer discovery via PEX" test (test_daemon.cpp:296) passes reliably without SIGSEGV across 10 consecutive runs
-**Plans**: TBD
 
 ### Phase 47: Crypto & Transport Verification
 **Goal**: Cryptographic guarantees (content addressing, non-repudiation, tamper detection, forward secrecy, MITM rejection, trusted peer bypass) are empirically verified via Docker multi-node tests
@@ -235,7 +240,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 46. Sanitizers & Bug Fix | 0/? | Not started | - |
+| 46. Sanitizers & Bug Fix | 0/2 | Planned | - |
 | 47. Crypto & Transport Verification | 0/? | Not started | - |
 | 48. Access Control & Topology | 0/? | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
