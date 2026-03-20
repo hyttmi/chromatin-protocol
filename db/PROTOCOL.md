@@ -336,6 +336,41 @@ Each address is a `host:port` string. Nodes share up to 8 addresses per response
 
 **QuotaExceeded** (`type = QuotaExceeded (26)`): Empty payload. Sent by a node when a blob write would exceed the configured per-namespace byte or count quota. Unlike StorageFull (which signals global capacity), QuotaExceeded indicates that the specific namespace has reached its limit. Other namespaces may still accept writes.
 
+### Rate Limiting
+
+Peers initiating sync too frequently or exceeding resource limits are rejected with a `SyncRejected (type 30)` message. The payload is a single byte indicating the rejection reason.
+
+**SyncRejected wire format:**
+
+```
+SyncRejected (type 30):
+[reason: 1 byte]
+```
+
+**Reason codes:**
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0x01 | Cooldown | Peer initiated sync before the cooldown period elapsed |
+| 0x02 | Session limit | Maximum concurrent sync sessions reached |
+| 0x03 | Byte rate | Sync traffic exceeded the configured byte rate limit |
+
+After receiving SyncRejected, the initiating peer should wait before retrying. The node's sync cooldown (configurable via `sync_cooldown_seconds`) enforces a minimum interval between sync requests from the same peer. The byte rate limit tracks all sync-related message traffic (reconciliation + blob transfer) per connection.
+
+**Write Rate Limiting** -- In addition to sync rate limiting, per-connection token bucket rate limiting applies to Data (8) and Delete (18) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
+
+### Inactivity Detection
+
+The node monitors all connected peers for message activity. If no messages are received from a peer within the configurable `inactivity_timeout_seconds` deadline, the peer is considered dead and disconnected.
+
+This is receiver-side detection only. The node does NOT send Ping messages at the application level to probe peers. Existing message traffic (sync, data, PEX, keepalive) serves as the liveness signal.
+
+When the timeout fires, the node closes the connection without sending a Goodbye message (a dead peer cannot process it). If the dead peer was an outbound connection, the auto-reconnect mechanism will attempt to re-establish the connection.
+
+The inactivity sweep runs every 30 seconds, checking all connected peers against the deadline. The check uses a monotonic clock (`steady_clock`) to avoid issues with system clock adjustments.
+
+Configuration: `inactivity_timeout_seconds` defaults to 120. Set to 0 to disable. Minimum value when enabled is 30 seconds.
+
 ## Message Type Reference
 
 All message types defined in the `TransportMsgType` enum:
@@ -372,3 +407,4 @@ All message types defined in the `TransportMsgType` enum:
 | 27 | ReconcileInit | Sync Phase B: start per-namespace reconciliation (version + namespace + count + fingerprint) |
 | 28 | ReconcileRanges | Sync Phase B: range fingerprints/items for reconciliation |
 | 29 | ReconcileItems | Sync Phase B: final item exchange after ranges resolved |
+| 30 | SyncRejected | Sync rate limiting: rejection with 1-byte reason code |
