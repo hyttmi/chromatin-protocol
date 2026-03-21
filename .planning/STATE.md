@@ -1,11 +1,10 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0.0
-milestone_name: Database Layer Done
-status: in_progress
-stopped_at: "Completed 46-02-PLAN.md"
-last_updated: "2026-03-20T19:41:27Z"
-last_activity: 2026-03-20 -- Completed 46-02 (TSAN/UBSAN clean, PEX fix, 50-run reliability)
+milestone: v1.0
+milestone_name: milestone
+status: completed
+last_updated: "2026-03-21T05:54:43.109Z"
+last_activity: 2026-03-20 -- Completed 46-02 (TSAN/UBSAN clean, PEX fix verified, 50-run reliability)
 progress:
   total_phases: 7
   completed_phases: 1
