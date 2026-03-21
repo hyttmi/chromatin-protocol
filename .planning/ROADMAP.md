@@ -276,5 +276,5 @@ Plans:
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 4/4 | Complete    | 2026-03-21 |
-| 51. TTL Lifecycle & E2E Primitives | 3/3 | Complete   | 2026-03-21 |
+| 51. TTL Lifecycle & E2E Primitives | 3/3 | Complete    | 2026-03-21 |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |

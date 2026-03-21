@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T19:03:20Z"
-last_activity: 2026-03-21 -- Completed 51-02 (E2E-01/03/04 messaging primitives integration tests)
+last_updated: "2026-03-21T19:20:55.957Z"
+last_activity: 2026-03-21 -- Completed 51-03 (TTL-02/E2E-02 tombstone TTL expiry GC and history backfill tests)
 progress:
   total_phases: 7
-  completed_phases: 5
-  total_plans: 17
-  completed_plans: 17
+  completed_phases: 6
+  total_plans: 20
+  completed_plans: 20
   percent: 100
 ---
 
