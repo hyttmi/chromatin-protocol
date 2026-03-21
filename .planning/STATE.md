@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-last_updated: "2026-03-21T09:50:05Z"
-last_activity: "2026-03-21 -- Completed 48-03 (connection dedup, ACL-05 SIGHUP reload, TOPO-01 dedup tests)"
+status: executing
+last_updated: "2026-03-21T09:59:10.450Z"
+last_activity: 2026-03-21 -- Completed 48-02 (ACL-03 delegation write, ACL-04 revocation propagation tests)
 progress:
   total_phases: 7
-  completed_phases: 2
-  total_plans: 10
+  completed_phases: 3
+  total_plans: 9
   completed_plans: 9
   percent: 90
 ---
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 48 of 52 (Access Control & Topology)
-Plan: 3 of 3 complete (01 and 03 shipped, 02 in progress)
+Plan: 3 of 3 complete
 Status: In progress
-Last activity: 2026-03-21 -- Completed 48-03 (connection dedup, ACL-05 SIGHUP reload, TOPO-01 dedup tests)
+Last activity: 2026-03-21 -- Completed 48-02 (ACL-03 delegation write, ACL-04 revocation propagation tests)
 
 Progress: [█████████░] 90%
 
@@ -55,6 +55,7 @@ Progress: [█████████░] 90%
 | Phase 47 P04 | 2min | 1 tasks | 1 files |
 | Phase 48 P01 | 28min | 2 tasks | 7 files |
 | Phase 48 P03 | 24min | 1 tasks | 5 files |
+| Phase 48 P02 | 32min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 48]: ACL-02 tests namespace isolation (separate namespace creation) rather than engine rejection path, since loadgen always writes to its own namespace
 - [Phase 48]: Named Docker volume pattern for preserving node identity across container restarts in multi-phase ACL tests
 - [Phase 48]: Connection dedup: lower namespace_id keeps its initiated connection (deterministic tie-break). Server::stop_reconnect() prevents reconnect-dedup infinite cycles.
+- [Phase 48]: Added --namespace flag to loadgen for delegation writes (delegate must target owner's namespace_id, not its own)
 
 ### Pending Todos
 

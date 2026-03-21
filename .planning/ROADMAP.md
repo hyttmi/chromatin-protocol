@@ -138,7 +138,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 
 - [x] **Phase 46: Sanitizers & Bug Fix** - ASAN/TSAN/UBSAN passes on Catch2 suite + PEX SIGSEGV fix (completed 2026-03-20)
 - [x] **Phase 47: Crypto & Transport Verification** - Docker integration tests for cryptographic integrity and PQ transport security (gap closure in progress) (completed 2026-03-21)
-- [ ] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup
+- [x] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup (completed 2026-03-21)
 - [ ] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation
 - [ ] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance
 - [ ] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives
@@ -185,7 +185,7 @@ Plans:
 **Goal**: Access control enforcement (closed-garden, namespace ownership, delegation lifecycle, hot-reload) and connection dedup are verified via Docker multi-node tests
 **Depends on**: Phase 47 (Docker test harness and helper scripts available)
 **Requirements**: ACL-01, ACL-02, ACL-03, ACL-04, ACL-05, TOPO-01
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 48-01-PLAN.md — Loadgen --delegate flag + Docker compose topologies + ACL-01 closed-garden + ACL-02 namespace sovereignty tests
@@ -255,7 +255,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
-| 48. Access Control & Topology | 2/3 | In progress | - |
+| 48. Access Control & Topology | 3/3 | Complete   | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
