@@ -26,6 +26,9 @@ services:
     networks:
       test-net:
         ipv4_address: 172.28.0.3
+    depends_on:
+      node1:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
       interval: 5s
