@@ -80,7 +80,7 @@ chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000)
+    uint64_t timestamp = 1000000000ULL)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
@@ -165,27 +165,27 @@ TEST_CASE("is_blob_expired", "[sync]") {
 
     SECTION("permanent blob is never expired") {
         blob.ttl = 0;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;
         REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 999999));
     }
 
     SECTION("non-expired blob") {
         blob.ttl = 604800;  // 7 days
-        blob.timestamp = 10000;
-        // now = 10000 + 100 = 10100, which is before 10000 + 604800
+        blob.timestamp = 10000000000ULL;  // 10000 seconds in microseconds
+        // now = 10100, which is before 10000 + 604800 = 614800
         REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 10100));
     }
 
     SECTION("expired blob") {
         blob.ttl = 100;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;  // 1000 seconds in microseconds
         // now = 1200 > 1000 + 100 = 1100
         REQUIRE(SyncProtocol::is_blob_expired(blob, 1200));
     }
 
     SECTION("exactly at expiry boundary") {
         blob.ttl = 100;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;  // 1000 seconds in microseconds
         // now = 1100 == 1000 + 100 -- expired (<=)
         REQUIRE(SyncProtocol::is_blob_expired(blob, 1100));
     }

@@ -38,11 +38,13 @@ struct TempDir {
 
 /// Create a test BlobData with specified TTL and timestamp.
 /// Uses deterministic namespace derived from a counter for test isolation.
+/// Timestamp is in microseconds (matching production loadgen behavior).
+/// Default 1000000000 = 1000 seconds in microseconds.
 chromatindb::wire::BlobData make_test_blob(
     uint8_t ns_byte,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000)
+    uint64_t timestamp = 1000000000ULL)
 {
     chromatindb::wire::BlobData blob;
     blob.namespace_id.fill(ns_byte);
@@ -309,7 +311,7 @@ TEST_CASE("Storage expiry scan with no expired blobs returns 0", "[storage][expi
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto blob = make_test_blob(0x01, "not-expired", 604800, 1000);
+    auto blob = make_test_blob(0x01, "not-expired", 604800, 1000000000ULL);
     store.store_blob(blob);
 
     // Clock is at 1000, blob expires at 1000 + 604800 = 605800
@@ -321,7 +323,7 @@ TEST_CASE("Storage expiry scan purges expired blob", "[storage][expiry]") {
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto blob = make_test_blob(0x01, "will-expire", 100, 1000);
+    auto blob = make_test_blob(0x01, "will-expire", 100, 1000000000ULL);
     auto hash = compute_hash(blob);
     store.store_blob(blob);
 
@@ -350,9 +352,9 @@ TEST_CASE("Storage expiry scan selective purge", "[storage][expiry]") {
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     // 3 blobs with different expiry times
-    auto blob1 = make_test_blob(0x01, "expires-first", 100, 1000);   // expires 1100
-    auto blob2 = make_test_blob(0x01, "expires-second", 200, 1000);  // expires 1200
-    auto blob3 = make_test_blob(0x01, "expires-last", 500, 1000);    // expires 1500
+    auto blob1 = make_test_blob(0x01, "expires-first", 100, 1000000000ULL);   // expires 1100
+    auto blob2 = make_test_blob(0x01, "expires-second", 200, 1000000000ULL);  // expires 1200
+    auto blob3 = make_test_blob(0x01, "expires-last", 500, 1000000000ULL);    // expires 1500
 
     store.store_blob(blob1);
     store.store_blob(blob2);
@@ -379,7 +381,7 @@ TEST_CASE("Storage expiry scan is idempotent", "[storage][expiry]") {
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto blob = make_test_blob(0x01, "purge-once", 100, 1000);
+    auto blob = make_test_blob(0x01, "purge-once", 100, 1000000000ULL);
     store.store_blob(blob);
 
     fake_time = 1101;
@@ -392,7 +394,7 @@ TEST_CASE("Storage TTL=0 blobs are never purged", "[storage][expiry]") {
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto permanent = make_test_blob(0x01, "permanent", 0, 1000);
+    auto permanent = make_test_blob(0x01, "permanent", 0, 1000000000ULL);
     auto hash = compute_hash(permanent);
     store.store_blob(permanent);
 
@@ -410,8 +412,8 @@ TEST_CASE("Storage mixed TTL=0 and TTL>0 expiry", "[storage][expiry]") {
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto permanent = make_test_blob(0x01, "permanent-blob", 0, 1000);
-    auto ephemeral = make_test_blob(0x01, "ephemeral-blob", 100, 1000);
+    auto permanent = make_test_blob(0x01, "permanent-blob", 0, 1000000000ULL);
+    auto ephemeral = make_test_blob(0x01, "ephemeral-blob", 100, 1000000000ULL);
 
     store.store_blob(permanent);
     store.store_blob(ephemeral);
@@ -443,8 +445,8 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
     uint64_t fake_time = 1000;
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
-    auto blob1 = make_test_blob(0x01, "will-expire-seq", 100, 1000);
-    auto blob2 = make_test_blob(0x01, "will-survive-seq", 604800, 1000);
+    auto blob1 = make_test_blob(0x01, "will-expire-seq", 100, 1000000000ULL);
+    auto blob2 = make_test_blob(0x01, "will-survive-seq", 604800, 1000000000ULL);
 
     store.store_blob(blob1);  // seq 1
     store.store_blob(blob2);  // seq 2
@@ -722,7 +724,7 @@ TEST_CASE("Storage delete_blob_data cleans up expiry index", "[storage][tombston
     Storage store(tmp.path.string(), [&]() { return fake_now; });
 
     // Store a blob with TTL
-    auto blob = make_test_blob(0x62, "expiry-cleanup", 3600, 1000);
+    auto blob = make_test_blob(0x62, "expiry-cleanup", 3600, 1000000000ULL);
     auto result = store.store_blob(blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
@@ -1166,7 +1168,7 @@ TEST_CASE("Storage tombstone with TTL>0 is expired by expiry scan", "[storage][t
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     // Store a regular blob
-    auto blob = make_test_blob(0x70, "target-blob", 604800, 1000);
+    auto blob = make_test_blob(0x70, "target-blob", 604800, 1000000000ULL);
     auto blob_result = store.store_blob(blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
@@ -1236,7 +1238,7 @@ TEST_CASE("Storage regular blob expiry unaffected by tombstone scan", "[storage]
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     // Store a regular blob with TTL=100
-    auto blob = make_test_blob(0x79, "regular-expiry", 100, 1000);
+    auto blob = make_test_blob(0x79, "regular-expiry", 100, 1000000000ULL);
     auto hash = compute_hash(blob);
     store.store_blob(blob);
 
@@ -1800,7 +1802,7 @@ TEST_CASE("run_expiry_scan decrements quota aggregate", "[storage][quota]") {
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     // Store a blob with TTL=100
-    auto blob = make_test_blob(0xA5, "expiry-quota-test", 100, 1000);
+    auto blob = make_test_blob(0xA5, "expiry-quota-test", 100, 1000000000ULL);
     auto result = store.store_blob(blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 

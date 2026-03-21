@@ -71,7 +71,7 @@ chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000)
+    uint64_t timestamp = 1000000000ULL)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
@@ -313,7 +313,7 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Ingest 3 blobs with different data (unique timestamps make unique blobs)
-    auto blob1 = make_signed_blob(id, "seq-range-1", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "seq-range-1", 604800, 1000000000ULL);
     auto blob2 = make_signed_blob(id, "seq-range-2", 604800, 1001);
     auto blob3 = make_signed_blob(id, "seq-range-3", 604800, 1002);
 
@@ -599,7 +599,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;
         blob.signature = {0x01};  // Invalid sig, but we should never reach sig check
 
         auto result = run_async(pool, engine.ingest(blob));
@@ -614,7 +614,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE, 0x42);
         blob.ttl = 604800;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;
         blob.signature = {0x01};  // Invalid sig
 
         auto result = run_async(pool, engine.ingest(blob));
@@ -637,7 +637,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;
         // Invalid signature -- if size check is first, we get oversized_blob, not invalid_signature
         blob.signature.resize(100, 0xFF);
 
@@ -652,7 +652,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
-        blob.timestamp = 1000;
+        blob.timestamp = 1000000000ULL;
         blob.signature = {0x01};
 
         auto result = run_async(pool, engine.ingest(blob));
@@ -937,7 +937,7 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Create and delete a blob
-    auto blob = make_signed_blob(id, "expiry-test", 604800, 1000);
+    auto blob = make_signed_blob(id, "expiry-test", 604800, 1000000000ULL);
     auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
@@ -1465,7 +1465,7 @@ TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engi
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // First ingest succeeds (under byte quota)
-    auto blob1 = make_signed_blob(id, "fill-quota", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "fill-quota", 604800, 1000000000ULL);
     auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
@@ -1487,7 +1487,7 @@ TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[eng
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // First blob succeeds (count 0 + 1 <= 1)
-    auto blob1 = make_signed_blob(id, "first-blob", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "first-blob", 604800, 1000000000ULL);
     auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
@@ -1522,7 +1522,7 @@ TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Fill the count quota
-    auto blob = make_signed_blob(id, "fill-count-quota", 604800, 1000);
+    auto blob = make_signed_blob(id, "fill-count-quota", 604800, 1000000000ULL);
     auto r1 = run_async(pool, engine.ingest(blob));
     REQUIRE(r1.accepted);
 
@@ -1551,7 +1551,7 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
     engine.set_quota_config(1, 0, overrides);
 
     // First blob should succeed (override allows it)
-    auto blob1 = make_signed_blob(id, "override-allowed-1", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "override-allowed-1", 604800, 1000000000ULL);
     auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
@@ -1577,7 +1577,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
     engine.set_quota_config(1, 0, overrides);
 
     // First blob should work
-    auto blob1 = make_signed_blob(id, "exempt-blob-1", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "exempt-blob-1", 604800, 1000000000ULL);
     auto r1 = run_async(pool, engine.ingest(blob1));
     REQUIRE(r1.accepted);
 
@@ -1603,7 +1603,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
     engine.set_quota_config(0, 1, overrides);
 
     // First blob succeeds
-    auto blob1 = make_signed_blob(id, "exempt-count-1", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "exempt-count-1", 604800, 1000000000ULL);
     REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Second blob also succeeds (exempt from count quota)
@@ -1636,7 +1636,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // First blob succeeds (no quota)
-    auto blob1 = make_signed_blob(id, "before-quota", 604800, 1000);
+    auto blob1 = make_signed_blob(id, "before-quota", 604800, 1000000000ULL);
     REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
     // Now set a count quota of 1 via set_quota_config (simulating SIGHUP)
