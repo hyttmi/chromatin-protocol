@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-03-21T14:36:00Z"
-last_activity: 2026-03-21 -- Completed 49-02 (NET-01/NET-02 partition healing and split-brain merge tests)
+status: completed
+last_updated: "2026-03-21T14:58:39.039Z"
+last_activity: 2026-03-21 -- Completed 49-04 (gap closure: hash verification + 10K RECON-01 baseline)
 progress:
   total_phases: 7
-  completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
-  percent: 90
+  completed_phases: 4
+  total_plans: 13
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 49 of 52 (Network Resilience & Reconciliation)
-Plan: 3 of 3 complete
-Status: Phase 49 complete
-Last activity: 2026-03-21 -- Completed 49-02 (NET-01/NET-02 partition healing and split-brain merge tests)
+Plan: 4 of 4 complete
+Status: Phase 49 complete (all gaps closed)
+Last activity: 2026-03-21 -- Completed 49-04 (gap closure: hash verification + 10K RECON-01 baseline)
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [█████████░] 90%
 | Phase 49 P01 | 23min | 2 tasks | 12 files |
 | Phase 49 P03 | 48min | 2 tasks | 5 files |
 | Phase 49 P02 | 54min | 2 tasks | 2 files |
+| Phase 49 P04 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -80,12 +81,14 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 49]: depends_on in recon compose for reliable startup order -- simultaneous boot causes sync deadlocks
 - [Phase 49]: Large blob (100M) notification ACK timeout is cosmetic -- verify via node blob count not loadgen errors
 - [Phase 49]: Rate 2000/sec for bulk loadgen ingest (>1000 blobs) -- sync timer at 5s disconnects loadgen at lower rates
-- [Phase 49]: Reduced RECON-01 baseline to 1000 blobs (from planned 10K) due to get_blob_count polling unreliability at scale
+- [Phase 49]: RECON-01 baseline restored to 10,000 blobs after helpers.sh --tail fix resolved get_blob_count unreliability at scale
 - [Phase 49]: Fixed IP for tcpdump capture containers to avoid Docker address conflicts with stopped nodes
 - [Phase 49]: docker network disconnect/connect over iptables for partition tests -- simpler, no NET_ADMIN needed
 - [Phase 49]: Relative blob count comparison for partition isolation -- blobs= metric overcounts across namespaces
 - [Phase 49]: Dual-network topology for split-brain (NET_A + NET_B) -- group B internal comms on NET_B during partition
 - [Phase 49]: Auto-reconnect backoff for healing instead of SIGHUP -- clear_reconnect_state kills reconnect_loop coroutines
+- [Phase 49]: Hash verification skips --verbose-blobs for 10M/100M blobs (data_hex = 20-200 MB hex) -- AEAD integrity is implicit
+- [Phase 49]: Single sample blob hash verification on late-joiner is sufficient -- crypto path + AEAD + fingerprint convergence
 
 ### Pending Todos
 
