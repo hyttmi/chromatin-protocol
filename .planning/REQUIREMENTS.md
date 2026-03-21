@@ -46,9 +46,9 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 - [ ] **DOS-01**: Docker test verifies write rate limiting -- flooding peer disconnected, other peers continue operating normally
 - [ ] **DOS-02**: Docker test verifies sync rate limiting -- excess sync initiations rejected with SyncRejected, byte-rate accounting includes sync traffic
 - [ ] **DOS-03**: Docker test verifies concurrent session limit -- excess sync sessions rejected, existing sessions complete normally
-- [ ] **DOS-04**: Docker test verifies storage full signaling -- StorageFull broadcast to all peers, peers stop pushing data, accepts data again after space freed
-- [ ] **DOS-05**: Docker test verifies namespace quota enforcement -- writes rejected after quota hit, other namespaces unaffected
-- [ ] **DOS-06**: Docker test verifies thread pool under load -- saturated ML-DSA-87 verifications don't starve event loop; new connections accepted, health checks pass
+- [x] **DOS-04**: Docker test verifies storage full signaling -- StorageFull broadcast to all peers, peers stop pushing data, accepts data again after space freed
+- [x] **DOS-05**: Docker test verifies namespace quota enforcement -- writes rejected after quota hit, other namespaces unaffected
+- [x] **DOS-06**: Docker test verifies thread pool under load -- saturated ML-DSA-87 verifications don't starve event loop; new connections accepted, health checks pass
 
 ### Operational Signaling
 
@@ -163,9 +163,9 @@ Explicitly excluded. Documented to prevent scope creep.
 | DOS-01 | Phase 50 | Pending |
 | DOS-02 | Phase 50 | Pending |
 | DOS-03 | Phase 50 | Pending |
-| DOS-04 | Phase 50 | Pending |
-| DOS-05 | Phase 50 | Pending |
-| DOS-06 | Phase 50 | Pending |
+| DOS-04 | Phase 50 | Complete |
+| DOS-05 | Phase 50 | Complete |
+| DOS-06 | Phase 50 | Complete |
 | TTL-01 | Phase 51 | Pending |
 | TTL-02 | Phase 51 | Pending |
 | TTL-03 | Phase 51 | Pending |

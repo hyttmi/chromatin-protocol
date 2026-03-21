@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T17:05:45.898Z"
-last_activity: "2026-03-21 -- Completed 49-04 (gap closure: hash verification + 10K RECON-01 baseline)"
+last_updated: "2026-03-21T17:16:32Z"
+last_activity: "2026-03-21 -- Completed 50-04 (DOS-04/05/06 resource limit tests + max_storage_bytes SIGHUP reload)"
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 17
-  completed_plans: 14
+  completed_plans: 17
   percent: 100
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 50 of 52 (Operations, Disaster Recovery & Resource Limits)
-Plan: 1 of 3 complete
-Status: Executing phase 50
-Last activity: 2026-03-21 -- Completed 50-01 (OPS signal tests: SIGHUP, SIGUSR1, SIGTERM)
+Plan: 4 of 4 complete
+Status: Phase 50 complete
+Last activity: 2026-03-21 -- Completed 50-02 (DR-01/02/03/04/05 disaster recovery integration tests)
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -61,6 +61,8 @@ Progress: [█████████░] 94%
 | Phase 49 P02 | 54min | 2 tasks | 2 files |
 | Phase 49 P04 | 3min | 2 tasks | 4 files |
 | Phase 50 P01 | 10min | 2 tasks | 3 files |
+| Phase 50 P04 | 22min | 2 tasks | 6 files |
+| Phase 50 P02 | 22min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -93,6 +95,11 @@ All decisions logged in PROJECT.md Key Decisions table.
 
 - [Phase 50]: Unique container names per test (chromatindb-ops0N-nodeN) to prevent cross-test collisions when running via --filter ops
 - [Phase 50]: rate_limit_bytes_per_sec=1024 (config validation minimum) with burst=2048 for tightest valid rate limit test
+- [Phase 50]: max_storage_bytes minimum 2 MiB for DOS-04 (mdbx file starts at ~1 MiB empty, 200KB below config minimum)
+- [Phase 50]: Added Engine::set_max_storage_bytes() for SIGHUP reload -- was missing from reload path, needed for storage full recovery
+- [Phase 50]: DOS-06 checks handshake completion count on Node1 (not live peer count) -- loadgens disconnect before verification
+- [Phase 50]: METRICS DUMP marker for SIGUSR1 response counting (avoids metrics: prefix ambiguity with quota_rejections/sync_rejections)
+- [Phase 50]: mdbx.dat is actual database filename (not data.mdb); DR-02 auto-generates new master.key but old DARE data unreadable; DR-03 manifests as SIGSEGV during integrity scan
 
 ### Pending Todos
 
