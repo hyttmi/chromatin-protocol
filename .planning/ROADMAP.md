@@ -246,7 +246,12 @@ Plans:
   3. A blob written while a recipient is disconnected is delivered via sync + pub/sub notification after reconnection
   4. A relay node joining a namespace after 1000 messages backfills all blobs with no gaps and monotonic sequence numbers; tombstones propagate to all nodes within one sync interval
   5. Two namespaces on the same cluster have complete isolation -- messages never cross namespaces, verified via per-namespace fingerprint comparison
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 51-01-PLAN.md — TTL-01 tombstone propagation + TTL-03 permanent blobs + TTL-04 delegate cannot delete
+- [ ] 51-02-PLAN.md — E2E-01 async delivery + E2E-03 delete for everyone + E2E-04 namespace isolation
+- [ ] 51-03-PLAN.md — TTL-02 tombstone TTL expiry/GC + E2E-02 history backfill
 
 ### Phase 52: Stress, Chaos & Fuzzing
 **Goal**: The system survives long-running load, random node churn, rapid namespace creation, concurrent mixed operations, and malformed protocol input without crashes, memory leaks, deadlocks, or corruption
@@ -271,5 +276,5 @@ Plans:
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 4/4 | Complete    | 2026-03-21 |
-| 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
+| 51. TTL Lifecycle & E2E Primitives | 0/3 | Not started | - |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
