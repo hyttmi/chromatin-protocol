@@ -4,10 +4,13 @@
 /// properties using the same code paths as the node itself (chromatindb_lib).
 ///
 /// Subcommands:
-///   hash  -- Recompute SHA3-256 signing digest and blob hash from raw fields.
-///   sig   -- Verify ML-DSA-87 signature against recomputed digest + embedded pubkey.
+///   hash        -- Recompute SHA3-256 signing digest and blob hash from FlatBuffer blob.
+///   sig         -- Verify ML-DSA-87 signature against recomputed digest + embedded pubkey.
+///   hash-fields -- Recompute signing digest from raw field values (no FlatBuffer needed).
+///   sig-fields  -- Verify ML-DSA-87 signature from raw hex values (no FlatBuffer needed).
 ///
-/// Input: FlatBuffer-encoded blob bytes from stdin or --file path.
+/// Input: FlatBuffer-encoded blob bytes from stdin or --file path (hash, sig).
+///        Raw hex values via CLI flags (hash-fields, sig-fields).
 /// Output: JSON to stdout. Exit 0 on success/valid, 1 on failure/invalid.
 
 #include "db/crypto/signing.h"
@@ -29,7 +32,7 @@
 namespace {
 
 // =============================================================================
-// Hex encoding
+// Hex encoding / decoding
 // =============================================================================
 
 std::string to_hex(const uint8_t* data, size_t len) {
@@ -46,6 +49,26 @@ std::string to_hex(const uint8_t* data, size_t len) {
 template <size_t N>
 std::string to_hex(const std::array<uint8_t, N>& arr) {
     return to_hex(arr.data(), arr.size());
+}
+
+/// Decode a hex string to a byte vector. Returns empty on invalid input.
+std::vector<uint8_t> from_hex(const std::string& hex_str) {
+    if (hex_str.size() % 2 != 0) return {};
+    std::vector<uint8_t> result;
+    result.reserve(hex_str.size() / 2);
+    for (size_t i = 0; i < hex_str.size(); i += 2) {
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        int hi = nibble(hex_str[i]);
+        int lo = nibble(hex_str[i + 1]);
+        if (hi < 0 || lo < 0) return {};
+        result.push_back(static_cast<uint8_t>((hi << 4) | lo));
+    }
+    return result;
 }
 
 // =============================================================================
@@ -76,7 +99,7 @@ std::vector<uint8_t> read_blob_bytes(const std::string& file_path) {
 }
 
 // =============================================================================
-// Subcommand: hash
+// Subcommand: hash (FlatBuffer input)
 // =============================================================================
 
 int cmd_hash(const std::string& file_path) {
@@ -117,7 +140,7 @@ int cmd_hash(const std::string& file_path) {
 }
 
 // =============================================================================
-// Subcommand: sig
+// Subcommand: sig (FlatBuffer input)
 // =============================================================================
 
 int cmd_sig(const std::string& file_path) {
@@ -152,6 +175,87 @@ int cmd_sig(const std::string& file_path) {
 }
 
 // =============================================================================
+// Subcommand: hash-fields (raw field values -- no FlatBuffer needed)
+// =============================================================================
+
+struct HashFieldsArgs {
+    std::string namespace_hex;
+    std::string data_hex;
+    uint32_t ttl = 0;
+    uint64_t timestamp = 0;
+};
+
+int cmd_hash_fields(const HashFieldsArgs& args) {
+    auto ns_bytes = from_hex(args.namespace_hex);
+    if (ns_bytes.size() != 32) {
+        spdlog::error("--namespace-hex must be 64 hex chars (32 bytes), got {}",
+                      args.namespace_hex.size());
+        return 1;
+    }
+
+    auto data_bytes = from_hex(args.data_hex);
+    if (data_bytes.empty() && !args.data_hex.empty()) {
+        spdlog::error("--data-hex contains invalid hex");
+        return 1;
+    }
+
+    // Convert namespace to array
+    std::array<uint8_t, 32> ns_array{};
+    std::memcpy(ns_array.data(), ns_bytes.data(), 32);
+
+    // Recompute signing digest: SHA3-256(namespace || data || ttl_le32 || timestamp_le64)
+    auto signing_digest = chromatindb::wire::build_signing_input(
+        ns_array, data_bytes, args.ttl, args.timestamp);
+
+    nlohmann::json out;
+    out["signing_digest"] = to_hex(signing_digest);
+
+    std::cout << out.dump() << std::endl;
+    return 0;
+}
+
+// =============================================================================
+// Subcommand: sig-fields (raw hex values -- no FlatBuffer needed)
+// =============================================================================
+
+struct SigFieldsArgs {
+    std::string digest_hex;
+    std::string signature_hex;
+    std::string pubkey_hex;
+};
+
+int cmd_sig_fields(const SigFieldsArgs& args) {
+    auto digest_bytes = from_hex(args.digest_hex);
+    if (digest_bytes.size() != 32) {
+        spdlog::error("--digest-hex must be 64 hex chars (32 bytes), got {}",
+                      args.digest_hex.size());
+        return 1;
+    }
+
+    auto sig_bytes = from_hex(args.signature_hex);
+    if (sig_bytes.empty()) {
+        spdlog::error("--signature-hex is empty or contains invalid hex");
+        return 1;
+    }
+
+    auto pk_bytes = from_hex(args.pubkey_hex);
+    if (pk_bytes.empty()) {
+        spdlog::error("--pubkey-hex is empty or contains invalid hex");
+        return 1;
+    }
+
+    // Verify ML-DSA-87 signature against digest + pubkey
+    bool valid = chromatindb::crypto::Signer::verify(
+        digest_bytes, sig_bytes, pk_bytes);
+
+    nlohmann::json out;
+    out["valid"] = valid;
+
+    std::cout << out.dump() << std::endl;
+    return valid ? 0 : 1;
+}
+
+// =============================================================================
 // Usage
 // =============================================================================
 
@@ -159,8 +263,12 @@ void print_usage(const char* prog) {
     std::cerr << "chromatindb_verify -- crypto verification tool for integration tests\n\n"
               << "Usage:\n"
               << "  " << prog << " hash [--file PATH]   Recompute signing digest and blob hash\n"
-              << "  " << prog << " sig  [--file PATH]   Verify ML-DSA-87 signature\n\n"
-              << "Input: FlatBuffer-encoded blob bytes from stdin (default) or --file.\n"
+              << "  " << prog << " sig  [--file PATH]   Verify ML-DSA-87 signature\n"
+              << "  " << prog << " hash-fields --namespace-hex HEX --data-hex HEX --ttl N --timestamp N\n"
+              << "                            Compute signing digest from raw field values\n"
+              << "  " << prog << " sig-fields --digest-hex HEX --signature-hex HEX --pubkey-hex HEX\n"
+              << "                            Verify ML-DSA-87 signature from raw hex values\n\n"
+              << "Input: FlatBuffer blob from stdin/--file (hash, sig) or hex flags (hash-fields, sig-fields).\n"
               << "Output: JSON to stdout.\n";
 }
 
@@ -184,26 +292,83 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Parse --file option
-    std::string file_path;
-    for (int i = 2; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--file" && i + 1 < argc) {
-            file_path = argv[++i];
+    // --- hash / sig: parse --file option ---
+    if (subcommand == "hash" || subcommand == "sig") {
+        std::string file_path;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--file" && i + 1 < argc) {
+                file_path = argv[++i];
+            } else {
+                spdlog::error("unknown option: {}", arg);
+                print_usage(argv[0]);
+                return 1;
+            }
+        }
+
+        if (subcommand == "hash") {
+            return cmd_hash(file_path);
         } else {
-            spdlog::error("unknown option: {}", arg);
-            print_usage(argv[0]);
-            return 1;
+            return cmd_sig(file_path);
         }
     }
 
-    if (subcommand == "hash") {
-        return cmd_hash(file_path);
-    } else if (subcommand == "sig") {
-        return cmd_sig(file_path);
-    } else {
-        spdlog::error("unknown subcommand: {}", subcommand);
-        print_usage(argv[0]);
-        return 1;
+    // --- hash-fields: parse raw field options ---
+    if (subcommand == "hash-fields") {
+        HashFieldsArgs hf_args;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--namespace-hex" && i + 1 < argc) {
+                hf_args.namespace_hex = argv[++i];
+            } else if (arg == "--data-hex" && i + 1 < argc) {
+                hf_args.data_hex = argv[++i];
+            } else if (arg == "--ttl" && i + 1 < argc) {
+                hf_args.ttl = static_cast<uint32_t>(std::stoul(argv[++i]));
+            } else if (arg == "--timestamp" && i + 1 < argc) {
+                hf_args.timestamp = std::stoull(argv[++i]);
+            } else {
+                spdlog::error("unknown option for hash-fields: {}", arg);
+                print_usage(argv[0]);
+                return 1;
+            }
+        }
+
+        if (hf_args.namespace_hex.empty()) {
+            spdlog::error("hash-fields requires --namespace-hex");
+            return 1;
+        }
+
+        return cmd_hash_fields(hf_args);
     }
+
+    // --- sig-fields: parse raw hex options ---
+    if (subcommand == "sig-fields") {
+        SigFieldsArgs sf_args;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--digest-hex" && i + 1 < argc) {
+                sf_args.digest_hex = argv[++i];
+            } else if (arg == "--signature-hex" && i + 1 < argc) {
+                sf_args.signature_hex = argv[++i];
+            } else if (arg == "--pubkey-hex" && i + 1 < argc) {
+                sf_args.pubkey_hex = argv[++i];
+            } else {
+                spdlog::error("unknown option for sig-fields: {}", arg);
+                print_usage(argv[0]);
+                return 1;
+            }
+        }
+
+        if (sf_args.digest_hex.empty() || sf_args.signature_hex.empty() ||
+            sf_args.pubkey_hex.empty()) {
+            spdlog::error("sig-fields requires --digest-hex, --signature-hex, and --pubkey-hex");
+            return 1;
+        }
+
+        return cmd_sig_fields(sf_args);
+    }
+
+    spdlog::error("unknown subcommand: {}", subcommand);
+    print_usage(argv[0]);
+    return 1;
 }

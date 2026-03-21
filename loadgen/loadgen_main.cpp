@@ -54,6 +54,7 @@ struct Config {
     std::string identity_file_path;   // empty = generate fresh
     bool delete_mode = false;
     std::string hashes_from;          // "stdin" = read target hashes from stdin
+    bool verbose_blobs = false;       // emit BLOB_FIELDS JSON to stderr per blob
 };
 
 void print_usage(const char* prog) {
@@ -70,7 +71,8 @@ void print_usage(const char* prog) {
               << "  --identity-save DIR  Save identity keypair to directory after generation\n"
               << "  --identity-file DIR  Load identity keypair from directory (node.key + node.pub)\n"
               << "  --delete             Delete mode: send tombstones instead of blobs\n"
-              << "  --hashes-from stdin  Read target blob hashes from stdin (one hex hash per line)\n";
+              << "  --hashes-from stdin  Read target blob hashes from stdin (one hex hash per line)\n"
+              << "  --verbose-blobs      Emit BLOB_FIELDS JSON to stderr for each blob sent\n";
 }
 
 bool parse_args(int argc, char* argv[], Config& cfg) {
@@ -111,6 +113,8 @@ bool parse_args(int argc, char* argv[], Config& cfg) {
             cfg.delete_mode = true;
         } else if (arg == "--hashes-from" && i + 1 < argc) {
             cfg.hashes_from = argv[++i];
+        } else if (arg == "--verbose-blobs") {
+            cfg.verbose_blobs = true;
         }
     }
     if (!has_target) {
@@ -556,6 +560,26 @@ private:
                 encoded = chromatindb::wire::encode_blob(blob);
                 hash = chromatindb::wire::blob_hash(
                     std::span<const uint8_t>(encoded));
+
+                // Emit per-blob field details for integration test verification
+                if (cfg_.verbose_blobs) {
+                    auto signing_digest = chromatindb::wire::build_signing_input(
+                        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+                    nlohmann::json bf;
+                    bf["index"] = i;
+                    bf["namespace_id"] = to_hex(blob.namespace_id);
+                    if (data_buf.size() <= 4096) {
+                        bf["data_hex"] = to_hex(std::span<const uint8_t>(data_buf));
+                    }
+                    bf["data_sha3"] = to_hex(signing_digest);
+                    bf["ttl"] = blob.ttl;
+                    bf["timestamp"] = blob.timestamp;
+                    bf["pubkey_hex"] = to_hex(std::span<const uint8_t>(blob.pubkey));
+                    bf["signature_hex"] = to_hex(std::span<const uint8_t>(blob.signature));
+                    bf["blob_hash"] = to_hex(hash);
+                    bf["signing_digest"] = to_hex(signing_digest);
+                    std::cerr << "BLOB_FIELDS:" << bf.dump() << std::endl;
+                }
             }
 
             // Record scheduled time for this blob (for latency measurement)
