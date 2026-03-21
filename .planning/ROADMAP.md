@@ -139,7 +139,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 - [x] **Phase 46: Sanitizers & Bug Fix** - ASAN/TSAN/UBSAN passes on Catch2 suite + PEX SIGSEGV fix (completed 2026-03-20)
 - [x] **Phase 47: Crypto & Transport Verification** - Docker integration tests for cryptographic integrity and PQ transport security (gap closure in progress) (completed 2026-03-21)
 - [x] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup (completed 2026-03-21)
-- [x] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (completed 2026-03-21)
+- [ ] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (gap closure in progress)
 - [ ] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance
 - [ ] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives
 - [ ] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests
@@ -203,12 +203,13 @@ Plans:
 **Goal**: The sync protocol delivers eventual consistency across partitions, crashes, scale, and edge cases -- verified via Docker multi-node tests with iptables partitioning and traffic measurement
 **Depends on**: Phase 48 (ACL/topology tests confirm basic connectivity works correctly)
 **Requirements**: NET-01, NET-02, NET-03, NET-04, NET-05, NET-06, RECON-01, RECON-02, RECON-03, RECON-04
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete, 1 gap closure)
 
 Plans:
 - [x] 49-01-PLAN.md — Docker topologies (2-node recon + 5-node mesh) + NET-03 large blob integrity + NET-04 cursor resumption + NET-05 crash recovery
 - [x] 49-02-PLAN.md — NET-01 partition healing + NET-02 split-brain merge
 - [x] 49-03-PLAN.md — RECON-01 O(diff) scaling + RECON-02 empty skip + RECON-03 version compat + RECON-04 large transfer + NET-06 late-joiner
+- [ ] 49-04-PLAN.md — Gap closure: NET-03 hash verification + RECON-01 10K baseline + NET-06 integrity check
 
 **Success Criteria** (what must be TRUE):
   1. A 5-node mesh with iptables-induced network partition heals and converges to identical blob sets; a 4-node split-brain with independent writes merges to the union of all blobs after healing
@@ -262,7 +263,7 @@ Plans:
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
-| 49. Network Resilience & Reconciliation | 3/3 | Complete   | 2026-03-21 |
+| 49. Network Resilience & Reconciliation | 3/4 | Gap closure | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
