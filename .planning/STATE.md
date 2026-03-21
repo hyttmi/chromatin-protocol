@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-last_updated: "2026-03-21T09:21:10Z"
-last_activity: "2026-03-21 -- Completed 48-01 (loadgen --delegate flag, ACL compose topologies, ACL-01/02 tests)"
+last_updated: "2026-03-21T09:50:05Z"
+last_activity: "2026-03-21 -- Completed 48-03 (connection dedup, ACL-05 SIGHUP reload, TOPO-01 dedup tests)"
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 10
-  completed_plans: 8
-  percent: 80
+  completed_plans: 9
+  percent: 90
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 48 of 52 (Access Control & Topology)
-Plan: 1 of 3 complete
+Plan: 3 of 3 complete (01 and 03 shipped, 02 in progress)
 Status: In progress
-Last activity: 2026-03-21 -- Completed 48-01 (loadgen --delegate flag, ACL compose topologies, ACL-01/02 tests)
+Last activity: 2026-03-21 -- Completed 48-03 (connection dedup, ACL-05 SIGHUP reload, TOPO-01 dedup tests)
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [████████░░] 80%
 | Phase 47 P02 | 5min | 2 tasks | 5 files |
 | Phase 47 P04 | 2min | 1 tasks | 1 files |
 | Phase 48 P01 | 28min | 2 tasks | 7 files |
+| Phase 48 P03 | 24min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 47]: Phase 47-04: Dynamic config with namespace discovery + allowed_keys for strict CRYPT-06 Part 3 identity rejection test
 - [Phase 48]: ACL-02 tests namespace isolation (separate namespace creation) rather than engine rejection path, since loadgen always writes to its own namespace
 - [Phase 48]: Named Docker volume pattern for preserving node identity across container restarts in multi-phase ACL tests
+- [Phase 48]: Connection dedup: lower namespace_id keeps its initiated connection (deterministic tie-break). Server::stop_reconnect() prevents reconnect-dedup infinite cycles.
 
 ### Pending Todos
 

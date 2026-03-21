@@ -190,7 +190,7 @@ Plans:
 Plans:
 - [x] 48-01-PLAN.md — Loadgen --delegate flag + Docker compose topologies + ACL-01 closed-garden + ACL-02 namespace sovereignty tests
 - [ ] 48-02-PLAN.md — ACL-03 delegation write + ACL-04 revocation propagation tests
-- [ ] 48-03-PLAN.md — Connection dedup implementation + ACL-05 SIGHUP reload + TOPO-01 dedup tests
+- [x] 48-03-PLAN.md — Connection dedup implementation + ACL-05 SIGHUP reload + TOPO-01 dedup tests
 
 **Success Criteria** (what must be TRUE):
   1. An unauthorized node is disconnected after handshake with zero application-layer messages exchanged (verified via log inspection)
@@ -255,7 +255,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
-| 48. Access Control & Topology | 1/3 | In progress | - |
+| 48. Access Control & Topology | 2/3 | In progress | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
