@@ -58,6 +58,7 @@ include(FetchContent)
 # Strip all unused algorithms to reduce build time and binary size.
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(OQS_MINIMAL_BUILD "" CACHE STRING "" FORCE)
+set(OQS_USE_OPENSSL OFF CACHE BOOL "" FORCE)
 
 # Disable all KEM algorithms except ML-KEM (used for ML-KEM-1024)
 set(OQS_ENABLE_KEM_BIKE OFF CACHE BOOL "" FORCE)

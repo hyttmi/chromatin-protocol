@@ -1,7 +1,7 @@
 #include "db/logging/logging.h"
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
-#include <fmt/core.h>
+#include <iostream>
 #include <vector>
 
 namespace chromatindb::logging {
@@ -40,8 +40,8 @@ void init(const std::string& level,
                 max_files);
             shared_sinks.push_back(file_sink);
         } catch (const spdlog::spdlog_ex& ex) {
-            fmt::print(stderr, "warning: failed to open log file '{}': {} (falling back to console only)\n",
-                       log_file, ex.what());
+            std::cerr << "warning: failed to open log file '" << log_file
+                      << "': " << ex.what() << " (falling back to console only)\n";
         }
     }
 

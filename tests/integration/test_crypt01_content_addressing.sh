@@ -44,12 +44,10 @@ trap 'cleanup; rm -rf "$TMPDIR"' EXIT
 
 # Run loadgen: stdout = JSON stats, stderr = BLOB_FIELDS lines + spdlog
 docker run --rm --network "$NETWORK" \
-    -v test-identity:/identity \
     --entrypoint chromatindb_loadgen \
     "$IMAGE" \
     --target node1:4200 \
     --count "$BLOB_COUNT" --size "$BLOB_SIZE" --ttl 3600 --rate 10 \
-    --identity-save /identity \
     --verbose-blobs \
     > "$TMPDIR/stats.json" 2> "$TMPDIR/stderr.txt"
 
@@ -80,8 +78,8 @@ while IFS= read -r line; do
     log "Blob $INDEX: verifying signing digest independently..."
 
     # Independently recompute signing digest via chromatindb_verify hash-fields
-    VERIFY_JSON=$(docker run --rm "$IMAGE" \
-        chromatindb_verify hash-fields \
+    VERIFY_JSON=$(docker run --rm --entrypoint chromatindb_verify "$IMAGE" \
+        hash-fields \
         --namespace-hex "$NS" \
         --data-hex "$DATA_HEX" \
         --ttl "$TTL" \

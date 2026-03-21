@@ -69,7 +69,7 @@ fi
 log "Stopping node1..."
 $COMPOSE stop node1
 
-log "Flipping a single bit in data.mdb..."
+log "Flipping a single bit in mdbx.dat..."
 
 # The mdbx header occupies the first few pages (page size 4096, ~3 pages for metadata).
 # We target offset 16384+ to hit data pages containing DARE-encrypted blob envelopes.
@@ -77,7 +77,7 @@ log "Flipping a single bit in data.mdb..."
 CORRUPTION_RESULT=$(docker run --rm \
     -v chromatindb-test_node1-data:/data \
     debian:bookworm-slim sh -c '
-    FILE=/data/data.mdb
+    FILE=/data/mdbx.dat
     SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo "0")
 
     if [ "$SIZE" -lt 20480 ]; then
@@ -88,11 +88,12 @@ CORRUPTION_RESULT=$(docker run --rm \
     # Target an offset in the data page area (past mdbx meta pages)
     # Use offset 16384 (page 4) which should be in the B-tree data area
     OFFSET=16384
-    ORIG=$(xxd -s $OFFSET -l 1 -p "$FILE")
+    # Read one byte at offset, XOR with 0x01, write back (no xxd needed)
+    ORIG=$(od -A n -t x1 -j $OFFSET -N 1 "$FILE" | tr -d " \n")
     FLIPPED=$(printf "%02x" $(( 0x$ORIG ^ 0x01 )))
-    printf "\x$(echo $FLIPPED | tr -d "\n")" | dd of="$FILE" bs=1 seek=$OFFSET conv=notrunc 2>/dev/null
+    printf "\\x${FLIPPED}" | dd of="$FILE" bs=1 seek=$OFFSET conv=notrunc 2>/dev/null
     echo "OK: Flipped byte at offset $OFFSET: 0x$ORIG -> 0x$FLIPPED (file size: $SIZE)"
-')
+' 2>&1) || true
 
 log "$CORRUPTION_RESULT"
 
@@ -155,8 +156,10 @@ fi
 
 # --- Start node2 and check sync behavior ------------------------------------
 
+# Use --no-deps because node1 may have crashed and compose would refuse
+# to start node2 due to the depends_on health check on node1.
 log "Starting node2..."
-$COMPOSE up -d node2
+$COMPOSE up -d --no-deps node2
 
 # Wait for node2 to become healthy (it should start fine since its data is clean)
 if ! wait_healthy chromatindb-test-node2 60; then
@@ -238,13 +241,13 @@ if [[ "$SUCCESS" != true ]]; then
             docker run --rm \
                 -v chromatindb-test_node1-data:/data \
                 debian:bookworm-slim sh -c "
-                FILE=/data/data.mdb
+                FILE=/data/mdbx.dat
                 OFFSET=$RETRY_OFFSET
                 SIZE=\$(stat -c%s \"\$FILE\" 2>/dev/null || echo 0)
                 if [ \"\$SIZE\" -le \$OFFSET ]; then exit 0; fi
-                ORIG=\$(xxd -s \$OFFSET -l 1 -p \"\$FILE\")
+                ORIG=\$(od -A n -t x1 -j \$OFFSET -N 1 \"\$FILE\" | tr -d ' \n')
                 FLIPPED=\$(printf '%02x' \$(( 0x\$ORIG ^ 0x01 )))
-                printf \"\x\$(echo \$FLIPPED | tr -d '\n')\" | dd of=\"\$FILE\" bs=1 seek=\$OFFSET conv=notrunc 2>/dev/null
+                printf \"\\x\${FLIPPED}\" | dd of=\"\$FILE\" bs=1 seek=\$OFFSET conv=notrunc 2>/dev/null
                 echo \"Retry: flipped byte at offset \$OFFSET\"
             " 2>/dev/null || true
         done

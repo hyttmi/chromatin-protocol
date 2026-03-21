@@ -17,8 +17,9 @@ source "$SCRIPT_DIR/helpers.sh"
 COMPOSE_TRUSTED="docker compose -f $SCRIPT_DIR/docker-compose.trusted.yml -p chromatindb-test"
 IMPOSTOR_CONTAINER="chromatindb-test-node3-impostor"
 
-# Temp config path (set before cleanup so trap can reference it)
+# Temp config paths (set before cleanup so trap can reference them)
 TEMP_CONFIG=""
+IMPOSTOR_CONFIG=""
 
 # --- Cleanup -----------------------------------------------------------------
 
@@ -29,6 +30,9 @@ cleanup_crypt06() {
     $COMPOSE_TRUSTED down -v --remove-orphans 2>/dev/null || true
     if [[ -n "$TEMP_CONFIG" ]]; then
         rm -f "$TEMP_CONFIG" 2>/dev/null || true
+    fi
+    if [[ -n "$IMPOSTOR_CONFIG" ]]; then
+        rm -f "$IMPOSTOR_CONFIG" 2>/dev/null || true
     fi
 }
 trap cleanup_crypt06 EXIT
@@ -146,6 +150,7 @@ cat > "$TEMP_CONFIG" <<EOCFG
   "allowed_keys": ["$NODE2_NS"]
 }
 EOCFG
+chmod 644 "$TEMP_CONFIG"  # Container runs as chromatindb user, needs read access
 log "Created restricted config at $TEMP_CONFIG"
 
 # Stop the entire trusted topology and restart node1 with the restricted config.
@@ -173,13 +178,24 @@ wait_healthy chromatindb-test-node1
 # Start impostor on 172.28.0.3 (the trusted IP) with a fresh identity.
 # The impostor generates a new identity key on startup (fresh data dir = new key).
 # Its namespace will NOT match node2's namespace in allowed_keys.
+# Use a temp config with IP-based bootstrap (Compose DNS won't resolve for manual docker run).
+IMPOSTOR_CONFIG=$(mktemp /tmp/impostor-XXXXXX.json)
+cat > "$IMPOSTOR_CONFIG" <<EOCFG
+{
+  "bind_address": "0.0.0.0:4200",
+  "bootstrap_peers": ["172.28.0.2:4200"],
+  "log_level": "debug",
+  "sync_interval_seconds": 5
+}
+EOCFG
+chmod 644 "$IMPOSTOR_CONFIG"
 log "Starting impostor node on 172.28.0.3 (trusted IP, wrong identity)..."
 docker run -d --name "$IMPOSTOR_CONTAINER" \
     --network chromatindb-test_test-net \
     --ip 172.28.0.3 \
-    -v "$SCRIPT_DIR/configs/node3-mitm.json:/config/node3-mitm.json:ro" \
+    -v "$IMPOSTOR_CONFIG:/config/impostor.json:ro" \
     chromatindb:test \
-    run --config /config/node3-mitm.json --data-dir /data --log-level debug
+    run --config /config/impostor.json --data-dir /data --log-level debug
 
 # Wait for the impostor to attempt connection and for node1 to process it
 sleep 10

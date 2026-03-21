@@ -42,12 +42,10 @@ TMPDIR=$(mktemp -d)
 trap 'cleanup; rm -rf "$TMPDIR"' EXIT
 
 docker run --rm --network "$NETWORK" \
-    -v test-identity:/identity \
     --entrypoint chromatindb_loadgen \
     "$IMAGE" \
     --target node1:4200 \
     --count "$BLOB_COUNT" --size "$BLOB_SIZE" --ttl 3600 --rate 10 \
-    --identity-save /identity \
     --verbose-blobs \
     > "$TMPDIR/stats.json" 2> "$TMPDIR/stderr.txt"
 
@@ -74,8 +72,8 @@ while IFS= read -r line; do
     log "Blob $INDEX: verifying ML-DSA-87 signature..."
 
     # Verify signature via chromatindb_verify sig-fields
-    VERIFY_JSON=$(docker run --rm "$IMAGE" \
-        chromatindb_verify sig-fields \
+    VERIFY_JSON=$(docker run --rm --entrypoint chromatindb_verify "$IMAGE" \
+        sig-fields \
         --digest-hex "$DIGEST" \
         --signature-hex "$SIG_HEX" \
         --pubkey-hex "$PUBKEY_HEX" 2>/dev/null)
@@ -113,8 +111,8 @@ FLIPPED=$(printf "%02x" $(( 16#$FIRST_BYTE ^ 1 )))
 TAMPERED_SIG="${FLIPPED}${SIG_HEX:2}"
 
 set +e
-VERIFY_JSON=$(docker run --rm "$IMAGE" \
-    chromatindb_verify sig-fields \
+VERIFY_JSON=$(docker run --rm --entrypoint chromatindb_verify "$IMAGE" \
+    sig-fields \
     --digest-hex "$DIGEST" \
     --signature-hex "$TAMPERED_SIG" \
     --pubkey-hex "$PUBKEY_HEX" 2>/dev/null)

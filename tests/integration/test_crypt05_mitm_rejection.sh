@@ -20,14 +20,18 @@ source "$SCRIPT_DIR/helpers.sh"
 COMPOSE_STD="docker compose -f $SCRIPT_DIR/docker-compose.test.yml -p chromatindb-test"
 COMPOSE_MITM="docker compose -f $SCRIPT_DIR/docker-compose.mitm.yml -p chromatindb-test"
 TMP_CONFIG=""
+MITM_CONFIG=""
 
 # --- Cleanup -----------------------------------------------------------------
 
 cleanup_crypt05() {
     log "Cleaning up CRYPT-05 test..."
+    docker rm -f chromatindb-test-node3-mitm 2>/dev/null || true
+    docker rm -f chromatindb-test-node1 2>/dev/null || true
     $COMPOSE_MITM down -v --remove-orphans 2>/dev/null || true
     $COMPOSE_STD down -v --remove-orphans 2>/dev/null || true
     [[ -n "$TMP_CONFIG" && -f "$TMP_CONFIG" ]] && rm -f "$TMP_CONFIG"
+    [[ -n "$MITM_CONFIG" && -f "$MITM_CONFIG" ]] && rm -f "$MITM_CONFIG"
 }
 trap cleanup_crypt05 EXIT
 
@@ -100,19 +104,46 @@ cat > "$TMP_CONFIG" <<EOJSON
 }
 EOJSON
 
-# Step 3: Start node1 with ACL + node3-mitm (different identity, connecting to node1)
+# Step 3: Start node1 manually with ACL config, then node3-mitm to attempt connection
 log "Starting node1 (with allowed_keys) + node3-mitm (unauthorized identity)..."
 
-# Use the MITM compose but override node1's config
-docker compose -f "$SCRIPT_DIR/docker-compose.mitm.yml" -p chromatindb-test up -d node1
-# Override node1 config with our ACL version
-docker cp "$TMP_CONFIG" chromatindb-test-node1:/config/node1.json
-# Restart node1 to pick up the new config
-docker restart chromatindb-test-node1
+# Ensure the MITM network exists (compose creates it), then remove pre-created containers
+docker compose -f "$SCRIPT_DIR/docker-compose.mitm.yml" -p chromatindb-test up -d --no-start 2>/dev/null || true
+docker rm -f chromatindb-test-node1 chromatindb-test-node3-mitm 2>/dev/null || true
+
+# Make temp config readable by container user
+chmod 644 "$TMP_CONFIG"
+
+# Start node1 manually with the ACL config mounted directly
+docker run -d --name chromatindb-test-node1 \
+    --network chromatindb-test_test-net \
+    --ip 172.28.0.2 \
+    -v "$TMP_CONFIG:/config/node1.json:ro" \
+    --health-cmd "bash -c 'exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-'" \
+    --health-interval 5s --health-timeout 3s --health-start-period 10s --health-retries 3 \
+    chromatindb:test \
+    run --config /config/node1.json --data-dir /data --log-level debug
 wait_healthy chromatindb-test-node1
 
-# Start node3-mitm (will connect to node1 with a different identity)
-docker compose -f "$SCRIPT_DIR/docker-compose.mitm.yml" -p chromatindb-test up -d node3-mitm
+# Start node3-mitm via compose (generates fresh identity, connects to node1 via IP)
+# Create a temp config for node3-mitm with IP-based bootstrap (compose DNS unavailable)
+MITM_CONFIG=$(mktemp /tmp/node3-mitm-XXXXXX.json)
+cat > "$MITM_CONFIG" <<EOJSON
+{
+  "bind_address": "0.0.0.0:4200",
+  "bootstrap_peers": ["172.28.0.2:4200"],
+  "log_level": "debug",
+  "sync_interval_seconds": 5
+}
+EOJSON
+chmod 644 "$MITM_CONFIG"
+
+docker run -d --name chromatindb-test-node3-mitm \
+    --network chromatindb-test_test-net \
+    --ip 172.28.0.4 \
+    -v "$MITM_CONFIG:/config/node3-mitm.json:ro" \
+    chromatindb:test \
+    run --config /config/node3-mitm.json --data-dir /data --log-level debug
 # node3-mitm generates a fresh identity on startup -- its namespace won't match allowed_keys
 sleep 10  # Give time for connection attempt and rejection
 
@@ -148,6 +179,8 @@ fi
 
 # Tear down for Part B
 log "Tearing down Part A topology..."
+docker rm -f chromatindb-test-node3-mitm 2>/dev/null || true
+docker rm -f chromatindb-test-node1 2>/dev/null || true
 $COMPOSE_MITM down -v --remove-orphans 2>/dev/null || true
 sleep 2
 
