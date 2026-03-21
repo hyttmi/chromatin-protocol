@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-03-21T14:30:57Z"
-last_activity: 2026-03-21 -- Completed 49-03 (RECON-01/02/03/04 + NET-06 reconciliation and late-joiner tests)
+last_updated: "2026-03-21T14:36:00Z"
+last_activity: 2026-03-21 -- Completed 49-02 (NET-01/NET-02 partition healing and split-brain merge tests)
 progress:
   total_phases: 7
   completed_phases: 3
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 Phase: 49 of 52 (Network Resilience & Reconciliation)
 Plan: 3 of 3 complete
 Status: Phase 49 complete
-Last activity: 2026-03-21 -- Completed 49-03 (RECON-01/02/03/04 + NET-06 reconciliation and late-joiner tests)
+Last activity: 2026-03-21 -- Completed 49-02 (NET-01/NET-02 partition healing and split-brain merge tests)
 
 Progress: [█████████░] 90%
 
@@ -58,6 +58,7 @@ Progress: [█████████░] 90%
 | Phase 48 P02 | 32min | 2 tasks | 5 files |
 | Phase 49 P01 | 23min | 2 tasks | 12 files |
 | Phase 49 P03 | 48min | 2 tasks | 5 files |
+| Phase 49 P02 | 54min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,10 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 49]: Rate 2000/sec for bulk loadgen ingest (>1000 blobs) -- sync timer at 5s disconnects loadgen at lower rates
 - [Phase 49]: Reduced RECON-01 baseline to 1000 blobs (from planned 10K) due to get_blob_count polling unreliability at scale
 - [Phase 49]: Fixed IP for tcpdump capture containers to avoid Docker address conflicts with stopped nodes
+- [Phase 49]: docker network disconnect/connect over iptables for partition tests -- simpler, no NET_ADMIN needed
+- [Phase 49]: Relative blob count comparison for partition isolation -- blobs= metric overcounts across namespaces
+- [Phase 49]: Dual-network topology for split-brain (NET_A + NET_B) -- group B internal comms on NET_B during partition
+- [Phase 49]: Auto-reconnect backoff for healing instead of SIGHUP -- clear_reconnect_state kills reconnect_loop coroutines
 
 ### Pending Todos
 

@@ -34,8 +34,8 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Network Resilience
 
-- [ ] **NET-01**: Docker test verifies eventual consistency -- 5-node mesh, network partition via iptables, heal, all nodes converge to identical blob set via XOR fingerprint verification
-- [ ] **NET-02**: Docker test verifies split-brain writes -- 4-node cluster partitioned into halves, different blobs written to each half, heal results in union of all blobs
+- [x] **NET-01**: Docker test verifies eventual consistency -- 5-node mesh, network partition via iptables, heal, all nodes converge to identical blob set via XOR fingerprint verification
+- [x] **NET-02**: Docker test verifies split-brain writes -- 4-node cluster partitioned into halves, different blobs written to each half, heal results in union of all blobs
 - [x] **NET-03**: Docker test verifies large blob integrity -- blobs at 1K, 100K, 1M, 10M, 100M sizes synced across cluster, hash verified on each peer
 - [x] **NET-04**: Docker test verifies sync cursor resumption -- node stopped/restarted syncs only new blobs (verified via wire traffic), not full re-sync
 - [x] **NET-05**: Docker test verifies sync recovery after crash -- kill -9 during reconciliation, restart completes sync without manual intervention, no duplicates or missing blobs
@@ -142,8 +142,8 @@ Explicitly excluded. Documented to prevent scope creep.
 | ACL-04 | Phase 48 | Complete |
 | ACL-05 | Phase 48 | Complete |
 | TOPO-01 | Phase 48 | Complete |
-| NET-01 | Phase 49 | Pending |
-| NET-02 | Phase 49 | Pending |
+| NET-01 | Phase 49 | Complete |
+| NET-02 | Phase 49 | Complete |
 | NET-03 | Phase 49 | Complete |
 | NET-04 | Phase 49 | Complete |
 | NET-05 | Phase 49 | Complete |

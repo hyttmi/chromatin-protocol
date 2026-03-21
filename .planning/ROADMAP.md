@@ -139,7 +139,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 - [x] **Phase 46: Sanitizers & Bug Fix** - ASAN/TSAN/UBSAN passes on Catch2 suite + PEX SIGSEGV fix (completed 2026-03-20)
 - [x] **Phase 47: Crypto & Transport Verification** - Docker integration tests for cryptographic integrity and PQ transport security (gap closure in progress) (completed 2026-03-21)
 - [x] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup (completed 2026-03-21)
-- [ ] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation
+- [x] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (completed 2026-03-21)
 - [ ] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance
 - [ ] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives
 - [ ] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests
