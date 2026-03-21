@@ -26,11 +26,11 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Disaster Recovery & Forensics
 
-- [ ] **DR-01**: Docker test verifies DARE forensics -- hex inspection of data.mdb shows no plaintext blob content, namespace IDs, or public keys; all data high-entropy
-- [ ] **DR-02**: Docker test verifies master key dependency -- daemon refuses to open database without master.key
-- [ ] **DR-03**: Docker test verifies master key rotation (negative) -- Node B cannot read Node A's data.mdb using Node B's master.key
-- [ ] **DR-04**: Docker test verifies data directory migration -- full data_dir copy to new machine resumes operation (connections, blob serving, sync, cursor state)
-- [ ] **DR-05**: Docker test verifies crash recovery -- kill -9 during active sync, restart recovers without data loss, MDBX transactions intact, cursors allow resumption
+- [x] **DR-01**: Docker test verifies DARE forensics -- hex inspection of data.mdb shows no plaintext blob content, namespace IDs, or public keys; all data high-entropy
+- [x] **DR-02**: Docker test verifies master key dependency -- daemon refuses to open database without master.key
+- [x] **DR-03**: Docker test verifies master key rotation (negative) -- Node B cannot read Node A's data.mdb using Node B's master.key
+- [x] **DR-04**: Docker test verifies data directory migration -- full data_dir copy to new machine resumes operation (connections, blob serving, sync, cursor state)
+- [x] **DR-05**: Docker test verifies crash recovery -- kill -9 during active sync, restart recovers without data loss, MDBX transactions intact, cursors allow resumption
 
 ### Network Resilience
 
@@ -155,11 +155,11 @@ Explicitly excluded. Documented to prevent scope creep.
 | OPS-01 | Phase 50 | Complete |
 | OPS-02 | Phase 50 | Complete |
 | OPS-03 | Phase 50 | Complete |
-| DR-01 | Phase 50 | Pending |
-| DR-02 | Phase 50 | Pending |
-| DR-03 | Phase 50 | Pending |
-| DR-04 | Phase 50 | Pending |
-| DR-05 | Phase 50 | Pending |
+| DR-01 | Phase 50 | Complete |
+| DR-02 | Phase 50 | Complete |
+| DR-03 | Phase 50 | Complete |
+| DR-04 | Phase 50 | Complete |
+| DR-05 | Phase 50 | Complete |
 | DOS-01 | Phase 50 | Pending |
 | DOS-02 | Phase 50 | Pending |
 | DOS-03 | Phase 50 | Pending |
