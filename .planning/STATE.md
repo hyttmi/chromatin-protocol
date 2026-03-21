@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T17:16:32Z"
-last_activity: "2026-03-21 -- Completed 50-04 (DOS-04/05/06 resource limit tests + max_storage_bytes SIGHUP reload)"
+last_updated: "2026-03-21T17:30:30.147Z"
+last_activity: 2026-03-21 -- Completed 50-03 (DOS-01/02/03 DoS rate limiting integration tests)
 progress:
   total_phases: 7
   completed_phases: 5
