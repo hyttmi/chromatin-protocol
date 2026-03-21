@@ -2,21 +2,21 @@
 # =============================================================================
 # RECON-01: O(diff) Scaling Verification
 #
-# Proves that reconciliation wire traffic for 10 new blobs on a large namespace
-# is proportional to ~10 blobs, not the entire namespace.
+# Proves that reconciliation wire traffic for 10 new blobs on a 10,000-blob
+# namespace is proportional to ~10 blobs, not the entire namespace.
 #
 # Method: tcpdump capture via nicolaka/netshoot measures total bytes during
 # the diff sync. The diff sync traffic (10 new blobs) should be well under
 # a full transfer would be.
 #
 # Topology: docker-compose.recon.yml (2-node)
-#   Node1 (172.28.0.2): seed node, preloaded with blobs
+#   Node1 (172.28.0.2): seed node, preloaded with 10,000 blobs
 #   Node2 (172.28.0.3): syncs from node1, stopped during diff injection
 #
 # Flow:
-#   1. Start node1 only, ingest 1000 blobs
-#   2. Start node2, wait for full sync (baseline established)
-#   3. Capture full-sync traffic baseline via tcpdump (for a 100-blob transfer)
+#   1. Start both nodes, ingest 10,000 blobs to node1
+#   2. Wait for full sync to node2 (baseline established)
+#   3. Let sync settle, cursors established
 #   4. Stop node2, inject 10 more blobs to node1
 #   5. Start tcpdump capture on test network
 #   6. Restart node2, wait for diff sync (10 new blobs only)
@@ -38,7 +38,7 @@ CAPTURE_CONTAINER="recon01-capture"
 PCAP_FILE="/tmp/recon01-diff-sync.pcap"
 
 # Threshold: 10 new blobs at 256 bytes + protocol overhead should be well under
-# 100 KB. A full 1000-blob transfer would be ~500 KB+. Set threshold at 100 KB
+# 100 KB. A full 10,000-blob transfer would be ~5 MB+. Set threshold at 100 KB
 # for the diff -- very conservative.
 TRAFFIC_THRESHOLD=100000  # 100 KB
 
@@ -65,10 +65,10 @@ log "=== RECON-01: O(diff) Scaling Verification ==="
 FAILURES=0
 
 # =============================================================================
-# Step 1: Start both nodes, ingest 1000 blobs, wait for full sync
+# Step 1: Start both nodes, ingest 10,000 blobs, wait for full sync
 # =============================================================================
 
-log "--- Step 1: Start topology and establish 1000-blob baseline ---"
+log "--- Step 1: Start topology and establish 10,000-blob baseline ---"
 
 $COMPOSE_RECON up -d
 wait_healthy "$NODE1_CONTAINER"
@@ -77,14 +77,15 @@ wait_healthy "$NODE2_CONTAINER"
 # Wait for peer connection
 sleep 5
 
-# Ingest 1000 blobs at rate 100 -- completes in ~10 seconds, well within
-# the sync disconnect threshold for concurrent sync.
-run_loadgen 172.28.0.2 --count 1000 --size 256 --rate 100 --ttl 3600 >/dev/null 2>&1 || true
+# Ingest 10,000 blobs at rate 2000 -- completes in ~5 seconds, before the
+# sync timer (5s) fires and disconnects the loadgen. Rate 2000 is required
+# for bulk ingest; at rate 100 only ~500 blobs get through per connection.
+run_loadgen 172.28.0.2 --count 10000 --size 256 --rate 2000 --ttl 3600 >/dev/null 2>&1 || true
 
-log "Waiting for sync to node2 (1000 blobs, 180s timeout)..."
-if ! wait_sync "$NODE2_CONTAINER" 1000 180; then
+log "Waiting for sync to node2 (10,000 blobs, 300s timeout)..."
+if ! wait_sync "$NODE2_CONTAINER" 10000 300; then
     NODE2_PRE=$(get_blob_count "$NODE2_CONTAINER")
-    fail "RECON-01: Initial sync failed -- node2 has $NODE2_PRE/1000 blobs"
+    fail "RECON-01: Initial sync failed -- node2 has $NODE2_PRE/10000 blobs"
 fi
 
 # =============================================================================
@@ -93,8 +94,10 @@ fi
 
 log "--- Step 2: Wait for sync to settle ---"
 
-# Wait for cursors to be established (3 sync intervals = 15s + buffer)
-sleep 20
+# Wait for cursors to be established on the 10,000-blob namespace.
+# Longer settle time (30s) accounts for cursor establishment overhead
+# on the larger baseline compared to smaller namespaces.
+sleep 30
 
 NODE1_BASELINE=$(get_blob_count "$NODE1_CONTAINER")
 NODE2_BASELINE=$(get_blob_count "$NODE2_CONTAINER")
@@ -132,10 +135,11 @@ sleep 2  # Let tcpdump initialize
 docker start "$NODE2_CONTAINER"
 wait_healthy "$NODE2_CONTAINER"
 
-# Wait for the diff sync to complete. Only 10 new blobs, so this should be fast.
+# Wait for the diff sync to complete. Only 10 new blobs, but reconnect +
+# handshake adds overhead on the 10,000-blob namespace.
 EXPECTED_TOTAL=$((NODE1_BASELINE + 10))
-log "Waiting for diff sync to node2 ($EXPECTED_TOTAL blobs, 120s timeout)..."
-if ! wait_sync "$NODE2_CONTAINER" "$EXPECTED_TOTAL" 120; then
+log "Waiting for diff sync to node2 ($EXPECTED_TOTAL blobs, 180s timeout)..."
+if ! wait_sync "$NODE2_CONTAINER" "$EXPECTED_TOTAL" 180; then
     NODE2_POST=$(get_blob_count "$NODE2_CONTAINER")
     log "WARN: Sync timeout, node2 has $NODE2_POST blobs (expected >= $EXPECTED_TOTAL)"
 fi
@@ -200,7 +204,8 @@ fi
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
     pass "RECON-01: O(diff) scaling verification PASSED"
-    pass "  - $NODE1_BASELINE blobs baseline, 10 new injected"
+    pass "  - ${NODE1_BASELINE} blobs baseline (10,000-blob namespace)"
+    pass "  - 10 new blobs injected during node2 downtime"
     pass "  - Diff sync traffic: $TRAFFIC_BYTES bytes (< $TRAFFIC_THRESHOLD byte threshold)"
     pass "  - Node2 final count: $NODE2_FINAL"
     exit 0
