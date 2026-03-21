@@ -12,9 +12,9 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 - [ ] **CRYPT-01**: Docker test verifies immutable content addressing -- blob hash matches independent SHA3-256(namespace||data||ttl||timestamp) recomputation on synced peer
 - [ ] **CRYPT-02**: Docker test verifies author non-repudiation -- ML-DSA-87 signature on blob from Node A independently verified on Node B using blob's pubkey
 - [ ] **CRYPT-03**: Docker test verifies payload tamper-proofing -- single bit flip in data.mdb causes AEAD authentication failure, node refuses to serve corrupted blob
-- [ ] **CRYPT-04**: Docker test verifies forward secrecy -- captured PQ handshake traffic cannot be decrypted using long-term ML-DSA-87 identity keys
-- [ ] **CRYPT-05**: Docker test verifies MITM rejection -- injected node substituting KEM keys causes session fingerprint mismatch and handshake failure on both sides
-- [ ] **CRYPT-06**: Docker test verifies trusted peer bypass -- lightweight handshake skips KEM but still verifies ML-DSA-87 identity; wrong identity key rejected even if IP is in trusted_peers
+- [x] **CRYPT-04**: Docker test verifies forward secrecy -- captured PQ handshake traffic cannot be decrypted using long-term ML-DSA-87 identity keys
+- [x] **CRYPT-05**: Docker test verifies MITM rejection -- injected node substituting KEM keys causes session fingerprint mismatch and handshake failure on both sides
+- [x] **CRYPT-06**: Docker test verifies trusted peer bypass -- lightweight handshake skips KEM but still verifies ML-DSA-87 identity; wrong identity key rejected even if IP is in trusted_peers
 
 ### Access Control
 
@@ -133,9 +133,9 @@ Explicitly excluded. Documented to prevent scope creep.
 | CRYPT-01 | Phase 47 | Pending |
 | CRYPT-02 | Phase 47 | Pending |
 | CRYPT-03 | Phase 47 | Pending |
-| CRYPT-04 | Phase 47 | Pending |
-| CRYPT-05 | Phase 47 | Pending |
-| CRYPT-06 | Phase 47 | Pending |
+| CRYPT-04 | Phase 47 | Complete |
+| CRYPT-05 | Phase 47 | Complete |
+| CRYPT-06 | Phase 47 | Complete |
 | ACL-01 | Phase 48 | Pending |
 | ACL-02 | Phase 48 | Pending |
 | ACL-03 | Phase 48 | Pending |

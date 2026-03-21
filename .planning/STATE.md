@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-last_updated: "2026-03-21T06:25:22Z"
-last_activity: 2026-03-21 -- Completed 47-01 (test infrastructure + chromatindb_verify CLI)
+status: executing
+last_updated: "2026-03-21T06:33:03.694Z"
+last_activity: 2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 1
-  percent: 28
+  total_plans: 5
+  completed_plans: 5
+  percent: 97
 ---
 
 # Project State
@@ -24,12 +24,12 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 
 ## Current Position
 
-Phase: 47 of 52 (Crypto & Transport Verification) -- IN PROGRESS
-Plan: 1 of 3 complete
-Status: Executing phase 47
-Last activity: 2026-03-21 -- Completed 47-01 (test infrastructure + chromatindb_verify CLI)
+Phase: 47 of 52 (Crypto & Transport Verification) -- COMPLETE
+Plan: 3 of 3 complete
+Status: Phase 47 complete
+Last activity: 2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)
 
-Progress: [▓▓▓░░░░░░░] 28%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 
 - Phase 46 sanitizer findings: coroutine params by value, recv_sync_msg executor transfer, silent SyncRequest drop, UBSAN nonnull exclusion
 - Phase 47-01: chromatindb_verify links against chromatindb_lib (same crypto paths), JSON output, test-net isolation, 5s sync interval
+- Phase 47-03: nicolaka/netshoot for tcpdump, MITM tested via ACL rejection + session fingerprint uniqueness, fixed-IP Docker networks for deterministic config
 
 ### Pending Todos
 

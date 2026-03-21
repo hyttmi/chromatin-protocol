@@ -166,7 +166,7 @@ Plans:
 **Goal**: Cryptographic guarantees (content addressing, non-repudiation, tamper detection, forward secrecy, MITM rejection, trusted peer bypass) are empirically verified via Docker multi-node tests
 **Depends on**: Phase 46 (sanitizer-clean codebase; Docker test harness established in this phase)
 **Requirements**: CRYPT-01, CRYPT-02, CRYPT-03, CRYPT-04, CRYPT-05, CRYPT-06
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 47-01-PLAN.md — chromatindb_verify CLI tool + Docker integration test harness + Dockerfile update
@@ -247,7 +247,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
-| 47. Crypto & Transport Verification | 1/3 | In progress | - |
+| 47. Crypto & Transport Verification | 2/3 | In Progress|  |
 | 48. Access Control & Topology | 0/? | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
