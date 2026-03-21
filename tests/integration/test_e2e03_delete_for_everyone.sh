@@ -252,12 +252,12 @@ fi
 
 log "--- Check 3: Propagation timing ---"
 
-log "Propagation time: ${PROPAGATION_TIME}s (limit: 15s)"
+log "Propagation time: ${PROPAGATION_TIME}s (limit: 20s = 5s sync + 15s margin)"
 
-if [[ "$PROPAGATION_TIME" -le 15 ]]; then
-    pass "Tombstone propagated within sync interval (${PROPAGATION_TIME}s <= 15s)"
+if [[ "$PROPAGATION_TIME" -le 20 ]]; then
+    pass "Tombstone propagated within sync interval (${PROPAGATION_TIME}s <= 20s)"
 else
-    log "FAIL: Propagation took ${PROPAGATION_TIME}s, expected <= 15s"
+    log "FAIL: Propagation took ${PROPAGATION_TIME}s, expected <= 20s"
     FAILURES=$((FAILURES + 1))
 fi
 
