@@ -228,7 +228,13 @@ Plans:
   3. A full data_dir copy to a new container resumes operation (connections, serving, sync, cursors); kill-9 during active sync recovers with all committed data intact and cursors allowing resumption
   4. Write rate flooding disconnects the offending peer while others continue; excess sync initiations get SyncRejected; excess sessions are rejected while existing ones complete; StorageFull broadcasts stop peers from pushing, and data is accepted again after space freed
   5. Namespace quota enforcement rejects writes after quota hit without affecting other namespaces; saturated ML-DSA-87 verifications do not starve the event loop (new connections accepted, metrics logged)
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 50-01-PLAN.md — OPS-01 SIGHUP config reload + OPS-02 SIGUSR1 metrics + OPS-03 SIGTERM graceful shutdown
+- [ ] 50-02-PLAN.md — DR-01 DARE forensics + DR-02/DR-03 master key + DR-04 data migration + DR-05 crash recovery
+- [ ] 50-03-PLAN.md — DOS-01 write rate limiting + DOS-02 sync rate limiting + DOS-03 concurrent sessions
+- [ ] 50-04-PLAN.md — DOS-04 storage full + DOS-05 namespace quotas + DOS-06 thread pool saturation
 
 ### Phase 51: TTL Lifecycle & E2E Primitives
 **Goal**: Tombstone propagation, TTL expiry, permanent blobs, and messaging primitives (async delivery, backfill, delete-for-everyone, namespace isolation) are verified via Docker multi-node tests
@@ -264,6 +270,6 @@ Plans:
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
-| 50. Operations, DR & Resource Limits | 0/? | Not started | - |
+| 50. Operations, DR & Resource Limits | 0/4 | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
