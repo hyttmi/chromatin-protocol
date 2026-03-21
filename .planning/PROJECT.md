@@ -86,6 +86,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Delegation quota enforcement verified (owner-attribution confirmed) — v0.9.0
 - ✓ README + protocol docs current with v0.8.0 and v0.9.0 changes — v0.9.0
 
+- ✓ SANITIZER CMake enum (asan/tsan/ubsan) replacing ENABLE_ASAN boolean — v1.0.0
+- ✓ ASAN-clean full suite (469 tests, zero findings in db/ code) — v1.0.0
+- ✓ TSAN-clean full suite (469 tests, zero data races in db/ code) — v1.0.0
+- ✓ UBSAN-clean full suite (469 tests, zero UB findings in db/ code) — v1.0.0
+- ✓ PEX SIGSEGV fix (root cause: AEAD nonce desync from concurrent SyncRejected writes) — v1.0.0
+- ✓ 50-run E2E reliability validated (release 50/50, TSAN 50/50, ASAN 50/50) — v1.0.0
+
 ### Active
 
 See REQUIREMENTS.md for v1.0.0 requirements.
@@ -119,7 +126,7 @@ See REQUIREMENTS.md for v1.0.0 requirements.
 
 ## Context
 
-Shipped v0.9.0 with 22,467 LOC C++20, 408+ tests.
+Shipped v0.9.0 with 22,467 LOC C++20, 469 tests.
 Built across 20 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d).
 9 milestones, 45 phases, 88 plans, 171 requirements total.
 
@@ -219,6 +226,11 @@ Previous projects inform design:
 | Reconnect with value copies across co_await | Prevents dangling refs on Server destruction during coroutine suspension | ✓ Good — fixed subtle lifetime bug |
 | Receiver-side inactivity (not Ping sender) | Avoids AEAD nonce desync from bidirectional keepalive messages; zero wire protocol changes | ✓ Good — simpler, safer |
 | Timestamp update at top of on_peer_message | Before rate limiting check — prevents false inactivity disconnects during rate-limited sessions | ✓ Good — correct ordering |
+| Coroutine params by value (not const ref) | C++ coroutine frames copy the reference, not the value — stack-use-after-scope when caller returns | ✓ Good — caught by ASAN |
+| Silent SyncRequest drop when peer syncing | Spawning detached SyncRejected coroutine races with sync initiator's writes, causing AEAD nonce desync | ✓ Good — fixed PEX SIGSEGV and flaky tests |
+| recv_sync_msg executor transfer after offload() | offload() resumes on thread_pool thread; must co_await asio::post(ioc_) before accessing io_context-bound state | ✓ Good — caught by TSAN |
+| UBSAN nonnull-attribute excluded globally | liboqs/libsodium __nonnull annotations on params that intentionally accept NULL — annotation bugs, not real UB | ✓ Good — scoped exclusion |
+| Per-target UBSAN alignment for libmdbx | MDBX intentionally uses misaligned stores in mmap'd pages — safe on x86, technically UB per C11 | ✓ Good — scoped to mdbx only |
 
 ---
-*Last updated: 2026-03-20 after v1.0.0 milestone start*
+*Last updated: 2026-03-21 after Phase 46 (Sanitizers & Bug Fix)*

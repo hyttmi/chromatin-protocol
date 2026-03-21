@@ -20,7 +20,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 46 -- Sanitizers & Bug Fix
+**Current focus:** v1.0.0 Phase 47 -- Crypto & Transport Verification
 
 ## Current Position
 
@@ -58,12 +58,8 @@ Progress: [▓▓░░░░░░░░] 14%
 
 All decisions logged in PROJECT.md Key Decisions table.
 
-- Coroutine params must be by value (not const ref) -- stack-use-after-scope pitfall
-- MDBX geometry.size_upper reduced to 1 GiB under ASAN (__SANITIZE_ADDRESS__)
-- SyncRequest silently dropped when peer->syncing to avoid AEAD nonce desync from concurrent writes
-- recv_sync_msg must co_await asio::post(ioc_) before accessing sync_inbox (offload resumes on pool thread)
-- UBSAN nonnull-attribute excluded globally (liboqs/libsodium annotation bugs)
-- PEX SIGSEGV root cause was AEAD nonce desync (fixed in 46-01, not a teardown issue)
+- Phase 46 sanitizer findings: coroutine params by value, recv_sync_msg executor transfer, silent SyncRequest drop, UBSAN nonnull exclusion
+- All decisions logged in PROJECT.md Key Decisions table
 
 ### Pending Todos
 
@@ -72,4 +68,3 @@ None.
 ### Blockers/Concerns
 
 - Pre-existing full-suite hang in release build when running all 469 tests together (port conflict in test infrastructure) -- deferred
-- Phase 46 complete (ASAN, TSAN, UBSAN all clean); ready for next phase
