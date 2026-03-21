@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T06:34:52.125Z"
-last_activity: "2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)"
+last_updated: "2026-03-21T07:00:54.154Z"
+last_activity: "2026-03-21 -- Completed 47-04 (CRYPT-06 gap fix: strict identity rejection on trusted IP)"
 progress:
   total_phases: 7
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
-  percent: 97
+  total_plans: 7
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 47 of 52 (Crypto & Transport Verification) -- COMPLETE
-Plan: 3 of 3 complete
+Plan: 4 of 4 complete
 Status: Phase 47 complete
-Last activity: 2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)
+Last activity: 2026-03-21 -- Completed 47-04 (CRYPT-06 gap fix: strict identity rejection on trusted IP)
 
-Progress: [██████████] 97%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [██████████] 97%
 | v0.8.0 Protocol Scalability | 4 | 8 | 1 day | ~24 min |
 | v0.9.0 Connection Resilience | 4 | 8 | 1 day | ~19 min |
 | Phase 47 P02 | 5min | 2 tasks | 5 files |
+| Phase 47 P04 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - Phase 47-02: hash-fields/sig-fields subcommands for field-level crypto verification, --verbose-blobs stderr output, CRYPT-03 handles both mdbx and DARE failure modes
 - Phase 47-03: nicolaka/netshoot for tcpdump, MITM tested via ACL rejection + session fingerprint uniqueness, fixed-IP Docker networks for deterministic config
 - [Phase 47]: hash-fields/sig-fields subcommands for field-level crypto verification, --verbose-blobs stderr output, CRYPT-03 handles both mdbx and DARE failure modes
+- [Phase 47]: Phase 47-04: Dynamic config with namespace discovery + allowed_keys for strict CRYPT-06 Part 3 identity rejection test
 
 ### Pending Todos
 
