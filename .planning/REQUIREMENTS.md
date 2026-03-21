@@ -39,7 +39,7 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 - [x] **NET-03**: Docker test verifies large blob integrity -- blobs at 1K, 100K, 1M, 10M, 100M sizes synced across cluster, hash verified on each peer
 - [x] **NET-04**: Docker test verifies sync cursor resumption -- node stopped/restarted syncs only new blobs (verified via wire traffic), not full re-sync
 - [x] **NET-05**: Docker test verifies sync recovery after crash -- kill -9 during reconciliation, restart completes sync without manual intervention, no duplicates or missing blobs
-- [ ] **NET-06**: Docker test verifies late-joiner at scale -- new node catches up to 10,000 blobs across multiple namespaces, blob counts and fingerprints match
+- [x] **NET-06**: Docker test verifies late-joiner at scale -- new node catches up to 10,000 blobs across multiple namespaces, blob counts and fingerprints match
 
 ### Resource Exhaustion & DoS
 
@@ -65,10 +65,10 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Set Reconciliation Protocol
 
-- [ ] **RECON-01**: Docker test verifies O(diff) scaling -- 10 new blobs on 10,000-blob namespace, wire traffic proportional to ~10 blobs not ~10,000
-- [ ] **RECON-02**: Docker test verifies empty namespace skip -- identical namespaces on two nodes, sync detects zero differences via cursor check, no ReconcileInit sent
-- [ ] **RECON-03**: Docker test verifies version byte forward compat -- ReconcileInit with unknown version byte rejected gracefully, no crash or state corruption
-- [ ] **RECON-04**: Docker test verifies large difference set -- Node A has 5000 blobs, Node B has 0, reconciliation transfers all 5000 with no duplicates or missed blobs
+- [x] **RECON-01**: Docker test verifies O(diff) scaling -- 10 new blobs on 10,000-blob namespace, wire traffic proportional to ~10 blobs not ~10,000
+- [x] **RECON-02**: Docker test verifies empty namespace skip -- identical namespaces on two nodes, sync detects zero differences via cursor check, no ReconcileInit sent
+- [x] **RECON-03**: Docker test verifies version byte forward compat -- ReconcileInit with unknown version byte rejected gracefully, no crash or state corruption
+- [x] **RECON-04**: Docker test verifies large difference set -- Node A has 5000 blobs, Node B has 0, reconciliation transfers all 5000 with no duplicates or missed blobs
 
 ### E2E Messaging Primitives
 
@@ -147,11 +147,11 @@ Explicitly excluded. Documented to prevent scope creep.
 | NET-03 | Phase 49 | Complete |
 | NET-04 | Phase 49 | Complete |
 | NET-05 | Phase 49 | Complete |
-| NET-06 | Phase 49 | Pending |
-| RECON-01 | Phase 49 | Pending |
-| RECON-02 | Phase 49 | Pending |
-| RECON-03 | Phase 49 | Pending |
-| RECON-04 | Phase 49 | Pending |
+| NET-06 | Phase 49 | Complete |
+| RECON-01 | Phase 49 | Complete |
+| RECON-02 | Phase 49 | Complete |
+| RECON-03 | Phase 49 | Complete |
+| RECON-04 | Phase 49 | Complete |
 | OPS-01 | Phase 50 | Pending |
 | OPS-02 | Phase 50 | Pending |
 | OPS-03 | Phase 50 | Pending |

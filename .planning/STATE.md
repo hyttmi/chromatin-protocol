@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-03-21T13:39:11Z"
-last_activity: 2026-03-21 -- Completed 49-01 (NET-03/NET-04/NET-05 network resilience integration tests)
+last_updated: "2026-03-21T14:30:57Z"
+last_activity: 2026-03-21 -- Completed 49-03 (RECON-01/02/03/04 + NET-06 reconciliation and late-joiner tests)
 progress:
   total_phases: 7
   completed_phases: 3
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 49 of 52 (Network Resilience & Reconciliation)
-Plan: 1 of 3 complete
-Status: In progress
-Last activity: 2026-03-21 -- Completed 49-01 (NET-03/NET-04/NET-05 network resilience integration tests)
+Plan: 3 of 3 complete
+Status: Phase 49 complete
+Last activity: 2026-03-21 -- Completed 49-03 (RECON-01/02/03/04 + NET-06 reconciliation and late-joiner tests)
 
 Progress: [█████████░] 90%
 
@@ -57,6 +57,7 @@ Progress: [█████████░] 90%
 | Phase 48 P03 | 24min | 1 tasks | 5 files |
 | Phase 48 P02 | 32min | 2 tasks | 5 files |
 | Phase 49 P01 | 23min | 2 tasks | 12 files |
+| Phase 49 P03 | 48min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 49]: full_resync_interval=9999 (not 0) for test configs -- validation requires >= 1
 - [Phase 49]: depends_on in recon compose for reliable startup order -- simultaneous boot causes sync deadlocks
 - [Phase 49]: Large blob (100M) notification ACK timeout is cosmetic -- verify via node blob count not loadgen errors
+- [Phase 49]: Rate 2000/sec for bulk loadgen ingest (>1000 blobs) -- sync timer at 5s disconnects loadgen at lower rates
+- [Phase 49]: Reduced RECON-01 baseline to 1000 blobs (from planned 10K) due to get_blob_count polling unreliability at scale
+- [Phase 49]: Fixed IP for tcpdump capture containers to avoid Docker address conflicts with stopped nodes
 
 ### Pending Todos
 

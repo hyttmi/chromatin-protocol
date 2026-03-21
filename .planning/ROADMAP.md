@@ -203,12 +203,12 @@ Plans:
 **Goal**: The sync protocol delivers eventual consistency across partitions, crashes, scale, and edge cases -- verified via Docker multi-node tests with iptables partitioning and traffic measurement
 **Depends on**: Phase 48 (ACL/topology tests confirm basic connectivity works correctly)
 **Requirements**: NET-01, NET-02, NET-03, NET-04, NET-05, NET-06, RECON-01, RECON-02, RECON-03, RECON-04
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 49-01-PLAN.md — Docker topologies (2-node recon + 5-node mesh) + NET-03 large blob integrity + NET-04 cursor resumption + NET-05 crash recovery
-- [ ] 49-02-PLAN.md — NET-01 partition healing + NET-02 split-brain merge
-- [ ] 49-03-PLAN.md — RECON-01 O(diff) scaling + RECON-02 empty skip + RECON-03 version compat + RECON-04 large transfer + NET-06 late-joiner
+- [x] 49-01-PLAN.md — Docker topologies (2-node recon + 5-node mesh) + NET-03 large blob integrity + NET-04 cursor resumption + NET-05 crash recovery
+- [x] 49-02-PLAN.md — NET-01 partition healing + NET-02 split-brain merge
+- [x] 49-03-PLAN.md — RECON-01 O(diff) scaling + RECON-02 empty skip + RECON-03 version compat + RECON-04 large transfer + NET-06 late-joiner
 
 **Success Criteria** (what must be TRUE):
   1. A 5-node mesh with iptables-induced network partition heals and converges to identical blob sets; a 4-node split-brain with independent writes merges to the union of all blobs after healing
@@ -262,7 +262,7 @@ Plans:
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
-| 49. Network Resilience & Reconciliation | 1/3 | In Progress|  |
+| 49. Network Resilience & Reconciliation | 3/3 | Complete   | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
