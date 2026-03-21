@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-03-21T06:33:03.694Z"
-last_activity: 2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)
+status: completed
+last_updated: "2026-03-21T06:34:52.125Z"
+last_activity: "2026-03-21 -- Completed 47-03 (transport security tests: forward secrecy, MITM rejection, trusted bypass)"
 progress:
   total_phases: 7
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 5
   completed_plans: 5
   percent: 97
@@ -51,6 +51,7 @@ Progress: [██████████] 97%
 | v0.7.0 Production Readiness | 6 | 12 | 2 days | ~13 min |
 | v0.8.0 Protocol Scalability | 4 | 8 | 1 day | ~24 min |
 | v0.9.0 Connection Resilience | 4 | 8 | 1 day | ~19 min |
+| Phase 47 P02 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -60,7 +61,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 
 - Phase 46 sanitizer findings: coroutine params by value, recv_sync_msg executor transfer, silent SyncRequest drop, UBSAN nonnull exclusion
 - Phase 47-01: chromatindb_verify links against chromatindb_lib (same crypto paths), JSON output, test-net isolation, 5s sync interval
+- Phase 47-02: hash-fields/sig-fields subcommands for field-level crypto verification, --verbose-blobs stderr output, CRYPT-03 handles both mdbx and DARE failure modes
 - Phase 47-03: nicolaka/netshoot for tcpdump, MITM tested via ACL rejection + session fingerprint uniqueness, fixed-IP Docker networks for deterministic config
+- [Phase 47]: hash-fields/sig-fields subcommands for field-level crypto verification, --verbose-blobs stderr output, CRYPT-03 handles both mdbx and DARE failure modes
 
 ### Pending Todos
 
