@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 Phase: 50 of 52 (Operations, Disaster Recovery & Resource Limits)
 Plan: 4 of 4 complete
 Status: Phase 50 complete
-Last activity: 2026-03-21 -- Completed 50-02 (DR-01/02/03/04/05 disaster recovery integration tests)
+Last activity: 2026-03-21 -- Completed 50-03 (DOS-01/02/03 DoS rate limiting integration tests)
 
 Progress: [██████████] 100%
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 49 P04 | 3min | 2 tasks | 4 files |
 | Phase 50 P01 | 10min | 2 tasks | 3 files |
 | Phase 50 P04 | 22min | 2 tasks | 6 files |
+| Phase 50 P03 | 26min | 2 tasks | 3 files |
 | Phase 50 P02 | 22min | 2 tasks | 4 files |
 
 ## Accumulated Context
@@ -100,6 +101,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 50]: DOS-06 checks handshake completion count on Node1 (not live peer count) -- loadgens disconnect before verification
 - [Phase 50]: METRICS DUMP marker for SIGUSR1 response counting (avoids metrics: prefix ambiguity with quota_rejections/sync_rejections)
 - [Phase 50]: mdbx.dat is actual database filename (not data.mdb); DR-02 auto-generates new master.key but old DARE data unreadable; DR-03 manifests as SIGSEGV during integrity scan
+- [Phase 50]: DOS-03 uses sync_cooldown=5s (not 0) -- per-peer syncing flag is initiator-checked so overlapping sessions from same peer don't generate server-side rejections without cooldown
+- [Phase 50]: Dedicated Docker networks per DoS test (172.36/37/38.0.0/16) prevent interference between concurrent test runs
 
 ### Pending Todos
 

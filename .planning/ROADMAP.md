@@ -140,7 +140,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 - [x] **Phase 47: Crypto & Transport Verification** - Docker integration tests for cryptographic integrity and PQ transport security (gap closure in progress) (completed 2026-03-21)
 - [x] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup (completed 2026-03-21)
 - [x] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (gap closure in progress) (completed 2026-03-21)
-- [ ] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance
+- [x] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance (completed 2026-03-21)
 - [ ] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives
 - [ ] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests
 
@@ -228,7 +228,7 @@ Plans:
   3. A full data_dir copy to a new container resumes operation (connections, serving, sync, cursors); kill-9 during active sync recovers with all committed data intact and cursors allowing resumption
   4. Write rate flooding disconnects the offending peer while others continue; excess sync initiations get SyncRejected; excess sessions are rejected while existing ones complete; StorageFull broadcasts stop peers from pushing, and data is accepted again after space freed
   5. Namespace quota enforcement rejects writes after quota hit without affecting other namespaces; saturated ML-DSA-87 verifications do not starve the event loop (new connections accepted, metrics logged)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 50-01-PLAN.md — OPS-01 SIGHUP config reload + OPS-02 SIGUSR1 metrics + OPS-03 SIGTERM graceful shutdown
@@ -270,6 +270,6 @@ Plans:
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
-| 50. Operations, DR & Resource Limits | 3/4 | In Progress|  |
+| 50. Operations, DR & Resource Limits | 4/4 | Complete   | 2026-03-21 |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
