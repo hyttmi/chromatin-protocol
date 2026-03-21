@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-03-21T11:28:53.637Z"
-last_activity: 2026-03-21 -- Completed 48-02 (ACL-03 delegation write, ACL-04 revocation propagation tests)
+last_updated: "2026-03-21T13:39:11Z"
+last_activity: 2026-03-21 -- Completed 49-01 (NET-03/NET-04/NET-05 network resilience integration tests)
 progress:
   total_phases: 7
   completed_phases: 3
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 48 -- Access Control & Topology
+**Current focus:** v1.0.0 Phase 49 -- Network Resilience & Reconciliation
 
 ## Current Position
 
-Phase: 48 of 52 (Access Control & Topology)
-Plan: 3 of 3 complete
+Phase: 49 of 52 (Network Resilience & Reconciliation)
+Plan: 1 of 3 complete
 Status: In progress
-Last activity: 2026-03-21 -- Completed 48-02 (ACL-03 delegation write, ACL-04 revocation propagation tests)
+Last activity: 2026-03-21 -- Completed 49-01 (NET-03/NET-04/NET-05 network resilience integration tests)
 
 Progress: [█████████░] 90%
 
@@ -56,6 +56,7 @@ Progress: [█████████░] 90%
 | Phase 48 P01 | 28min | 2 tasks | 7 files |
 | Phase 48 P03 | 24min | 1 tasks | 5 files |
 | Phase 48 P02 | 32min | 2 tasks | 5 files |
+| Phase 49 P01 | 23min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 48]: Named Docker volume pattern for preserving node identity across container restarts in multi-phase ACL tests
 - [Phase 48]: Connection dedup: lower namespace_id keeps its initiated connection (deterministic tie-break). Server::stop_reconnect() prevents reconnect-dedup infinite cycles.
 - [Phase 48]: Added --namespace flag to loadgen for delegation writes (delegate must target owner's namespace_id, not its own)
+- [Phase 49]: full_resync_interval=9999 (not 0) for test configs -- validation requires >= 1
+- [Phase 49]: depends_on in recon compose for reliable startup order -- simultaneous boot causes sync deadlocks
+- [Phase 49]: Large blob (100M) notification ACK timeout is cosmetic -- verify via node blob count not loadgen errors
 
 ### Pending Todos
 
