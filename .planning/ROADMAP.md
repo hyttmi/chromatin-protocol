@@ -166,13 +166,19 @@ Plans:
 **Goal**: Cryptographic guarantees (content addressing, non-repudiation, tamper detection, forward secrecy, MITM rejection, trusted peer bypass) are empirically verified via Docker multi-node tests
 **Depends on**: Phase 46 (sanitizer-clean codebase; Docker test harness established in this phase)
 **Requirements**: CRYPT-01, CRYPT-02, CRYPT-03, CRYPT-04, CRYPT-05, CRYPT-06
+**Plans:** 3 plans
+
+Plans:
+- [ ] 47-01-PLAN.md — chromatindb_verify CLI tool + Docker integration test harness + Dockerfile update
+- [ ] 47-02-PLAN.md — CRYPT-01 content addressing + CRYPT-02 non-repudiation + CRYPT-03 tamper detection tests
+- [ ] 47-03-PLAN.md — CRYPT-04 forward secrecy + CRYPT-05 MITM rejection + CRYPT-06 trusted peer bypass tests
+
 **Success Criteria** (what must be TRUE):
   1. A blob synced from Node A to Node B has its hash independently recomputed as SHA3-256(namespace||data||ttl||timestamp) and matches -- proving content addressing is correct
   2. A blob's ML-DSA-87 signature is independently verified on a different node using the blob's pubkey -- proving author non-repudiation
   3. A single bit flip in data.mdb causes AEAD authentication failure and the corrupted blob is never served to peers
   4. Captured PQ handshake traffic cannot be decrypted using either node's long-term identity keys -- proving forward secrecy via ephemeral ML-KEM-1024
   5. A MITM node substituting KEM keys causes session fingerprint mismatch and handshake failure; a node with wrong identity key is rejected even when its IP is in trusted_peers
-**Plans**: TBD
 
 ### Phase 48: Access Control & Topology
 **Goal**: Access control enforcement (closed-garden, namespace ownership, delegation lifecycle, hot-reload) and connection dedup are verified via Docker multi-node tests
@@ -241,7 +247,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
-| 47. Crypto & Transport Verification | 0/? | Not started | - |
+| 47. Crypto & Transport Verification | 0/3 | Not started | - |
 | 48. Access Control & Topology | 0/? | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
