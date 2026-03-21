@@ -18,8 +18,8 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Access Control
 
-- [ ] **ACL-01**: Docker test verifies closed-garden enforcement -- unauthorized node disconnected after handshake, no application-layer messages exchanged (packet capture verification)
-- [ ] **ACL-02**: Docker test verifies namespace sovereignty -- write with non-owning key and no delegation rejected immediately, no data written to storage
+- [x] **ACL-01**: Docker test verifies closed-garden enforcement -- unauthorized node disconnected after handshake, no application-layer messages exchanged (packet capture verification)
+- [x] **ACL-02**: Docker test verifies namespace sovereignty -- write with non-owning key and no delegation rejected immediately, no data written to storage
 - [ ] **ACL-03**: Docker test verifies delegation write -- delegate can write to owner's namespace on any cluster node; delegate cannot delete (write-only)
 - [ ] **ACL-04**: Docker test verifies revocation propagation -- tombstoned delegation blob syncs to all peers, revoked delegate's subsequent writes immediately rejected
 - [ ] **ACL-05**: Docker test verifies SIGHUP ACL reload -- newly added key can connect without restart; removed key's active connection dropped
@@ -136,8 +136,8 @@ Explicitly excluded. Documented to prevent scope creep.
 | CRYPT-04 | Phase 47 | Complete |
 | CRYPT-05 | Phase 47 | Complete |
 | CRYPT-06 | Phase 47 | Complete |
-| ACL-01 | Phase 48 | Pending |
-| ACL-02 | Phase 48 | Pending |
+| ACL-01 | Phase 48 | Complete |
+| ACL-02 | Phase 48 | Complete |
 | ACL-03 | Phase 48 | Pending |
 | ACL-04 | Phase 48 | Pending |
 | ACL-05 | Phase 48 | Pending |

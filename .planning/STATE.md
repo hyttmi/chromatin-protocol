@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-last_updated: "2026-03-21T07:00:54.154Z"
-last_activity: "2026-03-21 -- Completed 47-04 (CRYPT-06 gap fix: strict identity rejection on trusted IP)"
+status: in-progress
+last_updated: "2026-03-21T09:21:10Z"
+last_activity: "2026-03-21 -- Completed 48-01 (loadgen --delegate flag, ACL compose topologies, ACL-01/02 tests)"
 progress:
   total_phases: 7
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
-  percent: 100
+  total_plans: 10
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -20,23 +20,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 47 -- Crypto & Transport Verification
+**Current focus:** v1.0.0 Phase 48 -- Access Control & Topology
 
 ## Current Position
 
-Phase: 47 of 52 (Crypto & Transport Verification) -- COMPLETE
-Plan: 4 of 4 complete
-Status: Phase 47 complete
-Last activity: 2026-03-21 -- Completed 47-04 (CRYPT-06 gap fix: strict identity rejection on trusted IP)
+Phase: 48 of 52 (Access Control & Topology)
+Plan: 1 of 3 complete
+Status: In progress
+Last activity: 2026-03-21 -- Completed 48-01 (loadgen --delegate flag, ACL compose topologies, ACL-01/02 tests)
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 90 (across v1.0 - v1.0.0)
+- Total plans completed: 91 (across v1.0 - v1.0.0)
 - Average duration: ~17 min (historical)
-- Total execution time: ~26.5 hours
+- Total execution time: ~27 hours
 
 **By Milestone:**
 
@@ -53,6 +53,7 @@ Progress: [██████████] 100%
 | v0.9.0 Connection Resilience | 4 | 8 | 1 day | ~19 min |
 | Phase 47 P02 | 5min | 2 tasks | 5 files |
 | Phase 47 P04 | 2min | 1 tasks | 1 files |
+| Phase 48 P01 | 28min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - Phase 47-03: nicolaka/netshoot for tcpdump, MITM tested via ACL rejection + session fingerprint uniqueness, fixed-IP Docker networks for deterministic config
 - [Phase 47]: hash-fields/sig-fields subcommands for field-level crypto verification, --verbose-blobs stderr output, CRYPT-03 handles both mdbx and DARE failure modes
 - [Phase 47]: Phase 47-04: Dynamic config with namespace discovery + allowed_keys for strict CRYPT-06 Part 3 identity rejection test
+- [Phase 48]: ACL-02 tests namespace isolation (separate namespace creation) rather than engine rejection path, since loadgen always writes to its own namespace
+- [Phase 48]: Named Docker volume pattern for preserving node identity across container restarts in multi-phase ACL tests
 
 ### Pending Todos
 
