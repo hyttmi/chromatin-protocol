@@ -84,6 +84,11 @@ public:
     /// Called by PeerManager on SIGHUP to allow immediate retry.
     void clear_reconnect_state();
 
+    /// Stop reconnection attempts to a specific address (used by connection dedup).
+    /// Erases reconnect state and cancels any sleeping timer, causing the
+    /// reconnect_loop coroutine for that address to exit on next iteration.
+    void stop_reconnect(const std::string& address);
+
     /// ACL rejection threshold before extended backoff.
     static constexpr int ACL_REJECTION_THRESHOLD = 3;
 

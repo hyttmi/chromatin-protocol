@@ -329,6 +329,58 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     }
 
     auto ns_hex = to_hex(conn->peer_pubkey());
+
+    // Connection dedup: check if we already have a connection from this peer namespace.
+    // When two nodes are mutual bootstrap peers, both initiate connections simultaneously.
+    // We use a deterministic tie-break so both sides independently close the same connection.
+    {
+        for (auto it = peers_.begin(); it != peers_.end(); ++it) {
+            auto existing_ns = crypto::sha3_256(it->connection->peer_pubkey());
+            if (existing_ns == peer_ns) {
+                // Deterministic tie-break: the node with the lower namespace_id keeps
+                // its initiated (outbound) connection. Since both sides see the same
+                // pair of namespace IDs, they will independently close the same connection.
+                auto own_ns = identity_.namespace_id();
+                bool own_ns_lower = std::lexicographical_compare(
+                    own_ns.begin(), own_ns.end(),
+                    peer_ns.data(), peer_ns.data() + 32);
+
+                bool keep_new;
+                if (own_ns_lower) {
+                    // We have the lower namespace: keep whichever connection we initiated
+                    keep_new = conn->is_initiator();
+                } else {
+                    // They have the lower namespace: keep whichever they initiated (= we received)
+                    keep_new = !conn->is_initiator();
+                }
+
+                if (keep_new) {
+                    spdlog::info("duplicate connection from peer {}: closing existing, keeping new",
+                                 ns_hex);
+                    // Stop reconnect for the closed connection's bootstrap address
+                    // to prevent infinite reconnect-dedup cycles.
+                    auto closed_addr = it->connection->connect_address();
+                    if (!closed_addr.empty()) {
+                        server_.stop_reconnect(closed_addr);
+                    }
+                    it->connection->close();
+                    peers_.erase(it);
+                } else {
+                    spdlog::info("duplicate connection from peer {}: closing new, keeping existing",
+                                 ns_hex);
+                    // Stop reconnect for the closed connection's bootstrap address
+                    auto closed_addr = conn->connect_address();
+                    if (!closed_addr.empty()) {
+                        server_.stop_reconnect(closed_addr);
+                    }
+                    conn->close();
+                    return;  // Don't add to peers_
+                }
+                break;
+            }
+        }
+    }
+
     spdlog::info("Connected to peer {}@{}", ns_hex, info.address);
 
     // Set up message routing

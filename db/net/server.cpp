@@ -228,6 +228,8 @@ asio::awaitable<void> Server::reconnect_loop(std::string address) {
     // reconnect_loop active for this address
 
     while (!draining_) {
+        // If stop_reconnect() erased our entry, exit the loop (connection dedup).
+        if (!reconnect_state_.count(address)) co_return;
         // Read state by value at each iteration (safe across co_await)
         auto cur = reconnect_state_[address];
 
@@ -344,6 +346,14 @@ void Server::clear_reconnect_state() {
     // Cancel all sleeping reconnect timers to force immediate retry
     for (auto& [addr, timer] : reconnect_timers_) {
         if (timer) timer->cancel();
+    }
+}
+
+void Server::stop_reconnect(const std::string& address) {
+    reconnect_state_.erase(address);
+    auto it = reconnect_timers_.find(address);
+    if (it != reconnect_timers_.end() && it->second) {
+        it->second->cancel();
     }
 }
 
