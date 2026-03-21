@@ -357,6 +357,13 @@ void Server::stop_reconnect(const std::string& address) {
     }
 }
 
+void Server::delay_reconnect(const std::string& address) {
+    auto it = reconnect_state_.find(address);
+    if (it != reconnect_state_.end()) {
+        it->second.delay_sec = MAX_BACKOFF_SEC;
+    }
+}
+
 // =============================================================================
 // Outbound connection with reconnect (for discovered/persisted peers)
 // =============================================================================

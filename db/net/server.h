@@ -89,6 +89,12 @@ public:
     /// reconnect_loop coroutine for that address to exit on next iteration.
     void stop_reconnect(const std::string& address);
 
+    /// Delay reconnection to a specific address (used by connection dedup).
+    /// Sets backoff to MAX_BACKOFF_SEC instead of permanently stopping.
+    /// The reconnect loop stays alive and will retry after the delay,
+    /// recovering connectivity if the kept connection later fails.
+    void delay_reconnect(const std::string& address);
+
     /// ACL rejection threshold before extended backoff.
     static constexpr int ACL_REJECTION_THRESHOLD = 3;
 

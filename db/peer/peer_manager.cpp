@@ -357,21 +357,23 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
                 if (keep_new) {
                     spdlog::info("duplicate connection from peer {}: closing existing, keeping new",
                                  ns_hex);
-                    // Stop reconnect for the closed connection's bootstrap address
-                    // to prevent infinite reconnect-dedup cycles.
+                    // Delay reconnect for the closed connection's bootstrap address
+                    // to dampen reconnect-dedup cycles without permanently losing
+                    // connectivity (stop_reconnect would prevent recovery if the
+                    // kept connection later fails).
                     auto closed_addr = it->connection->connect_address();
                     if (!closed_addr.empty()) {
-                        server_.stop_reconnect(closed_addr);
+                        server_.delay_reconnect(closed_addr);
                     }
                     it->connection->close();
                     peers_.erase(it);
                 } else {
                     spdlog::info("duplicate connection from peer {}: closing new, keeping existing",
                                  ns_hex);
-                    // Stop reconnect for the closed connection's bootstrap address
+                    // Delay reconnect for the closed connection's bootstrap address
                     auto closed_addr = conn->connect_address();
                     if (!closed_addr.empty()) {
-                        server_.stop_reconnect(closed_addr);
+                        server_.delay_reconnect(closed_addr);
                     }
                     conn->close();
                     return;  // Don't add to peers_
