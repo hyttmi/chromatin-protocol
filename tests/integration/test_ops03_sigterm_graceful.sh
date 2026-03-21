@@ -25,8 +25,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
-NODE1_CONTAINER="chromatindb-test-node1"
-NODE2_CONTAINER="chromatindb-test-node2"
+NODE1_CONTAINER="chromatindb-ops03-node1"
+NODE2_CONTAINER="chromatindb-ops03-node2"
 OPS03_NETWORK="chromatindb-ops03-test-net"
 
 # Override helpers.sh NETWORK for run_loadgen
