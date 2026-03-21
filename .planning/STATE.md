@@ -17,10 +17,10 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-20)
+See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 51 -- TTL Lifecycle & E2E Primitives
+**Current focus:** v1.0.0 Phase 52 -- Stress, Chaos & Fuzzing
 
 ## Current Position
 
@@ -125,3 +125,4 @@ None.
 ### Blockers/Concerns
 
 - Pre-existing full-suite hang in release build when running all 469 tests together (port conflict in test infrastructure) -- deferred
+- [Phase 51] Timestamp/TTL units mismatch was silently preventing all GC in production -- fixed in a22d611
