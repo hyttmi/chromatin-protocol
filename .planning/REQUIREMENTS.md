@@ -59,7 +59,7 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 ### Tombstone & TTL Lifecycle
 
 - [x] **TTL-01**: Docker test verifies tombstone propagation -- 100 blobs deleted via tombstones, all peers stop serving original data after sync
-- [ ] **TTL-02**: Docker test verifies tombstone TTL expiry -- tombstones with TTL=60 expire and are GC'd, tombstone_map entries removed, storage decreases
+- [x] **TTL-02**: Docker test verifies tombstone TTL expiry -- tombstones with TTL=60 expire and are GC'd, tombstone_map entries removed, storage decreases
 - [x] **TTL-03**: Docker test verifies TTL=0 permanent blobs -- blobs with TTL=0 never expired or collected regardless of age
 - [x] **TTL-04**: Docker test verifies delegate cannot delete -- delegate with valid delegation blob has tombstone rejected; only namespace owner can delete
 
@@ -73,7 +73,7 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 ### E2E Messaging Primitives
 
 - [x] **E2E-01**: Docker test verifies async message delivery -- blob written while recipient disconnected, recipient reconnects, receives blob via sync + pub/sub notification
-- [ ] **E2E-02**: Docker test verifies history backfill -- relay node joins namespace after 1000 messages, reconciliation backfills all blobs with no gaps, sequence numbers monotonic
+- [x] **E2E-02**: Docker test verifies history backfill -- relay node joins namespace after 1000 messages, reconciliation backfills all blobs with no gaps, sequence numbers monotonic
 - [x] **E2E-03**: Docker test verifies delete for everyone -- tombstone propagates to all cluster nodes within one sync interval, no node serves original blob
 - [x] **E2E-04**: Docker test verifies multi-namespace isolation -- two namespaces on same cluster, messages never cross namespaces, verified via fingerprint comparison
 
@@ -167,11 +167,11 @@ Explicitly excluded. Documented to prevent scope creep.
 | DOS-05 | Phase 50 | Complete |
 | DOS-06 | Phase 50 | Complete |
 | TTL-01 | Phase 51 | Complete |
-| TTL-02 | Phase 51 | Pending |
+| TTL-02 | Phase 51 | Complete |
 | TTL-03 | Phase 51 | Complete |
 | TTL-04 | Phase 51 | Complete |
 | E2E-01 | Phase 51 | Complete |
-| E2E-02 | Phase 51 | Pending |
+| E2E-02 | Phase 51 | Complete |
 | E2E-03 | Phase 51 | Complete |
 | E2E-04 | Phase 51 | Complete |
 | STRESS-01 | Phase 52 | Pending |

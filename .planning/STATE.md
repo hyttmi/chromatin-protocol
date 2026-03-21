@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 51 of 52 (TTL Lifecycle & E2E Primitives)
-Plan: 2 of 3 complete
-Status: In progress
-Last activity: 2026-03-21 -- Completed 51-01 (TTL-01/03/04 tombstone propagation, permanent blobs, delegate delete tests)
+Plan: 3 of 3 complete
+Status: Phase 51 complete
+Last activity: 2026-03-21 -- Completed 51-03 (TTL-02/E2E-02 tombstone TTL expiry GC and history backfill tests)
 
 Progress: [██████████] 100%
 
@@ -66,6 +66,7 @@ Progress: [██████████] 100%
 | Phase 50 P02 | 22min | 2 tasks | 4 files |
 | Phase 51 P02 | 19min | 2 tasks | 3 files |
 | Phase 51 P01 | 23min | 2 tasks | 3 files |
+| Phase 51 P03 | 32min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 51]: Pub/sub notification check is soft (WARN not FAIL) -- async delivery proven by blob count convergence
 - [Phase 51]: TTL-03 verifies structural expiry exemption (0 expiry entries for TTL=0) rather than actual GC timing due to pre-existing timestamp/clock units mismatch
 - [Phase 51]: TTL-01 uses integrity scan restart to verify tombstone_map entries (restart triggers startup integrity_scan)
+- [Phase 51]: Fixed timestamp/TTL units mismatch: timestamps are microseconds, TTL/clock are seconds. Expiry computation now normalizes via timestamp/1000000
+- [Phase 51]: Integrity scan output (blobs= from startup) used for GC verification -- SIGUSR1 metrics sum latest_seq_num which never decreases
+- [Phase 51]: grep "integrity scan: blobs=" to filter info line from warning lines in integrity scan log output
 - [Phase 51]: TTL-04 reuses docker-compose.acl.yml topology for consistency with ACL-03/ACL-04 delegation tests
 - [Phase 51]: Dedicated Docker subnets: 172.39.0.0/16 (TTL-01), 172.40.0.0/16 (TTL-03)
 

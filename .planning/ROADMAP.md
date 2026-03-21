@@ -141,7 +141,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 - [x] **Phase 48: Access Control & Topology** - Docker integration tests for ACL enforcement, delegation, and connection dedup (completed 2026-03-21)
 - [x] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (gap closure in progress) (completed 2026-03-21)
 - [x] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance (completed 2026-03-21)
-- [ ] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives
+- [x] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives (completed 2026-03-21)
 - [ ] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests
 
 ## Phase Details
@@ -246,7 +246,7 @@ Plans:
   3. A blob written while a recipient is disconnected is delivered via sync + pub/sub notification after reconnection
   4. A relay node joining a namespace after 1000 messages backfills all blobs with no gaps and monotonic sequence numbers; tombstones propagate to all nodes within one sync interval
   5. Two namespaces on the same cluster have complete isolation -- messages never cross namespaces, verified via per-namespace fingerprint comparison
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 51-01-PLAN.md — TTL-01 tombstone propagation + TTL-03 permanent blobs + TTL-04 delegate cannot delete
@@ -276,5 +276,5 @@ Plans:
 | 48. Access Control & Topology | 3/3 | Complete    | 2026-03-21 |
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 4/4 | Complete    | 2026-03-21 |
-| 51. TTL Lifecycle & E2E Primitives | 2/3 | In Progress|  |
+| 51. TTL Lifecycle & E2E Primitives | 3/3 | Complete   | 2026-03-21 |
 | 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
