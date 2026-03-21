@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-20)
 ## Current Position
 
 Phase: 51 of 52 (TTL Lifecycle & E2E Primitives)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In progress
-Last activity: 2026-03-21 -- Completed 51-02 (E2E-01/03/04 messaging primitives integration tests)
+Last activity: 2026-03-21 -- Completed 51-01 (TTL-01/03/04 tombstone propagation, permanent blobs, delegate delete tests)
 
 Progress: [██████████] 100%
 
@@ -65,6 +65,7 @@ Progress: [██████████] 100%
 | Phase 50 P03 | 26min | 2 tasks | 3 files |
 | Phase 50 P02 | 22min | 2 tasks | 4 files |
 | Phase 51 P02 | 19min | 2 tasks | 3 files |
+| Phase 51 P01 | 23min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,10 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 51]: E2E-03 propagation timing margin 20s (5s sync + 15s overhead jitter) prevents false failures from clock jitter
 - [Phase 51]: Unique Docker subnets per E2E test (172.41/42/43) and unique container names (chromatindb-e2eNN-nodeN) prevent cross-test collisions
 - [Phase 51]: Pub/sub notification check is soft (WARN not FAIL) -- async delivery proven by blob count convergence
+- [Phase 51]: TTL-03 verifies structural expiry exemption (0 expiry entries for TTL=0) rather than actual GC timing due to pre-existing timestamp/clock units mismatch
+- [Phase 51]: TTL-01 uses integrity scan restart to verify tombstone_map entries (restart triggers startup integrity_scan)
+- [Phase 51]: TTL-04 reuses docker-compose.acl.yml topology for consistency with ACL-03/ACL-04 delegation tests
+- [Phase 51]: Dedicated Docker subnets: 172.39.0.0/16 (TTL-01), 172.40.0.0/16 (TTL-03)
 
 ### Pending Todos
 

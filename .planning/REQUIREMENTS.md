@@ -58,10 +58,10 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Tombstone & TTL Lifecycle
 
-- [ ] **TTL-01**: Docker test verifies tombstone propagation -- 100 blobs deleted via tombstones, all peers stop serving original data after sync
+- [x] **TTL-01**: Docker test verifies tombstone propagation -- 100 blobs deleted via tombstones, all peers stop serving original data after sync
 - [ ] **TTL-02**: Docker test verifies tombstone TTL expiry -- tombstones with TTL=60 expire and are GC'd, tombstone_map entries removed, storage decreases
-- [ ] **TTL-03**: Docker test verifies TTL=0 permanent blobs -- blobs with TTL=0 never expired or collected regardless of age
-- [ ] **TTL-04**: Docker test verifies delegate cannot delete -- delegate with valid delegation blob has tombstone rejected; only namespace owner can delete
+- [x] **TTL-03**: Docker test verifies TTL=0 permanent blobs -- blobs with TTL=0 never expired or collected regardless of age
+- [x] **TTL-04**: Docker test verifies delegate cannot delete -- delegate with valid delegation blob has tombstone rejected; only namespace owner can delete
 
 ### Set Reconciliation Protocol
 
@@ -166,10 +166,10 @@ Explicitly excluded. Documented to prevent scope creep.
 | DOS-04 | Phase 50 | Complete |
 | DOS-05 | Phase 50 | Complete |
 | DOS-06 | Phase 50 | Complete |
-| TTL-01 | Phase 51 | Pending |
+| TTL-01 | Phase 51 | Complete |
 | TTL-02 | Phase 51 | Pending |
-| TTL-03 | Phase 51 | Pending |
-| TTL-04 | Phase 51 | Pending |
+| TTL-03 | Phase 51 | Complete |
+| TTL-04 | Phase 51 | Complete |
 | E2E-01 | Phase 51 | Complete |
 | E2E-02 | Phase 51 | Pending |
 | E2E-03 | Phase 51 | Complete |
