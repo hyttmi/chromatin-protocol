@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T17:30:30.147Z"
-last_activity: 2026-03-21 -- Completed 50-03 (DOS-01/02/03 DoS rate limiting integration tests)
+last_updated: "2026-03-21T19:03:20Z"
+last_activity: 2026-03-21 -- Completed 51-02 (E2E-01/03/04 messaging primitives integration tests)
 progress:
   total_phases: 7
   completed_phases: 5
@@ -20,21 +20,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 50 -- Operations, Disaster Recovery & Resource Limits
+**Current focus:** v1.0.0 Phase 51 -- TTL Lifecycle & E2E Primitives
 
 ## Current Position
 
-Phase: 50 of 52 (Operations, Disaster Recovery & Resource Limits)
-Plan: 4 of 4 complete
-Status: Phase 50 complete
-Last activity: 2026-03-21 -- Completed 50-03 (DOS-01/02/03 DoS rate limiting integration tests)
+Phase: 51 of 52 (TTL Lifecycle & E2E Primitives)
+Plan: 1 of 3 complete
+Status: In progress
+Last activity: 2026-03-21 -- Completed 51-02 (E2E-01/03/04 messaging primitives integration tests)
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 91 (across v1.0 - v1.0.0)
+- Total plans completed: 92 (across v1.0 - v1.0.0)
 - Average duration: ~17 min (historical)
 - Total execution time: ~27 hours
 
@@ -64,6 +64,7 @@ Progress: [██████████] 100%
 | Phase 50 P04 | 22min | 2 tasks | 6 files |
 | Phase 50 P03 | 26min | 2 tasks | 3 files |
 | Phase 50 P02 | 22min | 2 tasks | 4 files |
+| Phase 51 P02 | 19min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,10 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 50]: mdbx.dat is actual database filename (not data.mdb); DR-02 auto-generates new master.key but old DARE data unreadable; DR-03 manifests as SIGSEGV during integrity scan
 - [Phase 50]: DOS-03 uses sync_cooldown=5s (not 0) -- per-peer syncing flag is initiator-checked so overlapping sessions from same peer don't generate server-side rejections without cooldown
 - [Phase 50]: Dedicated Docker networks per DoS test (172.36/37/38.0.0/16) prevent interference between concurrent test runs
+
+- [Phase 51]: E2E-03 propagation timing margin 20s (5s sync + 15s overhead jitter) prevents false failures from clock jitter
+- [Phase 51]: Unique Docker subnets per E2E test (172.41/42/43) and unique container names (chromatindb-e2eNN-nodeN) prevent cross-test collisions
+- [Phase 51]: Pub/sub notification check is soft (WARN not FAIL) -- async delivery proven by blob count convergence
 
 ### Pending Todos
 

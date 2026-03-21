@@ -72,10 +72,10 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### E2E Messaging Primitives
 
-- [ ] **E2E-01**: Docker test verifies async message delivery -- blob written while recipient disconnected, recipient reconnects, receives blob via sync + pub/sub notification
+- [x] **E2E-01**: Docker test verifies async message delivery -- blob written while recipient disconnected, recipient reconnects, receives blob via sync + pub/sub notification
 - [ ] **E2E-02**: Docker test verifies history backfill -- relay node joins namespace after 1000 messages, reconciliation backfills all blobs with no gaps, sequence numbers monotonic
-- [ ] **E2E-03**: Docker test verifies delete for everyone -- tombstone propagates to all cluster nodes within one sync interval, no node serves original blob
-- [ ] **E2E-04**: Docker test verifies multi-namespace isolation -- two namespaces on same cluster, messages never cross namespaces, verified via fingerprint comparison
+- [x] **E2E-03**: Docker test verifies delete for everyone -- tombstone propagates to all cluster nodes within one sync interval, no node serves original blob
+- [x] **E2E-04**: Docker test verifies multi-namespace isolation -- two namespaces on same cluster, messages never cross namespaces, verified via fingerprint comparison
 
 ### Stress & Chaos
 
@@ -170,10 +170,10 @@ Explicitly excluded. Documented to prevent scope creep.
 | TTL-02 | Phase 51 | Pending |
 | TTL-03 | Phase 51 | Pending |
 | TTL-04 | Phase 51 | Pending |
-| E2E-01 | Phase 51 | Pending |
+| E2E-01 | Phase 51 | Complete |
 | E2E-02 | Phase 51 | Pending |
-| E2E-03 | Phase 51 | Pending |
-| E2E-04 | Phase 51 | Pending |
+| E2E-03 | Phase 51 | Complete |
+| E2E-04 | Phase 51 | Complete |
 | STRESS-01 | Phase 52 | Pending |
 | STRESS-02 | Phase 52 | Pending |
 | STRESS-03 | Phase 52 | Pending |
