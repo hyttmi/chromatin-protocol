@@ -1,0 +1,47 @@
+services:
+  node1:
+    image: chromatindb:test
+    container_name: chromatindb-test-node1
+    command: ["run", "--config", "/config/node1.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node1-data:/data
+      - ./configs/node1.json:/config/node1.json:ro
+    networks:
+      - test-net
+    ports:
+      - "4201:4200"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node2:
+    image: chromatindb:test
+    container_name: chromatindb-test-node2
+    command: ["run", "--config", "/config/node2.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node2-data:/data
+      - ./configs/node2.json:/config/node2.json:ro
+    networks:
+      - test-net
+    ports:
+      - "4202:4200"
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  node1-data:
+  node2-data:
+
+networks:
+  test-net:
+    driver: bridge
