@@ -185,13 +185,19 @@ Plans:
 **Goal**: Access control enforcement (closed-garden, namespace ownership, delegation lifecycle, hot-reload) and connection dedup are verified via Docker multi-node tests
 **Depends on**: Phase 47 (Docker test harness and helper scripts available)
 **Requirements**: ACL-01, ACL-02, ACL-03, ACL-04, ACL-05, TOPO-01
+**Plans:** 3 plans
+
+Plans:
+- [ ] 48-01-PLAN.md — Loadgen --delegate flag + Docker compose topologies + ACL-01 closed-garden + ACL-02 namespace sovereignty tests
+- [ ] 48-02-PLAN.md — ACL-03 delegation write + ACL-04 revocation propagation tests
+- [ ] 48-03-PLAN.md — Connection dedup implementation + ACL-05 SIGHUP reload + TOPO-01 dedup tests
+
 **Success Criteria** (what must be TRUE):
   1. An unauthorized node is disconnected after handshake with zero application-layer messages exchanged (verified via log inspection)
   2. A write with non-owning key and no delegation is rejected immediately with no data written to storage
   3. A delegate can write to the owner's namespace on any cluster node, but a delegate's tombstone attempt is rejected (write-only verified)
   4. A tombstoned delegation blob syncs to all peers and the revoked delegate's subsequent writes are immediately rejected
   5. SIGHUP with updated allowed_keys connects newly-added keys and drops removed keys' active connections; two nodes configured as mutual peers produce exactly one logical connection
-**Plans**: TBD
 
 ### Phase 49: Network Resilience & Reconciliation
 **Goal**: The sync protocol delivers eventual consistency across partitions, crashes, scale, and edge cases -- verified via Docker multi-node tests with iptables partitioning and traffic measurement
@@ -249,7 +255,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 46. Sanitizers & Bug Fix | 2/2 | Complete    | 2026-03-21 |
 | 47. Crypto & Transport Verification | 4/4 | Complete   | 2026-03-21 |
-| 48. Access Control & Topology | 0/? | Not started | - |
+| 48. Access Control & Topology | 0/3 | Not started | - |
 | 49. Network Resilience & Reconciliation | 0/? | Not started | - |
 | 50. Operations, DR & Resource Limits | 0/? | Not started | - |
 | 51. TTL Lifecycle & E2E Primitives | 0/? | Not started | - |
