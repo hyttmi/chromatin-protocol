@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-21T15:02:32.219Z"
+last_updated: "2026-03-21T17:05:45.898Z"
 last_activity: "2026-03-21 -- Completed 49-04 (gap closure: hash verification + 10K RECON-01 baseline)"
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 17
+  completed_plans: 14
   percent: 100
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-20)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.0.0 Phase 49 -- Network Resilience & Reconciliation
+**Current focus:** v1.0.0 Phase 50 -- Operations, Disaster Recovery & Resource Limits
 
 ## Current Position
 
-Phase: 49 of 52 (Network Resilience & Reconciliation)
-Plan: 4 of 4 complete
-Status: Phase 49 complete (all gaps closed)
-Last activity: 2026-03-21 -- Completed 49-04 (gap closure: hash verification + 10K RECON-01 baseline)
+Phase: 50 of 52 (Operations, Disaster Recovery & Resource Limits)
+Plan: 1 of 3 complete
+Status: Executing phase 50
+Last activity: 2026-03-21 -- Completed 50-01 (OPS signal tests: SIGHUP, SIGUSR1, SIGTERM)
 
-Progress: [██████████] 100%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [██████████] 100%
 | Phase 49 P03 | 48min | 2 tasks | 5 files |
 | Phase 49 P02 | 54min | 2 tasks | 2 files |
 | Phase 49 P04 | 3min | 2 tasks | 4 files |
+| Phase 50 P01 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 49]: Auto-reconnect backoff for healing instead of SIGHUP -- clear_reconnect_state kills reconnect_loop coroutines
 - [Phase 49]: Hash verification skips --verbose-blobs for 10M/100M blobs (data_hex = 20-200 MB hex) -- AEAD integrity is implicit
 - [Phase 49]: Single sample blob hash verification on late-joiner is sufficient -- crypto path + AEAD + fingerprint convergence
+
+- [Phase 50]: Unique container names per test (chromatindb-ops0N-nodeN) to prevent cross-test collisions when running via --filter ops
+- [Phase 50]: rate_limit_bytes_per_sec=1024 (config validation minimum) with burst=2048 for tightest valid rate limit test
 
 ### Pending Todos
 

@@ -52,9 +52,9 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Operational Signaling
 
-- [ ] **OPS-01**: Docker test verifies SIGHUP config reload -- changed rate_limit_bytes_per_sec applies immediately; changed allowed_keys disconnects disallowed peers
-- [ ] **OPS-02**: Docker test verifies SIGUSR1 metrics dump -- output includes all expected fields (peers, blobs, storage, syncs, ingests, rejections, rate_limited, cursor_hits, cursor_misses, full_resyncs, uptime)
-- [ ] **OPS-03**: Docker test verifies SIGTERM graceful shutdown -- in-flight MDBX transactions complete/abort cleanly, restart shows no corruption
+- [x] **OPS-01**: Docker test verifies SIGHUP config reload -- changed rate_limit_bytes_per_sec applies immediately; changed allowed_keys disconnects disallowed peers
+- [x] **OPS-02**: Docker test verifies SIGUSR1 metrics dump -- output includes all expected fields (peers, blobs, storage, syncs, ingests, rejections, rate_limited, cursor_hits, cursor_misses, full_resyncs, uptime)
+- [x] **OPS-03**: Docker test verifies SIGTERM graceful shutdown -- in-flight MDBX transactions complete/abort cleanly, restart shows no corruption
 
 ### Tombstone & TTL Lifecycle
 
@@ -152,9 +152,9 @@ Explicitly excluded. Documented to prevent scope creep.
 | RECON-02 | Phase 49 | Complete |
 | RECON-03 | Phase 49 | Complete |
 | RECON-04 | Phase 49 | Complete |
-| OPS-01 | Phase 50 | Pending |
-| OPS-02 | Phase 50 | Pending |
-| OPS-03 | Phase 50 | Pending |
+| OPS-01 | Phase 50 | Complete |
+| OPS-02 | Phase 50 | Complete |
+| OPS-03 | Phase 50 | Complete |
 | DR-01 | Phase 50 | Pending |
 | DR-02 | Phase 50 | Pending |
 | DR-03 | Phase 50 | Pending |
