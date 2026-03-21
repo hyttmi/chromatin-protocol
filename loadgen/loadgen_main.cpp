@@ -56,6 +56,7 @@ struct Config {
     std::string hashes_from;          // "stdin" = read target hashes from stdin
     bool verbose_blobs = false;       // emit BLOB_FIELDS JSON to stderr per blob
     std::string delegate_pubkey_hex;  // non-empty = delegation mode
+    std::string target_namespace_hex; // non-empty = write to this namespace instead of own
 };
 
 void print_usage(const char* prog) {
@@ -74,7 +75,8 @@ void print_usage(const char* prog) {
               << "  --delete             Delete mode: send tombstones instead of blobs\n"
               << "  --hashes-from stdin  Read target blob hashes from stdin (one hex hash per line)\n"
               << "  --verbose-blobs      Emit BLOB_FIELDS JSON to stderr for each blob sent\n"
-              << "  --delegate PUBKEY_HEX  Create a delegation blob for the given delegate public key\n";
+              << "  --delegate PUBKEY_HEX  Create a delegation blob for the given delegate public key\n"
+              << "  --namespace NS_HEX     Write to target namespace instead of own (for delegation writes)\n";
 }
 
 bool parse_args(int argc, char* argv[], Config& cfg) {
@@ -119,6 +121,8 @@ bool parse_args(int argc, char* argv[], Config& cfg) {
             cfg.verbose_blobs = true;
         } else if (arg == "--delegate" && i + 1 < argc) {
             cfg.delegate_pubkey_hex = argv[++i];
+        } else if (arg == "--namespace" && i + 1 < argc) {
+            cfg.target_namespace_hex = argv[++i];
         }
     }
     if (cfg.delete_mode && !cfg.delegate_pubkey_hex.empty()) {
@@ -250,10 +254,15 @@ std::vector<uint8_t> from_hex_bytes(const std::string& hex_str) {
 chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::vector<uint8_t>& data,
-    uint32_t ttl, uint64_t timestamp)
+    uint32_t ttl, uint64_t timestamp,
+    const std::array<uint8_t, 32>* ns_override = nullptr)
 {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+    if (ns_override) {
+        std::memcpy(blob.namespace_id.data(), ns_override->data(), 32);
+    } else {
+        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+    }
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data = data;
     blob.ttl = ttl;
@@ -268,10 +277,15 @@ chromatindb::wire::BlobData make_signed_blob(
 chromatindb::wire::BlobData make_tombstone_request(
     const chromatindb::identity::NodeIdentity& id,
     std::span<const uint8_t, 32> target_hash,
-    uint32_t ttl, uint64_t timestamp)
+    uint32_t ttl, uint64_t timestamp,
+    const std::array<uint8_t, 32>* ns_override = nullptr)
 {
     chromatindb::wire::BlobData tombstone;
-    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    if (ns_override) {
+        std::memcpy(tombstone.namespace_id.data(), ns_override->data(), 32);
+    } else {
+        std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    }
     tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
     tombstone.data = chromatindb::wire::make_tombstone_data(target_hash);
     tombstone.ttl = ttl;
@@ -388,6 +402,12 @@ public:
     /// Set delegate public key for delegation mode (called from main before prepare).
     void set_delegate_pubkey(std::vector<uint8_t> pubkey) {
         delegate_pubkey_ = std::move(pubkey);
+    }
+
+    /// Set target namespace override (for delegation writes to foreign namespace).
+    void set_target_namespace(std::array<uint8_t, 32> ns) {
+        target_namespace_ = ns;
+        has_target_namespace_ = true;
     }
 
     /// Pre-generate random data pools and size class assignments.
@@ -532,12 +552,16 @@ public:
     }
 
 private:
-    /// Subscribe to own namespace (write mode), then start the timed send loop.
+    /// Subscribe to target namespace (write mode), then start the timed send loop.
     asio::awaitable<void> subscribe_and_send(chromatindb::net::Connection::Ptr conn_ptr) {
         if (!delete_mode_) {
-            // Write mode: subscribe to our namespace for notification ACKs
+            // Write mode: subscribe to target namespace for notification ACKs
             std::array<uint8_t, 32> ns_array{};
-            std::memcpy(ns_array.data(), identity_.namespace_id().data(), 32);
+            if (has_target_namespace_) {
+                ns_array = target_namespace_;
+            } else {
+                std::memcpy(ns_array.data(), identity_.namespace_id().data(), 32);
+            }
             std::vector<std::array<uint8_t, 32>> namespaces = {ns_array};
             auto ns_payload = chromatindb::peer::PeerManager::encode_namespace_list(namespaces);
 
@@ -596,10 +620,12 @@ private:
             std::array<uint8_t, 32> hash{};
             size_t data_size = 0;
 
+            const auto* ns_ptr = has_target_namespace_ ? &target_namespace_ : nullptr;
+
             if (delete_mode_) {
                 // Delete path: construct tombstone for target hash
                 auto tombstone = make_tombstone_request(
-                    identity_, target_hashes_[i], cfg_.ttl, now_us);
+                    identity_, target_hashes_[i], cfg_.ttl, now_us, ns_ptr);
                 encoded = chromatindb::wire::encode_blob(tombstone);
                 hash = chromatindb::wire::blob_hash(
                     std::span<const uint8_t>(encoded));
@@ -617,7 +643,7 @@ private:
                 // Write path: construct random blob
                 data_size = get_data_size(size_classes_[i]);
                 const auto& data_buf = get_data_buffer(size_classes_[i]);
-                auto blob = make_signed_blob(identity_, data_buf, cfg_.ttl, now_us);
+                auto blob = make_signed_blob(identity_, data_buf, cfg_.ttl, now_us, ns_ptr);
                 encoded = chromatindb::wire::encode_blob(blob);
                 hash = chromatindb::wire::blob_hash(
                     std::span<const uint8_t>(encoded));
@@ -802,6 +828,8 @@ private:
     chromatindb::identity::NodeIdentity& identity_;
     bool delete_mode_ = false;
     std::vector<uint8_t> delegate_pubkey_;  // non-empty = delegation mode
+    std::array<uint8_t, 32> target_namespace_{};  // namespace override for delegation writes
+    bool has_target_namespace_ = false;
     chromatindb::net::Connection::Ptr conn_;
 
     asio::steady_timer timer_;
@@ -910,6 +938,20 @@ int main(int argc, char* argv[]) {
         spdlog::info("delegation mode: creating delegation blob for delegate");
     }
 
+    // In namespace override mode, decode the target namespace hex
+    std::array<uint8_t, 32> target_namespace{};
+    bool has_target_namespace = false;
+    if (!cfg.target_namespace_hex.empty()) {
+        if (cfg.target_namespace_hex.size() != 64) {
+            spdlog::error("--namespace: expected 64 hex chars, got {}",
+                          cfg.target_namespace_hex.size());
+            return 1;
+        }
+        target_namespace = from_hex(cfg.target_namespace_hex);
+        has_target_namespace = true;
+        spdlog::info("target namespace override: {}", cfg.target_namespace_hex);
+    }
+
     asio::io_context ioc;
 
     LoadGenerator gen(ioc, cfg, identity);
@@ -918,6 +960,9 @@ int main(int argc, char* argv[]) {
     }
     if (!delegate_pubkey.empty()) {
         gen.set_delegate_pubkey(std::move(delegate_pubkey));
+    }
+    if (has_target_namespace) {
+        gen.set_target_namespace(target_namespace);
     }
     gen.prepare();
 

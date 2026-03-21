@@ -39,7 +39,7 @@ services:
     command: ["run", "--config", "/config/node.json", "--data-dir", "/data", "--log-level", "debug"]
     volumes:
       - node3-data:/data
-      - ./configs/node1.json:/config/node.json:ro
+      - ./configs/node3-acl.json:/config/node.json:ro
     networks:
       test-net:
         ipv4_address: 172.28.0.4
