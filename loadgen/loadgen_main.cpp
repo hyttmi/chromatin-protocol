@@ -55,6 +55,7 @@ struct Config {
     bool delete_mode = false;
     std::string hashes_from;          // "stdin" = read target hashes from stdin
     bool verbose_blobs = false;       // emit BLOB_FIELDS JSON to stderr per blob
+    std::string delegate_pubkey_hex;  // non-empty = delegation mode
 };
 
 void print_usage(const char* prog) {
@@ -72,7 +73,8 @@ void print_usage(const char* prog) {
               << "  --identity-file DIR  Load identity keypair from directory (node.key + node.pub)\n"
               << "  --delete             Delete mode: send tombstones instead of blobs\n"
               << "  --hashes-from stdin  Read target blob hashes from stdin (one hex hash per line)\n"
-              << "  --verbose-blobs      Emit BLOB_FIELDS JSON to stderr for each blob sent\n";
+              << "  --verbose-blobs      Emit BLOB_FIELDS JSON to stderr for each blob sent\n"
+              << "  --delegate PUBKEY_HEX  Create a delegation blob for the given delegate public key\n";
 }
 
 bool parse_args(int argc, char* argv[], Config& cfg) {
@@ -115,7 +117,13 @@ bool parse_args(int argc, char* argv[], Config& cfg) {
             cfg.hashes_from = argv[++i];
         } else if (arg == "--verbose-blobs") {
             cfg.verbose_blobs = true;
+        } else if (arg == "--delegate" && i + 1 < argc) {
+            cfg.delegate_pubkey_hex = argv[++i];
         }
+    }
+    if (cfg.delete_mode && !cfg.delegate_pubkey_hex.empty()) {
+        std::cerr << "error: --delete and --delegate cannot be combined\n";
+        return false;
     }
     if (!has_target) {
         std::cerr << "error: --target is required\n\n";
@@ -214,6 +222,27 @@ std::array<uint8_t, 32> from_hex(const std::string& hex_str) {
     return result;
 }
 
+/// Decode an arbitrary-length hex string to a byte vector.
+std::vector<uint8_t> from_hex_bytes(const std::string& hex_str) {
+    if (hex_str.size() % 2 != 0) {
+        throw std::runtime_error("from_hex_bytes: odd-length hex string (" +
+                                 std::to_string(hex_str.size()) + " chars)");
+    }
+    std::vector<uint8_t> result(hex_str.size() / 2);
+    for (size_t i = 0; i < result.size(); ++i) {
+        auto hi = hex_str[i * 2];
+        auto lo = hex_str[i * 2 + 1];
+        auto nibble = [](char c) -> uint8_t {
+            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
+            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
+            throw std::runtime_error(std::string("from_hex_bytes: invalid hex char '") + c + "'");
+        };
+        result[i] = static_cast<uint8_t>((nibble(hi) << 4) | nibble(lo));
+    }
+    return result;
+}
+
 // =============================================================================
 // Blob construction
 // =============================================================================
@@ -251,6 +280,24 @@ chromatindb::wire::BlobData make_tombstone_request(
         tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
     tombstone.signature = id.sign(signing_input);
     return tombstone;
+}
+
+/// Construct a signed delegation BlobData granting write access to a delegate.
+chromatindb::wire::BlobData make_delegation_blob(
+    const chromatindb::identity::NodeIdentity& id,
+    std::span<const uint8_t> delegate_pubkey,
+    uint32_t ttl, uint64_t timestamp)
+{
+    chromatindb::wire::BlobData blob;
+    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
+    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    blob.data = chromatindb::wire::make_delegation_data(delegate_pubkey);
+    blob.ttl = ttl;
+    blob.timestamp = timestamp;
+    auto signing_input = chromatindb::wire::build_signing_input(
+        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+    blob.signature = id.sign(signing_input);
+    return blob;
 }
 
 // =============================================================================
@@ -336,6 +383,11 @@ public:
     /// Set target hashes for delete mode (called from main before prepare).
     void set_target_hashes(std::vector<std::array<uint8_t, 32>> hashes) {
         target_hashes_ = std::move(hashes);
+    }
+
+    /// Set delegate public key for delegation mode (called from main before prepare).
+    void set_delegate_pubkey(std::vector<uint8_t> pubkey) {
+        delegate_pubkey_ = std::move(pubkey);
     }
 
     /// Pre-generate random data pools and size class assignments.
@@ -510,7 +562,7 @@ private:
             schedule[i] = start_time + interval * static_cast<int64_t>(i);
         }
 
-        auto mode_label = delete_mode_ ? "tombstones" : "blobs";
+        auto mode_label = delete_mode_ ? "tombstones" : (!delegate_pubkey_.empty() ? "delegation blobs" : "blobs");
         spdlog::info("starting send: {} {} at {} /sec", cfg_.count, mode_label, cfg_.rate);
         first_send_time_ = start_time;
 
@@ -552,6 +604,15 @@ private:
                 hash = chromatindb::wire::blob_hash(
                     std::span<const uint8_t>(encoded));
                 data_size = chromatindb::wire::TOMBSTONE_DATA_SIZE;
+            } else if (!delegate_pubkey_.empty()) {
+                // Delegation path: construct delegation blob
+                auto blob = make_delegation_blob(
+                    identity_, std::span<const uint8_t>(delegate_pubkey_),
+                    cfg_.ttl, now_us);
+                encoded = chromatindb::wire::encode_blob(blob);
+                hash = chromatindb::wire::blob_hash(
+                    std::span<const uint8_t>(encoded));
+                data_size = chromatindb::wire::DELEGATION_DATA_SIZE;
             } else {
                 // Write path: construct random blob
                 data_size = get_data_size(size_classes_[i]);
@@ -740,6 +801,7 @@ private:
     const Config& cfg_;
     chromatindb::identity::NodeIdentity& identity_;
     bool delete_mode_ = false;
+    std::vector<uint8_t> delegate_pubkey_;  // non-empty = delegation mode
     chromatindb::net::Connection::Ptr conn_;
 
     asio::steady_timer timer_;
@@ -833,11 +895,29 @@ int main(int argc, char* argv[]) {
         spdlog::info("read {} target hashes from stdin", target_hashes.size());
     }
 
+    // In delegation mode, decode the delegate pubkey hex
+    std::vector<uint8_t> delegate_pubkey;
+    if (!cfg.delegate_pubkey_hex.empty()) {
+        delegate_pubkey = from_hex_bytes(cfg.delegate_pubkey_hex);
+        if (delegate_pubkey.size() != chromatindb::wire::DELEGATION_PUBKEY_SIZE) {
+            spdlog::error("--delegate: expected {} hex chars ({} bytes), got {} hex chars ({} bytes)",
+                          chromatindb::wire::DELEGATION_PUBKEY_SIZE * 2,
+                          chromatindb::wire::DELEGATION_PUBKEY_SIZE,
+                          cfg.delegate_pubkey_hex.size(),
+                          delegate_pubkey.size());
+            return 1;
+        }
+        spdlog::info("delegation mode: creating delegation blob for delegate");
+    }
+
     asio::io_context ioc;
 
     LoadGenerator gen(ioc, cfg, identity);
     if (cfg.delete_mode) {
         gen.set_target_hashes(std::move(target_hashes));
+    }
+    if (!delegate_pubkey.empty()) {
+        gen.set_delegate_pubkey(std::move(delegate_pubkey));
     }
     gen.prepare();
 
