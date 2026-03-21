@@ -1,0 +1,69 @@
+services:
+  node1:
+    image: chromatindb:test
+    container_name: chromatindb-test-node1
+    command: ["run", "--config", "/config/node1.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node1-data:/data
+      - ./configs/node1.json:/config/node1.json:ro
+    networks:
+      test-net:
+        ipv4_address: 172.28.0.2
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node2:
+    image: chromatindb:test
+    container_name: chromatindb-test-node2
+    command: ["run", "--config", "/config/node2.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node2-data:/data
+      - ./configs/node2.json:/config/node2.json:ro
+    networks:
+      test-net:
+        ipv4_address: 172.28.0.3
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  node3-mitm:
+    image: chromatindb:test
+    container_name: chromatindb-test-node3-mitm
+    command: ["run", "--config", "/config/node3-mitm.json", "--data-dir", "/data", "--log-level", "debug"]
+    volumes:
+      - node3-data:/data
+      - ./configs/node3-mitm.json:/config/node3-mitm.json:ro
+    networks:
+      test-net:
+        ipv4_address: 172.28.0.4
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4200 && exec 3>&-"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
