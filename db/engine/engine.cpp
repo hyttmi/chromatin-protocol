@@ -65,6 +65,10 @@ BlobEngine::BlobEngine(storage::Storage& store,
     , namespace_quota_bytes_(namespace_quota_bytes)
     , namespace_quota_count_(namespace_quota_count) {}
 
+void BlobEngine::set_max_storage_bytes(uint64_t max_storage_bytes) {
+    max_storage_bytes_ = max_storage_bytes;
+}
+
 void BlobEngine::set_quota_config(
     uint64_t quota_bytes, uint64_t quota_count,
     const std::map<std::string, std::pair<std::optional<uint64_t>,

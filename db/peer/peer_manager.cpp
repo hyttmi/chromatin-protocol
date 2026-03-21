@@ -1749,6 +1749,15 @@ void PeerManager::reload_config() {
                      reset_count);
     }
 
+    // Reload max_storage_bytes
+    engine_.set_max_storage_bytes(new_cfg.max_storage_bytes);
+    if (new_cfg.max_storage_bytes > 0) {
+        spdlog::info("config reload: max_storage_bytes={}",
+                     new_cfg.max_storage_bytes);
+    } else {
+        spdlog::info("config reload: max_storage_bytes=unlimited");
+    }
+
     // Reload namespace quota config
     engine_.set_quota_config(new_cfg.namespace_quota_bytes,
                              new_cfg.namespace_quota_count,

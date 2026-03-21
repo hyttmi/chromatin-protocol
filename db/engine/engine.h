@@ -76,6 +76,9 @@ public:
                         uint64_t namespace_quota_bytes = 0,
                         uint64_t namespace_quota_count = 0);
 
+    /// Update storage capacity limit (called on SIGHUP config reload).
+    void set_max_storage_bytes(uint64_t max_storage_bytes);
+
     /// Update quota configuration (called on SIGHUP config reload).
     void set_quota_config(uint64_t quota_bytes, uint64_t quota_count,
                           const std::map<std::string, std::pair<std::optional<uint64_t>,
