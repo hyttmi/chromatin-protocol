@@ -263,7 +263,12 @@ Plans:
   3. 1000 namespaces with 10 blobs each sync correctly with bounded cursor storage; 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, and dumping metrics produce no deadlocks, crashes, or corruption
   4. Malformed FlatBuffers, truncated frames, invalid crypto payloads, and garbage bytes are handled gracefully with no crashes or memory corruption
   5. Malformed messages at each PQ handshake stage cause clean disconnect with no crashes or state corruption
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 52-01-PLAN.md — SAN-04 protocol fuzzing + SAN-05 handshake fuzzing (Python fuzzer + test scripts)
+- [ ] 52-02-PLAN.md — STRESS-02 peer churn + STRESS-03 namespace scaling
+- [ ] 52-03-PLAN.md — STRESS-01 long-running soak test + STRESS-04 concurrent operations
 
 ## Progress
 
@@ -277,4 +282,4 @@ Plans:
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 4/4 | Complete    | 2026-03-21 |
 | 51. TTL Lifecycle & E2E Primitives | 3/3 | Complete    | 2026-03-21 |
-| 52. Stress, Chaos & Fuzzing | 0/? | Not started | - |
+| 52. Stress, Chaos & Fuzzing | 0/3 | Not started | - |
