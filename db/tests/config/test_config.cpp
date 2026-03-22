@@ -1163,6 +1163,104 @@ TEST_CASE("load_config: missing inactivity_timeout_seconds uses default 120", "[
     std::filesystem::remove(tmp);
 }
 
+// =============================================================================
+// Phase 54: Expiry scan interval config tests (OPS-01)
+// =============================================================================
+
+TEST_CASE("Config defaults: expiry_scan_interval_seconds is 60", "[config][expiry]") {
+    Config cfg;
+    REQUIRE(cfg.expiry_scan_interval_seconds == 60);
+}
+
+TEST_CASE("validate_config: expiry_scan_interval_seconds=10 passes (minimum)", "[config][expiry]") {
+    Config cfg;
+    cfg.expiry_scan_interval_seconds = 10;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: expiry_scan_interval_seconds=60 passes (default)", "[config][expiry]") {
+    Config cfg;
+    cfg.expiry_scan_interval_seconds = 60;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: expiry_scan_interval_seconds=3600 passes", "[config][expiry]") {
+    Config cfg;
+    cfg.expiry_scan_interval_seconds = 3600;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: expiry_scan_interval_seconds=9 throws (below minimum)", "[config][expiry]") {
+    Config cfg;
+    cfg.expiry_scan_interval_seconds = 9;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("expiry_scan_interval_seconds"));
+    }
+}
+
+TEST_CASE("validate_config: expiry_scan_interval_seconds=0 throws", "[config][expiry]") {
+    Config cfg;
+    cfg.expiry_scan_interval_seconds = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("expiry_scan_interval_seconds"));
+    }
+}
+
+TEST_CASE("load_config reads expiry_scan_interval_seconds from JSON", "[config][expiry]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_expiry_interval.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"expiry_scan_interval_seconds": 300})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.expiry_scan_interval_seconds == 300);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: missing expiry_scan_interval_seconds uses default 60", "[config][expiry]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_expiry_interval.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.expiry_scan_interval_seconds == 60);
+
+    std::filesystem::remove(tmp);
+}
+
+// =============================================================================
+// Phase 54: Sync rejection reason string tests (OPS-03)
+// =============================================================================
+
+#include "db/peer/sync_reject.h"
+
+TEST_CASE("sync_reject_reason_string: all 8 reason codes", "[syncreason]") {
+    using namespace chromatindb::peer;
+
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_COOLDOWN) == "cooldown");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_SESSION_LIMIT) == "session_limit");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_BYTE_RATE) == "byte_rate");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_STORAGE_FULL) == "storage_full");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_QUOTA_EXCEEDED) == "quota_exceeded");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_NAMESPACE_NOT_FOUND) == "namespace_not_found");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_BLOB_TOO_LARGE) == "blob_too_large");
+    REQUIRE(sync_reject_reason_string(SYNC_REJECT_TIMESTAMP_REJECTED) == "timestamp_rejected");
+}
+
+TEST_CASE("sync_reject_reason_string: unknown byte returns unknown", "[syncreason]") {
+    using namespace chromatindb::peer;
+
+    REQUIRE(sync_reject_reason_string(0x00) == "unknown");
+    REQUIRE(sync_reject_reason_string(0x09) == "unknown");
+    REQUIRE(sync_reject_reason_string(0xFF) == "unknown");
+}
+
 TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_unknown_keys.json";
     {

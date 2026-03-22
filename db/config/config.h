@@ -42,6 +42,7 @@ struct Config {
     uint32_t log_max_files = 3;                      // Max number of rotated log files
     std::string log_format = "text";                 // Log format: "text" or "json"
     uint32_t inactivity_timeout_seconds = 120;       // 0 = disabled, minimum 30 when enabled
+    uint32_t expiry_scan_interval_seconds = 60;     // Expiry scan interval in seconds (minimum 10, default 60)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 
