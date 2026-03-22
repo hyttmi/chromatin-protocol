@@ -135,6 +135,11 @@ int cmd_run(int argc, char* argv[]) {
     } else {
         spdlog::info("compaction: disabled");
     }
+    if (!config.uds_path.empty()) {
+        spdlog::info("uds: {}", config.uds_path);
+    } else {
+        spdlog::info("uds: disabled");
+    }
 
     // Resolve and create thread pool for crypto offload
     uint32_t hw = std::thread::hardware_concurrency();

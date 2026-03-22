@@ -7,6 +7,7 @@
 #include "db/identity/identity.h"
 #include "db/net/connection.h"
 #include "db/net/server.h"
+#include "db/net/uds_acceptor.h"
 #include "db/storage/storage.h"
 #include "db/sync/sync_protocol.h"
 
@@ -282,6 +283,7 @@ private:
     acl::AccessControl& acl_;
 
     net::Server server_;
+    std::unique_ptr<net::UdsAcceptor> uds_acceptor_;
     sync::SyncProtocol sync_proto_;
     asio::signal_set sighup_signal_;
     asio::signal_set sigusr1_signal_;

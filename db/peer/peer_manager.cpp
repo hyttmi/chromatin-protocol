@@ -146,6 +146,22 @@ PeerManager::PeerManager(const config::Config& config,
         on_peer_disconnected(conn);
     });
 
+    // UDS acceptor setup (only if uds_path is configured)
+    if (!config.uds_path.empty()) {
+        uds_acceptor_ = std::make_unique<net::UdsAcceptor>(
+            config.uds_path, identity, ioc);
+
+        // Wire same callbacks as TCP server — UDS connections get identical treatment
+        uds_acceptor_->set_accept_filter([this]() { return should_accept_connection(); });
+        uds_acceptor_->set_on_connected([this](net::Connection::Ptr conn) {
+            on_peer_connected(conn);
+        });
+        uds_acceptor_->set_on_disconnected([this](net::Connection::Ptr conn) {
+            on_peer_disconnected(conn);
+        });
+        uds_acceptor_->set_pool(pool);
+    }
+
     // Set up sync-received blob notification callback
     sync_proto_.set_on_blob_ingested(
         [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
@@ -196,10 +212,16 @@ void PeerManager::start() {
 
     server_.start();
 
+    // Start UDS acceptor if configured
+    if (uds_acceptor_) {
+        uds_acceptor_->start();
+    }
+
     // Register shutdown callback (save peers before drain)
     server_.set_on_shutdown([this]() {
         stopping_ = true;
         save_persisted_peers();  // Save while connection list is still accurate
+        if (uds_acceptor_) uds_acceptor_->stop();
         sighup_signal_.cancel();
         sigusr1_signal_.cancel();
         cancel_all_timers();
@@ -255,6 +277,7 @@ void PeerManager::cancel_all_timers() {
 
 void PeerManager::stop() {
     stopping_ = true;
+    if (uds_acceptor_) uds_acceptor_->stop();
     sighup_signal_.cancel();
     sigusr1_signal_.cancel();
     cancel_all_timers();
@@ -2349,6 +2372,11 @@ void PeerManager::dump_metrics() {
     for (const auto& peer : peers_) {
         auto ns_hex = to_hex(peer.connection->peer_pubkey(), 4);
         spdlog::info("    {} (ns:{}...)", peer.address, ns_hex);
+    }
+
+    // UDS connection count
+    if (uds_acceptor_) {
+        spdlog::info("  uds_connections: {}", uds_acceptor_->connection_count());
     }
 
     // Quota metrics
