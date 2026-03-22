@@ -803,7 +803,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     if (!accept_msg || accept_msg->type != wire::TransportMsgType_SyncAccept) {
         if (accept_msg && accept_msg->type == wire::TransportMsgType_SyncRejected) {
             uint8_t reason = accept_msg->payload.empty() ? 0 : accept_msg->payload[0];
-            spdlog::info("sync with {}: rejected (reason={})", conn->remote_address(), reason);
+            const char* reason_str = "unknown";
+            if (reason == SYNC_REJECT_COOLDOWN) reason_str = "cooldown";
+            else if (reason == SYNC_REJECT_SESSION_LIMIT) reason_str = "session_limit";
+            else if (reason == SYNC_REJECT_BYTE_RATE) reason_str = "byte_rate";
+            spdlog::info("sync with {}: rejected ({})", conn->remote_address(), reason_str);
         } else {
             spdlog::warn("sync with {}: no SyncAccept received", conn->remote_address());
         }
