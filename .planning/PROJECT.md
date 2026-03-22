@@ -110,7 +110,20 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-<!-- Next milestone TBD -->
+<!-- v1.2.0: Relay & Client Protocol -->
+
+#### Protocol Extensions (Node)
+- [ ] WriteAck wire type — confirm blob stored over protocol (hash + seq_num)
+- [ ] ReadRequest/ReadResponse — client fetches blob by namespace + hash
+- [ ] ListRequest/ListResponse — client lists blobs in namespace (since_seq + limit pagination)
+- [ ] StatsRequest/StatsResponse — namespace usage (count, bytes, quota remaining)
+
+#### Relay
+- [ ] PQ-authenticated relay accepting client connections via ML-KEM-1024 handshake
+- [ ] Message type filter (allow client ops, block sync/reconciliation/PEX)
+- [ ] UDS forwarding to chromatindb node (TrustedHello, 1:1 client-to-UDS mapping)
+- [ ] Relay identity keypair (ML-DSA-87, generated or configured)
+- [ ] Relay config (bind address, UDS path, identity key path, logging)
 
 ### Out of Scope
 
@@ -121,8 +134,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - Conflict resolution / LWW / HLC — relay/app layer concern
 - Encrypted envelopes — relay/app layer concern
 - DHT or gossip protocol — proven unreliable in previous projects
-- Layer 2 (Relay) and Layer 3 (Client) — future work
-- HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted TCP only
+- Layer 3 (Client/SDK) — future work
+- HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted channel only
 - NAT traversal / hole punching — server daemon assumes reachable address
 - OpenSSL — prefer minimal deps (liboqs + libsodium)
 - Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
@@ -138,7 +151,7 @@ Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (
 
 Three-layer architecture (building bottom-up):
 - **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node with operational polish and local access. Fully tested under sanitizers, stress, chaos, and fuzzing. Database layer is done.
-- **Layer 2 (FUTURE): Thin API** — UDS/HTTP gateway for storage vault use case. Likely C++20 or Python.
+- **Layer 2 (v1.2.0 IN PROGRESS): Relay** — PQ-authenticated message filter + UDS forwarder. C++20, same wire protocol as node. Security boundary between untrusted clients and node.
 - **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
@@ -238,4 +251,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after v1.1.0 milestone (Operational Polish & Local Access)*
+*Last updated: 2026-03-22 after v1.2.0 milestone start (Relay & Client Protocol)*
