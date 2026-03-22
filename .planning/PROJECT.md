@@ -106,11 +106,11 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 - ✓ Runtime mdbx compaction (compaction_interval_hours, 6h default, SIGHUP reloadable, SIGUSR1 metrics) — v1.1.0 Phase 55
 
+- ✓ Unix Domain Socket local access (uds_path config, TrustedHello, full ACL/rate/quota enforcement) — v1.1.0 Phase 56
+
 ### Active
 
-<!-- Current scope: v1.1.0 Operational Polish & Local Access -->
-
-- [ ] Unix Domain Socket (UDS) local access interface
+<!-- Next milestone TBD -->
 
 ### Out of Scope
 
@@ -128,28 +128,16 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
 - Per-peer read/write restrictions — YAGNI for current access control model
 
-## Current Milestone: v1.1.0 Operational Polish & Local Access
-
-**Goal:** Make chromatindb operationally mature — runtime compaction, local UDS access, configurable GC, input validation hardening, and documentation/cleanup to match shipped v1.0.0 reality.
-
-**Target features:**
-- Runtime mdbx compaction (automatic, for long-running nodes on constrained devices)
-- Unix Domain Socket (UDS) local access interface
-- Configurable expiry scan interval (replace hardcoded 60s)
-- Timestamp validation on ingest (reject wildly future/past timestamps)
-- Sync reject reason strings (human-readable error messages)
-- Git tag v1.0.0 + docs/cleanup sweep
-
 ## Context
 
-Shipped v1.0.0 with 22,608 LOC C++20, 469 unit tests, 54 Docker integration tests.
-Built across 22 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d).
-10 milestones, 52 phases, 111 plans, 225 requirements total.
+Shipped v1.1.0 with 23,852 LOC C++20, 500+ unit tests, 54 Docker integration tests.
+Built across 22 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d).
+11 milestones, 56 phases, 117 plans, 237 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v1.0.0 SHIPPED): chromatindb** — production-hardened database node, fully tested under sanitizers, stress, chaos, and fuzzing. Database layer is done.
+- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node with operational polish and local access. Fully tested under sanitizers, stress, chaos, and fuzzing. Database layer is done.
 - **Layer 2 (FUTURE): Thin API** — UDS/HTTP gateway for storage vault use case. Likely C++20 or Python.
 - **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
 
@@ -250,4 +238,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after Phase 55 (Runtime Compaction)*
+*Last updated: 2026-03-22 after v1.1.0 milestone (Operational Polish & Local Access)*

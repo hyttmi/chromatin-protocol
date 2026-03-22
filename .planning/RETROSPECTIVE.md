@@ -288,6 +288,53 @@
 
 ---
 
+## Milestone: v1.1.0 — Operational Polish & Local Access
+
+**Shipped:** 2026-03-22
+**Phases:** 4 | **Plans:** 6 | **Sessions:** ~1
+
+### What Was Built
+- Repository cleanup: stale artifacts removed, 23 phase directories archived, CMake version bump to 1.1.0, README/db/README.md updated
+- Configurable expiry scan interval (expiry_scan_interval_seconds, min 10s, SIGHUP reloadable)
+- Shared sync_reject.h with 8 constexpr reason codes (expanded from 3 hardcoded constants)
+- Step 0c timestamp validation on ingest: rejects blobs >1hr future or >30d past before any crypto
+- Automatic runtime mdbx compaction: Storage::compact() with live env.copy(compactify=true), close/swap/reopen, 6h default timer, SIGHUP reload, SIGUSR1 metrics
+- Unix Domain Socket local access: Connection refactored to generic stream socket, UdsAcceptor class, TrustedHello path, full ACL/rate/quota enforcement, 0660 permissions, stale socket cleanup
+
+### What Worked
+- Entire v1.1.0 completed in <1 day — 4 phases, 6 plans, 13 tasks, 4865 insertions
+- Full auto-advance pipeline (discuss → plan → execute → verify per phase) ran smoothly for all 4 phases
+- Prior patterns (timer-cancel, SIGHUP reload, validate_config, Step 0) made each new feature incremental
+- Plan checker caught a real issue (missing create_uds_outbound in file list) before execution — saved a broken build
+- TS_AUTO sentinel pattern emerged from Phase 54 and immediately proved useful (57 tests needed valid timestamps after validation was added)
+- Compaction open_env() refactor was clean — constructor and compact() share identical open logic
+
+### What Was Inefficient
+- Phase 53 (cleanup) had to stage uncommitted changes in phases 47/49 before archiving — leftover from v1.0.0
+- Timestamp validation broke 57 existing tests with hardcoded past timestamps — auto-fixed but could have been anticipated in planning
+- No backward compatibility consideration needed (no deployed nodes) — simplified all wire format decisions
+
+### Patterns Established
+- TS_AUTO sentinel: test helpers use current time when timestamp=0, avoiding hardcoded past timestamps that fail validation
+- Shared constexpr header for protocol constants (sync_reject.h) vs anonymous namespace constants
+- open_env() factored helper for Storage::Impl — reusable open logic for constructor and compact()
+- Generic stream socket in Connection: asio::generic::stream_protocol::socket type-erases TCP and UDS
+- Separate UdsAcceptor class (not extending Server) — accept-only, no reconnect logic
+
+### Key Lessons
+1. Auto-advance pipeline works well for straightforward milestones — all 4 phases ran end-to-end without manual intervention
+2. Plan checker adds real value — the create_uds_outbound file list gap would have caused a compilation failure during execution
+3. Validation changes ripple through tests — adding Step 0 validation means updating all test helpers that create blobs with arbitrary timestamps
+4. SIGHUP reload pattern is now well-established — 3 config fields reloadable (ACL, expiry interval, compaction interval)
+5. UDS as "just another transport" was the right design — reusing TrustedHello and on_peer_connected kept the implementation minimal
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~1
+- Notable: Fastest milestone by wall-clock time — all 4 phases in a single auto-advance chain
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -303,6 +350,8 @@
 | v0.7.0 | ~2 | 6 | Sync cursors + crypto hot-path — largest protocol evolution |
 | v0.8.0 | ~1 | 4 | Fastest milestone (1 day) — custom reconciliation + thread pool offload |
 | v0.9.0 | ~1 | 4 | Second 1-day milestone — connection resilience, storage hardening, operational tooling |
+| v1.0.0 | ~8 | 7 | Database layer done — sanitizers, 54 Docker integration tests, stress/chaos/fuzz |
+| v1.1.0 | ~1 | 4 | Fastest milestone — full auto-advance chain, operational polish + UDS |
 
 ### Cumulative Quality
 
@@ -317,6 +366,8 @@
 | v0.7.0 | 313 | 18,000+ | ~75 | 20/20 |
 | v0.8.0 | 408 | 22,003 | ~80 | 12/12 |
 | v0.9.0 | 408+ | 22,467 | ~85 | 16/16 |
+| v1.0.0 | 469 | 22,608 | ~90 | 16/16 |
+| v1.1.0 | 500+ | 23,852 | ~95 | 12/12 |
 
 ### Top Lessons (Verified Across Milestones)
 
