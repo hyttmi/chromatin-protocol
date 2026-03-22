@@ -100,15 +100,16 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Clean up stale planning artifacts (archive completed phase dirs) — v1.1.0 Phase 53
 - ✓ Update README.md and db/README.md to v1.0.0 state — v1.1.0 Phase 53
 
+- ✓ Configurable expiry scan interval (expiry_scan_interval_seconds, SIGHUP reloadable, min 10s) — v1.1.0 Phase 54
+- ✓ Timestamp validation on ingest (1h future / 30d past, Step 0c, both direct + sync paths) — v1.1.0 Phase 54
+- ✓ Sync reject reason strings (8 codes in shared sync_reject.h, byte enum + local mapping) — v1.1.0 Phase 54
+
 ### Active
 
 <!-- Current scope: v1.1.0 Operational Polish & Local Access -->
 
 - [ ] Runtime mdbx compaction for long-running nodes
 - [ ] Unix Domain Socket (UDS) local access interface
-- [ ] Configurable expiry scan interval
-- [ ] Timestamp validation on ingest (reject wildly future/past)
-- [ ] Sync reject reason strings (human-readable SyncRejected messages)
 
 ### Out of Scope
 
@@ -248,4 +249,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after Phase 53 (Release Cleanup & Documentation)*
+*Last updated: 2026-03-22 after Phase 54 (Operational Hardening)*
