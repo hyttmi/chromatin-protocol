@@ -95,6 +95,11 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ 54 Docker integration tests across 12 categories (crypto, ACL, DR, DoS, TTL, E2E, stress, fuzz) — v1.0.0
 - ✓ 5-node SIGKILL churn (60 cycles, 30 min), 1000-namespace scaling, protocol fuzzing — all passing — v1.0.0
 
+- ✓ Git tag v1.0.0 release — v1.1.0 Phase 53
+- ✓ Remove stale bash tests and design docs — v1.1.0 Phase 53
+- ✓ Clean up stale planning artifacts (archive completed phase dirs) — v1.1.0 Phase 53
+- ✓ Update README.md and db/README.md to v1.0.0 state — v1.1.0 Phase 53
+
 ### Active
 
 <!-- Current scope: v1.1.0 Operational Polish & Local Access -->
@@ -104,10 +109,6 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - [ ] Configurable expiry scan interval
 - [ ] Timestamp validation on ingest (reject wildly future/past)
 - [ ] Sync reject reason strings (human-readable SyncRejected messages)
-- [ ] Git tag v1.0.0 release
-- [ ] Remove stale bash tests and design docs
-- [ ] Update README.md, db/README.md, db/PROTOCOL.md to v1.0.0 state
-- [ ] Clean up stale planning artifacts
 
 ### Out of Scope
 
@@ -247,4 +248,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after v1.0.0 milestone (Database Layer Done)*
+*Last updated: 2026-03-22 after Phase 53 (Release Cleanup & Documentation)*
