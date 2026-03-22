@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-last_updated: "2026-03-21T19:20:55.957Z"
-last_activity: 2026-03-21 -- Completed 51-03 (TTL-02/E2E-02 tombstone TTL expiry GC and history backfill tests)
+status: executing
+last_updated: "2026-03-22T04:18:19.298Z"
+last_activity: 2026-03-22 -- Completed 52-01 (SAN-04 protocol fuzzing + SAN-05 handshake fuzzing)
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 20
-  completed_plans: 20
+  total_plans: 23
+  completed_plans: 22
   percent: 100
 ---
 
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 51 of 52 (TTL Lifecycle & E2E Primitives)
-Plan: 3 of 3 complete
-Status: Phase 51 complete
-Last activity: 2026-03-21 -- Completed 51-03 (TTL-02/E2E-02 tombstone TTL expiry GC and history backfill tests)
+Phase: 52 of 52 (Stress, Chaos & Fuzzing)
+Plan: 2 of 3 complete
+Status: In progress
+Last activity: 2026-03-22 -- Completed 52-01 (SAN-04 protocol fuzzing + SAN-05 handshake fuzzing)
 
 Progress: [██████████] 100%
 
@@ -67,6 +67,8 @@ Progress: [██████████] 100%
 | Phase 51 P02 | 19min | 2 tasks | 3 files |
 | Phase 51 P01 | 23min | 2 tasks | 3 files |
 | Phase 51 P03 | 32min | 2 tasks | 8 files |
+| Phase 52 P02 | 3min | 2 tasks | 2 files |
+| Phase 52 P01 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -117,6 +119,11 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 51]: grep "integrity scan: blobs=" to filter info line from warning lines in integrity scan log output
 - [Phase 51]: TTL-04 reuses docker-compose.acl.yml topology for consistency with ACL-03/ACL-04 delegation tests
 - [Phase 51]: Dedicated Docker subnets: 172.39.0.0/16 (TTL-01), 172.40.0.0/16 (TTL-03)
+
+- [Phase 52]: Inline ingest per churn iteration (20 blobs per cycle) instead of background container -- avoids dead-node targeting complexity
+- [Phase 52]: 5% convergence tolerance for STRESS-02 (in-flight blobs during final kills); 1% for STRESS-03 (no chaos)
+- [Phase 52]: info log level for stress tests (30 min debug logs would be enormous)
+- [Phase 52]: Dedicated Docker subnets: 172.48.0.0/16 (STRESS-02), 172.49.0.0/16 (STRESS-03)
 
 ### Pending Todos
 
