@@ -168,7 +168,9 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
   2. `deploy/test-crash-recovery.sh`, `db/TESTS.md`, and stale `.planning/milestones/v1.0.0-*` deferred docs no longer exist in the tree
   3. `README.md` and `db/README.md` accurately describe v1.0.0 capabilities (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
   4. CMake `project(VERSION ...)` reads `1.1.0` and built binary reports v1.1.0
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 53-01-PLAN.md -- Remove stale artifacts, archive milestone phases, bump version, update documentation
 
 ### Phase 54: Operational Hardening
 **Goal**: Node operators have finer control over GC timing, protection against malformed timestamps, and actionable error messages on sync rejection
@@ -208,7 +210,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 53. Release Cleanup & Documentation | v1.1.0 | 0/TBD | Not started | - |
+| 53. Release Cleanup & Documentation | v1.1.0 | 0/1 | Not started | - |
 | 54. Operational Hardening | v1.1.0 | 0/TBD | Not started | - |
 | 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
