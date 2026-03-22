@@ -61,10 +61,27 @@ if [[ ${#ALL_TESTS[@]} -eq 0 ]]; then
     exit 0
 fi
 
-# Apply filter
+# Exclude long-running soak tests from default runs (invoke explicitly via --filter)
+EXCLUDED_TESTS=("test_stress01_long_running.sh")
+
+# Apply filter + exclusion
 TESTS=()
 for t in "${ALL_TESTS[@]}"; do
     name="$(basename "$t")"
+    # Skip excluded tests unless an explicit filter was provided
+    if [[ -z "$FILTER" ]]; then
+        skip=false
+        for excl in "${EXCLUDED_TESTS[@]}"; do
+            if [[ "$name" == "$excl" ]]; then
+                skip=true
+                break
+            fi
+        done
+        if [[ "$skip" == true ]]; then
+            log "Skipping $name (long-running, use --filter stress01 to run explicitly)"
+            continue
+        fi
+    fi
     if [[ -z "$FILTER" || "$name" == *"$FILTER"* ]]; then
         TESTS+=("$t")
     fi
