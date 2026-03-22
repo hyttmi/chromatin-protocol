@@ -89,8 +89,8 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 - [x] **SAN-01**: Full Catch2 test suite passes under AddressSanitizer (ASAN) with zero findings
 - [x] **SAN-02**: Full Catch2 test suite passes under ThreadSanitizer (TSAN) with zero data races
 - [x] **SAN-03**: Full Catch2 test suite passes under UndefinedBehaviorSanitizer (UBSAN) with zero findings
-- [ ] **SAN-04**: Docker test verifies protocol fuzzing -- malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
-- [ ] **SAN-05**: Docker test verifies handshake fuzzing -- malformed messages at each PQ handshake stage cause clean disconnect, no crashes
+- [x] **SAN-04**: Docker test verifies protocol fuzzing -- malformed FlatBuffers, truncated frames, invalid crypto payloads, garbage bytes handled gracefully; no crashes or memory corruption
+- [x] **SAN-05**: Docker test verifies handshake fuzzing -- malformed messages at each PQ handshake stage cause clean disconnect, no crashes
 
 ### Connection Topology
 
@@ -178,8 +178,8 @@ Explicitly excluded. Documented to prevent scope creep.
 | STRESS-02 | Phase 52 | Complete |
 | STRESS-03 | Phase 52 | Complete |
 | STRESS-04 | Phase 52 | Pending |
-| SAN-04 | Phase 52 | Pending |
-| SAN-05 | Phase 52 | Pending |
+| SAN-04 | Phase 52 | Complete |
+| SAN-05 | Phase 52 | Complete |
 
 **Coverage:**
 - v1.0.0 requirements: 54 total

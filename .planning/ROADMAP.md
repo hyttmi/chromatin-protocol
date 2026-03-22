@@ -142,7 +142,7 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 - [x] **Phase 49: Network Resilience & Reconciliation** - Docker integration tests for partition healing, sync correctness, and set reconciliation (gap closure in progress) (completed 2026-03-21)
 - [x] **Phase 50: Operations, Disaster Recovery & Resource Limits** - Docker integration tests for signals, DARE, crash recovery, and DoS resistance (completed 2026-03-21)
 - [x] **Phase 51: TTL Lifecycle & E2E Primitives** - Docker integration tests for tombstone/TTL behavior and messaging primitives (completed 2026-03-21)
-- [ ] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests
+- [x] **Phase 52: Stress, Chaos & Fuzzing** - Long-running stability, peer churn, and protocol fuzzing tests (completed 2026-03-22)
 
 ## Phase Details
 
@@ -263,7 +263,7 @@ Plans:
   3. 1000 namespaces with 10 blobs each sync correctly with bounded cursor storage; 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, and dumping metrics produce no deadlocks, crashes, or corruption
   4. Malformed FlatBuffers, truncated frames, invalid crypto payloads, and garbage bytes are handled gracefully with no crashes or memory corruption
   5. Malformed messages at each PQ handshake stage cause clean disconnect with no crashes or state corruption
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 52-01-PLAN.md — SAN-04 protocol fuzzing + SAN-05 handshake fuzzing (Python fuzzer + test scripts)
@@ -282,4 +282,4 @@ Plans:
 | 49. Network Resilience & Reconciliation | 4/4 | Complete    | 2026-03-21 |
 | 50. Operations, DR & Resource Limits | 4/4 | Complete    | 2026-03-21 |
 | 51. TTL Lifecycle & E2E Primitives | 3/3 | Complete    | 2026-03-21 |
-| 52. Stress, Chaos & Fuzzing | 1/3 | In progress | - |
+| 52. Stress, Chaos & Fuzzing | 3/3 | Complete   | 2026-03-22 |

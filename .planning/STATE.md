@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-03-22T04:18:19.298Z"
+last_updated: "2026-03-22T04:18:24.498Z"
 last_activity: 2026-03-22 -- Completed 52-01 (SAN-04 protocol fuzzing + SAN-05 handshake fuzzing)
 progress:
   total_phases: 7
@@ -124,6 +124,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 52]: 5% convergence tolerance for STRESS-02 (in-flight blobs during final kills); 1% for STRESS-03 (no chaos)
 - [Phase 52]: info log level for stress tests (30 min debug logs would be enormous)
 - [Phase 52]: Dedicated Docker subnets: 172.48.0.0/16 (STRESS-02), 172.49.0.0/16 (STRESS-03)
+- [Phase 52]: Dedicated Docker subnets: 172.46.0.0/16 (SAN-04), 172.47.0.0/16 (SAN-05)
+- [Phase 52]: Self-contained Python fuzzer using only stdlib -- no pip installs, single Dockerfile
 
 ### Pending Todos
 
