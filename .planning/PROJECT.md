@@ -97,7 +97,17 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(No active requirements — database layer complete. Next milestone TBD.)
+<!-- Current scope: v1.1.0 Operational Polish & Local Access -->
+
+- [ ] Runtime mdbx compaction for long-running nodes
+- [ ] Unix Domain Socket (UDS) local access interface
+- [ ] Configurable expiry scan interval
+- [ ] Timestamp validation on ingest (reject wildly future/past)
+- [ ] Sync reject reason strings (human-readable SyncRejected messages)
+- [ ] Git tag v1.0.0 release
+- [ ] Remove stale bash tests and design docs
+- [ ] Update README.md, db/README.md, db/PROTOCOL.md to v1.0.0 state
+- [ ] Clean up stale planning artifacts
 
 ### Out of Scope
 
@@ -115,6 +125,18 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
 - Per-peer read/write restrictions — YAGNI for current access control model
 
+## Current Milestone: v1.1.0 Operational Polish & Local Access
+
+**Goal:** Make chromatindb operationally mature — runtime compaction, local UDS access, configurable GC, input validation hardening, and documentation/cleanup to match shipped v1.0.0 reality.
+
+**Target features:**
+- Runtime mdbx compaction (automatic, for long-running nodes on constrained devices)
+- Unix Domain Socket (UDS) local access interface
+- Configurable expiry scan interval (replace hardcoded 60s)
+- Timestamp validation on ingest (reject wildly future/past timestamps)
+- Sync reject reason strings (human-readable error messages)
+- Git tag v1.0.0 + docs/cleanup sweep
+
 ## Context
 
 Shipped v1.0.0 with 22,608 LOC C++20, 469 unit tests, 54 Docker integration tests.
@@ -129,8 +151,6 @@ Three-layer architecture (building bottom-up):
 - **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
-
-**Next milestone:** v1.1.0 — compaction, UDS, configurable expiry scan, timestamp validation.
 
 **Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
 - 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
