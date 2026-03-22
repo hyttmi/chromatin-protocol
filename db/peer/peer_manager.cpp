@@ -100,6 +100,9 @@ PeerManager::PeerManager(const config::Config& config,
     // Initialize expiry scan interval from config
     expiry_scan_interval_seconds_ = config.expiry_scan_interval_seconds;
 
+    // Initialize compaction interval from config
+    compaction_interval_hours_ = config.compaction_interval_hours;
+
     // Initialize cursor config parameters
     full_resync_interval_ = config.full_resync_interval;
     cursor_stale_seconds_ = config.cursor_stale_seconds;
@@ -228,6 +231,11 @@ void PeerManager::start() {
     // Start cursor compaction timer (6h)
     asio::co_spawn(ioc_, cursor_compaction_loop(), asio::detached);
 
+    // Storage compaction: only spawn when enabled (non-zero interval)
+    if (compaction_interval_hours_ > 0) {
+        asio::co_spawn(ioc_, compaction_loop(), asio::detached);
+    }
+
     // Inactivity sweep: only spawn when enabled (non-zero timeout)
     if (config_.inactivity_timeout_seconds > 0) {
         asio::co_spawn(ioc_, inactivity_check_loop(), asio::detached);
@@ -241,6 +249,7 @@ void PeerManager::cancel_all_timers() {
     if (flush_timer_) flush_timer_->cancel();
     if (metrics_timer_) metrics_timer_->cancel();
     if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
+    if (compaction_timer_) compaction_timer_->cancel();
     if (inactivity_timer_) inactivity_timer_->cancel();
 }
 
@@ -1803,6 +1812,21 @@ void PeerManager::reload_config() {
     spdlog::info("config reload: expiry_scan_interval={}s", expiry_scan_interval_seconds_);
     // Cancel current expiry timer to restart with new interval
     if (expiry_timer_) { expiry_timer_->cancel(); }
+
+    // Reload compaction interval
+    auto old_compaction = compaction_interval_hours_;
+    compaction_interval_hours_ = new_cfg.compaction_interval_hours;
+    if (compaction_interval_hours_ > 0) {
+        spdlog::info("config reload: compaction_interval={}h", compaction_interval_hours_);
+    } else {
+        spdlog::info("config reload: compaction=disabled");
+    }
+    // Cancel current timer to restart with new interval (or stop if now disabled)
+    if (compaction_timer_) { compaction_timer_->cancel(); }
+    // If was disabled and now enabled, spawn the loop
+    if (old_compaction == 0 && compaction_interval_hours_ > 0) {
+        asio::co_spawn(ioc_, compaction_loop(), asio::detached);
+    }
 }
 
 void PeerManager::disconnect_unauthorized_peers() {
@@ -2340,6 +2364,10 @@ void PeerManager::dump_metrics() {
         spdlog::info("    ns:{:>8}... latest_seq={}", ns_hex, ns.latest_seq_num);
     }
 
+    // Compaction stats
+    spdlog::info("  last_compaction_time: {}", last_compaction_time_);
+    spdlog::info("  compaction_count: {}", compaction_count_);
+
     spdlog::info("=== END METRICS DUMP ===");
 }
 
@@ -2427,6 +2455,42 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
         if (removed > 0) {
             spdlog::info("cursor compaction: removed {} entries for disconnected peers", removed);
         }
+    }
+}
+
+// =============================================================================
+// Storage compaction (periodic mdbx file compaction)
+// =============================================================================
+
+asio::awaitable<void> PeerManager::compaction_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        compaction_timer_ = &timer;
+        timer.expires_after(std::chrono::hours(compaction_interval_hours_));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        compaction_timer_ = nullptr;
+        if (ec || stopping_) co_return;
+
+        // If interval was set to 0 (disabled) via SIGHUP, exit the loop
+        if (compaction_interval_hours_ == 0) co_return;
+
+        auto result = storage_.compact();
+        if (result.success) {
+            auto before_mib = static_cast<double>(result.before_bytes) / (1024.0 * 1024.0);
+            auto after_mib = static_cast<double>(result.after_bytes) / (1024.0 * 1024.0);
+            double reduction = (result.before_bytes > 0)
+                ? (1.0 - static_cast<double>(result.after_bytes) /
+                         static_cast<double>(result.before_bytes)) * 100.0
+                : 0.0;
+            spdlog::info("compaction complete: {:.1f}MiB -> {:.1f}MiB ({:.1f}%) in {}ms",
+                         before_mib, after_mib, reduction, result.duration_ms);
+            last_compaction_time_ = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+            ++compaction_count_;
+        }
+        // On failure, Storage::compact() already logged the error
     }
 }
 

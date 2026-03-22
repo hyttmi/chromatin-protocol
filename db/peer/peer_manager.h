@@ -244,6 +244,9 @@ private:
     // Expiry scanning (cancellable member coroutine)
     asio::awaitable<void> expiry_scan_loop();
 
+    // Storage compaction (periodic timer)
+    asio::awaitable<void> compaction_loop();
+
     // Pub/Sub notification dispatch
     /// Notify all peers subscribed to a namespace about a new blob.
     /// Fires co_spawn per subscriber -- async, does not block caller.
@@ -297,6 +300,7 @@ private:
     asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
     asio::steady_timer* inactivity_timer_ = nullptr;         // Timer-cancel pattern for inactivity sweep
+    asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
@@ -305,6 +309,9 @@ private:
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
     uint32_t expiry_scan_interval_seconds_ = 60;  // SIGHUP-reloadable (Phase 54)
+    uint32_t compaction_interval_hours_ = 6;      // SIGHUP-reloadable (Phase 55)
+    uint64_t last_compaction_time_ = 0;           // Epoch seconds of last successful compaction
+    uint64_t compaction_count_ = 0;               // Monotonic counter of successful compactions
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;
