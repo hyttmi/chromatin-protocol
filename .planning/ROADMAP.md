@@ -194,7 +194,9 @@ Plans:
   1. Node performs mdbx compaction automatically on a configurable schedule (default interval appropriate for long-running operation)
   2. After compaction following bulk deletion, the database file size is measurably smaller than before compaction
   3. Compaction runs without blocking normal read/write/sync operations (non-disruptive to connected peers)
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 55-01-PLAN.md -- Config field, Storage::compact() method, PeerManager timer loop with SIGHUP reload and SIGUSR1 metrics
 
 ### Phase 56: Local Access
 **Goal**: Local processes can read and write blobs via Unix Domain Socket without TCP overhead or PQ crypto handshake
@@ -215,5 +217,5 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
 | 54. Operational Hardening | 2/2 | Complete    | 2026-03-22 | - |
-| 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
+| 55. Runtime Compaction | v1.1.0 | 0/1 | Planning complete | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
