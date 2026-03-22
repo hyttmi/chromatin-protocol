@@ -54,24 +54,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| COMP-01 | — | Pending |
-| UDS-01 | — | Pending |
-| OPS-01 | — | Pending |
-| OPS-02 | — | Pending |
-| OPS-03 | — | Pending |
-| REL-01 | — | Pending |
-| REL-02 | — | Pending |
-| REL-03 | — | Pending |
-| REL-04 | — | Pending |
-| DOCS-01 | — | Pending |
-| DOCS-02 | — | Pending |
-| DOCS-03 | — | Pending |
+| COMP-01 | Phase 55 | Pending |
+| UDS-01 | Phase 56 | Pending |
+| OPS-01 | Phase 54 | Pending |
+| OPS-02 | Phase 54 | Pending |
+| OPS-03 | Phase 54 | Pending |
+| REL-01 | Phase 53 | Pending |
+| REL-02 | Phase 53 | Pending |
+| REL-03 | Phase 53 | Pending |
+| REL-04 | Phase 53 | Pending |
+| DOCS-01 | Phase 53 | Pending |
+| DOCS-02 | Phase 53 | Pending |
+| DOCS-03 | Phase 54 | Pending |
 
 **Coverage:**
 - v1.1.0 requirements: 12 total
-- Mapped to phases: 0
-- Unmapped: 12 ⚠️
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-22*
-*Last updated: 2026-03-22 after initial definition*
+*Last updated: 2026-03-22 after roadmap creation*

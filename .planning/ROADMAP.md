@@ -12,6 +12,7 @@
 - ✅ **v0.8.0 Protocol Scalability** — Phases 38-41 (shipped 2026-03-19)
 - ✅ **v0.9.0 Connection Resilience & Hardening** — Phases 42-45 (shipped 2026-03-20)
 - ✅ **v1.0.0 Database Layer Done** — Phases 46-52 (shipped 2026-03-22)
+- [ ] **v1.1.0 Operational Polish & Local Access** — Phases 53-56 (in progress)
 
 ## Phases
 
@@ -146,3 +147,68 @@ Full details: [milestones/v0.9.0-ROADMAP.md](milestones/v0.9.0-ROADMAP.md)
 Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 
 </details>
+
+### v1.1.0 Operational Polish & Local Access (In Progress)
+
+**Milestone Goal:** Make chromatindb operationally mature -- runtime compaction, local UDS access, configurable GC, input validation hardening, and documentation/cleanup to match shipped v1.0.0 reality.
+
+- [ ] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0
+- [ ] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings
+- [ ] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes
+- [ ] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication
+
+## Phase Details
+
+### Phase 53: Release Cleanup & Documentation
+**Goal**: Repository reflects shipped v1.0.0 reality -- tagged, documented, stale artifacts removed, version bumped to 1.1.0
+**Depends on**: Nothing (first phase of v1.1.0)
+**Requirements**: REL-01, REL-02, REL-03, REL-04, DOCS-01, DOCS-02
+**Success Criteria** (what must be TRUE):
+  1. `git tag v1.0.0` exists on the shipped commit and `git describe` returns it
+  2. `deploy/test-crash-recovery.sh`, `db/TESTS.md`, and stale `.planning/milestones/v1.0.0-*` deferred docs no longer exist in the tree
+  3. `README.md` and `db/README.md` accurately describe v1.0.0 capabilities (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
+  4. CMake `project(VERSION ...)` reads `1.1.0` and built binary reports v1.1.0
+**Plans**: TBD
+
+### Phase 54: Operational Hardening
+**Goal**: Node operators have finer control over GC timing, protection against malformed timestamps, and actionable error messages on sync rejection
+**Depends on**: Phase 53
+**Requirements**: OPS-01, OPS-02, OPS-03, DOCS-03
+**Success Criteria** (what must be TRUE):
+  1. Operator can set `expiry_scan_interval_seconds` in config and the node scans at that interval instead of hardcoded 60s
+  2. Node rejects blobs with timestamps more than 1 hour in the future or more than 30 days in the past, with a logged rejection reason
+  3. When a peer receives a SyncRejected message, the reason string (e.g. "rate limited", "storage full", "quota exceeded") is logged and visible to the operator
+  4. `db/PROTOCOL.md` documents the sync reject reason string field and defined reason values
+**Plans**: TBD
+
+### Phase 55: Runtime Compaction
+**Goal**: Long-running nodes on constrained devices automatically reclaim disk space without restart
+**Depends on**: Phase 54
+**Requirements**: COMP-01
+**Success Criteria** (what must be TRUE):
+  1. Node performs mdbx compaction automatically on a configurable schedule (default interval appropriate for long-running operation)
+  2. After compaction following bulk deletion, the database file size is measurably smaller than before compaction
+  3. Compaction runs without blocking normal read/write/sync operations (non-disruptive to connected peers)
+**Plans**: TBD
+
+### Phase 56: Local Access
+**Goal**: Local processes can read and write blobs via Unix Domain Socket without TCP overhead or PQ crypto handshake
+**Depends on**: Phase 55
+**Requirements**: UDS-01
+**Success Criteria** (what must be TRUE):
+  1. Node listens on a configurable Unix Domain Socket path when `uds_path` is set in config
+  2. A local process can write a blob via UDS and read it back, using the same wire protocol as TCP connections
+  3. UDS connections skip PQ key exchange (trusted by definition -- local access only) and proceed directly to message exchange
+  4. UDS connections are subject to the same ACL, rate limiting, and quota enforcement as TCP connections
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:** 53 -> 54 -> 55 -> 56
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 53. Release Cleanup & Documentation | v1.1.0 | 0/TBD | Not started | - |
+| 54. Operational Hardening | v1.1.0 | 0/TBD | Not started | - |
+| 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
+| 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
