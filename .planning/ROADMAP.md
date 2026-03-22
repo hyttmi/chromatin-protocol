@@ -217,5 +217,5 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
 | 54. Operational Hardening | 2/2 | Complete    | 2026-03-22 | - |
-| 55. Runtime Compaction | 1/1 | Complete   | 2026-03-22 | - |
+| 55. Runtime Compaction | 1/1 | Complete    | 2026-03-22 | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
