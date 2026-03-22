@@ -13,7 +13,7 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 
 ### Local Access
 
-- [ ] **UDS-01**: Local process can read/write blobs via Unix Domain Socket without TCP+PQ overhead
+- [x] **UDS-01**: Local process can read/write blobs via Unix Domain Socket without TCP+PQ overhead
 
 ### Operational Hardening
 
@@ -55,7 +55,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | COMP-01 | Phase 55 | Complete |
-| UDS-01 | Phase 56 | Pending |
+| UDS-01 | Phase 56 | Complete |
 | OPS-01 | Phase 54 | Complete |
 | OPS-02 | Phase 54 | Complete |
 | OPS-03 | Phase 54 | Complete |

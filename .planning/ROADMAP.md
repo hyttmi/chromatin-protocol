@@ -155,7 +155,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 - [x] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0 (completed 2026-03-22)
 - [x] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings (completed 2026-03-22)
 - [x] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes (completed 2026-03-22)
-- [ ] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication
+- [x] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication (completed 2026-03-22)
 
 ## Phase Details
 
@@ -207,7 +207,7 @@ Plans:
   2. A local process can write a blob via UDS and read it back, using the same wire protocol as TCP connections
   3. UDS connections skip PQ key exchange (trusted by definition -- local access only) and proceed directly to message exchange
   4. UDS connections are subject to the same ACL, rate limiting, and quota enforcement as TCP connections
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 56-01-PLAN.md -- Config field, Connection generic socket refactor, UdsAcceptor class
 - [ ] 56-02-PLAN.md -- PeerManager integration, UDS tests, startup logging, PROTOCOL.md update
@@ -221,4 +221,4 @@ Plans:
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
 | 54. Operational Hardening | 2/2 | Complete    | 2026-03-22 | - |
 | 55. Runtime Compaction | 1/1 | Complete    | 2026-03-22 | - |
-| 56. Local Access | 1/2 | In Progress|  | - |
+| 56. Local Access | 2/2 | Complete   | 2026-03-22 | - |
