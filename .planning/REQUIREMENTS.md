@@ -17,9 +17,9 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 
 ### Operational Hardening
 
-- [ ] **OPS-01**: Node operator can configure expiry scan interval via config field (replacing hardcoded 60s)
+- [x] **OPS-01**: Node operator can configure expiry scan interval via config field (replacing hardcoded 60s)
 - [ ] **OPS-02**: Node rejects blobs with timestamps too far in the future or past on ingest
-- [ ] **OPS-03**: SyncRejected messages include human-readable reason strings for operator debugging
+- [x] **OPS-03**: SyncRejected messages include human-readable reason strings for operator debugging
 
 ### Release & Cleanup
 
@@ -56,9 +56,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | COMP-01 | Phase 55 | Pending |
 | UDS-01 | Phase 56 | Pending |
-| OPS-01 | Phase 54 | Pending |
+| OPS-01 | Phase 54 | Complete |
 | OPS-02 | Phase 54 | Pending |
-| OPS-03 | Phase 54 | Pending |
+| OPS-03 | Phase 54 | Complete |
 | REL-01 | Phase 53 | Complete |
 | REL-02 | Phase 53 | Complete |
 | REL-03 | Phase 53 | Complete |

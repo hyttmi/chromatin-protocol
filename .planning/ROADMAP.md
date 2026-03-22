@@ -181,7 +181,7 @@ Plans:
   2. Node rejects blobs with timestamps more than 1 hour in the future or more than 30 days in the past, with a logged rejection reason
   3. When a peer receives a SyncRejected message, the reason string (e.g. "rate limited", "storage full", "quota exceeded") is logged and visible to the operator
   4. `db/PROTOCOL.md` documents the sync reject reason string field and defined reason values
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 54-01-PLAN.md -- Configurable expiry scan interval and shared sync rejection reason header
 - [ ] 54-02-PLAN.md -- Timestamp validation on ingest and PROTOCOL.md documentation update
@@ -214,6 +214,6 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
-| 54. Operational Hardening | v1.1.0 | 0/2 | Not started | - |
+| 54. Operational Hardening | 1/2 | In Progress|  | - |
 | 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
