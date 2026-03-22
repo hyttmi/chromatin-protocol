@@ -152,7 +152,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 
 **Milestone Goal:** Make chromatindb operationally mature -- runtime compaction, local UDS access, configurable GC, input validation hardening, and documentation/cleanup to match shipped v1.0.0 reality.
 
-- [ ] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0
+- [x] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0 (completed 2026-03-22)
 - [ ] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings
 - [ ] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes
 - [ ] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication
@@ -168,7 +168,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
   2. `deploy/test-crash-recovery.sh`, `db/TESTS.md`, and stale `.planning/milestones/v1.0.0-*` deferred docs no longer exist in the tree
   3. `README.md` and `db/README.md` accurately describe v1.0.0 capabilities (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
   4. CMake `project(VERSION ...)` reads `1.1.0` and built binary reports v1.1.0
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 53-01-PLAN.md -- Remove stale artifacts, archive milestone phases, bump version, update documentation
 
@@ -210,7 +210,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 53. Release Cleanup & Documentation | v1.1.0 | 0/1 | Not started | - |
+| 53. Release Cleanup & Documentation | 1/1 | Complete   | 2026-03-22 | - |
 | 54. Operational Hardening | v1.1.0 | 0/TBD | Not started | - |
 | 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |

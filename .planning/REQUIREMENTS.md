@@ -23,15 +23,15 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 
 ### Release & Cleanup
 
-- [ ] **REL-01**: Git repository has a v1.0.0 release tag on the shipped commit
-- [ ] **REL-02**: Stale bash tests (deploy/test-crash-recovery.sh) and design docs (db/TESTS.md) removed
-- [ ] **REL-03**: Stale .planning/milestones/v1.0.0-* deferred docs cleaned up
-- [ ] **REL-04**: CMake project version bumped to 1.1.0
+- [x] **REL-01**: Git repository has a v1.0.0 release tag on the shipped commit
+- [x] **REL-02**: Stale bash tests (deploy/test-crash-recovery.sh) and design docs (db/TESTS.md) removed
+- [x] **REL-03**: Stale .planning/milestones/v1.0.0-* deferred docs cleaned up
+- [x] **REL-04**: CMake project version bumped to 1.1.0
 
 ### Documentation
 
-- [ ] **DOCS-01**: db/README.md reflects v1.0.0 state (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
-- [ ] **DOCS-02**: README.md aligned with v1.0.0 shipped state
+- [x] **DOCS-01**: db/README.md reflects v1.0.0 state (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
+- [x] **DOCS-02**: README.md aligned with v1.0.0 shipped state
 - [ ] **DOCS-03**: db/PROTOCOL.md updated with sync reject reason strings
 
 ## v2 Requirements
@@ -59,12 +59,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-01 | Phase 54 | Pending |
 | OPS-02 | Phase 54 | Pending |
 | OPS-03 | Phase 54 | Pending |
-| REL-01 | Phase 53 | Pending |
-| REL-02 | Phase 53 | Pending |
-| REL-03 | Phase 53 | Pending |
-| REL-04 | Phase 53 | Pending |
-| DOCS-01 | Phase 53 | Pending |
-| DOCS-02 | Phase 53 | Pending |
+| REL-01 | Phase 53 | Complete |
+| REL-02 | Phase 53 | Complete |
+| REL-03 | Phase 53 | Complete |
+| REL-04 | Phase 53 | Complete |
+| DOCS-01 | Phase 53 | Complete |
+| DOCS-02 | Phase 53 | Complete |
 | DOCS-03 | Phase 54 | Pending |
 
 **Coverage:**
