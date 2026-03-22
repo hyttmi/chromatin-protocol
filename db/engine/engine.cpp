@@ -5,6 +5,7 @@
 
 #include <asio/this_coro.hpp>
 
+#include <chrono>
 #include <cstring>
 
 #include "db/crypto/hash.h"
@@ -116,6 +117,25 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
                          storage_.used_bytes(), max_storage_bytes_);
             co_return IngestResult::rejection(IngestError::storage_full,
                 "storage capacity exceeded");
+        }
+    }
+
+    // Step 0c: Timestamp validation (cheap integer compare, before any crypto)
+    {
+        constexpr uint64_t MAX_FUTURE_SECONDS = 3600;         // 1 hour
+        constexpr uint64_t MAX_PAST_SECONDS = 30 * 24 * 3600; // 30 days
+        auto now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        if (blob.timestamp > now + MAX_FUTURE_SECONDS) {
+            spdlog::warn("Ingest rejected: timestamp too far in future (more than 1 hour ahead)");
+            co_return IngestResult::rejection(IngestError::timestamp_rejected,
+                "timestamp too far in future (more than 1 hour ahead)");
+        }
+        if (blob.timestamp < now - MAX_PAST_SECONDS) {
+            spdlog::warn("Ingest rejected: timestamp too far in past (more than 30 days ago)");
+            co_return IngestResult::rejection(IngestError::timestamp_rejected,
+                "timestamp too far in past (more than 30 days ago)");
         }
     }
 
@@ -278,6 +298,25 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& dele
     //   signature = over canonical form SHA3-256(namespace || tombstone_data || 0 || timestamp)
     //
     // This design means the tombstone is directly storable and verifiable on any node.
+
+    // Step 0c: Timestamp validation (cheap integer compare, before any crypto)
+    {
+        constexpr uint64_t MAX_FUTURE_SECONDS = 3600;         // 1 hour
+        constexpr uint64_t MAX_PAST_SECONDS = 30 * 24 * 3600; // 30 days
+        auto now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        if (delete_request.timestamp > now + MAX_FUTURE_SECONDS) {
+            spdlog::warn("Delete rejected: timestamp too far in future (more than 1 hour ahead)");
+            co_return IngestResult::rejection(IngestError::timestamp_rejected,
+                "timestamp too far in future (more than 1 hour ahead)");
+        }
+        if (delete_request.timestamp < now - MAX_PAST_SECONDS) {
+            spdlog::warn("Delete rejected: timestamp too far in past (more than 30 days ago)");
+            co_return IngestResult::rejection(IngestError::timestamp_rejected,
+                "timestamp too far in past (more than 30 days ago)");
+        }
+    }
 
     // Step 1: Structural checks
     if (delete_request.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {

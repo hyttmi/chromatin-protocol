@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -75,19 +76,29 @@ struct TempDir {
     TempDir& operator=(const TempDir&) = delete;
 };
 
+/// Get current Unix timestamp in seconds for test helper defaults.
+uint64_t current_timestamp() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+/// Sentinel value: pass this as timestamp to auto-use current system time.
+constexpr uint64_t TS_AUTO = UINT64_MAX;
+
 /// Build a properly signed BlobData using a NodeIdentity.
 chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000000000ULL)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
-    blob.timestamp = timestamp;
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     // Build canonical signing input and sign it
     auto signing_input = chromatindb::wire::build_signing_input(
@@ -101,14 +112,14 @@ chromatindb::wire::BlobData make_signed_blob(
 chromatindb::wire::BlobData make_signed_tombstone(
     const chromatindb::identity::NodeIdentity& id,
     const std::array<uint8_t, 32>& target_blob_hash,
-    uint64_t timestamp = 2000)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData tombstone;
     std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
     tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
     tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
     tombstone.ttl = 0;  // Permanent
-    tombstone.timestamp = timestamp;
+    tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
@@ -118,7 +129,7 @@ chromatindb::wire::BlobData make_signed_tombstone(
 }
 
 /// Fixed clock for deterministic tests.
-uint64_t test_clock_value = 10000;
+uint64_t test_clock_value = 0;
 uint64_t test_clock() { return test_clock_value; }
 
 } // anonymous namespace
@@ -203,19 +214,18 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
-    // Set clock to 10000
     test_clock_value = 10000;
 
-    // Ingest a non-expired blob (timestamp=9000, ttl=604800 => expires at 613800)
-    auto blob1 = make_signed_blob(id, "non-expired", 604800, 9000);
+    // Ingest a non-expired blob (current timestamp, ttl=604800 => not expired)
+    auto blob1 = make_signed_blob(id, "non-expired");
     REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
 
-    // Ingest an expired blob (timestamp=1, ttl=100 => expires at 101, way before now=10000)
-    auto blob2 = make_signed_blob(id, "expired", 100, 1);
+    // Ingest a blob with short TTL (will be expired per sync clock)
+    auto blob2 = make_signed_blob(id, "expired", 100);
     REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
 
     // Ingest a permanent blob (ttl=0)
-    auto blob3 = make_signed_blob(id, "permanent", 0, 5000);
+    auto blob3 = make_signed_blob(id, "permanent", 0);
     REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
 
     SyncProtocol sync(engine, store, pool, test_clock);
@@ -246,13 +256,13 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto id2 = chromatindb::identity::NodeIdentity::generate();
 
     // Store blobs in engine1 (from id1)
-    auto blob_a = make_signed_blob(id1, "blob-A", 604800, 9000);
-    auto blob_b = make_signed_blob(id1, "blob-B", 604800, 9001);
+    auto blob_a = make_signed_blob(id1, "blob-A");
+    auto blob_b = make_signed_blob(id1, "blob-B");
     REQUIRE(run_async(pool, engine1.ingest(blob_a)).accepted);
     REQUIRE(run_async(pool, engine1.ingest(blob_b)).accepted);
 
     // Store a different blob in engine2 (from id2)
-    auto blob_c = make_signed_blob(id2, "blob-C", 604800, 9002);
+    auto blob_c = make_signed_blob(id2, "blob-C");
     REQUIRE(run_async(pool, engine2.ingest(blob_c)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -311,11 +321,11 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Store a non-expired blob
-    auto blob_ok = make_signed_blob(id, "not-expired", 604800, 9000);
+    auto blob_ok = make_signed_blob(id, "not-expired");
     REQUIRE(run_async(pool, engine1.ingest(blob_ok)).accepted);
 
-    // Store an expired blob (timestamp=1, ttl=100 => expired at 101)
-    auto blob_expired = make_signed_blob(id, "already-expired", 100, 1);
+    // Store a blob with short TTL (expired per sync clock)
+    auto blob_expired = make_signed_blob(id, "already-expired", 100);
     REQUIRE(run_async(pool, engine1.ingest(blob_expired)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -343,7 +353,7 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Both engines have the same blob
-    auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
+    auto blob = make_signed_blob(id, "shared-blob");
     REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
     REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
 
@@ -371,7 +381,7 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Engine1 has data, engine2 has nothing
-    auto blob = make_signed_blob(id, "only-on-one-side", 604800, 9000);
+    auto blob = make_signed_blob(id, "only-on-one-side");
     REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -444,8 +454,8 @@ TEST_CASE("blob request encode/decode round-trip", "[sync][codec]") {
 TEST_CASE("blob transfer encode/decode round-trip", "[sync][codec]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
-    auto blob1 = make_signed_blob(id, "transfer-1", 604800, 9000);
-    auto blob2 = make_signed_blob(id, "transfer-2", 604800, 9001);
+    auto blob1 = make_signed_blob(id, "transfer-1");
+    auto blob2 = make_signed_blob(id, "transfer-2");
 
     std::vector<chromatindb::wire::BlobData> blobs = {blob1, blob2};
 
@@ -461,7 +471,7 @@ TEST_CASE("blob transfer encode/decode round-trip", "[sync][codec]") {
 
 TEST_CASE("single blob transfer encode/decode round-trip", "[sync][codec]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
-    auto blob = make_signed_blob(id, "single-transfer", 604800, 9000);
+    auto blob = make_signed_blob(id, "single-transfer");
 
     auto encoded = SyncProtocol::encode_single_blob_transfer(blob);
     auto decoded = SyncProtocol::decode_blob_transfer(encoded);
@@ -490,12 +500,12 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Store a regular blob
-    auto blob = make_signed_blob(id, "to-be-deleted", 604800, 9000);
+    auto blob = make_signed_blob(id, "to-be-deleted");
     auto ingest_result = run_async(pool, engine.ingest(blob));
     REQUIRE(ingest_result.accepted);
 
     // Delete it via tombstone
-    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash, 9500);
+    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
     auto delete_result = run_async(pool, engine.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
@@ -521,14 +531,14 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Both nodes have the same blob
-    auto blob = make_signed_blob(id, "shared-blob", 604800, 9000);
+    auto blob = make_signed_blob(id, "shared-blob");
     auto ingest1 = run_async(pool, engine1.ingest(blob));
     REQUIRE(ingest1.accepted);
     REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
     auto blob_hash = ingest1.ack->blob_hash;
 
     // Node1 deletes the blob
-    auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
+    auto tombstone = make_signed_tombstone(id, blob_hash);
     auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
@@ -570,13 +580,13 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Create blob on node1
-    auto blob = make_signed_blob(id, "will-be-blocked", 604800, 9000);
+    auto blob = make_signed_blob(id, "will-be-blocked");
     auto ingest_result = run_async(pool, engine1.ingest(blob));
     REQUIRE(ingest_result.accepted);
     auto blob_hash = ingest_result.ack->blob_hash;
 
     // Node2 receives a tombstone for this blob before the blob itself arrives
-    auto tombstone = make_signed_tombstone(id, blob_hash, 9500);
+    auto tombstone = make_signed_tombstone(id, blob_hash);
     auto tombstone_ingest = run_async(pool, engine2.ingest(tombstone));
     REQUIRE(tombstone_ingest.accepted);
 
@@ -597,7 +607,7 @@ TEST_CASE("tombstone transfer encode/decode preserves tombstone data", "[sync][t
 
     std::array<uint8_t, 32> target{};
     target.fill(0xDD);
-    auto tombstone = make_signed_tombstone(id, target, 9500);
+    auto tombstone = make_signed_tombstone(id, target);
 
     // Encode and decode via blob transfer (used during sync)
     auto encoded = SyncProtocol::encode_single_blob_transfer(tombstone);
@@ -624,14 +634,14 @@ namespace {
 chromatindb::wire::BlobData make_signed_delegation_sync(
     const chromatindb::identity::NodeIdentity& owner,
     const chromatindb::identity::NodeIdentity& delegate,
-    uint64_t timestamp = 9000)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
     blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
     blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
     blob.ttl = 0;  // Permanent
-    blob.timestamp = timestamp;
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
@@ -646,14 +656,14 @@ chromatindb::wire::BlobData make_delegate_blob_sync(
     const chromatindb::identity::NodeIdentity& delegate,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 9100)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
     blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
-    blob.timestamp = timestamp;
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
@@ -797,7 +807,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
         owner.namespace_id(), delegate.public_key()));
 
     // Node1: owner revokes by tombstoning
-    auto tombstone = make_signed_tombstone(owner, deleg_content_hash, 9500);
+    auto tombstone = make_signed_tombstone(owner, deleg_content_hash);
     auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
     REQUIRE(delete_result.accepted);
 
@@ -849,7 +859,7 @@ TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "
     auto id1 = chromatindb::identity::NodeIdentity::generate();
 
     // Store a blob on node1
-    auto blob = make_signed_blob(id1, "cursor-test-blob", 604800, 9000);
+    auto blob = make_signed_blob(id1, "cursor-test-blob");
     REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
 
     // Simulate "peer hash" for node1 (as seen by node2)
@@ -896,9 +906,9 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
     auto id2 = chromatindb::identity::NodeIdentity::generate();
 
     // Store blobs in two namespaces
-    auto blob1 = make_signed_blob(id1, "ns1-blob", 604800, 9000);
+    auto blob1 = make_signed_blob(id1, "ns1-blob");
     REQUIRE(run_async(pool, engine1.ingest(blob1)).accepted);
-    auto blob2 = make_signed_blob(id2, "ns2-blob", 604800, 9001);
+    auto blob2 = make_signed_blob(id2, "ns2-blob");
     REQUIRE(run_async(pool, engine1.ingest(blob2)).accepted);
 
     // Get initial seq_nums
@@ -917,7 +927,7 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
     }
 
     // Add a new blob to namespace 1 only
-    auto blob3 = make_signed_blob(id1, "ns1-new-blob", 604800, 9002);
+    auto blob3 = make_signed_blob(id1, "ns1-new-blob");
     REQUIRE(run_async(pool, engine1.ingest(blob3)).accepted);
 
     // Re-read namespace list

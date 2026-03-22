@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -67,19 +68,29 @@ std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
     return result;
 }
 
+/// Get current Unix timestamp in seconds for test helper defaults.
+uint64_t current_timestamp() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+/// Sentinel value: pass this as timestamp to auto-use current system time.
+constexpr uint64_t TS_AUTO = UINT64_MAX;
+
 /// Build a properly signed BlobData using a NodeIdentity.
 chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
-    blob.timestamp = timestamp;
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
@@ -92,14 +103,14 @@ chromatindb::wire::BlobData make_signed_blob(
 chromatindb::wire::BlobData make_signed_tombstone(
     const chromatindb::identity::NodeIdentity& id,
     const std::array<uint8_t, 32>& target_blob_hash,
-    uint64_t timestamp = 2000)
+    uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData tombstone;
     std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
     tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
     tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
     tombstone.ttl = 0;  // Permanent
-    tombstone.timestamp = timestamp;
+    tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
