@@ -98,6 +98,9 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(const std::vector<wire::Bl
             } else if (*result.error == engine::IngestError::quota_exceeded) {
                 quota_exceeded_count++;
                 spdlog::debug("Sync blob skipped: namespace quota exceeded");
+            } else if (*result.error == engine::IngestError::timestamp_rejected) {
+                spdlog::debug("Sync blob skipped: timestamp rejected ({})",
+                              result.error_detail.empty() ? "unknown" : result.error_detail);
             } else {
                 spdlog::warn("sync ingest rejected blob: {}",
                              result.error_detail.empty() ? "unknown" : result.error_detail);

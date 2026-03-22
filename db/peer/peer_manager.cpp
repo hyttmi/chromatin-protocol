@@ -709,6 +709,11 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                         ++metrics_.quota_rejections;
                         std::span<const uint8_t> empty{};
                         co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
+                    } else if (*result.error == engine::IngestError::timestamp_rejected) {
+                        // Timestamp too far in future/past -- receiver's decision, debug log only
+                        spdlog::debug("Data from {}: timestamp rejected ({})",
+                                      conn->remote_address(),
+                                      result.error_detail.empty() ? "unknown" : result.error_detail);
                     } else {
                         spdlog::warn("invalid blob from peer {}: {}",
                                      conn->remote_address(),

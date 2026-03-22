@@ -336,9 +336,9 @@ Each address is a `host:port` string. Nodes share up to 8 addresses per response
 
 **QuotaExceeded** (`type = QuotaExceeded (26)`): Empty payload. Sent by a node when a blob write would exceed the configured per-namespace byte or count quota. Unlike StorageFull (which signals global capacity), QuotaExceeded indicates that the specific namespace has reached its limit. Other namespaces may still accept writes.
 
-### Rate Limiting
+### Sync Rejection
 
-Peers initiating sync too frequently or exceeding resource limits are rejected with a `SyncRejected (type 30)` message. The payload is a single byte indicating the rejection reason.
+Sync-related operations that cannot proceed are rejected with a `SyncRejected (type 30)` message. The payload is a single byte indicating the rejection reason.
 
 **SyncRejected wire format:**
 
@@ -354,10 +354,36 @@ SyncRejected (type 30):
 | 0x01 | Cooldown | Peer initiated sync before the cooldown period elapsed |
 | 0x02 | Session limit | Maximum concurrent sync sessions reached |
 | 0x03 | Byte rate | Sync traffic exceeded the configured byte rate limit |
+| 0x04 | Storage full | Node storage capacity exhausted |
+| 0x05 | Quota exceeded | Namespace quota (byte or count limit) exceeded |
+| 0x06 | Namespace not found | Requested namespace does not exist on this node |
+| 0x07 | Blob too large | Blob data exceeds maximum allowed size |
+| 0x08 | Timestamp rejected | Blob timestamp too far in future or past |
 
 After receiving SyncRejected, the initiating peer should wait before retrying. The node's sync cooldown (configurable via `sync_cooldown_seconds`) enforces a minimum interval between sync requests from the same peer. The byte rate limit tracks all sync-related message traffic (reconciliation + blob transfer) per connection.
 
-**Write Rate Limiting** -- In addition to sync rate limiting, per-connection token bucket rate limiting applies to Data (8) and Delete (18) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
+### Timestamp Validation
+
+Nodes validate blob timestamps before performing any cryptographic verification (Step 0 placement). This prevents nodes from wasting compute on blobs with clearly invalid timestamps.
+
+**Thresholds (hardcoded):**
+
+| Direction | Threshold | Description |
+|-----------|-----------|-------------|
+| Future | 1 hour (3600 seconds) | Blob timestamp must not be more than 1 hour ahead of the node's system clock |
+| Past | 30 days (2,592,000 seconds) | Blob timestamp must not be more than 30 days behind the node's system clock |
+
+The `timestamp` field is a `uint64` Unix epoch value (seconds since 1970-01-01 00:00:00 UTC) from the BlobData structure.
+
+Timestamp validation applies to:
+- **Direct writes** (Data messages): Blobs arriving via `Data (8)` or `Delete (18)` are checked before any signature verification.
+- **Sync-received blobs**: Blobs arriving during Phase C blob transfer are checked by the engine before ingestion. Blobs that fail timestamp validation are silently skipped (logged at debug level) without aborting the sync session.
+
+Blobs rejected for timestamp validation return `IngestError::timestamp_rejected` with an actionable detail string indicating whether the timestamp was too far in the future or too far in the past.
+
+### Rate Limiting
+
+In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (18) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
 
 ### Inactivity Detection
 
