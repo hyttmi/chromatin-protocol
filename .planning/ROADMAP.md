@@ -154,7 +154,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 
 - [x] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0 (completed 2026-03-22)
 - [x] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings (completed 2026-03-22)
-- [ ] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes
+- [x] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes (completed 2026-03-22)
 - [ ] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication
 
 ## Phase Details
@@ -194,7 +194,7 @@ Plans:
   1. Node performs mdbx compaction automatically on a configurable schedule (default interval appropriate for long-running operation)
   2. After compaction following bulk deletion, the database file size is measurably smaller than before compaction
   3. Compaction runs without blocking normal read/write/sync operations (non-disruptive to connected peers)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 55-01-PLAN.md -- Config field, Storage::compact() method, PeerManager timer loop with SIGHUP reload and SIGUSR1 metrics
 
@@ -217,5 +217,5 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
 | 54. Operational Hardening | 2/2 | Complete    | 2026-03-22 | - |
-| 55. Runtime Compaction | v1.1.0 | 0/1 | Planning complete | - |
+| 55. Runtime Compaction | 1/1 | Complete   | 2026-03-22 | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |

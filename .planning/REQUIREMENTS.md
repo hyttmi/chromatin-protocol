@@ -9,7 +9,7 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 
 ### Compaction
 
-- [ ] **COMP-01**: Node operator can trigger runtime mdbx compaction automatically for long-running nodes
+- [x] **COMP-01**: Node operator can trigger runtime mdbx compaction automatically for long-running nodes
 
 ### Local Access
 
@@ -54,7 +54,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| COMP-01 | Phase 55 | Pending |
+| COMP-01 | Phase 55 | Complete |
 | UDS-01 | Phase 56 | Pending |
 | OPS-01 | Phase 54 | Complete |
 | OPS-02 | Phase 54 | Complete |
