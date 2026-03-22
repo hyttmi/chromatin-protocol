@@ -1235,6 +1235,91 @@ TEST_CASE("load_config: missing expiry_scan_interval_seconds uses default 60", "
 }
 
 // =============================================================================
+// Phase 55: Compaction interval config tests (COMP-01)
+// =============================================================================
+
+TEST_CASE("Config defaults: compaction_interval_hours is 6", "[config][compaction]") {
+    Config cfg;
+    REQUIRE(cfg.compaction_interval_hours == 6);
+}
+
+TEST_CASE("validate_config: compaction_interval_hours=0 passes (disabled)", "[config][compaction]") {
+    Config cfg;
+    cfg.compaction_interval_hours = 0;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: compaction_interval_hours=1 passes (minimum when enabled)", "[config][compaction]") {
+    Config cfg;
+    cfg.compaction_interval_hours = 1;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: compaction_interval_hours=6 passes (default)", "[config][compaction]") {
+    Config cfg;
+    cfg.compaction_interval_hours = 6;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: compaction_interval_hours=168 passes (1 week)", "[config][compaction]") {
+    Config cfg;
+    cfg.compaction_interval_hours = 168;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("load_config reads compaction_interval_hours from JSON", "[config][compaction]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_compaction.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"compaction_interval_hours": 12})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.compaction_interval_hours == 12);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: missing compaction_interval_hours uses default 6", "[config][compaction]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_compaction.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.compaction_interval_hours == 6);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: compaction_interval_hours=0 disables compaction", "[config][compaction]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_compaction_off.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"compaction_interval_hours": 0})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.compaction_interval_hours == 0);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("compaction_interval_hours is a known config key", "[config][compaction]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_compaction_known.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"compaction_interval_hours": 6})";
+    }
+
+    // Should not produce "unknown config key" warning -- verified by no throw
+    REQUIRE_NOTHROW(load_config(tmp));
+
+    std::filesystem::remove(tmp);
+}
+
+// =============================================================================
 // Phase 54: Sync rejection reason string tests (OPS-03)
 // =============================================================================
 

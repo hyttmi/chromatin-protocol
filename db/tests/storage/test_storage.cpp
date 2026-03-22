@@ -1977,3 +1977,106 @@ TEST_CASE("used_bytes returns mmap geometry size", "[storage][integrity]") {
     // Mmap geometry (used_bytes) should be >= actual data usage
     REQUIRE(bytes >= data_bytes);
 }
+
+// =============================================================================
+// Phase 55: Storage compaction tests (COMP-01)
+// =============================================================================
+
+TEST_CASE("Storage::compact() on empty DB succeeds", "[storage][compact]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    auto result = store.compact();
+    REQUIRE(result.success);
+    REQUIRE(result.before_bytes > 0);
+    REQUIRE(result.after_bytes > 0);
+    REQUIRE(result.after_bytes <= result.before_bytes);
+}
+
+TEST_CASE("Storage::compact() on DB with data produces valid result", "[storage][compact]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    // Store some blobs to increase DB size
+    for (int i = 0; i < 20; ++i) {
+        auto blob = make_test_blob(0x50, "compact-data-" + std::to_string(i));
+        REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
+    }
+
+    auto before = store.used_bytes();
+    auto result = store.compact();
+    REQUIRE(result.success);
+    REQUIRE(result.before_bytes > 0);
+    REQUIRE(result.after_bytes > 0);
+    REQUIRE(result.after_bytes <= result.before_bytes);
+    REQUIRE(result.duration_ms < 60000);  // Should finish quickly
+}
+
+TEST_CASE("Storage::compact() after deletion produces smaller file", "[storage][compact]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0x51);
+
+    // Store many blobs to grow the DB
+    std::vector<std::array<uint8_t, 32>> hashes;
+    for (int i = 0; i < 50; ++i) {
+        auto blob = make_test_blob(0x51, "delete-compact-" + std::to_string(i));
+        auto result = store.store_blob(blob);
+        REQUIRE(result.status == StoreResult::Status::Stored);
+        hashes.push_back(result.blob_hash);
+    }
+
+    // Delete most blobs
+    for (size_t i = 0; i < 40; ++i) {
+        REQUIRE(store.delete_blob_data(
+            std::span<const uint8_t, 32>(ns),
+            std::span<const uint8_t, 32>(hashes[i])));
+    }
+
+    // Compact should reclaim space from deleted blobs
+    auto result = store.compact();
+    REQUIRE(result.success);
+    REQUIRE(result.before_bytes > 0);
+    REQUIRE(result.after_bytes > 0);
+    // After compaction of a DB with mostly deleted data, the
+    // compacted file should be measurably smaller
+    REQUIRE(result.after_bytes < result.before_bytes);
+}
+
+TEST_CASE("Storage::compact() DB is still functional after compaction", "[storage][compact]") {
+    TempDir dir;
+    Storage store(dir.path.string());
+
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0x52);
+
+    // Store blobs before compaction
+    auto blob1 = make_test_blob(0x52, "before-compact-1");
+    auto r1 = store.store_blob(blob1);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+
+    // Compact
+    auto result = store.compact();
+    REQUIRE(result.success);
+
+    // Verify existing data survives compaction
+    auto retrieved = store.get_blob(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(r1.blob_hash));
+    REQUIRE(retrieved.has_value());
+    REQUIRE(retrieved->data == blob1.data);
+
+    // Verify new writes work after compaction
+    auto blob2 = make_test_blob(0x52, "after-compact-1");
+    auto r2 = store.store_blob(blob2);
+    REQUIRE(r2.status == StoreResult::Status::Stored);
+
+    // Verify new blob is retrievable
+    auto retrieved2 = store.get_blob(
+        std::span<const uint8_t, 32>(ns),
+        std::span<const uint8_t, 32>(r2.blob_hash));
+    REQUIRE(retrieved2.has_value());
+    REQUIRE(retrieved2->data == blob2.data);
+}
