@@ -79,10 +79,10 @@ Requirements for the "database layer is done" open-source release. Each maps to 
 
 ### Stress & Chaos
 
-- [ ] **STRESS-01**: Docker test verifies long-running stability (4h) -- 3-node cluster, continuous ingest at 10 blobs/sec mixed sizes, memory bounded, blob counts consistent, no crashes
+- [x] **STRESS-01**: Docker test verifies long-running stability (4h) -- 3-node cluster, continuous ingest at 10 blobs/sec mixed sizes, memory bounded, blob counts consistent, no crashes
 - [x] **STRESS-02**: Docker test verifies peer churn -- 5-node cluster, random node kill/restart every 30s for 30 minutes, all nodes converge to identical blob set
 - [x] **STRESS-03**: Docker test verifies rapid namespace creation -- 1000 namespaces with 10 blobs each, all sync correctly, cursor storage bounded
-- [ ] **STRESS-04**: Docker test verifies concurrent everything -- 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, SIGUSR1 metrics; no deadlocks, crashes, or corruption
+- [x] **STRESS-04**: Docker test verifies concurrent everything -- 4 nodes simultaneously ingesting, syncing, tombstoning, SIGHUP reloading, SIGUSR1 metrics; no deadlocks, crashes, or corruption
 
 ### Sanitizer & Security
 
@@ -174,10 +174,10 @@ Explicitly excluded. Documented to prevent scope creep.
 | E2E-02 | Phase 51 | Complete |
 | E2E-03 | Phase 51 | Complete |
 | E2E-04 | Phase 51 | Complete |
-| STRESS-01 | Phase 52 | Pending |
+| STRESS-01 | Phase 52 | Complete |
 | STRESS-02 | Phase 52 | Complete |
 | STRESS-03 | Phase 52 | Complete |
-| STRESS-04 | Phase 52 | Pending |
+| STRESS-04 | Phase 52 | Complete |
 | SAN-04 | Phase 52 | Complete |
 | SAN-05 | Phase 52 | Complete |
 
