@@ -104,11 +104,12 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Timestamp validation on ingest (1h future / 30d past, Step 0c, both direct + sync paths) — v1.1.0 Phase 54
 - ✓ Sync reject reason strings (8 codes in shared sync_reject.h, byte enum + local mapping) — v1.1.0 Phase 54
 
+- ✓ Runtime mdbx compaction (compaction_interval_hours, 6h default, SIGHUP reloadable, SIGUSR1 metrics) — v1.1.0 Phase 55
+
 ### Active
 
 <!-- Current scope: v1.1.0 Operational Polish & Local Access -->
 
-- [ ] Runtime mdbx compaction for long-running nodes
 - [ ] Unix Domain Socket (UDS) local access interface
 
 ### Out of Scope
@@ -249,4 +250,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after Phase 54 (Operational Hardening)*
+*Last updated: 2026-03-22 after Phase 55 (Runtime Compaction)*
