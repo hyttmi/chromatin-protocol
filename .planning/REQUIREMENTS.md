@@ -18,7 +18,7 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 ### Operational Hardening
 
 - [x] **OPS-01**: Node operator can configure expiry scan interval via config field (replacing hardcoded 60s)
-- [ ] **OPS-02**: Node rejects blobs with timestamps too far in the future or past on ingest
+- [x] **OPS-02**: Node rejects blobs with timestamps too far in the future or past on ingest
 - [x] **OPS-03**: SyncRejected messages include human-readable reason strings for operator debugging
 
 ### Release & Cleanup
@@ -32,7 +32,7 @@ Requirements for v1.1.0 Operational Polish & Local Access. Each maps to roadmap 
 
 - [x] **DOCS-01**: db/README.md reflects v1.0.0 state (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
 - [x] **DOCS-02**: README.md aligned with v1.0.0 shipped state
-- [ ] **DOCS-03**: db/PROTOCOL.md updated with sync reject reason strings
+- [x] **DOCS-03**: db/PROTOCOL.md updated with sync reject reason strings
 
 ## v2 Requirements
 
@@ -57,7 +57,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | COMP-01 | Phase 55 | Pending |
 | UDS-01 | Phase 56 | Pending |
 | OPS-01 | Phase 54 | Complete |
-| OPS-02 | Phase 54 | Pending |
+| OPS-02 | Phase 54 | Complete |
 | OPS-03 | Phase 54 | Complete |
 | REL-01 | Phase 53 | Complete |
 | REL-02 | Phase 53 | Complete |
@@ -65,7 +65,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REL-04 | Phase 53 | Complete |
 | DOCS-01 | Phase 53 | Complete |
 | DOCS-02 | Phase 53 | Complete |
-| DOCS-03 | Phase 54 | Pending |
+| DOCS-03 | Phase 54 | Complete |
 
 **Coverage:**
 - v1.1.0 requirements: 12 total

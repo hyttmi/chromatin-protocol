@@ -153,7 +153,7 @@ Full details: [milestones/v1.0.0-ROADMAP.md](milestones/v1.0.0-ROADMAP.md)
 **Milestone Goal:** Make chromatindb operationally mature -- runtime compaction, local UDS access, configurable GC, input validation hardening, and documentation/cleanup to match shipped v1.0.0 reality.
 
 - [x] **Phase 53: Release Cleanup & Documentation** - Tag v1.0.0, remove stale artifacts, update docs, bump to v1.1.0 (completed 2026-03-22)
-- [ ] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings
+- [x] **Phase 54: Operational Hardening** - Configurable expiry scan, timestamp validation, sync reject reason strings (completed 2026-03-22)
 - [ ] **Phase 55: Runtime Compaction** - Automatic mdbx compaction for long-running nodes
 - [ ] **Phase 56: Local Access** - Unix Domain Socket interface for local process communication
 
@@ -181,7 +181,7 @@ Plans:
   2. Node rejects blobs with timestamps more than 1 hour in the future or more than 30 days in the past, with a logged rejection reason
   3. When a peer receives a SyncRejected message, the reason string (e.g. "rate limited", "storage full", "quota exceeded") is logged and visible to the operator
   4. `db/PROTOCOL.md` documents the sync reject reason string field and defined reason values
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 54-01-PLAN.md -- Configurable expiry scan interval and shared sync rejection reason header
 - [ ] 54-02-PLAN.md -- Timestamp validation on ingest and PROTOCOL.md documentation update
@@ -214,6 +214,6 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
-| 54. Operational Hardening | 1/2 | In Progress|  | - |
+| 54. Operational Hardening | 2/2 | Complete   | 2026-03-22 | - |
 | 55. Runtime Compaction | v1.1.0 | 0/TBD | Not started | - |
 | 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
