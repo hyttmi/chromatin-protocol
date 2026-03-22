@@ -157,11 +157,29 @@ struct Storage::Impl {
     mdbx::map_handle quota_map{0};
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
+    std::string data_dir_;          // Stored for compact() reopen
 
     Impl(const std::string& data_dir, crypto::SecureBytes master_key, Clock clk)
-        : clock(std::move(clk)) {
+        : clock(std::move(clk)), data_dir_(data_dir) {
         fs::create_directories(data_dir);
 
+        open_env(data_dir);
+
+        // Derive blob encryption key from master key
+        blob_key_ = crypto::derive_blob_key(master_key);
+
+        // Validate no unencrypted data exists in the database
+        {
+            auto rtxn = env.start_read();
+            validate_no_unencrypted_data(rtxn);
+        }
+
+        spdlog::info("Storage opened at {} with encryption at rest", data_dir);
+    }
+
+    /// Open (or reopen) the mdbx environment and sub-databases.
+    /// Used by both the constructor and compact().
+    void open_env(const std::string& path) {
         // Create parameters with geometry
         mdbx::env_managed::create_parameters create_params;
         create_params.geometry.size_lower = 1 * mdbx::env::geometry::MiB;
@@ -184,9 +202,9 @@ struct Storage::Impl {
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
 
-        env = mdbx::env_managed(data_dir, create_params, operate_params);
+        env = mdbx::env_managed(path, create_params, operate_params);
 
-        // Create all 5 sub-databases in a single write transaction
+        // Create/open all 7 sub-databases in a single write transaction
         {
             auto txn = env.start_write();
             blobs_map = txn.create_map("blobs");
@@ -198,17 +216,6 @@ struct Storage::Impl {
             quota_map = txn.create_map("quota");
             txn.commit();
         }
-
-        // Derive blob encryption key from master key
-        blob_key_ = crypto::derive_blob_key(master_key);
-
-        // Validate no unencrypted data exists in the database
-        {
-            auto rtxn = env.start_read();
-            validate_no_unencrypted_data(rtxn);
-        }
-
-        spdlog::info("Storage opened at {} with encryption at rest", data_dir);
     }
 
     // =========================================================================
@@ -1285,6 +1292,67 @@ void Storage::rebuild_quota_aggregates() {
     } catch (const std::exception& e) {
         spdlog::error("Storage error in rebuild_quota_aggregates: {}", e.what());
     }
+}
+
+// =============================================================================
+// Compaction
+// =============================================================================
+
+CompactResult Storage::compact() {
+    CompactResult result;
+    auto start = std::chrono::steady_clock::now();
+
+    try {
+        result.before_bytes = used_bytes();
+
+        // data_dir_ is a directory containing mdbx.dat and mdbx.lck.
+        // env.copy() with compactify=true creates a single-file copy at the destination.
+        // Strategy: copy to temp file, close env, swap mdbx.dat, reopen.
+        auto db_file = fs::path(impl_->data_dir_) / "mdbx.dat";
+        auto temp_file = fs::path(impl_->data_dir_) / "mdbx.compact";
+
+        // Clean up any prior interrupted compaction
+        std::error_code ec;
+        fs::remove(temp_file, ec);
+
+        // Live compacted copy -- does NOT block concurrent reads/writes
+        impl_->env.copy(temp_file.string(), true);
+
+        // Close current env (releases file locks)
+        impl_->env.close();
+
+        // Swap: rename compacted copy over the original mdbx.dat
+        fs::rename(temp_file, db_file);
+        // Remove stale lockfile so mdbx creates a fresh one on reopen
+        fs::remove(fs::path(impl_->data_dir_) / "mdbx.lck", ec);
+
+        // Reopen env from the swapped-in compacted file
+        impl_->open_env(impl_->data_dir_);
+
+        result.after_bytes = used_bytes();
+        result.success = true;
+
+    } catch (const std::exception& e) {
+        spdlog::error("compaction failed: {}", e.what());
+
+        // Attempt to reopen the original (might still be intact if copy failed)
+        try {
+            impl_->open_env(impl_->data_dir_);
+        } catch (const std::exception& reopen_err) {
+            spdlog::error("CRITICAL: failed to reopen storage after compaction failure: {}",
+                          reopen_err.what());
+        }
+
+        // Clean up temp file
+        std::error_code ec;
+        fs::remove(fs::path(impl_->data_dir_) / "mdbx.compact", ec);
+    }
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    result.duration_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+
+    return result;
 }
 
 } // namespace chromatindb::storage

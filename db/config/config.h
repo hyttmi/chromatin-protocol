@@ -43,6 +43,7 @@ struct Config {
     std::string log_format = "text";                 // Log format: "text" or "json"
     uint32_t inactivity_timeout_seconds = 120;       // 0 = disabled, minimum 30 when enabled
     uint32_t expiry_scan_interval_seconds = 60;     // Expiry scan interval in seconds (minimum 10, default 60)
+    uint32_t compaction_interval_hours = 6;         // Compaction interval in hours (0 = disabled, minimum 1 when enabled)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

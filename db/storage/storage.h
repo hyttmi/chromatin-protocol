@@ -47,6 +47,14 @@ using Clock = std::function<uint64_t()>;
 /// Default clock: system wall clock in seconds since epoch.
 uint64_t system_clock_seconds();
 
+/// Result of a compaction operation.
+struct CompactResult {
+    uint64_t before_bytes = 0;  ///< used_bytes() before compaction.
+    uint64_t after_bytes = 0;   ///< used_bytes() after compaction (reopened env).
+    uint64_t duration_ms = 0;   ///< Wall-clock time for the compaction.
+    bool success = false;       ///< True if compaction completed successfully.
+};
+
 /// Per-namespace usage aggregate for quota tracking.
 struct NamespaceQuota {
     uint64_t total_bytes = 0;  ///< Total encrypted envelope bytes stored.
@@ -170,6 +178,12 @@ public:
     /// More accurate for storage reporting since it excludes pre-allocated
     /// but unused mmap pages.
     uint64_t used_data_bytes() const;
+
+    /// Perform a live compaction: copy the database with mdbx compactify,
+    /// close the current env, swap the compacted copy over the original,
+    /// and reopen the env. Reclaims disk space from deleted/fragmented data.
+    /// @return CompactResult with before/after bytes, duration, and success flag.
+    CompactResult compact();
 
     /// Perform a read-only integrity scan of all sub-databases at startup.
     /// Logs entry counts and any cross-reference inconsistencies as warnings.

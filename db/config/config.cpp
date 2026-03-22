@@ -50,6 +50,7 @@ Config load_config(const std::filesystem::path& path) {
         cfg.log_format = j.value("log_format", cfg.log_format);
         cfg.inactivity_timeout_seconds = j.value("inactivity_timeout_seconds", cfg.inactivity_timeout_seconds);
         cfg.expiry_scan_interval_seconds = j.value("expiry_scan_interval_seconds", cfg.expiry_scan_interval_seconds);
+        cfg.compaction_interval_hours = j.value("compaction_interval_hours", cfg.compaction_interval_hours);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -66,7 +67,7 @@ Config load_config(const std::filesystem::path& path) {
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
         "log_format", "inactivity_timeout_seconds",
-        "expiry_scan_interval_seconds"
+        "expiry_scan_interval_seconds", "compaction_interval_hours"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -286,6 +287,8 @@ void validate_config(const Config& cfg) {
         errors.push_back("expiry_scan_interval_seconds must be >= 10 (got " +
                           std::to_string(cfg.expiry_scan_interval_seconds) + ")");
     }
+    // compaction_interval_hours: 0 = disabled, minimum 1 when enabled
+    // (uint32_t guarantees non-zero values are >= 1, but document the intent)
 
     // log_level validation
     static const std::set<std::string> valid_levels = {

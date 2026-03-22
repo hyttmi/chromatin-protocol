@@ -2019,17 +2019,24 @@ TEST_CASE("Storage::compact() after deletion produces smaller file", "[storage][
     std::array<uint8_t, 32> ns{};
     ns.fill(0x51);
 
-    // Store many blobs to grow the DB
+    // Store enough blobs with large payloads to push DB well past 1 MiB minimum geometry.
+    // Each blob: ~2592 (pubkey) + ~4627 (signature) + payload + overhead = ~8KB + payload.
+    // With 10 KB payload, each blob is ~18 KB encrypted. 200 blobs = ~3.6 MB.
+    std::string large_payload(10000, 'X');
     std::vector<std::array<uint8_t, 32>> hashes;
-    for (int i = 0; i < 50; ++i) {
-        auto blob = make_test_blob(0x51, "delete-compact-" + std::to_string(i));
+    for (int i = 0; i < 200; ++i) {
+        auto blob = make_test_blob(0x51, large_payload + std::to_string(i));
         auto result = store.store_blob(blob);
         REQUIRE(result.status == StoreResult::Status::Stored);
         hashes.push_back(result.blob_hash);
     }
 
-    // Delete most blobs
-    for (size_t i = 0; i < 40; ++i) {
+    auto before_compact = store.used_bytes();
+    // Confirm DB grew past minimum 1 MiB
+    REQUIRE(before_compact > 1048576);
+
+    // Delete most blobs (180 of 200)
+    for (size_t i = 0; i < 180; ++i) {
         REQUIRE(store.delete_blob_data(
             std::span<const uint8_t, 32>(ns),
             std::span<const uint8_t, 32>(hashes[i])));
