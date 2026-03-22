@@ -207,7 +207,10 @@ Plans:
   2. A local process can write a blob via UDS and read it back, using the same wire protocol as TCP connections
   3. UDS connections skip PQ key exchange (trusted by definition -- local access only) and proceed directly to message exchange
   4. UDS connections are subject to the same ACL, rate limiting, and quota enforcement as TCP connections
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 56-01-PLAN.md -- Config field, Connection generic socket refactor, UdsAcceptor class
+- [ ] 56-02-PLAN.md -- PeerManager integration, UDS tests, startup logging, PROTOCOL.md update
 
 ## Progress
 
@@ -218,4 +221,4 @@ Plans:
 | 53. Release Cleanup & Documentation | 1/1 | Complete    | 2026-03-22 | - |
 | 54. Operational Hardening | 2/2 | Complete    | 2026-03-22 | - |
 | 55. Runtime Compaction | 1/1 | Complete    | 2026-03-22 | - |
-| 56. Local Access | v1.1.0 | 0/TBD | Not started | - |
+| 56. Local Access | v1.1.0 | 0/2 | Planning complete | - |
