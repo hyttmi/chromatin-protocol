@@ -44,12 +44,46 @@ cmake --build .
 
 All dependencies are fetched automatically via CMake FetchContent on first build. This includes liboqs, libsodium, FlatBuffers, libmdbx, Standalone Asio, Catch2, spdlog, nlohmann/json, and xxHash. The first build takes longer as dependencies are downloaded and compiled.
 
-### Test
+### Sanitizer Builds
+
+Build with AddressSanitizer, ThreadSanitizer, or UndefinedBehaviorSanitizer:
+
+```bash
+cmake .. -DSANITIZER=asan   # AddressSanitizer
+cmake .. -DSANITIZER=tsan   # ThreadSanitizer
+cmake .. -DSANITIZER=ubsan  # UndefinedBehaviorSanitizer
+cmake --build .
+```
+
+The codebase is clean under all three sanitizers.
+
+## Testing
+
+### Unit Tests
+
+469 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
 
 ```bash
 cd build
 ctest --output-on-failure
 ```
+
+### Docker Integration Tests
+
+54 integration tests across 12 categories running real multi-node topologies in Docker containers:
+
+```bash
+cd deploy
+./run-integration-tests.sh
+```
+
+Categories include: basic sync, ACL enforcement, delegation, deletion propagation, pub/sub, storage limits, rate limiting, namespace quotas, trusted peers, crash recovery, concurrent sync, and large blob transfer.
+
+### Stress, Chaos & Fuzz Testing
+
+- **Stress testing:** 5-node cluster with continuous SIGKILL churn, verifying data consistency after node recovery
+- **Chaos testing:** 1000-namespace scaling with concurrent writes and deletions across multiple nodes
+- **Protocol fuzzing:** Random byte injection and malformed message testing against the wire protocol parser
 
 ## Usage
 
