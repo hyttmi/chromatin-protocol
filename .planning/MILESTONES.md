@@ -1,5 +1,14 @@
 # Milestones
 
+## v1.0.0 Database Layer Done (Shipped: 2026-03-22)
+
+**Phases completed:** 7 phases, 23 plans, 0 tasks
+
+**Key accomplishments:**
+- (none recorded)
+
+---
+
 ## v0.9.0 Connection Resilience & Hardening (Shipped: 2026-03-20)
 
 **Phases:** 4 (42-45) | **Plans:** 8 | **LOC:** 22,467 C++ (+464)

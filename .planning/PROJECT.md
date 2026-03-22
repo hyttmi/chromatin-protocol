@@ -92,21 +92,12 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ UBSAN-clean full suite (469 tests, zero UB findings in db/ code) — v1.0.0
 - ✓ PEX SIGSEGV fix (root cause: AEAD nonce desync from concurrent SyncRejected writes) — v1.0.0
 - ✓ 50-run E2E reliability validated (release 50/50, TSAN 50/50, ASAN 50/50) — v1.0.0
+- ✓ 54 Docker integration tests across 12 categories (crypto, ACL, DR, DoS, TTL, E2E, stress, fuzz) — v1.0.0
+- ✓ 5-node SIGKILL churn (60 cycles, 30 min), 1000-namespace scaling, protocol fuzzing — all passing — v1.0.0
 
 ### Active
 
-See REQUIREMENTS.md for v1.0.0 requirements.
-
-## Current Milestone: v1.0.0 Database Layer Done
-
-**Goal:** Prove chromatindb works correctly under adversarial conditions via Docker-based integration tests, sanitizer passes, and fixing whatever breaks — then open-source.
-
-**Target features:**
-- Full integration test suite from db/TESTS.md (~52 system-level tests across 12 categories)
-- ASAN/TSAN/UBSAN sanitizer passes on full Catch2 test suite
-- Duplicate-connection dedup verification (symmetric 2-node topology)
-- Fix all issues discovered by tests and sanitizers
-- PEX test SIGSEGV fix (pre-existing, deferred from v0.4.0)
+(No active requirements — database layer complete. Next milestone TBD.)
 
 ### Out of Scope
 
@@ -126,18 +117,20 @@ See REQUIREMENTS.md for v1.0.0 requirements.
 
 ## Context
 
-Shipped v0.9.0 with 22,467 LOC C++20, 469 tests.
-Built across 20 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d).
-9 milestones, 45 phases, 88 plans, 171 requirements total.
+Shipped v1.0.0 with 22,608 LOC C++20, 469 unit tests, 54 Docker integration tests.
+Built across 22 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d).
+10 milestones, 52 phases, 111 plans, 225 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v0.9.0 SHIPPED): chromatindb** — production-hardened database node with connection resilience, operational tooling, and complete documentation
-- **Layer 2 (FUTURE): Relay** — application semantics, owns a namespace
-- **Layer 3 (FUTURE): Client** — mobile/desktop app, talks to relay
+- **Layer 1 (v1.0.0 SHIPPED): chromatindb** — production-hardened database node, fully tested under sanitizers, stress, chaos, and fuzzing. Database layer is done.
+- **Layer 2 (FUTURE): Thin API** — UDS/HTTP gateway for storage vault use case. Likely C++20 or Python.
+- **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
 
-**Current milestone:** v1.0.0 — integration test suite (Docker-based system tests from db/TESTS.md), sanitizer passes (ASAN/TSAN/UBSAN), fix what breaks, open-source release.
+**Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
+
+**Next milestone:** v1.1.0 — compaction, UDS, configurable expiry scan, timestamp validation.
 
 **Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
 - 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
@@ -234,4 +227,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-21 after Phase 51 (TTL Lifecycle & E2E Primitives)*
+*Last updated: 2026-03-22 after v1.0.0 milestone (Database Layer Done)*
