@@ -1,4 +1,5 @@
 #include "db/peer/peer_manager.h"
+#include "db/peer/sync_reject.h"
 #include "db/sync/reconciliation.h"
 
 #include <nlohmann/json.hpp>
@@ -66,11 +67,6 @@ std::array<uint8_t, 32> hex_to_namespace(const std::string& hex) {
     return result;
 }
 
-// Sync rejection reason bytes (SyncRejected payload)
-constexpr uint8_t SYNC_REJECT_COOLDOWN = 0x01;
-constexpr uint8_t SYNC_REJECT_SESSION_LIMIT = 0x02;
-constexpr uint8_t SYNC_REJECT_BYTE_RATE = 0x03;
-
 } // anonymous namespace
 
 PeerManager::PeerManager(const config::Config& config,
@@ -100,6 +96,9 @@ PeerManager::PeerManager(const config::Config& config,
     // Initialize sync rate limit parameters from config
     sync_cooldown_seconds_ = config.sync_cooldown_seconds;
     max_sync_sessions_ = config.max_sync_sessions;
+
+    // Initialize expiry scan interval from config
+    expiry_scan_interval_seconds_ = config.expiry_scan_interval_seconds;
 
     // Initialize cursor config parameters
     full_resync_interval_ = config.full_resync_interval;
@@ -485,8 +484,9 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
                 send_sync_rejected(conn, SYNC_REJECT_BYTE_RATE);
                 ++metrics_.sync_rejections;
-                spdlog::debug("sync request from {} rejected: byte rate exceeded",
-                              conn->remote_address());
+                spdlog::debug("sync request from {} rejected: {}",
+                              conn->remote_address(),
+                              sync_reject_reason_string(SYNC_REJECT_BYTE_RATE));
                 return;
             }
             // All other messages (sync in-progress, control): route normally.
@@ -524,8 +524,10 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
             if (peer->last_sync_initiated > 0 && elapsed_ms < cooldown_ms) {
                 send_sync_rejected(conn, SYNC_REJECT_COOLDOWN);
                 ++metrics_.sync_rejections;
-                spdlog::debug("sync request from {} rejected: cooldown ({} ms remaining)",
-                              conn->remote_address(), cooldown_ms - elapsed_ms);
+                spdlog::debug("sync request from {} rejected: {} ({} ms remaining)",
+                              conn->remote_address(),
+                              sync_reject_reason_string(SYNC_REJECT_COOLDOWN),
+                              cooldown_ms - elapsed_ms);
                 return;
             }
         }
@@ -803,10 +805,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     if (!accept_msg || accept_msg->type != wire::TransportMsgType_SyncAccept) {
         if (accept_msg && accept_msg->type == wire::TransportMsgType_SyncRejected) {
             uint8_t reason = accept_msg->payload.empty() ? 0 : accept_msg->payload[0];
-            const char* reason_str = "unknown";
-            if (reason == SYNC_REJECT_COOLDOWN) reason_str = "cooldown";
-            else if (reason == SYNC_REJECT_SESSION_LIMIT) reason_str = "session_limit";
-            else if (reason == SYNC_REJECT_BYTE_RATE) reason_str = "byte_rate";
+            auto reason_str = sync_reject_reason_string(reason);
             spdlog::info("sync with {}: rejected ({})", conn->remote_address(), reason_str);
         } else {
             spdlog::warn("sync with {}: no SyncAccept received", conn->remote_address());
@@ -1793,6 +1792,12 @@ void PeerManager::reload_config() {
         }
     }
     spdlog::info("config reload: trusted_peers={} addresses", trusted_peers_.size());
+
+    // Reload expiry scan interval
+    expiry_scan_interval_seconds_ = new_cfg.expiry_scan_interval_seconds;
+    spdlog::info("config reload: expiry_scan_interval={}s", expiry_scan_interval_seconds_);
+    // Cancel current expiry timer to restart with new interval
+    if (expiry_timer_) { expiry_timer_->cancel(); }
 }
 
 void PeerManager::disconnect_unauthorized_peers() {
@@ -1825,7 +1830,7 @@ asio::awaitable<void> PeerManager::expiry_scan_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
         expiry_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(60));
+        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
         expiry_timer_ = nullptr;

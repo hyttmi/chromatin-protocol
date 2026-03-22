@@ -129,6 +129,7 @@ int cmd_run(int argc, char* argv[]) {
 
     spdlog::info("max peers: {}", config.max_peers);
     spdlog::info("sync interval: {}s", config.sync_interval_seconds);
+    spdlog::info("expiry scan interval: {}s", config.expiry_scan_interval_seconds);
 
     // Resolve and create thread pool for crypto offload
     uint32_t hw = std::thread::hardware_concurrency();

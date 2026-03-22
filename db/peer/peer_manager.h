@@ -304,6 +304,7 @@ private:
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
+    uint32_t expiry_scan_interval_seconds_ = 60;  // SIGHUP-reloadable (Phase 54)
     NotificationCallback on_notification_;        // Test hook for notification dispatch
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;
