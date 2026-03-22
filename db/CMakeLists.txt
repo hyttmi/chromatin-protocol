@@ -169,6 +169,7 @@ add_library(chromatindb_lib STATIC
   net/handshake.cpp
   net/connection.cpp
   net/server.cpp
+  net/uds_acceptor.cpp
   sync/sync_protocol.cpp
   sync/reconciliation.cpp
   peer/peer_manager.cpp
