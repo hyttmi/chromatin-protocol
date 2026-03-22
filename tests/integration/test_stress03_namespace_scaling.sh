@@ -184,15 +184,43 @@ log "Ingest complete: $TOTAL_NS namespaces in ${INGEST_ELAPSED}s"
 # Phase 3: Wait for sync convergence
 # =============================================================================
 
-log "--- Phase 3: Waiting 180s for sync convergence ---"
+log "--- Phase 3: Waiting for sync convergence ---"
 
-# Periodic progress check
-for check in 60 120 180; do
-    sleep 60
+# Poll until all nodes have >= 99% of expected blobs AND counts converge within 1%
+CONVERGE_TIMEOUT=600
+CONVERGE_START=$(date +%s)
+THRESHOLD_99=$((EXPECTED_BLOBS * 99 / 100))
+
+while true; do
+    sleep 30
+    CELAPSED=$(( $(date +%s) - CONVERGE_START ))
+
+    POLL_COUNTS=()
     for i in $(seq 1 $NODE_COUNT); do
-        COUNT=$(get_blob_count "${NODE_NAMES[$((i - 1))]}")
-        log "Sync check at ${check}s: node$i has $COUNT / $EXPECTED_BLOBS blobs"
+        C=$(get_blob_count "${NODE_NAMES[$((i - 1))]}")
+        POLL_COUNTS+=("$C")
     done
+
+    CMAX=0; CMIN=999999999
+    for c in "${POLL_COUNTS[@]}"; do
+        [[ "$c" -gt "$CMAX" ]] && CMAX=$c
+        [[ "$c" -lt "$CMIN" ]] && CMIN=$c
+    done
+    CDIFF=$((CMAX - CMIN))
+    CTOL=$((CMAX > 0 ? CMAX / 100 : 1))
+
+    log "Sync poll @${CELAPSED}s: ${POLL_COUNTS[0]}/${POLL_COUNTS[1]}/${POLL_COUNTS[2]} (diff=$CDIFF, min_needed=$THRESHOLD_99)"
+
+    # Converged: all nodes have enough blobs AND counts match within 1%
+    if [[ $CMIN -ge $THRESHOLD_99 && $CDIFF -le $CTOL ]]; then
+        log "Converged after ${CELAPSED}s"
+        break
+    fi
+
+    if [[ $CELAPSED -ge $CONVERGE_TIMEOUT ]]; then
+        log "WARNING: Convergence timeout after ${CONVERGE_TIMEOUT}s"
+        break
+    fi
 done
 
 # =============================================================================

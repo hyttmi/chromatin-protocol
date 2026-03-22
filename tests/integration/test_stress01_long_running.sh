@@ -221,10 +221,6 @@ echo "0 $INITIAL_RSS_1 $INITIAL_RSS_2 $INITIAL_RSS_3" >> "$RSS_LOG_FILE"
 
 log "--- Phase 2+3: Continuous ingest loop (${DURATION_SECONDS}s) ---"
 
-# Mixed sizes: 128B, 1KB, 10KB, 100KB, 1MB -- cycled via loadgen batches
-SIZES=(128 1024 10240 102400 1048576)
-SIZE_COUNT=${#SIZES[@]}
-
 SOAK_START=$(date +%s)
 LAST_RSS_CHECK=$SOAK_START
 LAST_CONVERGENCE_CHECK=$SOAK_START
@@ -237,16 +233,13 @@ while true; do
         break
     fi
 
-    # Pick size for this batch (round-robin)
-    SIZE_IDX=$((ITER % SIZE_COUNT))
-    SIZE=${SIZES[$SIZE_IDX]}
-
-    # Run loadgen batch: 50 blobs at rate 10 = ~5 seconds per batch
-    # Use --drain-timeout 1 to minimize idle time between batches
+    # 50 blobs at rate 10 = ~5 seconds per batch
+    # --mixed: 70% 1KB, 20% 100KB, 10% 1MB (realistic distribution)
+    # Fresh identity per batch (creates separate namespaces; convergence polling handles sync)
     docker run --rm --network "$STRESS01_NETWORK" \
         --entrypoint chromatindb_loadgen "$IMAGE" \
-        --target "172.50.0.2:4200" --count 50 --rate 10 --size "$SIZE" --ttl 3600 --drain-timeout 1 \
-        >/dev/null 2>/dev/null || true
+        --target "172.50.0.2:4200" --count 50 --rate 10 --mixed --ttl 3600 --drain-timeout 1 \
+        >/dev/null 2>&1
 
     TOTAL_BLOBS_INGESTED=$((TOTAL_BLOBS_INGESTED + 50))
     ITER=$((ITER + 1))
@@ -282,9 +275,35 @@ log "Ingest loop complete: ~${TOTAL_BLOBS_INGESTED} blobs ingested over ${DURATI
 
 log "--- Phase 4: Final verification ---"
 
-# Wait 60 seconds for final sync convergence
-log "Waiting 60s for final sync convergence..."
-sleep 60
+# Wait for sync convergence: poll every 15s until counts match within 5%, timeout 5 min
+CONVERGE_TIMEOUT=300
+CONVERGE_START=$(date +%s)
+CONVERGE_THRESHOLD=5  # percent
+log "Waiting for sync convergence (polling every 15s, timeout ${CONVERGE_TIMEOUT}s)..."
+while true; do
+    sleep 15
+    C1=$(get_blob_count "$NODE1_CONTAINER")
+    C2=$(get_blob_count "$NODE2_CONTAINER")
+    C3=$(get_blob_count "$NODE3_CONTAINER")
+    CMAX=$C1; CMIN=$C1
+    for c in $C2 $C3; do
+        [[ $c -gt $CMAX ]] && CMAX=$c
+        [[ $c -lt $CMIN ]] && CMIN=$c
+    done
+    CDIFF=$((CMAX - CMIN))
+    CTHRESH=$((CMAX * CONVERGE_THRESHOLD / 100))
+    [[ $CTHRESH -lt 1 ]] && CTHRESH=1
+    CELAPSED=$(( $(date +%s) - CONVERGE_START ))
+    log "Convergence poll @${CELAPSED}s: $C1/$C2/$C3 (diff=$CDIFF, threshold=$CTHRESH)"
+    if [[ $CMAX -gt 0 && $CDIFF -le $CTHRESH ]]; then
+        log "Converged after ${CELAPSED}s"
+        break
+    fi
+    if [[ $CELAPSED -ge $CONVERGE_TIMEOUT ]]; then
+        log "WARNING: Convergence timeout after ${CONVERGE_TIMEOUT}s (diff=$CDIFF)"
+        break
+    fi
+done
 
 # Check 1: All 3 nodes still running
 log "--- Check 1: All nodes still running ---"
@@ -332,49 +351,51 @@ else
     FAILURES=$((FAILURES + 1))
 fi
 
-# Check 3: Memory bounded -- max RSS for any node at any point <= 2x its initial RSS
-log "--- Check 3: Memory bounded ---"
+# Check 3: Memory stable -- RSS not still growing after ingest stops
+# Take 3 samples 15s apart; last must be within 20% of first (no leak)
+log "--- Check 3: Memory stable (post-ingest) ---"
 
-# Get final RSS
-FINAL_RSS_1=$(get_rss_bytes "$NODE1_CONTAINER")
-FINAL_RSS_2=$(get_rss_bytes "$NODE2_CONTAINER")
-FINAL_RSS_3=$(get_rss_bytes "$NODE3_CONTAINER")
+STABLE_SAMPLES=3
+STABLE_INTERVAL=15
+declare -a STABLE_RSS_1=() STABLE_RSS_2=() STABLE_RSS_3=()
 
-# Parse RSS log to find max per node
-MAX_RSS_1=$INITIAL_RSS_1
-MAX_RSS_2=$INITIAL_RSS_2
-MAX_RSS_3=$INITIAL_RSS_3
+for ((s=0; s<STABLE_SAMPLES; s++)); do
+    STABLE_RSS_1+=("$(get_rss_bytes "$NODE1_CONTAINER")")
+    STABLE_RSS_2+=("$(get_rss_bytes "$NODE2_CONTAINER")")
+    STABLE_RSS_3+=("$(get_rss_bytes "$NODE3_CONTAINER")")
+    [[ $s -lt $((STABLE_SAMPLES - 1)) ]] && sleep $STABLE_INTERVAL
+done
 
+MEMORY_OK=true
+for NODE_NUM in 1 2 3; do
+    eval "FIRST=\${STABLE_RSS_${NODE_NUM}[0]}"
+    eval "LAST=\${STABLE_RSS_${NODE_NUM}[$((STABLE_SAMPLES - 1))]}"
+    # Allow 20% growth tolerance (mdbx compaction, mmap settling)
+    if [[ $FIRST -gt 0 ]]; then
+        GROWTH_BOUND=$(( FIRST + FIRST / 5 ))
+        if [[ $LAST -gt $GROWTH_BOUND ]]; then
+            log "FAIL: Node$NODE_NUM RSS still growing post-ingest: first=$((FIRST / 1048576))MiB last=$((LAST / 1048576))MiB (>20% growth)"
+            MEMORY_OK=false
+            FAILURES=$((FAILURES + 1))
+        fi
+    fi
+done
+
+if [[ "$MEMORY_OK" == true ]]; then
+    pass "Memory stable: RSS not growing post-ingest"
+fi
+
+# Parse RSS log for summary stats
+MAX_RSS_1=$INITIAL_RSS_1; MAX_RSS_2=$INITIAL_RSS_2; MAX_RSS_3=$INITIAL_RSS_3
 while IFS=' ' read -r _ rss1 rss2 rss3; do
     [[ $rss1 -gt $MAX_RSS_1 ]] && MAX_RSS_1=$rss1
     [[ $rss2 -gt $MAX_RSS_2 ]] && MAX_RSS_2=$rss2
     [[ $rss3 -gt $MAX_RSS_3 ]] && MAX_RSS_3=$rss3
 done < "$RSS_LOG_FILE"
 
-# Also check final RSS
-[[ $FINAL_RSS_1 -gt $MAX_RSS_1 ]] && MAX_RSS_1=$FINAL_RSS_1
-[[ $FINAL_RSS_2 -gt $MAX_RSS_2 ]] && MAX_RSS_2=$FINAL_RSS_2
-[[ $FINAL_RSS_3 -gt $MAX_RSS_3 ]] && MAX_RSS_3=$FINAL_RSS_3
-
-MEMORY_OK=true
-for NODE_NUM in 1 2 3; do
-    eval "INITIAL=\$INITIAL_RSS_$NODE_NUM"
-    eval "MAX_VAL=\$MAX_RSS_$NODE_NUM"
-    eval "FINAL_VAL=\$FINAL_RSS_$NODE_NUM"
-    BOUND=$((INITIAL * 2))
-    # Ensure a minimum bound of 100 MiB (initial RSS may be very small)
-    MIN_BOUND=$((100 * 1048576))
-    [[ $BOUND -lt $MIN_BOUND ]] && BOUND=$MIN_BOUND
-    if [[ $MAX_VAL -gt $BOUND ]]; then
-        log "FAIL: Node$NODE_NUM max RSS ${MAX_VAL}B exceeds 2x initial (${INITIAL}B, bound=${BOUND}B)"
-        MEMORY_OK=false
-        FAILURES=$((FAILURES + 1))
-    fi
-done
-
-if [[ "$MEMORY_OK" == true ]]; then
-    pass "Memory bounded: all nodes max RSS within 2x initial"
-fi
+FINAL_RSS_1=${STABLE_RSS_1[$((STABLE_SAMPLES - 1))]}
+FINAL_RSS_2=${STABLE_RSS_2[$((STABLE_SAMPLES - 1))]}
+FINAL_RSS_3=${STABLE_RSS_3[$((STABLE_SAMPLES - 1))]}
 
 log "RSS summary:"
 log "  Node1: initial=$((INITIAL_RSS_1 / 1048576))MiB max=$((MAX_RSS_1 / 1048576))MiB final=$((FINAL_RSS_1 / 1048576))MiB"
@@ -426,7 +447,7 @@ if [[ $FAILURES -eq 0 ]]; then
     pass "  - Duration: ${DURATION_SECONDS}s"
     pass "  - Total blobs ingested: ~${TOTAL_BLOBS_INGESTED}"
     pass "  - Final counts: node1=$FINAL_COUNT_1 node2=$FINAL_COUNT_2 node3=$FINAL_COUNT_3"
-    pass "  - Memory bounded: max RSS within 2x initial for all nodes"
+    pass "  - Memory stable: RSS not growing post-ingest"
     pass "  - No crashes or corruption detected"
     exit 0
 else

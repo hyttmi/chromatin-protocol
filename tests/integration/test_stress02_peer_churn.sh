@@ -212,6 +212,17 @@ for iter in $(seq 1 "$CHURN_ITERATIONS"); do
     ITER_START=$(date +%s)
     ELAPSED=$((ITER_START - CHURN_START))
 
+    # Ensure all previously-killed nodes are back up before next kill round
+    for idx in $(seq 1 $NODE_COUNT); do
+        local_name="${NODE_NAMES[$((idx - 1))]}"
+        STATUS=$(docker inspect --format '{{.State.Running}}' "$local_name" 2>/dev/null || echo "false")
+        if [[ "$STATUS" != "true" ]]; then
+            log "Iter $iter: reviving dead node$idx before next kill"
+            docker start "$local_name" >/dev/null 2>&1 || true
+            wait_healthy "$local_name" 30 || log "WARN: node$idx slow to revive"
+        fi
+    done
+
     # Determine kill count: 1 or 2
     KILL_COUNT=$(( RANDOM % 2 + 1 ))
 
@@ -307,9 +318,61 @@ for name in "${NODE_NAMES[@]}"; do
     docker kill -s HUP "$name" >/dev/null 2>&1 || true
 done
 
-# Wait 120 seconds for convergence
-log "Waiting 120s for convergence..."
-sleep 120
+# Poll for convergence: all nodes running + blob counts within 5%, timeout 5 min
+CONVERGE_TIMEOUT=300
+CONVERGE_START=$(date +%s)
+log "Polling for convergence (timeout ${CONVERGE_TIMEOUT}s)..."
+
+while true; do
+    sleep 30
+
+    # Revive any dead nodes
+    for i in $(seq 1 $NODE_COUNT); do
+        local_name="${NODE_NAMES[$((i - 1))]}"
+        STATUS=$(docker inspect --format '{{.State.Running}}' "$local_name" 2>/dev/null || echo "false")
+        if [[ "$STATUS" != "true" ]]; then
+            log "Reviving dead node$i during convergence..."
+            docker start "$local_name" >/dev/null 2>&1 || true
+            wait_healthy "$local_name" 30 || log "WARN: node$i slow to revive"
+            docker kill -s HUP "$local_name" >/dev/null 2>&1 || true
+        fi
+    done
+
+    # Check counts
+    POLL_COUNTS=()
+    ALL_UP=true
+    for i in $(seq 1 $NODE_COUNT); do
+        local_name="${NODE_NAMES[$((i - 1))]}"
+        STATUS=$(docker inspect --format '{{.State.Running}}' "$local_name" 2>/dev/null || echo "false")
+        if [[ "$STATUS" != "true" ]]; then
+            ALL_UP=false
+            POLL_COUNTS+=("0")
+        else
+            POLL_COUNTS+=("$(get_blob_count "$local_name")")
+        fi
+    done
+
+    CMAX=0; CMIN=999999999
+    for c in "${POLL_COUNTS[@]}"; do
+        [[ "$c" -gt "$CMAX" ]] && CMAX=$c
+        [[ "$c" -lt "$CMIN" ]] && CMIN=$c
+    done
+    CDIFF=$((CMAX - CMIN))
+    CTOL=$((CMAX > 0 ? CMAX * 5 / 100 : 1))
+    CELAPSED=$(( $(date +%s) - CONVERGE_START ))
+
+    log "Convergence poll @${CELAPSED}s: ${POLL_COUNTS[*]} (diff=$CDIFF, tol=$CTOL, all_up=$ALL_UP)"
+
+    if [[ "$ALL_UP" == true && $CMAX -gt 0 && $CDIFF -le $CTOL ]]; then
+        log "Converged after ${CELAPSED}s"
+        break
+    fi
+
+    if [[ $CELAPSED -ge $CONVERGE_TIMEOUT ]]; then
+        log "WARNING: Convergence timeout after ${CONVERGE_TIMEOUT}s"
+        break
+    fi
+done
 
 # =============================================================================
 # Phase 5: Verification

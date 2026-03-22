@@ -117,7 +117,9 @@ get_blob_count() {
     docker kill -s USR1 "$container" >/dev/null 2>&1 || true
     sleep 2
     local count
-    count=$(docker logs --tail 200 "$container" 2>&1 | grep "metrics:" | tail -1 | grep -oP 'blobs=\K[0-9]+' || echo "0")
+    # SIGUSR1 dumps: metrics line, then per-namespace stats (can be 1000+ lines).
+    # Use --tail 5000 to ensure the metrics: line is captured even with many namespaces.
+    count=$(docker logs --tail 5000 "$container" 2>&1 | grep "metrics:" | tail -1 | grep -oP 'blobs=\K[0-9]+' || echo "0")
     echo "$count"
 }
 

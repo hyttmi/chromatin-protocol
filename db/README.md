@@ -39,7 +39,7 @@ Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace
 ```bash
 mkdir build && cd build
 cmake ..
-make -j$(nproc)
+cmake --build .
 ```
 
 All dependencies are fetched automatically via CMake FetchContent on first build. This includes liboqs, libsodium, FlatBuffers, libmdbx, Standalone Asio, Catch2, spdlog, nlohmann/json, and xxHash. The first build takes longer as dependencies are downloaded and compiled.

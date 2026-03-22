@@ -123,7 +123,7 @@ table Blob {
     namespace_id: [ubyte];   // 32 bytes: SHA3-256(author's signing pubkey)
     pubkey: [ubyte];         // 2592 bytes: ML-DSA-87 signing public key
     data: [ubyte];           // variable length: application payload (max 100 MiB)
-    ttl: uint32;             // seconds until expiry (protocol constant: 604800 = 7 days), 0 = permanent
+    ttl: uint32;             // seconds until expiry (writer-controlled, per-blob), 0 = permanent
     timestamp: uint64;       // author's Unix timestamp in seconds
     signature: [ubyte];      // up to 4627 bytes: ML-DSA-87 signature
 }
