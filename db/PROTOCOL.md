@@ -106,6 +106,26 @@ Initiator                              Responder
 
 If the responder does not recognize the initiator as trusted, it replies with `PQRequired (25)` instead of `TrustedHello`. The initiator then falls back to the full PQ handshake starting from KemPubkey.
 
+### Unix Domain Socket Transport
+
+UDS is an alternative transport for local process communication, enabling applications on the same host to interact with the node without TCP overhead.
+
+**Configuration:** Set `uds_path` in the config JSON to an absolute filesystem path (e.g., `"/run/chromatindb/node.sock"`). Leave empty or omit to disable. Maximum path length is 107 characters (POSIX `sockaddr_un` limit). Changing `uds_path` requires a restart (not SIGHUP-reloadable).
+
+**Wire protocol:** UDS connections use the same length-prefixed AEAD-encrypted frame format as TCP. All message types, payload formats, and protocol phases are identical.
+
+**Handshake:** UDS connections always use the TrustedHello path (local connections are inherently trusted). The full PQ key exchange is skipped. Session keys are derived via HKDF from the exchanged signing public keys, identical to the trusted TCP peer handshake.
+
+**Enforcement:** UDS connections receive the same enforcement as TCP peers:
+- ACL gating (allowed_keys checked after handshake)
+- Rate limiting (token bucket per-connection)
+- Namespace quotas
+- Connection limit (max_peers counts UDS connections)
+
+**Socket permissions:** The socket file is created with mode `0660` (owner and group read/write). Stale socket files from a previous process are automatically unlinked on startup.
+
+**Lifecycle:** The UDS acceptor starts alongside the TCP server during daemon startup and stops during shutdown. The socket file is removed when the acceptor stops.
+
 ### Step 3: Encrypted Session
 
 All subsequent messages are AEAD-encrypted `TransportMessage` frames using the established session keys. Nonce counters continue incrementing from where the handshake left off.

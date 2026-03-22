@@ -1358,3 +1358,55 @@ TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
 
     std::filesystem::remove(tmp);
 }
+
+// =============================================================================
+// Phase 56: UDS path config tests (UDS-01)
+// =============================================================================
+
+TEST_CASE("uds_path defaults to empty", "[config][uds]") {
+    Config cfg;
+    REQUIRE(cfg.uds_path.empty());
+}
+
+TEST_CASE("load_config parses uds_path", "[config][uds]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_uds_path.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"uds_path": "/tmp/chromatindb.sock"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.uds_path == "/tmp/chromatindb.sock");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("validate_config rejects relative uds_path", "[config][uds]") {
+    Config cfg;
+    cfg.uds_path = "relative/path.sock";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("absolute path"));
+    }
+}
+
+TEST_CASE("validate_config accepts absolute uds_path", "[config][uds]") {
+    Config cfg;
+    cfg.uds_path = "/tmp/chromatindb.sock";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config accepts empty uds_path", "[config][uds]") {
+    Config cfg;
+    cfg.uds_path = "";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config rejects too-long uds_path", "[config][uds]") {
+    Config cfg;
+    cfg.uds_path = "/" + std::string(199, 'a');  // 200 chars total, starts with /
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), ContainsSubstring("too long"));
+    }
+}

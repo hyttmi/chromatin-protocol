@@ -227,6 +227,7 @@ if(BUILD_TESTING)
     tests/net/test_handshake.cpp
     tests/net/test_protocol.cpp
     tests/net/test_server.cpp
+    tests/net/test_uds.cpp
     tests/peer/test_peer_manager.cpp
     tests/storage/test_storage.cpp
     tests/sync/test_reconciliation.cpp
