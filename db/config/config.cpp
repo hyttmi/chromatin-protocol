@@ -51,6 +51,7 @@ Config load_config(const std::filesystem::path& path) {
         cfg.inactivity_timeout_seconds = j.value("inactivity_timeout_seconds", cfg.inactivity_timeout_seconds);
         cfg.expiry_scan_interval_seconds = j.value("expiry_scan_interval_seconds", cfg.expiry_scan_interval_seconds);
         cfg.compaction_interval_hours = j.value("compaction_interval_hours", cfg.compaction_interval_hours);
+        cfg.uds_path = j.value("uds_path", cfg.uds_path);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -67,7 +68,8 @@ Config load_config(const std::filesystem::path& path) {
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
         "log_format", "inactivity_timeout_seconds",
-        "expiry_scan_interval_seconds", "compaction_interval_hours"
+        "expiry_scan_interval_seconds", "compaction_interval_hours",
+        "uds_path"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -289,6 +291,18 @@ void validate_config(const Config& cfg) {
     }
     // compaction_interval_hours: 0 = disabled, minimum 1 when enabled
     // (uint32_t guarantees non-zero values are >= 1, but document the intent)
+
+    // uds_path validation: if non-empty, must be absolute and within sockaddr_un limit
+    if (!cfg.uds_path.empty()) {
+        if (cfg.uds_path[0] != '/') {
+            errors.push_back("uds_path must be an absolute path (got '" +
+                              cfg.uds_path + "')");
+        }
+        if (cfg.uds_path.size() > 107) {
+            errors.push_back("uds_path too long (max 107 chars, got " +
+                              std::to_string(cfg.uds_path.size()) + ")");
+        }
+    }
 
     // log_level validation
     static const std::set<std::string> valid_levels = {

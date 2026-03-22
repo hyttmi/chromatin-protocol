@@ -6,21 +6,20 @@
 #include <sodium.h>
 #include <spdlog/spdlog.h>
 #include <cstring>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 namespace chromatindb::net {
 
-Connection::Connection(asio::ip::tcp::socket socket,
+Connection::Connection(asio::generic::stream_protocol::socket socket,
                        const identity::NodeIdentity& identity,
-                       bool is_initiator)
+                       bool is_initiator,
+                       bool is_uds)
     : socket_(std::move(socket))
     , identity_(identity)
-    , is_initiator_(is_initiator) {
-    // Capture remote address before any socket operations
-    asio::error_code ec;
-    auto ep = socket_.remote_endpoint(ec);
-    if (!ec) {
-        remote_addr_ = ep.address().to_string() + ":" + std::to_string(ep.port());
-    }
+    , is_initiator_(is_initiator)
+    , is_uds_(is_uds) {
+    // remote_addr_ is set by the factory methods (before run())
 }
 
 Connection::~Connection() {
@@ -29,19 +28,75 @@ Connection::~Connection() {
 
 Connection::Ptr Connection::create_inbound(asio::ip::tcp::socket socket,
                                             const identity::NodeIdentity& identity) {
-    return Ptr(new Connection(std::move(socket), identity, false));
+    // Capture remote address before moving the socket
+    std::string addr;
+    asio::error_code ec;
+    auto ep = socket.remote_endpoint(ec);
+    if (!ec) {
+        addr = ep.address().to_string() + ":" + std::to_string(ep.port());
+    }
+
+    // Convert tcp socket to generic stream socket
+    auto proto = asio::generic::stream_protocol(
+        ep.protocol().family(), ep.protocol().type());
+    asio::generic::stream_protocol::socket generic(
+        socket.get_executor(), proto, socket.release());
+
+    auto conn = Ptr(new Connection(std::move(generic), identity, false, false));
+    conn->remote_addr_ = std::move(addr);
+    return conn;
 }
 
 Connection::Ptr Connection::create_outbound(asio::ip::tcp::socket socket,
                                              const identity::NodeIdentity& identity) {
-    return Ptr(new Connection(std::move(socket), identity, true));
+    // Capture remote address before moving the socket
+    std::string addr;
+    asio::error_code ec;
+    auto ep = socket.remote_endpoint(ec);
+    if (!ec) {
+        addr = ep.address().to_string() + ":" + std::to_string(ep.port());
+    }
+
+    // Convert tcp socket to generic stream socket
+    auto proto = asio::generic::stream_protocol(
+        ep.protocol().family(), ep.protocol().type());
+    asio::generic::stream_protocol::socket generic(
+        socket.get_executor(), proto, socket.release());
+
+    auto conn = Ptr(new Connection(std::move(generic), identity, true, false));
+    conn->remote_addr_ = std::move(addr);
+    return conn;
+}
+
+Connection::Ptr Connection::create_uds_inbound(asio::local::stream_protocol::socket socket,
+                                                const identity::NodeIdentity& identity) {
+    // Convert local socket to generic stream socket
+    auto proto = asio::generic::stream_protocol(AF_UNIX, SOCK_STREAM);
+    asio::generic::stream_protocol::socket generic(
+        socket.get_executor(), proto, socket.release());
+
+    auto conn = Ptr(new Connection(std::move(generic), identity, false, true));
+    conn->remote_addr_ = "uds";
+    return conn;
+}
+
+Connection::Ptr Connection::create_uds_outbound(asio::local::stream_protocol::socket socket,
+                                                  const identity::NodeIdentity& identity) {
+    // Convert local socket to generic stream socket
+    auto proto = asio::generic::stream_protocol(AF_UNIX, SOCK_STREAM);
+    asio::generic::stream_protocol::socket generic(
+        socket.get_executor(), proto, socket.release());
+
+    auto conn = Ptr(new Connection(std::move(generic), identity, true, true));
+    conn->remote_addr_ = "uds";
+    return conn;
 }
 
 void Connection::close() {
     if (closed_) return;
     closed_ = true;
     asio::error_code ec;
-    socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+    socket_.shutdown(asio::socket_base::shutdown_both, ec);
     socket_.close(ec);
 }
 
@@ -125,10 +180,34 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> Connection::recv_encrypted(
 // =============================================================================
 
 asio::awaitable<bool> Connection::do_handshake() {
-    // Determine trust based on remote IP
-    asio::error_code ec;
-    auto remote_ep = socket_.remote_endpoint(ec);
-    bool peer_is_trusted = !ec && trust_check_ && trust_check_(remote_ep.address());
+    // UDS connections are always trusted (local transport, no PQ needed)
+    bool peer_is_trusted;
+    if (is_uds_) {
+        peer_is_trusted = true;
+    } else {
+        // TCP: determine trust based on remote IP
+        asio::error_code ec;
+        auto gen_ep = socket_.remote_endpoint(ec);
+        if (!ec && trust_check_) {
+            // Extract IP address from generic endpoint's sockaddr
+            const void* data = gen_ep.data();
+            if (gen_ep.protocol().family() == AF_INET) {
+                const auto* sa = static_cast<const sockaddr_in*>(data);
+                asio::ip::address_v4::bytes_type bytes;
+                std::memcpy(bytes.data(), &sa->sin_addr, 4);
+                peer_is_trusted = trust_check_(asio::ip::address_v4(bytes));
+            } else if (gen_ep.protocol().family() == AF_INET6) {
+                const auto* sa6 = static_cast<const sockaddr_in6*>(data);
+                asio::ip::address_v6::bytes_type bytes;
+                std::memcpy(bytes.data(), &sa6->sin6_addr, 16);
+                peer_is_trusted = trust_check_(asio::ip::address_v6(bytes));
+            } else {
+                peer_is_trusted = false;
+            }
+        } else {
+            peer_is_trusted = false;
+        }
+    }
 
     if (is_initiator_) {
         if (peer_is_trusted) {

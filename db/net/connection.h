@@ -9,6 +9,8 @@
 #include <asio/awaitable.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/as_tuple.hpp>
+#include <asio/generic/stream_protocol.hpp>
+#include <asio/local/stream_protocol.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 
 #include <atomic>
@@ -44,6 +46,14 @@ public:
     static Ptr create_outbound(asio::ip::tcp::socket socket,
                                 const identity::NodeIdentity& identity);
 
+    /// Create a UDS inbound connection (responder, from UdsAcceptor).
+    static Ptr create_uds_inbound(asio::local::stream_protocol::socket socket,
+                                   const identity::NodeIdentity& identity);
+
+    /// Create a UDS outbound connection (initiator, for UDS clients).
+    static Ptr create_uds_outbound(asio::local::stream_protocol::socket socket,
+                                    const identity::NodeIdentity& identity);
+
     ~Connection();
 
     /// Run the connection lifecycle: handshake -> message loop -> cleanup.
@@ -64,6 +74,9 @@ public:
 
     /// Whether this is the initiator (outbound) side of the connection.
     bool is_initiator() const { return is_initiator_; }
+
+    /// Whether this connection uses a Unix domain socket transport.
+    bool is_uds() const { return is_uds_; }
 
     /// Peer's signing public key (available after auth).
     const std::vector<uint8_t>& peer_pubkey() const { return peer_pubkey_; }
@@ -102,9 +115,10 @@ public:
     const std::string& connect_address() const { return connect_address_; }
 
 private:
-    Connection(asio::ip::tcp::socket socket,
+    Connection(asio::generic::stream_protocol::socket socket,
                const identity::NodeIdentity& identity,
-               bool is_initiator);
+               bool is_initiator,
+               bool is_uds);
 
     /// Perform the full handshake (KEM + auth, or lightweight for trusted peers).
     asio::awaitable<bool> do_handshake();
@@ -131,9 +145,10 @@ private:
     /// Receive and decrypt a frame.
     asio::awaitable<std::optional<std::vector<uint8_t>>> recv_encrypted();
 
-    asio::ip::tcp::socket socket_;
+    asio::generic::stream_protocol::socket socket_;
     const identity::NodeIdentity& identity_;
     bool is_initiator_;
+    bool is_uds_ = false;
     bool authenticated_ = false;
     bool closed_ = false;
     bool received_goodbye_ = false;
