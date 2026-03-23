@@ -219,3 +219,17 @@ Plans:
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
 | 58. Relay Scaffolding & Identity | 2/2 | Complete   | 2026-03-23 |
 | 59. Relay Core | 0/? | Not started | - |
+
+## Backlog
+
+### Phase 999.1: Codebase Deduplication Audit (BACKLOG)
+
+**Goal:** Extract repeated utility functions (to_hex, ns_to_hex, and any other duplicated helpers) into shared headers. Audit entire codebase for similar copy-paste patterns before they accumulate further.
+**Known duplicates:**
+- `to_hex()` in db/main.cpp, db/peer/peer_manager.cpp, relay/relay_main.cpp (3 production copies)
+- `to_hex()` / `ns_to_hex()` in db/tests/acl/test_access_control.cpp, db/tests/peer/test_peer_manager.cpp, db/tests/engine/test_engine.cpp (3 test copies)
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
