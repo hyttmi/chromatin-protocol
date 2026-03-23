@@ -208,7 +208,10 @@ Plans:
   2. For each authenticated client, the relay opens a dedicated UDS connection to the chromatindb node using TrustedHello -- one UDS connection per client session, torn down when the client disconnects
   3. The relay forwards allowed message types bidirectionally (client to node, node to client) without inspecting payloads -- only the type byte is read for filtering; client operations (Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse, ListRequest, ListResponse, StatsRequest, StatsResponse, Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye) pass through; peer operations (SyncRequest, SyncAccept, SyncComplete, ReconcileInit, ReconcileRanges, ReconcileItems, SyncRejected, PeerListRequest, PeerListResponse, NamespaceList, BlobRequest, BlobTransfer, StorageFull, TrustedHello, PQRequired, QuotaExceeded) are blocked; unknown types are default-denied
   4. A client connected through the relay can write a blob and receive a WriteAck, read it back via ReadRequest/ReadResponse, list it via ListRequest/ListResponse, and query namespace stats via StatsRequest/StatsResponse -- the full client workflow works end-to-end through the relay
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 59-01-PLAN.md -- Identity adapter, message filter, RelaySession class with bidirectional forwarding
+- [ ] 59-02-PLAN.md -- Wire relay event loop into relay_main.cpp (TCP accept, UDS sessions, signal handling)
 
 ## Progress
 
@@ -218,7 +221,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
 | 58. Relay Scaffolding & Identity | 2/2 | Complete    | 2026-03-23 |
-| 59. Relay Core | 0/? | Not started | - |
+| 59. Relay Core | 0/2 | Not started | - |
 
 ## Backlog
 
