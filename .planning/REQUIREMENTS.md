@@ -9,10 +9,10 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 
 ### Protocol Extensions
 
-- [ ] **PROTO-01**: Node sends WriteAck (type 25) back to client after successful blob ingest, containing blob hash and seq_num
-- [ ] **PROTO-02**: Client can fetch a specific blob by namespace + hash via ReadRequest (type 26) / ReadResponse (type 27)
-- [ ] **PROTO-03**: Client can list blobs in a namespace with pagination via ListRequest (type 28) / ListResponse (type 29), using since_seq cursor + limit
-- [ ] **PROTO-04**: Client can query namespace usage (blob count, total bytes, quota remaining) via StatsRequest (type 30) / StatsResponse (type 31)
+- [ ] **PROTO-01**: Node sends WriteAck (type 31) back to client after successful blob ingest, containing blob hash and seq_num
+- [ ] **PROTO-02**: Client can fetch a specific blob by namespace + hash via ReadRequest (type 32) / ReadResponse (type 33)
+- [ ] **PROTO-03**: Client can list blobs in a namespace with pagination via ListRequest (type 34) / ListResponse (type 35), using since_seq cursor + limit
+- [ ] **PROTO-04**: Client can query namespace usage (blob count, total bytes, quota remaining) via StatsRequest (type 36) / StatsResponse (type 37)
 
 ### Relay
 
