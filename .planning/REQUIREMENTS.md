@@ -16,10 +16,10 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 
 ### Relay
 
-- [ ] **RELAY-01**: Relay accepts TCP connections and performs PQ handshake as responder (ML-KEM-1024 + ML-DSA-87), using its own identity keypair
-- [ ] **RELAY-02**: Relay connects to chromatindb node via UDS with TrustedHello, one UDS connection per client session
-- [ ] **RELAY-03**: Relay filters messages by type -- allows client operations (Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse, ListRequest, ListResponse, StatsRequest, StatsResponse, Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye), blocks peer operations (Sync*, Reconcile*, PeerList*, NamespaceList, BlobRequest, BlobTransfer, StorageFull, TrustedHello), default-deny on unknown types
-- [ ] **RELAY-04**: Relay forwards allowed messages bidirectionally -- client<->node -- without parsing payloads (type field only)
+- [x] **RELAY-01**: Relay accepts TCP connections and performs PQ handshake as responder (ML-KEM-1024 + ML-DSA-87), using its own identity keypair
+- [x] **RELAY-02**: Relay connects to chromatindb node via UDS with TrustedHello, one UDS connection per client session
+- [x] **RELAY-03**: Relay filters messages by type -- allows client operations (Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse, ListRequest, ListResponse, StatsRequest, StatsResponse, Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye), blocks peer operations (Sync*, Reconcile*, PeerList*, NamespaceList, BlobRequest, BlobTransfer, StorageFull, TrustedHello), default-deny on unknown types
+- [x] **RELAY-04**: Relay forwards allowed messages bidirectionally -- client<->node -- without parsing payloads (type field only)
 - [x] **RELAY-05**: Relay has its own ML-DSA-87 identity keypair, generated on first run or loaded from configured path
 - [x] **RELAY-06**: Relay config via JSON file (bind_address, bind_port, uds_path, identity_key_path, log_level, log_file)
 - [x] **RELAY-07**: Relay lives in `relay/` directory with own CMakeLists.txt, links chromatindb_lib, zero new dependencies
@@ -77,10 +77,10 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 | PROTO-02 | Phase 57 | Complete |
 | PROTO-03 | Phase 57 | Complete |
 | PROTO-04 | Phase 57 | Complete |
-| RELAY-01 | Phase 59 | Pending |
-| RELAY-02 | Phase 59 | Pending |
-| RELAY-03 | Phase 59 | Pending |
-| RELAY-04 | Phase 59 | Pending |
+| RELAY-01 | Phase 59 | Complete |
+| RELAY-02 | Phase 59 | Complete |
+| RELAY-03 | Phase 59 | Complete |
+| RELAY-04 | Phase 59 | Complete |
 | RELAY-05 | Phase 58 | Complete |
 | RELAY-06 | Phase 58 | Complete |
 | RELAY-07 | Phase 58 | Complete |
