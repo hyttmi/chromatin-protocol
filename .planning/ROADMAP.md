@@ -194,6 +194,10 @@ Plans:
   2. `cmake --build .` from the project root produces a `chromatindb_relay` binary alongside `chromatindb`
   3. The relay binary loads a JSON config file specifying bind_address, bind_port, uds_path, identity_key_path, log_level, and log_file -- and exits with a clear error if the config is invalid or missing
   4. On first run with no existing key file, the relay generates an ML-DSA-87 keypair and saves it to the configured path; on subsequent runs it loads the existing keypair and logs its public key hash
+**Plans:** 2 plans
+Plans:
+- [ ] 58-01-PLAN.md -- Build system, relay config struct, JSON parsing, error-accumulating validation
+- [ ] 58-02-PLAN.md -- RelayIdentity (ML-DSA-87 keypair), CLI entry point (run/keygen/version/help)
 
 ### Phase 59: Relay Core
 **Goal**: A client can connect to the relay via PQ-encrypted channel and interact with the node -- the relay authenticates, filters, and forwards
@@ -213,5 +217,5 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
-| 58. Relay Scaffolding & Identity | 0/? | Not started | - |
+| 58. Relay Scaffolding & Identity | 0/2 | Not started | - |
 | 59. Relay Core | 0/? | Not started | - |
