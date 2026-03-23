@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2.0
 milestone_name: Relay & Client Protocol
 status: unknown
-stopped_at: Completed 57-01-PLAN.md
-last_updated: "2026-03-23T03:36:49.809Z"
+stopped_at: Completed 57-02-PLAN.md
+last_updated: "2026-03-23T03:46:41.350Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -33,6 +33,7 @@ Plan: 2 of 2
 All decisions logged in PROJECT.md Key Decisions table.
 
 - [Phase 57]: WriteAck payload format identical to DeleteAck (41 bytes) for wire consistency; sent for stored + duplicate ingests
+- [Phase 57]: Client read/list/stats handlers do not filter by sync_namespaces_ -- reads serve whatever is in storage
 
 ### Pending Todos
 
@@ -44,6 +45,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T03:36:49.807Z
-Stopped at: Completed 57-01-PLAN.md
+Last session: 2026-03-23T03:46:41.348Z
+Stopped at: Completed 57-02-PLAN.md
 Resume file: None

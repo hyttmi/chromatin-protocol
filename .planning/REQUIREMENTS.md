@@ -10,9 +10,9 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 ### Protocol Extensions
 
 - [x] **PROTO-01**: Node sends WriteAck (type 31) back to client after successful blob ingest, containing blob hash and seq_num
-- [ ] **PROTO-02**: Client can fetch a specific blob by namespace + hash via ReadRequest (type 32) / ReadResponse (type 33)
-- [ ] **PROTO-03**: Client can list blobs in a namespace with pagination via ListRequest (type 34) / ListResponse (type 35), using since_seq cursor + limit
-- [ ] **PROTO-04**: Client can query namespace usage (blob count, total bytes, quota remaining) via StatsRequest (type 36) / StatsResponse (type 37)
+- [x] **PROTO-02**: Client can fetch a specific blob by namespace + hash via ReadRequest (type 32) / ReadResponse (type 33)
+- [x] **PROTO-03**: Client can list blobs in a namespace with pagination via ListRequest (type 34) / ListResponse (type 35), using since_seq cursor + limit
+- [x] **PROTO-04**: Client can query namespace usage (blob count, total bytes, quota remaining) via StatsRequest (type 36) / StatsResponse (type 37)
 
 ### Relay
 
@@ -74,9 +74,9 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PROTO-01 | Phase 57 | Complete |
-| PROTO-02 | Phase 57 | Pending |
-| PROTO-03 | Phase 57 | Pending |
-| PROTO-04 | Phase 57 | Pending |
+| PROTO-02 | Phase 57 | Complete |
+| PROTO-03 | Phase 57 | Complete |
+| PROTO-04 | Phase 57 | Complete |
 | RELAY-01 | Phase 59 | Pending |
 | RELAY-02 | Phase 59 | Pending |
 | RELAY-03 | Phase 59 | Pending |
