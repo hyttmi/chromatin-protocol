@@ -25,6 +25,13 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 - [x] **RELAY-07**: Relay lives in `relay/` directory with own CMakeLists.txt, links chromatindb_lib, zero new dependencies
 - [x] **RELAY-08**: Relay binary `chromatindb_relay` builds alongside `chromatindb` from root CMakeLists.txt
 
+### Codebase Deduplication
+
+- [ ] **DEDUP-01**: All production copies of `to_hex()` and `from_hex()` (11 functions across 5 files) replaced by a single shared header `db/util/hex.h`
+- [ ] **DEDUP-02**: All test copies of duplicated helpers (TempDir, run_async, current_timestamp, TS_AUTO, make_signed_blob, make_signed_tombstone, make_signed_delegation, make_delegate_blob, ns_to_hex -- ~30 copies across 7 files) replaced by a single shared header `db/tests/test_helpers.h`
+- [ ] **DEDUP-03**: Codebase audited for remaining duplicated utility functions across db/, relay/, loadgen/, and tools/ source trees -- no other duplicated helpers remain
+- [ ] **DEDUP-04**: All existing tests (500+ unit tests) pass with the shared headers
+
 ## Previous Milestone (v1.1.0 -- Complete)
 
 ### Compaction
@@ -85,12 +92,16 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 | RELAY-06 | Phase 58 | Complete |
 | RELAY-07 | Phase 58 | Complete |
 | RELAY-08 | Phase 58 | Complete |
+| DEDUP-01 | Phase 60 | Planned |
+| DEDUP-02 | Phase 60 | Planned |
+| DEDUP-03 | Phase 60 | Planned |
+| DEDUP-04 | Phase 60 | Planned |
 
 **Coverage:**
-- v1.2.0 requirements: 12 total
-- Mapped to phases: 12
+- v1.2.0 requirements: 16 total
+- Mapped to phases: 16
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-22*
-*Last updated: 2026-03-22 after roadmap creation*
+*Last updated: 2026-03-23 after Phase 60 planning*

@@ -13,7 +13,7 @@
 - ✅ **v0.9.0 Connection Resilience & Hardening** — Phases 42-45 (shipped 2026-03-20)
 - ✅ **v1.0.0 Database Layer Done** — Phases 46-52 (shipped 2026-03-22)
 - ✅ **v1.1.0 Operational Polish & Local Access** — Phases 53-56 (shipped 2026-03-22)
-- [ ] **v1.2.0 Relay & Client Protocol** — Phases 57-59 (in progress)
+- [ ] **v1.2.0 Relay & Client Protocol** — Phases 57-60 (in progress)
 
 ## Phases
 
@@ -215,20 +215,18 @@ Plans:
 - [x] 59-02-PLAN.md -- Wire relay event loop into relay_main.cpp (TCP accept, UDS sessions, signal handling)
 
 ### Phase 60: Codebase Deduplication Audit
-**Goal**: Extract repeated utility functions (to_hex, ns_to_hex, and any other duplicated helpers) into shared headers. Audit entire codebase for copy-paste patterns before they accumulate further.
+**Goal**: Extract all repeated utility functions into shared headers and audit the entire codebase for copy-paste patterns
 **Depends on**: Phase 59
-**Requirements**: TBD
+**Requirements**: DEDUP-01, DEDUP-02, DEDUP-03, DEDUP-04
 **Success Criteria** (what must be TRUE):
-  1. All copies of `to_hex()` in production code (db/main.cpp, db/peer/peer_manager.cpp, relay/relay_main.cpp) are replaced by a single shared header
-  2. All copies of `to_hex()` / `ns_to_hex()` in test code are replaced by a single shared test utility header
-  3. No other duplicated utility functions remain across db/ and relay/ source trees
+  1. All copies of `to_hex()` and `from_hex()` in production code (db/main.cpp, db/peer/peer_manager.cpp, relay/relay_main.cpp, relay/core/relay_session.cpp, loadgen/loadgen_main.cpp, tools/verify_main.cpp) are replaced by a single shared header `db/util/hex.h`
+  2. All copies of `to_hex()` / `ns_to_hex()` in test code and all duplicated test helpers (TempDir, run_async, make_signed_blob, make_signed_tombstone, make_signed_delegation, make_delegate_blob) are replaced by shared headers
+  3. No other duplicated utility functions remain across db/, relay/, loadgen/, and tools/ source trees
   4. All existing tests pass with the shared headers
-**Known duplicates:**
-- `to_hex()` in db/main.cpp, db/peer/peer_manager.cpp, relay/relay_main.cpp (3 production copies)
-- `to_hex()` / `ns_to_hex()` in db/tests/acl/test_access_control.cpp, db/tests/peer/test_peer_manager.cpp, db/tests/engine/test_engine.cpp (3 test copies)
-**Plans:** 0 plans
+**Plans:** 2 plans
 Plans:
-- [ ] TBD
+- [ ] 60-01-PLAN.md -- Create db/util/hex.h shared header, replace 11 production hex function copies across 6 files
+- [ ] 60-02-PLAN.md -- Create db/tests/test_helpers.h shared header, replace ~30 test helper copies across 8 files
 
 ## Progress
 
@@ -239,4 +237,4 @@ Plans:
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
 | 58. Relay Scaffolding & Identity | 2/2 | Complete    | 2026-03-23 |
 | 59. Relay Core | 2/2 | Complete    | 2026-03-23 |
-| 60. Codebase Deduplication Audit | 0/0 | Not started | - |
+| 60. Codebase Deduplication Audit | 0/2 | Not started | - |
