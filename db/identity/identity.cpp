@@ -13,8 +13,14 @@ NodeIdentity NodeIdentity::generate() {
 
 NodeIdentity NodeIdentity::from_keys(std::span<const uint8_t> pubkey,
                                       std::span<const uint8_t> seckey) {
-    // Stub: throws (tests will fail)
-    throw std::runtime_error("from_keys not implemented");
+    if (pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE)
+        throw std::runtime_error("Invalid public key size");
+    if (seckey.size() != crypto::Signer::SECRET_KEY_SIZE)
+        throw std::runtime_error("Invalid secret key size");
+    NodeIdentity id;
+    id.signer_ = crypto::Signer::from_keypair(pubkey, seckey);
+    id.namespace_id_ = crypto::sha3_256(id.signer_.export_public_key());
+    return id;
 }
 
 NodeIdentity NodeIdentity::load_from(const std::filesystem::path& data_dir) {
