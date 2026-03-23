@@ -119,9 +119,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ StatsRequest/StatsResponse — namespace usage (count, bytes, quota remaining)
 
 #### Relay
-- [ ] PQ-authenticated relay accepting client connections via ML-KEM-1024 handshake
-- [ ] Message type filter (allow client ops, block sync/reconciliation/PEX)
-- [ ] UDS forwarding to chromatindb node (TrustedHello, 1:1 client-to-UDS mapping)
+- ✓ PQ-authenticated relay accepting client connections via ML-KEM-1024 handshake — Validated in Phase 59
+- ✓ Message type filter (allow client ops, block sync/reconciliation/PEX) — Validated in Phase 59
+- ✓ UDS forwarding to chromatindb node (TrustedHello, 1:1 client-to-UDS mapping) — Validated in Phase 59
 - ✓ Relay identity keypair (ML-DSA-87, generated or configured) — Validated in Phase 58
 - ✓ Relay config (bind address, UDS path, identity key path, logging) — Validated in Phase 58
 
@@ -145,7 +145,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Shipped v1.1.0 with 23,852 LOC C++20, 500+ unit tests, 54 Docker integration tests.
 Built across 22 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d).
-11 milestones, 58 phases, 121 plans, 237 requirements total.
+11 milestones, 59 phases, 123 plans, 237 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -251,4 +251,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-23 after Phase 58 (relay scaffolding & identity) complete*
+*Last updated: 2026-03-23 after Phase 59 (relay core — PQ handshake, message filter, UDS forwarding, bidirectional relay) complete*
