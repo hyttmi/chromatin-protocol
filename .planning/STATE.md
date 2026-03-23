@@ -4,7 +4,7 @@ milestone: v1.2.0
 milestone_name: Relay & Client Protocol
 status: unknown
 stopped_at: Completed 59-02-PLAN.md
-last_updated: "2026-03-23T15:54:03.080Z"
+last_updated: "2026-03-23T15:58:44.229Z"
 progress:
   total_phases: 4
   completed_phases: 3
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-22)
 
 ## Current Position
 
-Phase: 59 (relay-core) — EXECUTING
-Plan: 2 of 2
+Phase: 999.1
+Plan: Not started
 
 ## Accumulated Context
 
