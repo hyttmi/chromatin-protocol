@@ -160,10 +160,21 @@ include(CTest)
 add_subdirectory(db)
 
 # =============================================================================
+# Relay component
+# =============================================================================
+add_subdirectory(relay)
+
+# =============================================================================
 # Daemon binary
 # =============================================================================
 add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
+
+# =============================================================================
+# Relay binary
+# =============================================================================
+add_executable(chromatindb_relay relay/relay_main.cpp)
+target_link_libraries(chromatindb_relay PRIVATE chromatindb_relay_lib)
 
 # =============================================================================
 # Load generator binary

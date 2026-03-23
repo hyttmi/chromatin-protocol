@@ -234,10 +234,12 @@ if(BUILD_TESTING)
     tests/sync/test_sync_protocol.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
+    tests/relay/test_relay_config.cpp
   )
 
   target_link_libraries(chromatindb_tests PRIVATE
     chromatindb_lib
+    chromatindb_relay_lib
     Catch2::Catch2WithMain
   )
 
