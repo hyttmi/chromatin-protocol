@@ -112,11 +112,11 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 <!-- v1.2.0: Relay & Client Protocol -->
 
-#### Protocol Extensions (Node)
-- [ ] WriteAck wire type — confirm blob stored over protocol (hash + seq_num)
-- [ ] ReadRequest/ReadResponse — client fetches blob by namespace + hash
-- [ ] ListRequest/ListResponse — client lists blobs in namespace (since_seq + limit pagination)
-- [ ] StatsRequest/StatsResponse — namespace usage (count, bytes, quota remaining)
+#### Protocol Extensions (Node) — Validated in Phase 57
+- ✓ WriteAck wire type — confirm blob stored over protocol (hash + seq_num)
+- ✓ ReadRequest/ReadResponse — client fetches blob by namespace + hash
+- ✓ ListRequest/ListResponse — client lists blobs in namespace (since_seq + limit pagination)
+- ✓ StatsRequest/StatsResponse — namespace usage (count, bytes, quota remaining)
 
 #### Relay
 - [ ] PQ-authenticated relay accepting client connections via ML-KEM-1024 handshake
@@ -251,4 +251,4 @@ Previous projects inform design:
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
 
 ---
-*Last updated: 2026-03-22 after v1.2.0 milestone start (Relay & Client Protocol)*
+*Last updated: 2026-03-23 after Phase 57 (client protocol extensions) complete*
