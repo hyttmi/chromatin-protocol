@@ -180,9 +180,9 @@ Full details: [milestones/v1.1.0-ROADMAP.md](milestones/v1.1.0-ROADMAP.md)
   2. A client can send ReadRequest (type 32) with a namespace + hash and receive a ReadResponse (type 33) containing the blob data, or an empty response if the blob does not exist
   3. A client can send ListRequest (type 34) with a namespace, since_seq cursor, and limit, and receive a ListResponse (type 35) with matching blobs in seq_num order -- repeated calls with an advancing cursor paginate through the full namespace
   4. A client can send StatsRequest (type 36) for a namespace and receive a StatsResponse (type 37) with blob count, total bytes, and quota remaining
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
-- [ ] 57-01-PLAN.md -- Schema extension, engine API, WriteAck dispatch, round-trip tests
+- [x] 57-01-PLAN.md -- Schema extension, engine API, WriteAck dispatch, round-trip tests
 - [ ] 57-02-PLAN.md -- Read/List/Stats handlers, payload tests, protocol docs
 
 ### Phase 58: Relay Scaffolding & Identity
@@ -212,6 +212,6 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. Client Protocol Extensions | 0/2 | Not started | - |
+| 57. Client Protocol Extensions | 1/2 | In Progress|  |
 | 58. Relay Scaffolding & Identity | 0/? | Not started | - |
 | 59. Relay Core | 0/? | Not started | - |
