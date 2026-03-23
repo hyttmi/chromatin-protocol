@@ -223,9 +223,9 @@ Plans:
   2. All copies of `to_hex()` / `ns_to_hex()` in test code and all duplicated test helpers (TempDir, run_async, make_signed_blob, make_signed_tombstone, make_signed_delegation, make_delegate_blob) are replaced by shared headers
   3. No other duplicated utility functions remain across db/, relay/, loadgen/, and tools/ source trees
   4. All existing tests pass with the shared headers
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
-- [ ] 60-01-PLAN.md -- Create db/util/hex.h shared header, replace 11 production hex function copies across 6 files
+- [x] 60-01-PLAN.md -- Create db/util/hex.h shared header, replace 11 production hex function copies across 6 files
 - [ ] 60-02-PLAN.md -- Create db/tests/test_helpers.h shared header, replace ~30 test helper copies across 8 files
 
 ## Progress
@@ -237,4 +237,4 @@ Plans:
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
 | 58. Relay Scaffolding & Identity | 2/2 | Complete    | 2026-03-23 |
 | 59. Relay Core | 2/2 | Complete    | 2026-03-23 |
-| 60. Codebase Deduplication Audit | 0/2 | Not started | - |
+| 60. Codebase Deduplication Audit | 1/2 | In Progress|  |

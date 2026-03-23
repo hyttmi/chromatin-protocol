@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2.0
 milestone_name: Relay & Client Protocol
 status: unknown
-stopped_at: Completed 59-02-PLAN.md
-last_updated: "2026-03-23T15:58:44.229Z"
+stopped_at: Completed 60-01-PLAN.md
+last_updated: "2026-03-23T16:43:51.253Z"
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 59 — relay-core
+**Current focus:** Phase 60 — codebase-deduplication-audit
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
+Phase: 60 (codebase-deduplication-audit) — EXECUTING
+Plan: 2 of 2
 
 ## Accumulated Context
 
@@ -39,6 +39,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 58]: RelayIdentity uses direct key_path (not data_dir) matching SSH-style identity management
 - [Phase 59]: Message forwarding gated on node on_ready to prevent sends before TrustedHello completes
 - [Phase 59]: Accept loop as lambda coroutine capturing cmd_run() locals -- simpler than separate class for relay
+- [Phase 60]: Header-only utility with inline functions in db/util/hex.h to avoid ODR violations across translation units
+- [Phase 60]: from_hex_safe() non-throwing wrapper in verify_main.cpp preserves CLI error handling pattern
 
 ### Pending Todos
 
@@ -50,6 +52,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T15:54:03.078Z
-Stopped at: Completed 59-02-PLAN.md
+Last session: 2026-03-23T16:43:51.251Z
+Stopped at: Completed 60-01-PLAN.md
 Resume file: None

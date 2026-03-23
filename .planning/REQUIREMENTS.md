@@ -27,10 +27,10 @@ Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
 
 ### Codebase Deduplication
 
-- [ ] **DEDUP-01**: All production copies of `to_hex()` and `from_hex()` (11 functions across 5 files) replaced by a single shared header `db/util/hex.h`
+- [x] **DEDUP-01**: All production copies of `to_hex()` and `from_hex()` (11 functions across 5 files) replaced by a single shared header `db/util/hex.h`
 - [ ] **DEDUP-02**: All test copies of duplicated helpers (TempDir, run_async, current_timestamp, TS_AUTO, make_signed_blob, make_signed_tombstone, make_signed_delegation, make_delegate_blob, ns_to_hex -- ~30 copies across 7 files) replaced by a single shared header `db/tests/test_helpers.h`
-- [ ] **DEDUP-03**: Codebase audited for remaining duplicated utility functions across db/, relay/, loadgen/, and tools/ source trees -- no other duplicated helpers remain
-- [ ] **DEDUP-04**: All existing tests (500+ unit tests) pass with the shared headers
+- [x] **DEDUP-03**: Codebase audited for remaining duplicated utility functions across db/, relay/, loadgen/, and tools/ source trees -- no other duplicated helpers remain
+- [x] **DEDUP-04**: All existing tests (500+ unit tests) pass with the shared headers
 
 ## Previous Milestone (v1.1.0 -- Complete)
 
