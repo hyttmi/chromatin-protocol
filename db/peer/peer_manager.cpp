@@ -716,6 +716,19 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
                 auto result = co_await engine_.ingest(blob);
+                // Send WriteAck for all accepted ingests (stored + duplicate)
+                if (result.accepted && result.ack.has_value()) {
+                    auto ack = result.ack.value();
+                    std::vector<uint8_t> ack_payload(41);
+                    std::memcpy(ack_payload.data(), ack.blob_hash.data(), 32);
+                    for (int i = 7; i >= 0; --i) {
+                        ack_payload[32 + (7 - i)] = static_cast<uint8_t>(
+                            ack.seq_num >> (i * 8));
+                    }
+                    ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
+                    co_await conn->send_message(wire::TransportMsgType_WriteAck,
+                                                 std::span<const uint8_t>(ack_payload));
+                }
                 if (result.accepted && result.ack.has_value() &&
                     result.ack->status == engine::IngestStatus::stored) {
                     notify_subscribers(
