@@ -235,6 +235,7 @@ if(BUILD_TESTING)
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
     tests/relay/test_relay_config.cpp
+    tests/relay/test_relay_identity.cpp
   )
 
   target_link_libraries(chromatindb_tests PRIVATE
