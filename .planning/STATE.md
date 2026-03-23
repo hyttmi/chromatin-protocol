@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2.0
 milestone_name: Relay & Client Protocol
 status: unknown
-stopped_at: Completed 59-01-PLAN.md
-last_updated: "2026-03-23T15:49:44.321Z"
+stopped_at: Completed 59-02-PLAN.md
+last_updated: "2026-03-23T15:54:03.080Z"
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -38,6 +38,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 58]: Relay config requires file (throws on missing) unlike node config which returns defaults
 - [Phase 58]: RelayIdentity uses direct key_path (not data_dir) matching SSH-style identity management
 - [Phase 59]: Message forwarding gated on node on_ready to prevent sends before TrustedHello completes
+- [Phase 59]: Accept loop as lambda coroutine capturing cmd_run() locals -- simpler than separate class for relay
 
 ### Pending Todos
 
@@ -49,6 +50,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T15:49:44.318Z
-Stopped at: Completed 59-01-PLAN.md
+Last session: 2026-03-23T15:54:03.078Z
+Stopped at: Completed 59-02-PLAN.md
 Resume file: None
