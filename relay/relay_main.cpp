@@ -1,11 +1,18 @@
 #include "db/version.h"
 #include "relay/config/relay_config.h"
 #include "relay/identity/relay_identity.h"
+#include "relay/core/relay_session.h"
+#include "relay/core/message_filter.h"
+#include "db/crypto/hash.h"
 #include "db/logging/logging.h"
+#include "db/net/connection.h"
 
+#include <asio/signal_set.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <span>
@@ -123,7 +130,127 @@ int cmd_run(int argc, char* argv[]) {
     auto identity = chromatindb::relay::identity::RelayIdentity::load_or_generate(cfg.identity_key_path);
     spdlog::info("public key hash: {}", to_hex(identity.public_key_hash()));
 
-    spdlog::info("relay ready");
+    // Convert RelayIdentity to NodeIdentity for Connection compatibility
+    auto node_identity = identity.to_node_identity();
+
+    // Create io_context
+    asio::io_context ioc;
+
+    // Session tracking (deque per project decision: coroutine-accessed containers)
+    std::deque<chromatindb::relay::core::RelaySession::Ptr> sessions;
+    bool draining = false;
+
+    // TCP acceptor setup
+    asio::ip::tcp::acceptor acceptor(ioc);
+    auto port_str = std::to_string(cfg.bind_port);
+    asio::ip::tcp::resolver resolver(ioc);
+    auto endpoints = resolver.resolve(cfg.bind_address, port_str);
+    auto endpoint = *endpoints.begin();
+    acceptor.open(endpoint.endpoint().protocol());
+    acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
+    acceptor.bind(endpoint.endpoint());
+    acceptor.listen();
+
+    spdlog::info("listening on {}:{}", cfg.bind_address, cfg.bind_port);
+
+    // Accept loop coroutine
+    auto accept_loop = [&]() -> asio::awaitable<void> {
+        while (!draining) {
+            auto [ec, socket] = co_await acceptor.async_accept(
+                chromatindb::net::use_nothrow);
+            if (ec) {
+                if (draining) break;
+                spdlog::warn("accept error: {}", ec.message());
+                continue;
+            }
+
+            std::string client_addr;
+            {
+                asio::error_code ep_ec;
+                auto ep = socket.remote_endpoint(ep_ec);
+                if (!ep_ec) client_addr = ep.address().to_string() + ":" + std::to_string(ep.port());
+            }
+
+            spdlog::info("client connecting from {}", client_addr);
+
+            // Create inbound connection (PQ handshake as responder, per RELAY-01)
+            auto conn = chromatindb::net::Connection::create_inbound(
+                std::move(socket), node_identity);
+
+            // After PQ handshake completes, create relay session
+            conn->on_ready([&, conn](chromatindb::net::Connection::Ptr c) {
+                spdlog::info("client authenticated: {} from {}",
+                    [&]() {
+                        auto& pk = c->peer_pubkey();
+                        auto hash = chromatindb::crypto::sha3_256(pk);
+                        return to_hex(std::span<const uint8_t>(hash.data(), hash.size()));
+                    }(),
+                    c->remote_address());
+
+                // Create relay session (per RELAY-02: dedicated UDS per client)
+                auto session = chromatindb::relay::core::RelaySession::create(
+                    c, cfg.uds_path, node_identity, ioc);
+
+                session->on_close([&](chromatindb::relay::core::RelaySession::Ptr s) {
+                    sessions.erase(
+                        std::remove(sessions.begin(), sessions.end(), s),
+                        sessions.end());
+                });
+
+                sessions.push_back(session);
+
+                // Start session (connect UDS to node, begin forwarding)
+                asio::co_spawn(ioc, [session]() -> asio::awaitable<void> {
+                    bool ok = co_await session->start();
+                    if (!ok) {
+                        // UDS connect failed (per D-03: refuse client)
+                        spdlog::error("failed to connect to node via UDS for client {}",
+                            session->client_address());
+                        session->stop();
+                    }
+                }, asio::detached);
+            });
+
+            // If handshake fails, connection closes itself (on_close fires)
+            conn->on_close([&, client_addr](chromatindb::net::Connection::Ptr c, bool /*graceful*/) {
+                if (!c->is_authenticated()) {
+                    spdlog::info("client handshake failed from {}", client_addr);
+                }
+            });
+
+            // Run connection (PQ handshake + message loop)
+            asio::co_spawn(ioc, [conn]() -> asio::awaitable<void> {
+                co_await conn->run();
+            }, asio::detached);
+        }
+    };
+
+    // Spawn accept loop
+    asio::co_spawn(ioc, accept_loop(), asio::detached);
+
+    // Signal handling (SIGINT/SIGTERM graceful shutdown)
+    asio::signal_set signals(ioc, SIGINT, SIGTERM);
+    signals.async_wait([&](asio::error_code ec, int sig) {
+        if (ec) return;
+        spdlog::info("signal {} received, shutting down", sig);
+        draining = true;
+
+        // Stop accepting
+        asio::error_code close_ec;
+        acceptor.close(close_ec);
+
+        // Stop all sessions
+        auto snapshot = sessions;
+        for (auto& s : snapshot) {
+            s->stop();
+        }
+        sessions.clear();
+
+        spdlog::info("relay stopped");
+    });
+
+    // Run event loop (blocks until stopped)
+    ioc.run();
 
     return 0;
 }
