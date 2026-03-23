@@ -39,7 +39,15 @@ enum TransportMsgType : byte {
     ReconcileRanges = 28,
     ReconcileItems = 29,
     // Phase 40: Sync rate limiting
-    SyncRejected = 30
+    SyncRejected = 30,
+    // Phase 57: Client protocol extensions
+    WriteAck = 31,
+    ReadRequest = 32,
+    ReadResponse = 33,
+    ListRequest = 34,
+    ListResponse = 35,
+    StatsRequest = 36,
+    StatsResponse = 37
 }
 
 table TransportMessage {

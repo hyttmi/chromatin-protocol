@@ -51,11 +51,18 @@ enum TransportMsgType : int8_t {
   TransportMsgType_ReconcileRanges = 28,
   TransportMsgType_ReconcileItems = 29,
   TransportMsgType_SyncRejected = 30,
+  TransportMsgType_WriteAck = 31,
+  TransportMsgType_ReadRequest = 32,
+  TransportMsgType_ReadResponse = 33,
+  TransportMsgType_ListRequest = 34,
+  TransportMsgType_ListResponse = 35,
+  TransportMsgType_StatsRequest = 36,
+  TransportMsgType_StatsResponse = 37,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_SyncRejected
+  TransportMsgType_MAX = TransportMsgType_StatsResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[30] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[37] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -86,13 +93,20 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[30] {
     TransportMsgType_ReconcileInit,
     TransportMsgType_ReconcileRanges,
     TransportMsgType_ReconcileItems,
-    TransportMsgType_SyncRejected
+    TransportMsgType_SyncRejected,
+    TransportMsgType_WriteAck,
+    TransportMsgType_ReadRequest,
+    TransportMsgType_ReadResponse,
+    TransportMsgType_ListRequest,
+    TransportMsgType_ListResponse,
+    TransportMsgType_StatsRequest,
+    TransportMsgType_StatsResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[32] = {
+  static const char * const names[39] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -124,13 +138,20 @@ inline const char * const *EnumNamesTransportMsgType() {
     "ReconcileRanges",
     "ReconcileItems",
     "SyncRejected",
+    "WriteAck",
+    "ReadRequest",
+    "ReadResponse",
+    "ListRequest",
+    "ListResponse",
+    "StatsRequest",
+    "StatsResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_SyncRejected)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_StatsResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

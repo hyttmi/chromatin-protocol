@@ -133,12 +133,12 @@ public:
     /// @return Namespace IDs with their latest seq_num.
     std::vector<storage::NamespaceInfo> list_namespaces();
 
-private:
     /// Resolve effective quota limits for a namespace (override > global).
     /// Returns {byte_limit, count_limit} where 0 = unlimited.
     std::pair<uint64_t, uint64_t> effective_quota(
         std::span<const uint8_t, 32> namespace_id) const;
 
+private:
     storage::Storage& storage_;
     asio::thread_pool& pool_;
     uint64_t max_storage_bytes_ = 0;
