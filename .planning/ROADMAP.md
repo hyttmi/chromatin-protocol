@@ -212,6 +212,6 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. Client Protocol Extensions | 2/2 | Complete   | 2026-03-23 |
+| 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
 | 58. Relay Scaffolding & Identity | 0/? | Not started | - |
 | 59. Relay Core | 0/? | Not started | - |
