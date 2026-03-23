@@ -172,6 +172,81 @@ TEST_CASE("TransportCodec new message types round-trip", "[protocol]") {
     }
 }
 
+TEST_CASE("Client protocol payload formats", "[protocol]") {
+    SECTION("ReadRequest payload is 64 bytes") {
+        std::vector<uint8_t> payload(64);
+        std::fill(payload.begin(), payload.begin() + 32, 0xAA);
+        std::fill(payload.begin() + 32, payload.end(), 0xBB);
+        auto encoded = TransportCodec::encode(TransportMsgType_ReadRequest, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->payload.size() == 64);
+        REQUIRE(decoded->payload[0] == 0xAA);
+        REQUIRE(decoded->payload[31] == 0xAA);
+        REQUIRE(decoded->payload[32] == 0xBB);
+        REQUIRE(decoded->payload[63] == 0xBB);
+    }
+
+    SECTION("ListRequest payload encodes since_seq and limit in big-endian") {
+        std::vector<uint8_t> payload(44, 0x00);
+        std::fill(payload.begin(), payload.begin() + 32, 0x11);
+        // since_seq = 256 (0x0000000000000100)
+        payload[38] = 0x01; payload[39] = 0x00;
+        // limit = 50 (0x00000032)
+        payload[43] = 0x32;
+        auto encoded = TransportCodec::encode(TransportMsgType_ListRequest, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->payload.size() == 44);
+        uint64_t since_seq = 0;
+        for (int i = 0; i < 8; ++i)
+            since_seq = (since_seq << 8) | decoded->payload[32 + i];
+        REQUIRE(since_seq == 256);
+        uint32_t limit = 0;
+        for (int i = 0; i < 4; ++i)
+            limit = (limit << 8) | decoded->payload[40 + i];
+        REQUIRE(limit == 50);
+    }
+
+    SECTION("ListResponse payload with zero entries") {
+        std::vector<uint8_t> payload = {0x00, 0x00, 0x00, 0x00, 0x00};
+        auto encoded = TransportCodec::encode(TransportMsgType_ListResponse, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->payload.size() == 5);
+        uint32_t count = 0;
+        for (int i = 0; i < 4; ++i)
+            count = (count << 8) | decoded->payload[i];
+        REQUIRE(count == 0);
+        REQUIRE(decoded->payload[4] == 0);
+    }
+
+    SECTION("StatsResponse payload encodes three uint64 big-endian values") {
+        std::vector<uint8_t> payload(24, 0x00);
+        // blob_count = 1000 (0x3E8) -- big-endian uint64 at offset 0
+        payload[6] = 0x03; payload[7] = 0xE8;
+        // total_bytes = 1048576 (0x100000) -- big-endian uint64 at offset 8
+        payload[13] = 0x10;
+        // quota_bytes = 0 (unlimited)
+        auto encoded = TransportCodec::encode(TransportMsgType_StatsResponse, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->payload.size() == 24);
+        uint64_t blob_count = 0;
+        for (int i = 0; i < 8; ++i)
+            blob_count = (blob_count << 8) | decoded->payload[i];
+        REQUIRE(blob_count == 1000);
+        uint64_t total_bytes = 0;
+        for (int i = 0; i < 8; ++i)
+            total_bytes = (total_bytes << 8) | decoded->payload[8 + i];
+        REQUIRE(total_bytes == 1048576);
+        uint64_t quota_bytes = 0;
+        for (int i = 0; i < 8; ++i)
+            quota_bytes = (quota_bytes << 8) | decoded->payload[16 + i];
+        REQUIRE(quota_bytes == 0);
+    }
+}
+
 TEST_CASE("TransportCodec decode rejects corrupt data", "[protocol]") {
     SECTION("empty buffer") {
         std::span<const uint8_t> empty{};

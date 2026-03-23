@@ -417,6 +417,84 @@ The inactivity sweep runs every 30 seconds, checking all connected peers against
 
 Configuration: `inactivity_timeout_seconds` defaults to 120. Set to 0 to disable. Minimum value when enabled is 30 seconds.
 
+## Client Protocol
+
+Client protocol operations allow authenticated connections to read, list, and query blobs without participating in the sync protocol. These operations are available on all connection types (TCP with PQ handshake, trusted TCP, and UDS).
+
+### WriteAck (type 31)
+
+After a successful `Data (8)` ingest, the node sends a WriteAck back to the connection that submitted the blob. The ack is sent for both new blobs (stored) and duplicates.
+
+**Payload:** 41 bytes
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| blob_hash | 0 | 32 | raw bytes | SHA3-256 of the encoded blob |
+| seq_num | 32 | 8 | big-endian uint64 | Sequence number (0 for dedup short-circuit) |
+| status | 40 | 1 | uint8 | 0 = stored (new), 1 = duplicate |
+
+### ReadRequest / ReadResponse (types 32-33)
+
+Fetch a specific blob by namespace and content hash.
+
+**ReadRequest payload:** 64 bytes
+
+| Field | Offset | Size | Description |
+|-------|--------|------|-------------|
+| namespace_id | 0 | 32 | Target namespace |
+| blob_hash | 32 | 32 | Content hash of the blob |
+
+**ReadResponse payload:** variable
+
+| Case | Format |
+|------|--------|
+| Found | `[0x01][flatbuffer_encoded_blob]` |
+| Not found | `[0x00]` |
+
+The blob portion uses the same FlatBuffer Blob encoding as Data (8) messages.
+
+### ListRequest / ListResponse (types 34-35)
+
+List blobs in a namespace with cursor-based pagination.
+
+**ListRequest payload:** 44 bytes
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| namespace_id | 0 | 32 | raw bytes | Target namespace |
+| since_seq | 32 | 8 | big-endian uint64 | Return blobs with seq > this (0 = from start) |
+| limit | 40 | 4 | big-endian uint32 | Max entries (0 or >100 = server default 100) |
+
+**ListResponse payload:** 4 + (count * 40) + 1 bytes
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| count | 0 | 4 | big-endian uint32 | Number of entries |
+| entries | 4 | count * 40 | {hash:32, seq_be:8} | Blob hash + sequence number pairs |
+| has_more | 4 + count*40 | 1 | uint8 | 1 = more entries available |
+
+To paginate: set `since_seq` to the last `seq_num` in the response. Repeat until `has_more = 0`. Use ReadRequest to fetch full blob data.
+
+### StatsRequest / StatsResponse (types 36-37)
+
+Query namespace usage and quota information.
+
+**StatsRequest payload:** 32 bytes
+
+| Field | Offset | Size | Description |
+|-------|--------|------|-------------|
+| namespace_id | 0 | 32 | Target namespace |
+
+**StatsResponse payload:** 24 bytes
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| blob_count | 0 | 8 | big-endian uint64 | Number of blobs in namespace |
+| total_bytes | 8 | 8 | big-endian uint64 | Total encrypted bytes used |
+| quota_bytes | 16 | 8 | big-endian uint64 | Byte quota limit (0 = unlimited) |
+
+Quota remaining = quota_bytes - total_bytes (computed client-side).
+
 ## Message Type Reference
 
 All message types defined in the `TransportMsgType` enum:
@@ -454,3 +532,10 @@ All message types defined in the `TransportMsgType` enum:
 | 28 | ReconcileRanges | Sync Phase B: range fingerprints/items for reconciliation |
 | 29 | ReconcileItems | Sync Phase B: final item exchange after ranges resolved |
 | 30 | SyncRejected | Sync rate limiting: rejection with 1-byte reason code |
+| 31 | WriteAck | Client write acknowledgment: blob_hash + seq_num + status |
+| 32 | ReadRequest | Client blob fetch: namespace + hash (64 bytes) |
+| 33 | ReadResponse | Client blob fetch response: found flag + optional blob |
+| 34 | ListRequest | Client blob listing: namespace + cursor + limit (44 bytes) |
+| 35 | ListResponse | Client blob listing response: hash+seq pairs + has_more |
+| 36 | StatsRequest | Client namespace stats query: namespace (32 bytes) |
+| 37 | StatsResponse | Client namespace stats: count + bytes + quota (24 bytes) |
