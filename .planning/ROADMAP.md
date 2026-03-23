@@ -176,11 +176,14 @@ Full details: [milestones/v1.1.0-ROADMAP.md](milestones/v1.1.0-ROADMAP.md)
 **Depends on**: Nothing (first phase of v1.2.0)
 **Requirements**: PROTO-01, PROTO-02, PROTO-03, PROTO-04
 **Success Criteria** (what must be TRUE):
-  1. When a client sends a Data message (blob write) and the node ingests it successfully, the node sends back a WriteAck message (type 25) containing the blob hash and assigned seq_num over the wire
-  2. A client can send ReadRequest (type 26) with a namespace + hash and receive a ReadResponse (type 27) containing the blob data, or an empty response if the blob does not exist
-  3. A client can send ListRequest (type 28) with a namespace, since_seq cursor, and limit, and receive a ListResponse (type 29) with matching blobs in seq_num order -- repeated calls with an advancing cursor paginate through the full namespace
-  4. A client can send StatsRequest (type 30) for a namespace and receive a StatsResponse (type 31) with blob count, total bytes, and quota remaining
-**Plans**: TBD
+  1. When a client sends a Data message (blob write) and the node ingests it successfully, the node sends back a WriteAck message (type 31) containing the blob hash and assigned seq_num over the wire
+  2. A client can send ReadRequest (type 32) with a namespace + hash and receive a ReadResponse (type 33) containing the blob data, or an empty response if the blob does not exist
+  3. A client can send ListRequest (type 34) with a namespace, since_seq cursor, and limit, and receive a ListResponse (type 35) with matching blobs in seq_num order -- repeated calls with an advancing cursor paginate through the full namespace
+  4. A client can send StatsRequest (type 36) for a namespace and receive a StatsResponse (type 37) with blob count, total bytes, and quota remaining
+**Plans:** 2 plans
+Plans:
+- [ ] 57-01-PLAN.md -- Schema extension, engine API, WriteAck dispatch, round-trip tests
+- [ ] 57-02-PLAN.md -- Read/List/Stats handlers, payload tests, protocol docs
 
 ### Phase 58: Relay Scaffolding & Identity
 **Goal**: The relay binary compiles, loads config, and has its own ML-DSA-87 identity -- ready for protocol logic
@@ -209,6 +212,6 @@ Full details: [milestones/v1.1.0-ROADMAP.md](milestones/v1.1.0-ROADMAP.md)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 57. Client Protocol Extensions | 0/? | Not started | - |
+| 57. Client Protocol Extensions | 0/2 | Not started | - |
 | 58. Relay Scaffolding & Identity | 0/? | Not started | - |
 | 59. Relay Core | 0/? | Not started | - |
