@@ -11,6 +11,12 @@ NodeIdentity NodeIdentity::generate() {
     return id;
 }
 
+NodeIdentity NodeIdentity::from_keys(std::span<const uint8_t> pubkey,
+                                      std::span<const uint8_t> seckey) {
+    // Stub: throws (tests will fail)
+    throw std::runtime_error("from_keys not implemented");
+}
+
 NodeIdentity NodeIdentity::load_from(const std::filesystem::path& data_dir) {
     auto pub_path = data_dir / "node.pub";
     auto key_path = data_dir / "node.key";

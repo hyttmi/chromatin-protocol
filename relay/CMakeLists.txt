@@ -1,6 +1,7 @@
 add_library(chromatindb_relay_lib STATIC
   config/relay_config.cpp
   identity/relay_identity.cpp
+  core/message_filter.cpp
 )
 
 target_include_directories(chromatindb_relay_lib PUBLIC

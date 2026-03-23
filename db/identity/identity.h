@@ -24,6 +24,11 @@ public:
     /// Load from files if they exist, otherwise generate and save.
     static NodeIdentity load_or_generate(const std::filesystem::path& data_dir);
 
+    /// Construct from raw key bytes (for relay identity adapter).
+    /// @throws std::runtime_error if key sizes are wrong.
+    static NodeIdentity from_keys(std::span<const uint8_t> pubkey,
+                                   std::span<const uint8_t> seckey);
+
     /// Save key files to data directory (node.key + node.pub).
     void save_to(const std::filesystem::path& data_dir) const;
 

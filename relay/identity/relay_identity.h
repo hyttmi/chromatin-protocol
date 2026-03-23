@@ -2,6 +2,7 @@
 
 #include "db/crypto/signing.h"
 #include "db/crypto/hash.h"
+#include "db/identity/identity.h"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -41,6 +42,9 @@ public:
 
     /// Sign a message.
     std::vector<uint8_t> sign(std::span<const uint8_t> message) const;
+
+    /// Convert to NodeIdentity for use with Connection class.
+    chromatindb::identity::NodeIdentity to_node_identity() const;
 
 private:
     RelayIdentity() = default;

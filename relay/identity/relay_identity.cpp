@@ -112,4 +112,9 @@ std::vector<uint8_t> RelayIdentity::sign(std::span<const uint8_t> message) const
     return signer_.sign(message);
 }
 
+chromatindb::identity::NodeIdentity RelayIdentity::to_node_identity() const {
+    // Stub: throws (tests will fail)
+    throw std::runtime_error("to_node_identity not implemented");
+}
+
 } // namespace chromatindb::relay::identity
