@@ -14,6 +14,7 @@
 /// Output: JSON to stdout. Exit 0 on success/valid, 1 on failure/invalid.
 
 #include "db/crypto/signing.h"
+#include "db/util/hex.h"
 #include "db/wire/codec.h"
 
 #include <nlohmann/json.hpp>
@@ -31,44 +32,16 @@
 
 namespace {
 
-// =============================================================================
-// Hex encoding / decoding
-// =============================================================================
+using chromatindb::util::to_hex;
 
-std::string to_hex(const uint8_t* data, size_t len) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(len * 2);
-    for (size_t i = 0; i < len; ++i) {
-        result.push_back(hex_chars[data[i] >> 4]);
-        result.push_back(hex_chars[data[i] & 0x0F]);
+/// Decode a hex string to a byte vector. Returns empty on invalid input
+/// (non-throwing wrapper around chromatindb::util::from_hex for CLI error handling).
+std::vector<uint8_t> from_hex_safe(const std::string& hex_str) {
+    try {
+        return chromatindb::util::from_hex(hex_str);
+    } catch (const std::invalid_argument&) {
+        return {};
     }
-    return result;
-}
-
-template <size_t N>
-std::string to_hex(const std::array<uint8_t, N>& arr) {
-    return to_hex(arr.data(), arr.size());
-}
-
-/// Decode a hex string to a byte vector. Returns empty on invalid input.
-std::vector<uint8_t> from_hex(const std::string& hex_str) {
-    if (hex_str.size() % 2 != 0) return {};
-    std::vector<uint8_t> result;
-    result.reserve(hex_str.size() / 2);
-    for (size_t i = 0; i < hex_str.size(); i += 2) {
-        auto nibble = [](char c) -> int {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-            return -1;
-        };
-        int hi = nibble(hex_str[i]);
-        int lo = nibble(hex_str[i + 1]);
-        if (hi < 0 || lo < 0) return {};
-        result.push_back(static_cast<uint8_t>((hi << 4) | lo));
-    }
-    return result;
 }
 
 // =============================================================================
@@ -186,14 +159,14 @@ struct HashFieldsArgs {
 };
 
 int cmd_hash_fields(const HashFieldsArgs& args) {
-    auto ns_bytes = from_hex(args.namespace_hex);
+    auto ns_bytes = from_hex_safe(args.namespace_hex);
     if (ns_bytes.size() != 32) {
         spdlog::error("--namespace-hex must be 64 hex chars (32 bytes), got {}",
                       args.namespace_hex.size());
         return 1;
     }
 
-    auto data_bytes = from_hex(args.data_hex);
+    auto data_bytes = from_hex_safe(args.data_hex);
     if (data_bytes.empty() && !args.data_hex.empty()) {
         spdlog::error("--data-hex contains invalid hex");
         return 1;
@@ -225,20 +198,20 @@ struct SigFieldsArgs {
 };
 
 int cmd_sig_fields(const SigFieldsArgs& args) {
-    auto digest_bytes = from_hex(args.digest_hex);
+    auto digest_bytes = from_hex_safe(args.digest_hex);
     if (digest_bytes.size() != 32) {
         spdlog::error("--digest-hex must be 64 hex chars (32 bytes), got {}",
                       args.digest_hex.size());
         return 1;
     }
 
-    auto sig_bytes = from_hex(args.signature_hex);
+    auto sig_bytes = from_hex_safe(args.signature_hex);
     if (sig_bytes.empty()) {
         spdlog::error("--signature-hex is empty or contains invalid hex");
         return 1;
     }
 
-    auto pk_bytes = from_hex(args.pubkey_hex);
+    auto pk_bytes = from_hex_safe(args.pubkey_hex);
     if (pk_bytes.empty()) {
         spdlog::error("--pubkey-hex is empty or contains invalid hex");
         return 1;

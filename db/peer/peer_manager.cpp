@@ -1,6 +1,7 @@
 #include "db/peer/peer_manager.h"
 #include "db/peer/sync_reject.h"
 #include "db/sync/reconciliation.h"
+#include "db/util/hex.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -22,18 +23,7 @@ namespace chromatindb::peer {
 
 namespace {
 
-/// Convert bytes to hex string (for logging).
-std::string to_hex(std::span<const uint8_t> bytes, size_t max_len = 8) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    size_t len = std::min(bytes.size(), max_len);
-    result.reserve(len * 2);
-    for (size_t i = 0; i < len; ++i) {
-        result += hex_chars[(bytes[i] >> 4) & 0xF];
-        result += hex_chars[bytes[i] & 0xF];
-    }
-    return result;
-}
+using chromatindb::util::to_hex;
 
 /// Token bucket rate limiter: returns true if tokens consumed, false if rate exceeded.
 /// Caller must check rate_bytes_per_sec > 0 before calling (0 = disabled).
@@ -359,7 +349,7 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
         }
     }
 
-    auto ns_hex = to_hex(conn->peer_pubkey());
+    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
 
     // Connection dedup: check if we already have a connection from this peer namespace.
     // When two nodes are mutual bootstrap peers, both initiate connections simultaneously.
@@ -455,7 +445,7 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
 }
 
 void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
-    auto ns_hex = to_hex(conn->peer_pubkey());
+    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
     bool graceful = conn->received_goodbye();
     spdlog::info("Peer {} disconnected ({})", ns_hex,
                  graceful ? "graceful" : "timeout");
@@ -1039,16 +1029,16 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 if (cursor->seq_num == pns.latest_seq_num) {
                     cursor_skip_namespaces.insert(pns.namespace_id);
                     cursor_hits_this_round++;
-                    spdlog::debug("sync cursor hit: ns={} seq={}", to_hex(pns.namespace_id), pns.latest_seq_num);
+                    spdlog::debug("sync cursor hit: ns={} seq={}", to_hex(pns.namespace_id, 8), pns.latest_seq_num);
                 } else if (pns.latest_seq_num < cursor->seq_num) {
                     spdlog::warn("sync cursor mismatch: ns={} remote_seq={} stored_seq={}, resetting",
-                                 to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                                 to_hex(pns.namespace_id, 8), pns.latest_seq_num, cursor->seq_num);
                     storage_.delete_sync_cursor(peer_hash, pns.namespace_id);
                     cursor_misses_this_round++;
                 } else {
                     cursor_misses_this_round++;
                     spdlog::debug("sync cursor miss: ns={} remote_seq={} stored_seq={}",
-                                  to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                                  to_hex(pns.namespace_id, 8), pns.latest_seq_num, cursor->seq_num);
                 }
             } else {
                 cursor_misses_this_round++;
@@ -1119,7 +1109,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
             if (!msg) {
                 spdlog::warn("sync with {}: timeout during reconciliation for ns={}",
-                             conn->remote_address(), to_hex(ns));
+                             conn->remote_address(), to_hex(ns, 8));
                 peer->syncing = false;
                 co_return;
             }
@@ -1433,10 +1423,10 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 if (cursor->seq_num == pns.latest_seq_num) {
                     cursor_skip_namespaces.insert(pns.namespace_id);
                     cursor_hits_this_round++;
-                    spdlog::debug("sync responder cursor hit: ns={} seq={}", to_hex(pns.namespace_id), pns.latest_seq_num);
+                    spdlog::debug("sync responder cursor hit: ns={} seq={}", to_hex(pns.namespace_id, 8), pns.latest_seq_num);
                 } else if (pns.latest_seq_num < cursor->seq_num) {
                     spdlog::warn("sync responder cursor mismatch: ns={} remote_seq={} stored_seq={}, resetting",
-                                 to_hex(pns.namespace_id), pns.latest_seq_num, cursor->seq_num);
+                                 to_hex(pns.namespace_id, 8), pns.latest_seq_num, cursor->seq_num);
                     storage_.delete_sync_cursor(peer_hash, pns.namespace_id);
                     cursor_misses_this_round++;
                 } else {
@@ -1533,7 +1523,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                     auto rmsg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
                     if (!rmsg) {
                         spdlog::warn("sync responder {}: timeout during reconciliation for ns={}",
-                                     conn->remote_address(), to_hex(ns));
+                                     conn->remote_address(), to_hex(ns, 8));
                         peer->syncing = false;
                         co_return;
                     }
@@ -2459,7 +2449,7 @@ PeerInfo* PeerManager::find_peer(const net::Connection::Ptr& conn) {
 }
 
 std::string PeerManager::peer_display_name(const net::Connection::Ptr& conn) {
-    auto ns_hex = to_hex(conn->peer_pubkey());
+    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
     return ns_hex + "@" + conn->remote_address();
 }
 

@@ -6,6 +6,7 @@
 #include "db/crypto/hash.h"
 #include "db/logging/logging.h"
 #include "db/net/connection.h"
+#include "db/util/hex.h"
 
 #include <asio/signal_set.hpp>
 #include <spdlog/spdlog.h>
@@ -20,16 +21,7 @@
 
 namespace {
 
-std::string to_hex(std::span<const uint8_t> bytes) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(bytes.size() * 2);
-    for (auto b : bytes) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
+using chromatindb::util::to_hex;
 
 void print_usage(const char* prog) {
     std::cerr << "chromatindb_relay " << VERSION << "\n\n"

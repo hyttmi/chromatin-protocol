@@ -7,6 +7,7 @@
 #include "db/identity/identity.h"
 #include "db/net/connection.h"
 #include "db/peer/peer_manager.h"
+#include "db/util/hex.h"
 #include "db/wire/codec.h"
 #include "db/wire/transport_generated.h"
 
@@ -180,72 +181,12 @@ std::vector<SizeClass> compute_size_classes(uint64_t count, bool mixed,
 }
 
 // =============================================================================
-// Hex encoding for blob hash keys
+// Hex encoding — uses shared db/util/hex.h
 // =============================================================================
 
-std::string to_hex(const std::array<uint8_t, 32>& bytes) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(64);
-    for (auto b : bytes) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
-
-std::string to_hex(std::span<const uint8_t> bytes) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(bytes.size() * 2);
-    for (auto b : bytes) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
-
-/// Decode a 64-char hex string to a 32-byte array.
-std::array<uint8_t, 32> from_hex(const std::string& hex_str) {
-    std::array<uint8_t, 32> result{};
-    if (hex_str.size() != 64) {
-        throw std::runtime_error("from_hex: expected 64 hex chars, got " +
-                                 std::to_string(hex_str.size()));
-    }
-    for (size_t i = 0; i < 32; ++i) {
-        auto hi = hex_str[i * 2];
-        auto lo = hex_str[i * 2 + 1];
-        auto nibble = [](char c) -> uint8_t {
-            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
-            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
-            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
-            throw std::runtime_error(std::string("from_hex: invalid hex char '") + c + "'");
-        };
-        result[i] = static_cast<uint8_t>((nibble(hi) << 4) | nibble(lo));
-    }
-    return result;
-}
-
-/// Decode an arbitrary-length hex string to a byte vector.
-std::vector<uint8_t> from_hex_bytes(const std::string& hex_str) {
-    if (hex_str.size() % 2 != 0) {
-        throw std::runtime_error("from_hex_bytes: odd-length hex string (" +
-                                 std::to_string(hex_str.size()) + " chars)");
-    }
-    std::vector<uint8_t> result(hex_str.size() / 2);
-    for (size_t i = 0; i < result.size(); ++i) {
-        auto hi = hex_str[i * 2];
-        auto lo = hex_str[i * 2 + 1];
-        auto nibble = [](char c) -> uint8_t {
-            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
-            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
-            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
-            throw std::runtime_error(std::string("from_hex_bytes: invalid hex char '") + c + "'");
-        };
-        result[i] = static_cast<uint8_t>((nibble(hi) << 4) | nibble(lo));
-    }
-    return result;
-}
+using chromatindb::util::to_hex;
+using chromatindb::util::from_hex;
+using chromatindb::util::from_hex_fixed;
 
 // =============================================================================
 // Blob construction
@@ -917,7 +858,7 @@ int main(int argc, char* argv[]) {
                 line.pop_back();
             }
             if (line.empty()) continue;
-            target_hashes.push_back(from_hex(line));
+            target_hashes.push_back(from_hex_fixed<32>(line));
         }
         cfg.count = target_hashes.size();
         spdlog::info("read {} target hashes from stdin", target_hashes.size());
@@ -926,7 +867,7 @@ int main(int argc, char* argv[]) {
     // In delegation mode, decode the delegate pubkey hex
     std::vector<uint8_t> delegate_pubkey;
     if (!cfg.delegate_pubkey_hex.empty()) {
-        delegate_pubkey = from_hex_bytes(cfg.delegate_pubkey_hex);
+        delegate_pubkey = from_hex(cfg.delegate_pubkey_hex);
         if (delegate_pubkey.size() != chromatindb::wire::DELEGATION_PUBKEY_SIZE) {
             spdlog::error("--delegate: expected {} hex chars ({} bytes), got {} hex chars ({} bytes)",
                           chromatindb::wire::DELEGATION_PUBKEY_SIZE * 2,
@@ -947,7 +888,7 @@ int main(int argc, char* argv[]) {
                           cfg.target_namespace_hex.size());
             return 1;
         }
-        target_namespace = from_hex(cfg.target_namespace_hex);
+        target_namespace = from_hex_fixed<32>(cfg.target_namespace_hex);
         has_target_namespace = true;
         spdlog::info("target namespace override: {}", cfg.target_namespace_hex);
     }

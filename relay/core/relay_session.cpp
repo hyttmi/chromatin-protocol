@@ -1,23 +1,11 @@
 #include "relay/core/relay_session.h"
 #include "relay/core/message_filter.h"
 #include "db/crypto/hash.h"
+#include "db/util/hex.h"
 
 #include <spdlog/spdlog.h>
 
-namespace {
-
-std::string to_hex(std::span<const uint8_t> bytes) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(bytes.size() * 2);
-    for (auto b : bytes) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
-
-} // anonymous namespace
+using chromatindb::util::to_hex;
 
 namespace chromatindb::relay::core {
 
