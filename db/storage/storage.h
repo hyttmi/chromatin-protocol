@@ -61,6 +61,13 @@ struct NamespaceQuota {
     uint64_t blob_count = 0;   ///< Number of blobs stored.
 };
 
+/// Lightweight blob reference for list/pagination queries.
+/// Contains only hash and seq_num (no full blob data).
+struct BlobRef {
+    std::array<uint8_t, 32> blob_hash{};
+    uint64_t seq_num = 0;
+};
+
 /// Persistent blob storage engine backed by libmdbx.
 ///
 /// Manages seven sub-databases:
@@ -122,6 +129,15 @@ public:
     std::vector<wire::BlobData> get_blobs_by_seq(
         std::span<const uint8_t, 32> ns,
         uint64_t since_seq);
+
+    /// Lightweight query: return {blob_hash, seq_num} pairs for pagination.
+    /// Returns pairs with seq_num > since_seq in ascending order, up to max_count.
+    /// More efficient than get_blobs_by_seq (reads seq_map only, not blobs_map).
+    /// Skips zero-hash sentinels (deleted blobs with seq gaps).
+    std::vector<BlobRef> get_blob_refs_since(
+        std::span<const uint8_t, 32> ns,
+        uint64_t since_seq,
+        uint32_t max_count);
 
     /// Retrieve all blob hashes for a namespace from the seq_map index.
     /// Reads only 32-byte hash values from seq_map without touching blobs_map.

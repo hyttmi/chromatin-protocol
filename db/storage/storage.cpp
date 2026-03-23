@@ -593,6 +593,63 @@ std::vector<wire::BlobData> Storage::get_blobs_by_seq(
     return results;
 }
 
+std::vector<BlobRef> Storage::get_blob_refs_since(
+    std::span<const uint8_t, 32> ns,
+    uint64_t since_seq,
+    uint32_t max_count) {
+    std::vector<BlobRef> results;
+
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->seq_map);
+
+        auto lower_key = make_seq_key(ns.data(), since_seq + 1);
+        auto seek_result = cursor.lower_bound(to_slice(lower_key));
+
+        if (!seek_result.done) {
+            return results;
+        }
+
+        static constexpr std::array<uint8_t, 32> zero_hash{};
+
+        do {
+            auto key_data = cursor.current(false).key;
+            if (key_data.length() != 40) break;
+
+            // Check namespace prefix
+            if (std::memcmp(key_data.data(), ns.data(), 32) != 0) {
+                break;
+            }
+
+            // Read hash from value (32 bytes)
+            auto val_data = cursor.current(false).value;
+            if (val_data.length() != 32) break;
+
+            // Skip zero-hash sentinels (deleted blobs)
+            if (std::memcmp(val_data.data(), zero_hash.data(), 32) != 0) {
+                BlobRef ref;
+                std::memcpy(ref.blob_hash.data(), val_data.data(), 32);
+                ref.seq_num = decode_be_u64(
+                    static_cast<const uint8_t*>(key_data.data()) + 32);
+                results.push_back(ref);
+
+                if (max_count > 0 && results.size() >= max_count) {
+                    break;
+                }
+            }
+
+            auto next = cursor.to_next(false);
+            if (!next.done) break;
+
+        } while (true);
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_blob_refs_since: {}", e.what());
+    }
+
+    return results;
+}
+
 std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
     std::span<const uint8_t, 32> ns) {
     std::vector<std::array<uint8_t, 32>> hashes;

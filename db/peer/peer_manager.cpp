@@ -703,6 +703,125 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_ReadRequest) {
+        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 64) {
+                    record_strike(conn, "ReadRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::array<uint8_t, 32> hash{};
+                std::memcpy(ns.data(), payload.data(), 32);
+                std::memcpy(hash.data(), payload.data() + 32, 32);
+
+                auto blob = engine_.get_blob(ns, hash);
+                if (blob.has_value()) {
+                    auto encoded = wire::encode_blob(*blob);
+                    std::vector<uint8_t> response(1 + encoded.size());
+                    response[0] = 0x01;  // found
+                    std::memcpy(response.data() + 1, encoded.data(), encoded.size());
+                    co_await conn->send_message(wire::TransportMsgType_ReadResponse,
+                                                 std::span<const uint8_t>(response));
+                } else {
+                    std::vector<uint8_t> response = {0x00};  // not found
+                    co_await conn->send_message(wire::TransportMsgType_ReadResponse,
+                                                 std::span<const uint8_t>(response));
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed ReadRequest from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_ListRequest) {
+        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 44) {
+                    record_strike(conn, "ListRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+                uint64_t since_seq = 0;
+                for (int i = 0; i < 8; ++i)
+                    since_seq = (since_seq << 8) | payload[32 + i];
+                uint32_t limit = 0;
+                for (int i = 0; i < 4; ++i)
+                    limit = (limit << 8) | payload[40 + i];
+
+                constexpr uint32_t MAX_LIST_LIMIT = 100;
+                if (limit == 0 || limit > MAX_LIST_LIMIT)
+                    limit = MAX_LIST_LIMIT;
+
+                // Fetch limit+1 to detect has_more
+                auto refs = storage_.get_blob_refs_since(ns, since_seq, limit + 1);
+                bool has_more = (refs.size() > limit);
+                if (has_more)
+                    refs.resize(limit);
+
+                uint32_t count = static_cast<uint32_t>(refs.size());
+                std::vector<uint8_t> response(4 + count * 40 + 1);
+                // count (big-endian 4 bytes)
+                response[0] = static_cast<uint8_t>(count >> 24);
+                response[1] = static_cast<uint8_t>(count >> 16);
+                response[2] = static_cast<uint8_t>(count >> 8);
+                response[3] = static_cast<uint8_t>(count);
+                // hash+seq pairs
+                for (uint32_t i = 0; i < count; ++i) {
+                    size_t off = 4 + i * 40;
+                    std::memcpy(response.data() + off, refs[i].blob_hash.data(), 32);
+                    uint64_t seq = refs[i].seq_num;
+                    for (int b = 7; b >= 0; --b)
+                        response[off + 32 + (7 - b)] = static_cast<uint8_t>(seq >> (b * 8));
+                }
+                // has_more flag
+                response[4 + count * 40] = has_more ? 1 : 0;
+
+                co_await conn->send_message(wire::TransportMsgType_ListResponse,
+                                             std::span<const uint8_t>(response));
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed ListRequest from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_StatsRequest) {
+        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 32) {
+                    record_strike(conn, "StatsRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                auto quota = storage_.get_namespace_quota(ns);
+                auto [byte_limit, count_limit] = engine_.effective_quota(ns);
+
+                // Response: [blob_count_be:8][total_bytes_be:8][quota_bytes_be:8] = 24 bytes
+                std::vector<uint8_t> response(24);
+                for (int i = 7; i >= 0; --i)
+                    response[7 - i] = static_cast<uint8_t>(quota.blob_count >> (i * 8));
+                for (int i = 7; i >= 0; --i)
+                    response[8 + 7 - i] = static_cast<uint8_t>(quota.total_bytes >> (i * 8));
+                for (int i = 7; i >= 0; --i)
+                    response[16 + 7 - i] = static_cast<uint8_t>(byte_limit >> (i * 8));
+
+                co_await conn->send_message(wire::TransportMsgType_StatsResponse,
+                                             std::span<const uint8_t>(response));
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed StatsRequest from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob via coroutine (engine is async)
         asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
