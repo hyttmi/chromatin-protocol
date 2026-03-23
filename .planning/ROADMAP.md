@@ -166,7 +166,7 @@ Full details: [milestones/v1.1.0-ROADMAP.md](milestones/v1.1.0-ROADMAP.md)
 **Milestone Goal:** Enable clients to interact with chromatindb through a PQ-authenticated relay -- adding client-facing protocol operations to the node (read, list, stats, write-ack) and building a relay binary that accepts PQ-encrypted client connections, filters messages, and forwards to the node via UDS.
 
 - [x] **Phase 57: Client Protocol Extensions** - Add WriteAck, Read, List, and Stats wire types to the node protocol (completed 2026-03-23)
-- [ ] **Phase 58: Relay Scaffolding & Identity** - Create relay/ directory, build system, config, ML-DSA-87 identity keypair
+- [x] **Phase 58: Relay Scaffolding & Identity** - Create relay/ directory, build system, config, ML-DSA-87 identity keypair (completed 2026-03-23)
 - [ ] **Phase 59: Relay Core** - PQ handshake responder, UDS forwarding, message type filter, bidirectional relay
 
 ## Phase Details
@@ -194,10 +194,10 @@ Plans:
   2. `cmake --build .` from the project root produces a `chromatindb_relay` binary alongside `chromatindb`
   3. The relay binary loads a JSON config file specifying bind_address, bind_port, uds_path, identity_key_path, log_level, and log_file -- and exits with a clear error if the config is invalid or missing
   4. On first run with no existing key file, the relay generates an ML-DSA-87 keypair and saves it to the configured path; on subsequent runs it loads the existing keypair and logs its public key hash
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 58-01-PLAN.md -- Build system, relay config struct, JSON parsing, error-accumulating validation
-- [ ] 58-02-PLAN.md -- RelayIdentity (ML-DSA-87 keypair), CLI entry point (run/keygen/version/help)
+- [x] 58-02-PLAN.md -- RelayIdentity (ML-DSA-87 keypair), CLI entry point (run/keygen/version/help)
 
 ### Phase 59: Relay Core
 **Goal**: A client can connect to the relay via PQ-encrypted channel and interact with the node -- the relay authenticates, filters, and forwards
@@ -217,5 +217,5 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 57. Client Protocol Extensions | 2/2 | Complete    | 2026-03-23 |
-| 58. Relay Scaffolding & Identity | 1/2 | In Progress|  |
+| 58. Relay Scaffolding & Identity | 2/2 | Complete   | 2026-03-23 |
 | 59. Relay Core | 0/? | Not started | - |
