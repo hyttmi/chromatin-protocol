@@ -53,6 +53,7 @@ enum TransportMsgType : byte {
 table TransportMessage {
     type: TransportMsgType;
     payload: [ubyte];
+    request_id: uint32;
 }
 
 root_type TransportMessage;

@@ -160,6 +160,7 @@ struct TransportMessageT : public ::flatbuffers::NativeTable {
   typedef TransportMessage TableType;
   chromatindb::wire::TransportMsgType type = chromatindb::wire::TransportMsgType_None;
   std::vector<uint8_t> payload{};
+  uint32_t request_id = 0;
 };
 
 struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -167,7 +168,8 @@ struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef TransportMessageBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TYPE = 4,
-    VT_PAYLOAD = 6
+    VT_PAYLOAD = 6,
+    VT_REQUEST_ID = 8
   };
   chromatindb::wire::TransportMsgType type() const {
     return static_cast<chromatindb::wire::TransportMsgType>(GetField<int8_t>(VT_TYPE, 0));
@@ -175,11 +177,15 @@ struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<uint8_t> *payload() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_PAYLOAD);
   }
+  uint32_t request_id() const {
+    return GetField<uint32_t>(VT_REQUEST_ID, 0);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<int8_t>(verifier, VT_TYPE, 1) &&
            VerifyOffset(verifier, VT_PAYLOAD) &&
            verifier.VerifyVector(payload()) &&
+           VerifyField<uint32_t>(verifier, VT_REQUEST_ID, 4) &&
            verifier.EndTable();
   }
   TransportMessageT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -197,6 +203,9 @@ struct TransportMessageBuilder {
   void add_payload(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload) {
     fbb_.AddOffset(TransportMessage::VT_PAYLOAD, payload);
   }
+  void add_request_id(uint32_t request_id) {
+    fbb_.AddElement<uint32_t>(TransportMessage::VT_REQUEST_ID, request_id, 0);
+  }
   explicit TransportMessageBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -211,8 +220,10 @@ struct TransportMessageBuilder {
 inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     chromatindb::wire::TransportMsgType type = chromatindb::wire::TransportMsgType_None,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload = 0,
+    uint32_t request_id = 0) {
   TransportMessageBuilder builder_(_fbb);
+  builder_.add_request_id(request_id);
   builder_.add_payload(payload);
   builder_.add_type(type);
   return builder_.Finish();
@@ -221,12 +232,14 @@ inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(
 inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessageDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     chromatindb::wire::TransportMsgType type = chromatindb::wire::TransportMsgType_None,
-    const std::vector<uint8_t> *payload = nullptr) {
+    const std::vector<uint8_t> *payload = nullptr,
+    uint32_t request_id = 0) {
   auto payload__ = payload ? _fbb.CreateVector<uint8_t>(*payload) : 0;
   return chromatindb::wire::CreateTransportMessage(
       _fbb,
       type,
-      payload__);
+      payload__,
+      request_id);
 }
 
 ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -242,6 +255,7 @@ inline void TransportMessage::UnPackTo(TransportMessageT *_o, const ::flatbuffer
   (void)_resolver;
   { auto _e = type(); _o->type = _e; }
   { auto _e = payload(); if (_e) { _o->payload.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->payload.begin()); } }
+  { auto _e = request_id(); _o->request_id = _e; }
 }
 
 inline ::flatbuffers::Offset<TransportMessage> TransportMessage::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -254,10 +268,12 @@ inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuff
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TransportMessageT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _type = _o->type;
   auto _payload = _o->payload.size() ? _fbb.CreateVector(_o->payload) : 0;
+  auto _request_id = _o->request_id;
   return chromatindb::wire::CreateTransportMessage(
       _fbb,
       _type,
-      _payload);
+      _payload,
+      _request_id);
 }
 
 inline const chromatindb::wire::TransportMessage *GetTransportMessage(const void *buf) {
