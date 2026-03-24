@@ -60,24 +60,24 @@ Deferred to subsequent milestone (v1.4.0+).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONC-01 | — | Pending |
-| CONC-02 | — | Pending |
-| CONC-03 | — | Pending |
-| CONC-04 | — | Pending |
-| CONC-05 | — | Pending |
-| QUERY-01 | — | Pending |
-| QUERY-02 | — | Pending |
-| QUERY-03 | — | Pending |
-| QUERY-04 | — | Pending |
-| DOCS-01 | — | Pending |
-| DOCS-02 | — | Pending |
-| DOCS-03 | — | Pending |
+| CONC-01 | Phase 61 | Pending |
+| CONC-02 | Phase 61 | Pending |
+| CONC-03 | Phase 62 | Pending |
+| CONC-04 | Phase 62 | Pending |
+| CONC-05 | Phase 61 | Pending |
+| QUERY-01 | Phase 63 | Pending |
+| QUERY-02 | Phase 63 | Pending |
+| QUERY-03 | Phase 63 | Pending |
+| QUERY-04 | Phase 63 | Pending |
+| DOCS-01 | Phase 64 | Pending |
+| DOCS-02 | Phase 64 | Pending |
+| DOCS-03 | Phase 64 | Pending |
 
 **Coverage:**
 - v1.3.0 requirements: 12 total
-- Mapped to phases: 0
-- Unmapped: 12
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-24*
-*Last updated: 2026-03-24 after initial definition*
+*Last updated: 2026-03-24 after roadmap creation*
