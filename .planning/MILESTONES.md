@@ -1,5 +1,24 @@
 # Milestones
 
+## v1.2.0 Relay & Client Protocol (Shipped: 2026-03-23)
+
+**Phases:** 4 (57-60) | **Plans:** 8 | **Tasks:** 16
+**Velocity:** 44 commits | 60 files changed (+7,817 / -240)
+**Requirements:** 16/16
+**Timeline:** 1 day (2026-03-23)
+
+**Key accomplishments:**
+
+- **Client Protocol Suite:** Added WriteAck, Read, List, and Stats wire types (31-37), enabling clients to query and interact with the database without being a full peer.
+- **PQ-Authenticated Relay:** Launched chromatindb_relay, a standalone binary providing a post-quantum secure gateway via TCP with mutual authentication (ML-KEM-1024 + ML-DSA-87).
+- **Trusted UDS Bridge:** Established a secure "arm's length" connection between the relay and node using Unix Domain Sockets and the TrustedHello handshake.
+- **Architectural Cleanup:** Consolidated all hex encoding and test helper logic into two shared header-only libraries (db/util/hex.h and db/tests/test_helpers.h).
+- **Policy Enforcement:** Created root-level GEMINI.md mandating a Zero Duplication Policy for all future protocol development.
+
+**Archive:** [v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md) | [v1.2.0-REQUIREMENTS.md](milestones/v1.2.0-REQUIREMENTS.md)
+
+---
+
 ## v1.1.0 Operational Polish & Local Access (Shipped: 2026-03-22)
 
 **Phases completed:** 4 phases, 6 plans, 13 tasks

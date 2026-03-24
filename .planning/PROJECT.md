@@ -108,50 +108,31 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 - ✓ Unix Domain Socket local access (uds_path config, TrustedHello, full ACL/rate/quota enforcement) — v1.1.0 Phase 56
 
-### Active
+- ✓ Client protocol wire types (WriteAck, Read, List, Stats) — v1.2.0 Phase 57
+- ✓ PQ-authenticated relay responder (ML-KEM-1024 + ML-DSA-87) — v1.2.0 Phase 59
+- ✓ Bidirectional UDS forwarding with message type filter — v1.2.0 Phase 59
+- ✓ Shared utility libraries (hex.h, test_helpers.h) — v1.2.0 Phase 60
+- ✓ Root-level GEMINI.md policy enforcement — v1.2.0 Phase 60
 
-<!-- v1.2.0: Relay & Client Protocol -->
+### Future
 
-#### Protocol Extensions (Node) — Validated in Phase 57
-- ✓ WriteAck wire type — confirm blob stored over protocol (hash + seq_num)
-- ✓ ReadRequest/ReadResponse — client fetches blob by namespace + hash
-- ✓ ListRequest/ListResponse — client lists blobs in namespace (since_seq + limit pagination)
-- ✓ StatsRequest/StatsResponse — namespace usage (count, bytes, quota remaining)
+<!-- v1.3.0: Client SDK & Tooling -->
 
-#### Relay
-- ✓ PQ-authenticated relay accepting client connections via ML-KEM-1024 handshake — Validated in Phase 59
-- ✓ Message type filter (allow client ops, block sync/reconciliation/PEX) — Validated in Phase 59
-- ✓ UDS forwarding to chromatindb node (TrustedHello, 1:1 client-to-UDS mapping) — Validated in Phase 59
-- ✓ Relay identity keypair (ML-DSA-87, generated or configured) — Validated in Phase 58
-- ✓ Relay config (bind address, UDS path, identity key path, logging) — Validated in Phase 58
-
-### Out of Scope
-
-- Application semantics (messages, profiles, nicknames) — relay/app layer concern
-- Human-readable names — relay/app layer concern
-- Client authentication — relay layer concern
-- Message routing — relay layer concern
-- Conflict resolution / LWW / HLC — relay/app layer concern
-- Encrypted envelopes — relay/app layer concern
-- DHT or gossip protocol — proven unreliable in previous projects
-- Layer 3 (Client/SDK) — future work
-- HTTP/REST API — adds attack surface and deps, binary protocol over PQ-encrypted channel only
-- NAT traversal / hole punching — server daemon assumes reachable address
-- OpenSSL — prefer minimal deps (liboqs + libsodium)
-- Chunked/streaming blob transfer — only necessary at 1+ GiB; ML-DSA-87 requires full data for signing
-- Per-peer read/write restrictions — YAGNI for current access control model
+- Python SDK for connecting to relay
+- CLI tool for admin operations (quota check, list blobs, etc.)
+- Performance benchmarks for Relay layer
 
 ## Context
 
-Shipped v1.1.0 with 23,852 LOC C++20, 500+ unit tests, 54 Docker integration tests.
-Built across 22 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d).
-11 milestones, 59 phases, 123 plans, 237 requirements total.
+Shipped v1.2.0 with ~24,500 LOC C++20, 500+ unit tests, 54 Docker integration tests.
+Built across 23 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d).
+12 milestones, 60 phases, 125 plans, 253 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
 Three-layer architecture (building bottom-up):
-- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node with operational polish and local access. Fully tested under sanitizers, stress, chaos, and fuzzing. Database layer is done.
-- **Layer 2 (v1.2.0 IN PROGRESS): Relay** — PQ-authenticated message filter + UDS forwarder. C++20, same wire protocol as node. Security boundary between untrusted clients and node.
+- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. Database layer is done.
+- **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Security boundary between untrusted clients and node.
 - **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
@@ -160,11 +141,6 @@ Three-layer architecture (building bottom-up):
 - 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
 - Reconciliation scaling: 1050ms for 10-blob delta on 1000-blob namespace (O(diff) confirmed)
 - Small namespace: no regression within 5% threshold
-
-Previous projects inform design:
-- **chromatin-protocol**: Kademlia + libmdbx + WebSocket = too complex. No DHT ever again.
-- **DNA messenger**: DHT storage unreliable. SQLite-as-cache on client worked.
-- **PQCC**: PQ crypto stack proven and production-ready. Reuse directly.
 
 ## Constraints
 
@@ -181,6 +157,7 @@ Previous projects inform design:
 - **No DHT**: Explicit constraint from lessons learned
 - **No OpenSSL**: Prefer minimal deps — liboqs for PQ, libsodium for symmetric
 - **No shortcuts**: No inefficient code, no lazy workarounds. Code must be correct and efficient — always.
+- **Zero Duplication**: All repeating tasks must use single source of truth (GEMINI.md policy).
 
 ## Key Decisions
 
@@ -249,6 +226,13 @@ Previous projects inform design:
 | UBSAN nonnull-attribute excluded globally | liboqs/libsodium __nonnull annotations on params that intentionally accept NULL — annotation bugs, not real UB | ✓ Good — scoped exclusion |
 | Per-target UBSAN alignment for libmdbx | MDBX intentionally uses misaligned stores in mmap'd pages — safe on x86, technically UB per C11 | ✓ Good — scoped to mdbx only |
 | Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
+| WriteAck payload format [hash:32][seq:8][status:1] | Wire consistency with DeleteAck; status byte distinguishes stored vs duplicate | ✓ Good — uniform client feedback |
+| Read/List/Stats bypass sync_namespaces_ filter | Client ops serve all stored data (RESEARCH.md guidance) | ✓ Good — client can query everything node holds |
+| List limit capped at 100 per response | Bounds memory and response size for pagination | ✓ Good — prevents large response DoS |
+| Relay-to-Node TrustedHello over UDS | One client session = one UDS connection; node trust established via local socket ownership | ✓ Good — hard security boundary |
+| Relay as default-deny message filter | Only 16 client operation types allowed; blocks all sync/PEX traffic | ✓ Good — protects node from peer-protocol attacks |
+| RelayIdentity uses SSH-style .key/.pub siblings | Direct key path config instead of directory-based identity | ✓ Good — familiar infra pattern |
+| Shared headers for hex and test helpers | db/util/hex.h and db/tests/test_helpers.h eliminate 570+ lines of duplication | ✓ Good — Zero Duplication Policy enforced |
 
 ---
-*Last updated: 2026-03-23 after Phase 59 (relay core — PQ handshake, message filter, UDS forwarding, bidirectional relay) complete*
+*Last updated: 2026-03-23 after Milestone v1.2.0 (Relay & Client Protocol) SHIPPED*
