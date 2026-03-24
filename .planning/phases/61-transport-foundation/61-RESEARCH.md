@@ -1,0 +1,423 @@
+# Phase 61: Transport Foundation - Research
+
+**Researched:** 2026-03-24
+**Domain:** FlatBuffers schema evolution, transport codec plumbing, C++20 coroutine signature propagation
+**Confidence:** HIGH
+
+## Summary
+
+Phase 61 adds a `request_id: uint32` field to the FlatBuffers `TransportMessage` table and propagates it through every layer of the encode/decode/dispatch/relay pipeline. This is a mechanical signature-widening change that touches many files but has zero algorithmic complexity -- every change follows an identical pattern.
+
+The primary risk is not getting it wrong (the pattern is trivially correct) but missing a call site. The codebase has exactly 36 `send_message` calls in `peer_manager.cpp`, 3 in `relay_session.cpp`, and 3 in `connection.cpp` (including `close_gracefully` and `message_loop` Ping/Pong). Additionally, 4 `on_message` lambda bindings need signature updates (1 production, 3 test), and the relay session's `start()` lambda pair needs the same update.
+
+**Primary recommendation:** Treat this as a three-wave change: (1) schema + codec + DecodedMessage, (2) Connection + MessageCallback + PeerManager dispatch, (3) relay + tests. Each wave must compile and all existing tests must pass before moving to the next.
+
+<user_constraints>
+## User Constraints (from CONTEXT.md)
+
+### Locked Decisions
+- **D-01:** `request_id` is opaque to the relay -- no logging, no inspection, pure pass-through
+- **D-02:** Blocked messages get immediate disconnect as today -- no error response echoing `request_id` (client sending peer-only types is buggy or probing per Phase 59 D-01/D-02)
+- **D-03:** Single UDS connection per client session unchanged; concurrency concerns deferred to Phase 62
+- **D-04:** Relay signature updates bundled with db/ codec changes in the same plan -- relay won't compile without the updated `MessageCallback` signature
+- **D-05:** Single `on_peer_message` with added `request_id` parameter -- no split into separate client/peer dispatchers
+- **D-06:** All `send_message` calls echo the received `request_id`; peer-originated messages naturally carry 0
+- **D-07:** Data/WriteAck and Delete/DeleteAck follow the same echo pattern as Read/List/Stats handlers
+- **D-08:** `StorageFull` and `QuotaExceeded` echo the `request_id` from the `Data` message that triggered them -- SDK can identify which write was rejected
+- **D-09:** `Notification` messages are server-initiated, always `request_id = 0`
+- **D-10:** Both `request_id` (transport-level) and blob hash (application-level) available on acks -- belt and suspenders, no removal of existing hash-based matching
+
+### Claude's Discretion
+- Compiler warning handling for unused `request_id` in peer-only handler branches
+- Exact FlatBuffers field ordering in updated TransportMessage table
+- Test structure and organization for request_id round-trip verification
+
+### Deferred Ideas (OUT OF SCOPE)
+None -- discussion stayed within phase scope
+</user_constraints>
+
+<phase_requirements>
+## Phase Requirements
+
+| ID | Description | Research Support |
+|----|-------------|------------------|
+| CONC-01 | Transport envelope includes a `request_id: uint32` field that clients set on requests and the node echoes on corresponding responses | FlatBuffers schema evolution rules verified -- new field appended to end of table, defaults to 0, `ForceDefaults(true)` ensures explicit serialization |
+| CONC-02 | `DecodedMessage`, `TransportCodec`, `Connection::send_message`, and `MessageCallback` all carry `request_id` through the full encode/decode/dispatch pipeline | Full call chain mapped: 4 struct/function signatures, 1 callback typedef, ~36 send_message call sites in PeerManager, 1 on_peer_message binding |
+| CONC-05 | Relay forwards `request_id` bidirectionally in both `handle_client_message` and `handle_node_message` paths | RelaySession code analyzed: 2 handler functions, 2 lambda bindings in `start()`, each calls `conn->send_message` -- mechanical pass-through |
+</phase_requirements>
+
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| FlatBuffers | 25.2.10 | Wire format schema + code generation | Already in use; `transport.fbs` is the target schema |
+| Standalone Asio | latest via FetchContent | Networking + coroutines | Already in use; `send_message` returns `awaitable<bool>` |
+| Catch2 | 3.7.1 | Unit test framework | Already in use; all 500+ tests use it |
+
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| spdlog | latest via FetchContent | Structured logging | Already in use; no new logging needed for request_id (opaque pass-through) |
+
+No new libraries are needed for this phase. All changes use existing dependencies.
+
+## Architecture Patterns
+
+### Recommended Change Structure
+```
+db/schemas/transport.fbs          # Add request_id field
+db/wire/transport_generated.h     # Regenerated by flatc
+db/net/protocol.h                 # DecodedMessage + TransportCodec signatures
+db/net/protocol.cpp               # Encode/decode implementation
+db/net/connection.h               # MessageCallback typedef + send_message signature
+db/net/connection.cpp             # message_loop callback + send_message impl
+db/peer/peer_manager.h            # on_peer_message signature
+db/peer/peer_manager.cpp          # All handler branches + send_sync_rejected
+relay/core/relay_session.h        # handle_client_message + handle_node_message
+relay/core/relay_session.cpp      # Lambda bindings + forwarding
+db/tests/net/test_protocol.cpp    # Codec round-trip tests with request_id
+db/tests/net/test_connection.cpp  # on_message lambda signatures
+```
+
+### Pattern 1: FlatBuffers Schema Field Addition
+**What:** Add a new scalar field to the end of a FlatBuffers table definition
+**When to use:** Adding `request_id` to `TransportMessage`
+**Example:**
+```flatbuffers
+// Source: https://flatbuffers.dev/evolution/
+// New fields MUST be appended to the end of the table.
+// Default value for uint32 is 0. ForceDefaults(true) ensures it's always serialized.
+table TransportMessage {
+    type: TransportMsgType;
+    payload: [ubyte];
+    request_id: uint32;          // <-- new field, appended at end
+}
+```
+
+**Why at end:** FlatBuffers requires new fields at the end of the table for forward/backward compatibility. Old readers ignore the new field; new readers get default 0 for old data. This project does not use `id` attributes on the TransportMessage table, so positional ordering is required.
+
+### Pattern 2: Signature Widening Through Coroutine Pipeline
+**What:** Add a parameter to a function that is called through several layers of async dispatch
+**When to use:** Propagating `request_id` from decode to dispatch to response
+**Example:**
+```cpp
+// Layer 1: DecodedMessage gains field
+struct DecodedMessage {
+    chromatindb::wire::TransportMsgType type;
+    std::vector<uint8_t> payload;
+    uint32_t request_id = 0;      // <-- new field with default
+};
+
+// Layer 2: Codec encode gains parameter
+static std::vector<uint8_t> encode(chromatindb::wire::TransportMsgType type,
+                                    std::span<const uint8_t> payload,
+                                    uint32_t request_id = 0);
+
+// Layer 3: Connection::send_message gains parameter
+asio::awaitable<bool> send_message(wire::TransportMsgType type,
+                                    std::span<const uint8_t> payload,
+                                    uint32_t request_id = 0);
+
+// Layer 4: MessageCallback gains parameter
+using MessageCallback = std::function<void(
+    Connection::Ptr, wire::TransportMsgType, std::vector<uint8_t>, uint32_t)>;
+
+// Layer 5: on_peer_message gains parameter
+void on_peer_message(net::Connection::Ptr conn,
+                     wire::TransportMsgType type,
+                     std::vector<uint8_t> payload,
+                     uint32_t request_id);
+```
+
+### Pattern 3: Coroutine Lambda Capture for request_id
+**What:** Capturing `request_id` in `co_spawn` lambdas alongside existing captures
+**When to use:** Every handler branch in `on_peer_message` that spawns a coroutine
+**Example:**
+```cpp
+// Existing pattern (Data handler, line 817):
+asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+    // ... process ...
+    co_await conn->send_message(wire::TransportMsgType_WriteAck,
+                                 std::span<const uint8_t>(ack_payload));
+}, asio::detached);
+
+// Updated pattern:
+asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+    // ... process ...
+    co_await conn->send_message(wire::TransportMsgType_WriteAck,
+                                 std::span<const uint8_t>(ack_payload),
+                                 request_id);
+}, asio::detached);
+```
+
+### Pattern 4: Default-0 for Peer-Originated Messages
+**What:** Peer-only messages (sync, PEX, reconciliation) always carry `request_id = 0`
+**When to use:** `send_sync_rejected`, `notify_subscribers`, sync coroutines
+**Example:**
+```cpp
+// send_sync_rejected: always request_id=0 (peer-only)
+void PeerManager::send_sync_rejected(net::Connection::Ptr conn, uint8_t reason) {
+    std::vector<uint8_t> payload = { reason };
+    asio::co_spawn(ioc_, [conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        co_await conn->send_message(wire::TransportMsgType_SyncRejected,
+                                     std::span<const uint8_t>(payload));
+        // request_id defaults to 0 -- no change needed here
+    }, asio::detached);
+}
+```
+
+### Pattern 5: Relay Transparent Forwarding
+**What:** Relay passes `request_id` through without inspection or modification
+**When to use:** `RelaySession::handle_client_message` and `handle_node_message`
+**Example:**
+```cpp
+// handle_client_message signature gains request_id parameter:
+void RelaySession::handle_client_message(
+    chromatindb::net::Connection::Ptr conn,
+    chromatindb::wire::TransportMsgType type,
+    std::vector<uint8_t> payload,
+    uint32_t request_id) {
+
+    if (!is_client_allowed(type)) {
+        teardown("blocked message type");
+        return;
+    }
+
+    // Forward with request_id preserved
+    auto self = shared_from_this();
+    asio::co_spawn(ioc_, [self, conn = node_conn_, t = type,
+                           p = std::move(payload), rid = request_id]() -> asio::awaitable<void> {
+        co_await conn->send_message(t, p, rid);
+    }, asio::detached);
+}
+```
+
+### Anti-Patterns to Avoid
+- **Splitting on_peer_message into client/peer dispatchers:** Decision D-05 locks a single dispatch function. Do not create separate code paths.
+- **Logging request_id in relay:** Decision D-01 makes request_id opaque to the relay. Do not add debug logging of request_id values in relay code.
+- **Passing request_id by reference in lambdas:** `uint32_t` is trivially copyable. Always capture by value in coroutine lambdas. Reference captures risk dangling when the calling scope returns before the coroutine runs.
+- **Adding request_id to handshake messages:** Handshake uses `send_raw`/`recv_raw`, not `TransportCodec`. The request_id field only applies post-handshake. Do not touch any handshake code.
+- **Adding request_id to Ping/Pong handling in message_loop:** Ping/Pong are handled in `Connection::message_loop` (line 760-770) using `send_encrypted` directly with `TransportCodec::encode`. These are connection-level keepalives, not client requests. They should use `request_id = 0` (the default).
+
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| FlatBuffers code generation | Manual byte packing for request_id | `flatc --cpp --gen-object-api` on updated schema | Generated code handles vtable offsets, verification, and endianness correctly |
+| Compile-time exhaustiveness checking | Runtime assertions for missed handler branches | Compiler warnings (`-Wswitch`) with `uint32_t request_id` parameter | Missing a call site will produce a compile error (wrong argument count), not a runtime bug |
+
+**Key insight:** The default parameter `uint32_t request_id = 0` on `encode` and `send_message` means all existing call sites that do NOT need request_id (sync, PEX, keepalive) continue to compile without changes. Only the handler branches that receive a request_id from the client and need to echo it will explicitly pass the value. This eliminates the risk of missed call sites causing compile failures -- only under-echoing is possible, and that is caught by new tests.
+
+## Common Pitfalls
+
+### Pitfall 1: Missing send_message Call Sites in PeerManager
+**What goes wrong:** A handler branch fails to pass `request_id` to its response `send_message`, causing the client to receive `request_id = 0` on a response it expected to correlate.
+**Why it happens:** `on_peer_message` has ~15 handler branches spread across 400+ lines, and 36 `send_message` calls. Easy to miss one.
+**How to avoid:** The `send_message` signature uses a default parameter (`uint32_t request_id = 0`), so missing call sites still compile. The mitigation is test coverage: a round-trip test that sends a request with a non-zero request_id and verifies the response echoes it. Must cover: Data/WriteAck, Data/StorageFull, Data/QuotaExceeded, Delete/DeleteAck, ReadRequest/ReadResponse, ListRequest/ListResponse, StatsRequest/StatsResponse.
+**Warning signs:** Tests pass but `request_id` is always 0 in responses -- indicates the parameter was not plumbed to the specific handler.
+
+### Pitfall 2: FlatBuffers Field Not at End of Table
+**What goes wrong:** Adding `request_id` before `payload` in the schema breaks deserialization of existing data (not relevant for this project since no persistent wire data exists, but breaks the generated code's vtable offsets).
+**Why it happens:** Developer adds the field in a "logical" position instead of the required end position.
+**How to avoid:** Schema rule: new fields ALWAYS go at the end of the table. FlatBuffers positional encoding requires this.
+**Warning signs:** `flatc` compiles fine (it does not warn about this), but the generated header has different VT offsets than expected. Round-trip tests fail with corrupt data.
+
+### Pitfall 3: Lambda Capture of request_id in co_spawn
+**What goes wrong:** `request_id` is captured by reference in a `co_spawn` lambda and used after the calling function (`on_peer_message`) returns, causing a dangling reference.
+**Why it happens:** Copy-paste from existing patterns that move `payload` (a vector) but don't think about `request_id` (a scalar).
+**How to avoid:** Always capture `request_id` by value (it's a `uint32_t`). The existing codebase captures `conn` by value (shared_ptr copy), `payload` by move, and scalars by value -- follow the same pattern.
+**Warning signs:** ASAN/TSAN findings on `request_id` access inside coroutine. Intermittent wrong values.
+
+### Pitfall 4: Relay Lambda Signature Mismatch After MessageCallback Change
+**What goes wrong:** `relay_session.cpp` sets `on_message` lambdas (lines 64-76) that match the old 3-parameter `MessageCallback` signature. After the typedef changes to 4 parameters, these lambdas fail to compile.
+**Why it happens:** Relay is in a separate source tree (`relay/`) and easy to forget when updating `db/` code.
+**How to avoid:** Decision D-04 bundles relay updates in the same plan as db/ codec changes. The compiler will enforce this -- `std::function` assignment with wrong arity is a hard compile error.
+**Warning signs:** Compile error in `relay_session.cpp` at lambda assignment to `on_message`.
+
+### Pitfall 5: ForceDefaults Not Writing request_id = 0
+**What goes wrong:** `request_id = 0` is the default, and without `ForceDefaults(true)`, FlatBuffers skips writing default values. The decode side would then read 0 anyway, but the wire format would be non-deterministic (sometimes includes the field, sometimes not).
+**Why it happens:** Forgetting that FlatBuffers optimizes away default values by default.
+**How to avoid:** The codebase already sets `builder.ForceDefaults(true)` in `TransportCodec::encode` (line 10 of protocol.cpp). No action needed -- just verify it remains set.
+**Warning signs:** Wire bytes differ between `request_id = 0` and `request_id = 1` by more than the expected 4 bytes.
+
+### Pitfall 6: Notification Messages Accidentally Echoing request_id
+**What goes wrong:** `notify_subscribers` is called from inside `Data` handler coroutines that have `request_id` in scope. If someone passes `request_id` to the notification `send_message`, clients would receive a Notification with a non-zero `request_id` that doesn't correspond to any client request.
+**Why it happens:** Mechanical "add request_id to every send_message" refactoring without checking D-09 (Notifications are server-initiated, always 0).
+**How to avoid:** `notify_subscribers` does NOT take a `request_id` parameter. Its internal `send_message` call uses the default (0). Do not change `notify_subscribers` signature.
+**Warning signs:** Notification messages arriving with non-zero `request_id`.
+
+## Code Examples
+
+### Example 1: Updated transport.fbs Schema
+```flatbuffers
+// Source: existing db/schemas/transport.fbs + FlatBuffers evolution rules
+namespace chromatindb.wire;
+
+// ... enum TransportMsgType unchanged ...
+
+table TransportMessage {
+    type: TransportMsgType;
+    payload: [ubyte];
+    request_id: uint32;    // CONC-01: client-assigned correlation ID, default 0
+}
+
+root_type TransportMessage;
+```
+
+### Example 2: Updated TransportCodec::encode
+```cpp
+// Source: existing db/net/protocol.cpp pattern
+std::vector<uint8_t> TransportCodec::encode(chromatindb::wire::TransportMsgType type,
+                                             std::span<const uint8_t> payload,
+                                             uint32_t request_id) {
+    flatbuffers::FlatBufferBuilder builder(payload.size() + 64);
+    builder.ForceDefaults(true);  // Ensures request_id=0 is serialized
+
+    auto payload_vec = builder.CreateVector(payload.data(), payload.size());
+    auto msg = chromatindb::wire::CreateTransportMessage(builder, type, payload_vec, request_id);
+    builder.Finish(msg);
+
+    auto* buf = builder.GetBufferPointer();
+    auto size = builder.GetSize();
+    return std::vector<uint8_t>(buf, buf + size);
+}
+```
+
+### Example 3: Updated TransportCodec::decode
+```cpp
+// Source: existing db/net/protocol.cpp pattern
+std::optional<DecodedMessage> TransportCodec::decode(std::span<const uint8_t> data) {
+    flatbuffers::Verifier verifier(data.data(), data.size());
+    if (!chromatindb::wire::VerifyTransportMessageBuffer(verifier)) {
+        return std::nullopt;
+    }
+
+    auto msg = chromatindb::wire::GetTransportMessage(data.data());
+    if (!msg) {
+        return std::nullopt;
+    }
+
+    DecodedMessage result;
+    result.type = msg->type();
+    result.request_id = msg->request_id();  // New: extract request_id
+
+    if (msg->payload()) {
+        result.payload.assign(msg->payload()->begin(), msg->payload()->end());
+    }
+
+    return result;
+}
+```
+
+### Example 4: Updated Connection::message_loop Callback Invocation
+```cpp
+// Source: existing db/net/connection.cpp line 777-779
+// In message_loop() default: branch:
+default:
+    if (message_cb_) {
+        message_cb_(shared_from_this(), decoded->type,
+                    std::move(decoded->payload), decoded->request_id);
+    }
+    break;
+```
+
+### Example 5: Test Pattern for request_id Round-Trip
+```cpp
+// New test verifying request_id encode/decode round-trip
+TEST_CASE("TransportCodec preserves request_id", "[protocol]") {
+    SECTION("non-zero request_id round-trips") {
+        std::vector<uint8_t> payload = {1, 2, 3};
+        uint32_t request_id = 42;
+        auto encoded = TransportCodec::encode(TransportMsgType_Data, payload, request_id);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->type == TransportMsgType_Data);
+        REQUIRE(decoded->payload == payload);
+        REQUIRE(decoded->request_id == 42);
+    }
+
+    SECTION("default request_id is 0") {
+        std::vector<uint8_t> payload = {1, 2, 3};
+        auto encoded = TransportCodec::encode(TransportMsgType_Data, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->request_id == 0);
+    }
+
+    SECTION("max uint32 request_id round-trips") {
+        std::vector<uint8_t> payload = {0xAA};
+        uint32_t request_id = UINT32_MAX;
+        auto encoded = TransportCodec::encode(TransportMsgType_Data, payload, request_id);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->request_id == UINT32_MAX);
+    }
+}
+```
+
+## State of the Art
+
+| Old Approach | Current Approach | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| No correlation ID | `request_id: uint32` in transport envelope | Phase 61 (this phase) | Enables Phase 62 concurrent dispatch -- clients can match responses to requests |
+| Response matching by content (blob hash in WriteAck) | Content-matching + transport-level `request_id` | Phase 61 (this phase) | Belt-and-suspenders per D-10 -- both available |
+
+**Key context:** This project has no backward compatibility requirements (REQUIREMENTS.md Out of Scope table: "Backward compatibility shims: Node not deployed anywhere; clean breaking changes allowed"). The schema change is non-breaking by FlatBuffers rules anyway, but even if it were, this project accepts clean breaks.
+
+## Open Questions
+
+1. **Compiler warnings for unused `request_id` in peer-only handlers**
+   - What we know: Handler branches like Subscribe/Unsubscribe don't send responses, so `request_id` is unused in those branches. The function parameter itself is used in other branches, so no `-Wunused-parameter` at the function level.
+   - What's unclear: Whether any compiler on the CI matrix flags the variable as unused within specific handler branches.
+   - Recommendation: The `request_id` parameter is used by at least one branch, so function-level unused warnings won't fire. Within specific if-blocks that don't use it, the compiler won't warn because it's a function parameter, not a local variable. No action needed -- this is a non-issue.
+
+## Validation Architecture
+
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | Catch2 v3.7.1 |
+| Config file | `db/CMakeLists.txt` (lines 197-245) |
+| Quick run command | `cd build && ctest -R test_protocol --output-on-failure` |
+| Full suite command | `cd build && ctest --output-on-failure` |
+
+### Phase Requirements to Test Map
+| Req ID | Behavior | Test Type | Automated Command | File Exists? |
+|--------|----------|-----------|-------------------|-------------|
+| CONC-01 | request_id round-trips through encode/decode | unit | `cd build && ctest -R test_protocol --output-on-failure` | db/tests/net/test_protocol.cpp (exists, needs new sections) |
+| CONC-01 | request_id=0 is default for messages without explicit ID | unit | `cd build && ctest -R test_protocol --output-on-failure` | db/tests/net/test_protocol.cpp (exists, needs new section) |
+| CONC-02 | request_id flows through Connection message_loop to MessageCallback | integration | `cd build && ctest -R test_connection --output-on-failure` | db/tests/net/test_connection.cpp (exists, lambda signatures need update) |
+| CONC-02 | on_peer_message receives and echoes request_id on responses | integration | `cd build && ctest -R test_peer_manager --output-on-failure` | db/tests/peer/test_peer_manager.cpp (exists, may need new test) |
+| CONC-05 | relay forwards request_id bidirectionally | unit | Manual verification via code review -- relay tests don't have live forwarding harness | Compile-time verified (signature mismatch = compile error) |
+
+### Sampling Rate
+- **Per task commit:** `cd build && cmake --build . && ctest -R "test_protocol|test_connection" --output-on-failure`
+- **Per wave merge:** `cd build && cmake --build . && ctest --output-on-failure`
+- **Phase gate:** Full suite green before `/gsd:verify-work`
+
+### Wave 0 Gaps
+None -- existing test infrastructure covers all phase requirements. The protocol test file exists and new test sections are additive. Connection test file exists and only needs lambda signature updates. No new test files required.
+
+## Sources
+
+### Primary (HIGH confidence)
+- FlatBuffers Evolution Documentation: https://flatbuffers.dev/evolution/ -- field addition rules, backward/forward compatibility
+- FlatBuffers Schema Documentation: https://flatbuffers.dev/schema/ -- scalar types (uint32 confirmed), default values
+- Codebase direct inspection: `db/schemas/transport.fbs`, `db/net/protocol.h`, `db/net/protocol.cpp`, `db/net/connection.h`, `db/net/connection.cpp`, `db/peer/peer_manager.cpp`, `relay/core/relay_session.cpp`
+
+### Secondary (MEDIUM confidence)
+- None needed -- all findings from primary sources
+
+### Tertiary (LOW confidence)
+- None
+
+## Metadata
+
+**Confidence breakdown:**
+- Standard stack: HIGH - no new libraries, all changes to existing code using existing patterns
+- Architecture: HIGH - complete call chain mapped from schema to relay, every file and line number identified
+- Pitfalls: HIGH - based on direct code analysis of existing patterns and FlatBuffers official docs
+
+**Research date:** 2026-03-24
+**Valid until:** 2026-04-24 (stable -- no external dependencies changing)
