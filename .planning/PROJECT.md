@@ -114,13 +114,28 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Shared utility libraries (hex.h, test_helpers.h) — v1.2.0 Phase 60
 - ✓ Root-level GEMINI.md policy enforcement — v1.2.0 Phase 60
 
-### Future
+### Active
 
-<!-- v1.3.0: Client SDK & Tooling -->
+<!-- v1.3.0: Protocol Concurrency & Query Foundation -->
+
+#### Transport Concurrency
+- [ ] Request correlation via request_id field in transport envelope
+- [ ] Concurrent request dispatch (thread pool offload for heavy ops, inline for cheap ops)
+
+#### Query Extensions
+- [ ] ExistsRequest/ExistsResponse — check blob existence without data transfer
+- [ ] NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types
+
+#### Documentation
+- [ ] PROTOCOL.md updated with concurrency model and new message types
+- [ ] README.md updated with v1.3.0 capabilities
+
+### Future
 
 - Python SDK for connecting to relay
 - CLI tool for admin operations (quota check, list blobs, etc.)
 - Performance benchmarks for Relay layer
+- Extended query types (TimeRange, Metadata, DelegationList, NamespaceList, PeerInfo, Health)
 
 ## Context
 
@@ -234,5 +249,9 @@ Three-layer architecture (building bottom-up):
 | RelayIdentity uses SSH-style .key/.pub siblings | Direct key path config instead of directory-based identity | ✓ Good — familiar infra pattern |
 | Shared headers for hex and test helpers | db/util/hex.h and db/tests/test_helpers.h eliminate 570+ lines of duplication | ✓ Good — Zero Duplication Policy enforced |
 
+| Concurrent dispatch via offload() pattern | Reuse proven thread pool offload for heavy read ops; send_counter_ AEAD nonce requires IO-thread serialization | — Pending |
+| request_id in transport envelope | Per-connection correlation ID; node echoes, never generates; enables SDK pipelining | — Pending |
+| supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | — Pending |
+
 ---
-*Last updated: 2026-03-23 after Milestone v1.2.0 (Relay & Client Protocol) SHIPPED*
+*Last updated: 2026-03-24 after Milestone v1.3.0 started*
