@@ -13,6 +13,7 @@ namespace chromatindb::net {
 struct DecodedMessage {
     chromatindb::wire::TransportMsgType type;
     std::vector<uint8_t> payload;
+    uint32_t request_id = 0;
 };
 
 /// Transport message codec using FlatBuffers.
@@ -20,7 +21,8 @@ struct DecodedMessage {
 struct TransportCodec {
     /// Encode a transport message to FlatBuffer bytes.
     static std::vector<uint8_t> encode(chromatindb::wire::TransportMsgType type,
-                                        std::span<const uint8_t> payload);
+                                        std::span<const uint8_t> payload,
+                                        uint32_t request_id = 0);
 
     /// Decode FlatBuffer bytes to a transport message.
     /// Returns nullopt if the buffer is invalid.

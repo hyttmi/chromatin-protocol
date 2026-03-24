@@ -269,3 +269,35 @@ TEST_CASE("TransportCodec decode rejects corrupt data", "[protocol]") {
         REQUIRE_FALSE(decoded.has_value());
     }
 }
+
+TEST_CASE("TransportCodec preserves request_id", "[protocol]") {
+    SECTION("non-zero request_id round-trips") {
+        std::vector<uint8_t> payload = {1, 2, 3};
+        auto encoded = TransportCodec::encode(TransportMsgType_Ping, payload, 42);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->type == TransportMsgType_Ping);
+        REQUIRE(decoded->payload == payload);
+        REQUIRE(decoded->request_id == 42);
+    }
+
+    SECTION("max uint32 request_id round-trips") {
+        std::vector<uint8_t> payload = {1, 2, 3};
+        auto encoded = TransportCodec::encode(TransportMsgType_Ping, payload, 0xFFFFFFFF);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->type == TransportMsgType_Ping);
+        REQUIRE(decoded->payload == payload);
+        REQUIRE(decoded->request_id == 0xFFFFFFFF);
+    }
+
+    SECTION("default request_id is 0") {
+        std::vector<uint8_t> payload = {1, 2, 3};
+        auto encoded = TransportCodec::encode(TransportMsgType_Ping, payload);
+        auto decoded = TransportCodec::decode(encoded);
+        REQUIRE(decoded.has_value());
+        REQUIRE(decoded->type == TransportMsgType_Ping);
+        REQUIRE(decoded->payload == payload);
+        REQUIRE(decoded->request_id == 0);
+    }
+}
