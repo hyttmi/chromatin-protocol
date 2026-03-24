@@ -1,107 +1,83 @@
 # Requirements: chromatindb
 
-**Defined:** 2026-03-22
+**Defined:** 2026-03-24
 **Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 
-## v1.2.0 Requirements
+## v1.3.0 Requirements
 
-Requirements for v1.2.0 Relay & Client Protocol. Each maps to roadmap phases.
+Requirements for v1.3.0 Protocol Concurrency & Query Foundation. Each maps to roadmap phases.
 
-### Protocol Extensions
+### Transport Concurrency
 
-- [x] **PROTO-01**: Node sends WriteAck (type 31) back to client after successful blob ingest, containing blob hash and seq_num
-- [x] **PROTO-02**: Client can fetch a specific blob by namespace + hash via ReadRequest (type 32) / ReadResponse (type 33)
-- [x] **PROTO-03**: Client can list blobs in a namespace with pagination via ListRequest (type 34) / ListResponse (type 35), using since_seq cursor + limit
-- [x] **PROTO-04**: Client can query namespace usage (blob count, total bytes, quota remaining) via StatsRequest (type 36) / StatsResponse (type 37)
+- [ ] **CONC-01**: Transport envelope includes a `request_id: uint32` field that clients set on requests and the node echoes on corresponding responses
+- [ ] **CONC-02**: `DecodedMessage`, `TransportCodec`, `Connection::send_message`, and `MessageCallback` all carry `request_id` through the full encode/decode/dispatch pipeline
+- [ ] **CONC-03**: Request/response handlers for Read, List, and Stats are dispatched to the thread pool via the existing offload pattern, with responses sent back on the IO thread (AEAD nonce safety)
+- [ ] **CONC-04**: Cheap operations (Ping, Pong, Goodbye, Subscribe, Unsubscribe, ExistsRequest, NodeInfoRequest) execute inline on the IO thread without offload overhead
+- [ ] **CONC-05**: Relay forwards `request_id` bidirectionally in both `handle_client_message` and `handle_node_message` paths
 
-### Relay
+### Query Extensions
 
-- [x] **RELAY-01**: Relay accepts TCP connections and performs PQ handshake as responder (ML-KEM-1024 + ML-DSA-87), using its own identity keypair
-- [x] **RELAY-02**: Relay connects to chromatindb node via UDS with TrustedHello, one UDS connection per client session
-- [x] **RELAY-03**: Relay filters messages by type -- allows client operations (Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse, ListRequest, ListResponse, StatsRequest, StatsResponse, Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye), blocks peer operations (Sync*, Reconcile*, PeerList*, NamespaceList, BlobRequest, BlobTransfer, StorageFull, TrustedHello), default-deny on unknown types
-- [x] **RELAY-04**: Relay forwards allowed messages bidirectionally -- client<->node -- without parsing payloads (type field only)
-- [x] **RELAY-05**: Relay has its own ML-DSA-87 identity keypair, generated on first run or loaded from configured path
-- [x] **RELAY-06**: Relay config via JSON file (bind_address, bind_port, uds_path, identity_key_path, log_level, log_file)
-- [x] **RELAY-07**: Relay lives in `relay/` directory with own CMakeLists.txt, links chromatindb_lib, zero new dependencies
-- [x] **RELAY-08**: Relay binary `chromatindb_relay` builds alongside `chromatindb` from root CMakeLists.txt
-
-### Codebase Deduplication
-
-- [x] **DEDUP-01**: All production copies of `to_hex()` and `from_hex()` (11 functions across 5 files) replaced by a single shared header `db/util/hex.h`
-- [ ] **DEDUP-02**: All test copies of duplicated helpers (TempDir, run_async, current_timestamp, TS_AUTO, make_signed_blob, make_signed_tombstone, make_signed_delegation, make_delegate_blob, ns_to_hex -- ~30 copies across 7 files) replaced by a single shared header `db/tests/test_helpers.h`
-- [x] **DEDUP-03**: Codebase audited for remaining duplicated utility functions across db/, relay/, loadgen/, and tools/ source trees -- no other duplicated helpers remain
-- [x] **DEDUP-04**: All existing tests (500+ unit tests) pass with the shared headers
-
-## Previous Milestone (v1.1.0 -- Complete)
-
-### Compaction
-- [x] **COMP-01**: Node operator can trigger runtime mdbx compaction automatically for long-running nodes
-
-### Local Access
-- [x] **UDS-01**: Local process can read/write blobs via Unix Domain Socket without TCP+PQ overhead
-
-### Operational Hardening
-- [x] **OPS-01**: Node operator can configure expiry scan interval via config field (replacing hardcoded 60s)
-- [x] **OPS-02**: Node rejects blobs with timestamps too far in the future or past on ingest
-- [x] **OPS-03**: SyncRejected messages include human-readable reason strings for operator debugging
-
-### Release & Cleanup
-- [x] **REL-01**: Git repository has a v1.0.0 release tag on the shipped commit
-- [x] **REL-02**: Stale bash tests (deploy/test-crash-recovery.sh) and design docs (db/TESTS.md) removed
-- [x] **REL-03**: Stale .planning/milestones/v1.0.0-* deferred docs cleaned up
-- [x] **REL-04**: CMake project version bumped to 1.1.0
+- [ ] **QUERY-01**: Client can send ExistsRequest (type 38) with namespace + blob hash and receive ExistsResponse (type 39) with a boolean existence result and echoed blob hash
+- [ ] **QUERY-02**: `Storage` exposes a `has_blob()` key-existence check that does not read the blob value
+- [ ] **QUERY-03**: Client can send NodeInfoRequest (type 40) and receive NodeInfoResponse (type 41) with version, git hash, uptime, peer count, namespace count, total blobs, storage bytes used/max, and list of supported message types
+- [ ] **QUERY-04**: Relay message filter allows ExistsRequest (38), ExistsResponse (39), NodeInfoRequest (40), NodeInfoResponse (41) through to the node
 
 ### Documentation
-- [x] **DOCS-01**: db/README.md reflects v1.0.0 state (sanitizers, 469 tests, Docker integration, stress/chaos/fuzz)
-- [x] **DOCS-02**: README.md aligned with v1.0.0 shipped state
-- [x] **DOCS-03**: db/PROTOCOL.md updated with sync reject reason strings
+
+- [ ] **DOCS-01**: `db/PROTOCOL.md` documents request_id semantics, concurrent dispatch model, ExistsRequest/ExistsResponse, and NodeInfoRequest/NodeInfoResponse
+- [ ] **DOCS-02**: `README.md` updated with v1.3.0 protocol capabilities
+- [ ] **DOCS-03**: `db/README.md` updated with v1.3.0 changes (concurrent dispatch, new message types, request_id)
 
 ## Future Requirements
 
-### Client SDK (v1.3.0+)
-- **SDK-01**: Python SDK for connecting to relay, writing/reading blobs
+Deferred to subsequent milestone (v1.4.0+).
+
+### Extended Query Types
+- **QUERY-05**: TimeRangeRequest/TimeRangeResponse -- blobs in namespace between timestamp A and B
+- **QUERY-06**: MetadataRequest/MetadataResponse -- blob metadata (size, timestamp, TTL, pubkey) without data
+- **QUERY-07**: NamespaceListRequest/NamespaceListResponse -- client-facing namespace enumeration with counts
+- **QUERY-08**: DelegationListRequest/DelegationListResponse -- delegates with write access to a namespace
+
+### Operator Queries
+- **OPS-01**: PeerInfoRequest/PeerInfoResponse -- connected peers, addresses, sync status
+- **OPS-02**: HealthRequest/HealthResponse -- node health check (storage, peers, sync)
+
+### Client SDK
+- **SDK-01**: Python SDK for connecting to relay
 - **SDK-02**: CLI tool for admin operations
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| HTTP/REST API | Binary protocol over PQ-encrypted channel only -- no web protocol attack surface |
-| OpenSSL / TLS | Relay uses same PQ handshake as node -- no OpenSSL dependency |
-| Connection pooling / multiplexing | YAGNI -- one client = one UDS connection |
-| Rate limiting at relay | Node already enforces rate limits |
-| Authentication at relay | Node verifies blob signatures -- relay is a pass-through |
-| Relay payload inspection | Relay reads type field only, never parses message content |
-| Per-blob encryption keys | Single HKDF-derived key per node is sufficient |
-| Chunked/streaming blob transfer | Only necessary at 1+ GiB |
-| NAT traversal | Server daemon assumes reachable address |
+| Full worker pool model | Current offload pattern sufficient; can evolve later |
+| Connection pooling in protocol | SDK concern, not protocol |
+| Batch message types (BatchExists, BatchRead) | request_id + pipelining achieves same goal without dedicated types |
+| Thread pool sizing config | Uses existing asio::thread_pool; tuning is operational, not protocol |
+| Backward compatibility shims | Node not deployed anywhere; clean breaking changes allowed |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROTO-01 | Phase 57 | Complete |
-| PROTO-02 | Phase 57 | Complete |
-| PROTO-03 | Phase 57 | Complete |
-| PROTO-04 | Phase 57 | Complete |
-| RELAY-01 | Phase 59 | Complete |
-| RELAY-02 | Phase 59 | Complete |
-| RELAY-03 | Phase 59 | Complete |
-| RELAY-04 | Phase 59 | Complete |
-| RELAY-05 | Phase 58 | Complete |
-| RELAY-06 | Phase 58 | Complete |
-| RELAY-07 | Phase 58 | Complete |
-| RELAY-08 | Phase 58 | Complete |
-| DEDUP-01 | Phase 60 | Planned |
-| DEDUP-02 | Phase 60 | Planned |
-| DEDUP-03 | Phase 60 | Planned |
-| DEDUP-04 | Phase 60 | Planned |
+| CONC-01 | — | Pending |
+| CONC-02 | — | Pending |
+| CONC-03 | — | Pending |
+| CONC-04 | — | Pending |
+| CONC-05 | — | Pending |
+| QUERY-01 | — | Pending |
+| QUERY-02 | — | Pending |
+| QUERY-03 | — | Pending |
+| QUERY-04 | — | Pending |
+| DOCS-01 | — | Pending |
+| DOCS-02 | — | Pending |
+| DOCS-03 | — | Pending |
 
 **Coverage:**
-- v1.2.0 requirements: 16 total
-- Mapped to phases: 16
-- Unmapped: 0
+- v1.3.0 requirements: 12 total
+- Mapped to phases: 0
+- Unmapped: 12
 
 ---
-*Requirements defined: 2026-03-22*
-*Last updated: 2026-03-23 after Phase 60 planning*
+*Requirements defined: 2026-03-24*
+*Last updated: 2026-03-24 after initial definition*
