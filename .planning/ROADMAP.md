@@ -153,7 +153,10 @@ Plans:
   2. A client can send NodeInfoRequest and receive NodeInfoResponse containing version, git hash, uptime, peer count, namespace count, total blobs, storage bytes, and a list of supported message types
   3. The relay allows ExistsRequest/ExistsResponse and NodeInfoRequest/NodeInfoResponse through its message filter
   4. Storage exposes a key-existence check (has_blob) that does not read the blob value
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 63-01-PLAN.md — ExistsRequest/ExistsResponse handler, relay filter, tests (Wave 1)
+- [ ] 63-02-PLAN.md — NodeInfoRequest/NodeInfoResponse handler, relay filter, tests (Wave 2)
 
 ### Phase 64: Documentation
 **Goal**: Protocol documentation and READMEs reflect the full v1.3.0 concurrency model, new message types, and request_id semantics
@@ -173,5 +176,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
 | 62. Concurrent Dispatch | 1/1 | Complete    | 2026-03-25 |
-| 63. Query Extensions | 0/TBD | Not started | - |
+| 63. Query Extensions | 0/2 | Not started | - |
 | 64. Documentation | 0/TBD | Not started | - |
