@@ -519,6 +519,23 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         }
     }
 
+    // ===========================================================================
+    // Dispatch model (Phase 62 — CONC-03/CONC-04):
+    //
+    // INLINE (IO thread, no co_spawn):
+    //   Subscribe, Unsubscribe, StorageFull, QuotaExceeded — fast in-memory ops
+    //
+    // COROUTINE (co_spawn on ioc_, stays on IO thread):
+    //   ReadRequest, ListRequest, StatsRequest — synchronous storage calls
+    //
+    // COROUTINE with OFFLOAD (co_spawn on ioc_, engine offloads to pool, transfer back):
+    //   Data, Delete — engine_.ingest()/delete_blob() offload crypto to pool,
+    //   then co_await asio::post(ioc_) transfers back before send_message/metrics
+    //
+    // Sync messages: own concurrency model (sync_inbox queue + timer-cancel)
+    // Ping/Pong/Goodbye: handled in Connection::message_loop, never reach here
+    // ===========================================================================
+
     // Handle sync messages
     if (type == wire::TransportMsgType_SyncRequest) {
         // Peer wants to sync with us -- handle as responder
@@ -642,6 +659,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
                 auto result = co_await engine_.delete_blob(blob);
+                // Transfer back to IO thread after engine offload (CONC-03).
+                co_await asio::post(ioc_, asio::use_awaitable);
                 if (result.accepted && result.ack.has_value()) {
                     // Build DeleteAck payload: [blob_hash:32][seq_num_be:8][status:1]
                     auto ack = result.ack.value();
@@ -826,6 +845,12 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
                 auto result = co_await engine_.ingest(blob);
+                // Transfer back to IO thread after engine offload (CONC-03).
+                // engine_.ingest() internally calls crypto::offload(pool_, ...) which
+                // resumes this coroutine on the thread pool. All subsequent code must
+                // run on the IO thread: send_message (AEAD nonce safety),
+                // notify_subscribers (peers_ access), metrics_, record_strike.
+                co_await asio::post(ioc_, asio::use_awaitable);
                 // Send WriteAck for all accepted ingests (stored + duplicate)
                 if (result.accepted && result.ack.has_value()) {
                     auto ack = result.ack.value();
