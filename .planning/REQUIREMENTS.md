@@ -11,8 +11,8 @@ Requirements for v1.3.0 Protocol Concurrency & Query Foundation. Each maps to ro
 
 - [ ] **CONC-01**: Transport envelope includes a `request_id: uint32` field that clients set on requests and the node echoes on corresponding responses
 - [ ] **CONC-02**: `DecodedMessage`, `TransportCodec`, `Connection::send_message`, and `MessageCallback` all carry `request_id` through the full encode/decode/dispatch pipeline
-- [ ] **CONC-03**: Request/response handlers for Read, List, and Stats are dispatched to the thread pool via the existing offload pattern, with responses sent back on the IO thread (AEAD nonce safety)
-- [ ] **CONC-04**: Cheap operations (Ping, Pong, Goodbye, Subscribe, Unsubscribe, ExistsRequest, NodeInfoRequest) execute inline on the IO thread without offload overhead
+- [x] **CONC-03**: Request/response handlers for Read, List, and Stats are dispatched to the thread pool via the existing offload pattern, with responses sent back on the IO thread (AEAD nonce safety)
+- [x] **CONC-04**: Cheap operations (Ping, Pong, Goodbye, Subscribe, Unsubscribe, ExistsRequest, NodeInfoRequest) execute inline on the IO thread without offload overhead
 - [ ] **CONC-05**: Relay forwards `request_id` bidirectionally in both `handle_client_message` and `handle_node_message` paths
 
 ### Query Extensions
@@ -62,8 +62,8 @@ Deferred to subsequent milestone (v1.4.0+).
 |-------------|-------|--------|
 | CONC-01 | Phase 61 | Pending |
 | CONC-02 | Phase 61 | Pending |
-| CONC-03 | Phase 62 | Pending |
-| CONC-04 | Phase 62 | Pending |
+| CONC-03 | Phase 62 | Complete |
+| CONC-04 | Phase 62 | Complete |
 | CONC-05 | Phase 61 | Pending |
 | QUERY-01 | Phase 63 | Pending |
 | QUERY-02 | Phase 63 | Pending |

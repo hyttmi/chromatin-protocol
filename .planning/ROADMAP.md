@@ -112,7 +112,7 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 **Milestone Goal:** Clients can send concurrent requests with correlation IDs, check blob existence without data transfer, and discover node capabilities -- establishing the concurrent dispatch foundation for all future query types.
 
 - [ ] **Phase 61: Transport Foundation** - request_id in wire format, codec pipeline, relay forwarding
-- [ ] **Phase 62: Concurrent Dispatch** - Thread pool offload for heavy ops, inline for cheap ops
+- [x] **Phase 62: Concurrent Dispatch** - Thread pool offload for heavy ops, inline for cheap ops (completed 2026-03-25)
 - [ ] **Phase 63: Query Extensions** - ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse
 - [ ] **Phase 64: Documentation** - PROTOCOL.md, README.md, db/README.md updated for v1.3.0
 
@@ -142,7 +142,7 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
   3. All send_message calls happen on the IO thread (AEAD nonce safety verified -- no TSAN findings)
 **Plans**: 1 plan
 Plans:
-- [ ] 62-01-PLAN.md — IO-thread safety fix and concurrent dispatch verification
+- [x] 62-01-PLAN.md — IO-thread safety fix and concurrent dispatch verification
 
 ### Phase 63: Query Extensions
 **Goal**: Clients can check blob existence without data transfer and discover node capabilities, version, and storage state
@@ -172,6 +172,6 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
-| 62. Concurrent Dispatch | 0/1 | Not started | - |
+| 62. Concurrent Dispatch | 1/1 | Complete   | 2026-03-25 |
 | 63. Query Extensions | 0/TBD | Not started | - |
 | 64. Documentation | 0/TBD | Not started | - |
