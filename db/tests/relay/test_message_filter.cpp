@@ -12,7 +12,7 @@ using Catch::Matchers::ContainsSubstring;
 // ===== Message filter tests =====
 
 TEST_CASE("is_client_allowed permits client operation types", "[message_filter]") {
-    // 16 client-allowed types per RELAY-03
+    // 18 client-allowed types (16 per RELAY-03 + 2 query extensions)
     CHECK(is_client_allowed(TransportMsgType_Data));
     CHECK(is_client_allowed(TransportMsgType_WriteAck));
     CHECK(is_client_allowed(TransportMsgType_Delete));
@@ -23,6 +23,8 @@ TEST_CASE("is_client_allowed permits client operation types", "[message_filter]"
     CHECK(is_client_allowed(TransportMsgType_ListResponse));
     CHECK(is_client_allowed(TransportMsgType_StatsRequest));
     CHECK(is_client_allowed(TransportMsgType_StatsResponse));
+    CHECK(is_client_allowed(TransportMsgType_ExistsRequest));
+    CHECK(is_client_allowed(TransportMsgType_ExistsResponse));
     CHECK(is_client_allowed(TransportMsgType_Subscribe));
     CHECK(is_client_allowed(TransportMsgType_Unsubscribe));
     CHECK(is_client_allowed(TransportMsgType_Notification));

@@ -2548,3 +2548,99 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     pm.stop();
     ioc.run_for(std::chrono::milliseconds(500));
 }
+
+TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing", "[peer][exists]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14420";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    // Ingest a blob so we can test exists=true
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(server_id, "exists-test-data", 604800, now);
+    auto result = run_async(pool, eng.ingest(blob));
+    REQUIRE(result.accepted);
+    auto stored_hash = result.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    // Build ExistsRequest payloads: [namespace:32][blob_hash:32]
+    // Payload 1: existing blob (namespace + actual blob hash)
+    std::vector<uint8_t> exists_payload(64, 0);
+    std::memcpy(exists_payload.data(), server_id.namespace_id().data(), 32);
+    std::memcpy(exists_payload.data() + 32, stored_hash.data(), 32);
+
+    // Payload 2: non-existent blob (namespace + random hash)
+    std::vector<uint8_t> missing_payload(64, 0);
+    std::memcpy(missing_payload.data(), server_id.namespace_id().data(), 32);
+    missing_payload[32] = 0xFF;  // Different hash, won't exist
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14420),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_ExistsResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    // Wait for authentication, then send both ExistsRequests in a single coroutine
+    // (serializes send_counter_ to avoid AEAD nonce desync)
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ExistsRequest, exists_payload, 50);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ExistsRequest, missing_payload, 51);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        // Both ExistsResponses must have correct request_ids and payloads
+        for (const auto& [rid, payload] : responses) {
+            REQUIRE(payload.size() == 33);  // [exists:1][hash:32]
+            if (rid == 50) {
+                CHECK(payload[0] == 0x01);  // exists=true
+                // Verify echoed hash matches stored_hash
+                CHECK(std::equal(payload.begin() + 1, payload.end(),
+                                 stored_hash.begin(), stored_hash.end()));
+            } else if (rid == 51) {
+                CHECK(payload[0] == 0x00);  // exists=false
+            }
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
