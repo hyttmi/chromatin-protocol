@@ -2,6 +2,7 @@
 #include "db/peer/sync_reject.h"
 #include "db/sync/reconciliation.h"
 #include "db/util/hex.h"
+#include "db/version.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -526,7 +527,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     //   Subscribe, Unsubscribe, StorageFull, QuotaExceeded — fast in-memory ops
     //
     // COROUTINE (co_spawn on ioc_, stays on IO thread):
-    //   ReadRequest, ListRequest, StatsRequest, ExistsRequest — synchronous storage calls
+    //   ReadRequest, ListRequest, StatsRequest, ExistsRequest, NodeInfoRequest — synchronous storage calls
     //
     // COROUTINE with OFFLOAD (co_spawn on ioc_, engine offloads to pool, transfer back):
     //   Data, Delete — engine_.ingest()/delete_blob() offload crypto to pool,
@@ -855,6 +856,91 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ExistsRequest from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_NodeInfoRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id]() -> asio::awaitable<void> {
+            try {
+                // Gather node state
+                std::string version = CHROMATINDB_VERSION;
+                std::string git_hash = CHROMATINDB_GIT_HASH;
+                uint64_t uptime = compute_uptime_seconds();
+                uint32_t peers = static_cast<uint32_t>(peer_count());
+                auto namespaces = storage_.list_namespaces();
+                uint32_t ns_count = static_cast<uint32_t>(namespaces.size());
+
+                // Total blobs: sum latest_seq_num across namespaces
+                // (Note: this overcounts if blobs are deleted, but matches existing benchmark pattern)
+                uint64_t total_blobs = 0;
+                for (const auto& ns_info : namespaces)
+                    total_blobs += ns_info.latest_seq_num;
+
+                uint64_t storage_used = storage_.used_data_bytes();
+                uint64_t storage_max = config_.max_storage_bytes;
+
+                // Client-facing message types (per D-05: only types relay allows)
+                static constexpr uint8_t supported[] = {
+                    5, 6, 7, 8,                     // Ping, Pong, Goodbye, Data
+                    17, 18, 19, 20, 21,             // Delete, DeleteAck, Subscribe, Unsubscribe, Notification
+                    30, 31, 32, 33, 34, 35, 36,     // WriteAck, Read*, List*, Stats*
+                    37, 38, 39, 40                   // Exists*, NodeInfo*
+                };
+                uint8_t types_count = static_cast<uint8_t>(sizeof(supported));
+
+                // Build response
+                size_t resp_size = 1 + version.size()
+                                 + 1 + git_hash.size()
+                                 + 8 + 4 + 4 + 8 + 8 + 8
+                                 + 1 + types_count;
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                // Version string (length-prefixed)
+                response[off++] = static_cast<uint8_t>(version.size());
+                std::memcpy(response.data() + off, version.data(), version.size());
+                off += version.size();
+
+                // Git hash string (length-prefixed)
+                response[off++] = static_cast<uint8_t>(git_hash.size());
+                std::memcpy(response.data() + off, git_hash.data(), git_hash.size());
+                off += git_hash.size();
+
+                // Uptime (big-endian uint64)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(uptime >> (i * 8));
+
+                // Peer count (big-endian uint32)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(peers >> (i * 8));
+
+                // Namespace count (big-endian uint32)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(ns_count >> (i * 8));
+
+                // Total blobs (big-endian uint64)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(total_blobs >> (i * 8));
+
+                // Storage bytes used (big-endian uint64)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(storage_used >> (i * 8));
+
+                // Storage bytes max (big-endian uint64, 0=unlimited)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(storage_max >> (i * 8));
+
+                // Supported types
+                response[off++] = types_count;
+                std::memcpy(response.data() + off, supported, types_count);
+
+                co_await conn->send_message(wire::TransportMsgType_NodeInfoResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("NodeInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike(conn, e.what());
             }
         }, asio::detached);

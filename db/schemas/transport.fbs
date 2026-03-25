@@ -50,7 +50,9 @@ enum TransportMsgType : byte {
     StatsResponse = 36,
     // Phase 63: Query extensions
     ExistsRequest = 37,
-    ExistsResponse = 38
+    ExistsResponse = 38,
+    NodeInfoRequest = 39,
+    NodeInfoResponse = 40
 }
 
 table TransportMessage {

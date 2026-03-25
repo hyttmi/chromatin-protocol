@@ -59,11 +59,13 @@ enum TransportMsgType : int8_t {
   TransportMsgType_StatsResponse = 36,
   TransportMsgType_ExistsRequest = 37,
   TransportMsgType_ExistsResponse = 38,
+  TransportMsgType_NodeInfoRequest = 39,
+  TransportMsgType_NodeInfoResponse = 40,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_ExistsResponse
+  TransportMsgType_MAX = TransportMsgType_NodeInfoResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[39] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[41] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -103,13 +105,15 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[39] {
     TransportMsgType_StatsRequest,
     TransportMsgType_StatsResponse,
     TransportMsgType_ExistsRequest,
-    TransportMsgType_ExistsResponse
+    TransportMsgType_ExistsResponse,
+    TransportMsgType_NodeInfoRequest,
+    TransportMsgType_NodeInfoResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[40] = {
+  static const char * const names[42] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -149,13 +153,15 @@ inline const char * const *EnumNamesTransportMsgType() {
     "StatsResponse",
     "ExistsRequest",
     "ExistsResponse",
+    "NodeInfoRequest",
+    "NodeInfoResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_ExistsResponse)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_NodeInfoResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }
