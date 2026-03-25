@@ -2374,3 +2374,177 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     pm.stop();
     ioc.run_for(std::chrono::milliseconds(500));
 }
+
+TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[peer][concurrent]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14410";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob1 = make_signed_blob(client_id, "pipeline-test-1", 604800, now);
+    auto blob2 = make_signed_blob(client_id, "pipeline-test-2", 604800, now);
+    auto payload1 = chromatindb::wire::encode_blob(blob1);
+    auto payload2 = chromatindb::wire::encode_blob(blob2);
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<chromatindb::wire::TransportMsgType, uint32_t>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14410),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t>, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_WriteAck) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(type, req_id);
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    // Wait for authentication, then send both Data messages in quick succession
+    // Must be in a single coroutine to serialize send_counter_ (AEAD nonce)
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_Data, payload1, 42);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_Data, payload2, 99);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        // Both WriteAcks must be present with correct request_ids (order may vary)
+        bool found_42 = false;
+        bool found_99 = false;
+        for (const auto& [type, rid] : responses) {
+            CHECK(type == chromatindb::wire::TransportMsgType_WriteAck);
+            if (rid == 42) found_42 = true;
+            if (rid == 99) found_99 = true;
+        }
+        REQUIRE(found_42);
+        REQUIRE(found_99);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurrent][read]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14411";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    // Construct two ReadRequest payloads: [namespace_id:32][blob_hash:32]
+    // Both use client_id's namespace, with different (nonexistent) blob hashes
+    std::vector<uint8_t> read_payload1(64, 0);
+    std::memcpy(read_payload1.data(), client_id.namespace_id().data(), 32);
+    // blob_hash1 = all zeros (nonexistent)
+
+    std::vector<uint8_t> read_payload2(64, 0);
+    std::memcpy(read_payload2.data(), client_id.namespace_id().data(), 32);
+    read_payload2[32] = 0x01;  // Different blob hash (nonexistent)
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> read_responses;  // (request_id, payload)
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14411),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_ReadResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                read_responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    // Wait for authentication, then send both ReadRequests in quick succession
+    // Must be in a single coroutine to serialize send_counter_ (AEAD nonce)
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ReadRequest, read_payload1, 11);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ReadRequest, read_payload2, 22);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(read_responses.size() == 2);
+        // Both ReadResponses must have correct request_ids (order may vary)
+        bool found_11 = false;
+        bool found_22 = false;
+        for (const auto& [rid, payload] : read_responses) {
+            if (rid == 11) found_11 = true;
+            if (rid == 22) found_22 = true;
+            // ReadResponse for non-existent blob: payload starts with 0x00 (not found)
+            REQUIRE(!payload.empty());
+            CHECK(payload[0] == 0x00);
+        }
+        REQUIRE(found_11);
+        REQUIRE(found_22);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
