@@ -123,8 +123,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - [ ] Concurrent request dispatch (thread pool offload for heavy ops, inline for cheap ops)
 
 #### Query Extensions
-- [ ] ExistsRequest/ExistsResponse — check blob existence without data transfer
-- [ ] NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types
+- [x] ExistsRequest/ExistsResponse — check blob existence without data transfer (Phase 63)
+- [x] NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types (Phase 63)
 
 #### Documentation
 - [ ] PROTOCOL.md updated with concurrency model and new message types
@@ -141,7 +141,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Shipped v1.2.0 with ~24,500 LOC C++20, 500+ unit tests, 54 Docker integration tests.
 Built across 23 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d).
-12 milestones, 60 phases, 125 plans, 253 requirements total.
+13 milestones, 63 phases, 127 plans, 253 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -249,9 +249,11 @@ Three-layer architecture (building bottom-up):
 | RelayIdentity uses SSH-style .key/.pub siblings | Direct key path config instead of directory-based identity | ✓ Good — familiar infra pattern |
 | Shared headers for hex and test helpers | db/util/hex.h and db/tests/test_helpers.h eliminate 570+ lines of duplication | ✓ Good — Zero Duplication Policy enforced |
 
-| Concurrent dispatch via offload() pattern | Reuse proven thread pool offload for heavy read ops; send_counter_ AEAD nonce requires IO-thread serialization | — Pending |
-| request_id in transport envelope | Per-connection correlation ID; node echoes, never generates; enables SDK pipelining | — Pending |
-| supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | — Pending |
+| Concurrent dispatch via offload() pattern | Reuse proven thread pool offload for heavy read ops; send_counter_ AEAD nonce requires IO-thread serialization | ✓ Good — Phase 62 |
+| request_id in transport envelope | Per-connection correlation ID; node echoes, never generates; enables SDK pipelining | ✓ Good — Phase 61 |
+| ExistsRequest via has_blob() key-only lookup | 33-byte response [exists:1][hash:32]; no blob data read, tombstones return false | ✓ Good — Phase 63 |
+| NodeInfoResponse binary wire format | Length-prefixed strings + big-endian integers; 20 client-facing supported types | ✓ Good — Phase 63 |
+| supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | ✓ Good — Phase 63 |
 
 ---
-*Last updated: 2026-03-25 after Phase 62 (concurrent-dispatch) complete — IO-thread transfer for Data/Delete handlers, dispatch model documented*
+*Last updated: 2026-03-25 after Phase 63 (query-extensions) complete — ExistsRequest/ExistsResponse and NodeInfoRequest/NodeInfoResponse with relay filter updates*
