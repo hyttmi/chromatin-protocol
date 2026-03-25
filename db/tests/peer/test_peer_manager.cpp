@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <set>
 #include <cstring>
 #include <ctime>
 
@@ -2639,6 +2640,144 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
                 CHECK(payload[0] == 0x00);  // exists=false
             }
         }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14421";
+    cfg.data_dir = tmp.path.string();
+    cfg.max_storage_bytes = 1048576;  // 1 MiB, so response has non-zero max
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<uint8_t> info_response;
+    uint32_t response_req_id = 0;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14421),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_NodeInfoResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                info_response = std::move(payload);
+                response_req_id = req_id;
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // NodeInfoRequest has empty payload
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NodeInfoRequest, {}, 77);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(!info_response.empty());
+        CHECK(response_req_id == 77);
+
+        // Parse response: [version_len:1][version:N][git_hash_len:1][git_hash:N]...
+        size_t off = 0;
+
+        // Version string
+        REQUIRE(off < info_response.size());
+        uint8_t version_len = info_response[off++];
+        REQUIRE(off + version_len <= info_response.size());
+        std::string version(info_response.begin() + off, info_response.begin() + off + version_len);
+        off += version_len;
+        CHECK(!version.empty());  // Has a version string
+
+        // Git hash string
+        REQUIRE(off < info_response.size());
+        uint8_t hash_len = info_response[off++];
+        REQUIRE(off + hash_len <= info_response.size());
+        std::string git_hash(info_response.begin() + off, info_response.begin() + off + hash_len);
+        off += hash_len;
+        CHECK(!git_hash.empty());  // Has a git hash string
+
+        // Uptime (8 bytes big-endian) -- should be small (< 10 seconds)
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t uptime = 0;
+        for (int i = 0; i < 8; ++i)
+            uptime = (uptime << 8) | info_response[off++];
+        CHECK(uptime < 30);  // Just started, should be under 30 seconds
+
+        // Peer count (4 bytes big-endian)
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t peer_count = 0;
+        for (int i = 0; i < 4; ++i)
+            peer_count = (peer_count << 8) | info_response[off++];
+        // peer_count includes the client connection
+        // (exact value depends on implementation -- just check it parsed)
+
+        // Namespace count (4 bytes big-endian)
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t ns_count = 0;
+        for (int i = 0; i < 4; ++i)
+            ns_count = (ns_count << 8) | info_response[off++];
+        CHECK(ns_count == 0);  // No blobs ingested
+
+        // Total blobs (8 bytes big-endian)
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t total_blobs = 0;
+        for (int i = 0; i < 8; ++i)
+            total_blobs = (total_blobs << 8) | info_response[off++];
+        CHECK(total_blobs == 0);
+
+        // Storage bytes used (8 bytes big-endian)
+        REQUIRE(off + 8 <= info_response.size());
+        off += 8;  // Skip used bytes (non-deterministic)
+
+        // Storage bytes max (8 bytes big-endian)
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t storage_max = 0;
+        for (int i = 0; i < 8; ++i)
+            storage_max = (storage_max << 8) | info_response[off++];
+        CHECK(storage_max == 1048576);  // Matches config
+
+        // Supported types
+        REQUIRE(off + 1 <= info_response.size());
+        uint8_t types_count = info_response[off++];
+        CHECK(types_count == 20);  // 20 client-facing types
+        REQUIRE(off + types_count <= info_response.size());
+        // Verify at least Ping(5), Data(8), ExistsRequest(37), NodeInfoRequest(39) are present
+        std::set<uint8_t> types(info_response.begin() + off, info_response.begin() + off + types_count);
+        CHECK(types.count(5));   // Ping
+        CHECK(types.count(8));   // Data
+        CHECK(types.count(37));  // ExistsRequest
+        CHECK(types.count(39));  // NodeInfoRequest
     }
 
     pm.stop();
