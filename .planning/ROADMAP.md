@@ -169,7 +169,7 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 61. Transport Foundation | 0/3 | Planned | - |
+| 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
 | 62. Concurrent Dispatch | 0/TBD | Not started | - |
 | 63. Query Extensions | 0/TBD | Not started | - |
 | 64. Documentation | 0/TBD | Not started | - |
