@@ -46,3 +46,12 @@ All client-side — database stays dumb, stores encrypted bytes. SDK provides th
 If browser-based clients are ever needed, a WebSocket layer on top of the relay. Browsers can't do raw TCP, so this would be a separate gateway that bridges WebSocket to the PQ-encrypted relay protocol. Low priority — native apps and SDKs cover most use cases.
 
 **Depends on:** v1.2.0 (relay)
+
+## 999.6 — Docker-Based Test Infrastructure
+
+Migrate flaky in-process E2E peer tests to Docker containers with isolated networking. Currently, tests that spin up multiple nodes in-process share the host network with hardcoded ports, causing race conditions and SIGSEGV on teardown (port conflicts, timing-sensitive sync assertions). Move these to per-test Docker containers so each test gets isolated port space and deterministic teardown. Goal: all tests always run in Docker, zero flaky failures.
+
+**Current flaky tests:** `[peer][acl]`, `[peer][metrics]`, `[peer][tombstone]`, `[daemon]` (PEX), `[sync][quota]`
+**Root cause:** hardcoded ports + shared io_context + timing-dependent sync assertions
+
+**Depends on:** existing Docker infrastructure (v0.6.0 Compose topology)
