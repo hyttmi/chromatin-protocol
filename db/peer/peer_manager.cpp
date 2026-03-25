@@ -526,7 +526,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     //   Subscribe, Unsubscribe, StorageFull, QuotaExceeded — fast in-memory ops
     //
     // COROUTINE (co_spawn on ioc_, stays on IO thread):
-    //   ReadRequest, ListRequest, StatsRequest — synchronous storage calls
+    //   ReadRequest, ListRequest, StatsRequest, ExistsRequest — synchronous storage calls
     //
     // COROUTINE with OFFLOAD (co_spawn on ioc_, engine offloads to pool, transfer back):
     //   Data, Delete — engine_.ingest()/delete_blob() offload crypto to pool,
@@ -826,6 +826,35 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed StatsRequest from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_ExistsRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 64) {
+                    record_strike(conn, "ExistsRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::array<uint8_t, 32> hash{};
+                std::memcpy(ns.data(), payload.data(), 32);
+                std::memcpy(hash.data(), payload.data() + 32, 32);
+
+                bool exists = storage_.has_blob(ns, hash);
+
+                // Response: [exists:1][blob_hash:32] = 33 bytes
+                std::vector<uint8_t> response(33);
+                response[0] = exists ? 0x01 : 0x00;
+                std::memcpy(response.data() + 1, hash.data(), 32);
+
+                co_await conn->send_message(wire::TransportMsgType_ExistsResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("malformed ExistsRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike(conn, e.what());
             }
         }, asio::detached);

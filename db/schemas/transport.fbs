@@ -14,40 +14,43 @@ enum TransportMsgType : byte {
     SyncRequest = 9,
     SyncAccept = 10,
     NamespaceList = 11,
-    BlobRequest = 13,
-    BlobTransfer = 14,
-    SyncComplete = 15,
+    BlobRequest = 12,
+    BlobTransfer = 13,
+    SyncComplete = 14,
     // Phase 7: Peer exchange
-    PeerListRequest = 16,
-    PeerListResponse = 17,
+    PeerListRequest = 15,
+    PeerListResponse = 16,
     // Phase 12: Blob deletion
-    Delete = 18,
-    DeleteAck = 19,
+    Delete = 17,
+    DeleteAck = 18,
     // Phase 14: Pub/Sub notifications
-    Subscribe = 20,
-    Unsubscribe = 21,
-    Notification = 22,
+    Subscribe = 19,
+    Unsubscribe = 20,
+    Notification = 21,
     // Phase 16: Storage capacity signaling
-    StorageFull = 23,
+    StorageFull = 22,
     // Phase 25: Transport optimization
-    TrustedHello = 24,
-    PQRequired = 25,
+    TrustedHello = 23,
+    PQRequired = 24,
     // Phase 35: Namespace quota signaling
-    QuotaExceeded = 26,
+    QuotaExceeded = 25,
     // Phase 39: Set reconciliation
-    ReconcileInit = 27,
-    ReconcileRanges = 28,
-    ReconcileItems = 29,
+    ReconcileInit = 26,
+    ReconcileRanges = 27,
+    ReconcileItems = 28,
     // Phase 40: Sync rate limiting
-    SyncRejected = 30,
+    SyncRejected = 29,
     // Phase 57: Client protocol extensions
-    WriteAck = 31,
-    ReadRequest = 32,
-    ReadResponse = 33,
-    ListRequest = 34,
-    ListResponse = 35,
-    StatsRequest = 36,
-    StatsResponse = 37
+    WriteAck = 30,
+    ReadRequest = 31,
+    ReadResponse = 32,
+    ListRequest = 33,
+    ListResponse = 34,
+    StatsRequest = 35,
+    StatsResponse = 36,
+    // Phase 63: Query extensions
+    ExistsRequest = 37,
+    ExistsResponse = 38
 }
 
 table TransportMessage {

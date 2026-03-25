@@ -18,6 +18,9 @@ bool is_client_allowed(TransportMsgType type) {
         case TransportMsgType_ListResponse:
         case TransportMsgType_StatsRequest:
         case TransportMsgType_StatsResponse:
+        // Query extensions
+        case TransportMsgType_ExistsRequest:
+        case TransportMsgType_ExistsResponse:
         // Pub/sub
         case TransportMsgType_Subscribe:
         case TransportMsgType_Unsubscribe:
