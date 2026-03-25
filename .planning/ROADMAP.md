@@ -155,7 +155,7 @@ Plans:
   4. Storage exposes a key-existence check (has_blob) that does not read the blob value
 **Plans**: 2 plans
 Plans:
-- [ ] 63-01-PLAN.md — ExistsRequest/ExistsResponse handler, relay filter, tests (Wave 1)
+- [x] 63-01-PLAN.md — ExistsRequest/ExistsResponse handler, relay filter, tests (Wave 1)
 - [ ] 63-02-PLAN.md — NodeInfoRequest/NodeInfoResponse handler, relay filter, tests (Wave 2)
 
 ### Phase 64: Documentation
@@ -176,5 +176,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
 | 62. Concurrent Dispatch | 1/1 | Complete    | 2026-03-25 |
-| 63. Query Extensions | 0/2 | Not started | - |
+| 63. Query Extensions | 1/2 | In Progress|  |
 | 64. Documentation | 0/TBD | Not started | - |
