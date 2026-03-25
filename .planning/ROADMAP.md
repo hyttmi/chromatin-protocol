@@ -127,7 +127,10 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
   2. The relay forwards request_id bidirectionally without modification -- a client connected through the relay sees the same correlation behavior as a direct connection
   3. Non-request/response operations (sync, PEX, pub/sub, lifecycle) function unchanged with request_id defaulting to 0
   4. All existing tests pass with the updated MessageCallback and send_message signatures
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 61-01-PLAN.md — Schema and Codec Foundation (Wave 1)
+- [ ] 61-02-PLAN.md — Pipeline Plumbing & Relay Forwarding (Wave 2)
+- [ ] 61-03-PLAN.md — PeerManager Dispatch & Echoing (Wave 3)
 
 ### Phase 62: Concurrent Dispatch
 **Goal**: Multiple in-flight client requests execute concurrently without blocking each other, while maintaining AEAD nonce safety on the IO thread
@@ -166,7 +169,7 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 61. Transport Foundation | 0/TBD | Not started | - |
+| 61. Transport Foundation | 0/3 | Planned | - |
 | 62. Concurrent Dispatch | 0/TBD | Not started | - |
 | 63. Query Extensions | 0/TBD | Not started | - |
 | 64. Documentation | 0/TBD | Not started | - |
