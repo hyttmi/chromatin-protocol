@@ -254,4 +254,4 @@ Three-layer architecture (building bottom-up):
 | supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | — Pending |
 
 ---
-*Last updated: 2026-03-24 after Milestone v1.3.0 started*
+*Last updated: 2026-03-25 after Phase 62 (concurrent-dispatch) complete — IO-thread transfer for Data/Delete handlers, dispatch model documented*
