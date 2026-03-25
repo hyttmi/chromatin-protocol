@@ -418,7 +418,8 @@ public:
         conn_->on_message(
             [this](chromatindb::net::Connection::Ptr /*conn*/,
                    chromatindb::wire::TransportMsgType type,
-                   std::vector<uint8_t> payload) {
+                   std::vector<uint8_t> payload,
+                   uint32_t /*request_id*/) {
                 handle_message(type, std::move(payload));
             });
 

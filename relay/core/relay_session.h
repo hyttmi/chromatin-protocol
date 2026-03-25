@@ -52,12 +52,14 @@ private:
     /// Forward messages from client to node (with filtering per RELAY-03).
     void handle_client_message(chromatindb::net::Connection::Ptr conn,
                                chromatindb::wire::TransportMsgType type,
-                               std::vector<uint8_t> payload);
+                               std::vector<uint8_t> payload,
+                               uint32_t request_id);
 
     /// Forward messages from node to client (no filtering -- node only sends client types).
     void handle_node_message(chromatindb::net::Connection::Ptr conn,
                              chromatindb::wire::TransportMsgType type,
-                             std::vector<uint8_t> payload);
+                             std::vector<uint8_t> payload,
+                             uint32_t request_id);
 
     /// Handle client disconnect.
     void handle_client_close(chromatindb::net::Connection::Ptr conn, bool graceful);

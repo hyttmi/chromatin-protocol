@@ -5,10 +5,6 @@
 #include <optional>
 #include <random>
 
-#include <asio.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-
 #include "db/engine/engine.h"
 #include "db/crypto/hash.h"
 #include "db/identity/identity.h"
@@ -16,155 +12,24 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
+#include "db/tests/test_helpers.h"
+#include "db/util/hex.h"
+
 namespace fs = std::filesystem;
 
 namespace {
 
-/// Run an awaitable synchronously using a temporary io_context.
-/// Used in tests to call async BlobEngine methods.
-template <typename T>
-T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
-    asio::io_context ioc;
-    T result{};
-    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
-        result = co_await std::move(a);
-        co_return result;
-    }, asio::detached);
-    ioc.run();
-    return result;
-}
-
-/// Convert a 32-byte namespace hash to 64-char hex string (for quota override keys).
-std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(64);
-    for (auto b : ns) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
-
-/// Create a unique temporary directory for each test.
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() /
-               ("chromatindb_test_engine_" + std::to_string(dist(gen)));
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
-
-/// Get current Unix timestamp in seconds for test helper defaults.
-uint64_t current_timestamp() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-}
-
-/// Sentinel value: pass this as timestamp to auto-use current system time.
-constexpr uint64_t TS_AUTO = UINT64_MAX;
-
-/// Build a properly signed BlobData using a NodeIdentity.
-chromatindb::wire::BlobData make_signed_blob(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::string& payload,
-    uint32_t ttl = 604800,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    blob.data.assign(payload.begin(), payload.end());
-    blob.ttl = ttl;
-    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    // Build canonical signing input and sign it
-    auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-    blob.signature = id.sign(signing_input);
-
-    return blob;
-}
-
-/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
-chromatindb::wire::BlobData make_signed_tombstone(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::array<uint8_t, 32>& target_blob_hash,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData tombstone;
-    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
-    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
-    tombstone.ttl = 0;  // Permanent
-    tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
-    tombstone.signature = id.sign(signing_input);
-
-    return tombstone;
-}
-
-/// Build a properly signed delegation BlobData: owner delegates to delegate.
-chromatindb::wire::BlobData make_signed_delegation(
-    const chromatindb::identity::NodeIdentity& owner,
-    const chromatindb::identity::NodeIdentity& delegate,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
-    blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
-    blob.ttl = 0;  // Permanent
-    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-    blob.signature = owner.sign(signing_input);
-
-    return blob;
-}
-
-/// Build a properly signed blob written by a delegate to an owner's namespace.
-/// The delegate signs the canonical form with their own key.
-chromatindb::wire::BlobData make_delegate_blob(
-    const chromatindb::identity::NodeIdentity& owner,
-    const chromatindb::identity::NodeIdentity& delegate,
-    const std::string& payload,
-    uint32_t ttl = 604800,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData blob;
-    // Target the owner's namespace
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    // Signed by delegate's key
-    blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
-    blob.data.assign(payload.begin(), payload.end());
-    blob.ttl = ttl;
-    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-    blob.signature = delegate.sign(signing_input);
-
-    return blob;
-}
-
 } // anonymous namespace
+
+using chromatindb::test::TempDir;
+using chromatindb::test::run_async;
+using chromatindb::test::make_signed_blob;
+using chromatindb::test::make_signed_tombstone;
+using chromatindb::test::make_signed_delegation;
+using chromatindb::test::make_delegate_blob;
+using chromatindb::test::current_timestamp;
+using chromatindb::test::TS_AUTO;
+using chromatindb::util::to_hex;
 
 using chromatindb::engine::BlobEngine;
 using chromatindb::engine::IngestError;
@@ -1556,7 +1421,7 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Set per-namespace override to allow much more
-    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
     overrides[ns_hex] = {100ULL * 1024 * 1024, std::nullopt};  // 100 MiB override
     engine.set_quota_config(1, 0, overrides);
@@ -1582,7 +1447,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Set override with max_bytes=0 (exempt from byte quota)
-    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
     overrides[ns_hex] = {uint64_t(0), std::nullopt};  // 0 = unlimited bytes
     engine.set_quota_config(1, 0, overrides);
@@ -1608,7 +1473,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     // Set override with max_count=0 (exempt from count quota)
-    auto ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
+    auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> overrides;
     overrides[ns_hex] = {std::nullopt, uint64_t(0)};  // 0 = unlimited count
     engine.set_quota_config(0, 1, overrides);

@@ -7,32 +7,15 @@
 #include <random>
 #include <string>
 
+#include "db/tests/test_helpers.h"
+
 namespace fs = std::filesystem;
 using chromatindb::relay::identity::RelayIdentity;
 using chromatindb::relay::identity::pub_path_from_key_path;
 
 namespace {
 
-/// RAII temp directory for file I/O tests.
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() / ("chromatindb_test_relay_id_" + std::to_string(dist(gen)));
-        fs::create_directories(path);
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
+using chromatindb::test::TempDir;
 
 /// Write arbitrary data to file for corruption tests.
 void write_file(const fs::path& p, const std::vector<uint8_t>& data) {
@@ -69,6 +52,7 @@ TEST_CASE("RelayIdentity::generate produces 32-byte public key hash", "[relay_id
 
 TEST_CASE("RelayIdentity::save_to creates .key and .pub files", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
     auto pub_path = tmp.path / "relay.pub";
 
@@ -83,6 +67,7 @@ TEST_CASE("RelayIdentity::save_to creates .key and .pub files", "[relay_identity
 
 TEST_CASE("save_to sibling path: /tmp/test_relay.key creates /tmp/test_relay.pub", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "test_relay.key";
 
     auto id = RelayIdentity::generate();
@@ -96,6 +81,7 @@ TEST_CASE("save_to sibling path: /tmp/test_relay.key creates /tmp/test_relay.pub
 
 TEST_CASE("RelayIdentity::load_from loads identity from .key + .pub files", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
 
     auto original = RelayIdentity::generate();
@@ -117,6 +103,7 @@ TEST_CASE("RelayIdentity::load_from loads identity from .key + .pub files", "[re
 
 TEST_CASE("load_from throws if .key file missing", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "nonexistent.key";
 
     REQUIRE_THROWS_AS(RelayIdentity::load_from(key_path), std::runtime_error);
@@ -124,6 +111,7 @@ TEST_CASE("load_from throws if .key file missing", "[relay_identity]") {
 
 TEST_CASE("load_from throws if .pub file missing", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
 
     // Create only the .key file, no .pub
@@ -136,6 +124,7 @@ TEST_CASE("load_from throws if .pub file missing", "[relay_identity]") {
 
 TEST_CASE("load_from throws if .key file has wrong size", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
     auto pub_path = tmp.path / "relay.pub";
 
@@ -149,6 +138,7 @@ TEST_CASE("load_from throws if .key file has wrong size", "[relay_identity]") {
 
 TEST_CASE("load_or_generate creates files when none exist", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
     auto pub_path = tmp.path / "relay.pub";
 
@@ -164,6 +154,7 @@ TEST_CASE("load_or_generate creates files when none exist", "[relay_identity]") 
 
 TEST_CASE("load_or_generate loads existing without overwriting", "[relay_identity]") {
     TempDir tmp;
+    fs::create_directories(tmp.path);
     auto key_path = tmp.path / "relay.key";
 
     // First: generate and save

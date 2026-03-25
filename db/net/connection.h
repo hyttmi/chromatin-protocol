@@ -32,7 +32,7 @@ public:
 
     /// Callback for received data messages.
     using MessageCallback = std::function<void(
-        Connection::Ptr, wire::TransportMsgType, std::vector<uint8_t>)>;
+        Connection::Ptr, wire::TransportMsgType, std::vector<uint8_t>, uint32_t)>;
 
     /// Callback for connection close/error.
     using CloseCallback = std::function<void(Connection::Ptr, bool /*graceful*/)>;
@@ -61,7 +61,8 @@ public:
 
     /// Send a transport message (encrypted).
     asio::awaitable<bool> send_message(wire::TransportMsgType type,
-                                        std::span<const uint8_t> payload);
+                                        std::span<const uint8_t> payload,
+                                        uint32_t request_id = 0);
 
     /// Send goodbye and close gracefully.
     asio::awaitable<void> close_gracefully();

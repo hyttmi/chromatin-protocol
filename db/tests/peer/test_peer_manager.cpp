@@ -15,111 +15,24 @@
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
+#include "db/tests/test_helpers.h"
+#include "db/util/hex.h"
+
 #include <asio.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 
 namespace fs = std::filesystem;
 
 namespace {
 
-/// Run an awaitable synchronously using a temporary io_context.
-template <typename T>
-T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
-    asio::io_context ioc;
-    T result{};
-    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
-        result = co_await std::move(a);
-        co_return result;
-    }, asio::detached);
-    ioc.run();
-    return result;
-}
-
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() /
-               ("chromatindb_test_peer_" + std::to_string(dist(gen)));
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
-
-/// Convert a 32-byte namespace hash to 64-char hex string (for allowed_keys config).
-std::string ns_to_hex(std::span<const uint8_t, 32> ns) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(64);
-    for (auto b : ns) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
-
-/// Get current Unix timestamp in seconds for test helper defaults.
-uint64_t current_timestamp() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-}
-
-/// Sentinel value: pass this as timestamp to auto-use current system time.
-constexpr uint64_t TS_AUTO = UINT64_MAX;
-
-/// Build a properly signed BlobData using a NodeIdentity.
-chromatindb::wire::BlobData make_signed_blob(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::string& payload,
-    uint32_t ttl = 604800,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    blob.data.assign(payload.begin(), payload.end());
-    blob.ttl = ttl;
-    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-    blob.signature = id.sign(signing_input);
-
-    return blob;
-}
-
-/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
-chromatindb::wire::BlobData make_signed_tombstone(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::array<uint8_t, 32>& target_blob_hash,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData tombstone;
-    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
-    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
-    tombstone.ttl = 0;  // Permanent
-    tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
-    tombstone.signature = id.sign(signing_input);
-
-    return tombstone;
-}
-
 } // anonymous namespace
+
+using chromatindb::test::TempDir;
+using chromatindb::test::run_async;
+using chromatindb::test::make_signed_blob;
+using chromatindb::test::make_signed_tombstone;
+using chromatindb::test::current_timestamp;
+using chromatindb::test::TS_AUTO;
+using chromatindb::util::to_hex;
 
 using chromatindb::acl::AccessControl;
 using chromatindb::config::Config;
@@ -313,7 +226,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     // Node1 is in closed mode but allows id2's namespace
-    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+    auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:14252";
@@ -323,7 +236,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     cfg1.allowed_keys = {id2_ns_hex};
 
     // Node2 is also in closed mode and allows id1's namespace
-    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
+    auto id1_ns_hex = to_hex(id1.namespace_id());
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:14253";
@@ -384,8 +297,8 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
-    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
-    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+    auto id1_ns_hex = to_hex(id1.namespace_id());
+    auto id2_ns_hex = to_hex(id2.namespace_id());
 
     // Write config file for node1 with id2 allowed
     auto config_path = tmp1.path / "config.json";
@@ -547,9 +460,9 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     auto id_b = NodeIdentity::load_or_generate(tmp2.path);
     auto id_c = NodeIdentity::load_or_generate(tmp3.path);
 
-    auto ns_a = ns_to_hex(id_a.namespace_id());
-    auto ns_b = ns_to_hex(id_b.namespace_id());
-    auto ns_c = ns_to_hex(id_c.namespace_id());
+    auto ns_a = to_hex(id_a.namespace_id());
+    auto ns_b = to_hex(id_b.namespace_id());
+    auto ns_c = to_hex(id_c.namespace_id());
 
     // All three nodes in closed mode, each allowing the other two
     Config cfg_a;
@@ -1706,8 +1619,8 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
-    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
-    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+    auto id1_ns_hex = to_hex(id1.namespace_id());
+    auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:14360";
@@ -1770,8 +1683,8 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
-    auto id1_ns_hex = ns_to_hex(id1.namespace_id());
-    auto id2_ns_hex = ns_to_hex(id2.namespace_id());
+    auto id1_ns_hex = to_hex(id1.namespace_id());
+    auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:14362";
@@ -1969,7 +1882,7 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     auto id3 = NodeIdentity::load_or_generate(tmp3.path);
 
     // Node2 only replicates id1's namespace
-    auto id1_ns_hex = ns_to_hex(std::span<const uint8_t, 32>(id1.namespace_id()));
+    auto id1_ns_hex = to_hex(std::span<const uint8_t, 32>(id1.namespace_id()));
 
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:14340";
@@ -2394,4 +2307,70 @@ TEST_CASE("connect_address set on outbound connections", "[peer][reconnect]") {
     auto conn = chromatindb::net::Connection::create_outbound(std::move(sock), id);
     conn->set_connect_address("myhost:4200");
     REQUIRE(conn->connect_address() == "myhost:4200");
+}
+
+
+TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14400";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(client_id, "request-id-test", 604800, now);
+    auto encoded_payload = chromatindb::wire::encode_blob(blob);
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::atomic<uint32_t> echoed_request_id = 0;
+    std::atomic<bool> response_received = false;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14400),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t>, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_WriteAck) {
+                echoed_request_id = req_id;
+                response_received = true;
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc,
+                client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_Data, encoded_payload, 42),
+                asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+    REQUIRE(response_received);
+    REQUIRE(echoed_request_id == 42);
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
 }

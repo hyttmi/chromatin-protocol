@@ -64,15 +64,17 @@ asio::awaitable<bool> RelaySession::start() {
         self->client_conn_->on_message(
             [self](chromatindb::net::Connection::Ptr conn,
                    chromatindb::wire::TransportMsgType type,
-                   std::vector<uint8_t> payload) {
-                self->handle_client_message(conn, type, std::move(payload));
+                   std::vector<uint8_t> payload,
+                   uint32_t request_id) {
+                self->handle_client_message(conn, type, std::move(payload), request_id);
             });
 
         self->node_conn_->on_message(
             [self](chromatindb::net::Connection::Ptr conn,
                    chromatindb::wire::TransportMsgType type,
-                   std::vector<uint8_t> payload) {
-                self->handle_node_message(conn, type, std::move(payload));
+                   std::vector<uint8_t> payload,
+                   uint32_t request_id) {
+                self->handle_node_message(conn, type, std::move(payload), request_id);
             });
 
         spdlog::info("session active: client {} from {}",
@@ -96,7 +98,8 @@ const std::string& RelaySession::client_address() const {
 void RelaySession::handle_client_message(
     chromatindb::net::Connection::Ptr /*conn*/,
     chromatindb::wire::TransportMsgType type,
-    std::vector<uint8_t> payload) {
+    std::vector<uint8_t> payload,
+    uint32_t request_id) {
 
     if (!is_client_allowed(type)) {
         // Per D-07: warn with type name and client pubkey hash
@@ -112,23 +115,24 @@ void RelaySession::handle_client_message(
     auto t = type;
     auto p = std::move(payload);
     auto conn = node_conn_;
-    asio::co_spawn(ioc_, [self, conn, t, p = std::move(p)]() -> asio::awaitable<void> {
-        co_await conn->send_message(t, p);
+    asio::co_spawn(ioc_, [self, conn, t, p = std::move(p), rid = request_id]() -> asio::awaitable<void> {
+        co_await conn->send_message(t, p, rid);
     }, asio::detached);
 }
 
 void RelaySession::handle_node_message(
     chromatindb::net::Connection::Ptr /*conn*/,
     chromatindb::wire::TransportMsgType type,
-    std::vector<uint8_t> payload) {
+    std::vector<uint8_t> payload,
+    uint32_t request_id) {
 
     // No filtering on node->client direction -- node only sends client-understood types
     auto self = shared_from_this();
     auto t = type;
     auto p = std::move(payload);
     auto conn = client_conn_;
-    asio::co_spawn(ioc_, [self, conn, t, p = std::move(p)]() -> asio::awaitable<void> {
-        co_await conn->send_message(t, p);
+    asio::co_spawn(ioc_, [self, conn, t, p = std::move(p), rid = request_id]() -> asio::awaitable<void> {
+        co_await conn->send_message(t, p, rid);
     }, asio::detached);
 }
 

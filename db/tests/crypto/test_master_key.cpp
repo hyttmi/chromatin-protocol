@@ -7,29 +7,14 @@
 #include "db/crypto/master_key.h"
 #include "db/crypto/aead.h"
 
+#include "db/tests/test_helpers.h"
+
 namespace fs = std::filesystem;
 
 namespace {
 
-struct TempDir {
-    fs::path path;
+using chromatindb::test::TempDir;
 
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() /
-               ("chromatindb_mk_test_" + std::to_string(dist(gen)));
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
 
 } // anonymous namespace
 

@@ -10,31 +10,13 @@
 #include "db/crypto/hash.h"
 #include "db/identity/identity.h"
 
+#include "db/tests/test_helpers.h"
+
 namespace fs = std::filesystem;
 
 namespace {
 
-/// Create a unique temporary directory for each test.
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() /
-               ("chromatindb_test_" + std::to_string(dist(gen)));
-        // Don't create -- Storage should create it
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
+using chromatindb::test::TempDir;
 
 /// Create a test BlobData with specified TTL and timestamp.
 /// Uses deterministic namespace derived from a counter for test isolation.

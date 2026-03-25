@@ -31,7 +31,7 @@ TEST_CASE("Two connections complete handshake over loopback", "[connection]") {
         REQUIRE(!ec);
 
         auto conn = Connection::create_inbound(std::move(socket), responder_id);
-        conn->on_message([&](Connection::Ptr, TransportMsgType type, std::vector<uint8_t> payload) {
+        conn->on_message([&](Connection::Ptr, TransportMsgType type, std::vector<uint8_t> payload, uint32_t /*request_id*/) {
             if (type == TransportMsgType_Data) {
                 data_received = true;
                 received_payload = payload;
@@ -142,7 +142,7 @@ TEST_CASE("Connection sends and receives encrypted data", "[connection]") {
 
         resp_conn = Connection::create_inbound(std::move(socket), resp_id);
         resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
-                                   std::vector<uint8_t> payload) {
+                                   std::vector<uint8_t> payload, uint32_t /*request_id*/) {
             if (type == TransportMsgType_Data) {
                 data_received = true;
                 received_payload = payload;
@@ -284,7 +284,7 @@ TEST_CASE("Lightweight handshake over loopback", "[connection][lightweight]") {
         resp_conn = Connection::create_inbound(std::move(socket), resp_id);
         resp_conn->set_trust_check(trust_check);
         resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
-                                   std::vector<uint8_t> payload) {
+                                   std::vector<uint8_t> payload, uint32_t /*request_id*/) {
             if (type == TransportMsgType_Data) {
                 data_received = true;
                 received_payload = payload;

@@ -184,7 +184,8 @@ private:
     // Message routing
     void on_peer_message(net::Connection::Ptr conn,
                          wire::TransportMsgType type,
-                         std::vector<uint8_t> payload);
+                         std::vector<uint8_t> payload,
+                         uint32_t request_id);
 
     // Sync orchestration
     asio::awaitable<void> run_sync_with_peer(net::Connection::Ptr conn);

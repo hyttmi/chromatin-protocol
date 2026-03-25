@@ -8,21 +8,13 @@
 #include <string>
 #include <vector>
 
+#include "db/util/hex.h"
+
 using namespace chromatindb::acl;
 
 namespace {
 
-/// Convert 32 bytes to hex string for test setup.
-std::string to_hex(std::span<const uint8_t, 32> bytes) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(64);
-    for (auto b : bytes) {
-        result += hex_chars[(b >> 4) & 0xF];
-        result += hex_chars[b & 0xF];
-    }
-    return result;
-}
+using chromatindb::util::to_hex;
 
 /// Generate a deterministic test namespace hash from a seed.
 std::array<uint8_t, 32> make_ns_hash(uint8_t seed) {

@@ -6,16 +6,16 @@
 #include <cstring>
 #include <unordered_set>
 
-#include <asio.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-
 #include "db/sync/sync_protocol.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 #include "db/config/config.h"
+
+#include "db/tests/test_helpers.h"
+
+#include <asio.hpp>
 
 namespace fs = std::filesystem;
 
@@ -41,98 +41,18 @@ std::vector<std::array<uint8_t, 32>> diff_hashes(
     return missing;
 }
 
-/// Run an awaitable synchronously using a temporary io_context.
-/// Used in tests to call async BlobEngine and SyncProtocol methods.
-template <typename T>
-T run_async(asio::thread_pool& pool, asio::awaitable<T> aw) {
-    asio::io_context ioc;
-    T result{};
-    asio::co_spawn(ioc, [&result, a = std::move(aw)]() mutable -> asio::awaitable<T> {
-        result = co_await std::move(a);
-        co_return result;
-    }, asio::detached);
-    ioc.run();
-    return result;
-}
-
-/// Create a unique temporary directory for each test.
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint64_t> dist;
-        path = fs::temp_directory_path() /
-               ("chromatindb_test_sync_" + std::to_string(dist(gen)));
-    }
-
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-};
-
-/// Get current Unix timestamp in seconds for test helper defaults.
-uint64_t current_timestamp() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-}
-
-/// Sentinel value: pass this as timestamp to auto-use current system time.
-constexpr uint64_t TS_AUTO = UINT64_MAX;
-
-/// Build a properly signed BlobData using a NodeIdentity.
-chromatindb::wire::BlobData make_signed_blob(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::string& payload,
-    uint32_t ttl = 604800,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    blob.data.assign(payload.begin(), payload.end());
-    blob.ttl = ttl;
-    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    // Build canonical signing input and sign it
-    auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-    blob.signature = id.sign(signing_input);
-
-    return blob;
-}
-
-/// Build a properly signed tombstone BlobData for deleting a blob by its content hash.
-chromatindb::wire::BlobData make_signed_tombstone(
-    const chromatindb::identity::NodeIdentity& id,
-    const std::array<uint8_t, 32>& target_blob_hash,
-    uint64_t timestamp = TS_AUTO)
-{
-    chromatindb::wire::BlobData tombstone;
-    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
-    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
-    tombstone.data = chromatindb::wire::make_tombstone_data(target_blob_hash);
-    tombstone.ttl = 0;  // Permanent
-    tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
-
-    auto signing_input = chromatindb::wire::build_signing_input(
-        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
-    tombstone.signature = id.sign(signing_input);
-
-    return tombstone;
-}
-
 /// Fixed clock for deterministic tests.
 uint64_t test_clock_value = 0;
 uint64_t test_clock() { return test_clock_value; }
 
 } // anonymous namespace
+
+using chromatindb::test::TempDir;
+using chromatindb::test::run_async;
+using chromatindb::test::make_signed_blob;
+using chromatindb::test::make_signed_tombstone;
+using chromatindb::test::current_timestamp;
+using chromatindb::test::TS_AUTO;
 
 using chromatindb::config::Config;
 using chromatindb::engine::BlobEngine;
@@ -688,7 +608,7 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     // Node1: owner creates delegation
-    auto deleg = make_signed_delegation_sync(owner, delegate);
+    auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
     auto deleg_result = run_async(pool, engine1.ingest(deleg));
     REQUIRE(deleg_result.accepted);
 
@@ -728,10 +648,10 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     // Node1: owner delegates, delegate writes
-    auto deleg = make_signed_delegation_sync(owner, delegate);
+    auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
     REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
 
-    auto delegate_blob = make_delegate_blob_sync(owner, delegate, "sync-delegate-data");
+    auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "sync-delegate-data");
     REQUIRE(run_async(pool, engine1.ingest(delegate_blob)).accepted);
 
     // Sync everything from node1 to node2
@@ -791,7 +711,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     // Both nodes have the delegation
-    auto deleg = make_signed_delegation_sync(owner, delegate);
+    auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
     REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
     REQUIRE(run_async(pool, engine2.ingest(deleg)).accepted);
 
@@ -833,7 +753,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
         owner.namespace_id(), delegate.public_key()));
 
     // Delegate writes to node2 should now fail
-    auto delegate_blob = make_delegate_blob_sync(owner, delegate, "post-revocation");
+    auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "post-revocation");
     auto result = run_async(pool, engine2.ingest(delegate_blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);

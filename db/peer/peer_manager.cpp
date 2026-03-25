@@ -408,8 +408,8 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
 
     // Set up message routing
     conn->on_message([this](net::Connection::Ptr c, wire::TransportMsgType type,
-                            std::vector<uint8_t> payload) {
-        on_peer_message(c, type, std::move(payload));
+                            std::vector<uint8_t> payload, uint32_t request_id) {
+        on_peer_message(c, type, std::move(payload), request_id);
     });
 
     peers_.push_back(info);
@@ -466,7 +466,8 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
 
 void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                    wire::TransportMsgType type,
-                                   std::vector<uint8_t> payload) {
+                                   std::vector<uint8_t> payload,
+                                   uint32_t request_id) {
     // Track last message time for inactivity detection (CONN-03).
     // Placed at the very top so ALL messages (even rate-limited ones) update the timestamp.
     {
@@ -630,7 +631,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_Delete) {
         // Delete message -- process as blob deletion via coroutine (engine is async)
-        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 auto blob = wire::decode_blob(payload);
                 // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
@@ -652,7 +653,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     }
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
-                                                 std::span<const uint8_t>(ack_payload));
+                                                 std::span<const uint8_t>(ack_payload), request_id);
                     // Notify subscribers about tombstone
                     if (ack.status == engine::IngestStatus::stored) {
                         notify_subscribers(
@@ -694,7 +695,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_ReadRequest) {
-        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 64) {
                     record_strike(conn, "ReadRequest too short");
@@ -712,11 +713,11 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     response[0] = 0x01;  // found
                     std::memcpy(response.data() + 1, encoded.data(), encoded.size());
                     co_await conn->send_message(wire::TransportMsgType_ReadResponse,
-                                                 std::span<const uint8_t>(response));
+                                                 std::span<const uint8_t>(response), request_id);
                 } else {
                     std::vector<uint8_t> response = {0x00};  // not found
                     co_await conn->send_message(wire::TransportMsgType_ReadResponse,
-                                                 std::span<const uint8_t>(response));
+                                                 std::span<const uint8_t>(response), request_id);
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ReadRequest from {}: {}", conn->remote_address(), e.what());
@@ -727,7 +728,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_ListRequest) {
-        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 44) {
                     record_strike(conn, "ListRequest too short");
@@ -771,7 +772,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 response[4 + count * 40] = has_more ? 1 : 0;
 
                 co_await conn->send_message(wire::TransportMsgType_ListResponse,
-                                             std::span<const uint8_t>(response));
+                                             std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ListRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike(conn, e.what());
@@ -781,7 +782,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_StatsRequest) {
-        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 32) {
                     record_strike(conn, "StatsRequest too short");
@@ -803,7 +804,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     response[16 + 7 - i] = static_cast<uint8_t>(byte_limit >> (i * 8));
 
                 co_await conn->send_message(wire::TransportMsgType_StatsResponse,
-                                             std::span<const uint8_t>(response));
+                                             std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed StatsRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike(conn, e.what());
@@ -814,7 +815,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob via coroutine (engine is async)
-        asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 auto blob = wire::decode_blob(payload);
                 // Namespace filter: drop blobs for filtered namespaces (silent, no strike)
@@ -836,7 +837,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     }
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_WriteAck,
-                                                 std::span<const uint8_t>(ack_payload));
+                                                 std::span<const uint8_t>(ack_payload), request_id);
                 }
                 if (result.accepted && result.ack.has_value() &&
                     result.ack->status == engine::IngestStatus::stored) {
@@ -855,14 +856,14 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                         // Send StorageFull to inform peer we cannot accept blobs
                         spdlog::warn("Storage full, notifying peer {}", peer_display_name(conn));
                         std::span<const uint8_t> empty{};
-                        co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
+                        co_await conn->send_message(wire::TransportMsgType_StorageFull, empty, request_id);
                     } else if (*result.error == engine::IngestError::quota_exceeded) {
                         // Send QuotaExceeded to inform peer namespace is over quota
                         spdlog::warn("Namespace quota exceeded, notifying peer {}",
                                      peer_display_name(conn));
                         ++metrics_.quota_rejections;
                         std::span<const uint8_t> empty{};
-                        co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
+                        co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty, request_id);
                     } else if (*result.error == engine::IngestError::timestamp_rejected) {
                         // Timestamp too far in future/past -- receiver's decision, debug log only
                         spdlog::debug("Data from {}: timestamp rejected ({})",

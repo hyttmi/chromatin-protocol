@@ -776,7 +776,7 @@ asio::awaitable<void> Connection::message_loop() {
             default:
                 if (message_cb_) {
                     message_cb_(shared_from_this(), decoded->type,
-                                std::move(decoded->payload));
+                                std::move(decoded->payload), decoded->request_id);
                 }
                 break;
         }
@@ -808,8 +808,9 @@ asio::awaitable<bool> Connection::run() {
 }
 
 asio::awaitable<bool> Connection::send_message(wire::TransportMsgType type,
-                                                std::span<const uint8_t> payload) {
-    auto msg = TransportCodec::encode(type, payload);
+                                                std::span<const uint8_t> payload,
+                                                uint32_t request_id) {
+    auto msg = TransportCodec::encode(type, payload, request_id);
     co_return co_await send_encrypted(msg);
 }
 
