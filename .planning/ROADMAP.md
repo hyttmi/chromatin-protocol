@@ -140,7 +140,9 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
   1. A client can send multiple ReadRequest/ListRequest/StatsRequest messages without waiting for responses, and each response arrives with the correct request_id regardless of completion order
   2. Cheap operations (Ping, Pong, Goodbye, Subscribe, Unsubscribe) execute inline on the IO thread without thread pool dispatch overhead
   3. All send_message calls happen on the IO thread (AEAD nonce safety verified -- no TSAN findings)
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 62-01-PLAN.md — IO-thread safety fix and concurrent dispatch verification
 
 ### Phase 63: Query Extensions
 **Goal**: Clients can check blob existence without data transfer and discover node capabilities, version, and storage state
@@ -170,6 +172,6 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
-| 62. Concurrent Dispatch | 0/TBD | Not started | - |
+| 62. Concurrent Dispatch | 0/1 | Not started | - |
 | 63. Query Extensions | 0/TBD | Not started | - |
 | 64. Documentation | 0/TBD | Not started | - |
