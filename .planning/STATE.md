@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3.0
 milestone_name: Protocol Concurrency & Query Foundation
 status: unknown
-stopped_at: Completed 63-01-PLAN.md
-last_updated: "2026-03-25T16:59:17.986Z"
+stopped_at: Completed 63-02-PLAN.md
+last_updated: "2026-03-25T17:08:26.976Z"
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -44,6 +44,7 @@ Plan: 2 of 2
 
 | Phase 62 P01 | 40min | 2 tasks | 2 files |
 | Phase 63 P01 | 6min | 2 tasks | 6 files |
+| Phase 63 P02 | 6min | 2 tasks | 6 files |
 
 ### Decisions
 
@@ -54,6 +55,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [Phase 62]: Client sends must be serialized within single coroutine to avoid AEAD nonce desync
 - [Phase 63]: ExistsResponse echoes blob_hash for client-side pipelining correlation
 - [Phase 63]: Uses storage_.has_blob() directly for zero-data-read existence check (QUERY-02)
+- [Phase 63]: NodeInfoResponse uses binary wire format with length-prefixed strings for SDK capability discovery (per D-05)
+- [Phase 63]: supported_types list contains 20 client-facing types only (excludes sync/PEX/handshake internals)
 
 ### Pending Todos
 
@@ -65,6 +68,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-25T16:59:17.984Z
-Stopped at: Completed 63-01-PLAN.md
+Last session: 2026-03-25T17:08:26.974Z
+Stopped at: Completed 63-02-PLAN.md
 Resume file: None

@@ -19,7 +19,7 @@ Requirements for v1.3.0 Protocol Concurrency & Query Foundation. Each maps to ro
 
 - [x] **QUERY-01**: Client can send ExistsRequest (type 37) with namespace + blob hash and receive ExistsResponse (type 38) with a boolean existence result and echoed blob hash
 - [x] **QUERY-02**: `Storage` exposes a `has_blob()` key-existence check that does not read the blob value
-- [ ] **QUERY-03**: Client can send NodeInfoRequest (type 39) and receive NodeInfoResponse (type 40) with version, git hash, uptime, peer count, namespace count, total blobs, storage bytes used/max, and list of supported message types
+- [x] **QUERY-03**: Client can send NodeInfoRequest (type 39) and receive NodeInfoResponse (type 40) with version, git hash, uptime, peer count, namespace count, total blobs, storage bytes used/max, and list of supported message types
 - [x] **QUERY-04**: Relay message filter allows ExistsRequest (37), ExistsResponse (38), NodeInfoRequest (39), NodeInfoResponse (40) through to the node
 
 ### Documentation
@@ -67,7 +67,7 @@ Deferred to subsequent milestone (v1.4.0+).
 | CONC-05 | Phase 61 | Pending |
 | QUERY-01 | Phase 63 | Complete |
 | QUERY-02 | Phase 63 | Complete |
-| QUERY-03 | Phase 63 | Pending |
+| QUERY-03 | Phase 63 | Complete |
 | QUERY-04 | Phase 63 | Complete |
 | DOCS-01 | Phase 64 | Pending |
 | DOCS-02 | Phase 64 | Pending |
