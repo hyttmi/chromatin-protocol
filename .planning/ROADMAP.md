@@ -166,7 +166,10 @@ Plans:
   1. db/PROTOCOL.md documents request_id semantics (client-assigned, node-echoed, per-connection scope), the concurrent dispatch model (inline vs offloaded categories), and both new message type pairs (ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse)
   2. README.md describes v1.3.0 capabilities (concurrent requests, blob existence check, node info query)
   3. db/README.md documents the concurrent dispatch model, new message types, and request_id field
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 64-01-PLAN.md — PROTOCOL.md: request_id semantics, ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse wire format
+- [ ] 64-02-PLAN.md — README.md version bump, db/README.md features, dispatch model, counts
 
 ## Progress
 
@@ -177,4 +180,4 @@ Plans:
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
 | 62. Concurrent Dispatch | 1/1 | Complete    | 2026-03-25 |
 | 63. Query Extensions | 2/2 | Complete    | 2026-03-25 |
-| 64. Documentation | 0/TBD | Not started | - |
+| 64. Documentation | 0/2 | Not started | - |
