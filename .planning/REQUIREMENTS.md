@@ -58,26 +58,26 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| QUERY-05 | — | Pending |
-| QUERY-06 | — | Pending |
-| QUERY-07 | — | Pending |
-| QUERY-08 | — | Pending |
-| QUERY-09 | — | Pending |
-| QUERY-10 | — | Pending |
-| QUERY-11 | — | Pending |
-| QUERY-12 | — | Pending |
-| QUERY-13 | — | Pending |
-| QUERY-14 | — | Pending |
-| INTEG-01 | — | Pending |
-| INTEG-02 | — | Pending |
-| INTEG-03 | — | Pending |
-| INTEG-04 | — | Pending |
+| QUERY-05 | Phase 65 | Pending |
+| QUERY-06 | Phase 65 | Pending |
+| QUERY-07 | Phase 65 | Pending |
+| QUERY-08 | Phase 65 | Pending |
+| QUERY-09 | Phase 67 | Pending |
+| QUERY-10 | Phase 66 | Pending |
+| QUERY-11 | Phase 66 | Pending |
+| QUERY-12 | Phase 66 | Pending |
+| QUERY-13 | Phase 67 | Pending |
+| QUERY-14 | Phase 67 | Pending |
+| INTEG-01 | Phase 67 | Pending |
+| INTEG-02 | Phase 67 | Pending |
+| INTEG-03 | Phase 67 | Pending |
+| INTEG-04 | Phase 67 | Pending |
 
 **Coverage:**
 - v1.4.0 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-26*
-*Last updated: 2026-03-26 after initial definition*
+*Last updated: 2026-03-26 after roadmap creation*

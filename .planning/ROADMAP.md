@@ -15,6 +15,7 @@
 - ✅ **v1.1.0 Operational Polish & Local Access** — Phases 53-56 (shipped 2026-03-22)
 - ✅ **v1.2.0 Relay & Client Protocol** — Phases 57-60 (shipped 2026-03-23)
 - ✅ **v1.3.0 Protocol Concurrency & Query Foundation** — Phases 61-64 (shipped 2026-03-26)
+- [ ] **v1.4.0 Extended Query Suite** — Phases 65-67 (in progress)
 
 ## Phases
 
@@ -113,3 +114,71 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 </details>
+
+### v1.4.0 Extended Query Suite (In Progress)
+
+**Milestone Goal:** Add 10 new query/response message type pairs (20 enum values, types 41-60) expanding the client-facing API with health, namespace inspection, metadata, batch operations, delegations, peer topology, and time-range queries.
+
+- [ ] **Phase 65: Node-Level Queries** - Health, NamespaceList, StorageStatus, NamespaceStats using existing storage methods
+- [ ] **Phase 66: Blob-Level Queries** - MetadataRequest, BatchExists, DelegationList with minor new Storage methods
+- [ ] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md
+
+## Phase Details
+
+### Phase 65: Node-Level Queries
+**Goal**: Operators and clients can inspect node health, enumerate namespaces, and query storage status
+**Depends on**: Phase 64 (v1.3.0 -- coroutine-IO dispatch, request_id, NodeInfo pattern)
+**Requirements**: QUERY-05, QUERY-06, QUERY-07, QUERY-08
+**Success Criteria** (what must be TRUE):
+  1. Client can send a HealthRequest and receive uptime, version, peer count, and readiness status without any storage IO blocking the response
+  2. Client can list all namespaces stored on the node with pagination (after_namespace cursor + limit), receiving namespace hashes and counts
+  3. Client can query node-level storage status including used bytes, quota headroom, and tombstone counts in a single request
+  4. Client can query per-namespace statistics (blob count, total bytes, delegation count, quota usage) for any namespace
+  5. All four new request/response types pass through relay message filter and work over both TCP (via relay) and UDS paths
+**Plans**: TBD
+
+Plans:
+- [ ] 65-01: TBD
+- [ ] 65-02: TBD
+
+### Phase 66: Blob-Level Queries
+**Goal**: Clients can inspect individual blob metadata, check batch existence, and list delegations without transferring payload data
+**Depends on**: Phase 65
+**Requirements**: QUERY-10, QUERY-11, QUERY-12
+**Success Criteria** (what must be TRUE):
+  1. Client can fetch blob metadata (size, timestamp, TTL, signer pubkey) for a specific blob without transferring the payload data
+  2. Client can check existence of multiple blob hashes (up to 256) in a single BatchExistsRequest, receiving a per-hash boolean result
+  3. Client can list all active delegations for a namespace, receiving delegate pubkeys and delegation blob hashes
+  4. All three new request/response types pass through relay message filter and work over both TCP and UDS paths
+**Plans**: TBD
+
+Plans:
+- [ ] 66-01: TBD
+- [ ] 66-02: TBD
+
+### Phase 67: Batch/Range Queries & Integration
+**Goal**: Clients can batch-fetch blobs, query peers, query by time range, and all v1.4.0 types are fully integrated across relay, NodeInfo, and documentation
+**Depends on**: Phase 66
+**Requirements**: QUERY-09, QUERY-13, QUERY-14, INTEG-01, INTEG-02, INTEG-03, INTEG-04
+**Success Criteria** (what must be TRUE):
+  1. Client can fetch multiple blobs in a single BatchReadRequest with cumulative size cap and partial-result flag when the cap is reached
+  2. Client can query peer connection information via PeerInfoRequest with trust-gated response (full detail for trusted/UDS, reduced for untrusted)
+  3. Client can query blobs in a namespace within a timestamp range via TimeRangeRequest with a result limit
+  4. NodeInfoResponse supported_types includes all new v1.4.0 message types (types 41-60)
+  5. PROTOCOL.md documents wire format for all 10 new request/response pairs added in this milestone
+**Plans**: TBD
+
+Plans:
+- [ ] 67-01: TBD
+- [ ] 67-02: TBD
+- [ ] 67-03: TBD
+
+## Progress
+
+**Execution Order:** 65 -> 66 -> 67
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 65. Node-Level Queries | 0/2 | Not started | - |
+| 66. Blob-Level Queries | 0/2 | Not started | - |
+| 67. Batch/Range Queries & Integration | 0/3 | Not started | - |
