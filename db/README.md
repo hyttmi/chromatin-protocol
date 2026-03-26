@@ -61,7 +61,7 @@ The codebase is clean under all three sanitizers.
 
 ### Unit Tests
 
-469 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
+551 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
 
 ```bash
 cd build
@@ -189,7 +189,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 30 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, and sync rate limiting. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 40 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, and node capability discovery. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## Scenarios
 
@@ -339,6 +339,8 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 
 **Thread Pool Crypto Offload** -- CPU-bound cryptographic operations (ML-DSA-87 signature verification, SHA3-256 content hashing) are dispatched to a configurable thread pool, freeing the event loop for I/O. Connection-scoped AEAD state is never accessed from worker threads (nonce safety by design).
 
+**Concurrent Request Dispatch** -- Client requests are dispatched according to their cost. Lightweight operations (Subscribe, Unsubscribe, StorageFull, QuotaExceeded) execute inline on the IO thread. Storage queries (ReadRequest, ListRequest, StatsRequest, ExistsRequest, NodeInfoRequest) run as coroutines on the IO thread. Heavy operations (Data, Delete) offload cryptographic verification to the thread pool and transfer back to the IO thread before sending responses, maintaining AEAD nonce safety.
+
 **Namespace Quotas** -- Per-namespace byte and blob count limits enforced at ingest. When a write would exceed the configured quota, the node rejects the blob and sends a QuotaExceeded signal to the writing peer. Global defaults apply to all namespaces, with per-namespace overrides for differentiated limits. Quota configuration is reloadable via SIGHUP.
 
 **Config Validation** -- The node validates all configuration fields at startup and rejects invalid values with human-readable error messages. Validation checks types, ranges, and formats, accumulating all errors before reporting. Invalid configuration prevents startup.
@@ -356,6 +358,12 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 **ACL-Aware Reconnection** -- When a peer rejects connections via ACL (connects, handshakes, disconnects with zero messages), the node enters extended backoff (600s) after 3 consecutive rejections. Sending SIGHUP resets all rejection counters for immediate retry.
 
 **Inactivity Timeout** -- The node monitors all connected peers for message activity. Peers that send no messages within the configurable `inactivity_timeout_seconds` deadline are disconnected and their resources freed. This is receiver-side detection only (no Ping/Pong messages).
+
+**Request Pipelining** -- Clients assign a `request_id` to each request message and the node echoes it on the corresponding response. Multiple requests can be sent without waiting, and responses are matched by `request_id` regardless of arrival order. The `request_id` is a `uint32` in the transport envelope, scoped per connection.
+
+**Blob Existence Check** -- Clients send an ExistsRequest with a namespace and blob hash to check whether a blob exists without transferring its data. The node responds with a single-byte existence flag and the echoed blob hash. Tombstoned blobs are reported as not found.
+
+**Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version, git hash, uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. SDKs use the supported types list for feature detection.
 
 ## License
 
