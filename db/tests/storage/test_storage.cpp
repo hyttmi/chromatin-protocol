@@ -2161,3 +2161,103 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
     auto unknown = chromatindb::identity::NodeIdentity::generate();
     CHECK(store.count_delegations(unknown.namespace_id()) == 0);
 }
+
+// ============================================================================
+// list_delegations tests
+// ============================================================================
+
+TEST_CASE("list_delegations returns empty for namespace with no delegations", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+
+    auto entries = store.list_delegations(owner.namespace_id());
+    CHECK(entries.empty());
+}
+
+TEST_CASE("list_delegations returns entries for namespace with delegations", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    // Store 2 delegations
+    auto d1 = make_signed_delegation(owner, delegate1);
+    auto dr1 = run_async(pool, eng.ingest(d1));
+    REQUIRE(dr1.accepted);
+
+    auto d2 = make_signed_delegation(owner, delegate2);
+    auto dr2 = run_async(pool, eng.ingest(d2));
+    REQUIRE(dr2.accepted);
+
+    auto entries = store.list_delegations(owner.namespace_id());
+    REQUIRE(entries.size() == 2);
+
+    // Compute expected delegate_pk_hash values
+    auto expected_hash1 = chromatindb::crypto::sha3_256(
+        delegate1.public_key().data(), delegate1.public_key().size());
+    auto expected_hash2 = chromatindb::crypto::sha3_256(
+        delegate2.public_key().data(), delegate2.public_key().size());
+
+    // Compute expected delegation_blob_hash values
+    auto encoded1 = chromatindb::wire::encode_blob(d1);
+    auto expected_blob_hash1 = chromatindb::wire::blob_hash(encoded1);
+    auto encoded2 = chromatindb::wire::encode_blob(d2);
+    auto expected_blob_hash2 = chromatindb::wire::blob_hash(encoded2);
+
+    // Entries may be in any order; collect into a set for matching
+    bool found1 = false, found2 = false;
+    for (const auto& e : entries) {
+        if (e.delegate_pk_hash == expected_hash1) {
+            CHECK(e.delegation_blob_hash == expected_blob_hash1);
+            found1 = true;
+        } else if (e.delegate_pk_hash == expected_hash2) {
+            CHECK(e.delegation_blob_hash == expected_blob_hash2);
+            found2 = true;
+        }
+    }
+    CHECK(found1);
+    CHECK(found2);
+}
+
+TEST_CASE("list_delegations does not return delegations from other namespaces", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    auto owner1 = chromatindb::identity::NodeIdentity::generate();
+    auto owner2 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    // owner1 delegates to delegate1
+    auto d1 = make_signed_delegation(owner1, delegate1);
+    auto dr1 = run_async(pool, eng.ingest(d1));
+    REQUIRE(dr1.accepted);
+
+    // owner2 delegates to delegate2
+    auto d2 = make_signed_delegation(owner2, delegate2);
+    auto dr2 = run_async(pool, eng.ingest(d2));
+    REQUIRE(dr2.accepted);
+
+    // list_delegations(owner1) should only return delegate1
+    auto entries1 = store.list_delegations(owner1.namespace_id());
+    REQUIRE(entries1.size() == 1);
+
+    auto expected_hash1 = chromatindb::crypto::sha3_256(
+        delegate1.public_key().data(), delegate1.public_key().size());
+    CHECK(entries1[0].delegate_pk_hash == expected_hash1);
+
+    // list_delegations(owner2) should only return delegate2
+    auto entries2 = store.list_delegations(owner2.namespace_id());
+    REQUIRE(entries2.size() == 1);
+
+    auto expected_hash2 = chromatindb::crypto::sha3_256(
+        delegate2.public_key().data(), delegate2.public_key().size());
+    CHECK(entries2[0].delegate_pk_hash == expected_hash2);
+}
