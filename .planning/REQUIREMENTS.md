@@ -1,0 +1,83 @@
+# Requirements: chromatindb v1.4.0
+
+**Defined:** 2026-03-26
+**Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
+
+## v1.4.0 Requirements
+
+Requirements for Extended Query Suite. Each maps to roadmap phases.
+
+### Node-Level Queries
+
+- [ ] **QUERY-05**: Client can check node health (uptime, version, peer count, readiness status)
+- [ ] **QUERY-06**: Client can list all namespaces on a node with pagination
+- [ ] **QUERY-07**: Client can query storage status (disk usage, quota headroom, tombstone counts)
+- [ ] **QUERY-08**: Client can query per-namespace statistics (blob count, bytes, delegation count)
+- [ ] **QUERY-09**: Client can query peer connection information (trust-gated response)
+
+### Blob-Level Queries
+
+- [ ] **QUERY-10**: Client can fetch blob metadata without transferring payload data
+- [ ] **QUERY-11**: Client can check existence of multiple blobs in a single request
+- [ ] **QUERY-12**: Client can list active delegations for a namespace
+
+### Range/Batch Queries
+
+- [ ] **QUERY-13**: Client can fetch multiple blobs in a single request with size-capped partial responses
+- [ ] **QUERY-14**: Client can query blobs in a namespace within a timestamp range
+
+### Integration
+
+- [ ] **INTEG-01**: All new query types pass through relay message filter
+- [ ] **INTEG-02**: NodeInfoResponse advertises all new types in supported_types
+- [ ] **INTEG-03**: PROTOCOL.md documents all new message type wire formats
+- [ ] **INTEG-04**: Relay forwards and receives all new response types without modification (no silent drops)
+
+## Future Requirements
+
+### Client SDK
+
+- **SDK-01**: Python SDK for connecting to relay
+- **SDK-02**: CLI tool for admin operations (quota check, list blobs, etc.)
+
+### Performance
+
+- **PERF-01**: Relay layer performance benchmarks
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Timestamp sub-database index | YAGNI — seq_map scan with limit cap is sufficient for v1.4.0. Optimize if profiling warrants. |
+| GraphQL/REST query interface | Protocol is binary wire format. Higher-level APIs belong in SDK layer. |
+| Query result caching | Premature optimization. MDBX MVCC reads are already lock-free. |
+| Full-text search | Not a document database. Blobs are opaque signed data. |
+| Streaming query results | Paginated responses with limits are sufficient. Streaming adds protocol complexity. |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| QUERY-05 | — | Pending |
+| QUERY-06 | — | Pending |
+| QUERY-07 | — | Pending |
+| QUERY-08 | — | Pending |
+| QUERY-09 | — | Pending |
+| QUERY-10 | — | Pending |
+| QUERY-11 | — | Pending |
+| QUERY-12 | — | Pending |
+| QUERY-13 | — | Pending |
+| QUERY-14 | — | Pending |
+| INTEG-01 | — | Pending |
+| INTEG-02 | — | Pending |
+| INTEG-03 | — | Pending |
+| INTEG-04 | — | Pending |
+
+**Coverage:**
+- v1.4.0 requirements: 14 total
+- Mapped to phases: 0
+- Unmapped: 14 ⚠️
+
+---
+*Requirements defined: 2026-03-26*
+*Last updated: 2026-03-26 after initial definition*
