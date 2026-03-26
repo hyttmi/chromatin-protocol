@@ -9,6 +9,7 @@
 #include "db/wire/codec.h"
 #include "db/crypto/hash.h"
 #include "db/identity/identity.h"
+#include "db/engine/engine.h"
 
 #include "db/tests/test_helpers.h"
 
@@ -2068,4 +2069,95 @@ TEST_CASE("Storage::compact() DB is still functional after compaction", "[storag
         std::span<const uint8_t, 32>(r2.blob_hash));
     REQUIRE(retrieved2.has_value());
     REQUIRE(retrieved2->data == blob2.data);
+}
+
+// ============================================================================
+// count_tombstones / count_delegations tests
+// ============================================================================
+
+using chromatindb::test::make_signed_blob;
+using chromatindb::test::make_signed_tombstone;
+using chromatindb::test::make_signed_delegation;
+using chromatindb::test::run_async;
+using chromatindb::engine::BlobEngine;
+
+TEST_CASE("count_tombstones returns 0 for empty storage", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    CHECK(store.count_tombstones() == 0);
+}
+
+TEST_CASE("count_tombstones counts tombstone entries", "[storage][tombstone]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+
+    // Store 2 regular blobs, then tombstone them
+    auto blob1 = make_signed_blob(owner, "tombstone-test-1");
+    auto r1 = run_async(pool, eng.ingest(blob1));
+    REQUIRE(r1.accepted);
+
+    auto blob2 = make_signed_blob(owner, "tombstone-test-2");
+    auto r2 = run_async(pool, eng.ingest(blob2));
+    REQUIRE(r2.accepted);
+
+    // Store tombstones for both
+    auto ts1 = make_signed_tombstone(owner, r1.ack->blob_hash);
+    auto tr1 = run_async(pool, eng.delete_blob(ts1));
+    REQUIRE(tr1.accepted);
+
+    auto ts2 = make_signed_tombstone(owner, r2.ack->blob_hash);
+    auto tr2 = run_async(pool, eng.delete_blob(ts2));
+    REQUIRE(tr2.accepted);
+
+    CHECK(store.count_tombstones() == 2);
+
+    // Store a regular blob -- should NOT affect tombstone count
+    auto blob3 = make_signed_blob(owner, "regular-blob");
+    auto r3 = run_async(pool, eng.ingest(blob3));
+    REQUIRE(r3.accepted);
+    CHECK(store.count_tombstones() == 2);
+}
+
+TEST_CASE("count_delegations returns 0 for empty storage", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    auto owner = chromatindb::identity::NodeIdentity::generate();
+    CHECK(store.count_delegations(owner.namespace_id()) == 0);
+}
+
+TEST_CASE("count_delegations counts per-namespace delegations", "[storage][delegation]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    auto owner1 = chromatindb::identity::NodeIdentity::generate();
+    auto owner2 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate1 = chromatindb::identity::NodeIdentity::generate();
+    auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+
+    // owner1 delegates to delegate1 and delegate2
+    auto d1 = make_signed_delegation(owner1, delegate1);
+    auto dr1 = run_async(pool, eng.ingest(d1));
+    REQUIRE(dr1.accepted);
+
+    auto d2 = make_signed_delegation(owner1, delegate2);
+    auto dr2 = run_async(pool, eng.ingest(d2));
+    REQUIRE(dr2.accepted);
+
+    // owner2 delegates to delegate1 only
+    auto d3 = make_signed_delegation(owner2, delegate1);
+    auto dr3 = run_async(pool, eng.ingest(d3));
+    REQUIRE(dr3.accepted);
+
+    CHECK(store.count_delegations(owner1.namespace_id()) == 2);
+    CHECK(store.count_delegations(owner2.namespace_id()) == 1);
+
+    // Unknown namespace returns 0
+    auto unknown = chromatindb::identity::NodeIdentity::generate();
+    CHECK(store.count_delegations(unknown.namespace_id()) == 0);
 }
