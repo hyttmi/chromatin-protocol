@@ -55,3 +55,21 @@ Migrate flaky in-process E2E peer tests to Docker containers with isolated netwo
 **Root cause:** hardcoded ports + shared io_context + timing-dependent sync assertions
 
 **Depends on:** existing Docker infrastructure (v0.6.0 Compose topology)
+
+## 999.7 — Managed Replication / Backup-as-a-Service Mode
+
+Sell storage space so companies can automatically back up their node data to your instances. Company runs relay + primary node + 2-3 backup nodes, and additionally replicates to your hosted nodes as off-site backup.
+
+Bootstrap connection works today, but a paid backup service needs:
+
+1. **Replication role config** — `replication_mode: receiver` that accepts/stores incoming syncs but doesn't initiate outbound sync or become a full mesh participant in the customer's network
+2. **PEX scoping** — don't leak peer lists across customer boundaries. Currently PEX shares all known peers, so Customer A would learn Customer B's peer addresses
+3. **Connection-level tenant tagging** — associate connections with a customer identity for billing/quota enforcement. StorageStatus + NamespaceStats (Phase 65) provide the usage data, but need a way to attribute it per-customer
+
+What already works:
+- `allowed_keys` restricts who can write to your nodes
+- Namespace isolation means multi-tenant is cryptographically safe
+- DARE means you can't read their data
+- StorageStatus/NamespaceStats provide billing-grade usage metrics
+
+**Depends on:** v1.4.0 (query suite for usage metrics), possibly v1.5.0+ as its own milestone
