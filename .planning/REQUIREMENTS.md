@@ -17,8 +17,8 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 ### Blob-Level Queries
 
-- [ ] **QUERY-10**: Client can fetch blob metadata without transferring payload data
-- [ ] **QUERY-11**: Client can check existence of multiple blobs in a single request
+- [x] **QUERY-10**: Client can fetch blob metadata without transferring payload data
+- [x] **QUERY-11**: Client can check existence of multiple blobs in a single request
 - [x] **QUERY-12**: Client can list active delegations for a namespace
 
 ### Range/Batch Queries
@@ -63,8 +63,8 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 | QUERY-07 | Phase 65 | Complete |
 | QUERY-08 | Phase 65 | Complete |
 | QUERY-09 | Phase 67 | Pending |
-| QUERY-10 | Phase 66 | Pending |
-| QUERY-11 | Phase 66 | Pending |
+| QUERY-10 | Phase 66 | Complete |
+| QUERY-11 | Phase 66 | Complete |
 | QUERY-12 | Phase 66 | Complete |
 | QUERY-13 | Phase 67 | Pending |
 | QUERY-14 | Phase 67 | Pending |

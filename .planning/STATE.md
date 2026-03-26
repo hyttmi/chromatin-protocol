@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.4.0
 milestone_name: Extended Query Suite
 status: unknown
-stopped_at: Completed 66-01-PLAN.md
-last_updated: "2026-03-26T16:15:58.307Z"
+stopped_at: Completed 66-02-PLAN.md
+last_updated: "2026-03-26T16:23:44.444Z"
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -49,6 +49,7 @@ Plan: 2 of 2
 | Phase 65 P01 | 7min | 2 tasks | 9 files |
 | Phase 65 P02 | 8min | 2 tasks | 2 files |
 | Phase 66 P01 | 6min | 2 tasks | 8 files |
+| Phase 66 P02 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ Recent decisions affecting current work:
 - [Phase 65]: StorageStatus includes mmap_bytes for operator monitoring alongside used_data_bytes
 - [Phase 65]: NamespaceStats blob_count includes delegation blobs (only tombstones are quota-exempt)
 - [Phase 66]: DelegationEntry struct with delegate_pk_hash + delegation_blob_hash as typed return from delegation_map
+- [Phase 66]: MetadataRequest seq_num retrieved via get_blob_refs_since scan (no direct seq_num in BlobData)
+- [Phase 66]: BatchExistsRequest count=0 and count>1024 both trigger strike and connection drop
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-26T16:15:58.305Z
-Stopped at: Completed 66-01-PLAN.md
+Last session: 2026-03-26T16:23:44.441Z
+Stopped at: Completed 66-02-PLAN.md
 Resume file: None
