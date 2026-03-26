@@ -31,6 +31,7 @@ using chromatindb::test::TempDir;
 using chromatindb::test::run_async;
 using chromatindb::test::make_signed_blob;
 using chromatindb::test::make_signed_tombstone;
+using chromatindb::test::make_signed_delegation;
 using chromatindb::test::current_timestamp;
 using chromatindb::test::TS_AUTO;
 using chromatindb::util::to_hex;
@@ -2778,6 +2779,331 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         CHECK(types.count(8));   // Data
         CHECK(types.count(37));  // ExistsRequest
         CHECK(types.count(39));  // NodeInfoRequest
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][namespacelist]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner1 = NodeIdentity::generate();
+    auto owner2 = NodeIdentity::generate();
+    auto owner3 = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14430";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    // Ingest one blob into each of 3 namespaces
+    auto b1 = make_signed_blob(owner1, "ns1-data");
+    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    auto b2 = make_signed_blob(owner2, "ns2-data");
+    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+    auto b3 = make_signed_blob(owner3, "ns3-data");
+    REQUIRE(run_async(pool, eng.ingest(b3)).accepted);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14430),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_NamespaceListResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    // Send paginated request: cursor=zero, limit=2
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                std::vector<uint8_t> req(36, 0);  // all-zero cursor
+                req[35] = 2;  // limit=2 (big-endian uint32: 0x00000002)
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NamespaceListRequest, req, 100);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() >= 1);
+        auto& [rid, payload] = responses[0];
+        CHECK(rid == 100);
+        REQUIRE(payload.size() >= 5);  // count:4 + has_more:1
+
+        uint32_t count = 0;
+        for (int i = 0; i < 4; ++i)
+            count = (count << 8) | payload[i];
+        CHECK(count == 2);
+        CHECK(payload[4] == 0x01);  // has_more = true
+
+        // Verify each entry is 40 bytes
+        REQUIRE(payload.size() == 5 + count * 40);
+
+        // Each entry's blob_count should be >= 1
+        for (uint32_t e = 0; e < count; ++e) {
+            size_t entry_off = 5 + e * 40 + 32;  // skip namespace_id
+            uint64_t blob_count = 0;
+            for (int i = 0; i < 8; ++i)
+                blob_count = (blob_count << 8) | payload[entry_off + i];
+            CHECK(blob_count >= 1);
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagestatus]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14431";
+    cfg.data_dir = tmp.path.string();
+    cfg.max_storage_bytes = 1048576;
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    // Ingest 2 blobs
+    auto b1 = make_signed_blob(owner, "status-data-1");
+    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    auto b2 = make_signed_blob(owner, "status-data-2");
+    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<uint8_t> status_response;
+    uint32_t response_req_id = 0;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14431),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_StorageStatusResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                status_response = std::move(payload);
+                response_req_id = req_id;
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_StorageStatusRequest, {}, 200);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(status_response.size() == 44);
+        CHECK(response_req_id == 200);
+
+        size_t off = 0;
+
+        // used_data_bytes > 0
+        uint64_t used_data = 0;
+        for (int i = 0; i < 8; ++i) used_data = (used_data << 8) | status_response[off++];
+        CHECK(used_data > 0);
+
+        // max_storage_bytes == 1048576
+        uint64_t max_storage = 0;
+        for (int i = 0; i < 8; ++i) max_storage = (max_storage << 8) | status_response[off++];
+        CHECK(max_storage == 1048576);
+
+        // tombstone_count == 0
+        uint64_t tombstones = 0;
+        for (int i = 0; i < 8; ++i) tombstones = (tombstones << 8) | status_response[off++];
+        CHECK(tombstones == 0);
+
+        // namespace_count == 1
+        uint32_t ns_count = 0;
+        for (int i = 0; i < 4; ++i) ns_count = (ns_count << 8) | status_response[off++];
+        CHECK(ns_count == 1);
+
+        // total_blobs == 2
+        uint64_t total_blobs = 0;
+        for (int i = 0; i < 8; ++i) total_blobs = (total_blobs << 8) | status_response[off++];
+        CHECK(total_blobs == 2);
+
+        // mmap_bytes > 0
+        uint64_t mmap_bytes = 0;
+        for (int i = 0; i < 8; ++i) mmap_bytes = (mmap_bytes << 8) | status_response[off++];
+        CHECK(mmap_bytes > 0);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][namespacestats]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+    auto delegate1 = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:14432";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    // Ingest 3 regular blobs + 1 delegation
+    auto b1 = make_signed_blob(owner, "stats-data-1");
+    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    auto b2 = make_signed_blob(owner, "stats-data-2");
+    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+    auto b3 = make_signed_blob(owner, "stats-data-3");
+    REQUIRE(run_async(pool, eng.ingest(b3)).accepted);
+    auto d1 = make_signed_delegation(owner, delegate1);
+    REQUIRE(run_async(pool, eng.ingest(d1)).accepted);
+
+    asio::io_context ioc;
+    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14432),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_NamespaceStatsResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // Request 1: known namespace (owner)
+                std::vector<uint8_t> req1(owner.namespace_id().begin(), owner.namespace_id().end());
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NamespaceStatsRequest, req1, 300);
+                // Request 2: unknown namespace
+                std::vector<uint8_t> req2(32, 0xFF);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NamespaceStatsRequest, req2, 301);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+
+        for (const auto& [rid, payload] : responses) {
+            REQUIRE(payload.size() == 41);
+            if (rid == 300) {
+                // Found namespace
+                CHECK(payload[0] == 0x01);  // found=true
+                size_t off = 1;
+
+                // blob_count (4: 3 regular + 1 delegation -- only tombstones are exempt from quota counting)
+                uint64_t blob_count = 0;
+                for (int i = 0; i < 8; ++i) blob_count = (blob_count << 8) | payload[off++];
+                CHECK(blob_count == 4);
+
+                // total_bytes > 0
+                uint64_t total_bytes = 0;
+                for (int i = 0; i < 8; ++i) total_bytes = (total_bytes << 8) | payload[off++];
+                CHECK(total_bytes > 0);
+
+                // delegation_count == 1
+                uint64_t deleg_count = 0;
+                for (int i = 0; i < 8; ++i) deleg_count = (deleg_count << 8) | payload[off++];
+                CHECK(deleg_count == 1);
+
+                // quota_bytes_limit == 0 (no quota configured)
+                uint64_t qb = 0;
+                for (int i = 0; i < 8; ++i) qb = (qb << 8) | payload[off++];
+                CHECK(qb == 0);
+
+                // quota_count_limit == 0
+                uint64_t qc = 0;
+                for (int i = 0; i < 8; ++i) qc = (qc << 8) | payload[off++];
+                CHECK(qc == 0);
+            } else if (rid == 301) {
+                // Unknown namespace
+                CHECK(payload[0] == 0x00);  // found=false
+                // All remaining bytes should be zero
+                bool all_zero = true;
+                for (size_t i = 1; i < 41; ++i) {
+                    if (payload[i] != 0) { all_zero = false; break; }
+                }
+                CHECK(all_zero);
+            }
+        }
     }
 
     pm.stop();
