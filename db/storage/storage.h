@@ -175,6 +175,16 @@ public:
         std::span<const uint8_t, 32> namespace_id,
         std::span<const uint8_t> delegate_pubkey);
 
+    /// Count total tombstone entries across all namespaces.
+    /// O(1) via MDBX map statistics (no cursor scan).
+    /// @return Number of tombstone entries in tombstone_map.
+    uint64_t count_tombstones() const;
+
+    /// Count delegation entries for a specific namespace.
+    /// Uses cursor prefix scan on delegation_map with [namespace:32] prefix.
+    /// @return Number of delegations for the given namespace.
+    uint64_t count_delegations(std::span<const uint8_t, 32> namespace_id) const;
+
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.
     /// Sequence index entries are NOT deleted (gaps are expected).

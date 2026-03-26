@@ -941,6 +941,49 @@ bool Storage::has_tombstone_for(
     }
 }
 
+uint64_t Storage::count_tombstones() const {
+    try {
+        auto txn = impl_->env.start_read();
+        return txn.get_map_stat(impl_->tombstone_map).ms_entries;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in count_tombstones: {}", e.what());
+        return 0;
+    }
+}
+
+uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) const {
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->delegation_map);
+
+        // Seek to lower bound: namespace prefix with zero hash suffix
+        std::array<uint8_t, 64> lower_key{};
+        std::memcpy(lower_key.data(), namespace_id.data(), 32);
+        // remaining 32 bytes are zero -- sorts before any real delegate_pk_hash
+
+        uint64_t count = 0;
+        auto result = cursor.lower_bound(to_slice(lower_key));
+        while (result.done) {
+            auto key = cursor.current(false).key;
+            // Check that the first 32 bytes still match our namespace
+            if (key.length() < 32 ||
+                std::memcmp(key.data(), namespace_id.data(), 32) != 0) {
+                break;  // Past our namespace prefix
+            }
+            ++count;
+            result = cursor.to_next(false);
+        }
+        return count;
+    } catch (const mdbx::exception& e) {
+        if (e.error().code() == MDBX_NOTFOUND) return 0;
+        spdlog::error("Storage error in count_delegations: {}", e.what());
+        return 0;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in count_delegations: {}", e.what());
+        return 0;
+    }
+}
+
 size_t Storage::run_expiry_scan() {
     size_t purged = 0;
 
