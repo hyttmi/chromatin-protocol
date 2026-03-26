@@ -947,6 +947,187 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_NamespaceListRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 36) {
+                    record_strike(conn, "NamespaceListRequest too short");
+                    co_return;
+                }
+
+                // Parse cursor and limit
+                std::array<uint8_t, 32> after_ns{};
+                std::memcpy(after_ns.data(), payload.data(), 32);
+                uint32_t limit = 0;
+                for (int i = 0; i < 4; ++i)
+                    limit = (limit << 8) | payload[32 + i];
+                if (limit == 0 || limit > 1000) limit = 100;
+
+                // Get all namespaces and filter/paginate
+                auto all_ns = storage_.list_namespaces();
+
+                // Sort by namespace_id for deterministic cursor pagination
+                std::sort(all_ns.begin(), all_ns.end(),
+                    [](const auto& a, const auto& b) {
+                        return a.namespace_id < b.namespace_id;
+                    });
+
+                // Find cursor position: skip entries <= after_ns
+                static const std::array<uint8_t, 32> zero_ns{};
+                auto it = all_ns.begin();
+                if (after_ns != zero_ns) {
+                    it = std::upper_bound(all_ns.begin(), all_ns.end(), after_ns,
+                        [](const auto& cursor, const auto& info) {
+                            return cursor < info.namespace_id;
+                        });
+                }
+
+                // Collect up to limit entries
+                std::vector<std::pair<std::array<uint8_t, 32>, uint64_t>> entries;
+                uint32_t count = 0;
+                for (; it != all_ns.end() && count < limit; ++it, ++count) {
+                    auto quota = storage_.get_namespace_quota(it->namespace_id);
+                    entries.emplace_back(it->namespace_id, quota.blob_count);
+                }
+                bool has_more = (it != all_ns.end());
+
+                // Build response: [count:4][has_more:1][entries...]
+                size_t resp_size = 4 + 1 + entries.size() * 40;
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                // Count (big-endian uint32)
+                uint32_t entry_count = static_cast<uint32_t>(entries.size());
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(entry_count >> (i * 8));
+
+                // has_more flag
+                response[off++] = has_more ? 0x01 : 0x00;
+
+                // Entries: [namespace_id:32][blob_count:8]
+                for (const auto& [ns_id, blob_count] : entries) {
+                    std::memcpy(response.data() + off, ns_id.data(), 32);
+                    off += 32;
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(blob_count >> (i * 8));
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_NamespaceListResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("NamespaceListRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_StorageStatusRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id]() -> asio::awaitable<void> {
+            try {
+                uint64_t used_data = storage_.used_data_bytes();
+                uint64_t max_storage = config_.max_storage_bytes;
+                uint64_t tombstones = storage_.count_tombstones();
+                auto namespaces = storage_.list_namespaces();
+                uint32_t ns_count = static_cast<uint32_t>(namespaces.size());
+                uint64_t total_blobs = 0;
+                for (const auto& ns_info : namespaces)
+                    total_blobs += ns_info.latest_seq_num;
+                uint64_t mmap_bytes = storage_.used_bytes();
+
+                // Build 44-byte response
+                std::vector<uint8_t> response(44);
+                size_t off = 0;
+
+                // used_data_bytes (8)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(used_data >> (i * 8));
+                // max_storage_bytes (8)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(max_storage >> (i * 8));
+                // tombstone_count (8)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(tombstones >> (i * 8));
+                // namespace_count (4)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(ns_count >> (i * 8));
+                // total_blobs (8)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(total_blobs >> (i * 8));
+                // mmap_bytes (8)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(mmap_bytes >> (i * 8));
+
+                co_await conn->send_message(wire::TransportMsgType_StorageStatusResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("StorageStatusRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_NamespaceStatsRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 32) {
+                    record_strike(conn, "NamespaceStatsRequest too short");
+                    co_return;
+                }
+
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                // Check if namespace exists
+                auto all_ns = storage_.list_namespaces();
+                bool found = false;
+                for (const auto& info : all_ns) {
+                    if (info.namespace_id == ns) {
+                        found = true;
+                        break;
+                    }
+                }
+
+                // Build 41-byte response
+                std::vector<uint8_t> response(41, 0);
+                size_t off = 0;
+
+                response[off++] = found ? 0x01 : 0x00;
+
+                if (found) {
+                    auto quota = storage_.get_namespace_quota(ns);
+                    uint64_t delegation_count = storage_.count_delegations(ns);
+                    auto [quota_bytes_limit, quota_count_limit] = engine_.effective_quota(ns);
+
+                    // blob_count (8)
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(quota.blob_count >> (i * 8));
+                    // total_bytes (8)
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(quota.total_bytes >> (i * 8));
+                    // delegation_count (8)
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(delegation_count >> (i * 8));
+                    // quota_bytes_limit (8)
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(quota_bytes_limit >> (i * 8));
+                    // quota_count_limit (8)
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(quota_count_limit >> (i * 8));
+                }
+                // If not found, bytes 1-40 remain zero (already initialized)
+
+                co_await conn->send_message(wire::TransportMsgType_NamespaceStatsResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("NamespaceStatsRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob via coroutine (engine is async)
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
