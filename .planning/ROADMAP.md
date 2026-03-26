@@ -153,7 +153,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 66-01-PLAN.md — Schema types 47-52, Storage::list_delegations(), relay filter update (32 types)
+- [x] 66-01-PLAN.md — Schema types 47-52, Storage::list_delegations(), relay filter update (32 types)
 - [ ] 66-02-PLAN.md — MetadataRequest, BatchExistsRequest, DelegationListRequest handlers with integration tests
 
 ### Phase 67: Batch/Range Queries & Integration
@@ -180,5 +180,5 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 65. Node-Level Queries | 2/2 | Complete    | 2026-03-26 |
-| 66. Blob-Level Queries | 0/2 | Not started | - |
+| 66. Blob-Level Queries | 1/2 | In Progress|  |
 | 67. Batch/Range Queries & Integration | 0/3 | Not started | - |

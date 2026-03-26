@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.4.0
 milestone_name: Extended Query Suite
 status: unknown
-stopped_at: Completed 65-02-PLAN.md
-last_updated: "2026-03-26T15:36:44.074Z"
+stopped_at: Completed 66-01-PLAN.md
+last_updated: "2026-03-26T16:15:58.307Z"
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 65 — node-level-queries
+**Current focus:** Phase 66 — blob-level-queries
 
 ## Current Position
 
-Phase: 66
-Plan: Not started
+Phase: 66 (blob-level-queries) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -48,6 +48,7 @@ Plan: Not started
 *Updated after each plan completion*
 | Phase 65 P01 | 7min | 2 tasks | 9 files |
 | Phase 65 P02 | 8min | 2 tasks | 2 files |
+| Phase 66 P01 | 6min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,7 @@ Recent decisions affecting current work:
 - [Phase 65]: NamespaceList sorted by namespace_id with upper_bound for cursor pagination
 - [Phase 65]: StorageStatus includes mmap_bytes for operator monitoring alongside used_data_bytes
 - [Phase 65]: NamespaceStats blob_count includes delegation blobs (only tombstones are quota-exempt)
+- [Phase 66]: DelegationEntry struct with delegate_pk_hash + delegation_blob_hash as typed return from delegation_map
 
 ### Pending Todos
 
@@ -75,6 +77,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-26T15:30:47.188Z
-Stopped at: Completed 65-02-PLAN.md
+Last session: 2026-03-26T16:15:58.305Z
+Stopped at: Completed 66-01-PLAN.md
 Resume file: None
