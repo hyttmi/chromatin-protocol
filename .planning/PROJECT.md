@@ -10,6 +10,23 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v1.4.0 Extended Query Suite
+
+**Goal:** Add 11 new query/response message types to the protocol, expanding the client-facing API with time-range queries, metadata inspection, batch operations, delegation management, and operational health endpoints.
+
+**Target features:**
+- TimeRange query (blobs within a timestamp window)
+- BlobMetadata query (size, timestamp, TTL, signer without payload transfer)
+- BatchExists query (check multiple blob hashes in one request)
+- BatchRead query (fetch multiple small blobs in one request)
+- DelegationList query (active delegations for a namespace)
+- NamespaceList query (all namespaces stored on node)
+- NamespaceStats query (per-namespace count, bytes, quota usage)
+- Metadata query (blob metadata without data)
+- PeerInfo query (detailed peer connection info)
+- Health query (liveness/readiness check)
+- StorageStatus query (disk usage, quota headroom, tombstone counts)
+
 ## Requirements
 
 ### Validated
@@ -116,7 +133,17 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-(none — v1.3.0 complete, next milestone not started)
+- [ ] TimeRange query — blobs in a namespace within a timestamp window
+- [ ] BlobMetadata query — size, timestamp, TTL, seq_num, signer without payload
+- [ ] BatchExists query — check existence of multiple blob hashes in one request
+- [ ] BatchRead query — fetch multiple small blobs in one request
+- [ ] DelegationList query — list active delegations for a namespace
+- [ ] NamespaceList query — list all namespaces stored on the node
+- [ ] NamespaceStats query — per-namespace count, bytes, quota usage
+- [ ] Metadata query — blob metadata without data transfer
+- [ ] PeerInfo query — detailed peer connection information
+- [ ] Health query — liveness/readiness check endpoint
+- [ ] StorageStatus query — disk usage, quota headroom, tombstone counts
 
 ### Validated (continued)
 
@@ -132,7 +159,6 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - Python SDK for connecting to relay
 - CLI tool for admin operations (quota check, list blobs, etc.)
 - Performance benchmarks for Relay layer
-- Extended query types (TimeRange, Metadata, DelegationList, NamespaceList, PeerInfo, Health)
 
 ## Context
 
@@ -252,5 +278,22 @@ Three-layer architecture (building bottom-up):
 | NodeInfoResponse binary wire format | Length-prefixed strings + big-endian integers; 20 client-facing supported types | ✓ Good — Phase 63 |
 | supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | ✓ Good — Phase 63 |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd:transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-03-26 after v1.3.0 milestone*
+*Last updated: 2026-03-26 after v1.4.0 milestone started*
