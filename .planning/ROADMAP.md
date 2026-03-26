@@ -150,11 +150,11 @@ Plans:
   2. Client can check existence of multiple blob hashes (up to 256) in a single BatchExistsRequest, receiving a per-hash boolean result
   3. Client can list all active delegations for a namespace, receiving delegate pubkeys and delegation blob hashes
   4. All three new request/response types pass through relay message filter and work over both TCP and UDS paths
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 66-01: TBD
-- [ ] 66-02: TBD
+- [ ] 66-01-PLAN.md — Schema types 47-52, Storage::list_delegations(), relay filter update (32 types)
+- [ ] 66-02-PLAN.md — MetadataRequest, BatchExistsRequest, DelegationListRequest handlers with integration tests
 
 ### Phase 67: Batch/Range Queries & Integration
 **Goal**: Clients can batch-fetch blobs, query peers, query by time range, and all v1.4.0 types are fully integrated across relay, NodeInfo, and documentation
