@@ -138,7 +138,7 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 **Plans**: 2 plans
 
 Plans:
-- [ ] 65-01-PLAN.md — Schema types 41-46, Storage methods (count_tombstones, count_delegations), relay filter update
+- [x] 65-01-PLAN.md — Schema types 41-46, Storage methods (count_tombstones, count_delegations), relay filter update
 - [ ] 65-02-PLAN.md — NamespaceList, StorageStatus, NamespaceStats handlers with integration tests
 
 ### Phase 66: Blob-Level Queries
@@ -179,6 +179,6 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 65. Node-Level Queries | 0/2 | Not started | - |
+| 65. Node-Level Queries | 1/2 | In Progress|  |
 | 66. Blob-Level Queries | 0/2 | Not started | - |
 | 67. Batch/Range Queries & Integration | 0/3 | Not started | - |
