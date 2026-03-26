@@ -116,19 +116,16 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-<!-- v1.3.0: Protocol Concurrency & Query Foundation -->
+(none — v1.3.0 complete, next milestone not started)
 
-#### Transport Concurrency
-- [ ] Request correlation via request_id field in transport envelope
-- [ ] Concurrent request dispatch (thread pool offload for heavy ops, inline for cheap ops)
+### Validated (continued)
 
-#### Query Extensions
-- [x] ExistsRequest/ExistsResponse — check blob existence without data transfer (Phase 63)
-- [x] NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types (Phase 63)
-
-#### Documentation
-- [ ] PROTOCOL.md updated with concurrency model and new message types
-- [ ] README.md updated with v1.3.0 capabilities
+- ✓ Request correlation via request_id field in transport envelope — v1.3.0 Phase 61
+- ✓ Concurrent request dispatch (thread pool offload for heavy ops, inline for cheap ops) — v1.3.0 Phase 62
+- ✓ ExistsRequest/ExistsResponse — check blob existence without data transfer — v1.3.0 Phase 63
+- ✓ NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types — v1.3.0 Phase 63
+- ✓ PROTOCOL.md updated with concurrency model and new message types — v1.3.0 Phase 64
+- ✓ README.md updated with v1.3.0 capabilities — v1.3.0 Phase 64
 
 ### Future
 
@@ -139,9 +136,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.2.0 with ~24,500 LOC C++20, 500+ unit tests, 54 Docker integration tests.
-Built across 23 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d).
-13 milestones, 63 phases, 127 plans, 253 requirements total.
+Shipped v1.3.0 with ~24,500 LOC C++20, 551+ unit tests, 54 Docker integration tests.
+Built across 24 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d).
+13 milestones, 64 phases, 129 plans, 256 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -256,4 +253,4 @@ Three-layer architecture (building bottom-up):
 | supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | ✓ Good — Phase 63 |
 
 ---
-*Last updated: 2026-03-25 after Phase 63 (query-extensions) complete — ExistsRequest/ExistsResponse and NodeInfoRequest/NodeInfoResponse with relay filter updates*
+*Last updated: 2026-03-26 after Phase 64 (documentation) complete — v1.3.0 milestone complete. PROTOCOL.md wire spec and READMEs updated for request_id, ExistsRequest, NodeInfoRequest, 40 message types*
