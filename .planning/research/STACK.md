@@ -1,452 +1,314 @@
-# Technology Stack: v0.9.0 Connection Resilience & Hardening
-
-**Project:** chromatindb v0.9.0
-**Researched:** 2026-03-19
-**Confidence:** HIGH
-
-## Executive Summary
+# Technology Stack: v1.4.0 Extended Query Suite
 
-v0.9.0 is a hardening milestone. The core thesis: **zero new dependencies**. Every feature in scope -- connection resilience, structured logging, file logging, config validation, CMake version injection, crash recovery audit, cursor compaction, tombstone GC fix, startup integrity scan -- is achievable with the existing stack. The codebase already has the right libraries; it needs deeper use of their capabilities.
+**Project:** chromatindb
+**Researched:** 2026-03-26
+**Scope:** Stack additions/changes for 11 new query/response message types
+**Overall confidence:** HIGH
 
-The only recommended change is a **spdlog version bump** from v1.15.1 to v1.15.1+ (staying on v1.15.x is fine; upgrading to v1.16.0 or v1.17.0 is optional and low-risk). spdlog v1.15.1 already supports file sinks, rotating file sinks, multi-sink loggers, and JSON pattern formatting -- all needed for structured/file logging. No API changes needed from a bump.
+## Executive Answer
 
-Connection resilience (auto-reconnect with exponential backoff, keepalive timeout, ACL-aware suppression) uses `asio::steady_timer` -- already the established pattern in the codebase (timer-cancel pattern for sync inbox, expiry timer, sync timer). No new networking primitives needed.
-
-CMake version injection uses `configure_file()` -- a built-in CMake command. No external tooling.
+**No new dependencies needed.** The existing stack covers every requirement for all 11 new query types. This is pure application-level code using proven patterns already in the codebase.
 
-Config validation is pure C++ logic using nlohmann/json (already a dependency). No JSON Schema library needed -- the config struct is simple enough that hand-written validation is clearer, faster, and avoids a new dependency.
-
-libmdbx crash recovery audit is a code review task, not a library addition. The current configuration (`durability::robust_synchronous`, `mode::write_mapped_io`) is the correct default for data integrity. The audit verifies this is used correctly and tests unclean shutdown scenarios.
-
-## Recommended Stack
-
-### No New Dependencies
+The research validates that:
+- libmdbx cursor `lower_bound()` + scan already powers time-range queries (used by expiry scanner and seq-based queries)
+- Batch operations are just loops over existing point lookups -- no new primitives
+- Health/status queries read from in-memory metrics and `mdbx::env::info()` -- zero library additions
+- Delegation listing uses the same cursor scan pattern as `list_namespaces()`
+- All wire encoding follows the existing binary format (big-endian integers + raw bytes)
 
-| Feature | Implementation | Existing Dependency | Why No New Dep |
-|---------|---------------|-------------------|---------------|
-| Auto-reconnect + backoff | `asio::steady_timer` coroutine loop | Standalone Asio 1.38.0 | Timer-cancel pattern already proven in codebase |
-| Keepalive timeout | `asio::steady_timer` per-connection watchdog | Standalone Asio 1.38.0 | Same as sync inbox timer pattern |
-| File logging | `spdlog::sinks::rotating_file_sink_mt` | spdlog 1.15.1 | Built-in sink, just needs wiring |
-| Structured log format | `spdlog::set_pattern()` with JSON template | spdlog 1.15.1 | Pattern string change, no code dep |
-| Config validation | Hand-written checks in `config.cpp` | nlohmann/json 3.11.3 | ~100 LOC of range/type checks beats a schema validator dep |
-| CMake version injection | `configure_file()` + `execute_process(git describe)` | CMake 3.20 (built-in) | Standard CMake feature |
-| Cursor compaction | Storage API + steady_timer | libmdbx 0.13.11 + Asio | Already have `cleanup_stale_cursors()` and `delete_peer_cursors()` |
-| Tombstone GC fix | Debug + fix existing `run_expiry_scan()` | libmdbx 0.13.11 | Bug in existing code, not a missing capability |
-| Startup integrity scan | Read transaction scan on open | libmdbx 0.13.11 | Same pattern as existing `validate_no_unencrypted_data()` |
-| Crash recovery audit | Code review + test | libmdbx 0.13.11 | Verify existing flags, add kill-9 tests |
-| Delegation quota verification | Logic fix in `BlobEngine::ingest()` | Existing code | Ensure delegate writes count against owner namespace quota |
-| Timer cleanup | Audit `on_shutdown` paths | Standalone Asio 1.38.0 | Cancel all active timers in drain |
-| Metrics logging | Additional `spdlog::info()` calls | spdlog 1.15.1 | Emit counters already tracked in-memory |
+## Existing Stack (Validated, Unchanged)
 
-### Version Recommendations
+These are locked decisions from 13 shipped milestones. DO NOT change.
 
-| Technology | Current | Recommended | Action | Rationale |
-|------------|---------|-------------|--------|-----------|
-| spdlog | v1.15.1 | v1.15.1 (keep) or v1.17.0 (optional) | Optional bump | v1.15.1 has all needed features. v1.17.0 brings fmt 12.1.0 bump and minor fixes. Low risk either way. |
-| libmdbx | v0.13.11 | v0.13.11 (keep) | No change | Latest stable release as of 2026-01. v0.13.11 is the final open-source release before MithrilDB transition. Pinning is correct. |
-| Standalone Asio | 1.38.0 | 1.38.0 (keep) | No change | All needed coroutine/timer features present. |
-| nlohmann/json | 3.11.3 | 3.11.3 (keep) | No change | Config parsing works. No new JSON features needed. |
-| Catch2 | v3.7.1 | v3.7.1 (keep) | No change | Test framework is stable. |
-| All others | Current | Current | No change | liboqs, libsodium, FlatBuffers, xxHash unchanged. |
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| C++20 | GCC 14+ | Language standard, coroutines |
+| CMake | 3.20+ | Build system |
+| liboqs | 0.15.0 | ML-DSA-87, ML-KEM-1024, SHA3-256 |
+| libsodium | latest (cmake wrapper) | ChaCha20-Poly1305, HKDF-SHA256 |
+| libmdbx | v0.13.11 | ACID storage, 7 sub-databases |
+| FlatBuffers | v25.2.10 | Wire format for transport envelope |
+| Standalone Asio | 1.38.0 | Networking, C++20 coroutines, thread_pool |
+| xxHash | (via reconciliation) | XXH3 sync fingerprints |
+| Catch2 | v3.7.1 | Unit testing |
+| spdlog | v1.15.1 | Structured logging |
+| nlohmann/json | v3.11.3 | Config parsing |
 
-## Feature-by-Feature Stack Details
+## New Dependencies Required
 
-### 1. Connection Resilience (Auto-Reconnect + Exponential Backoff)
+**None.**
 
-**Implementation:** Coroutine loop in `PeerManager` using `asio::steady_timer`.
+## Analysis by Query Type
 
-**Pattern:**
-```cpp
-// Reconnect coroutine per outbound peer
-asio::awaitable<void> reconnect_loop(std::string endpoint) {
-    uint32_t attempt = 0;
-    while (!draining_) {
-        auto delay = std::min(base_delay * (1 << attempt), max_delay);
-        asio::steady_timer timer(co_await asio::this_coro::executor);
-        timer.expires_after(delay);
-        co_await timer.async_wait(asio::use_awaitable);
-        // Attempt connection...
-        if (success) attempt = 0; else ++attempt;
-    }
-}
-```
+### 1. TimeRange Query (blobs in namespace within timestamp window)
 
-**Key design points:**
-- Base delay: 1s. Max delay cap: 60s. Backoff: exponential (1, 2, 4, 8, 16, 32, 60, 60...).
-- ACL-aware suppression: if peer was rejected by ACL (silent TCP close from remote), suppress reconnect entirely (or use very long backoff like 10min). Detection: connection succeeds at TCP level but remote closes immediately after handshake.
-- Jitter: add random 0-25% jitter to prevent thundering herd on network partition recovery.
-- Reset on successful sync: attempt counter resets to 0 after a successful message exchange, not just TCP connect.
-- Cancel on shutdown: the timer is cancelled in `on_shutdown`, breaking the loop.
+**Stack requirement:** libmdbx cursor range scan on seq_map, then filter by timestamp.
 
-**No new deps.** `asio::steady_timer` is the same primitive used for sync interval timer and expiry timer.
+**Why existing stack is sufficient:**
+- The sequence sub-database (`seq_map`) already supports `lower_bound()` seeks. This is the same primitive used by `get_blobs_by_seq()`, `get_blob_refs_since()`, and `list_namespaces()`.
+- Blobs are stored as DARE-encrypted FlatBuffers in `blobs_map`. Each blob contains a `timestamp` field (microseconds since epoch). To filter by time range, the pattern is: scan seq entries in a namespace, fetch+decrypt each blob, check `timestamp >= start && timestamp <= end`.
+- There is **no dedicated timestamp index** in storage. Creating one would add a new sub-database. However, for v1.4.0, the scan-and-filter approach is correct because:
+  1. Timestamps are writer-controlled and in the signed blob data -- they cannot be indexed separately without decryption.
+  2. The sequence index provides natural ordering that correlates with time (blobs arrive roughly in timestamp order).
+  3. A dedicated timestamp index is a v2.0+ optimization if profiling shows scan-and-filter is too slow. YAGNI.
 
-### 2. Keepalive Timeout (Dead Peer Detection)
+**Implementation approach:** New `Storage::get_blobs_in_time_range(ns, start_us, end_us, limit)` that uses the existing seq_map cursor scan + per-blob decrypt + timestamp filter. Capped at a configurable limit (e.g., 100) to bound response size.
 
-**Implementation:** Per-connection `asio::steady_timer` watchdog, reset on any received message.
+**Confidence:** HIGH -- libmdbx cursor operations are battle-tested in this codebase (12+ uses of `lower_bound()` in storage.cpp).
 
-**Pattern:**
-```cpp
-// In PeerInfo or connection message loop:
-asio::steady_timer keepalive_timer(executor);
-keepalive_timer.expires_after(std::chrono::seconds(120));
-// On every received message: keepalive_timer.expires_after(120s);
-// If timer fires: peer is dead, close connection.
-```
-
-**Key design points:**
-- Timeout: 120s (2 minutes). Configurable via `keepalive_timeout_seconds` config field.
-- No ping/pong protocol messages: the existing sync cycle (default 60s) generates traffic. If no message arrives in 2x the sync interval, peer is dead.
-- TCP keepalive as fallback: optionally set `asio::socket_base::keep_alive(true)` on sockets, but application-level timeout is primary.
-- Timer reset on ANY received frame (data, sync, PEX, etc.), not just keepalive-specific messages.
-
-**No new deps.** Same timer pattern as existing codebase.
+### 2. BlobMetadata / Metadata Query (metadata without payload)
 
-### 3. Structured Log Format
+**Stack requirement:** Decrypt blob, extract metadata fields, skip `data` field in response.
 
-**Implementation:** JSON pattern string in `spdlog::set_pattern()`.
-
-**Current pattern:** `[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v`
-
-**Proposed structured pattern (when enabled):**
-```
-{"ts":"%Y-%m-%dT%H:%M:%S.%fZ","level":"%l","logger":"%n","tid":"%t","msg":"%v"}
-```
-
-**Key design points:**
-- Config field: `"log_format": "text"` (default) or `"log_format": "json"`. Text format stays human-readable for development; JSON for production/monitoring.
-- spdlog's `%f` gives microsecond precision in ISO 8601 format.
-- Thread ID (`%t`) included because the codebase uses `asio::thread_pool` for crypto offload.
-- No custom formatter class needed -- spdlog's pattern syntax is sufficient for flat JSON lines.
-- Escaping: spdlog does NOT JSON-escape the `%v` payload. Messages must not contain unescaped quotes/newlines. Since all log messages are programmer-controlled format strings (not user input), this is acceptable. If a message includes user data (hex pubkeys, addresses), those are already safe ASCII.
-
-**No new deps.** Pattern change only. spdlog v1.15.1 supports this.
-
-### 4. File Logging
+**Why existing stack is sufficient:**
+- `get_blob()` already decrypts and returns a full `wire::BlobData` struct containing `namespace_id`, `pubkey`, `data`, `ttl`, `timestamp`, `signature`.
+- Metadata extraction is selecting fields from the decoded struct. No library needed.
+- The encrypted-at-rest DARE envelope means we must decrypt the full blob to read any field (AEAD is all-or-nothing). This is inherent to the security model, not a stack limitation.
+- Response wire format: binary encoding of `[timestamp_be:8][ttl_be:4][data_size_be:4][seq_num_be:8][signer_pubkey_hash:32]` -- same pattern as ExistsResponse/StatsResponse.
 
-**Implementation:** Multi-sink logger with `spdlog::sinks::rotating_file_sink_mt` + existing `stdout_color_sink_mt`.
+**Note:** BlobMetadata and Metadata appear to be the same concept (metadata without data transfer). The roadmap should merge these into a single message type pair unless there is a distinction in scope.
 
-**Key code change in `logging.cpp`:**
-```cpp
-#include <spdlog/sinks/rotating_file_sink.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-
-void init(const std::string& level, const std::string& log_file) {
-    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
-
-    std::vector<spdlog::sink_ptr> sinks = {console_sink};
-
-    if (!log_file.empty()) {
-        // 10 MiB per file, 3 rotated files
-        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            log_file, 10 * 1024 * 1024, 3);
-        sinks.push_back(file_sink);
-    }
-
-    auto logger = std::make_shared<spdlog::logger>("chromatindb", sinks.begin(), sinks.end());
-    spdlog::set_default_logger(logger);
-}
-```
-
-**Config fields:**
-- `"log_file": ""` (default: empty = no file logging, stderr only)
-- `"log_max_size_mb": 10` (max file size before rotation, default 10 MiB)
-- `"log_max_files": 3` (number of rotated files to keep)
-
-**Key design points:**
-- `rotating_file_sink_mt` (thread-safe) because crypto pool threads may log.
-- Rotation prevents unbounded disk usage -- essential for a daemon.
-- Both sinks share the same pattern (text or JSON per `log_format`).
-- File sink level can match console or be set independently (console=warn, file=debug for production).
-
-**No new deps.** `rotating_file_sink_mt` is built into spdlog. Just needs the include.
-
-### 5. CMake Version Injection
-
-**Implementation:** `configure_file()` with `git describe` in CMakeLists.txt.
-
-**New file: `db/version.h.in` (template):**
-```cpp
-#pragma once
-
-// Auto-generated by CMake. Do not edit.
-#define CHROMATINDB_VERSION "@CHROMATINDB_VERSION@"
-#define CHROMATINDB_VERSION_MAJOR @CHROMATINDB_VERSION_MAJOR@
-#define CHROMATINDB_VERSION_MINOR @CHROMATINDB_VERSION_MINOR@
-#define CHROMATINDB_VERSION_PATCH @CHROMATINDB_VERSION_PATCH@
-#define CHROMATINDB_GIT_HASH "@CHROMATINDB_GIT_HASH@"
-
-static constexpr const char* VERSION = CHROMATINDB_VERSION;
-```
-
-**CMakeLists.txt additions:**
-```cmake
-# Version from project() directive
-project(chromatindb VERSION 0.9.0 LANGUAGES C CXX)
-
-# Git hash for build identification
-execute_process(
-    COMMAND git describe --always --dirty
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE CHROMATINDB_GIT_HASH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT CHROMATINDB_GIT_HASH)
-    set(CHROMATINDB_GIT_HASH "unknown")
-endif()
-
-set(CHROMATINDB_VERSION "${PROJECT_VERSION}")
-set(CHROMATINDB_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
-set(CHROMATINDB_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-set(CHROMATINDB_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/db/version.h.in
-    ${CMAKE_CURRENT_SOURCE_DIR}/db/version.h
-    @ONLY
-)
-```
-
-**Key design points:**
-- Replace hand-edited `db/version.h` (currently stuck at "0.6.0") with generated file.
-- `version.h.in` is the source of truth, `version.h` is generated (add to `.gitignore`).
-- `git describe --always --dirty` gives short hash + dirty flag for dev builds.
-- `project(VERSION)` in CMake is the canonical version source. Tags match: `v0.9.0`.
-- `@ONLY` prevents CMake from expanding `${...}` variables in the template (safety).
-- Output to source dir (not build dir) so `#include "db/version.h"` works without include path changes. Alternatively, output to build dir and add it to include paths -- either approach works.
-
-**No new deps.** `configure_file()` and `execute_process()` are built-in CMake commands.
-
-### 6. Config Validation (Fail-Fast)
+**Confidence:** HIGH -- uses existing `get_blob()` + field selection.
 
-**Implementation:** Validation function in `config.cpp` called after `load_config()`.
+### 3. BatchExists Query (check multiple blob hashes)
 
-**What to validate:**
+**Stack requirement:** Loop of `has_blob()` calls within a single handler.
 
-| Field | Validation | Current State |
-|-------|-----------|---------------|
-| `bind_address` | Must contain `:` separator, port must be 1-65535 | No validation |
-| `max_peers` | Must be >= 1 | No validation |
-| `sync_interval_seconds` | Must be >= 5 (prevent thrashing) | No validation |
-| `max_storage_bytes` | 0 or >= 1 MiB (prevent nonsensical tiny limits) | No validation |
-| `rate_limit_bytes_per_sec` | 0 or >= 1024 (at least 1 KiB/s if enabled) | No validation |
-| `rate_limit_burst` | If rate limiting enabled, burst >= rate (at least 1s worth) | No validation |
-| `full_resync_interval` | Must be >= 1 | No validation |
-| `cursor_stale_seconds` | Must be >= 60 | No validation |
-| `worker_threads` | 0 or 1-256 (sane range) | Clamped at runtime but not validated |
-| `sync_cooldown_seconds` | 0 or >= 5 | No validation |
-| `max_sync_sessions` | Must be >= 1 | No validation |
-| `namespace_quota_bytes` | No constraint (0 = unlimited is valid) | OK |
-| `namespace_quota_count` | No constraint (0 = unlimited is valid) | OK |
-| `log_level` | Must be one of: trace, debug, info, warn, warning, error, err, critical | Silently defaults to info |
-| `log_file` | If non-empty, parent directory must exist or be creatable | New field |
-| `log_format` | Must be "text" or "json" | New field |
-| `keepalive_timeout_seconds` | 0 (disabled) or >= 30 | New field |
-
-**Approach:** Single `validate_config(const Config&)` function that throws `std::runtime_error` with a human-readable message on the first invalid field. Called in `cmd_run()` immediately after `parse_args()`, before any component construction. Fail fast, fail loud.
-
-**Why NOT json-schema-validator:** That library (pboettch/json-schema-validator) adds a FetchContent dependency, requires JSON Schema draft-7 definition maintenance, and is overkill for ~20 fields with simple range checks. The validation logic is ~100 LOC of `if` statements. YAGNI.
-
-**No new deps.** Pure C++ logic using existing nlohmann/json for type checking.
-
-### 7. libmdbx Crash Recovery Audit
-
-**Current configuration (verified from `storage.cpp:178-179`):**
-```cpp
-operate_params.mode = mdbx::env::mode::write_mapped_io;
-operate_params.durability = mdbx::env::durability::robust_synchronous;
-```
-
-**Analysis:**
-
-| Setting | Value | Meaning | Correctness |
-|---------|-------|---------|-------------|
-| `mode` | `write_mapped_io` | Memory-mapped writes (WRITEMAP) | CORRECT -- fastest write mode that still supports crash safety |
-| `durability` | `robust_synchronous` | Full fsync after every commit | CORRECT -- maximum durability. Data survives power loss. |
-
-**libmdbx durability modes (from most to least safe):**
-
-| Mode | Crash Safety | Write Speed | Notes |
-|------|-------------|-------------|-------|
-| `robust_synchronous` | Full (current) | Slowest | Data always consistent after crash. Never lose committed transactions. |
-| `half_synchronous_weak_last` | Good | Medium | May lose last transaction after crash but DB is consistent. |
-| `lazy_weak_tail` | OK | Fast | May lose several recent transactions. DB consistent. |
-| `whole_fragile` | UNSAFE | Fastest | DB may corrupt on crash. Never use for production. |
-
-**Audit tasks (code review, no deps):**
-1. Verify `robust_synchronous` is used everywhere (not overridden).
-2. Verify no `MDBX_UTTERLY_NOSYNC` or `MDBX_NOSYNC` flags anywhere.
-3. Test: kill -9 during write transaction, verify DB opens cleanly.
-4. Test: kill -9 during commit, verify no data corruption.
-5. Verify `mdbx::env_managed` destructor is called on graceful shutdown (flushes).
-6. Document: libmdbx's copy-on-write B-tree means no WAL needed. Committed transactions are always durable. Uncommitted transactions are lost on crash (expected and correct).
-
-**No new deps.** Code review + test scenarios.
-
-### 8. Startup Integrity Scan
-
-**Implementation:** Read-only transaction scan at startup, after `env_managed` opens.
-
-**What to verify:**
-1. All blobs in `blobs_map` decrypt successfully (DARE envelope valid, AEAD tag verifies).
-2. All `seq_map` entries point to existing blobs in `blobs_map` (or are zero-hash sentinels for deletions).
-3. All `expiry_map` entries reference existing blobs.
-4. All `quota_map` aggregates match actual blob data (already done: `rebuild_quota_aggregates()`).
-5. `delegation_map` entries reference existing delegation blobs.
-
-**Existing precedent:** `validate_no_unencrypted_data()` already scans `blobs_map` at startup. The integrity scan extends this pattern.
-
-**Key design points:**
-- Full scan at startup is acceptable: even at 100K blobs, a read-only cursor scan over keys (not values) completes in milliseconds. Value-level validation (decrypt check) is heavier but runs once.
-- Log warnings for inconsistencies rather than aborting (self-healing: delete orphaned index entries).
-- Optionally skip with `--skip-integrity-check` CLI flag for fast restart after known-clean shutdown.
-
-**No new deps.** libmdbx read transaction + existing crypto.
-
-### 9. Cursor Compaction
-
-**Implementation:** Periodic `asio::steady_timer` that calls existing `cleanup_stale_cursors()`.
-
-**Existing API (already in storage.h):**
-- `cleanup_stale_cursors(known_peer_hashes)` -- deletes cursors for unknown peers.
-- `delete_peer_cursors(peer_hash)` -- deletes all cursors for a specific peer.
-- `list_cursor_peers()` -- lists all peers with stored cursors.
-
-**What's needed:**
-- Timer-driven compaction: every N minutes (e.g., 60), scan cursors. Delete cursors where `last_sync_timestamp` is older than `cursor_stale_seconds` (already a config field, default 3600s).
-- On peer disconnect: mark peer as "last seen" time. If peer hasn't reconnected within stale threshold, cursors are eligible for cleanup.
-
-**No new deps.** Combines existing storage API + timer pattern.
-
-### 10. Tombstone GC Fix
-
-**Known issue:** "Tombstone GC not reclaiming storage in Docker benchmarks (storage grows instead of shrinking)."
-
-**Investigation approach (no new deps):**
-1. Trace `run_expiry_scan()` execution: is it finding expired tombstones? Are tombstones being stored with TTL > 0?
-2. Check if tombstone blobs have their own expiry entries in `expiry_map`.
-3. Verify `delete_blob_data()` actually removes blob bytes from `blobs_map` and the mdbx database file shrinks (or at least frees pages internally -- libmdbx may not shrink the file but should reuse pages).
-4. Key insight: libmdbx with `write_mapped_io` mode may not physically shrink the database file even after deletions. The freed pages are reused for new writes. This is **expected behavior** for mmap-based databases. The "storage grows" observation may not be a bug -- it's how mmap databases work. The file size represents high-water mark, not current data size.
-5. If actual data is not being deleted: trace through tombstone creation -> expiry entry -> expiry scan -> delete_blob_data chain.
-
-**No new deps.** Debugging existing code.
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Structured logging | spdlog JSON pattern | structlog (spdlog+json fork) | Extra dependency for something spdlog handles natively with a pattern string. |
-| Structured logging | spdlog JSON pattern | structured_spdlog (fork) | Unmaintained fork. Not worth the risk. |
-| Config validation | Hand-written checks | pboettch/json-schema-validator | New FetchContent dep, JSON Schema draft-7 maintenance, overkill for ~20 fields. |
-| Config validation | Hand-written checks | nlohmann/json SAX parser | Over-engineering. Current DOM approach is fine for small configs. |
-| File logging | spdlog rotating_file_sink | spdlog daily_file_sink | Daily rotation is less useful for a daemon that may run for months. Size-based rotation is more predictable. |
-| File logging | spdlog rotating_file_sink | spdlog basic_file_sink | No rotation = unbounded file growth. Unacceptable for a daemon. |
-| Keepalive | Application-level timer | TCP SO_KEEPALIVE | TCP keepalive has OS-level defaults (often 2 hours), not configurable per-socket on all platforms without setsockopt. Application-level timeout is more predictable and testable. |
-| Keepalive | Application-level timer | Custom ping/pong wire messages | Requires protocol change (new message types). Sync cycle already generates periodic traffic. Unnecessary complexity. |
-| Version injection | CMake configure_file | Compile-time __DATE__/__TIME__ | Not reproducible. Different every build. Can't extract semver from it. |
-| Version injection | CMake configure_file | External script generating version.h | Extra build step. CMake handles this natively. |
-| Reconnect backoff | Exponential with jitter | Linear backoff | Too slow to recover from brief outages. Exponential reaches steady state faster. |
-| Reconnect backoff | Exponential with jitter | Fixed interval | Thundering herd problem when multiple peers recover simultaneously. |
-
-## What NOT to Add
-
-| Technology | Why Not |
-|------------|---------|
-| JSON Schema validator | Overkill for config validation. Hand-written is clearer. |
-| Boost.Log | Entire Boost dependency for something spdlog handles. |
-| gRPC/HTTP health checks | Out of scope. Binary protocol only. |
-| Prometheus client library | Out of scope for v0.9.0. Metrics are log-based. |
-| Custom log framework | spdlog is proven. Don't reinvent. |
-| fmt (standalone) | Already bundled inside spdlog. |
-| Any new FetchContent dependency | Zero new deps is the goal. |
+**Why existing stack is sufficient:**
+- `Storage::has_blob()` is an O(1) key-existence check in `blobs_map` (MDBX btree seek, no value read).
+- Batch = iterate over N hashes, call `has_blob()` for each, accumulate results.
+- Bounded by a max batch size (e.g., 64 to match `MAX_HASHES_PER_REQUEST` from sync protocol).
+- No transactional consistency needed across individual checks (read snapshot from MVCC is already consistent within a single `start_read()` transaction).
+- For efficiency: open a single read transaction, call `txn.get()` in a loop rather than per-call `has_blob()`. This avoids per-call transaction overhead. This is a Storage-level optimization, not a new library.
+
+**Implementation approach:** New `Storage::batch_has_blobs(ns, hashes) -> vector<bool>` using a single read transaction. Response: `[count_be:2][exists:1][hash:32][exists:1][hash:32]...`
+
+**Confidence:** HIGH -- trivial composition of existing MDBX operations.
+
+### 4. BatchRead Query (fetch multiple small blobs)
+
+**Stack requirement:** Loop of `get_blob()` calls within a single handler.
+
+**Why existing stack is sufficient:**
+- Same pattern as BatchExists but with decrypt + encode for each found blob.
+- Must be bounded (e.g., max 32 blobs, max 1 MiB total response) to prevent DoS.
+- Single read transaction for consistency.
+- Encryption overhead: each blob requires AEAD decryption. For N small blobs, this is N decrypts -- all using the same key. No parallelism needed for small N.
+
+**Implementation approach:** New `Storage::batch_get_blobs(ns, hashes) -> vector<optional<BlobData>>` using single read transaction. Response: `[count_be:2][found:1][encoded_blob_len_be:4][flatbuffer_blob]...`
+
+**Confidence:** HIGH -- composition of existing operations.
+
+### 5. DelegationList Query (active delegations for namespace)
+
+**Stack requirement:** libmdbx cursor scan of `delegation_map` for a namespace prefix.
+
+**Why existing stack is sufficient:**
+- `delegation_map` keys are `[namespace:32][delegate_pk_hash:32]`.
+- To list all delegations for a namespace: `lower_bound([namespace][0x00...00])`, scan forward while prefix matches namespace, collect delegate_pk_hash values.
+- This is the **exact same pattern** as `list_namespaces()` uses on `seq_map` (seek to prefix, scan, break on prefix change).
+- Values in delegation_map are `[delegation_blob_hash:32]` -- can include in response for the client to fetch the full delegation blob if needed.
+
+**Implementation approach:** New `Storage::list_delegations(ns) -> vector<{delegate_pk_hash, delegation_blob_hash}>`. Response: `[count_be:2][delegate_pk_hash:32][delegation_blob_hash:32]...`
+
+**Confidence:** HIGH -- existing cursor pattern.
+
+### 6. NamespaceList Query (all namespaces on node)
+
+**Stack requirement:** Already implemented.
+
+**Why existing stack is sufficient:**
+- `Storage::list_namespaces()` already exists and returns `vector<NamespaceInfo>` with namespace_id and latest_seq_num.
+- `BlobEngine::list_namespaces()` wraps it.
+- The existing `NamespaceList` message type (11) is for sync protocol. The new client-facing version needs a different type ID but the data source is the same.
+
+**Implementation approach:** New message type pair that calls existing `engine_.list_namespaces()`. Response: `[count_be:4][namespace_id:32][latest_seq_be:8]...`
+
+**Confidence:** HIGH -- wraps existing method.
+
+### 7. NamespaceStats Query (per-namespace count, bytes, quota)
+
+**Stack requirement:** Already partially implemented.
+
+**Why existing stack is sufficient:**
+- StatsRequest/StatsResponse (types 35-36) already returns `[blob_count:8][total_bytes:8][quota_bytes:8]`.
+- NamespaceStats extends this with additional fields: quota count limit, tombstone count, delegation count.
+- Tombstone count: cursor scan of `tombstone_map` with namespace prefix (same pattern as DelegationList).
+- Delegation count: cursor scan of `delegation_map` with namespace prefix.
+- Alternatively, use `mdbx::txn::get_map_stat()` for global counts, or add per-namespace counters.
+
+**Question for roadmap:** Is NamespaceStats distinct from StatsRequest, or an extension? If it only adds fields, consider extending StatsResponse rather than adding a new type pair. This reduces message type count.
+
+**Confidence:** HIGH -- uses existing quota API + cursor scans.
+
+### 8. PeerInfo Query (detailed peer connection info)
+
+**Stack requirement:** Read from in-memory `PeerInfo` structs in PeerManager.
+
+**Why existing stack is sufficient:**
+- `PeerManager::peers_` (deque of PeerInfo) already contains: address, is_bootstrap, syncing, peer_is_full, subscribed_namespaces, etc.
+- Connection provides: remote_address, is_initiator, is_uds, is_authenticated.
+- This is a pure in-memory read, serialized to binary wire format.
+- No storage access needed.
+
+**Implementation approach:** Inline handler (no co_spawn needed -- pure memory read). Response: `[peer_count_be:2][per-peer: address_len:2, address, is_bootstrap:1, is_syncing:1, is_full:1, ...]`
+
+**Confidence:** HIGH -- reads existing in-memory state.
+
+### 9. Health Query (liveness/readiness check)
+
+**Stack requirement:** Return a fixed response indicating the node is alive.
+
+**Why existing stack is sufficient:**
+- Liveness: if the node can process the message, it is alive. Response = `[status:1]` (0x01 = healthy).
+- Readiness: add simple checks: storage accessible (try `env.info()`), at least one peer connected, etc.
+- No external health check library needed. The protocol IS the health check mechanism.
+- This is the simplest handler in the entire milestone -- likely 10-15 lines of code.
+
+**Implementation approach:** Inline handler. Response: `[status:1][uptime_be:8][peer_count_be:4][storage_ok:1]`
+
+**Confidence:** HIGH -- trivial.
+
+### 10. StorageStatus Query (disk usage, quota headroom, tombstone counts)
+
+**Stack requirement:** Read from existing Storage and MDBX env info APIs.
+
+**Why existing stack is sufficient:**
+- `Storage::used_bytes()` -- mmap geometry (already exists)
+- `Storage::used_data_bytes()` -- actual B-tree occupancy (already exists)
+- `mdbx::env::info()` -- provides `mi_geo.current`, `mi_geo.upper`, page counts
+- `mdbx::txn::get_map_stat()` -- per-sub-database entry counts (used in integrity_scan)
+- Config `max_storage_bytes_` -- total capacity limit
+- Tombstone count: `get_map_stat(tombstone_map).ms_entries`
+- All data sources already exist in the codebase.
+
+**Implementation approach:** Coroutine handler (storage access). Response: `[used_bytes_be:8][data_bytes_be:8][max_bytes_be:8][tombstone_count_be:8][blob_count_be:8][namespace_count_be:4]`
+
+**Confidence:** HIGH -- uses existing MDBX info/stat APIs.
+
+### 11. FlatBuffers Schema Update (transport.fbs)
+
+**Stack requirement:** Add new enum values to `TransportMsgType`.
+
+**Why existing stack is sufficient:**
+- FlatBuffers enums are backwards-compatible when only adding values at the end.
+- The existing `TransportMsgType_MAX` moves from `NodeInfoResponse (40)` to the highest new type.
+- `flatc` regenerates `transport_generated.h` from the updated schema.
+- Relay message filter (`is_client_allowed`) needs new cases for the new types.
+
+**Confidence:** HIGH -- FlatBuffers enum extension is a standard operation done 6+ times already.
 
 ## Integration Points
 
-### New Config Fields (config.h additions)
+### Storage Layer
+
+New methods needed on `Storage` class (all use existing MDBX primitives):
+
+| Method | MDBX Operation | Existing Pattern |
+|--------|---------------|------------------|
+| `get_blobs_in_time_range()` | seq_map cursor scan + blobs_map get + decrypt | `get_blobs_by_seq()` |
+| `batch_has_blobs()` | blobs_map get in loop (single txn) | `has_blob()` |
+| `batch_get_blobs()` | blobs_map get+decrypt in loop (single txn) | `get_blob()` |
+| `list_delegations()` | delegation_map cursor prefix scan | `list_namespaces()` |
+| `get_storage_status()` | env info + map stats | `integrity_scan()` |
+| `count_tombstones_for_ns()` | tombstone_map cursor prefix scan | `list_namespaces()` |
+
+### Wire Protocol
+
+New FlatBuffers enum values (11 request/response pairs, types 41-60+ ):
+
+| Type ID | Name | Payload Size |
+|---------|------|--------------|
+| 41-42 | TimeRangeRequest/Response | 52 bytes / variable |
+| 43-44 | BlobMetadataRequest/Response | 64 bytes / 57 bytes |
+| 45-46 | BatchExistsRequest/Response | 34+ bytes / variable |
+| 47-48 | BatchReadRequest/Response | 34+ bytes / variable |
+| 49-50 | DelegationListRequest/Response | 32 bytes / variable |
+| 51-52 | NamespaceListRequest/Response | 0 bytes / variable |
+| 53-54 | NamespaceStatsRequest/Response | 32 bytes / variable |
+| 55-56 | PeerInfoRequest/Response | 0 bytes / variable |
+| 57-58 | HealthRequest/Response | 0 bytes / 14 bytes |
+| 59-60 | StorageStatusRequest/Response | 0 bytes / 44 bytes |
+
+**Note:** BlobMetadata and Metadata should be merged into a single type pair, reducing from 11 to 10 new pairs (20 new enum values, types 41-60).
+
+### Dispatch Model
+
+All new query types follow the **coroutine-IO** dispatch pattern (co_spawn on ioc_, stays on IO thread):
 
 ```cpp
-// Connection resilience
-uint32_t keepalive_timeout_seconds = 120;  // 0 = disabled
-uint32_t reconnect_base_delay_seconds = 1;
-uint32_t reconnect_max_delay_seconds = 60;
-
-// Logging
-std::string log_file;                       // Empty = stderr only
-std::string log_format = "text";            // "text" or "json"
-uint32_t log_max_size_mb = 10;
-uint32_t log_max_files = 3;
+// Pattern from Phase 62 CONC-04 classification
+on_peer_message -> if (type == NewQueryRequest) {
+    asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]()
+        -> asio::awaitable<void> {
+        // validate payload size (Step 0)
+        // parse fields from payload
+        // call storage/engine method
+        // encode binary response
+        // co_await conn->send_message(ResponseType, response, request_id)
+    }, asio::detached);
+}
 ```
 
-### logging::init() Signature Change
+Exceptions: PeerInfo and Health can be **inline** (no co_spawn needed) since they read only in-memory state with no IO.
 
-```cpp
-// Current:
-void init(const std::string& level = "info");
+No thread pool offload needed -- these are read-only operations on MDBX (read transactions are non-blocking in MVCC). The offload pattern is only needed for write operations that involve crypto verification (Data, Delete).
 
-// New:
-struct LogConfig {
-    std::string level = "info";
-    std::string format = "text";   // "text" or "json"
-    std::string file;              // empty = no file
-    uint32_t max_size_mb = 10;
-    uint32_t max_files = 3;
-};
-void init(const LogConfig& config);
-```
+### Relay Message Filter
 
-### version.h Change
+Add all new request/response types to `is_client_allowed()` in `relay/core/message_filter.cpp`. Mechanical switch-case addition of 20 new enum values.
 
-```
-// Current (hand-edited, stale at 0.6.0):
-#define VERSION_MAJOR "0"
-#define VERSION_MINOR "6"
-#define VERSION_PATCH "0"
+## What NOT to Add
 
-// New (CMake-generated from version.h.in):
-#define CHROMATINDB_VERSION "0.9.0"
-#define CHROMATINDB_GIT_HASH "acefff8-dirty"
-```
+| Temptation | Why Not |
+|------------|---------|
+| Dedicated timestamp index (new sub-database) | YAGNI -- scan-and-filter via seq_map is sufficient for v1.4.0. Timestamps are in encrypted blob data; indexing requires decrypting on write, adding write-path complexity. Add only if profiling shows time-range queries are too slow. |
+| Batch query library (e.g., protocol buffers for batch encoding) | YAGNI -- simple count + loop encoding is the established pattern (see PEX `encode_peer_list()`). |
+| Health check framework (e.g., gRPC health checking) | YAGNI -- the node communicates over its own protocol. A 4-byte response is the health check. |
+| JSON response encoding | NO -- all responses use binary wire format. JSON adds parsing overhead and breaks the existing binary-only contract. |
+| In-memory metadata cache | YAGNI -- MDBX reads from mmap'd pages, which the OS already caches. Adding an application-level cache adds invalidation complexity for zero benefit. |
+| Separate metadata storage (unencrypted) | NO -- breaks DARE security model. All blob data at rest must be encrypted. Storing metadata unencrypted leaks information about stored content. |
 
-## Installation
+## Performance Considerations (No New Libraries Needed)
 
-No changes to installation. No new `FetchContent_Declare` blocks.
+| Query Type | Expected Latency | Bottleneck | Mitigation |
+|------------|------------------|------------|------------|
+| TimeRange | Medium (N decrypts) | AEAD decryption per blob | Limit to 100 results; seq_map cursor provides natural time ordering |
+| BlobMetadata | Low (1 decrypt) | Single blob decrypt | Single MDBX get + AEAD decrypt -- microseconds |
+| BatchExists | Low (N key checks) | MDBX btree seeks | Single transaction, key-only checks -- very fast |
+| BatchRead | Medium (N decrypts) | AEAD decryption per blob | Limit batch size (32) and total response size (1 MiB) |
+| DelegationList | Low (cursor scan) | Prefix scan breadth | Delegations per namespace are typically few (<100) |
+| NamespaceList | Low (cursor scan) | Number of namespaces | Already implemented, proven |
+| NamespaceStats | Low (stats + scan) | Per-namespace tombstone/delegation counts | Use map_stat for global counts, cursor scan for per-namespace |
+| PeerInfo | Trivial (memory read) | None | In-memory data, no IO |
+| Health | Trivial (memory read) | None | Fixed response, no IO |
+| StorageStatus | Low (env info) | None | MDBX env info is O(1) |
 
-```bash
-# Existing (unchanged):
-cmake -B build
-cmake --build build
-```
+## Alternatives Considered
 
-Optional spdlog bump (if desired):
-```cmake
-# In db/CMakeLists.txt, change:
-GIT_TAG v1.15.1
-# To:
-GIT_TAG v1.17.0
-```
+| Consideration | Decision | Rationale |
+|---------------|----------|-----------|
+| New sub-database for timestamp index | **Reject** | Adds write-path complexity (decrypt-index-re-encrypt dance), increases MDBX transaction scope, and v1.4.0 volumes don't warrant it. Seq-scan-and-filter is correct for now. |
+| Separate MetadataRequest from BlobMetadataRequest | **Merge** | Same data, same implementation. Two type pairs waste enum space. |
+| gRPC/REST health endpoint alongside binary protocol | **Reject** | Adds HTTP dependency. The existing protocol carries health checks natively. External monitoring can use a thin wrapper. |
+| Parallel MDBX reads for batch operations | **Reject** | MDBX read transactions are already lock-free (MVCC). Multiple sequential reads in one transaction are faster than spawning parallel transactions due to transaction setup overhead. |
 
-## Confidence Assessment
+## Summary
 
-| Area | Confidence | Reason |
-|------|-----------|--------|
-| No new deps needed | HIGH | All features verified achievable with existing stack. spdlog file sinks, Asio timers, CMake configure_file -- all well-documented, widely used. |
-| spdlog JSON pattern | HIGH | Verified via spdlog wiki and issue #1797. Pattern string approach is documented and supported. |
-| spdlog file sink | HIGH | `rotating_file_sink_mt` is a core spdlog feature, documented in wiki and examples. |
-| CMake version injection | HIGH | `configure_file()` + `execute_process(git describe)` is the standard CMake pattern. Dozens of references confirm. |
-| libmdbx crash safety | HIGH | `robust_synchronous` + `write_mapped_io` verified as correct combination from libmdbx README. Copy-on-write B-tree means no WAL needed. |
-| libmdbx file size behavior | MEDIUM | mmap databases typically don't shrink files. Need to verify this is the tombstone GC "bug" explanation. May require `mdbx_env_shrink()` or accept as expected behavior. |
-| Config validation approach | HIGH | Hand-written validation for ~20 fields is straightforward. No ambiguity. |
-| Keepalive without ping/pong | HIGH | Sync cycle generates traffic every 60s. 120s timeout means peer is truly dead if no messages arrive. |
+The v1.4.0 milestone is a **pure application-layer feature expansion**. Every query type maps to existing MDBX cursor operations, in-memory state reads, or composition of existing Storage methods. The stack is complete. No new dependencies, no CMakeLists.txt changes, no FetchContent additions.
+
+The work is:
+1. Add enum values to `transport.fbs` and regenerate
+2. Add ~6 new methods to `Storage` class using existing MDBX patterns
+3. Add ~10 handler blocks in `PeerManager::on_peer_message` following the coroutine-IO pattern
+4. Update relay message filter with new type pairs
+5. Write unit tests following existing patterns in `test_storage.cpp` and `test_peer_manager.cpp`
 
 ## Sources
 
-- [spdlog Wiki - Sinks](https://github.com/gabime/spdlog/wiki/Sinks)
-- [spdlog Wiki - JSON Logging Setup](https://github.com/gabime/spdlog/issues/1797)
-- [spdlog v1.15.1 Example Code](https://github.com/gabime/spdlog/blob/v1.x/example/example.cpp)
-- [spdlog Releases](https://github.com/gabime/spdlog/releases)
-- [libmdbx README - Crash Recovery](https://github.com/erthink/libmdbx/blob/master/README.md)
-- [libmdbx GitHub - ACID Guarantees](https://github.com/erthink/libmdbx)
-- [CMake Version Injection via Git](https://www.marcusfolkesson.se/blog/git-version-in-cmake/)
-- [CMake configure_file Best Practices](https://dev.to/khozaei/automating-semver-with-git-and-cmake-2hji)
-- [Asio C++20 Coroutines - Timeout Example](https://beta.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/coroutines/timeout.cpp)
-- [Asio 201 - Timeouts and Cancellation](https://cppalliance.org/asio/2023/01/02/Asio201Timeouts.html)
+- libmdbx v0.13.11 cursor API: verified through codebase analysis of 12+ `lower_bound()` uses in `db/storage/storage.cpp` -- HIGH confidence
+- MDBX `get_map_stat()` for entry counts: verified through `integrity_scan()` implementation -- HIGH confidence
+- Binary wire format pattern: verified through 6 existing request/response handler implementations in `peer_manager.cpp` -- HIGH confidence
+- FlatBuffers enum extension: verified through `transport.fbs` evolution from 30 types (v1.2.0) to 40 types (v1.3.0) -- HIGH confidence
+- DARE encryption model (all-or-nothing AEAD): verified through `encrypt_value()`/`decrypt_value()` in storage.cpp -- HIGH confidence
+- Dispatch model classification: verified through Phase 62 CONC-03/CONC-04 comments in `peer_manager.cpp` -- HIGH confidence

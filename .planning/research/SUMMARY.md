@@ -1,157 +1,189 @@
 # Project Research Summary
 
-**Project:** chromatindb v0.9.0 — Connection Resilience & Hardening
-**Domain:** C++20 async daemon hardening — operational reliability and storage integrity
-**Researched:** 2026-03-19
+**Project:** chromatindb
+**Domain:** Decentralized PQ-secure database node — query API expansion (v1.4.0 Extended Query Suite)
+**Researched:** 2026-03-26
 **Confidence:** HIGH
 
 ## Executive Summary
 
-v0.9.0 is a pure hardening milestone on a mature codebase. All four research files converge on the same core finding: every feature in scope is achievable with the existing stack — zero new dependencies required. The existing Asio timer patterns, spdlog sink architecture, libmdbx ACID guarantees, and CMake built-ins already provide everything needed. This is a milestone about using existing capabilities more completely, not adding new ones.
+The v1.4.0 milestone is a pure application-layer feature expansion onto a stable, production-hardened foundation. Thirteen shipped milestones and 64 phases of prior work mean the entire stack, storage schema, dispatch model, wire format conventions, and relay filter architecture are locked and proven. The research confirms that all 10 new query types (the milestone listed 11, but BlobMetadata and Metadata are duplicates and must be merged into one MetadataRequest/MetadataResponse pair) can be built using existing libmdbx cursor operations, existing in-memory state reads, and the coroutine-IO dispatch pattern established in Phase 62. No new dependencies, no new sub-databases for the core feature set, and no new async primitives are needed anywhere in this milestone.
 
-The recommended approach falls into four natural phases: (1) infrastructure foundation (version injection, config validation, timer refactoring), (2) storage and logging improvements (structured logs, file sink, cursor compaction, integrity scan), (3) network resilience (keepalive timeout, ACL-aware reconnect), and (4) verification (crash audit, delegation quota tests, docs). This ordering is dependency-driven — config validation must precede all other work because new config fields are needed throughout, and logging must improve before debugging network state machines. The tombstone GC "issue" is likely a measurement problem (mmap file-size semantics), not a real bug.
+The recommended approach is to implement in three phases ordered by complexity: simple node-level queries first (Health, NamespaceList, NamespaceStats, StorageStatus — zero storage API changes required), then blob-level queries second (MetadataRequest, BatchExists, DelegationList — minor new Storage methods, no complex wire formats), then batch and range queries last (BatchRead, PeerInfo, TimeRange — complex variable-length response encoding, privacy policy decisions, and the timestamp-scan tradeoff). This ordering is dependency-driven: simpler phases validate the four-component integration pattern before the harder features add storage complexity, and TimeRange is intentionally last because it requires the largest design decision: scan-and-filter via seq_map (O(N) decrypts, acceptable for v1.4.0 volumes) versus a new timestamp sub-database (O(log N) queries but adds write-path complexity — YAGNI).
 
-Key risks are concentrated in Phase 3. Reconnect logic must handle ACL-rejection detection, jitter, and connection-storm prevention after network partitions. The `acl_rejected_` flag pattern and `awaitable operator||` for concurrent coroutines are proven codebase patterns and should be followed exactly. The coroutine lifetime / timer lifetime pitfall (stack-use-after-return on shutdown) is the single most dangerous failure mode and is already mitigated by the existing timer-cancel pattern — new timers must be added to `cancel_all_timers()` to maintain this invariant.
+The primary risks are operational, not conceptual. Every phase that adds message types must update four locations: transport.fbs enum, message_filter.cpp in the relay, NodeInfoResponse supported_types array, and PROTOCOL.md. Missing any one of these produces silent failures visible only through specific test paths (relay path vs UDS path). The AEAD nonce desync risk from incorrect handler dispatch is the most severe failure mode — it causes data corruption rather than clear errors — and has been the root cause of production bugs in prior milestones (Phase 50 PEX SIGSEGV). All 10 new handlers must be classified as coroutine-IO and must never call thread-pool offload paths.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The existing stack handles everything. No new `FetchContent_Declare` blocks. The only optional action is bumping spdlog from v1.15.1 to v1.17.0 — but v1.15.1 already has all needed capabilities (`rotating_file_sink_mt`, JSON pattern formatting, multi-sink loggers). Keep all other dependencies pinned at current versions. libmdbx v0.13.11 is the final open-source release before MithrilDB transition — staying pinned is correct.
+No stack changes whatsoever. The existing stack fully covers all 10 new query types. The research validates this against every new type: libmdbx cursor `lower_bound()` scans power time-range and list queries; `has_blob()` loops in a single MDBX read transaction cover batch existence; `get_blob()` loops cover batch read; `mdbx::txn::get_map_stat()` returns aggregate tombstone and delegation counts in O(1); the in-memory `peers_` deque in PeerManager covers PeerInfo; a status byte is sufficient for Health. All wire encoding uses the existing big-endian integer helpers (`encode_be_u64`, `encode_be_u32`). The FlatBuffers enum extension from 40 types (v1.3.0) to 60 types (v1.4.0) is a standard backward-compatible operation already done multiple times in this codebase.
 
-**Core technologies (all existing):**
-- Standalone Asio 1.38.0 — `steady_timer` coroutine loops for reconnect and keepalive — timer-cancel pattern already proven throughout codebase
-- spdlog 1.15.1 — `rotating_file_sink_mt` + JSON pattern string — built-in feature, needs wiring only
-- libmdbx 0.13.11 — `robust_synchronous` + `write_mapped_io` — correct crash-safe config, audit confirms no changes needed
-- nlohmann/json 3.11.3 — hand-written `validate_config()` — ~100 LOC beats a schema-validator dependency
-- CMake 3.20 — `configure_file()` + `execute_process(git describe)` — fixes stale version.h stuck at 0.6.0
+**Core technologies (unchanged, no additions):**
+- libmdbx v0.13.11 — ACID storage with 7 sub-databases; cursor scans power all new list and range queries
+- liboqs / libsodium — PQ crypto and DARE encryption; metadata queries must fully decrypt blobs (AEAD is all-or-nothing; there is no way to read metadata without decrypting the full blob)
+- FlatBuffers v25.2.10 — enum extension from types 0-40 to 0-60; backwards-compatible; regenerate transport_generated.h
+- Standalone Asio 1.38.0 — coroutine-IO dispatch; all new handlers use the same co_spawn on ioc_ pattern from Phase 62
+- C++20 / CMake — language and build system; no FetchContent changes needed
+
+See `.planning/research/STACK.md` for per-query-type analysis, integration point details, and the full "what NOT to add" rationale.
 
 ### Expected Features
 
-All features are appropriately sized for a hardening milestone. Nothing should be deferred.
+The feature analysis identified 11 items in the milestone spec, but BlobMetadata and Metadata are identical operations (return blob fields without the data payload, identified by namespace+hash) and must be merged into a single MetadataRequest/MetadataResponse pair. The resulting 10 message type pairs occupy enum slots 41-60 in transport.fbs, with the duplicate slot reserved.
 
-**Must have (table stakes — daemon is not deployable without these):**
-- Auto-reconnect on disconnect — peers come and go; permanent peer loss on disconnect is unacceptable
-- Dead peer detection (keepalive timeout) — stale connections waste sync slots and block progress
-- File logging — operators cannot monitor a daemon that only logs to stderr
-- Config validation fail-fast — daemon must reject bad config at startup, not crash 10 minutes later
-- Version identification — fix stale version.h (stuck at "0.6.0" for three milestones)
+**Must have (table stakes):**
+- Health — any deployable daemon needs liveness/readiness probes; orchestrators (Docker, K8s, systemd) require this
+- MetadataRequest — completes the Read/Exists/Metadata trio that is universally expected in a blob store API
+- NamespaceList — NodeInfoResponse reports namespace_count but clients have no way to enumerate the actual namespace IDs
+- NamespaceStats — per-namespace quota usage, tombstone count, and delegation count; needed for monitoring dashboards
+- StorageStatus — disk usage, quota headroom, and tombstone totals at the node level; needed for capacity planning
 
-**Should have (operational differentiators):**
-- Structured JSON log format — machine-parseable logs for monitoring pipelines
-- Startup integrity scan — cross-reference sub-databases on open, self-healing for orphaned entries
-- Cursor compaction (age-based) — prevent unbounded cursor storage growth from one-time peers
-- Tombstone GC investigation — confirm expected mmap behavior or find real bug
-- libmdbx crash recovery audit — empirical kill-9 confirmation of ACID guarantees
-- Delegation quota verification — confirm delegate writes correctly count against owner quota
-- Complete metrics logging — add missing byte/tombstone counters to periodic log line
-- Timer cleanup refactoring — `cancel_all_timers()` as single cancellation point
+**Should have (differentiators):**
+- BatchExists — reduces O(N) round-trips to O(1) for sync verification and cache freshness checks; high-value, low-complexity
+- BatchRead — batch fetch for small-blob workloads where per-round-trip latency dominates over bandwidth
+- DelegationList — exposes who has write access to a namespace; essential for delegation management UIs and security audits
 
-**Defer (none — all features in scope):**
-- Ping/pong protocol messages — sync cycle already provides keepalive traffic, protocol change unnecessary
-- Prometheus/gRPC health endpoint — HTTP dependency, attack surface, out of scope
-- JSON Schema config validation — overkill for 20 fields with range checks
-- Hot config reload for non-ACL fields — SIGHUP already handles ACL; restart is fine for the rest
+**Defer to v1.5.0 (acceptable scope reduction if needed):**
+- PeerInfo — useful for operational dashboards but requires trust-gating policy decisions about IP address exposure
+- TimeRange — standard query type but requires either O(N) decrypt scans (v1.4.0 approach) or a new timestamp sub-database; highest complexity in the set
+
+See `.planning/research/FEATURES.md` for full wire format specifications, payload byte layouts, and per-feature implementation notes.
 
 ### Architecture Approach
 
-All changes integrate cleanly into the existing three-tier component model (main.cpp -> Config/Logging/Storage/BlobEngine -> PeerManager -> Server/Connection). The single io_context thread constraint means all new timers must use the established timer-cancel pattern. The key architectural change is adding `heartbeat_loop()` to Connection and racing it against `message_loop()` using `asio::experimental::awaitable_operators::operator||` — the required header is already included in connection.h, making this a low-risk change. Config validation is structured as a separate pass after all config sources merge (file + CLI overrides), before any component construction.
+Every new query type integrates via the same four-component pattern established across all prior milestones: add enum values to transport.fbs, add Storage methods where needed, add dispatch cases in `PeerManager::on_peer_message()`, and add relay filter entries in `message_filter.cpp`. No changes to Connection, Engine, Server, Handshake, Sync, Reconciliation, PEX, Config, Identity, or Crypto. The entire new work is confined to storage.h/.cpp, peer_manager.cpp, message_filter.cpp, transport.fbs, and PROTOCOL.md.
 
-**Major components affected:**
-1. `config/` — add `validate_config()` + new fields for logging, keepalive, reconnect
-2. `logging/` — multi-sink init (console + rotating file), JSON format switch
-3. `net/connection.*` — add `heartbeat_loop()`, `last_activity_` tracking, `acl_rejected_` flag
-4. `net/server.*` — check `acl_rejected_` in reconnect_loop, enter extended backoff on ACL pattern
-5. `peer/peer_manager.*` — `cancel_all_timers()` extraction, cursor compaction timer, expanded metrics
-6. `storage/` — `compact_stale_cursors(age)`, `run_integrity_scan()`, call `rebuild_quota_aggregates()` at startup
-7. `CMakeLists.txt` — `project(VERSION 0.9.0)`, `configure_file(version.h.in)`
+All 10 new handlers are classified as coroutine-IO dispatch (co_spawn on ioc_). None require the coroutine-offload-transfer pattern because none call the crypto thread pool — they are read-only queries using synchronous MDBX read transactions. The co_spawn is required solely because `send_message()` is an awaitable that must run on the IO thread for AEAD nonce serialization.
+
+**Major components and their v1.4.0 scope:**
+1. Storage (storage.h/.cpp) — add 5 new methods: `get_blob_metadata()`, `batch_has_blobs()`, `batch_get_blobs()`, `list_delegations()`, `tombstone_count()`; all use existing MDBX cursor patterns
+2. PeerManager (peer_manager.cpp) — add 10 dispatch cases in `on_peer_message()`, all following the coroutine-IO template from Phase 62/63
+3. Relay filter (relay/core/message_filter.cpp) — add 20 new enum values (10 request + 10 response) to `is_client_allowed()`
+4. FlatBuffers schema (transport.fbs) — add enum values 41-60 to TransportMsgType; regenerate transport_generated.h
+5. PROTOCOL.md — document byte-level wire format for all 10 new request/response pairs
+
+See `.planning/research/ARCHITECTURE.md` for per-type dispatch classification table, new Storage method signatures, and complete wire format specifications.
 
 ### Critical Pitfalls
 
-1. **Reconnect storm after network partition** — add 0-25% random jitter to exponential backoff; stagger initial bootstrap connections by 0-2s per peer; sync rate limiter (existing) handles post-connect throttling
-2. **Coroutine stack-use-after-return on shutdown** — cancel all timers in `on_shutdown()` before `ioc.stop()`; check `operation_aborted` after every `co_await` timer; use member functions not lambdas for reconnect/keepalive coroutines
-3. **ACL-rejected peer infinite reconnect loop** — add `acl_rejected_` flag to Connection; detect pattern (TCP + handshake OK but closes <5s with zero messages); enter 600s extended backoff after 3 consecutive rejects; reset on SIGHUP
-4. **File logging silent startup failure** — validate `log_file` parent directory in `validate_config()`; catch `spdlog_ex` in `logging::init()` and fall back to console-only with stderr warning
-5. **Tombstone GC misdiagnosis** — check `used_bytes()` via `mdbx_env_info`, not file size; mmap databases reuse freed pages but don't shrink files; only if `used_bytes()` doesn't decrease after GC is there a real bug
+1. **Batch response frame overflow (BatchRead)** — aggregate response exceeds MAX_FRAME_SIZE (110 MiB) when no cumulative size cap is enforced. Prevent by: capping BatchRead at 16-32 blobs, enforcing a cumulative size limit with a `partial` flag in the response wire format (must be in the format from the start — adding it later is a breaking change), and writing a test with blobs whose aggregate size approaches the frame limit.
+
+2. **AEAD nonce desync from incorrect dispatch classification** — `send_counter_` in Connection is a non-atomic uint64_t; concurrent sends from multiple coroutines on different threads cause nonce races and AEAD decryption failures at the remote end. This produced the Phase 50 PEX SIGSEGV. Prevent by: classifying all 10 new handlers as coroutine-IO, never adding thread pool offload to read-only query handlers, running TSAN tests with pipelined concurrent requests per connection.
+
+3. **Relay filter missing new types** — missing a case in `message_filter.cpp` causes the relay to silently disconnect clients who send the new type; the node works fine over UDS, masking the bug in single-node tests. Prevent by: treating relay filter update as a per-phase mandatory checklist item, and explicitly testing each new type through the relay path (not just UDS).
+
+4. **NamespaceList unbounded scan** — exposing the existing `list_namespaces()` without pagination is a DoS vector for nodes with many namespaces; adding pagination after deployment is a breaking wire format change. Prevent by: designing the pagination cursor (after_namespace:32 + limit:4) into the request format before any implementation begins.
+
+5. **Health handler blocking the IO thread** — calling any storage cursor method from a health handler adds latency under write transaction contention; calling a write transaction causes health to hang during compaction. Liveness must be zero-IO. Readiness may use `used_bytes()` (O(1) mmap stat, no cursor) but must not open cursors, scan namespaces, or write.
+
+See `.planning/research/PITFALLS.md` for additional integration gotchas, security mistakes to avoid, and a per-feature "looks done but isn't" checklist.
 
 ## Implications for Roadmap
 
-Based on combined research, a four-phase structure is strongly recommended. The ordering is dependency-driven, not arbitrary.
+Based on combined research, the feature ordering from FEATURES.md aligns exactly with the dependency and complexity analysis from ARCHITECTURE.md and PITFALLS.md. Three implementation phases are recommended within the v1.4.0 milestone.
 
-### Phase 1: Foundation
-**Rationale:** Pure infrastructure changes with no behavioral impact. Must exist before adding new config fields or timers. Zero risk of breaking existing functionality.
-**Delivers:** Correct version in logs, fail-fast config errors, single timer cancellation point
-**Addresses:** Version identification (table stakes), config validation (table stakes), timer cleanup (safety net for phases 2-3)
-**Avoids:** Version injection breaking Docker builds (ERROR_QUIET + "unknown" fallback); over-strict validation rejecting benchmark configs (warn, don't reject, for unusual-but-valid values); dual timer cancellation anti-pattern (extract `cancel_all_timers()` first)
+### Phase 65: Simple Node-Level Queries (Health, NamespaceList, NamespaceStats, StorageStatus)
 
-### Phase 2: Storage & Logging
-**Rationale:** Improves operational tooling before touching the network state machine. Better logs = better debugging of Phase 3. Storage work is fully independent of network changes.
-**Delivers:** File + structured logging, cursor compaction, tombstone GC investigation result, startup integrity scan, complete metrics
-**Addresses:** File logging (table stakes), structured format (differentiator), cursor compaction (differentiator), metrics (differentiator)
-**Avoids:** Log rotation file permissions in Docker (validate path in config, fallback to console on failure); JSON broken by unescaped content (audit: only hex/IP data in logs); cursor compaction deleting active peer cursors (check connected peers before compacting)
+**Rationale:** These four queries require zero new Storage methods — they reuse existing `list_namespaces()`, `get_namespace_quota()`, `effective_quota()`, `used_bytes()`, and `used_data_bytes()`. They cover the highest-priority table stakes features (Health is a deployment blocker). Starting here validates the four-component integration pattern (schema + handler + relay filter + PROTOCOL.md) before adding storage complexity.
 
-### Phase 3: Network Resilience
-**Rationale:** Highest-risk changes; benefits from Phase 1 (correct config validation, timer refactoring) and Phase 2 (better logs for debugging). Network state machine changes require the most care.
-**Delivers:** Keepalive timeout (dead peer detection via `heartbeat_loop() || message_loop()`), ACL-aware reconnect with exponential backoff + jitter
-**Addresses:** Auto-reconnect (table stakes), dead peer detection (table stakes)
-**Avoids:** Reconnect storm (jitter + staggered startup); ACL infinite loop (`acl_rejected_` flag + extended backoff); coroutine lifetime pitfall (timer-cancel pattern, member functions not lambdas); keepalive too aggressive for large blob sync (90s timeout > 2x typical 100 MiB transfer time)
+**Delivers:** Complete liveness/readiness probe support; full namespace enumeration and storage visibility for operators; foundation pattern that all subsequent phases copy.
 
-### Phase 4: Verification & Documentation
-**Rationale:** Validates correctness of all prior phases. Kill-9 tests and delegation quota tests confirm ACID guarantees empirically. Documentation closes the milestone.
-**Delivers:** libmdbx crash recovery audit (kill-9 test suite), delegation quota behavior confirmed with tests, updated README/config docs
-**Addresses:** libmdbx crash recovery (differentiator), delegation quota verification (differentiator)
-**Avoids:** Stale reader slots after kill-9 (verify auto-cleanup on env_open); delegation quota bypass (verify ingest resolves delegate to owner for quota accounting)
+**Addresses:** Health, NamespaceList, NamespaceStats, StorageStatus from the features list.
+
+**Avoids:** Health blocking IO (Pitfall 6 in PITFALLS.md) — design as inline or minimal-IO from the start. NamespaceList unbounded scan (Pitfall 7) — pagination cursor in wire format before any code is written. Relay filter omission (Pitfall 4) — establish checklist discipline here.
+
+**Research flag:** Standard patterns from Phase 62/63. Skip `/gsd:research-phase`.
+
+---
+
+### Phase 66: Blob-Level Queries (MetadataRequest, BatchExists, DelegationList)
+
+**Rationale:** These require minor new Storage methods but no complex wire formats or policy decisions. MetadataRequest closes the obvious gap in the Read/Exists API. BatchExists is the simplest batch operation (fixed-size response: count + N result bytes). DelegationList is a cursor prefix scan over existing delegation_map following the exact `list_namespaces()` pattern. Grouping these together allows the new Storage methods to be written and tested together before the more complex batch operations.
+
+**Delivers:** Complete single-blob query API (exists/metadata/read); O(1) round-trip batch existence check; delegation visibility for security audits.
+
+**Addresses:** MetadataRequest (must-have), BatchExists (should-have), DelegationList (should-have).
+
+**Avoids:** DelegationList snapshot inconsistency (Pitfall 5) — implement as a single-txn cursor scan, not N separate `has_valid_delegation()` calls. MetadataRequest seq_num gap — the plan must decide whether to include seq_num in the response (requires reverse lookup or seq_map scan) or omit it; this decision must be made before writing the wire format.
+
+**Research flag:** Standard patterns. Skip `/gsd:research-phase`.
+
+---
+
+### Phase 67: Batch and Range Queries (BatchRead, PeerInfo, TimeRange)
+
+**Rationale:** These are the most complex features in the milestone. BatchRead requires variable-length response encoding with cumulative size tracking and a truncation flag — the wire format must be locked before any implementation begins. PeerInfo requires a trust-gating policy decision (what to expose to untrusted vs trusted connections). TimeRange requires the explicit decision between seq_map scan-and-filter (O(N) decrypts, accepted for v1.4.0) and a new timestamp sub-database (O(log N), YAGNI). Placing these last means the simpler patterns are exercised and the dispatch model is well-understood.
+
+**Delivers:** Batch blob fetch with partial-result support; detailed peer topology data; time-window blob queries.
+
+**Addresses:** BatchRead (should-have), PeerInfo (defer candidate), TimeRange (defer candidate).
+
+**Avoids:** Frame size overflow (Pitfall 1) — BatchRead cumulative size cap and partial flag must be in the wire format spec, not added during implementation. AEAD nonce desync (Pitfall 2) — TSAN pipelined-request tests required. TimeRange full-scan performance (Pitfall 3) — enforce request limit (e.g., 100 results) and document O(N) behavior in PROTOCOL.md.
+
+**Research flag:** BatchRead and TimeRange benefit from explicit design review during plan writing. PeerInfo trust-gating policy must be documented before implementation. If schedule is tight, both PeerInfo and TimeRange can be explicitly deferred to v1.5.0 without breaking the rest of the milestone.
+
+---
 
 ### Phase Ordering Rationale
 
-- Config validation and timer cleanup precede everything because new `log_file`, `keepalive_timeout_seconds`, and `reconnect_max_delay_seconds` config fields are needed in Phases 2 and 3, and new timers need `cancel_all_timers()` to be in place
-- Logging improvements come before network changes because diagnosing reconnect state machine issues requires good log output from the start
-- Network resilience is last among implementation phases because it touches the most complex state machine (Connection/Server/PeerManager interaction) and benefits from all prior tooling
-- The tombstone GC investigation belongs in Phase 2 because the startup integrity scan may reveal the root cause, and architecture analysis strongly suggests this is a documentation fix rather than a code fix
+- Phase 65 comes first because it covers deployment-blocking features (Health) and establishes the four-component integration checklist used by all subsequent phases.
+- Phase 66 comes second because it adds Storage API methods that Phase 67 may need to reference, and the patterns are simpler.
+- Phase 67 comes last because it contains the features with the most design decisions; deferring PeerInfo and TimeRange to v1.5.0 is explicitly acceptable if needed.
+- TimeRange is the very last feature within Phase 67 because the timestamp-scan decision (seq_map proxy vs new sub-database) has the largest blast radius if changed after implementation starts.
+- All phases share the same four-component integration pattern; per-phase relay filter and PROTOCOL.md updates must be treated as required, not optional.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 3 (Network Resilience):** The exact wiring of `acl_rejected_` through the Server callback chain should be traced during plan writing. The architecture file documents the existing bug (handshake_ok set before ACL check), and the fix is clear, but the connection lifecycle state transitions are subtle enough to warrant careful plan-time tracing before writing requirements.
+Phases needing design attention during plan writing:
+- **Phase 67 (BatchRead):** Wire format must include `partial` flag and cumulative size tracking from day one. Lock the response format before writing any implementation code.
+- **Phase 67 (TimeRange):** Decision on seq_map scan-and-filter vs timestamp index must be documented in the plan. Recommendation from all three research files: use scan-and-filter with a 100-result limit for v1.4.0; defer timestamp index to v2+.
+- **Phase 67 (PeerInfo):** Trust-gating policy must be documented. Recommendation: allow through relay, return reduced data (count only, no IP addresses) for untrusted connections.
+- **Phase 66 (MetadataRequest):** Decide whether seq_num is included in MetadataResponse; if yes, document the lookup strategy (scan seq_map — O(N) — or accept absence of seq_num).
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1 (Foundation):** CMake configure_file and C++ validation functions are well-documented standard patterns. HIGH confidence.
-- **Phase 2 (Storage & Logging):** spdlog rotating file sinks are a core feature. libmdbx scan patterns follow existing `validate_no_unencrypted_data()` precedent. HIGH confidence.
-- **Phase 4 (Verification):** Test writing against documented behavior. No implementation ambiguity.
+Phases with well-documented standard patterns (no additional research needed):
+- **Phase 65:** All four queries reuse existing storage methods and coroutine-IO dispatch from Phase 62/63.
+- **Phase 66:** DelegationList and BatchExists cursor/loop patterns are direct copies of `list_namespaces()` and `has_blob()` patterns already in the codebase.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All features verified against existing spdlog, Asio, libmdbx capabilities. Zero new deps confirmed. Source code reviewed directly. |
-| Features | HIGH | Feature set is conservative (hardening, not new functionality). All features sized small-medium. Anti-features are well-justified. |
-| Architecture | HIGH | Based on direct source code analysis of all affected files. Existing patterns (timer-cancel, awaitable_operators, member function coroutines) are proven in the codebase. |
-| Pitfalls | HIGH | Critical pitfalls derived from actual code bugs (reconnect loop ACL issue is a documented existing defect in server.cpp) and well-documented Asio/libmdbx behaviors. |
+| Stack | HIGH | Verified through direct codebase analysis of 12+ libmdbx cursor uses, 6 existing handler implementations, FlatBuffers enum history (30 -> 40 -> 60 types), and DARE encryption model |
+| Features | HIGH | Derived from protocol gap analysis cross-referenced with existing wire spec in PROTOCOL.md; BlobMetadata/Metadata merge decision is clear and unambiguous |
+| Architecture | HIGH | All dispatch classifications and component boundaries derived from direct source reading of peer_manager.cpp, storage.cpp, and connection.cpp; no inferences from external docs |
+| Pitfalls | HIGH | Derived from codebase analysis plus documented failure modes from prior milestones (Phase 50 PEX SIGSEGV, Phase 62 IO-thread transfer pattern); not speculative |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Tombstone GC root cause:** Architecture analysis identifies three likely explanations (TTL=0 by design, seq_map sentinel accumulation, mmap file-size semantics). The actual root cause must be confirmed during Phase 2 implementation by adding `used_bytes()` instrumentation. Resolution: document and close if mmap behavior; fix if actual data not being deleted.
-- **JSON log escaping:** Architecture recommends a custom `spdlog::custom_flag_formatter` for safe JSON escaping of `%v`. STACK.md says the simple pattern string is sufficient (all log data is hex/IP, already safe ASCII). Decide during Phase 2 implementation — if any log message includes non-safe content, use the custom formatter.
-- **Keepalive timeout calibration:** The proposed 90s timeout is well above typical transfer times (100 MiB at 33 blobs/sec = ~3s). Confirm acceptable during Phase 3 plan writing. The configurable `keepalive_timeout_seconds` field means this can be tuned by operators without a code change.
+- **TimeRange timestamp units:** Confirm whether blob.timestamp is stored in microseconds or seconds at the storage layer before finalizing the TimeRange wire format. PITFALLS.md flags this as a potential confusion point. Resolve by checking the FlatBuffer schema and store_blob() during Phase 67 plan writing.
+
+- **MetadataRequest seq_num inclusion:** No reverse index from blob_hash to seq_num currently exists. The Phase 66 plan must decide: scan seq_map to find seq_num (O(N)), add a new reverse index, or omit seq_num from MetadataResponse. FEATURES.md notes this explicitly as the only non-trivial part of MetadataRequest.
+
+- **BlobMetadata vs Metadata final confirmation:** Both research files recommend merging into a single type pair. The roadmap plan must confirm this merge and reserve the duplicate type IDs as `Reserved` in transport.fbs to maintain contiguous enum numbering.
+
+- **PeerInfo trust-gating policy:** A policy decision, not a code ambiguity. Must be documented before Phase 67 implementation begins. The recommendation (expose count for untrusted, full data for trusted/UDS) is documented in FEATURES.md but must be approved as the final design.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Source code: `server.cpp`, `connection.cpp`, `peer_manager.cpp`, `storage.cpp`, `engine.cpp`, `config.cpp`, `logging.cpp`, `main.cpp`, `version.h`, `CMakeLists.txt` — direct analysis of all affected components
-- [libmdbx GitHub — ACID and crash recovery](https://github.com/erthink/libmdbx) — durability modes, reader slots, mmap semantics
-- [spdlog Wiki — Sinks](https://github.com/gabime/spdlog/wiki/Sinks) — rotating_file_sink_mt, multi-sink loggers
-- [CMake configure_file documentation](https://www.marcusfolkesson.se/blog/git-version-in-cmake/) — version injection pattern
-- [Asio C++20 Coroutines](https://think-async.com/Asio/asio-1.22.0/doc/asio/overview/core/cpp20_coroutines.html) — awaitable_operators, timer cancellation
+
+- `db/storage/storage.cpp` — cursor patterns, DARE encryption model, delegation_map/tombstone_map key structure, `list_namespaces()` and `integrity_scan()` patterns
+- `db/peer/peer_manager.cpp` lines 523-538 — dispatch model classification comment block, ExistsRequest/NodeInfoRequest handler patterns from Phase 62/63
+- `db/net/connection.cpp` line 155 — `send_counter_++` in `send_encrypted()`, non-atomic nonce serialization
+- `db/net/framing.h` — MAX_FRAME_SIZE = 110 MiB
+- `relay/core/message_filter.cpp` — explicit allow-list switch structure confirming per-type registration requirement
+- `db/PROTOCOL.md` — existing wire format specifications (types 1-40) confirming big-endian, no-padding conventions
+- `.planning/RETROSPECTIVE.md` — PEX SIGSEGV root cause (v1.0.0), IO-thread transfer pattern (v1.3.0), dispatch model classification
 
 ### Secondary (MEDIUM confidence)
-- [spdlog JSON logging guide](https://github.com/gabime/spdlog/issues/1797) — JSON pattern string approach, escaping behavior
-- [Asio Timeouts and Cancellation](https://cppalliance.org/asio/2023/01/02/Asio201Timeouts.html) — reconnect coroutine patterns
 
-### Tertiary (LOW confidence)
-- None — all findings verified against source code or primary documentation
+- Kubernetes liveness/readiness probe semantics — health check design (two-probe model; liveness = no storage, readiness = lightweight probe)
+- API Design Patterns Ch. 18 (Manning) — batch operation response patterns and partial-result conventions
+- libmdbx v0.13.11 documentation — MVCC snapshot isolation guarantees confirming safe concurrent cursor reads without explicit locking
 
 ---
-*Research completed: 2026-03-19*
+*Research completed: 2026-03-26*
 *Ready for roadmap: yes*
