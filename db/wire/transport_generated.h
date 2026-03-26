@@ -68,11 +68,17 @@ enum TransportMsgType : int8_t {
   TransportMsgType_StorageStatusResponse = 44,
   TransportMsgType_NamespaceStatsRequest = 45,
   TransportMsgType_NamespaceStatsResponse = 46,
+  TransportMsgType_MetadataRequest = 47,
+  TransportMsgType_MetadataResponse = 48,
+  TransportMsgType_BatchExistsRequest = 49,
+  TransportMsgType_BatchExistsResponse = 50,
+  TransportMsgType_DelegationListRequest = 51,
+  TransportMsgType_DelegationListResponse = 52,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_NamespaceStatsResponse
+  TransportMsgType_MAX = TransportMsgType_DelegationListResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[47] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[53] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -120,13 +126,19 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[47] {
     TransportMsgType_StorageStatusRequest,
     TransportMsgType_StorageStatusResponse,
     TransportMsgType_NamespaceStatsRequest,
-    TransportMsgType_NamespaceStatsResponse
+    TransportMsgType_NamespaceStatsResponse,
+    TransportMsgType_MetadataRequest,
+    TransportMsgType_MetadataResponse,
+    TransportMsgType_BatchExistsRequest,
+    TransportMsgType_BatchExistsResponse,
+    TransportMsgType_DelegationListRequest,
+    TransportMsgType_DelegationListResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[48] = {
+  static const char * const names[54] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -174,13 +186,19 @@ inline const char * const *EnumNamesTransportMsgType() {
     "StorageStatusResponse",
     "NamespaceStatsRequest",
     "NamespaceStatsResponse",
+    "MetadataRequest",
+    "MetadataResponse",
+    "BatchExistsRequest",
+    "BatchExistsResponse",
+    "DelegationListRequest",
+    "DelegationListResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_NamespaceStatsResponse)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_DelegationListResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

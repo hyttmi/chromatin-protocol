@@ -30,6 +30,13 @@ bool is_client_allowed(TransportMsgType type) {
         case TransportMsgType_StorageStatusResponse:
         case TransportMsgType_NamespaceStatsRequest:
         case TransportMsgType_NamespaceStatsResponse:
+        // Phase 66: Blob-level queries
+        case TransportMsgType_MetadataRequest:
+        case TransportMsgType_MetadataResponse:
+        case TransportMsgType_BatchExistsRequest:
+        case TransportMsgType_BatchExistsResponse:
+        case TransportMsgType_DelegationListRequest:
+        case TransportMsgType_DelegationListResponse:
         // Pub/sub
         case TransportMsgType_Subscribe:
         case TransportMsgType_Unsubscribe:

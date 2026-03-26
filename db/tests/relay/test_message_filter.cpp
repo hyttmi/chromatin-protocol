@@ -12,7 +12,7 @@ using Catch::Matchers::ContainsSubstring;
 // ===== Message filter tests =====
 
 TEST_CASE("is_client_allowed permits client operation types", "[message_filter]") {
-    // 26 client-allowed types (16 per RELAY-03 + 4 query extensions + 6 node-level queries)
+    // 32 client-allowed types (16 per RELAY-03 + 4 query extensions + 6 node-level queries + 6 blob-level queries)
     CHECK(is_client_allowed(TransportMsgType_Data));
     CHECK(is_client_allowed(TransportMsgType_WriteAck));
     CHECK(is_client_allowed(TransportMsgType_Delete));
@@ -33,6 +33,12 @@ TEST_CASE("is_client_allowed permits client operation types", "[message_filter]"
     CHECK(is_client_allowed(TransportMsgType_StorageStatusResponse));
     CHECK(is_client_allowed(TransportMsgType_NamespaceStatsRequest));
     CHECK(is_client_allowed(TransportMsgType_NamespaceStatsResponse));
+    CHECK(is_client_allowed(TransportMsgType_MetadataRequest));
+    CHECK(is_client_allowed(TransportMsgType_MetadataResponse));
+    CHECK(is_client_allowed(TransportMsgType_BatchExistsRequest));
+    CHECK(is_client_allowed(TransportMsgType_BatchExistsResponse));
+    CHECK(is_client_allowed(TransportMsgType_DelegationListRequest));
+    CHECK(is_client_allowed(TransportMsgType_DelegationListResponse));
     CHECK(is_client_allowed(TransportMsgType_Subscribe));
     CHECK(is_client_allowed(TransportMsgType_Unsubscribe));
     CHECK(is_client_allowed(TransportMsgType_Notification));

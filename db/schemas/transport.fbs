@@ -59,7 +59,14 @@ enum TransportMsgType : byte {
     StorageStatusRequest = 43,
     StorageStatusResponse = 44,
     NamespaceStatsRequest = 45,
-    NamespaceStatsResponse = 46
+    NamespaceStatsResponse = 46,
+    // Phase 66: Blob-level queries
+    MetadataRequest = 47,
+    MetadataResponse = 48,
+    BatchExistsRequest = 49,
+    BatchExistsResponse = 50,
+    DelegationListRequest = 51,
+    DelegationListResponse = 52
 }
 
 table TransportMessage {
