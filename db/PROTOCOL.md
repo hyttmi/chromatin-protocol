@@ -32,8 +32,19 @@ The plaintext inside each AEAD frame is a FlatBuffers-encoded `TransportMessage`
 table TransportMessage {
     type: TransportMsgType;   // 1 byte enum
     payload: [ubyte];         // variable length, type-dependent
+    request_id: uint32;       // client-assigned correlation ID
 }
 ```
+
+The `request_id` field enables request pipelining. Clients assign a unique `request_id` to each request and the node echoes it on the corresponding response, allowing clients to send multiple requests without waiting and match responses by `request_id`. Three rules govern its use:
+
+1. **Client-assigned** -- the client sets `request_id` on every request message. Values are arbitrary `uint32`s chosen by the client.
+2. **Node-echoed** -- the node copies the `request_id` from the request into the corresponding response (or error signal such as StorageFull or QuotaExceeded).
+3. **Per-connection scope** -- `request_id` values are meaningful only within a single connection. Different connections may reuse the same values independently.
+
+Server-initiated messages (Notification) always carry `request_id = 0`.
+
+The node may process requests concurrently and responses may arrive in a different order than requests were sent. Clients must use `request_id` to correlate responses, not assume ordering.
 
 ## Connection Lifecycle
 
@@ -104,7 +115,7 @@ Initiator                              Responder
     |   Session established (AEAD-encrypted from here).
 ```
 
-If the responder does not recognize the initiator as trusted, it replies with `PQRequired (25)` instead of `TrustedHello`. The initiator then falls back to the full PQ handshake starting from KemPubkey.
+If the responder does not recognize the initiator as trusted, it replies with `PQRequired (24)` instead of `TrustedHello`. The initiator then falls back to the full PQ handshake starting from KemPubkey.
 
 ### Unix Domain Socket Transport
 
@@ -210,7 +221,7 @@ For each namespace that needs syncing, the initiator drives a multi-round range-
 The initiator sends a `ReconcileInit` message to start reconciliation for each namespace:
 
 ```
-ReconcileInit (type 27):
+ReconcileInit (type 26):
 [version: 1 byte (0x01)]
 [namespace_id: 32 bytes]
 [count: 4 bytes BE uint32]
@@ -222,7 +233,7 @@ The `version` byte enables forward-compatible protocol evolution. The `count` an
 The responder compares its own fingerprint and count against the received values. If they match, the namespace is identical and the responder sends an empty `ReconcileRanges` to signal completion. If they differ, the responder splits the mismatched range and responds with sub-range fingerprints:
 
 ```
-ReconcileRanges (type 28):
+ReconcileRanges (type 27):
 [namespace_id: 32 bytes]
 [range_count: 4 bytes BE uint32]
 for each range:
@@ -244,13 +255,13 @@ Range lower bounds are implicit (the previous range's upper bound, or all-zeros 
 The protocol exchanges `ReconcileRanges` back and forth until all ranges are resolved. When one side receives ranges containing only Skip and ItemList modes (no Fingerprint), it performs the final item exchange: it collects the peer's items from the ItemList ranges and sends its own items for those ranges via `ReconcileItems`:
 
 ```
-ReconcileItems (type 29):
+ReconcileItems (type 28):
 [namespace_id: 32 bytes]
 [count: 4 bytes BE uint32]
 [hash: 32 bytes] * count
 ```
 
-After all namespaces are reconciled, the initiator sends `SyncComplete (15)` to signal the end of Phase B. The reconciliation produces a bidirectional diff: both sides now know which hashes they are missing and can request them in Phase C.
+After all namespaces are reconciled, the initiator sends `SyncComplete (14)` to signal the end of Phase B. The reconciliation produces a bidirectional diff: both sides now know which hashes they are missing and can request them in Phase C.
 
 ### Phase C: Blob Transfer
 
@@ -287,9 +298,9 @@ Tombstone data format: [0xDE 0xAD 0xBE 0xEF][target_blob_hash: 32 bytes]
                        (total: 36 bytes)
 ```
 
-The tombstone is signed by the namespace owner and sent as a `TransportMessage` with `type = Delete (18)`. The payload is a FlatBuffers-encoded `Blob` where the `data` field contains the tombstone bytes. The `ttl` field is 0 (permanent).
+The tombstone is signed by the namespace owner and sent as a `TransportMessage` with `type = Delete (17)`. The payload is a FlatBuffers-encoded `Blob` where the `data` field contains the tombstone bytes. The `ttl` field is 0 (permanent).
 
-The node responds with `DeleteAck (19)` (empty payload). Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
+The node responds with `DeleteAck (18)` (empty payload). Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
 
 ### Namespace Delegation
 
@@ -308,7 +319,7 @@ Revocation is done by tombstoning the delegation blob.
 
 Peers subscribe to namespaces to receive real-time notifications when blobs are ingested or deleted.
 
-**Subscribe** (`type = Subscribe (20)`): Payload contains a list of namespace IDs to subscribe to:
+**Subscribe** (`type = Subscribe (19)`): Payload contains a list of namespace IDs to subscribe to:
 
 ```
 Subscribe/Unsubscribe wire format: [count: 2 bytes BE uint16]
@@ -317,9 +328,9 @@ Subscribe/Unsubscribe wire format: [count: 2 bytes BE uint16]
                                    ...
 ```
 
-**Unsubscribe** (`type = Unsubscribe (21)`): Same payload format. Removes the listed namespaces from the peer's subscription set.
+**Unsubscribe** (`type = Unsubscribe (20)`): Same payload format. Removes the listed namespaces from the peer's subscription set.
 
-**Notification** (`type = Notification (22)`): Sent by the node to subscribed peers when a blob is ingested or deleted. Fixed 77-byte payload:
+**Notification** (`type = Notification (21)`): Sent by the node to subscribed peers when a blob is ingested or deleted. Fixed 77-byte payload:
 
 ```
 Notification wire format: [namespace_id: 32 bytes]
@@ -335,9 +346,9 @@ Subscriptions are connection-scoped and do not persist across reconnections.
 
 PEX allows nodes to discover new peers without relying solely on bootstrap nodes. It runs inline after each sync round completes.
 
-**PeerListRequest** (`type = PeerListRequest (16)`): Empty payload. Asks the peer for its known addresses.
+**PeerListRequest** (`type = PeerListRequest (15)`): Empty payload. Asks the peer for its known addresses.
 
-**PeerListResponse** (`type = PeerListResponse (17)`): Contains a list of peer addresses:
+**PeerListResponse** (`type = PeerListResponse (16)`): Contains a list of peer addresses:
 
 ```
 PeerListResponse wire format: [count: 2 bytes BE uint16]
@@ -350,20 +361,20 @@ Each address is a `host:port` string. Nodes share up to 8 addresses per response
 
 ### Storage Signaling
 
-**StorageFull** (`type = StorageFull (23)`): Empty payload. Sent by a node when it has reached its configured `max_storage_bytes` limit and cannot accept more blobs. Peers receiving this message suppress sync pushes (blob transfers) to the full node until the next reconnection.
+**StorageFull** (`type = StorageFull (22)`): Empty payload. Sent by a node when it has reached its configured `max_storage_bytes` limit and cannot accept more blobs. Peers receiving this message suppress sync pushes (blob transfers) to the full node until the next reconnection.
 
 ### Quota Signaling
 
-**QuotaExceeded** (`type = QuotaExceeded (26)`): Empty payload. Sent by a node when a blob write would exceed the configured per-namespace byte or count quota. Unlike StorageFull (which signals global capacity), QuotaExceeded indicates that the specific namespace has reached its limit. Other namespaces may still accept writes.
+**QuotaExceeded** (`type = QuotaExceeded (25)`): Empty payload. Sent by a node when a blob write would exceed the configured per-namespace byte or count quota. Unlike StorageFull (which signals global capacity), QuotaExceeded indicates that the specific namespace has reached its limit. Other namespaces may still accept writes.
 
 ### Sync Rejection
 
-Sync-related operations that cannot proceed are rejected with a `SyncRejected (type 30)` message. The payload is a single byte indicating the rejection reason.
+Sync-related operations that cannot proceed are rejected with a `SyncRejected (type 29)` message. The payload is a single byte indicating the rejection reason.
 
 **SyncRejected wire format:**
 
 ```
-SyncRejected (type 30):
+SyncRejected (type 29):
 [reason: 1 byte]
 ```
 
@@ -396,14 +407,14 @@ Nodes validate blob timestamps before performing any cryptographic verification 
 The `timestamp` field is a `uint64` Unix epoch value (seconds since 1970-01-01 00:00:00 UTC) from the BlobData structure.
 
 Timestamp validation applies to:
-- **Direct writes** (Data messages): Blobs arriving via `Data (8)` or `Delete (18)` are checked before any signature verification.
+- **Direct writes** (Data messages): Blobs arriving via `Data (8)` or `Delete (17)` are checked before any signature verification.
 - **Sync-received blobs**: Blobs arriving during Phase C blob transfer are checked by the engine before ingestion. Blobs that fail timestamp validation are silently skipped (logged at debug level) without aborting the sync session.
 
 Blobs rejected for timestamp validation return `IngestError::timestamp_rejected` with an actionable detail string indicating whether the timestamp was too far in the future or too far in the past.
 
 ### Rate Limiting
 
-In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (18) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
+In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (17) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
 
 ### Inactivity Detection
 
@@ -421,7 +432,7 @@ Configuration: `inactivity_timeout_seconds` defaults to 120. Set to 0 to disable
 
 Client protocol operations allow authenticated connections to read, list, and query blobs without participating in the sync protocol. These operations are available on all connection types (TCP with PQ handshake, trusted TCP, and UDS).
 
-### WriteAck (type 31)
+### WriteAck (type 30)
 
 After a successful `Data (8)` ingest, the node sends a WriteAck back to the connection that submitted the blob. The ack is sent for both new blobs (stored) and duplicates.
 
@@ -433,7 +444,7 @@ After a successful `Data (8)` ingest, the node sends a WriteAck back to the conn
 | seq_num | 32 | 8 | big-endian uint64 | Sequence number (0 for dedup short-circuit) |
 | status | 40 | 1 | uint8 | 0 = stored (new), 1 = duplicate |
 
-### ReadRequest / ReadResponse (types 32-33)
+### ReadRequest / ReadResponse (types 31-32)
 
 Fetch a specific blob by namespace and content hash.
 
@@ -453,7 +464,7 @@ Fetch a specific blob by namespace and content hash.
 
 The blob portion uses the same FlatBuffer Blob encoding as Data (8) messages.
 
-### ListRequest / ListResponse (types 34-35)
+### ListRequest / ListResponse (types 33-34)
 
 List blobs in a namespace with cursor-based pagination.
 
@@ -475,7 +486,7 @@ List blobs in a namespace with cursor-based pagination.
 
 To paginate: set `since_seq` to the last `seq_num` in the response. Repeat until `has_more = 0`. Use ReadRequest to fetch full blob data.
 
-### StatsRequest / StatsResponse (types 36-37)
+### StatsRequest / StatsResponse (types 35-36)
 
 Query namespace usage and quota information.
 
@@ -513,29 +524,28 @@ All message types defined in the `TransportMsgType` enum:
 | 9 | SyncRequest | Sync initiation (empty payload) |
 | 10 | SyncAccept | Sync acceptance (empty payload) |
 | 11 | NamespaceList | Sync Phase A: namespace IDs with sequence numbers |
-| 12 | _(removed)_ | _(was HashList, replaced by reconciliation in Phase 39)_ |
-| 13 | BlobRequest | Sync Phase C: request blobs by hash (max 64 per message) |
-| 14 | BlobTransfer | Sync Phase C: requested blob data |
-| 15 | SyncComplete | Sync finished / end of Phase B (empty payload) |
-| 16 | PeerListRequest | PEX: request known peer addresses (empty payload) |
-| 17 | PeerListResponse | PEX: list of known peer addresses |
-| 18 | Delete | Blob deletion: FlatBuffer-encoded tombstone Blob |
-| 19 | DeleteAck | Deletion acknowledgment (empty payload) |
-| 20 | Subscribe | Pub/sub: subscribe to namespace notifications |
-| 21 | Unsubscribe | Pub/sub: unsubscribe from namespace notifications |
-| 22 | Notification | Pub/sub: blob ingested/deleted notification (77 bytes) |
-| 23 | StorageFull | Capacity signaling: node at storage limit (empty payload) |
-| 24 | TrustedHello | Lightweight handshake: trusted peer identity exchange (ML-DSA-87 pubkey + signature, no KEM) |
-| 25 | PQRequired | Lightweight handshake rejection: responder requires full PQ handshake (empty payload) |
-| 26 | QuotaExceeded | Quota signaling: namespace byte or count limit reached (empty payload) |
-| 27 | ReconcileInit | Sync Phase B: start per-namespace reconciliation (version + namespace + count + fingerprint) |
-| 28 | ReconcileRanges | Sync Phase B: range fingerprints/items for reconciliation |
-| 29 | ReconcileItems | Sync Phase B: final item exchange after ranges resolved |
-| 30 | SyncRejected | Sync rate limiting: rejection with 1-byte reason code |
-| 31 | WriteAck | Client write acknowledgment: blob_hash + seq_num + status |
-| 32 | ReadRequest | Client blob fetch: namespace + hash (64 bytes) |
-| 33 | ReadResponse | Client blob fetch response: found flag + optional blob |
-| 34 | ListRequest | Client blob listing: namespace + cursor + limit (44 bytes) |
-| 35 | ListResponse | Client blob listing response: hash+seq pairs + has_more |
-| 36 | StatsRequest | Client namespace stats query: namespace (32 bytes) |
-| 37 | StatsResponse | Client namespace stats: count + bytes + quota (24 bytes) |
+| 12 | BlobRequest | Sync Phase C: request blobs by hash (max 64 per message) |
+| 13 | BlobTransfer | Sync Phase C: requested blob data |
+| 14 | SyncComplete | Sync finished / end of Phase B (empty payload) |
+| 15 | PeerListRequest | PEX: request known peer addresses (empty payload) |
+| 16 | PeerListResponse | PEX: list of known peer addresses |
+| 17 | Delete | Blob deletion: FlatBuffer-encoded tombstone Blob |
+| 18 | DeleteAck | Deletion acknowledgment (empty payload) |
+| 19 | Subscribe | Pub/sub: subscribe to namespace notifications |
+| 20 | Unsubscribe | Pub/sub: unsubscribe from namespace notifications |
+| 21 | Notification | Pub/sub: blob ingested/deleted notification (77 bytes) |
+| 22 | StorageFull | Capacity signaling: node at storage limit (empty payload) |
+| 23 | TrustedHello | Lightweight handshake: trusted peer identity exchange (ML-DSA-87 pubkey + signature, no KEM) |
+| 24 | PQRequired | Lightweight handshake rejection: responder requires full PQ handshake (empty payload) |
+| 25 | QuotaExceeded | Quota signaling: namespace byte or count limit reached (empty payload) |
+| 26 | ReconcileInit | Sync Phase B: start per-namespace reconciliation (version + namespace + count + fingerprint) |
+| 27 | ReconcileRanges | Sync Phase B: range fingerprints/items for reconciliation |
+| 28 | ReconcileItems | Sync Phase B: final item exchange after ranges resolved |
+| 29 | SyncRejected | Sync rate limiting: rejection with 1-byte reason code |
+| 30 | WriteAck | Client write acknowledgment: blob_hash + seq_num + status |
+| 31 | ReadRequest | Client blob fetch: namespace + hash (64 bytes) |
+| 32 | ReadResponse | Client blob fetch response: found flag + optional blob |
+| 33 | ListRequest | Client blob listing: namespace + cursor + limit (44 bytes) |
+| 34 | ListResponse | Client blob listing response: hash+seq pairs + has_more |
+| 35 | StatsRequest | Client namespace stats query: namespace (32 bytes) |
+| 36 | StatsResponse | Client namespace stats: count + bytes + quota (24 bytes) |
