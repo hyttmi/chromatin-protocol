@@ -1,5 +1,25 @@
 # Milestones
 
+## v1.3.0 Protocol Concurrency & Query Foundation (Shipped: 2026-03-26)
+
+**Phases:** 4 (61-64) | **Plans:** 8 | **Tasks:** 10
+**Velocity:** 34 commits | 54 files changed (+4,810 / -835)
+**Requirements:** 12/12
+**Timeline:** 2 days (2026-03-24 → 2026-03-26)
+
+**Key accomplishments:**
+
+- **Request correlation:** request_id plumbed through transport envelope, codec, connection, relay, and all dispatch handlers
+- **Concurrent dispatch:** IO-thread transfer for Data/Delete handlers after engine offload, preventing AEAD nonce desync
+- **Blob existence check:** ExistsRequest/ExistsResponse (types 37/38) with key-only has_blob() lookup
+- **Node capability discovery:** NodeInfoRequest/NodeInfoResponse (types 39/40) with version, peers, storage, 20 supported types
+- **Wire spec:** PROTOCOL.md updated with request_id semantics, new message wire formats, 40-entry type table
+- **Documentation:** README.md and db/README.md updated with v1.3.0 capabilities and dispatch model
+
+**Archive:** [v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md) | [v1.3.0-REQUIREMENTS.md](milestones/v1.3.0-REQUIREMENTS.md)
+
+---
+
 ## v1.2.0 Relay & Client Protocol (Shipped: 2026-03-23)
 
 **Phases:** 4 (57-60) | **Plans:** 8 | **Tasks:** 16

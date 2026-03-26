@@ -253,4 +253,4 @@ Three-layer architecture (building bottom-up):
 | supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | ✓ Good — Phase 63 |
 
 ---
-*Last updated: 2026-03-26 after Phase 64 (documentation) complete — v1.3.0 milestone complete. PROTOCOL.md wire spec and READMEs updated for request_id, ExistsRequest, NodeInfoRequest, 40 message types*
+*Last updated: 2026-03-26 after v1.3.0 milestone*

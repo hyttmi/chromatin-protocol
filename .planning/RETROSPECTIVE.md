@@ -2,6 +2,129 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v1.3.0 — Protocol Concurrency & Query Foundation
+
+**Shipped:** 2026-03-26
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~2
+
+### What Was Built
+- request_id correlation plumbed through transport envelope, codec, connection, relay, and all dispatch handlers (Phase 61)
+- IO-thread transfer for Data/Delete handlers after engine offload — AEAD nonce safety under concurrency (Phase 62)
+- ExistsRequest/ExistsResponse (types 37/38) with key-only has_blob() storage lookup (Phase 63)
+- NodeInfoRequest/NodeInfoResponse (types 39/40) with version, uptime, peers, storage, 20 supported types (Phase 63)
+- PROTOCOL.md wire spec with request_id semantics, new message byte-level formats, 40-entry type table (Phase 64)
+- README.md and db/README.md updated with v1.3.0 capabilities, dispatch model, 551 unit tests (Phase 64)
+
+### What Worked
+- Entire milestone completed in 2 days — 4 phases, 8 plans, 34 commits, 54 files changed
+- Phase 61 plans 02 and 03 were naturally combined into a single commit — correct granularity emerged during execution
+- Offload pattern from v0.8.0 (thread pool dispatch) was directly reused for concurrent dispatch — zero new async primitives needed
+- has_blob() key-existence check was trivial to add to Storage (MDBX cursor seek without value read) — elegant and efficient
+- NodeInfoResponse supported_types list enables SDK capability discovery without version parsing — forward-compatible design
+- Documentation phase (64) was pure documentation — no code changes needed, clean milestone boundary
+
+### What Was Inefficient
+- Phase 61 plan 03 SUMMARY.md was never created (work combined into plan 02 commit) — paperwork gap
+- CONC-01/02/05 checkboxes in REQUIREMENTS.md were never checked off despite Phase 61 being complete — bookkeeping gap
+- Phase 61 checkbox in ROADMAP.md showed unchecked `[ ]` despite progress table showing 3/3 Complete — inconsistent state
+
+### Patterns Established
+- IO-thread transfer after engine offload: co_await asio::post(ioc_) before send_message/metrics for thread-safe AEAD access
+- Dispatch model classification: inline (Subscribe, Ping, etc.), coroutine-IO (Read/List/Stats/Exists/NodeInfo), coroutine-offload-transfer (Data/Delete)
+- Binary wire format for rich responses: length-prefixed strings + big-endian integers (NodeInfoResponse)
+- Key-only storage lookup: MDBX cursor seek without value read for existence checks
+
+### Key Lessons
+1. Combined commits for tightly coupled plans are natural — forcing separate commits for plan-02 and plan-03 of a 3-wave phase adds overhead without value
+2. Bookkeeping gaps (unchecked requirements, missing summaries) accumulate when plan execution is fast — the velocity that makes 2-day milestones possible also makes it easy to skip checkboxes
+3. Reusing proven patterns (offload→transfer, relay filter update, binary wire format) keeps velocity high — v1.3.0 was mostly composition of existing patterns
+4. Documentation-only phases work well as the final phase — no risk of code changes invalidating docs
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~2 across 2 days
+- Notable: Documentation phase completed in minutes — pure markdown updates with no code changes
+
+---
+
+## Milestone: v1.2.0 — Relay & Client Protocol
+
+**Shipped:** 2026-03-23
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~1
+
+### What Was Built
+- Client protocol wire types: WriteAck, ReadRequest/Response, ListRequest/Response, StatsRequest/Response (types 31-37)
+- PQ-authenticated relay binary (chromatindb_relay) with ML-KEM-1024 + ML-DSA-87 mutual auth
+- Bidirectional UDS forwarding with default-deny message filter (16 client operation types allowed)
+- Shared utility libraries: db/util/hex.h and db/tests/test_helpers.h eliminating 570+ lines of duplication
+- Root-level GEMINI.md with Zero Duplication Policy
+
+### What Worked
+- Full milestone in 1 day — 4 phases, 8 plans, 44 commits, 60 files (+7,817 / -240)
+- Relay architecture (TCP client → relay → UDS → node) cleanly separates untrusted and trusted zones
+- SSH-style .key/.pub identity for relay was a familiar infrastructure pattern — zero design debate
+- Default-deny message filter was the right security posture — explicitly allow rather than block
+- Shared test_helpers.h immediately reduced duplication across 15+ test files
+
+### What Was Inefficient
+- No retrospective was written at milestone completion — process gap
+- test_helpers.h extraction required touching many test files simultaneously — large but mechanical change
+
+### Patterns Established
+- Relay as security boundary: untrusted TCP clients never touch the node directly
+- TrustedHello over UDS: one client session = one UDS connection, trust via local socket ownership
+- Default-deny message filter: only explicitly listed client operations pass through
+- SSH-style identity files: .key/.pub siblings for relay key management
+- Zero Duplication Policy: all repeating tasks must use single source of truth
+
+### Key Lessons
+1. Relay architecture validates the three-layer design — clean separation between untrusted clients and trusted node
+2. UDS as internal transport is ideal for co-located relay+node — no network overhead, OS-level access control
+3. Code deduplication phases pay for themselves immediately — 570 lines removed, shared helpers used everywhere
+4. Zero Duplication Policy should be enforced from project start, not retrofit
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~1
+- Notable: Third consecutive 1-day milestone (v1.0.0, v1.1.0, v1.2.0)
+
+---
+
+## Milestone: v1.0.0 — Database Layer Done
+
+**Shipped:** 2026-03-22
+**Phases:** 7 | **Plans:** 23 | **Sessions:** ~8
+
+### What Was Built
+- SANITIZER CMake enum (asan/tsan/ubsan) replacing ENABLE_ASAN boolean
+- Full suite ASAN/TSAN/UBSAN clean (469 tests, zero findings in db/ code)
+- PEX SIGSEGV root cause and fix (AEAD nonce desync from concurrent SyncRejected writes)
+- 50-run E2E reliability (release 50/50, TSAN 50/50, ASAN 50/50)
+- 54 Docker integration tests across 12 categories (crypto, ACL, DR, DoS, TTL, E2E, stress, fuzz)
+- 5-node SIGKILL churn (60 cycles, 30 min), 1000-namespace scaling, protocol fuzzing
+
+### What Worked
+- Sanitizer approach caught real bugs: TSAN found data races, ASAN found lifetime issues, UBSAN found annotation bugs in deps
+- PEX SIGSEGV root cause analysis was thorough — traced to concurrent SyncRejected writes causing AEAD nonce desync
+- Docker integration test infrastructure provides repeatable, isolated testing environment
+- 50-run reliability testing gave high confidence in stability
+
+### What Was Inefficient
+- 7 phases for what was essentially a quality gate — could potentially have been fewer phases with more plans each
+- No accomplishments were recorded in MILESTONES.md at the time — retrospective written retroactively
+
+### Key Lessons
+1. Sanitizers should be enabled from the first milestone — retrofitting catches bugs but the earlier they're found, the cheaper they are
+2. Concurrent write bugs in AEAD protocols are subtle — the PEX SIGSEGV took significant investigation
+3. Docker integration tests are worth the infrastructure investment — 54 tests across 12 categories is comprehensive
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~8 across 2 days
+- Notable: Most sessions per milestone since v1.0 — quality/verification work requires iteration
+
+---
+
 ## Milestone: v0.9.0 — Connection Resilience & Hardening
 
 **Shipped:** 2026-03-20
@@ -352,6 +475,8 @@
 | v0.9.0 | ~1 | 4 | Second 1-day milestone — connection resilience, storage hardening, operational tooling |
 | v1.0.0 | ~8 | 7 | Database layer done — sanitizers, 54 Docker integration tests, stress/chaos/fuzz |
 | v1.1.0 | ~1 | 4 | Fastest milestone — full auto-advance chain, operational polish + UDS |
+| v1.2.0 | ~1 | 4 | Relay architecture — PQ-authenticated gateway, default-deny filter, Zero Duplication Policy |
+| v1.3.0 | ~2 | 4 | Concurrent dispatch foundation — request_id, ExistsRequest, NodeInfoRequest, IO-thread transfer |
 
 ### Cumulative Quality
 
@@ -368,6 +493,8 @@
 | v0.9.0 | 408+ | 22,467 | ~85 | 16/16 |
 | v1.0.0 | 469 | 22,608 | ~90 | 16/16 |
 | v1.1.0 | 500+ | 23,852 | ~95 | 12/12 |
+| v1.2.0 | 530+ | 24,000+ | ~100 | 16/16 |
+| v1.3.0 | 551+ | 27,469 | ~105 | 12/12 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -383,3 +510,5 @@
 10. Plans can have correctness bugs — E2E tests catch what plan reviews miss (v0.8.0 cursor skip bug)
 11. Foundation phases (config, timers, logging) compound — v0.9.0 Phase 42 patterns used immediately by Phases 43+44
 12. Planning/implementation divergence happens silently — milestone audit is the last defense (v0.9.0 README vs cursor compaction)
+13. Relay as security boundary cleanly separates untrusted clients from trusted node — validated in v1.2.0
+14. Bookkeeping gaps (unchecked requirements, missing summaries) accumulate at high velocity — v1.3.0 had 3 unchecked requirements despite code being shipped
