@@ -506,6 +506,51 @@ Query namespace usage and quota information.
 
 Quota remaining = quota_bytes - total_bytes (computed client-side).
 
+### ExistsRequest / ExistsResponse (types 37-38)
+
+Check whether a specific blob exists without transferring its data.
+
+**ExistsRequest payload:** 64 bytes
+
+| Field | Offset | Size | Description |
+|-------|--------|------|-------------|
+| namespace_id | 0 | 32 | Target namespace |
+| blob_hash | 32 | 32 | Content hash of the blob |
+
+**ExistsResponse payload:** 33 bytes
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| exists | 0 | 1 | uint8 | 0x01 = exists, 0x00 = not found |
+| blob_hash | 1 | 32 | raw bytes | Echo of the requested blob hash |
+
+Tombstoned blobs return `exists = 0x00`. The echoed `blob_hash` allows clients to correlate responses when pipelining multiple existence checks.
+
+### NodeInfoRequest / NodeInfoResponse (types 39-40)
+
+Query node version, state, and supported message types for SDK capability discovery.
+
+**NodeInfoRequest payload:** empty (0 bytes)
+
+**NodeInfoResponse payload:** variable length
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| version_len | 0 | 1 | uint8 | Length of version string |
+| version | 1 | version_len | UTF-8 | Node software version (e.g., "1.1.0") |
+| git_hash_len | 1 + version_len | 1 | uint8 | Length of git hash string |
+| git_hash | 2 + version_len | git_hash_len | UTF-8 | Build git commit hash |
+| uptime | 2 + version_len + git_hash_len | 8 | big-endian uint64 | Node uptime in seconds |
+| peer_count | +8 | 4 | big-endian uint32 | Number of connected peers |
+| namespace_count | +4 | 4 | big-endian uint32 | Number of namespaces with stored blobs |
+| total_blobs | +4 | 8 | big-endian uint64 | Total blob count across all namespaces |
+| storage_used | +8 | 8 | big-endian uint64 | Storage bytes used |
+| storage_max | +8 | 8 | big-endian uint64 | Configured storage limit (0 = unlimited) |
+| types_count | +8 | 1 | uint8 | Number of supported message types |
+| supported_types | +1 | types_count | uint8[] | List of supported TransportMsgType values |
+
+The `supported_types` list contains only client-facing message types (types that the relay allows through). Internal protocol types (handshake, sync, PEX) are excluded. Clients use this list for feature detection -- if a type value is present, the node supports that operation.
+
 ## Message Type Reference
 
 All message types defined in the `TransportMsgType` enum:
@@ -549,3 +594,7 @@ All message types defined in the `TransportMsgType` enum:
 | 34 | ListResponse | Client blob listing response: hash+seq pairs + has_more |
 | 35 | StatsRequest | Client namespace stats query: namespace (32 bytes) |
 | 36 | StatsResponse | Client namespace stats: count + bytes + quota (24 bytes) |
+| 37 | ExistsRequest | Client blob existence check: namespace + hash (64 bytes) |
+| 38 | ExistsResponse | Client blob existence result: exists flag + hash (33 bytes) |
+| 39 | NodeInfoRequest | Client node info query (empty payload) |
+| 40 | NodeInfoResponse | Client node info: version, state, supported types (variable) |
