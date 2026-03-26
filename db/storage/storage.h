@@ -61,6 +61,12 @@ struct NamespaceQuota {
     uint64_t blob_count = 0;   ///< Number of blobs stored.
 };
 
+/// Entry from the delegation_map for listing active delegations.
+struct DelegationEntry {
+    std::array<uint8_t, 32> delegate_pk_hash{};       ///< SHA3-256(delegate_pubkey)
+    std::array<uint8_t, 32> delegation_blob_hash{};    ///< Content hash of the delegation blob
+};
+
 /// Lightweight blob reference for list/pagination queries.
 /// Contains only hash and seq_num (no full blob data).
 struct BlobRef {
@@ -184,6 +190,11 @@ public:
     /// Uses cursor prefix scan on delegation_map with [namespace:32] prefix.
     /// @return Number of delegations for the given namespace.
     uint64_t count_delegations(std::span<const uint8_t, 32> namespace_id) const;
+
+    /// List all delegation entries for a specific namespace.
+    /// Uses cursor prefix scan on delegation_map (same pattern as count_delegations).
+    /// @return Vector of DelegationEntry with delegate_pk_hash and delegation_blob_hash.
+    std::vector<DelegationEntry> list_delegations(std::span<const uint8_t, 32> namespace_id) const;
 
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.

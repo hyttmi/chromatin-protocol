@@ -984,6 +984,44 @@ uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) c
     }
 }
 
+std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 32> namespace_id) const {
+    std::vector<DelegationEntry> entries;
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->delegation_map);
+
+        // Seek to lower bound: namespace prefix with zero hash suffix
+        std::array<uint8_t, 64> lower_key{};
+        std::memcpy(lower_key.data(), namespace_id.data(), 32);
+
+        auto result = cursor.lower_bound(to_slice(lower_key));
+        while (result.done) {
+            auto kv = cursor.current(true);
+            auto key = kv.key;
+            // Check namespace prefix match (key = [namespace:32][delegate_pk_hash:32])
+            if (key.length() < 64 ||
+                std::memcmp(key.data(), namespace_id.data(), 32) != 0) {
+                break;
+            }
+            DelegationEntry entry;
+            std::memcpy(entry.delegate_pk_hash.data(),
+                        static_cast<const uint8_t*>(key.data()) + 32, 32);
+            if (kv.value.length() >= 32) {
+                std::memcpy(entry.delegation_blob_hash.data(),
+                            kv.value.data(), 32);
+            }
+            entries.push_back(entry);
+            result = cursor.to_next(false);
+        }
+    } catch (const mdbx::exception& e) {
+        if (e.error().code() != MDBX_NOTFOUND)
+            spdlog::error("Storage error in list_delegations: {}", e.what());
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in list_delegations: {}", e.what());
+    }
+    return entries;
+}
+
 size_t Storage::run_expiry_scan() {
     size_t purged = 0;
 
