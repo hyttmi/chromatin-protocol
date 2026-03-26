@@ -134,13 +134,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 ### Active
 
 - [ ] TimeRange query — blobs in a namespace within a timestamp window
-- [ ] BlobMetadata query — size, timestamp, TTL, seq_num, signer without payload
-- [ ] BatchExists query — check existence of multiple blob hashes in one request
+- [x] BlobMetadata query — size, timestamp, TTL, seq_num, signer without payload — Validated in Phase 66
+- [x] BatchExists query — check existence of multiple blob hashes in one request — Validated in Phase 66
 - [ ] BatchRead query — fetch multiple small blobs in one request
-- [ ] DelegationList query — list active delegations for a namespace
+- [x] DelegationList query — list active delegations for a namespace — Validated in Phase 66
 - [x] NamespaceList query — list all namespaces stored on the node — Validated in Phase 65
 - [x] NamespaceStats query — per-namespace count, bytes, quota usage — Validated in Phase 65
-- [ ] Metadata query — blob metadata without data transfer
+- [x] Metadata query — blob metadata without data transfer — Validated in Phase 66
 - [ ] PeerInfo query — detailed peer connection information
 - [x] Health query — DROPPED: NodeInfoResponse (Phase 63) already serves as health check — Phase 65
 - [x] StorageStatus query — disk usage, quota headroom, tombstone counts — Validated in Phase 65
@@ -162,9 +162,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.3.0 with ~24,500 LOC C++20, 551+ unit tests, 54 Docker integration tests. Phase 65 complete — node-level queries (NamespaceList, StorageStatus, NamespaceStats) with 7 new tests.
+Shipped v1.3.0 with ~24,500 LOC C++20, 551+ unit tests, 54 Docker integration tests. Phase 66 complete — blob-level queries (MetadataRequest, BatchExistsRequest, DelegationListRequest) with 6 new tests.
 Built across 24 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d).
-14 milestones, 65 phases, 131 plans, 270 requirements total.
+14 milestones, 66 phases, 133 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -296,4 +296,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after v1.4.0 milestone started*
+*Last updated: 2026-03-26 after Phase 66 complete*
