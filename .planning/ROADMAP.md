@@ -119,7 +119,7 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 **Milestone Goal:** Add 10 new query/response message type pairs (20 enum values, types 41-60) expanding the client-facing API with health, namespace inspection, metadata, batch operations, delegations, peer topology, and time-range queries.
 
-- [ ] **Phase 65: Node-Level Queries** - NamespaceList, StorageStatus, NamespaceStats (HealthRequest cut -- NodeInfo suffices)
+- [x] **Phase 65: Node-Level Queries** - NamespaceList, StorageStatus, NamespaceStats (HealthRequest cut -- NodeInfo suffices) (completed 2026-03-26)
 - [ ] **Phase 66: Blob-Level Queries** - MetadataRequest, BatchExists, DelegationList with minor new Storage methods
 - [ ] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md
 
@@ -139,7 +139,7 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 Plans:
 - [x] 65-01-PLAN.md — Schema types 41-46, Storage methods (count_tombstones, count_delegations), relay filter update
-- [ ] 65-02-PLAN.md — NamespaceList, StorageStatus, NamespaceStats handlers with integration tests
+- [x] 65-02-PLAN.md — NamespaceList, StorageStatus, NamespaceStats handlers with integration tests
 
 ### Phase 66: Blob-Level Queries
 **Goal**: Clients can inspect individual blob metadata, check batch existence, and list delegations without transferring payload data
@@ -179,6 +179,6 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 65. Node-Level Queries | 1/2 | In Progress|  |
+| 65. Node-Level Queries | 2/2 | Complete   | 2026-03-26 |
 | 66. Blob-Level Queries | 0/2 | Not started | - |
 | 67. Batch/Range Queries & Integration | 0/3 | Not started | - |
