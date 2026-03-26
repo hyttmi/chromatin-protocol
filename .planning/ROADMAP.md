@@ -119,27 +119,27 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 **Milestone Goal:** Add 10 new query/response message type pairs (20 enum values, types 41-60) expanding the client-facing API with health, namespace inspection, metadata, batch operations, delegations, peer topology, and time-range queries.
 
-- [ ] **Phase 65: Node-Level Queries** - Health, NamespaceList, StorageStatus, NamespaceStats using existing storage methods
+- [ ] **Phase 65: Node-Level Queries** - NamespaceList, StorageStatus, NamespaceStats (HealthRequest cut -- NodeInfo suffices)
 - [ ] **Phase 66: Blob-Level Queries** - MetadataRequest, BatchExists, DelegationList with minor new Storage methods
 - [ ] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md
 
 ## Phase Details
 
 ### Phase 65: Node-Level Queries
-**Goal**: Operators and clients can inspect node health, enumerate namespaces, and query storage status
+**Goal**: Operators and clients can enumerate namespaces, query storage status, and query per-namespace statistics
 **Depends on**: Phase 64 (v1.3.0 -- coroutine-IO dispatch, request_id, NodeInfo pattern)
-**Requirements**: QUERY-05, QUERY-06, QUERY-07, QUERY-08
+**Requirements**: QUERY-05 (dropped), QUERY-06, QUERY-07, QUERY-08
 **Success Criteria** (what must be TRUE):
-  1. Client can send a HealthRequest and receive uptime, version, peer count, and readiness status without any storage IO blocking the response
+  1. ~~HealthRequest~~ -- CUT (NodeInfoResponse already serves as health check)
   2. Client can list all namespaces stored on the node with pagination (after_namespace cursor + limit), receiving namespace hashes and counts
   3. Client can query node-level storage status including used bytes, quota headroom, and tombstone counts in a single request
   4. Client can query per-namespace statistics (blob count, total bytes, delegation count, quota usage) for any namespace
-  5. All four new request/response types pass through relay message filter and work over both TCP (via relay) and UDS paths
-**Plans**: TBD
+  5. All three new request/response types pass through relay message filter and work over both TCP (via relay) and UDS paths
+**Plans**: 2 plans
 
 Plans:
-- [ ] 65-01: TBD
-- [ ] 65-02: TBD
+- [ ] 65-01-PLAN.md — Schema types 41-46, Storage methods (count_tombstones, count_delegations), relay filter update
+- [ ] 65-02-PLAN.md — NamespaceList, StorageStatus, NamespaceStats handlers with integration tests
 
 ### Phase 66: Blob-Level Queries
 **Goal**: Clients can inspect individual blob metadata, check batch existence, and list delegations without transferring payload data
