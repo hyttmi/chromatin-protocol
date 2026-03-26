@@ -1128,6 +1128,169 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_MetadataRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 64) {
+                    record_strike(conn, "MetadataRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::array<uint8_t, 32> hash{};
+                std::memcpy(ns.data(), payload.data(), 32);
+                std::memcpy(hash.data(), payload.data() + 32, 32);
+
+                auto blob_opt = storage_.get_blob(ns, hash);
+                if (!blob_opt) {
+                    // Not found: 1-byte response
+                    std::vector<uint8_t> response(1, 0x00);
+                    co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
+                                                 std::span<const uint8_t>(response), request_id);
+                    co_return;
+                }
+
+                const auto& blob = *blob_opt;
+                uint64_t data_size = blob.data.size();
+                uint16_t pubkey_len = static_cast<uint16_t>(blob.pubkey.size());
+
+                // Get seq_num from seq_map
+                uint64_t seq_num = 0;
+                auto refs = storage_.get_blob_refs_since(ns, 0, UINT32_MAX);
+                for (const auto& ref : refs) {
+                    if (ref.blob_hash == hash) {
+                        seq_num = ref.seq_num;
+                        break;
+                    }
+                }
+
+                // Response: status(1) + hash(32) + timestamp(8) + ttl(4) + size(8) + seq_num(8) + pubkey_len(2) + pubkey(N)
+                size_t resp_size = 1 + 32 + 8 + 4 + 8 + 8 + 2 + pubkey_len;
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                response[off++] = 0x01;  // found
+
+                // blob_hash (32)
+                std::memcpy(response.data() + off, hash.data(), 32);
+                off += 32;
+
+                // timestamp (8, big-endian)
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(blob.timestamp >> (i * 8));
+
+                // ttl (4, big-endian)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(blob.ttl >> (i * 8));
+
+                // size (8, big-endian) -- raw data size per D-03
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(data_size >> (i * 8));
+
+                // seq_num (8, big-endian) -- per D-02
+                for (int i = 7; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(seq_num >> (i * 8));
+
+                // pubkey_len (2, big-endian)
+                response[off++] = static_cast<uint8_t>(pubkey_len >> 8);
+                response[off++] = static_cast<uint8_t>(pubkey_len & 0xFF);
+
+                // pubkey (N bytes)
+                std::memcpy(response.data() + off, blob.pubkey.data(), pubkey_len);
+                off += pubkey_len;
+
+                co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("MetadataRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_BatchExistsRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 36) {
+                    record_strike(conn, "BatchExistsRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                uint32_t count = 0;
+                for (int i = 0; i < 4; ++i)
+                    count = (count << 8) | payload[32 + i];
+
+                if (count == 0 || count > 1024) {
+                    record_strike(conn, "BatchExistsRequest invalid count");
+                    co_return;
+                }
+
+                size_t expected_size = 36 + static_cast<size_t>(count) * 32;
+                if (payload.size() < expected_size) {
+                    record_strike(conn, "BatchExistsRequest payload too short for count");
+                    co_return;
+                }
+
+                // Check each hash
+                std::vector<uint8_t> response(count);
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::array<uint8_t, 32> hash{};
+                    std::memcpy(hash.data(), payload.data() + 36 + i * 32, 32);
+                    response[i] = storage_.has_blob(ns, hash) ? 0x01 : 0x00;
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_BatchExistsResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("BatchExistsRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_DelegationListRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                if (payload.size() < 32) {
+                    record_strike(conn, "DelegationListRequest too short");
+                    co_return;
+                }
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                auto entries = storage_.list_delegations(ns);
+
+                // Build response: [count:4 BE] + count * [pk_hash:32][blob_hash:32]
+                uint32_t entry_count = static_cast<uint32_t>(entries.size());
+                size_t resp_size = 4 + entry_count * 64;
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                // count (4, big-endian)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(entry_count >> (i * 8));
+
+                // entries
+                for (const auto& entry : entries) {
+                    std::memcpy(response.data() + off, entry.delegate_pk_hash.data(), 32);
+                    off += 32;
+                    std::memcpy(response.data() + off, entry.delegation_blob_hash.data(), 32);
+                    off += 32;
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_DelegationListResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("DelegationListRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob via coroutine (engine is async)
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
