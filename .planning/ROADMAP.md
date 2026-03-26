@@ -179,6 +179,6 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 65. Node-Level Queries | 2/2 | Complete   | 2026-03-26 |
+| 65. Node-Level Queries | 2/2 | Complete    | 2026-03-26 |
 | 66. Blob-Level Queries | 0/2 | Not started | - |
 | 67. Batch/Range Queries & Integration | 0/3 | Not started | - |
