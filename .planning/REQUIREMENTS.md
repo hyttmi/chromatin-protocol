@@ -24,9 +24,9 @@ Requirements for v1.3.0 Protocol Concurrency & Query Foundation. Each maps to ro
 
 ### Documentation
 
-- [ ] **DOCS-01**: `db/PROTOCOL.md` documents request_id semantics, concurrent dispatch model, ExistsRequest/ExistsResponse, and NodeInfoRequest/NodeInfoResponse
-- [ ] **DOCS-02**: `README.md` updated with v1.3.0 protocol capabilities
-- [ ] **DOCS-03**: `db/README.md` updated with v1.3.0 changes (concurrent dispatch, new message types, request_id)
+- [x] **DOCS-01**: `db/PROTOCOL.md` documents request_id semantics, concurrent dispatch model, ExistsRequest/ExistsResponse, and NodeInfoRequest/NodeInfoResponse
+- [x] **DOCS-02**: `README.md` updated with v1.3.0 protocol capabilities
+- [x] **DOCS-03**: `db/README.md` updated with v1.3.0 changes (concurrent dispatch, new message types, request_id)
 
 ## Future Requirements
 
@@ -69,9 +69,9 @@ Deferred to subsequent milestone (v1.4.0+).
 | QUERY-02 | Phase 63 | Complete |
 | QUERY-03 | Phase 63 | Complete |
 | QUERY-04 | Phase 63 | Complete |
-| DOCS-01 | Phase 64 | Pending |
-| DOCS-02 | Phase 64 | Pending |
-| DOCS-03 | Phase 64 | Pending |
+| DOCS-01 | Phase 64 | Complete |
+| DOCS-02 | Phase 64 | Complete |
+| DOCS-03 | Phase 64 | Complete |
 
 **Coverage:**
 - v1.3.0 requirements: 12 total

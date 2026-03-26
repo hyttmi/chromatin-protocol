@@ -114,7 +114,7 @@ Full details: [milestones/v1.2.0-ROADMAP.md](milestones/v1.2.0-ROADMAP.md)
 - [ ] **Phase 61: Transport Foundation** - request_id in wire format, codec pipeline, relay forwarding
 - [x] **Phase 62: Concurrent Dispatch** - Thread pool offload for heavy ops, inline for cheap ops (completed 2026-03-25)
 - [x] **Phase 63: Query Extensions** - ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse (completed 2026-03-25)
-- [ ] **Phase 64: Documentation** - PROTOCOL.md, README.md, db/README.md updated for v1.3.0
+- [x] **Phase 64: Documentation** - PROTOCOL.md, README.md, db/README.md updated for v1.3.0 (completed 2026-03-26)
 
 ## Phase Details
 
@@ -168,8 +168,8 @@ Plans:
   3. db/README.md documents the concurrent dispatch model, new message types, and request_id field
 **Plans**: 2 plans
 Plans:
-- [ ] 64-01-PLAN.md — PROTOCOL.md: request_id semantics, ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse wire format
-- [ ] 64-02-PLAN.md — README.md version bump, db/README.md features, dispatch model, counts
+- [x] 64-01-PLAN.md — PROTOCOL.md: request_id semantics, ExistsRequest/ExistsResponse, NodeInfoRequest/NodeInfoResponse wire format
+- [x] 64-02-PLAN.md — README.md version bump, db/README.md features, dispatch model, counts
 
 ## Progress
 
@@ -180,4 +180,4 @@ Plans:
 | 61. Transport Foundation | 3/3 | Complete | 2026-03-25 |
 | 62. Concurrent Dispatch | 1/1 | Complete    | 2026-03-25 |
 | 63. Query Extensions | 2/2 | Complete    | 2026-03-25 |
-| 64. Documentation | 0/2 | Not started | - |
+| 64. Documentation | 2/2 | Complete   | 2026-03-26 |
