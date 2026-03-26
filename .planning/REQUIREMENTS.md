@@ -9,7 +9,7 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 ### Node-Level Queries
 
-- [ ] **QUERY-05**: Client can check node health (uptime, version, peer count, readiness status)
+- [x] **QUERY-05**: ~~Client can check node health~~ — DROPPED: NodeInfoResponse (Phase 63) already serves as health check
 - [ ] **QUERY-06**: Client can list all namespaces on a node with pagination
 - [ ] **QUERY-07**: Client can query storage status (disk usage, quota headroom, tombstone counts)
 - [ ] **QUERY-08**: Client can query per-namespace statistics (blob count, bytes, delegation count)
@@ -58,7 +58,7 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| QUERY-05 | Phase 65 | Pending |
+| QUERY-05 | Phase 65 | Dropped |
 | QUERY-06 | Phase 65 | Pending |
 | QUERY-07 | Phase 65 | Pending |
 | QUERY-08 | Phase 65 | Pending |

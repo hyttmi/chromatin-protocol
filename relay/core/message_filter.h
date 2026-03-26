@@ -8,6 +8,10 @@ namespace chromatindb::relay::core {
 /// Check if a message type is allowed through the relay from a client.
 /// Allowed: Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse,
 ///          ListRequest, ListResponse, StatsRequest, StatsResponse,
+///          ExistsRequest, ExistsResponse, NodeInfoRequest, NodeInfoResponse,
+///          NamespaceListRequest, NamespaceListResponse,
+///          StorageStatusRequest, StorageStatusResponse,
+///          NamespaceStatsRequest, NamespaceStatsResponse,
 ///          Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye
 /// Blocked: All peer-only types, handshake types, None, unknown types.
 /// Per RELAY-03: default-deny on unknown types.

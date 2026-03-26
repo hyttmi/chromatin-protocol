@@ -23,6 +23,13 @@ bool is_client_allowed(TransportMsgType type) {
         case TransportMsgType_ExistsResponse:
         case TransportMsgType_NodeInfoRequest:
         case TransportMsgType_NodeInfoResponse:
+        // Phase 65: Node-level queries
+        case TransportMsgType_NamespaceListRequest:
+        case TransportMsgType_NamespaceListResponse:
+        case TransportMsgType_StorageStatusRequest:
+        case TransportMsgType_StorageStatusResponse:
+        case TransportMsgType_NamespaceStatsRequest:
+        case TransportMsgType_NamespaceStatsResponse:
         // Pub/sub
         case TransportMsgType_Subscribe:
         case TransportMsgType_Unsubscribe:
