@@ -882,12 +882,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 uint64_t storage_used = storage_.used_data_bytes();
                 uint64_t storage_max = config_.max_storage_bytes;
 
-                // Client-facing message types (per D-05: only types relay allows)
+                // Client-facing message types (all types relay allows through)
                 static constexpr uint8_t supported[] = {
                     5, 6, 7, 8,                     // Ping, Pong, Goodbye, Data
                     17, 18, 19, 20, 21,             // Delete, DeleteAck, Subscribe, Unsubscribe, Notification
                     30, 31, 32, 33, 34, 35, 36,     // WriteAck, Read*, List*, Stats*
-                    37, 38, 39, 40                   // Exists*, NodeInfo*
+                    37, 38, 39, 40,                  // Exists*, NodeInfo*
+                    41, 42, 43, 44, 45, 46,         // NamespaceList*, StorageStatus*, NamespaceStats*
+                    47, 48, 49, 50, 51, 52,         // Metadata*, BatchExists*, DelegationList*
+                    53, 54, 55, 56, 57, 58          // BatchRead*, PeerInfo*, TimeRange*
                 };
                 uint8_t types_count = static_cast<uint8_t>(sizeof(supported));
 
