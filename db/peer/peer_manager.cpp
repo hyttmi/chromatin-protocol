@@ -1513,12 +1513,12 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 std::array<uint8_t, 32> ns{};
                 std::memcpy(ns.data(), payload.data(), 32);
 
-                // start_timestamp (8 bytes big-endian, microseconds)
+                // start_timestamp (8 bytes big-endian, seconds)
                 uint64_t start_ts = 0;
                 for (int i = 0; i < 8; ++i)
                     start_ts = (start_ts << 8) | payload[32 + i];
 
-                // end_timestamp (8 bytes big-endian, microseconds)
+                // end_timestamp (8 bytes big-endian, seconds)
                 uint64_t end_ts = 0;
                 for (int i = 0; i < 8; ++i)
                     end_ts = (end_ts << 8) | payload[40 + i];

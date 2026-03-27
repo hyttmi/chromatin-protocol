@@ -97,7 +97,7 @@ Features to explicitly NOT build in this milestone.
 | found | 0 | 1 | uint8 | 0x01 = found |
 | blob_hash | 1 | 32 | raw bytes | Echo of requested hash |
 | data_size | 33 | 4 | big-endian uint32 | Size of blob data field in bytes |
-| timestamp | 37 | 8 | big-endian uint64 | Blob timestamp (microseconds) |
+| timestamp | 37 | 8 | big-endian uint64 | Blob timestamp (seconds) |
 | ttl | 45 | 4 | big-endian uint32 | TTL in seconds (0 = permanent) |
 | seq_num | 49 | 8 | big-endian uint64 | Sequence number in namespace |
 | signer_hash | 57 | 32 | raw bytes | SHA3-256(pubkey) -- namespace_id for owners, delegate's namespace for delegates |

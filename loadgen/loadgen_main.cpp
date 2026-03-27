@@ -552,9 +552,9 @@ private:
                 break;
             }
 
-            // Use current microsecond timestamp for uniqueness
+            // Use current second timestamp
             auto now_us = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::system_clock::now().time_since_epoch())
                     .count());
 

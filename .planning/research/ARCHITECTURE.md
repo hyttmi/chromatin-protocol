@@ -292,7 +292,7 @@ StorageStatusResponse wire format:
 [namespace_id:32]         -- echo
 [blob_hash:32]            -- echo
 [seq_num_be:8]            -- sequence number in namespace
-[timestamp_be:8]          -- blob timestamp (microseconds)
+[timestamp_be:8]          -- blob timestamp (seconds)
 [ttl_be:4]                -- TTL in seconds (0 = permanent)
 [data_size_be:4]          -- size of blob data field in bytes
 [pubkey_len:2 BE]         -- public key length (2592 for ML-DSA-87)
@@ -452,8 +452,8 @@ This is identical to the existing `NamespaceInfo` struct. The existing `storage_
 **Request:**
 ```
 [namespace_id:32]
-[min_timestamp_be:8]      -- microseconds (matches blob timestamp format)
-[max_timestamp_be:8]      -- microseconds
+[min_timestamp_be:8]      -- seconds (matches blob timestamp format)
+[max_timestamp_be:8]      -- seconds
 [limit_be:4]              -- max results (capped at 100)
 [since_seq_be:8]          -- pagination cursor (0 = from start)
 = 60 bytes

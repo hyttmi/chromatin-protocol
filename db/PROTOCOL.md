@@ -700,7 +700,7 @@ Found:
 |--------|------|-------|-------------|
 | 0 | 1 | status | 0x01 = found |
 | 1 | 32 | blob_hash | Content hash (echo) |
-| 33 | 8 | timestamp | Blob timestamp in microseconds (big-endian) |
+| 33 | 8 | timestamp | Blob timestamp in seconds (big-endian) |
 | 41 | 4 | ttl | Time-to-live in seconds (big-endian) |
 | 45 | 8 | size | Raw data size in bytes (big-endian) |
 | 53 | 8 | seq_num | Sequence number in namespace (big-endian) |
@@ -811,8 +811,8 @@ Trust detection: UDS connections are always trusted. TCP connections are trusted
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 32 | namespace_id | Namespace hash |
-| 32 | 8 | start_timestamp | Range start in microseconds (big-endian, inclusive) |
-| 40 | 8 | end_timestamp | Range end in microseconds (big-endian, inclusive) |
+| 32 | 8 | start_timestamp | Range start in seconds (big-endian, inclusive) |
+| 40 | 8 | end_timestamp | Range end in seconds (big-endian, inclusive) |
 | 48 | 4 | limit | Max results (big-endian, capped at 100; 0 = default 100) |
 
 Validation: `start_timestamp > end_timestamp` triggers a strike.

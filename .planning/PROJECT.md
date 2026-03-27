@@ -260,7 +260,7 @@ Three-layer architecture (building bottom-up):
 | recv_sync_msg executor transfer after offload() | offload() resumes on thread_pool thread; must co_await asio::post(ioc_) before accessing io_context-bound state | ✓ Good — caught by TSAN |
 | UBSAN nonnull-attribute excluded globally | liboqs/libsodium __nonnull annotations on params that intentionally accept NULL — annotation bugs, not real UB | ✓ Good — scoped exclusion |
 | Per-target UBSAN alignment for libmdbx | MDBX intentionally uses misaligned stores in mmap'd pages — safe on x86, technically UB per C11 | ✓ Good — scoped to mdbx only |
-| Timestamp/TTL units normalization | Timestamps are microseconds (for uniqueness), TTL/clock are seconds — expiry_time = timestamp/1000000 + ttl | ✓ Good — fixed silent GC failure |
+| Timestamp/TTL units: seconds everywhere | Timestamps and TTL both in seconds. expiry_time = timestamp + ttl. No unit conversion needed. | ✓ Good — removed /1000000 divider that caused sync and expiry bugs |
 | WriteAck payload format [hash:32][seq:8][status:1] | Wire consistency with DeleteAck; status byte distinguishes stored vs duplicate | ✓ Good — uniform client feedback |
 | Read/List/Stats bypass sync_namespaces_ filter | Client ops serve all stored data (RESEARCH.md guidance) | ✓ Good — client can query everything node holds |
 | List limit capped at 100 per response | Bounds memory and response size for pagination | ✓ Good — prevents large response DoS |
