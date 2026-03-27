@@ -1294,6 +1294,314 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    if (type == wire::TransportMsgType_BatchReadRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                // Step 0: minimum payload 40 bytes = namespace(32) + cap_bytes(4) + count(4)
+                if (payload.size() < 40) {
+                    record_strike(conn, "BatchReadRequest too short");
+                    co_return;
+                }
+
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                // cap_bytes (4 bytes big-endian)
+                uint32_t cap_bytes = 0;
+                for (int i = 0; i < 4; ++i)
+                    cap_bytes = (cap_bytes << 8) | payload[32 + i];
+
+                // Default/clamp: 0 or >4MiB -> 4MiB
+                static constexpr uint32_t MAX_CAP = 4194304;  // 4 MiB
+                if (cap_bytes == 0 || cap_bytes > MAX_CAP)
+                    cap_bytes = MAX_CAP;
+
+                // count (4 bytes big-endian)
+                uint32_t count = 0;
+                for (int i = 0; i < 4; ++i)
+                    count = (count << 8) | payload[36 + i];
+
+                if (count == 0 || count > 256) {
+                    record_strike(conn, "BatchReadRequest invalid count");
+                    co_return;
+                }
+
+                size_t expected_size = 40 + static_cast<size_t>(count) * 32;
+                if (payload.size() < expected_size) {
+                    record_strike(conn, "BatchReadRequest payload too short for count");
+                    co_return;
+                }
+
+                // Fetch blobs with cumulative size tracking
+                uint8_t truncated = 0x00;
+                uint32_t result_count = 0;
+                uint64_t cumulative_size = 0;
+                // Pre-build entries: vector of (status, hash, encoded data)
+                struct Entry {
+                    uint8_t status;
+                    std::array<uint8_t, 32> hash;
+                    std::vector<uint8_t> encoded;  // empty if not found
+                };
+                std::vector<Entry> entries;
+                entries.reserve(count);
+
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::array<uint8_t, 32> hash{};
+                    std::memcpy(hash.data(), payload.data() + 40 + i * 32, 32);
+
+                    auto blob = storage_.get_blob(ns, hash);
+                    if (!blob) {
+                        entries.push_back({0x00, hash, {}});
+                        ++result_count;
+                        continue;
+                    }
+
+                    auto encoded = wire::encode_blob(*blob);
+                    uint64_t blob_size = encoded.size();
+
+                    // Check if adding this blob exceeds cap
+                    // Per D-05: include the blob that crosses the cap, then stop
+                    cumulative_size += blob_size;
+                    entries.push_back({0x01, hash, std::move(encoded)});
+                    ++result_count;
+
+                    if (cumulative_size >= cap_bytes) {
+                        // Mark truncated if there are more hashes remaining
+                        if (i + 1 < count)
+                            truncated = 0x01;
+                        break;
+                    }
+                }
+
+                // Build response: [truncated:1][count:4 BE] + entries
+                // Per-entry found:    [status:1(0x01)][hash:32][size:8 BE][data:size bytes]
+                // Per-entry not found: [status:1(0x00)][hash:32]
+                size_t resp_size = 5;  // truncated + count
+                for (const auto& e : entries) {
+                    resp_size += 1 + 32;  // status + hash
+                    if (e.status == 0x01)
+                        resp_size += 8 + e.encoded.size();  // size + data
+                }
+
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                response[off++] = truncated;
+
+                // result_count (4 bytes big-endian)
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(result_count >> (i * 8));
+
+                for (const auto& e : entries) {
+                    response[off++] = e.status;
+                    std::memcpy(response.data() + off, e.hash.data(), 32);
+                    off += 32;
+
+                    if (e.status == 0x01) {
+                        uint64_t sz = e.encoded.size();
+                        for (int i = 7; i >= 0; --i)
+                            response[off++] = static_cast<uint8_t>(sz >> (i * 8));
+                        std::memcpy(response.data() + off, e.encoded.data(), e.encoded.size());
+                        off += e.encoded.size();
+                    }
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_BatchReadResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("BatchReadRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_PeerInfoRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                // D-08: Empty payload is valid (0 bytes). No minimum size check needed.
+
+                // D-10: Trust detection -- UDS connections or trusted IP addresses get full detail
+                bool trusted = conn->is_uds();
+                if (!trusted) {
+                    // Parse IP from remote_address (format: "ip:port")
+                    auto addr_str = conn->remote_address();
+                    auto colon_pos = addr_str.rfind(':');
+                    if (colon_pos != std::string::npos) {
+                        asio::error_code ec;
+                        auto addr = asio::ip::make_address(addr_str.substr(0, colon_pos), ec);
+                        if (!ec)
+                            trusted = is_trusted_address(addr);
+                    }
+                }
+
+                uint32_t pc = static_cast<uint32_t>(peer_count());
+                uint32_t bc = static_cast<uint32_t>(bootstrap_peer_count());
+
+                if (!trusted) {
+                    // D-09 untrusted: [peer_count:4 BE][bootstrap_count:4 BE]
+                    std::vector<uint8_t> response(8);
+                    size_t off = 0;
+                    for (int i = 3; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(pc >> (i * 8));
+                    for (int i = 3; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(bc >> (i * 8));
+                    co_await conn->send_message(wire::TransportMsgType_PeerInfoResponse,
+                                                 std::span<const uint8_t>(response), request_id);
+                    co_return;
+                }
+
+                // D-09 trusted/UDS: full detail
+                // Build: [peer_count:4 BE][bootstrap_count:4 BE] + peer_count entries
+                // Per entry: [addr_len:2 BE][addr:N][is_bootstrap:1][syncing:1][peer_is_full:1][connected_duration_ms:8 BE]
+
+                auto now_ms = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+
+                // Pre-compute response size
+                size_t resp_size = 8;  // peer_count + bootstrap_count
+                for (const auto& peer : peers_) {
+                    resp_size += 2 + peer.address.size() + 1 + 1 + 1 + 8;
+                }
+
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(pc >> (i * 8));
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(bc >> (i * 8));
+
+                for (const auto& peer : peers_) {
+                    // address length (2 bytes big-endian)
+                    uint16_t addr_len = static_cast<uint16_t>(peer.address.size());
+                    response[off++] = static_cast<uint8_t>(addr_len >> 8);
+                    response[off++] = static_cast<uint8_t>(addr_len & 0xFF);
+                    // address bytes
+                    std::memcpy(response.data() + off, peer.address.data(), addr_len);
+                    off += addr_len;
+                    // flags
+                    response[off++] = peer.is_bootstrap ? 0x01 : 0x00;
+                    response[off++] = peer.syncing ? 0x01 : 0x00;
+                    response[off++] = peer.peer_is_full ? 0x01 : 0x00;
+                    // connected_duration_ms (8 bytes big-endian)
+                    uint64_t duration_ms = (peer.last_message_time > 0) ? (now_ms - peer.last_message_time) : 0;
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(duration_ms >> (i * 8));
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_PeerInfoResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("PeerInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
+    if (type == wire::TransportMsgType_TimeRangeRequest) {
+        asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            try {
+                // Step 0: minimum payload 52 bytes = namespace(32) + start(8) + end(8) + limit(4)
+                if (payload.size() < 52) {
+                    record_strike(conn, "TimeRangeRequest too short");
+                    co_return;
+                }
+
+                std::array<uint8_t, 32> ns{};
+                std::memcpy(ns.data(), payload.data(), 32);
+
+                // start_timestamp (8 bytes big-endian, microseconds)
+                uint64_t start_ts = 0;
+                for (int i = 0; i < 8; ++i)
+                    start_ts = (start_ts << 8) | payload[32 + i];
+
+                // end_timestamp (8 bytes big-endian, microseconds)
+                uint64_t end_ts = 0;
+                for (int i = 0; i < 8; ++i)
+                    end_ts = (end_ts << 8) | payload[40 + i];
+
+                // D-17: strike if start > end
+                if (start_ts > end_ts) {
+                    record_strike(conn, "TimeRangeRequest invalid range (start > end)");
+                    co_return;
+                }
+
+                // limit (4 bytes big-endian)
+                uint32_t limit = 0;
+                for (int i = 0; i < 4; ++i)
+                    limit = (limit << 8) | payload[48 + i];
+
+                // D-14: cap at 100, default 100 if 0 or >100
+                static constexpr uint32_t MAX_LIMIT = 100;
+                if (limit == 0 || limit > MAX_LIMIT)
+                    limit = MAX_LIMIT;
+
+                // D-13/D-15: Scan seq_map, read timestamps, filter by range
+                // Scan limit: 10,000 entries max
+                static constexpr uint32_t SCAN_LIMIT = 10000;
+                auto refs = storage_.get_blob_refs_since(ns, 0, SCAN_LIMIT);
+
+                struct ResultEntry {
+                    std::array<uint8_t, 32> blob_hash;
+                    uint64_t seq_num;
+                    uint64_t timestamp;
+                };
+                std::vector<ResultEntry> results;
+                results.reserve(limit);
+
+                uint8_t truncated = 0x00;
+
+                for (const auto& ref : refs) {
+                    // Read blob to get timestamp
+                    auto blob = storage_.get_blob(ns, ref.blob_hash);
+                    if (!blob) continue;
+
+                    if (blob->timestamp >= start_ts && blob->timestamp <= end_ts) {
+                        results.push_back({ref.blob_hash, ref.seq_num, blob->timestamp});
+                        if (results.size() >= limit) {
+                            truncated = 0x01;
+                            break;
+                        }
+                    }
+                }
+
+                // If we consumed all SCAN_LIMIT refs but didn't hit result limit, also truncated
+                if (refs.size() >= SCAN_LIMIT && results.size() < limit)
+                    truncated = 0x01;
+
+                // D-16: Response: [truncated:1][count:4 BE] + count * [blob_hash:32][seq_num:8 BE][timestamp:8 BE]
+                uint32_t result_count = static_cast<uint32_t>(results.size());
+                size_t resp_size = 5 + result_count * 48;
+                std::vector<uint8_t> response(resp_size);
+                size_t off = 0;
+
+                response[off++] = truncated;
+
+                for (int i = 3; i >= 0; --i)
+                    response[off++] = static_cast<uint8_t>(result_count >> (i * 8));
+
+                for (const auto& r : results) {
+                    std::memcpy(response.data() + off, r.blob_hash.data(), 32);
+                    off += 32;
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(r.seq_num >> (i * 8));
+                    for (int i = 7; i >= 0; --i)
+                        response[off++] = static_cast<uint8_t>(r.timestamp >> (i * 8));
+                }
+
+                co_await conn->send_message(wire::TransportMsgType_TimeRangeResponse,
+                                             std::span<const uint8_t>(response), request_id);
+            } catch (const std::exception& e) {
+                spdlog::warn("TimeRangeRequest handler error from {}: {}", conn->remote_address(), e.what());
+                record_strike(conn, e.what());
+            }
+        }, asio::detached);
+        return;
+    }
+
     if (type == wire::TransportMsgType_Data) {
         // Data message -- try to ingest as a blob via coroutine (engine is async)
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
