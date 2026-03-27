@@ -425,10 +425,9 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                     mdbx::slice(precomputed_hash.data(), precomputed_hash.size()));
 
         // Store expiry entry (skip for TTL=0)
-        // Timestamp is in microseconds (for uniqueness), TTL is in seconds.
-        // Normalize timestamp to seconds before computing expiry.
+        // Both timestamp and TTL are in seconds.
         if (blob.ttl > 0) {
-            uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) / 1000000 +
+            uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) +
                                    static_cast<uint64_t>(blob.ttl);
             auto exp_key = make_expiry_key(expiry_time, precomputed_hash.data());
             txn.upsert(impl_->expiry_map, to_slice(exp_key),
@@ -862,9 +861,9 @@ bool Storage::delete_blob_data(
         }
 
         // Delete from expiry_map if TTL > 0
-        // Timestamp is in microseconds, TTL is in seconds -- normalize.
+        // Both timestamp and TTL are in seconds.
         if (blob.ttl > 0) {
-            uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) / 1000000 +
+            uint64_t expiry_time = static_cast<uint64_t>(blob.timestamp) +
                                    static_cast<uint64_t>(blob.ttl);
             auto exp_key = make_expiry_key(expiry_time, blob_hash.data());
             try {

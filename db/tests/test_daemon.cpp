@@ -53,18 +53,24 @@ struct TempDir {
     TempDir& operator=(const TempDir&) = delete;
 };
 
+std::string listening_address(uint16_t port) {
+    return "127.0.0.1:" + std::to_string(port);
+}
+
 chromatindb::wire::BlobData make_signed_blob(
     const chromatindb::identity::NodeIdentity& id,
     const std::string& payload,
     uint32_t ttl = 604800,
-    uint64_t timestamp = 1000)
+    uint64_t timestamp = 0)
 {
     chromatindb::wire::BlobData blob;
     std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
     blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
-    blob.timestamp = timestamp;
+    blob.timestamp = (timestamp == 0)
+        ? static_cast<uint64_t>(std::time(nullptr))
+        : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
         blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
@@ -131,7 +137,7 @@ TEST_CASE("daemon starts with unreachable bootstrap peers", "[daemon]") {
     TempDir tmp;
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14220";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.bootstrap_peers = {"192.0.2.1:4200"};  // RFC 5737 TEST-NET
 
@@ -163,16 +169,15 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
 
     // Node 1 config
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14230";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
 
-    // Node 2 config -- bootstrap to node 1
+    // Node 2 config -- bootstrap to node 1 (port set after pm1.start())
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14231";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14230"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
 
@@ -205,9 +210,9 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Run for enough time to connect + complete full sync protocol exchange
@@ -233,15 +238,14 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     TempDir tmp1, tmp2;
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14232";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14233";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14232"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
 
@@ -256,8 +260,9 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
-    // Store an expired blob in node1 (ttl=1, timestamp=1 => expired a long time ago)
-    auto expired_blob = make_signed_blob(id1, "should-not-sync", 1, 1);
+    // Store an expired blob in node1 (recent timestamp passes engine validation,
+    // but TTL=100 + timestamp 200s ago = expired by sync time)
+    auto expired_blob = make_signed_blob(id1, "should-not-sync", 100, now - 200);
     auto r1 = run_async(pool, eng1.ingest(expired_blob));
     REQUIRE(r1.accepted);
 
@@ -270,9 +275,9 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Run for enough time to complete sync exchange
@@ -298,24 +303,22 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
 
     // Node A config -- standalone, no bootstrap
     Config cfg_a;
-    cfg_a.bind_address = "127.0.0.1:14240";
+    cfg_a.bind_address = "127.0.0.1:0";
     cfg_a.data_dir = tmp1.path.string();
     cfg_a.sync_interval_seconds = 1;
     cfg_a.max_peers = 32;
 
-    // Node B config -- bootstraps to A
+    // Node B config -- bootstraps to A (port set after pm_a.start())
     Config cfg_b;
-    cfg_b.bind_address = "127.0.0.1:14241";
+    cfg_b.bind_address = "127.0.0.1:0";
     cfg_b.data_dir = tmp2.path.string();
-    cfg_b.bootstrap_peers = {"127.0.0.1:14240"};
     cfg_b.sync_interval_seconds = 1;
     cfg_b.max_peers = 32;
 
-    // Node C config -- bootstraps to B only (does NOT know A)
+    // Node C config -- bootstraps to B only (port set after pm_b.start())
     Config cfg_c;
-    cfg_c.bind_address = "127.0.0.1:14242";
+    cfg_c.bind_address = "127.0.0.1:0";
     cfg_c.data_dir = tmp3.path.string();
-    cfg_c.bootstrap_peers = {"127.0.0.1:14241"};
     cfg_c.sync_interval_seconds = 1;
     cfg_c.max_peers = 32;
 
@@ -346,17 +349,17 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
     AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
     AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
     PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, pool, acl_a);
-    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, pool, acl_b);
-    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, pool, acl_c);
-
-    // Start nodes: A first, then B, then C (natural bootstrap order)
     pm_a.start();
+    cfg_b.bootstrap_peers = {listening_address(pm_a.listening_port())};
+    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, pool, acl_b);
     pm_b.start();
 
     // Let B connect to A and exchange peer lists
     ioc.run_for(std::chrono::seconds(5));
 
     // Now start C (after B has connected to A and learned about A)
+    cfg_c.bootstrap_peers = {listening_address(pm_b.listening_port())};
+    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, pool, acl_c);
     pm_c.start();
 
     // Give enough time for:

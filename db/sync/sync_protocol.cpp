@@ -18,8 +18,8 @@ SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
 
 bool SyncProtocol::is_blob_expired(const wire::BlobData& blob, uint64_t now) {
     if (blob.ttl == 0) return false;  // Permanent blob
-    // Timestamp is in microseconds, TTL is in seconds -- normalize.
-    return (blob.timestamp / 1000000 + blob.ttl) <= now;
+    // Both timestamp and now are in seconds, TTL is in seconds.
+    return (blob.timestamp + blob.ttl) <= now;
 }
 
 // =============================================================================

@@ -96,27 +96,27 @@ TEST_CASE("is_blob_expired", "[sync]") {
 
     SECTION("permanent blob is never expired") {
         blob.ttl = 0;
-        blob.timestamp = 1000000000ULL;
+        blob.timestamp = 1000;
         REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 999999));
     }
 
     SECTION("non-expired blob") {
         blob.ttl = 604800;  // 7 days
-        blob.timestamp = 10000000000ULL;  // 10000 seconds in microseconds
+        blob.timestamp = 10000;  // 10000 seconds
         // now = 10100, which is before 10000 + 604800 = 614800
         REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 10100));
     }
 
     SECTION("expired blob") {
         blob.ttl = 100;
-        blob.timestamp = 1000000000ULL;  // 1000 seconds in microseconds
+        blob.timestamp = 1000;  // 1000 seconds
         // now = 1200 > 1000 + 100 = 1100
         REQUIRE(SyncProtocol::is_blob_expired(blob, 1200));
     }
 
     SECTION("exactly at expiry boundary") {
         blob.ttl = 100;
-        blob.timestamp = 1000000000ULL;  // 1000 seconds in microseconds
+        blob.timestamp = 1000;  // 1000 seconds
         // now = 1100 == 1000 + 100 -- expired (<=)
         REQUIRE(SyncProtocol::is_blob_expired(blob, 1100));
     }
@@ -230,7 +230,8 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
 
 TEST_CASE("sync skips expired blobs", "[sync]") {
     TempDir tmp1, tmp2;
-    test_clock_value = 10000;
+    auto real_now = current_timestamp();
+    test_clock_value = real_now + 200;  // Advance clock slightly past expired blob
 
     Storage store1(tmp1.path.string(), test_clock);
     Storage store2(tmp2.path.string(), test_clock);
@@ -240,12 +241,14 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
 
-    // Store a non-expired blob
+    // Store a non-expired blob (default TTL 604800, far from expiry)
     auto blob_ok = make_signed_blob(id, "not-expired");
     REQUIRE(run_async(pool, engine1.ingest(blob_ok)).accepted);
 
-    // Store a blob with short TTL (expired per sync clock)
-    auto blob_expired = make_signed_blob(id, "already-expired", 100);
+    // Store a blob with short TTL that is expired relative to test clock
+    // timestamp = real_now, TTL = 100 → expires at real_now + 100
+    // test_clock = real_now + 200 → blob is expired
+    auto blob_expired = make_signed_blob(id, "already-expired", 100, real_now);
     REQUIRE(run_async(pool, engine1.ingest(blob_expired)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);

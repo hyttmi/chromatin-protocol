@@ -2769,7 +2769,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         // Supported types
         REQUIRE(off + 1 <= info_response.size());
         uint8_t types_count = info_response[off++];
-        CHECK(types_count == 20);  // 20 client-facing types
+        CHECK(types_count == 38);  // 38 client-facing types (20 base + 18 v1.4.0 query types)
         REQUIRE(off + types_count <= info_response.size());
         // Verify at least Ping(5), Data(8), ExistsRequest(37), NodeInfoRequest(39) are present
         std::set<uint8_t> types(info_response.begin() + off, info_response.begin() + off + types_count);

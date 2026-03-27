@@ -2018,7 +2018,11 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     }
 
     // Phase C: Exchange blobs one at a time using existing BlobRequest/BlobTransfer
+    spdlog::debug("sync initiator {}: Phase C start, missing {} namespaces",
+                  conn->remote_address(), missing_per_ns.size());
     for (const auto& [ns, missing] : missing_per_ns) {
+        spdlog::debug("sync initiator {}: requesting {} blobs for ns {}",
+                      conn->remote_address(), missing.size(), to_hex(ns, 4));
         for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
             size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
                                         missing.size());
@@ -2042,6 +2046,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                     break;
                 }
 
+                spdlog::debug("sync initiator {}: Phase C got msg type={}",
+                              conn->remote_address(), static_cast<int>(msg->type));
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = co_await sync_proto_.ingest_blobs(blobs);
@@ -2200,7 +2206,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             if (reason != FullResyncReason::None) {
                 sync_is_full_resync = true;
                 if (reason == FullResyncReason::Periodic) {
-                    spdlog::info("sync responder {}: full resync (periodic, round {})",
+                    spdlog::debug("sync responder {}: full resync (periodic, round {})",
                                  conn->remote_address(), cursor->round_count);
                 } else {
                     spdlog::warn("sync responder {}: full resync (time gap, last={}s ago)",
@@ -2249,7 +2255,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
         // Byte budget check (responder): silently stop if budget exhausted
         // Per CONTEXT.md: "stop responding silently, let initiator hit SYNC_TIMEOUT (30s)"
         if (rate_limit_bytes_per_sec_ > 0 && peer->bucket_tokens == 0) {
-            spdlog::info("sync responder {}: byte budget exhausted, stopping silently",
+            spdlog::debug("sync responder {}: byte budget exhausted, stopping silently",
                          conn->remote_address());
             peer->syncing = false;
             co_return;  // Initiator will timeout after 30s
@@ -2416,7 +2422,11 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
 
     // Phase C: Exchange blobs one at a time
+    spdlog::debug("sync responder {}: Phase C start, missing {} namespaces",
+                  conn->remote_address(), missing_per_ns.size());
     for (const auto& [ns, missing] : missing_per_ns) {
+        spdlog::debug("sync responder {}: requesting {} blobs for ns {}",
+                      conn->remote_address(), missing.size(), to_hex(ns, 4));
         for (size_t i = 0; i < missing.size(); i += MAX_HASHES_PER_REQUEST) {
             size_t batch_end = std::min(i + static_cast<size_t>(MAX_HASHES_PER_REQUEST),
                                         missing.size());
@@ -2467,9 +2477,14 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
 
     // Handle remaining BlobRequests from peer
+    spdlog::debug("sync responder {}: entering remaining BlobRequests handler", conn->remote_address());
     while (true) {
         auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
-        if (!msg) break;
+        if (!msg) {
+            spdlog::debug("sync responder {}: remaining handler timeout, done", conn->remote_address());
+            break;
+        }
+        spdlog::debug("sync responder {}: remaining handler got type={}", conn->remote_address(), static_cast<int>(msg->type));
         if (msg->type == wire::TransportMsgType_BlobRequest) {
             if (peer->peer_is_full) {
                 spdlog::debug("Skipping blob push to full peer {}", peer_display_name(conn));
@@ -2477,6 +2492,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             }
             auto [req_ns, requested_hashes] =
                 sync::SyncProtocol::decode_blob_request(msg->payload);
+            spdlog::debug("sync responder {}: remaining handler serving {} hashes", conn->remote_address(), requested_hashes.size());
             for (const auto& hash : requested_hashes) {
                 auto blob = engine_.get_blob(req_ns, hash);
                 if (blob.has_value()) {
