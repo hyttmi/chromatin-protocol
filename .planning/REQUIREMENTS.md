@@ -13,7 +13,7 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 - [x] **QUERY-06**: Client can list all namespaces on a node with pagination
 - [x] **QUERY-07**: Client can query storage status (disk usage, quota headroom, tombstone counts)
 - [x] **QUERY-08**: Client can query per-namespace statistics (blob count, bytes, delegation count)
-- [ ] **QUERY-09**: Client can query peer connection information (trust-gated response)
+- [x] **QUERY-09**: Client can query peer connection information (trust-gated response)
 
 ### Blob-Level Queries
 
@@ -23,14 +23,14 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 ### Range/Batch Queries
 
-- [ ] **QUERY-13**: Client can fetch multiple blobs in a single request with size-capped partial responses
-- [ ] **QUERY-14**: Client can query blobs in a namespace within a timestamp range
+- [x] **QUERY-13**: Client can fetch multiple blobs in a single request with size-capped partial responses
+- [x] **QUERY-14**: Client can query blobs in a namespace within a timestamp range
 
 ### Integration
 
 - [x] **INTEG-01**: All new query types pass through relay message filter
 - [x] **INTEG-02**: NodeInfoResponse advertises all new types in supported_types
-- [ ] **INTEG-03**: PROTOCOL.md documents all new message type wire formats
+- [x] **INTEG-03**: PROTOCOL.md documents all new message type wire formats
 - [x] **INTEG-04**: Relay forwards and receives all new response types without modification (no silent drops)
 
 ## Future Requirements
@@ -62,15 +62,15 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 | QUERY-06 | Phase 65 | Complete |
 | QUERY-07 | Phase 65 | Complete |
 | QUERY-08 | Phase 65 | Complete |
-| QUERY-09 | Phase 67 | Pending |
+| QUERY-09 | Phase 67 | Complete |
 | QUERY-10 | Phase 66 | Complete |
 | QUERY-11 | Phase 66 | Complete |
 | QUERY-12 | Phase 66 | Complete |
-| QUERY-13 | Phase 67 | Pending |
-| QUERY-14 | Phase 67 | Pending |
+| QUERY-13 | Phase 67 | Complete |
+| QUERY-14 | Phase 67 | Complete |
 | INTEG-01 | Phase 67 | Complete |
 | INTEG-02 | Phase 67 | Complete |
-| INTEG-03 | Phase 67 | Pending |
+| INTEG-03 | Phase 67 | Complete |
 | INTEG-04 | Phase 67 | Complete |
 
 **Coverage:**
@@ -80,4 +80,4 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 ---
 *Requirements defined: 2026-03-26*
-*Last updated: 2026-03-26 after roadmap creation*
+*Last updated: 2026-03-27 after 67-03 completion — all v1.4.0 requirements complete*
