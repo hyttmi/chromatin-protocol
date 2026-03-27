@@ -598,3 +598,231 @@ All message types defined in the `TransportMsgType` enum:
 | 38 | ExistsResponse | Client blob existence result: exists flag + hash (33 bytes) |
 | 39 | NodeInfoRequest | Client node info query (empty payload) |
 | 40 | NodeInfoResponse | Client node info: version, state, supported types (variable) |
+| 41 | NamespaceListRequest | Client namespace enumeration: after_namespace cursor + limit (36 bytes min) |
+| 42 | NamespaceListResponse | Client namespace list: namespace entries + has_more flag |
+| 43 | StorageStatusRequest | Client storage status query (empty payload) |
+| 44 | StorageStatusResponse | Client storage status: disk usage, quota, tombstones (44 bytes) |
+| 45 | NamespaceStatsRequest | Client per-namespace stats query: namespace (32 bytes) |
+| 46 | NamespaceStatsResponse | Client per-namespace stats: found flag + counters (41 bytes) |
+| 47 | MetadataRequest | Client blob metadata query: namespace + hash (64 bytes) |
+| 48 | MetadataResponse | Client blob metadata: status + hash + timestamp + ttl + size + seq_num + pubkey (variable) |
+| 49 | BatchExistsRequest | Client batch existence check: namespace + count + hashes (36 + N*32 bytes) |
+| 50 | BatchExistsResponse | Client batch existence result: per-hash boolean array (N bytes) |
+| 51 | DelegationListRequest | Client delegation list: namespace (32 bytes) |
+| 52 | DelegationListResponse | Client delegation list: count + pk_hash/blob_hash pairs (4 + N*64 bytes) |
+| 53 | BatchReadRequest | Client batch blob fetch: namespace + cap_bytes + count + hashes (40 + N*32 bytes) |
+| 54 | BatchReadResponse | Client batch blob data: truncated flag + entries with status/hash/data (variable) |
+| 55 | PeerInfoRequest | Client peer info query (empty payload) |
+| 56 | PeerInfoResponse | Client peer info: trust-gated response (8 bytes untrusted, variable trusted) |
+| 57 | TimeRangeRequest | Client time-range query: namespace + start + end + limit (52 bytes) |
+| 58 | TimeRangeResponse | Client time-range result: truncated + entries with hash/seq/timestamp (5 + N*48 bytes) |
+
+## v1.4.0 Query Extensions
+
+These 10 request/response pairs (types 41-58) were added in v1.4.0. All use the coroutine-IO dispatch model, echo `request_id`, and are allowed through the relay message filter.
+
+### NamespaceListRequest (Type 41) / NamespaceListResponse (Type 42)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (minimum 36 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | after_namespace | Cursor: namespaces after this ID (zero = start) |
+| 32 | 4 | limit | Max entries to return (big-endian, capped at 1000, default 100) |
+
+**Response payload (variable):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | has_more | 0x00 = last page, 0x01 = more namespaces available |
+| 1 | 4 | count | Number of entries (big-endian) |
+| 5+ | N*40 | entries | Per-entry: [namespace_id:32][blob_count:8 big-endian] |
+
+### StorageStatusRequest (Type 43) / StorageStatusResponse (Type 44)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload:** Empty (0 bytes).
+
+**Response payload (44 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 8 | used_data_bytes | Actual B-tree data occupancy (big-endian) |
+| 8 | 8 | max_storage_bytes | Configured storage limit (big-endian) |
+| 16 | 8 | tombstone_count | Total tombstones across all namespaces (big-endian) |
+| 24 | 4 | namespace_count | Number of namespaces stored (big-endian) |
+| 28 | 4 | total_blobs | Total blobs across all namespaces (big-endian) |
+| 32 | 8 | mmap_bytes | MDBX mmap file geometry size (big-endian) |
+| 40 | 4 | _padding | Reserved (zero) |
+
+### NamespaceStatsRequest (Type 45) / NamespaceStatsResponse (Type 46)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (32 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace to query |
+
+**Response payload (41 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | found | 0x00 = unknown namespace, 0x01 = found |
+| 1 | 8 | blob_count | Number of blobs (big-endian, 0 if not found) |
+| 9 | 8 | total_bytes | Total bytes stored (big-endian, 0 if not found) |
+| 17 | 8 | delegation_count | Active delegations (big-endian, 0 if not found) |
+| 25 | 8 | max_bytes | Per-namespace byte quota limit (big-endian) |
+| 33 | 8 | max_blobs | Per-namespace blob count limit (big-endian) |
+
+### MetadataRequest (Type 47) / MetadataResponse (Type 48)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (64 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace hash |
+| 32 | 32 | blob_hash | Content hash of the blob |
+
+**Response payload (variable):**
+
+Not found (1 byte): `[0x00]`
+
+Found:
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | status | 0x01 = found |
+| 1 | 32 | blob_hash | Content hash (echo) |
+| 33 | 8 | timestamp | Blob timestamp in microseconds (big-endian) |
+| 41 | 4 | ttl | Time-to-live in seconds (big-endian) |
+| 45 | 8 | size | Raw data size in bytes (big-endian) |
+| 53 | 8 | seq_num | Sequence number in namespace (big-endian) |
+| 61 | 2 | pubkey_len | Signer public key length (big-endian) |
+| 63 | N | pubkey | Signer public key bytes |
+
+### BatchExistsRequest (Type 49) / BatchExistsResponse (Type 50)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (36 + N*32 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace hash |
+| 32 | 4 | count | Number of hashes (big-endian, 1-1024; 0 or >1024 = strike) |
+| 36 | N*32 | hashes | Blob hashes to check |
+
+**Response payload (N bytes):**
+
+Per-hash boolean array in request order. `0x01` = exists, `0x00` = not found.
+
+### DelegationListRequest (Type 51) / DelegationListResponse (Type 52)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (32 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace to query delegations for |
+
+**Response payload (4 + N*64 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 4 | count | Number of delegation entries (big-endian) |
+| 4+ | N*64 | entries | Per-entry: [delegate_pk_hash:32][delegation_blob_hash:32] |
+
+### BatchReadRequest (Type 53) / BatchReadResponse (Type 54)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (40 + N*32 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace hash |
+| 32 | 4 | cap_bytes | Cumulative response size cap (big-endian, max 4 MiB; 0 = default 4 MiB) |
+| 36 | 4 | count | Number of hashes (big-endian, 1-256; 0 or >256 = strike) |
+| 40 | N*32 | hashes | Blob hashes to fetch |
+
+**Response payload (variable):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | truncated | 0x00 = complete, 0x01 = size cap reached (more blobs requested) |
+| 1 | 4 | count | Number of entries in response (big-endian) |
+| 5+ | var | entries | Per-entry (see below) |
+
+Per-entry (found): `[0x01][hash:32][size:8 big-endian][data:size bytes]`
+Per-entry (not found): `[0x00][hash:32]`
+
+Entries preserve request order. When the cumulative encoded blob size reaches `cap_bytes`, the current blob is included (not truncated mid-blob) and remaining hashes are skipped with `truncated=0x01`.
+
+### PeerInfoRequest (Type 55) / PeerInfoResponse (Type 56)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload:** Empty (0 bytes).
+
+**Response payload (trust-gated):**
+
+**Untrusted clients (8 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 4 | peer_count | Connected peers (big-endian) |
+| 4 | 4 | bootstrap_count | Connected bootstrap peers (big-endian) |
+
+**Trusted clients / UDS (variable):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 4 | peer_count | Connected peers (big-endian) |
+| 4 | 4 | bootstrap_count | Connected bootstrap peers (big-endian) |
+| 8+ | var | entries | Per-peer entries (peer_count entries) |
+
+Per-peer entry:
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 2 | addr_len | Address string length (big-endian) |
+| 2 | N | address | Peer address string (e.g., "1.2.3.4:9735") |
+| 2+N | 1 | is_bootstrap | 0x00 or 0x01 |
+| 3+N | 1 | syncing | 0x00 or 0x01 |
+| 4+N | 1 | peer_is_full | 0x00 or 0x01 |
+| 5+N | 8 | connected_duration_ms | Milliseconds since last message (big-endian) |
+
+Trust detection: UDS connections are always trusted. TCP connections are trusted if the remote IP is loopback (127.0.0.1/::1) or in the node's `trusted_peers` configuration.
+
+### TimeRangeRequest (Type 57) / TimeRangeResponse (Type 58)
+
+**Direction:** Client -> Node -> Client
+
+**Request payload (52 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | namespace_id | Namespace hash |
+| 32 | 8 | start_timestamp | Range start in microseconds (big-endian, inclusive) |
+| 40 | 8 | end_timestamp | Range end in microseconds (big-endian, inclusive) |
+| 48 | 4 | limit | Max results (big-endian, capped at 100; 0 = default 100) |
+
+Validation: `start_timestamp > end_timestamp` triggers a strike.
+
+**Response payload (5 + N*48 bytes):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | truncated | 0x00 = complete, 0x01 = scan limit or result limit reached |
+| 1 | 4 | count | Number of result entries (big-endian) |
+| 5+ | N*48 | entries | Per-entry: [blob_hash:32][seq_num:8 big-endian][timestamp:8 big-endian] |
+
+Implementation scans the namespace's sequence map (up to 10,000 entries) and filters by timestamp range. Returns blob references only (not full blob data). Clients use ReadRequest or BatchReadRequest to fetch the actual blob data.
