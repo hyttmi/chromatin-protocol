@@ -37,6 +37,13 @@ bool is_client_allowed(TransportMsgType type) {
         case TransportMsgType_BatchExistsResponse:
         case TransportMsgType_DelegationListRequest:
         case TransportMsgType_DelegationListResponse:
+        // Phase 67: Batch/range queries
+        case TransportMsgType_BatchReadRequest:
+        case TransportMsgType_BatchReadResponse:
+        case TransportMsgType_PeerInfoRequest:
+        case TransportMsgType_PeerInfoResponse:
+        case TransportMsgType_TimeRangeRequest:
+        case TransportMsgType_TimeRangeResponse:
         // Pub/sub
         case TransportMsgType_Subscribe:
         case TransportMsgType_Unsubscribe:

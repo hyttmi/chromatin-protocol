@@ -74,11 +74,17 @@ enum TransportMsgType : int8_t {
   TransportMsgType_BatchExistsResponse = 50,
   TransportMsgType_DelegationListRequest = 51,
   TransportMsgType_DelegationListResponse = 52,
+  TransportMsgType_BatchReadRequest = 53,
+  TransportMsgType_BatchReadResponse = 54,
+  TransportMsgType_PeerInfoRequest = 55,
+  TransportMsgType_PeerInfoResponse = 56,
+  TransportMsgType_TimeRangeRequest = 57,
+  TransportMsgType_TimeRangeResponse = 58,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_DelegationListResponse
+  TransportMsgType_MAX = TransportMsgType_TimeRangeResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[53] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[59] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -132,13 +138,19 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[53] {
     TransportMsgType_BatchExistsRequest,
     TransportMsgType_BatchExistsResponse,
     TransportMsgType_DelegationListRequest,
-    TransportMsgType_DelegationListResponse
+    TransportMsgType_DelegationListResponse,
+    TransportMsgType_BatchReadRequest,
+    TransportMsgType_BatchReadResponse,
+    TransportMsgType_PeerInfoRequest,
+    TransportMsgType_PeerInfoResponse,
+    TransportMsgType_TimeRangeRequest,
+    TransportMsgType_TimeRangeResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[54] = {
+  static const char * const names[60] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -192,13 +204,19 @@ inline const char * const *EnumNamesTransportMsgType() {
     "BatchExistsResponse",
     "DelegationListRequest",
     "DelegationListResponse",
+    "BatchReadRequest",
+    "BatchReadResponse",
+    "PeerInfoRequest",
+    "PeerInfoResponse",
+    "TimeRangeRequest",
+    "TimeRangeResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_DelegationListResponse)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_TimeRangeResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

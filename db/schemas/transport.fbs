@@ -66,7 +66,14 @@ enum TransportMsgType : byte {
     BatchExistsRequest = 49,
     BatchExistsResponse = 50,
     DelegationListRequest = 51,
-    DelegationListResponse = 52
+    DelegationListResponse = 52,
+    // Phase 67: Batch/range queries
+    BatchReadRequest = 53,
+    BatchReadResponse = 54,
+    PeerInfoRequest = 55,
+    PeerInfoResponse = 56,
+    TimeRangeRequest = 57,
+    TimeRangeResponse = 58
 }
 
 table TransportMessage {

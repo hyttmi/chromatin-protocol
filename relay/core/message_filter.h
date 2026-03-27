@@ -6,7 +6,7 @@
 namespace chromatindb::relay::core {
 
 /// Check if a message type is allowed through the relay from a client.
-/// 32 client-allowed types:
+/// 38 client-allowed types:
 /// Allowed: Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse,
 ///          ListRequest, ListResponse, StatsRequest, StatsResponse,
 ///          ExistsRequest, ExistsResponse, NodeInfoRequest, NodeInfoResponse,
@@ -16,6 +16,9 @@ namespace chromatindb::relay::core {
 ///          MetadataRequest, MetadataResponse,
 ///          BatchExistsRequest, BatchExistsResponse,
 ///          DelegationListRequest, DelegationListResponse,
+///          BatchReadRequest, BatchReadResponse,
+///          PeerInfoRequest, PeerInfoResponse,
+///          TimeRangeRequest, TimeRangeResponse,
 ///          Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye
 /// Blocked: All peer-only types, handshake types, None, unknown types.
 /// Per RELAY-03: default-deny on unknown types.
