@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.4.0
 milestone_name: Extended Query Suite
 status: unknown
-stopped_at: Completed 66-02-PLAN.md
-last_updated: "2026-03-26T16:26:55.942Z"
+stopped_at: Completed 67-01-PLAN.md
+last_updated: "2026-03-27T03:14:23.978Z"
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 7
+  completed_plans: 5
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 66 — blob-level-queries
+**Current focus:** Phase 67 — batch-range-queries-and-integration
 
 ## Current Position
 
-Phase: 67
-Plan: Not started
+Phase: 67 (batch-range-queries-and-integration) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Plan: Not started
 | Phase 65 P02 | 8min | 2 tasks | 2 files |
 | Phase 66 P01 | 6min | 2 tasks | 8 files |
 | Phase 66 P02 | 5min | 2 tasks | 2 files |
+| Phase 67 P01 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,7 @@ Recent decisions affecting current work:
 - [Phase 66]: DelegationEntry struct with delegate_pk_hash + delegation_blob_hash as typed return from delegation_map
 - [Phase 66]: MetadataRequest seq_num retrieved via get_blob_refs_since scan (no direct seq_num in BlobData)
 - [Phase 66]: BatchExistsRequest count=0 and count>1024 both trigger strike and connection drop
+- [Phase 67]: NodeInfoResponse supported[] backfilled with types 41-52 (Phases 65/66) alongside new 53-58
 
 ### Pending Todos
 
@@ -80,6 +82,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-26T16:23:44.441Z
-Stopped at: Completed 66-02-PLAN.md
+Last session: 2026-03-27T03:14:23.975Z
+Stopped at: Completed 67-01-PLAN.md
 Resume file: None

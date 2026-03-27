@@ -169,7 +169,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 67-01-PLAN.md — Schema types 53-58, relay filter update (38 types), NodeInfoResponse supported[] update
+- [x] 67-01-PLAN.md — Schema types 53-58, relay filter update (38 types), NodeInfoResponse supported[] update
 - [ ] 67-02-PLAN.md — BatchReadRequest, PeerInfoRequest, TimeRangeRequest handlers with integration tests
 - [ ] 67-03-PLAN.md — PROTOCOL.md v1.4.0 documentation, requirements completion
 
@@ -181,4 +181,4 @@ Plans:
 |-------|----------------|--------|-----------|
 | 65. Node-Level Queries | 2/2 | Complete    | 2026-03-26 |
 | 66. Blob-Level Queries | 2/2 | Complete    | 2026-03-26 |
-| 67. Batch/Range Queries & Integration | 0/3 | Not started | - |
+| 67. Batch/Range Queries & Integration | 1/3 | In Progress|  |

@@ -28,10 +28,10 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 
 ### Integration
 
-- [ ] **INTEG-01**: All new query types pass through relay message filter
-- [ ] **INTEG-02**: NodeInfoResponse advertises all new types in supported_types
+- [x] **INTEG-01**: All new query types pass through relay message filter
+- [x] **INTEG-02**: NodeInfoResponse advertises all new types in supported_types
 - [ ] **INTEG-03**: PROTOCOL.md documents all new message type wire formats
-- [ ] **INTEG-04**: Relay forwards and receives all new response types without modification (no silent drops)
+- [x] **INTEG-04**: Relay forwards and receives all new response types without modification (no silent drops)
 
 ## Future Requirements
 
@@ -68,10 +68,10 @@ Requirements for Extended Query Suite. Each maps to roadmap phases.
 | QUERY-12 | Phase 66 | Complete |
 | QUERY-13 | Phase 67 | Pending |
 | QUERY-14 | Phase 67 | Pending |
-| INTEG-01 | Phase 67 | Pending |
-| INTEG-02 | Phase 67 | Pending |
+| INTEG-01 | Phase 67 | Complete |
+| INTEG-02 | Phase 67 | Complete |
 | INTEG-03 | Phase 67 | Pending |
-| INTEG-04 | Phase 67 | Pending |
+| INTEG-04 | Phase 67 | Complete |
 
 **Coverage:**
 - v1.4.0 requirements: 14 total
