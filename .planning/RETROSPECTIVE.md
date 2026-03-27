@@ -2,6 +2,52 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v1.4.0 — Extended Query Suite
+
+**Shipped:** 2026-03-27
+**Phases:** 3 | **Plans:** 7 | **Sessions:** ~2
+
+### What Was Built
+- 18 new FlatBuffers enum values (types 41-58) for 9 query request/response pairs
+- Relay message filter expanded from 20 to 38 client-allowed types across 3 phases
+- Storage helpers: count_tombstones() (O(1) via map stat), count_delegations() (cursor prefix scan), list_delegations() (DelegationEntry vector)
+- 6 coroutine-IO handlers: NamespaceList (paginated), StorageStatus (44-byte), NamespaceStats (41-byte), MetadataRequest, BatchExistsRequest, DelegationListRequest
+- 3 coroutine-IO handlers: BatchReadRequest (size-capped multi-blob fetch), PeerInfoRequest (trust-gated), TimeRangeRequest (timestamp-filtered)
+- NodeInfoResponse expanded from 20 to 38 supported_types for SDK capability discovery
+- PROTOCOL.md v1.4.0 Query Extensions section with byte-level wire format for all 9 message pairs
+- 12+ integration tests covering all query types (found/not-found, pagination, trust gating, batch, range)
+
+### What Worked
+- Entire milestone completed in 2 days — 3 phases, 7 plans, 34 commits, +2342 lines across 11 code files
+- Layered phase design worked perfectly: schema+relay (wave 1) → handlers+tests (wave 2) → docs (wave 2 parallel)
+- Phase 65/66/67 each followed identical structure (schema plan → handler plan) — predictable, fast execution
+- Parallel subagent execution for Wave 2 of Phase 67 (67-02 handlers + 67-03 docs) saved significant time
+- All 3 phase verifications passed first time — 9/9 must-haves each
+- Requirements closure was clean: 14/14 checked off, 1 intentionally dropped with rationale
+
+### What Was Inefficient
+- summary-extract tool returned N/A for all summaries — metadata extraction from SUMMARY.md frontmatter failed silently
+- Pre-existing flaky E2E peer tests ("closed mode accepts authorized peer and syncs", "closed mode disables PEX discovery") still not migrated to Docker — continues to create noise during regression testing
+
+### Patterns Established
+- Trust-gated response pattern: different response detail levels based on connection trust status (PeerInfoRequest)
+- Cumulative size cap with truncation flag for batch operations (BatchReadRequest)
+- Seq_map scan with timestamp post-filter for time-range queries (cheaper than dedicated time index)
+- DelegationEntry struct for typed delegation map results from cursor prefix scan
+
+### Key Lessons
+1. 3-phase milestones with consistent schema→handler structure are the sweet spot for query expansion — predictable, parallelizable
+2. Dropping QUERY-05 (HealthRequest) early was the right call — NodeInfoResponse already covered it, no wasted effort
+3. Wave-2 parallelization of handlers + docs is safe and effective when they touch different files
+4. Flaky E2E tests (backlog 999.6) are now consistently the only noise in regression gates — fixing these would make regression gates fully clean
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for executors, sonnet for verifier)
+- Sessions: ~2 across 2 days
+- Notable: Fastest per-plan velocity yet — 7 plans in ~1 session of active work. Pattern reuse from v1.3.0 handlers made execution mechanical.
+
+---
+
 ## Milestone: v1.3.0 — Protocol Concurrency & Query Foundation
 
 **Shipped:** 2026-03-26

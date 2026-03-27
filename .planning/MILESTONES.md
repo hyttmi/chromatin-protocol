@@ -1,5 +1,21 @@
 # Milestones
 
+## v1.4.0 Extended Query Suite (Shipped: 2026-03-27)
+
+**Phases completed:** 3 phases, 7 plans, 14 tasks
+
+**Key accomplishments:**
+
+- FlatBuffers types 41-46 for node-level queries, O(1) tombstone count and cursor-scanned delegation count in Storage, relay filter expanded to 26 client types
+- Three new coroutine-IO handlers for NamespaceList (paginated), StorageStatus (44-byte global stats), and NamespaceStats (41-byte per-namespace stats) with full integration tests
+- 6 new FlatBuffers enum types (47-52), Storage::list_delegations() with cursor prefix scan, relay filter expanded to 32 client types
+- MetadataRequest, BatchExistsRequest, DelegationListRequest handlers with binary wire protocol and 3 integration tests covering found/not-found, batch existence, and delegation listing
+- 6 new FlatBuffers enum values (53-58) for BatchRead/PeerInfo/TimeRange, relay filter expanded from 32 to 38 types, NodeInfoResponse backfilled with all v1.4.0 types (41-58)
+- Three coroutine-IO handlers for BatchRead (size-capped multi-blob fetch), PeerInfo (trust-gated peer topology), and TimeRange (timestamp-filtered blob query) with 3 integration tests (29 assertions)
+- PROTOCOL.md updated with byte-level wire format for all 9 v1.4.0 query pairs (types 41-58), all 14 requirements marked complete
+
+---
+
 ## v1.3.0 Protocol Concurrency & Query Foundation (Shipped: 2026-03-26)
 
 **Phases:** 4 (61-64) | **Plans:** 8 | **Tasks:** 10

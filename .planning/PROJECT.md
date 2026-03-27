@@ -10,22 +10,20 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v1.4.0 Extended Query Suite
+## Latest Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
 
-**Goal:** Add 11 new query/response message types to the protocol, expanding the client-facing API with time-range queries, metadata inspection, batch operations, delegation management, and operational health endpoints.
+**Delivered:** 9 new query/response message type pairs (18 types, enums 41-58) expanding the client-facing API. HealthRequest was dropped (NodeInfoResponse already serves as health check).
 
-**Target features:**
-- TimeRange query (blobs within a timestamp window)
-- BlobMetadata query (size, timestamp, TTL, signer without payload transfer)
-- BatchExists query (check multiple blob hashes in one request)
-- BatchRead query (fetch multiple small blobs in one request)
-- DelegationList query (active delegations for a namespace)
-- NamespaceList query (all namespaces stored on node)
-- NamespaceStats query (per-namespace count, bytes, quota usage)
-- Metadata query (blob metadata without data)
-- PeerInfo query (detailed peer connection info)
-- Health query (liveness/readiness check)
-- StorageStatus query (disk usage, quota headroom, tombstone counts)
+**Shipped features:**
+- NamespaceList query — paginated namespace enumeration
+- StorageStatus query — disk usage, quota headroom, tombstone counts
+- NamespaceStats query — per-namespace count, bytes, quota usage
+- BlobMetadata query — size, timestamp, TTL, signer without payload transfer
+- BatchExists query — check multiple blob hashes in one request
+- DelegationList query — active delegations for a namespace
+- BatchRead query — size-capped multi-blob fetch
+- PeerInfo query — trust-gated peer connection info
+- TimeRange query — blobs within a timestamp window
 
 ## Requirements
 
@@ -131,28 +129,27 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Shared utility libraries (hex.h, test_helpers.h) — v1.2.0 Phase 60
 - ✓ Root-level GEMINI.md policy enforcement — v1.2.0 Phase 60
 
-### Active
-
-- [x] TimeRange query — blobs in a namespace within a timestamp window — Validated in Phase 67
-- [x] BlobMetadata query — size, timestamp, TTL, seq_num, signer without payload — Validated in Phase 66
-- [x] BatchExists query — check existence of multiple blob hashes in one request — Validated in Phase 66
-- [x] BatchRead query — fetch multiple small blobs in one request — Validated in Phase 67
-- [x] DelegationList query — list active delegations for a namespace — Validated in Phase 66
-- [x] NamespaceList query — list all namespaces stored on the node — Validated in Phase 65
-- [x] NamespaceStats query — per-namespace count, bytes, quota usage — Validated in Phase 65
-- [x] Metadata query — blob metadata without data transfer — Validated in Phase 66
-- [x] PeerInfo query — detailed peer connection information — Validated in Phase 67
-- [x] Health query — DROPPED: NodeInfoResponse (Phase 63) already serves as health check — Phase 65
-- [x] StorageStatus query — disk usage, quota headroom, tombstone counts — Validated in Phase 65
-
-### Validated (continued)
-
 - ✓ Request correlation via request_id field in transport envelope — v1.3.0 Phase 61
 - ✓ Concurrent request dispatch (thread pool offload for heavy ops, inline for cheap ops) — v1.3.0 Phase 62
 - ✓ ExistsRequest/ExistsResponse — check blob existence without data transfer — v1.3.0 Phase 63
 - ✓ NodeInfoRequest/NodeInfoResponse — version, capabilities, peer count, storage stats, supported types — v1.3.0 Phase 63
 - ✓ PROTOCOL.md updated with concurrency model and new message types — v1.3.0 Phase 64
 - ✓ README.md updated with v1.3.0 capabilities — v1.3.0 Phase 64
+
+- ✓ NamespaceList query — paginated namespace enumeration — v1.4.0 Phase 65
+- ✓ StorageStatus query — disk usage, quota headroom, tombstone counts — v1.4.0 Phase 65
+- ✓ NamespaceStats query — per-namespace count, bytes, quota usage — v1.4.0 Phase 65
+- ✓ HealthRequest — DROPPED: NodeInfoResponse already serves as health check — v1.4.0 Phase 65
+- ✓ BlobMetadata query — size, timestamp, TTL, signer without payload — v1.4.0 Phase 66
+- ✓ BatchExists query — check existence of multiple blob hashes in one request — v1.4.0 Phase 66
+- ✓ DelegationList query — list active delegations for a namespace — v1.4.0 Phase 66
+- ✓ Metadata query — blob metadata without data transfer — v1.4.0 Phase 66
+- ✓ BatchRead query — size-capped multi-blob fetch — v1.4.0 Phase 67
+- ✓ PeerInfo query — trust-gated peer connection information — v1.4.0 Phase 67
+- ✓ TimeRange query — timestamp-filtered blob enumeration — v1.4.0 Phase 67
+- ✓ Relay filter expanded to 38 client-allowed types — v1.4.0 Phase 67
+- ✓ NodeInfoResponse advertises all 38 client-facing types — v1.4.0 Phase 67
+- ✓ PROTOCOL.md documents all v1.4.0 wire formats — v1.4.0 Phase 67
 
 ### Future
 
@@ -300,4 +297,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-27 after Phase 67 complete (v1.4.0 milestone complete)*
+*Last updated: 2026-03-27 after v1.4.0 milestone*

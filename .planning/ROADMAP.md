@@ -15,7 +15,7 @@
 - ✅ **v1.1.0 Operational Polish & Local Access** — Phases 53-56 (shipped 2026-03-22)
 - ✅ **v1.2.0 Relay & Client Protocol** — Phases 57-60 (shipped 2026-03-23)
 - ✅ **v1.3.0 Protocol Concurrency & Query Foundation** — Phases 61-64 (shipped 2026-03-26)
-- [ ] **v1.4.0 Extended Query Suite** — Phases 65-67 (in progress)
+- ✅ **v1.4.0 Extended Query Suite** — Phases 65-67 (shipped 2026-03-27)
 
 ## Phases
 
@@ -115,70 +115,13 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 </details>
 
-### v1.4.0 Extended Query Suite (In Progress)
+<details>
+<summary>v1.4.0 Extended Query Suite (Phases 65-67) — SHIPPED 2026-03-27</summary>
 
-**Milestone Goal:** Add 10 new query/response message type pairs (20 enum values, types 41-60) expanding the client-facing API with health, namespace inspection, metadata, batch operations, delegations, peer topology, and time-range queries.
+- [x] Phase 65: Node-Level Queries (2/2 plans) — completed 2026-03-26
+- [x] Phase 66: Blob-Level Queries (2/2 plans) — completed 2026-03-26
+- [x] Phase 67: Batch/Range Queries & Integration (3/3 plans) — completed 2026-03-27
 
-- [x] **Phase 65: Node-Level Queries** - NamespaceList, StorageStatus, NamespaceStats (HealthRequest cut -- NodeInfo suffices) (completed 2026-03-26)
-- [x] **Phase 66: Blob-Level Queries** - MetadataRequest, BatchExists, DelegationList with minor new Storage methods (completed 2026-03-26)
-- [x] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md (completed 2026-03-27)
+Full details: [milestones/v1.4.0-ROADMAP.md](milestones/v1.4.0-ROADMAP.md)
 
-## Phase Details
-
-### Phase 65: Node-Level Queries
-**Goal**: Operators and clients can enumerate namespaces, query storage status, and query per-namespace statistics
-**Depends on**: Phase 64 (v1.3.0 -- coroutine-IO dispatch, request_id, NodeInfo pattern)
-**Requirements**: QUERY-05 (dropped), QUERY-06, QUERY-07, QUERY-08
-**Success Criteria** (what must be TRUE):
-  1. ~~HealthRequest~~ -- CUT (NodeInfoResponse already serves as health check)
-  2. Client can list all namespaces stored on the node with pagination (after_namespace cursor + limit), receiving namespace hashes and counts
-  3. Client can query node-level storage status including used bytes, quota headroom, and tombstone counts in a single request
-  4. Client can query per-namespace statistics (blob count, total bytes, delegation count, quota usage) for any namespace
-  5. All three new request/response types pass through relay message filter and work over both TCP (via relay) and UDS paths
-**Plans**: 2 plans
-
-Plans:
-- [x] 65-01-PLAN.md — Schema types 41-46, Storage methods (count_tombstones, count_delegations), relay filter update
-- [x] 65-02-PLAN.md — NamespaceList, StorageStatus, NamespaceStats handlers with integration tests
-
-### Phase 66: Blob-Level Queries
-**Goal**: Clients can inspect individual blob metadata, check batch existence, and list delegations without transferring payload data
-**Depends on**: Phase 65
-**Requirements**: QUERY-10, QUERY-11, QUERY-12
-**Success Criteria** (what must be TRUE):
-  1. Client can fetch blob metadata (size, timestamp, TTL, signer pubkey) for a specific blob without transferring the payload data
-  2. Client can check existence of multiple blob hashes (up to 256) in a single BatchExistsRequest, receiving a per-hash boolean result
-  3. Client can list all active delegations for a namespace, receiving delegate pubkeys and delegation blob hashes
-  4. All three new request/response types pass through relay message filter and work over both TCP and UDS paths
-**Plans**: 2 plans
-
-Plans:
-- [x] 66-01-PLAN.md — Schema types 47-52, Storage::list_delegations(), relay filter update (32 types)
-- [x] 66-02-PLAN.md — MetadataRequest, BatchExistsRequest, DelegationListRequest handlers with integration tests
-
-### Phase 67: Batch/Range Queries & Integration
-**Goal**: Clients can batch-fetch blobs, query peers, query by time range, and all v1.4.0 types are fully integrated across relay, NodeInfo, and documentation
-**Depends on**: Phase 66
-**Requirements**: QUERY-09, QUERY-13, QUERY-14, INTEG-01, INTEG-02, INTEG-03, INTEG-04
-**Success Criteria** (what must be TRUE):
-  1. Client can fetch multiple blobs in a single BatchReadRequest with cumulative size cap and partial-result flag when the cap is reached
-  2. Client can query peer connection information via PeerInfoRequest with trust-gated response (full detail for trusted/UDS, reduced for untrusted)
-  3. Client can query blobs in a namespace within a timestamp range via TimeRangeRequest with a result limit
-  4. NodeInfoResponse supported_types includes all new v1.4.0 message types (types 41-58)
-  5. PROTOCOL.md documents wire format for all 10 new request/response pairs added in this milestone
-**Plans**: 3 plans
-
-Plans:
-- [x] 67-01-PLAN.md — Schema types 53-58, relay filter update (38 types), NodeInfoResponse supported[] update
-- [x] 67-02-PLAN.md — BatchReadRequest, PeerInfoRequest, TimeRangeRequest handlers with integration tests
-- [x] 67-03-PLAN.md — PROTOCOL.md v1.4.0 documentation, requirements completion
-
-## Progress
-
-**Execution Order:** 65 -> 66 -> 67
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 65. Node-Level Queries | 2/2 | Complete    | 2026-03-26 |
-| 66. Blob-Level Queries | 2/2 | Complete    | 2026-03-26 |
-| 67. Batch/Range Queries & Integration | 3/3 | Complete    | 2026-03-27 |
+</details>
