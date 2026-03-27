@@ -164,14 +164,14 @@ Plans:
   1. Client can fetch multiple blobs in a single BatchReadRequest with cumulative size cap and partial-result flag when the cap is reached
   2. Client can query peer connection information via PeerInfoRequest with trust-gated response (full detail for trusted/UDS, reduced for untrusted)
   3. Client can query blobs in a namespace within a timestamp range via TimeRangeRequest with a result limit
-  4. NodeInfoResponse supported_types includes all new v1.4.0 message types (types 41-60)
+  4. NodeInfoResponse supported_types includes all new v1.4.0 message types (types 41-58)
   5. PROTOCOL.md documents wire format for all 10 new request/response pairs added in this milestone
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 67-01: TBD
-- [ ] 67-02: TBD
-- [ ] 67-03: TBD
+- [ ] 67-01-PLAN.md — Schema types 53-58, relay filter update (38 types), NodeInfoResponse supported[] update
+- [ ] 67-02-PLAN.md — BatchReadRequest, PeerInfoRequest, TimeRangeRequest handlers with integration tests
+- [ ] 67-03-PLAN.md — PROTOCOL.md v1.4.0 documentation, requirements completion
 
 ## Progress
 
