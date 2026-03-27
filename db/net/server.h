@@ -48,6 +48,9 @@ public:
     /// Whether the server is in shutdown/draining state.
     bool is_draining() const { return draining_; }
 
+    /// Actual listening port (after bind). Useful when bind_address uses port 0.
+    uint16_t listening_port() const { return acceptor_.local_endpoint().port(); }
+
     /// Set callback for when a peer successfully connects and authenticates.
     void set_on_connected(ConnectionCallback cb) { on_connected_ = std::move(cb); }
 

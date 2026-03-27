@@ -35,6 +35,7 @@ using chromatindb::test::make_signed_delegation;
 using chromatindb::test::current_timestamp;
 using chromatindb::test::TS_AUTO;
 using chromatindb::util::to_hex;
+using chromatindb::test::listening_address;
 
 using chromatindb::acl::AccessControl;
 using chromatindb::config::Config;
@@ -52,7 +53,7 @@ TEST_CASE("PeerManager starts with unreachable bootstrap", "[peer]") {
     TempDir tmp;
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14210";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.bootstrap_peers = {"192.0.2.1:4200"};  // TEST-NET, unreachable
 
@@ -81,7 +82,7 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     TempDir tmp;
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14211";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.max_peers = 1;  // Very low limit for testing
 
@@ -166,7 +167,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     // Node1 is in closed mode with a random allowed key (NOT id2's namespace)
     // Use a dummy key that won't match any real peer
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14250";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
@@ -174,9 +175,8 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
 
     // Node2 is open mode, bootstraps to node1
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14251";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14250"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
 
@@ -201,9 +201,9 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     REQUIRE_FALSE(acl2.is_closed_mode());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Run long enough for connection attempt + rejection
@@ -231,7 +231,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14252";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
@@ -241,9 +241,8 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     auto id1_ns_hex = to_hex(id1.namespace_id());
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14253";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14252"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.allowed_keys = {id1_ns_hex};
@@ -271,13 +270,13 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     REQUIRE(acl2.is_allowed(id1.namespace_id()));
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
-    // Run long enough for handshake + ACL check + sync
-    ioc.run_for(std::chrono::seconds(8));
+    // Run long enough for PQ handshake + ACL check + sync (ASAN makes PQ crypto ~3-5x slower)
+    ioc.run_for(std::chrono::seconds(15));
 
     // Both nodes should have 1 peer (each other)
     REQUIRE(pm1.peer_count() == 1);
@@ -306,7 +305,7 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14260", "allowed_keys": [")" << id2_ns_hex << R"("]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": [")" << id2_ns_hex << R"("]})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -315,9 +314,8 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14261";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14260"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.allowed_keys = {id1_ns_hex};
@@ -333,9 +331,9 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -348,7 +346,7 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     // Now rewrite config to REMOVE id2 from allowed_keys (revocation)
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14260", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
     }
 
     // Trigger reload (same as what SIGHUP handler calls)
@@ -374,7 +372,7 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14262", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -422,7 +420,7 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14263"})";
+        f << R"({"bind_address": "127.0.0.1:0"})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -443,7 +441,7 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
     // Rewrite config to add allowed_keys (switch to closed mode)
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14263", "allowed_keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]})";
     }
 
     pm1.reload_config();
@@ -468,16 +466,15 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
 
     // All three nodes in closed mode, each allowing the other two
     Config cfg_a;
-    cfg_a.bind_address = "127.0.0.1:14254";
+    cfg_a.bind_address = "127.0.0.1:0";
     cfg_a.data_dir = tmp1.path.string();
     cfg_a.sync_interval_seconds = 1;
     cfg_a.max_peers = 32;
     cfg_a.allowed_keys = {ns_b, ns_c};
 
     Config cfg_b;
-    cfg_b.bind_address = "127.0.0.1:14255";
+    cfg_b.bind_address = "127.0.0.1:0";
     cfg_b.data_dir = tmp2.path.string();
-    cfg_b.bootstrap_peers = {"127.0.0.1:14254"};
     cfg_b.sync_interval_seconds = 1;
     cfg_b.max_peers = 32;
     cfg_b.allowed_keys = {ns_a, ns_c};
@@ -485,9 +482,8 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     // Node C only knows B (not A). In open mode it would discover A via PEX.
     // In closed mode, PEX is disabled, so C should NOT discover A.
     Config cfg_c;
-    cfg_c.bind_address = "127.0.0.1:14256";
+    cfg_c.bind_address = "127.0.0.1:0";
     cfg_c.data_dir = tmp3.path.string();
-    cfg_c.bootstrap_peers = {"127.0.0.1:14255"};
     cfg_c.sync_interval_seconds = 1;
     cfg_c.max_peers = 32;
     cfg_c.allowed_keys = {ns_a, ns_b};
@@ -513,15 +509,16 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
 
     PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, pool, acl_a);
-    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, pool, acl_b);
-    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, pool, acl_c);
-
     pm_a.start();
+    cfg_b.bootstrap_peers = {listening_address(pm_a.listening_port())};
+    PeerManager pm_b(cfg_b, id_b, eng_b, store_b, ioc, pool, acl_b);
     pm_b.start();
 
     // Let A and B connect
     ioc.run_for(std::chrono::seconds(5));
 
+    cfg_c.bootstrap_peers = {listening_address(pm_b.listening_port())};
+    PeerManager pm_c(cfg_c, id_c, eng_c, store_c, ioc, pool, acl_c);
     pm_c.start();
 
     // Run long enough that PEX would have happened in open mode
@@ -672,15 +669,14 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14280";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;  // Long interval -- we don't want sync to interfere
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14281";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14280"};
     cfg2.sync_interval_seconds = 60;
     cfg2.max_peers = 32;
 
@@ -695,7 +691,6 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     // Capture notifications on node1 (the node that will ingest and notify)
     struct NotifCapture {
@@ -714,6 +709,8 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     });
 
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and complete handshake
@@ -762,15 +759,14 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14282";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14283";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14282"};
     cfg2.sync_interval_seconds = 60;
     cfg2.max_peers = 32;
 
@@ -785,7 +781,6 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     // Capture notifications on node1
     std::vector<std::tuple<std::array<uint8_t, 32>, uint64_t, bool>> notifs;
@@ -796,6 +791,8 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     });
 
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect
@@ -842,15 +839,14 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14284";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14285";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14284"};
     cfg2.sync_interval_seconds = 60;
     cfg2.max_peers = 32;
 
@@ -865,7 +861,6 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     // Track notifications on node1 (node1 will receive a Data message from node2
     // once they sync -- node2 writes a blob and sync propagates it)
@@ -883,6 +878,8 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     REQUIRE(r.accepted);
 
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Quick sync interval to trigger sync fast
@@ -919,16 +916,15 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14286";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14287";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14286"};
     cfg2.sync_interval_seconds = 3;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
@@ -944,6 +940,16 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+
+    // Store a blob in node1
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id1, "will-be-tombstoned", 604800, now);
+    auto r = run_async(pool, eng1.ingest(blob));
+    REQUIRE(r.accepted);
+    auto blob_hash = r.ack->blob_hash;
+
+    pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
     PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     // Track notifications on node2 (tombstone will sync from node1 to node2)
@@ -954,14 +960,6 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
         notifs.emplace_back(ns, seq, tomb);
     });
 
-    // Store a blob in node1
-    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
-    auto blob = make_signed_blob(id1, "will-be-tombstoned", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
-    REQUIRE(r.accepted);
-    auto blob_hash = r.ack->blob_hash;
-
-    pm1.start();
     pm2.start();
 
     // Let nodes sync -- blob propagates to node2
@@ -1003,7 +1001,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     auto id = NodeIdentity::load_or_generate(tmp.path);
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14288";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.sync_interval_seconds = 60;
     cfg.max_peers = 32;
@@ -1085,16 +1083,15 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14270";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14271";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14270"};
     cfg2.sync_interval_seconds = 3;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
@@ -1118,9 +1115,9 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync -- blob should propagate to node2
@@ -1175,16 +1172,15 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
         Config cfg1;
-        cfg1.bind_address = "127.0.0.1:14300";
+        cfg1.bind_address = "127.0.0.1:0";
         cfg1.data_dir = tmp1.path.string();
         cfg1.sync_interval_seconds = 1;
         cfg1.max_peers = 32;
 
         // Node2 is effectively full: max_storage_bytes = 1 byte
         Config cfg2;
-        cfg2.bind_address = "127.0.0.1:14301";
+        cfg2.bind_address = "127.0.0.1:0";
         cfg2.data_dir = tmp2.path.string();
-        cfg2.bootstrap_peers = {"127.0.0.1:14300"};
         cfg2.sync_interval_seconds = 1;
         cfg2.max_peers = 32;
         cfg2.max_storage_bytes = 1;  // Effectively full (mdbx file > 1 byte)
@@ -1206,9 +1202,9 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
         PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-        PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
         pm1.start();
+        cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+        PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
         pm2.start();
 
         // Let nodes connect and sync (blob rejected, StorageFull sent)
@@ -1242,15 +1238,14 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
         Config cfg1;
-        cfg1.bind_address = "127.0.0.1:14308";
+        cfg1.bind_address = "127.0.0.1:0";
         cfg1.data_dir = tmp1.path.string();
         cfg1.sync_interval_seconds = 1;
         cfg1.max_peers = 32;
 
         Config cfg2;
-        cfg2.bind_address = "127.0.0.1:14309";
+        cfg2.bind_address = "127.0.0.1:0";
         cfg2.data_dir = tmp2.path.string();
-        cfg2.bootstrap_peers = {"127.0.0.1:14308"};
         cfg2.sync_interval_seconds = 1;
         cfg2.max_peers = 32;
         cfg2.max_storage_bytes = 1;
@@ -1276,9 +1271,9 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
         PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-        PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
         pm1.start();
+        cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+        PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
         pm2.start();
 
         // Let sync happen -- should complete without crash or hang
@@ -1309,15 +1304,14 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14320";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14321";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14320"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
 
@@ -1339,7 +1333,6 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
 
     // Metrics start at zero
     REQUIRE(pm1.metrics().peers_connected_total == 0);
@@ -1347,6 +1340,8 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     REQUIRE(pm1.metrics().ingests == 0);
 
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -1412,7 +1407,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14330";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
@@ -1421,9 +1416,8 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     cfg1.sync_cooldown_seconds = 0;             // Disable cooldown for rapid re-sync
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14331";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14330"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.rate_limit_bytes_per_sec = 1048576;
@@ -1449,9 +1443,9 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -1488,7 +1482,7 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14332", "rate_limit_bytes_per_sec": 0, "rate_limit_burst": 0})";
+        f << R"({"bind_address": "127.0.0.1:0", "rate_limit_bytes_per_sec": 0, "rate_limit_burst": 0})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -1511,7 +1505,7 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     // Update config file with rate limit enabled
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14332", "rate_limit_bytes_per_sec": 1048576, "rate_limit_burst": 10485760})";
+        f << R"({"bind_address": "127.0.0.1:0", "rate_limit_bytes_per_sec": 1048576, "rate_limit_burst": 10485760})";
     }
 
     // Trigger reload (simulates SIGHUP)
@@ -1536,7 +1530,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     auto client_id = NodeIdentity::load_or_generate(tmp_client.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14350";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;  // No sync interference
     cfg1.max_peers = 32;
@@ -1556,6 +1550,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     // Let the server start listening
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm1_port = pm1.listening_port();
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Create a signed blob with >100 bytes payload.
@@ -1571,7 +1566,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
             asio::ip::tcp::endpoint(
-                asio::ip::make_address("127.0.0.1"), 14350),
+                asio::ip::make_address("127.0.0.1"), pm1_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
 
@@ -1625,7 +1620,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14360";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;  // Node1 does not initiate sync
     cfg1.max_peers = 32;
@@ -1633,9 +1628,8 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14361";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14360"};
     cfg2.sync_interval_seconds = 1;   // Node2 syncs every 1s (hits cooldown)
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;   // No cooldown on node2
@@ -1652,9 +1646,9 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // First sync-on-connect succeeds (~3s with drain timeout).
@@ -1689,7 +1683,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     auto id2_ns_hex = to_hex(id2.namespace_id());
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14362";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;   // Node1 does not initiate sync
     cfg1.max_peers = 32;
@@ -1697,9 +1691,8 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14363";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14362"};
     cfg2.sync_interval_seconds = 1;    // Node2 syncs every 1s
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
@@ -1716,9 +1709,9 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // With closed mode (no PEX), sync cycle is ~3s (2s drain + 1s timer).
@@ -1746,16 +1739,15 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14364";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;    // Both nodes initiate sync every 1s
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;    // No cooldown -- only session limit applies
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14365";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14364"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
@@ -1781,9 +1773,9 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Run for enough time that both nodes attempt sync while the other is busy
@@ -1811,7 +1803,7 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14366";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
@@ -1820,9 +1812,8 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     cfg1.sync_cooldown_seconds = 0;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14367";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14366"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.rate_limit_bytes_per_sec = 100;
@@ -1848,9 +1839,9 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and attempt sync with tight byte budget
@@ -1887,16 +1878,15 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     auto id1_ns_hex = to_hex(std::span<const uint8_t, 32>(id1.namespace_id()));
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14340";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14341";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14340"};
     cfg2.sync_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
@@ -1923,9 +1913,9 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -1973,7 +1963,7 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14370", "full_resync_interval": 10, "cursor_stale_seconds": 3600})";
+        f << R"({"bind_address": "127.0.0.1:0", "full_resync_interval": 10, "cursor_stale_seconds": 3600})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -2006,7 +1996,7 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
     // Update config file with new cursor fields
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14370", "full_resync_interval": 5, "cursor_stale_seconds": 1800})";
+        f << R"({"bind_address": "127.0.0.1:0", "full_resync_interval": 5, "cursor_stale_seconds": 1800})";
     }
 
     // Trigger reload (simulates SIGHUP)
@@ -2042,16 +2032,15 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14390";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     // Node2 has a count quota of 0 (unlimited) but byte quota very small
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14391";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14390"};
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.namespace_quota_bytes = 0;
@@ -2075,9 +2064,9 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -2108,11 +2097,11 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14393"})";
+        f << R"({"bind_address": "127.0.0.1:0"})";
     }
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14393";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;
     cfg1.max_peers = 32;
@@ -2136,7 +2125,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     // Write updated config with count quota of 1
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:14393", "namespace_quota_count": 1})";
+        f << R"({"bind_address": "127.0.0.1:0", "namespace_quota_count": 1})";
     }
 
     // Trigger reload (simulates SIGHUP)
@@ -2205,16 +2194,15 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     auto id2 = NodeIdentity::load_or_generate(tmp2.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14400";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;
     cfg1.max_peers = 32;
     cfg1.inactivity_timeout_seconds = 120;
 
     Config cfg2;
-    cfg2.bind_address = "127.0.0.1:14401";
+    cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.bootstrap_peers = {"127.0.0.1:14400"};
     cfg2.sync_interval_seconds = 60;
     cfg2.max_peers = 32;
     cfg2.inactivity_timeout_seconds = 120;
@@ -2230,9 +2218,9 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
-
     pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();
 
     // Let nodes connect and sync
@@ -2255,7 +2243,7 @@ TEST_CASE("Inactivity timeout disabled when config is 0", "[peer][inactivity]") 
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
 
     Config cfg1;
-    cfg1.bind_address = "127.0.0.1:14402";
+    cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 60;
     cfg1.max_peers = 32;
@@ -2289,9 +2277,10 @@ TEST_CASE("connect_address is empty for inbound connections", "[peer][reconnect]
     asio::io_context ioc;
 
     asio::ip::tcp::acceptor acceptor(ioc,
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44230));
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto bound_port = acceptor.local_endpoint().port();
     asio::ip::tcp::socket sock(ioc);
-    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44230));
+    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), bound_port));
 
     auto conn = chromatindb::net::Connection::create_inbound(std::move(sock), id);
     REQUIRE(conn->connect_address().empty());
@@ -2302,9 +2291,10 @@ TEST_CASE("connect_address set on outbound connections", "[peer][reconnect]") {
     asio::io_context ioc;
 
     asio::ip::tcp::acceptor acceptor(ioc,
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44231));
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto bound_port = acceptor.local_endpoint().port();
     asio::ip::tcp::socket sock(ioc);
-    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 44231));
+    sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), bound_port));
 
     auto conn = chromatindb::net::Connection::create_outbound(std::move(sock), id);
     conn->set_connect_address("myhost:4200");
@@ -2318,7 +2308,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14400";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -2332,6 +2322,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
 
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(client_id, "request-id-test", 604800, now);
     auto encoded_payload = chromatindb::wire::encode_blob(blob);
@@ -2343,7 +2334,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14400),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
 
@@ -2383,7 +2374,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14410";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -2397,6 +2388,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
 
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(client_id, "pipeline-test-1", 604800, now);
     auto blob2 = make_signed_blob(client_id, "pipeline-test-2", 604800, now);
@@ -2410,7 +2402,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14410),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
 
@@ -2467,7 +2459,7 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14411";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -2480,6 +2472,8 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     pm.start();
 
     ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
 
     // Construct two ReadRequest payloads: [namespace_id:32][blob_hash:32]
     // Both use client_id's namespace, with different (nonexistent) blob hashes
@@ -2498,7 +2492,7 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14411),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
 
@@ -2557,7 +2551,7 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14420";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -2577,6 +2571,8 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     // Build ExistsRequest payloads: [namespace:32][blob_hash:32]
     // Payload 1: existing blob (namespace + actual blob hash)
     std::vector<uint8_t> exists_payload(64, 0);
@@ -2595,7 +2591,7 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14420),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -2653,7 +2649,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14421";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.max_storage_bytes = 1048576;  // 1 MiB, so response has non-zero max
 
@@ -2667,6 +2663,8 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<uint8_t> info_response;
@@ -2675,7 +2673,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14421),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -2794,7 +2792,7 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     auto owner3 = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14430";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -2815,6 +2813,8 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -2822,7 +2822,7 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14430),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -2889,7 +2889,7 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     auto owner = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14431";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
     cfg.max_storage_bytes = 1048576;
 
@@ -2909,6 +2909,8 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<uint8_t> status_response;
@@ -2917,7 +2919,7 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14431),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -2995,7 +2997,7 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     auto delegate1 = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14432";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3018,6 +3020,8 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3025,7 +3029,7 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14432),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3117,7 +3121,7 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     auto owner = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14440";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3137,6 +3141,8 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3144,7 +3150,7 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14440),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3247,7 +3253,7 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     auto owner = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14441";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3271,6 +3277,8 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3278,7 +3286,7 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14441),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3337,7 +3345,7 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
     auto delegate2 = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14442";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3362,6 +3370,8 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3369,7 +3379,7 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14442),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3444,7 +3454,7 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     auto owner = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14450";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3473,6 +3483,8 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3480,7 +3492,7 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14450),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3560,7 +3572,7 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     auto client_id = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14451";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3573,6 +3585,8 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3580,7 +3594,7 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14451),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
@@ -3646,7 +3660,7 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     auto owner = NodeIdentity::generate();
 
     Config cfg;
-    cfg.bind_address = "127.0.0.1:14452";
+    cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
 
     Storage store(tmp.path.string());
@@ -3680,6 +3694,8 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
 
+    auto pm_port = pm.listening_port();
+
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
@@ -3687,7 +3703,7 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         asio::ip::tcp::socket socket(ioc);
         auto [ec] = co_await socket.async_connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 14452),
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
             chromatindb::net::use_nothrow);
         if (ec) co_return;
         client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);

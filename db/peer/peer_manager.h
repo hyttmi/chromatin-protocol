@@ -111,6 +111,9 @@ public:
     /// Exit code from Server: 0 = clean shutdown, 1 = forced/timeout.
     int exit_code() const;
 
+    /// Actual listening port (after bind). Useful when bind_address uses port 0.
+    uint16_t listening_port() const { return server_.listening_port(); }
+
     /// Number of connected bootstrap peers.
     size_t bootstrap_peer_count() const;
 

@@ -37,7 +37,8 @@ void Server::start() {
     acceptor_.bind(endpoint.endpoint());
     acceptor_.listen();
 
-    spdlog::info("listening on {}", config_.bind_address);
+    auto bound = acceptor_.local_endpoint();
+    spdlog::info("listening on {}:{}", bound.address().to_string(), bound.port());
 
     // Start accept loop
     asio::co_spawn(ioc_, accept_loop(), asio::detached);

@@ -154,4 +154,10 @@ inline wire::BlobData make_delegate_blob(
     return blob;
 }
 
+/// Format a PeerManager's actual listening address as "127.0.0.1:PORT".
+/// Use after pm.start() to get the ephemeral port for bootstrap_peers.
+inline std::string listening_address(uint16_t port) {
+    return "127.0.0.1:" + std::to_string(port);
+}
+
 } // namespace chromatindb::test
