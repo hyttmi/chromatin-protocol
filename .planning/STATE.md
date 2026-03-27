@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.4.0
 milestone_name: Extended Query Suite
 status: unknown
-stopped_at: Completed 67-03-PLAN.md
-last_updated: "2026-03-27T03:19:41.408Z"
+stopped_at: Completed 67-02-PLAN.md
+last_updated: "2026-03-27T03:25:14.835Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -52,6 +52,7 @@ Plan: 3 of 3
 | Phase 66 P02 | 5min | 2 tasks | 2 files |
 | Phase 67 P01 | 4min | 2 tasks | 6 files |
 | Phase 67 P03 | 3min | 2 tasks | 2 files |
+| Phase 67 P02 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Recent decisions affecting current work:
 - [Phase 66]: BatchExistsRequest count=0 and count>1024 both trigger strike and connection drop
 - [Phase 67]: NodeInfoResponse supported[] backfilled with types 41-52 (Phases 65/66) alongside new 53-58
 - [Phase 67]: 9 message pairs documented in PROTOCOL.md (HealthRequest dropped in Phase 65)
+- [Phase 67]: TimeRange scans seq_map from seq 0 with 10k entry limit; BatchRead includes blob that crosses size cap; PeerInfo uses is_trusted_address() for trust gating
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-27T03:19:41.405Z
-Stopped at: Completed 67-03-PLAN.md
+Last session: 2026-03-27T03:25:14.833Z
+Stopped at: Completed 67-02-PLAN.md
 Resume file: None

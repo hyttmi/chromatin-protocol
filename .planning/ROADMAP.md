@@ -121,7 +121,7 @@ Full details: [milestones/v1.3.0-ROADMAP.md](milestones/v1.3.0-ROADMAP.md)
 
 - [x] **Phase 65: Node-Level Queries** - NamespaceList, StorageStatus, NamespaceStats (HealthRequest cut -- NodeInfo suffices) (completed 2026-03-26)
 - [x] **Phase 66: Blob-Level Queries** - MetadataRequest, BatchExists, DelegationList with minor new Storage methods (completed 2026-03-26)
-- [ ] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md
+- [x] **Phase 67: Batch/Range Queries & Integration** - BatchRead, PeerInfo, TimeRange + relay filter + NodeInfo update + PROTOCOL.md (completed 2026-03-27)
 
 ## Phase Details
 
@@ -170,7 +170,7 @@ Plans:
 
 Plans:
 - [x] 67-01-PLAN.md — Schema types 53-58, relay filter update (38 types), NodeInfoResponse supported[] update
-- [ ] 67-02-PLAN.md — BatchReadRequest, PeerInfoRequest, TimeRangeRequest handlers with integration tests
+- [x] 67-02-PLAN.md — BatchReadRequest, PeerInfoRequest, TimeRangeRequest handlers with integration tests
 - [x] 67-03-PLAN.md — PROTOCOL.md v1.4.0 documentation, requirements completion
 
 ## Progress
@@ -181,4 +181,4 @@ Plans:
 |-------|----------------|--------|-----------|
 | 65. Node-Level Queries | 2/2 | Complete    | 2026-03-26 |
 | 66. Blob-Level Queries | 2/2 | Complete    | 2026-03-26 |
-| 67. Batch/Range Queries & Integration | 2/3 | In Progress|  |
+| 67. Batch/Range Queries & Integration | 3/3 | Complete   | 2026-03-27 |
