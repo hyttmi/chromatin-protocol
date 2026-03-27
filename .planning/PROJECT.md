@@ -133,15 +133,15 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-- [ ] TimeRange query — blobs in a namespace within a timestamp window
+- [x] TimeRange query — blobs in a namespace within a timestamp window — Validated in Phase 67
 - [x] BlobMetadata query — size, timestamp, TTL, seq_num, signer without payload — Validated in Phase 66
 - [x] BatchExists query — check existence of multiple blob hashes in one request — Validated in Phase 66
-- [ ] BatchRead query — fetch multiple small blobs in one request
+- [x] BatchRead query — fetch multiple small blobs in one request — Validated in Phase 67
 - [x] DelegationList query — list active delegations for a namespace — Validated in Phase 66
 - [x] NamespaceList query — list all namespaces stored on the node — Validated in Phase 65
 - [x] NamespaceStats query — per-namespace count, bytes, quota usage — Validated in Phase 65
 - [x] Metadata query — blob metadata without data transfer — Validated in Phase 66
-- [ ] PeerInfo query — detailed peer connection information
+- [x] PeerInfo query — detailed peer connection information — Validated in Phase 67
 - [x] Health query — DROPPED: NodeInfoResponse (Phase 63) already serves as health check — Phase 65
 - [x] StorageStatus query — disk usage, quota headroom, tombstone counts — Validated in Phase 65
 
@@ -162,9 +162,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.3.0 with ~24,500 LOC C++20, 551+ unit tests, 54 Docker integration tests. Phase 66 complete — blob-level queries (MetadataRequest, BatchExistsRequest, DelegationListRequest) with 6 new tests.
-Built across 24 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d).
-14 milestones, 66 phases, 133 plans, 270 requirements total.
+Shipped v1.3.0 with ~24,500 LOC C++20, 551+ unit tests, 54 Docker integration tests. Phase 67 complete — batch/range queries (BatchReadRequest, PeerInfoRequest, TimeRangeRequest), protocol docs for all 10 v1.4.0 types, all requirements closed. v1.4.0 milestone complete.
+Built across 25 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d).
+14 milestones, 67 phases, 136 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -277,6 +277,10 @@ Three-layer architecture (building bottom-up):
 | ExistsRequest via has_blob() key-only lookup | 33-byte response [exists:1][hash:32]; no blob data read, tombstones return false | ✓ Good — Phase 63 |
 | NodeInfoResponse binary wire format | Length-prefixed strings + big-endian integers; 20 client-facing supported types | ✓ Good — Phase 63 |
 | supported_types for capability discovery | NodeInfoResponse lists handled message types; SDK feature-detects without version parsing | ✓ Good — Phase 63 |
+| BatchReadRequest with size cap | Multi-blob fetch with configurable byte cap + truncation flag; prevents unbounded responses | ✓ Good — Phase 67 |
+| PeerInfoRequest trust-gated | Trusted peers get full per-peer detail; untrusted get 8-byte summary only | ✓ Good — Phase 67 |
+| TimeRangeRequest with scan limit | get_blob_refs_since + timestamp filter + 100-result cap; prevents full-namespace scans | ✓ Good — Phase 67 |
+| NodeInfoResponse expanded to 38 types | supported_types[] advertises all 38 client-facing message types after v1.4.0 additions | ✓ Good — Phase 67 |
 
 ## Evolution
 
@@ -296,4 +300,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after Phase 66 complete*
+*Last updated: 2026-03-27 after Phase 67 complete (v1.4.0 milestone complete)*
