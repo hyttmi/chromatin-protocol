@@ -10,6 +10,15 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v1.5.0 Documentation & Distribution
+
+**Goal:** Complete documentation refresh and production distribution package.
+
+**Target features:**
+- README.md updated with all 58 message types and current architecture
+- PROTOCOL.md updated with complete wire format documentation
+- dist/ production kit: systemd units, default configs, logrotate, tmpfiles.d, sysusers.d, install script
+
 ## Latest Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
 
 **Delivered:** 9 new query/response message type pairs (18 types, enums 41-58) expanding the client-facing API. HealthRequest was dropped (NodeInfoResponse already serves as health check).
@@ -297,4 +306,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-27 after v1.4.0 milestone*
+*Last updated: 2026-03-28 after v1.5.0 milestone start*
