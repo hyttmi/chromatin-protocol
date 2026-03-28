@@ -636,8 +636,8 @@ These 10 request/response pairs (types 41-58) were added in v1.4.0. All use the 
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0 | 1 | has_more | 0x00 = last page, 0x01 = more namespaces available |
-| 1 | 4 | count | Number of entries (big-endian) |
+| 0 | 4 | count | Number of entries (big-endian) |
+| 4 | 1 | has_more | 0x00 = last page, 0x01 = more namespaces available |
 | 5+ | N*40 | entries | Per-entry: [namespace_id:32][blob_count:8 big-endian] |
 
 ### StorageStatusRequest (Type 43) / StorageStatusResponse (Type 44)
@@ -654,9 +654,8 @@ These 10 request/response pairs (types 41-58) were added in v1.4.0. All use the 
 | 8 | 8 | max_storage_bytes | Configured storage limit (big-endian) |
 | 16 | 8 | tombstone_count | Total tombstones across all namespaces (big-endian) |
 | 24 | 4 | namespace_count | Number of namespaces stored (big-endian) |
-| 28 | 4 | total_blobs | Total blobs across all namespaces (big-endian) |
-| 32 | 8 | mmap_bytes | MDBX mmap file geometry size (big-endian) |
-| 40 | 4 | _padding | Reserved (zero) |
+| 28 | 8 | total_blobs | Total blobs across all namespaces (big-endian) |
+| 36 | 8 | mmap_bytes | MDBX mmap file geometry size (big-endian) |
 
 ### NamespaceStatsRequest (Type 45) / NamespaceStatsResponse (Type 46)
 
