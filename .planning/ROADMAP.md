@@ -162,11 +162,11 @@ Plans:
   3. README.md includes dist/ deployment instructions referencing the install script and systemd units
   4. PROTOCOL.md documents all 58 message types with verified byte-level wire formats matching the encoder source code
   5. db/README.md reflects current state (version, test count, architecture)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 69-01: TBD
-- [ ] 69-02: TBD
+- [ ] 69-01-PLAN.md — README.md, db/README.md, and CMakeLists.txt refresh to v1.5.0
+- [ ] 69-02-PLAN.md — PROTOCOL.md byte-level verification against encoder source
 
 ## Progress
 
@@ -176,4 +176,4 @@ Phases execute in numeric order: 68 -> 69
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 68. Production Distribution Kit | 2/2 | Complete    | 2026-03-28 |
-| 69. Documentation Refresh | 0/? | Not started | - |
+| 69. Documentation Refresh | 0/2 | Not started | - |
