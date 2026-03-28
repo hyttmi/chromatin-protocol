@@ -146,11 +146,11 @@ Full details: [milestones/v1.4.0-ROADMAP.md](milestones/v1.4.0-ROADMAP.md)
   3. `systemctl start chromatindb-relay` launches the relay daemon with correct dependency ordering (After=chromatindb.service)
   4. Running `dist/install.sh` a second time is safe -- config files are preserved, binaries and service files are updated
   5. Both systemd units include security hardening directives (ProtectSystem=strict, NoNewPrivileges=yes, MemoryDenyWriteExecute=yes)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 68-01: TBD
-- [ ] 68-02: TBD
+- [ ] 68-01-PLAN.md — Static distribution artifacts (systemd units, configs, sysusers.d, tmpfiles.d)
+- [ ] 68-02-PLAN.md — Install script with install and uninstall modes
 
 ### Phase 69: Documentation Refresh
 **Goal**: All project documentation accurately reflects the current v1.5.0 state including all 58 message types, relay deployment, and dist/ installation
@@ -175,5 +175,5 @@ Phases execute in numeric order: 68 -> 69
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 68. Production Distribution Kit | 0/? | Not started | - |
+| 68. Production Distribution Kit | 0/2 | Not started | - |
 | 69. Documentation Refresh | 0/? | Not started | - |
