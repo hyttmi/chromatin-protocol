@@ -52,24 +52,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DIST-01 | — | Pending |
-| DIST-02 | — | Pending |
-| DIST-03 | — | Pending |
-| DIST-04 | — | Pending |
-| DIST-05 | — | Pending |
-| DIST-06 | — | Pending |
-| DIST-07 | — | Pending |
-| DOCS-01 | — | Pending |
-| DOCS-02 | — | Pending |
-| DOCS-03 | — | Pending |
-| DOCS-04 | — | Pending |
-| DOCS-05 | — | Pending |
+| DIST-01 | Phase 68 | Pending |
+| DIST-02 | Phase 68 | Pending |
+| DIST-03 | Phase 68 | Pending |
+| DIST-04 | Phase 68 | Pending |
+| DIST-05 | Phase 68 | Pending |
+| DIST-06 | Phase 68 | Pending |
+| DIST-07 | Phase 68 | Pending |
+| DOCS-01 | Phase 69 | Pending |
+| DOCS-02 | Phase 69 | Pending |
+| DOCS-03 | Phase 69 | Pending |
+| DOCS-04 | Phase 69 | Pending |
+| DOCS-05 | Phase 69 | Pending |
 
 **Coverage:**
 - v1.5.0 requirements: 12 total
-- Mapped to phases: 0
-- Unmapped: 12 ⚠️
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-28*
-*Last updated: 2026-03-28 after initial definition*
+*Last updated: 2026-03-28 after roadmap creation*
