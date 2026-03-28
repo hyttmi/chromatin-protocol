@@ -61,7 +61,7 @@ The codebase is clean under all three sanitizers.
 
 ### Unit Tests
 
-551 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
+567 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
 
 ```bash
 cd build
@@ -70,7 +70,7 @@ ctest --output-on-failure
 
 ### Docker Integration Tests
 
-54 integration tests across 12 categories running real multi-node topologies in Docker containers:
+49 integration test scripts across 12 categories running real multi-node topologies in Docker containers:
 
 ```bash
 cd deploy
@@ -141,7 +141,10 @@ Create a JSON config file and pass it with `--config`:
   "log_max_size_mb": 10,
   "log_max_files": 3,
   "log_format": "text",
-  "inactivity_timeout_seconds": 120
+  "inactivity_timeout_seconds": 120,
+  "expiry_scan_interval_seconds": 60,
+  "compaction_interval_hours": 6,
+  "uds_path": ""
 }
 ```
 
@@ -170,6 +173,9 @@ Create a JSON config file and pass it with `--config`:
 - **log_max_files** -- maximum number of rotated log files to retain (default: `3`)
 - **log_format** -- log output format: `"text"` for human-readable or `"json"` for structured machine-parseable output (default: `"text"`)
 - **inactivity_timeout_seconds** -- disconnect peers that send no messages within this many seconds; set to `0` to disable (default: `120`, minimum `30` when enabled)
+- **expiry_scan_interval_seconds** -- interval between periodic expired-blob scan passes in seconds; minimum is 10 seconds (default: `60`)
+- **compaction_interval_hours** -- interval between sync cursor compaction passes in hours; set to `0` to disable (default: `6`, minimum `1` when enabled)
+- **uds_path** -- path for Unix domain socket listener; relay connects via this path for trusted local communication (default: `""` = disabled)
 
 ## Signals
 
@@ -189,7 +195,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 40 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, and node capability discovery. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 58 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## Scenarios
 
@@ -303,6 +309,105 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 }
 ```
 
+## Relay
+
+chromatindb includes a relay binary (`chromatindb_relay`) that acts as a security boundary between untrusted clients and the node.
+
+### Architecture
+
+```
+Client (TCP, PQ handshake) --> Relay --> (UDS, TrustedHello) --> Node
+```
+
+The relay listens on TCP (default port 4201), performs a full PQ handshake (ML-KEM-1024 + ML-DSA-87) with each client, and forwards allowed messages to the node via Unix domain socket. The relay has its own ML-DSA-87 identity, separate from the node.
+
+### Message Filter
+
+The relay uses a default-deny message filter. Only 38 client-facing message types are allowed through:
+- **Storage:** Data, WriteAck, Delete, DeleteAck
+- **Queries:** ReadRequest/Response, ListRequest/Response, StatsRequest/Response, ExistsRequest/Response, NodeInfoRequest/Response
+- **Pub/Sub:** Subscribe, Unsubscribe, Notification
+- **Keepalive:** Ping, Pong, Goodbye
+- **v1.4.0 Extensions:** All 18 query types (NamespaceList, StorageStatus, NamespaceStats, Metadata, BatchExists, DelegationList, BatchRead, PeerInfo, TimeRange -- request and response)
+
+Blocked types include all sync, PEX, handshake, and reconciliation messages.
+
+### Relay Configuration
+
+```json
+{
+  "bind_address": "0.0.0.0",
+  "bind_port": 4201,
+  "uds_path": "/run/chromatindb/node.sock",
+  "identity_key_path": "/etc/chromatindb/relay.key",
+  "log_level": "info",
+  "log_file": "/var/log/chromatindb/relay.log"
+}
+```
+
+- **bind_address** -- address to listen on (default: `0.0.0.0`)
+- **bind_port** -- TCP port for client connections (default: `4201`)
+- **uds_path** -- path to the node's Unix domain socket
+- **identity_key_path** -- path to the relay's ML-DSA-87 private key
+- **log_level** -- log verbosity (default: `info`)
+- **log_file** -- path for log output (default: `""` = console only)
+
+## Deployment
+
+chromatindb includes a production deployment kit in the `dist/` directory for bare-metal Linux systems.
+
+### Quick Start
+
+Build both binaries, then run the install script:
+
+```bash
+mkdir build && cd build
+cmake ..
+cmake --build .
+cd ..
+sudo dist/install.sh build/db/chromatindb build/relay/chromatindb_relay
+```
+
+The install script creates a `chromatindb` system user and group, installs binaries to `/usr/local/bin`, copies default configs to `/etc/chromatindb`, installs systemd units, creates data and log directories, and generates identity keys for both node and relay.
+
+### Start Services
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now chromatindb
+sudo systemctl enable --now chromatindb-relay
+```
+
+### FHS Paths
+
+| Artifact | Location |
+|----------|----------|
+| Node binary | `/usr/local/bin/chromatindb` |
+| Relay binary | `/usr/local/bin/chromatindb_relay` |
+| Node config | `/etc/chromatindb/node.json` |
+| Relay config | `/etc/chromatindb/relay.json` |
+| Data directory | `/var/lib/chromatindb` |
+| Log directory | `/var/log/chromatindb` |
+| Runtime (UDS) | `/run/chromatindb` |
+| Node systemd unit | `/usr/lib/systemd/system/chromatindb.service` |
+| Relay systemd unit | `/usr/lib/systemd/system/chromatindb-relay.service` |
+
+### Security Hardening
+
+Both systemd units include hardening directives: `ProtectSystem=strict`, `NoNewPrivileges=yes`, `MemoryDenyWriteExecute=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `ProtectHome=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `ProtectClock=yes`, `ProtectHostname=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes`, `RestrictNamespaces=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`.
+
+### Reinstall / Upgrade
+
+Running `install.sh` again is safe -- config files are preserved (not overwritten), binaries and service files are updated. Keys are only generated if missing.
+
+### Uninstall
+
+```bash
+sudo dist/install.sh --uninstall
+```
+
+Stops and disables services, removes binaries, systemd units, and sysusers/tmpfiles configs. Data and config directories are preserved.
+
 ## Features
 
 **Signed Blob Storage** -- Every blob is cryptographically signed by its author using ML-DSA-87. The node verifies the signature against the blob's namespace before accepting it. Blobs are content-addressed by SHA3-256 hash and stored in an ACID key-value store (libmdbx).
@@ -364,6 +469,24 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 **Blob Existence Check** -- Clients send an ExistsRequest with a namespace and blob hash to check whether a blob exists without transferring its data. The node responds with a single-byte existence flag and the echoed blob hash. Tombstoned blobs are reported as not found.
 
 **Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version, git hash, uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. SDKs use the supported types list for feature detection.
+
+**Namespace Enumeration** -- Clients list all namespaces stored on a node via NamespaceListRequest. Paginated response with after-cursor and configurable limit (max 1000 per page). Each entry includes the namespace ID and blob count.
+
+**Storage Status Query** -- Clients query global storage status via StorageStatusRequest. Response includes total bytes used, max storage bytes, tombstone count, namespace count, and blob count.
+
+**Per-Namespace Stats** -- Clients query detailed per-namespace counters via NamespaceStatsRequest. Response includes blob count, total bytes, latest sequence number, and per-namespace quota limits.
+
+**Blob Metadata Query** -- Clients fetch blob metadata without transferring the blob payload via MetadataRequest. Response includes blob hash, timestamp, TTL, payload size, sequence number, and author public key hash.
+
+**Batch Existence Check** -- Clients check existence of multiple blobs in a single request via BatchExistsRequest. Response is a compact boolean array (one byte per blob). Maximum 256 hashes per request.
+
+**Delegation List** -- Clients list all active delegations for a namespace via DelegationListRequest. Response includes public key hash and delegation blob hash pairs.
+
+**Batch Blob Fetch** -- Clients fetch multiple blobs in a single request via BatchReadRequest. Size-capped response with per-blob found/not-found status. A truncation flag indicates when results were limited by the byte cap.
+
+**Peer Info Query** -- Clients query connected peer information via PeerInfoRequest. Trust-gated response: untrusted clients receive an 8-byte summary (peer count only), trusted clients receive full peer details including addresses, namespaces, and connection state.
+
+**Time-Range Query** -- Clients fetch blobs within a timestamp range via TimeRangeRequest. Response includes blob hash, sequence number, and timestamp for each matching entry. Capped at 100 results with truncation flag.
 
 ## License
 
