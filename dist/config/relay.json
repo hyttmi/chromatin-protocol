@@ -1,0 +1,5 @@
+{
+  "uds_path": "/run/chromatindb/node.sock",
+  "identity_key_path": "/var/lib/chromatindb/relay.key",
+  "log_file": "/var/log/chromatindb/relay.log"
+}
