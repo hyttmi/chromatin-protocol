@@ -1,5 +1,18 @@
 # Milestones
 
+## v1.5.0 Documentation & Distribution (Shipped: 2026-03-28)
+
+**Phases completed:** 2 phases, 4 plans, 8 tasks
+
+**Key accomplishments:**
+
+- Six dist/ files for bare-metal deployment: hardened systemd units, minimal JSON configs, sysusers.d user/group, tmpfiles.d directory structure
+- POSIX install.sh with install/uninstall modes, FHS deployment of binaries + configs + systemd units, identity key generation, and config preservation on reinstall
+- Version bump to v1.5.0 across CMakeLists.txt and README.md, plus full db/README.md refresh with relay architecture, deployment kit, 58 message types, and 9 v1.4.0 query features
+- Verified all 58 message types in PROTOCOL.md against peer_manager.cpp encoder source, fixed 2 byte-offset discrepancies in NamespaceListResponse and StorageStatusResponse
+
+---
+
 ## v1.4.0 Extended Query Suite (Shipped: 2026-03-27)
 
 **Phases completed:** 3 phases, 7 plans, 14 tasks

@@ -2,6 +2,41 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v1.5.0 — Documentation & Distribution
+
+**Shipped:** 2026-03-28
+**Phases:** 2 | **Plans:** 4 | **Sessions:** ~1
+
+### What Was Built
+- dist/ production deployment kit: hardened systemd units (ProtectSystem=strict, NoNewPrivileges=yes), default JSON configs, sysusers.d/tmpfiles.d, POSIX install.sh with install/uninstall modes
+- Full documentation refresh: CMakeLists.txt version bump 1.1.0→1.5.0, README.md v1.5.0, db/README.md with relay section + deployment section + 58 message types + 26 config fields
+- PROTOCOL.md systematic verification against peer_manager.cpp encoder source — found and fixed 2 real byte-offset discrepancies (NamespaceListResponse field order, StorageStatusResponse field sizes)
+
+### What Worked
+- Smallest milestone (2 phases, 4 plans) — completed in a single session with auto-advance
+- Research phase correctly identified all stale documentation values before planning — zero rework during execution
+- Parallel execution of plans 69-01 and 69-02 (no file overlap) saved significant time
+- PROTOCOL.md verification caught real bugs: NamespaceListResponse had field order swapped, StorageStatusResponse had wrong field size (4 vs 8 bytes for total_blobs)
+- All phase verifications passed first time
+
+### What Was Inefficient
+- Nothing significant — this was a clean docs-only milestone with no surprises
+
+### Patterns Established
+- Documentation verification against source code as a formal phase — catches drift that accumulates over multiple milestones
+- dist/ decoupled from CMake build system (no install() targets, no CPack) — simpler, more portable
+
+### Key Lessons
+- Protocol documentation drifts even when updated per-phase — systematic source comparison is the only reliable verification
+- Small focused milestones (2 phases) execute cleanly in a single auto-advance chain
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~1
+- Notable: Second-smallest milestone by phase count; auto-advance chain completed the entire milestone in one session
+
+---
+
 ## Milestone: v1.4.0 — Extended Query Suite
 
 **Shipped:** 2026-03-27
@@ -523,6 +558,8 @@
 | v1.1.0 | ~1 | 4 | Fastest milestone — full auto-advance chain, operational polish + UDS |
 | v1.2.0 | ~1 | 4 | Relay architecture — PQ-authenticated gateway, default-deny filter, Zero Duplication Policy |
 | v1.3.0 | ~2 | 4 | Concurrent dispatch foundation — request_id, ExistsRequest, NodeInfoRequest, IO-thread transfer |
+| v1.4.0 | ~2 | 3 | 18 new query types, relay filter expansion, PROTOCOL.md update |
+| v1.5.0 | ~1 | 2 | Docs-only — dist/ kit, full doc refresh, PROTOCOL.md source verification |
 
 ### Cumulative Quality
 
@@ -541,6 +578,8 @@
 | v1.1.0 | 500+ | 23,852 | ~95 | 12/12 |
 | v1.2.0 | 530+ | 24,000+ | ~100 | 16/16 |
 | v1.3.0 | 551+ | 27,469 | ~105 | 12/12 |
+| v1.4.0 | 560+ | ~28,000 | ~110 | 14/14 |
+| v1.5.0 | 567 | ~29,600 | ~110 | 12/12 |
 
 ### Top Lessons (Verified Across Milestones)
 

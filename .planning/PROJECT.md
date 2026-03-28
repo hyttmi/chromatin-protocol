@@ -10,16 +10,11 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v1.5.0 Documentation & Distribution
+## Latest Milestone: v1.5.0 Documentation & Distribution (SHIPPED 2026-03-28)
 
-**Goal:** Complete documentation refresh and production distribution package.
+**Delivered:** Production deployment kit (install.sh, systemd units, configs) and full documentation refresh (README, PROTOCOL.md verified against source with 2 byte-offset fixes).
 
-**Target features:**
-- ✓ README.md updated with all 58 message types and current architecture — Phase 69
-- ✓ PROTOCOL.md verified with complete wire format documentation (2 byte-offset fixes) — Phase 69
-- ✓ dist/ production kit: systemd units, default configs, tmpfiles.d, sysusers.d, install script — Phase 68
-
-## Latest Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
+## Previous Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
 
 **Delivered:** 9 new query/response message type pairs (18 types, enums 41-58) expanding the client-facing API. HealthRequest was dropped (NodeInfoResponse already serves as health check).
 
@@ -160,6 +155,10 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ NodeInfoResponse advertises all 38 client-facing types — v1.4.0 Phase 67
 - ✓ PROTOCOL.md documents all v1.4.0 wire formats — v1.4.0 Phase 67
 
+- ✓ dist/ production deployment kit (systemd units, configs, sysusers.d, tmpfiles.d, install.sh) — v1.5.0 Phase 68
+- ✓ README.md updated with v1.5.0 state, relay section, deployment section, all 58 message types — v1.5.0 Phase 69
+- ✓ PROTOCOL.md verified against encoder source for all 58 message types with byte-level accuracy — v1.5.0 Phase 69
+
 ### Future
 
 - Python SDK for connecting to relay
@@ -168,9 +167,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.4.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Phase 68-69 complete — production distribution kit and documentation refresh. v1.5.0 nearing completion.
-Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (in progress).
-14 milestones, 69 phases, 140 plans, 270 requirements total.
+Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete.
+Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d).
+15 milestones, 69 phases, 140 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -287,6 +286,9 @@ Three-layer architecture (building bottom-up):
 | PeerInfoRequest trust-gated | Trusted peers get full per-peer detail; untrusted get 8-byte summary only | ✓ Good — Phase 67 |
 | TimeRangeRequest with scan limit | get_blob_refs_since + timestamp filter + 100-result cap; prevents full-namespace scans | ✓ Good — Phase 67 |
 | NodeInfoResponse expanded to 38 types | supported_types[] advertises all 38 client-facing message types after v1.4.0 additions | ✓ Good — Phase 67 |
+| dist/ decoupled from CMake | No install() targets, no CPack; install.sh takes binary paths directly | ✓ Good — Phase 68 |
+| No logrotate for spdlog-managed paths | spdlog handles rotation internally; external logrotate causes log loss with copytruncate | ✓ Good — Phase 68 |
+| PROTOCOL.md byte-level source verification | Systematic comparison against peer_manager.cpp encoder; found 2 real discrepancies | ✓ Good — Phase 69 |
 
 ## Evolution
 
@@ -306,4 +308,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-28 after Phase 69 completion*
+*Last updated: 2026-03-28 after v1.5.0 milestone*
