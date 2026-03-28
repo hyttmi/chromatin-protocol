@@ -132,7 +132,7 @@ Full details: [milestones/v1.4.0-ROADMAP.md](milestones/v1.4.0-ROADMAP.md)
 **Milestone Goal:** Complete documentation refresh and production distribution package. Zero C++ code changes.
 
 - [x] **Phase 68: Production Distribution Kit** - dist/ directory with systemd units, default configs, sysusers.d, tmpfiles.d, and install script for bare-metal deployment (completed 2026-03-28)
-- [ ] **Phase 69: Documentation Refresh** - README.md, db/README.md, and PROTOCOL.md updated to accurately reflect v1.5.0 state with all 58 message types
+- [x] **Phase 69: Documentation Refresh** - README.md, db/README.md, and PROTOCOL.md updated to accurately reflect v1.5.0 state with all 58 message types (completed 2026-03-28)
 
 ## Phase Details
 
@@ -166,7 +166,7 @@ Plans:
 
 Plans:
 - [x] 69-01-PLAN.md — README.md, db/README.md, and CMakeLists.txt refresh to v1.5.0
-- [ ] 69-02-PLAN.md — PROTOCOL.md byte-level verification against encoder source
+- [x] 69-02-PLAN.md — PROTOCOL.md byte-level verification against encoder source
 
 ## Progress
 
@@ -176,4 +176,4 @@ Phases execute in numeric order: 68 -> 69
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 68. Production Distribution Kit | 2/2 | Complete    | 2026-03-28 |
-| 69. Documentation Refresh | 1/2 | In Progress|  |
+| 69. Documentation Refresh | 2/2 | Complete   | 2026-03-28 |

@@ -22,7 +22,7 @@ Requirements for v1.5.0 Documentation & Distribution. Each maps to roadmap phase
 - [x] **DOCS-01**: README.md updated with current test/LOC/type counts and v1.4.0 features
 - [x] **DOCS-02**: README.md includes relay deployment section
 - [x] **DOCS-03**: README.md includes dist/ deployment instructions
-- [ ] **DOCS-04**: PROTOCOL.md verified against source for all 58 message types with correct byte offsets
+- [x] **DOCS-04**: PROTOCOL.md verified against source for all 58 message types with correct byte offsets
 - [x] **DOCS-05**: db/README.md updated with current state
 
 ## Future Requirements
@@ -62,7 +62,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOCS-01 | Phase 69 | Complete |
 | DOCS-02 | Phase 69 | Complete |
 | DOCS-03 | Phase 69 | Complete |
-| DOCS-04 | Phase 69 | Pending |
+| DOCS-04 | Phase 69 | Complete |
 | DOCS-05 | Phase 69 | Complete |
 
 **Coverage:**
