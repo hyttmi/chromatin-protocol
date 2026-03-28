@@ -1,208 +1,268 @@
-# Pitfalls Research: v1.4.0 Extended Query Suite
+# Pitfalls Research
 
-**Domain:** Adding batch queries, time-range queries, health endpoints, delegation/namespace enumeration, and metadata inspection to a coroutine-based C++20 storage node
-**Researched:** 2026-03-26
-**Confidence:** HIGH (derived from codebase analysis of 13 shipped milestones, proven patterns, and known failure modes)
+**Domain:** Production distribution packaging and documentation refresh for existing C++ daemon
+**Researched:** 2026-03-28
+**Confidence:** HIGH
 
 ## Critical Pitfalls
 
-### Pitfall 1: Batch Response Frame Size Exceeding MAX_FRAME_SIZE
+### Pitfall 1: spdlog Rotating Sink Conflicts with External logrotate
 
 **What goes wrong:**
-BatchRead returns multiple full blobs in a single response message. If the client requests N blobs and each is up to 100 MiB, the response payload can exceed MAX_FRAME_SIZE (110 MiB). The `send_encrypted` call succeeds at the sender but `recv_raw` at the receiver sees `len > MAX_FRAME_SIZE` and drops the frame as invalid, causing a silent response loss or connection teardown.
+chromatindb uses spdlog's `rotating_file_sink_mt`, which performs its own rotation internally (rename old file, open new one). If an external logrotate config is also configured for the same log path, the two rotation mechanisms fight each other. logrotate may rename or truncate a file that spdlog is actively writing to with its own rotation logic, causing lost log entries, duplicate rotation, or spdlog writing to a stale file descriptor. Using `copytruncate` does not fully fix this -- there is a documented brief window between the copy and truncate operations where log entries can be lost, and spdlog's internal rotation counter becomes confused about the file size (it tracks bytes written, not actual file size after truncation).
 
 **Why it happens:**
-Existing single-item queries (ReadResponse, ExistsResponse, StatsResponse) produce small, bounded responses. BatchRead is the first query type where the response size scales with request count AND blob sizes. Developers naturally aggregate results into a single response vector without checking total size against the protocol's frame limit.
+Developers see "log file" in config and assume external logrotate is needed, not realizing spdlog already handles rotation. The `log_max_size_mb` and `log_max_files` config options already provide full rotation control. spdlog issue #3464 confirms that the library opens files in append mode and does not support external rotation signals -- it holds the fd open for the lifetime of the sink.
 
 **How to avoid:**
-1. Cap `max_batch_size` at a low, safe value (e.g., 64 items for BatchExists, 16 for BatchRead).
-2. For BatchRead, enforce a cumulative response size cap well below MAX_FRAME_SIZE (e.g., 100 MiB). Stop adding blobs to the response once the cap would be exceeded, and set a `partial` flag in the response.
-3. Alternative design: return blob metadata (hash + size) for oversized items instead of inline data, letting the client fall back to individual ReadRequests for large blobs.
-4. Validate: construct a worst-case response in tests (max items * max individual size) and assert it fits within MAX_FRAME_SIZE.
+Do NOT ship a logrotate config for spdlog-managed log files. Document this explicitly in both the default config comments and the README: "chromatindb manages its own log rotation via spdlog. Do not configure external logrotate for the `log_file` path." If operators need logrotate for specific compliance reasons, they must set `log_file` to empty (console-only mode) and redirect stderr via systemd's `StandardOutput=journal`, then manage journal rotation via journald.conf.
 
 **Warning signs:**
-- BatchRead tests only use small blobs (< 1 KiB) and never hit the frame limit.
-- No test that sends a batch request resulting in > 100 MiB aggregate response.
-- Response builder does not track cumulative size during iteration.
+- Log files appearing with unexpected suffixes (both spdlog's `.1`, `.2` and logrotate's `.1.gz`)
+- Log gaps during rotation windows
+- More rotated files on disk than `log_max_files` would produce
 
 **Phase to address:**
-BatchRead phase -- must be designed into the wire format from the start. The response format needs a `partial` indicator and the handler needs cumulative size tracking.
+Distribution packaging phase. Do not ship a logrotate config for the node or relay log paths. Document spdlog's built-in rotation as the intended mechanism.
 
 ---
 
-### Pitfall 2: AEAD Nonce Desync from Concurrent Batch/Health Responses
+### Pitfall 2: Wrong systemd Service Type Causing False Start/Stop Detection
 
 **What goes wrong:**
-`send_counter_` in Connection is a non-atomic `uint64_t` incremented inside `send_encrypted()`. The existing dispatch model is safe because all `send_message()` calls happen on the IO thread (coroutine-IO handlers run on `ioc_`, and offload-transfer handlers do `co_await asio::post(ioc_)` before sending). But if a new handler (e.g., Health or BatchRead) is mistakenly dispatched without the IO-thread transfer pattern, or if a handler spawns a detached coroutine that sends a response while another handler's coroutine also sends on the same connection, the nonce counter races and the remote side fails to decrypt subsequent messages.
-
-This is the exact same bug class as the PEX SIGSEGV (v1.0.0 Phase 50) where a detached SyncRejected coroutine raced with the sync initiator's writes.
+chromatindb is a foreground daemon (`main.cpp` calls `ioc.run()` which blocks until shutdown). Using `Type=forking` would cause systemd to think the process died immediately. Using `Type=notify` without calling `sd_notify("READY=1")` would cause systemd to time out waiting for readiness notification, then kill the service.
 
 **Why it happens:**
-With 11 new message types being added, each requiring a co_spawn handler, it is easy to:
-- Forget the `co_await asio::post(ioc_)` transfer after an offload.
-- Accidentally create a handler that does thread pool work and then sends without transferring back.
-- Copy-paste a Data/Delete handler pattern but omit the transfer step because the new handler "doesn't need offload" (but later adds one).
+Developers copy service files from other projects that use `Type=forking` (for old-style daemons that fork to background) or `Type=notify` (for services that have sd_notify integration). chromatindb has neither -- it runs in the foreground and exits the main thread only on SIGTERM/SIGINT via asio::signal_set.
 
 **How to avoid:**
-1. Enforce the dispatch model classification established in Phase 62: every new handler must be categorized as inline, coroutine-IO, or coroutine-offload-transfer.
-2. All 11 new handlers should be coroutine-IO (co_spawn on ioc_) since they only do synchronous storage reads. None should need thread pool offload (no crypto, no large-blob hashing).
-3. If any handler later needs offload (e.g., BatchRead for large response encoding), add the `co_await asio::post(ioc_)` transfer before the `send_message` call.
-4. Test under TSAN with concurrent request pipelining -- multiple in-flight requests on the same connection.
+Use `Type=simple` (or `Type=exec` on systemd 240+). `Type=simple` is correct because chromatindb starts, blocks on `ioc.run()`, and never forks or calls `sd_notify()`. `Type=exec` is slightly better because systemd considers the service started only after the `execve()` succeeds (catches bad binary path immediately). Do not add sd_notify integration -- it adds a build dependency (libsystemd) for zero benefit since chromatindb initializes fast and logs its startup.
 
 **Warning signs:**
-- TSAN reports data race on `send_counter_`.
-- Remote side logs AEAD decryption failures after a burst of pipelined requests.
-- Tests only send one request at a time per connection (no pipelining).
+- `systemctl start chromatindb` reports failed/timed-out despite the daemon running fine
+- `systemctl status` shows "activating" forever
+- systemd kills the daemon after `TimeoutStartSec`
 
 **Phase to address:**
-Every phase that adds a new handler. The dispatch classification comment block in `on_peer_message` must be updated with each new type.
+systemd unit file creation phase. Verify with `systemctl start chromatindb && systemctl status chromatindb` during testing.
 
 ---
 
-### Pitfall 3: Time-Range Query Without Secondary Index -- Full Namespace Scan
+### Pitfall 3: TimeoutStopSec Too Short for Graceful Shutdown with In-Flight Sync
 
 **What goes wrong:**
-TimeRange queries need blobs within a timestamp window `[start_us, end_us]` for a given namespace. Timestamps are stored INSIDE the encrypted blob payload (in the FlatBuffer-encoded BlobData). The current indexes are:
-- `blobs_map`: `[namespace:32][hash:32]` -> encrypted blob (no timestamp in key)
-- `seq_map`: `[namespace:32][seq_be:8]` -> `hash:32` (seq_num in key, not timestamp)
-- `expiry_map`: `[expiry_ts_be:8][hash:32]` -> `namespace:32` (has a time component but it is expiry time = timestamp/1000000 + ttl, not blob timestamp)
-
-Without a timestamp-indexed sub-database, TimeRange queries must: iterate the seq_map for the namespace, fetch each blob from blobs_map, decrypt it, decode the FlatBuffer, and check the timestamp field. For a namespace with 10,000 blobs, that is 10,000 decrypt + decode operations per query.
+chromatindb has a graceful shutdown path: SIGTERM -> drain coroutines -> save peer list -> thread pool join -> exit. With large blobs (up to 100 MiB) in transit during sync, draining can take meaningful time. If `TimeoutStopSec` is set too low, systemd sends SIGKILL before the drain completes, potentially losing the peer list save or cursor persistence. libmdbx is crash-safe (ACID), but the peer list and cursor compaction writes may be incomplete.
 
 **Why it happens:**
-Timestamps were designed as a signed-blob field (part of the canonical signing input), not as a query dimension. The storage layer was built for content-addressed retrieval and sequential polling (seq_num), not temporal queries.
+Developers set short stop timeouts thinking "it's just a database, how long can shutdown take?" without considering that in-flight sync of a 100 MiB blob over a slow connection can take tens of seconds, plus the thread pool join waits for in-flight crypto operations.
 
 **How to avoid:**
-Two options, ranked by preference:
-
-1. **Leverage seq_num ordering as a timestamp proxy (recommended).** Seq_nums are monotonically increasing per namespace and roughly correlate with insertion time. The TimeRange handler can:
-   - Binary search the seq_map for the approximate start position using the existing `lower_bound` cursor pattern.
-   - Iterate forward, fetching + decrypting blobs and checking timestamps.
-   - Stop early when timestamps exceed the end of the window (relying on approximate monotonicity).
-   - This avoids a new sub-database but requires decrypting blobs in the range. Cap iteration at a limit (e.g., 100 results) to bound work.
-
-2. **Add a timestamp sub-database.** Key: `[namespace:32][timestamp_be:8]`, Value: `[hash:32]`. Populated on store_blob, cleaned on delete. Enables pure index-based range queries without decryption. But this adds a new sub-database (8th), increases write amplification, and requires migration for existing data.
-
-Option 1 is correct for v1.4.0: YAGNI on the index, use limit + cursor pagination, accept that time-range is approximate-then-filter. If performance is later unacceptable, option 2 can be added.
+Set `TimeoutStopSec=120` in the service file (matches the `inactivity_timeout_seconds` default). Add a comment in the service file explaining why. Document that operators running nodes with very large blobs over slow networks may need to increase this value.
 
 **Warning signs:**
-- TimeRange query latency > 100ms on namespaces with > 1000 blobs.
-- CPU spikes during time-range queries from decryption overhead.
-- Client sends open-ended time range (start=0) triggering full namespace scan.
+- `systemctl stop` logs show "Timed out waiting for service to stop" followed by SIGKILL
+- Node logs show startup integrity scan reporting issues after restart
+- Peer list file is empty or missing after restart despite having had peers
 
 **Phase to address:**
-TimeRange phase. The decision (option 1 vs 2) must be made during plan design, not during implementation. The wire format should include a `limit` field and `has_more` flag regardless of which approach is chosen.
+systemd unit file creation phase. The service file must include an appropriate `TimeoutStopSec` with a comment explaining the rationale.
 
 ---
 
-### Pitfall 4: Relay Message Filter Not Updated for New Types
+### Pitfall 4: Path Inconsistency Across dist/ Files
 
 **What goes wrong:**
-The relay's `message_filter.cpp` has a `switch` with explicit `case` entries for each allowed client message type. Adding 11 new request/response pairs (22 new enum values in `transport.fbs`) requires updating THREE locations:
-1. `transport.fbs` -- enum definition
-2. `message_filter.cpp` -- `is_client_allowed()` switch
-3. `NodeInfoResponse` supported_types array in `peer_manager.cpp`
-
-If any of these are missed:
-- Missing from transport.fbs: compilation error (caught early, good).
-- Missing from message_filter.cpp: relay disconnects clients who send the new request type ("blocked message type" teardown). This looks like the relay is broken but the node works fine over UDS.
-- Missing from supported_types: SDK capability detection fails for the new type.
+The dist/ package has 6-8 files that reference shared paths (data directory, UDS socket path, log directory, config directory, binary paths). A mismatch between any two files causes silent runtime failure:
+- Node config sets `uds_path: /run/chromatindb/node.sock` but relay config references a different socket path -- relay cannot connect.
+- systemd unit has `ExecStart=/usr/local/bin/chromatindb run --config /etc/chromatindb/chromatindb.conf` but install.sh copies config as `chromatindb.json` -- daemon fails to start.
+- tmpfiles.d creates a directory that StateDirectory= also creates with different permissions.
 
 **Why it happens:**
-The relay is a separate binary (`relay/`) and separate mental context. When adding a handler to `peer_manager.cpp`, the developer is focused on the node code. The relay filter and NodeInfo supported_types are easy to forget because they are in different files and don't cause compilation errors.
+Files are written independently across different formats (INI for systemd, JSON for configs, shell for install.sh, specialized for sysusers/tmpfiles). No compiler or linter validates cross-file path consistency.
 
 **How to avoid:**
-1. Make a checklist for every new message type pair: transport.fbs, message_filter.cpp, NodeInfoResponse supported_types, PROTOCOL.md wire format.
-2. Write a test that exercises each new request/response through the relay path (client -> relay -> node -> relay -> client).
-3. Consider: a static_assert or compile-time check that the supported_types array size matches the number of client-allowed types.
+1. Define all canonical paths in a single location (e.g., comment block at top of install.sh or a shared `paths.env`).
+2. Build all dist/ files in a single phase so path decisions are made once and propagated immediately.
+3. Integration test: run install.sh on a clean system, start both services, verify both are running and relay connects to node via UDS.
 
 **Warning signs:**
-- New query works over UDS but fails through relay.
-- Relay logs show "blocked message type {N}" for the new type numbers.
-- NodeInfoResponse supported_types count doesn't increase after adding new types.
+- `systemctl status` shows "failed" with path-related errors
+- Relay logs "failed to connect to node via UDS" despite node running fine
+- Data appears in unexpected directories
 
 **Phase to address:**
-Every phase that adds new message types. This is a per-phase checklist item, not a single-phase concern. The relay filter update should be part of every plan that defines new TransportMsgType values.
+Distribution packaging phase. All dist/ files should be created in the same session with a single source of truth for paths.
 
 ---
 
-### Pitfall 5: DelegationList Cursor Iteration During Concurrent Delegation Modification
+### Pitfall 5: Documentation Describes Features That Do Not Exist or Omits Features That Do
 
 **What goes wrong:**
-DelegationList iterates the `delegation_map` sub-database with a cursor, filtering entries by namespace prefix. If a concurrent ingest (on the IO thread) creates or revokes a delegation blob while the DelegationList query is iterating:
-- libmdbx read transactions provide MVCC snapshot isolation, so the cursor sees a consistent snapshot. This is SAFE.
-- **BUT**: if the DelegationList handler uses a write transaction (accidentally) or if the handler is not wrapped in a read transaction (iterates individual `get()` calls instead), each call sees a different snapshot, which CAN produce inconsistent results (e.g., listing a delegation that was just revoked, or missing one that was just created).
+db/PROTOCOL.md header says "40 message types" but the project has 58 message type enums. Root README.md says "Current release: v1.3.0" but v1.4.0 shipped. db/README.md says "551 unit tests" but there are 560+. Partial updates create a worse situation than fully stale docs because readers trust "recently updated" documents more.
 
 **Why it happens:**
-Existing iteration patterns (list_namespaces, get_blob_refs_since) correctly use `start_read()` + cursor. But DelegationList is the first query that iterates the delegation_map, which has a different key structure (`[namespace:32][delegate_pk_hash:32]`). A developer might implement it as a loop of `has_valid_delegation()` calls (each opening its own read txn) instead of a single cursor scan, breaking snapshot consistency.
+Multiple documentation surfaces (root README.md, db/README.md, db/PROTOCOL.md) reference overlapping facts. Updating one file while forgetting another creates internal inconsistency.
 
 **How to avoid:**
-1. Implement DelegationList as a single Storage method that opens ONE read transaction, creates a cursor on delegation_map, seeks to the namespace prefix, and iterates entries with matching namespace prefix.
-2. Do NOT implement it as N calls to `has_valid_delegation()` -- each opens a separate read txn.
-3. Follow the exact pattern of `list_namespaces()`: `start_read()`, `open_cursor()`, prefix scan with `lower_bound()`.
+Create a documentation audit checklist before writing. Every numerical claim must be verified against current source:
+- Message type enum count from FlatBuffers schema
+- Unit test count from `ctest --test-dir build -N | tail -1`
+- Docker integration test count from test script
+- Relay filter allowed type count from source (currently 38)
+- NodeInfoResponse supported_types count from source (currently 38)
+- Version string in ALL readme files
+- Config option list matches current config.h fields
 
 **Warning signs:**
-- DelegationList returns different results on consecutive calls without any writes (non-reproducible inconsistency from separate txns).
-- The storage method for DelegationList calls other storage methods instead of using a cursor directly.
+- Numbers in docs don't match across files
+- Grep for old version strings finds hits in "updated" docs
 
 **Phase to address:**
-DelegationList phase. The storage API design must be a single-txn cursor scan.
+Documentation phase. Build the checklist FIRST, verify all values, THEN write. Do not write prose first and verify later.
 
 ---
 
-### Pitfall 6: Health Endpoint Blocking the IO Thread
+### Pitfall 6: PROTOCOL.md Wire Format Descriptions Diverge from Implementation
 
 **What goes wrong:**
-Health/readiness checks need to be lightweight and fast. If the Health handler calls `storage_.used_bytes()` or `storage_.list_namespaces()` or `engine_.list_namespaces()`, these are synchronous libmdbx operations that open transactions. Under heavy load with long-running write transactions, MVCC readers can block on the B-tree lock momentarily. If health checks are frequent (e.g., Kubernetes liveness probe every 5s), this adds IO-thread contention.
-
-Worse: if the health handler includes "can I write?" verification (e.g., opening a write txn to prove storage is writable), this blocks the IO thread until any in-flight write transaction completes. Since libmdbx serializes write transactions, a compaction in progress (which opens a long write via `env.copy()`) would make the health endpoint hang.
+PROTOCOL.md describes byte-level wire formats for all message types. If any format description has a wrong byte offset, wrong field order, wrong endianness, or wrong length, a third-party SDK implementer writes code that produces invalid messages. The node silently drops them (bad crypto or validation failure). The documentation becomes actively harmful.
 
 **Why it happens:**
-Health endpoints in traditional HTTP servers are trivial (return 200 OK). In a single-IO-thread event loop with MVCC storage, "is the database healthy?" is not free. The temptation is to check storage health thoroughly, but this conflicts with the non-blocking IO model.
+Wire format documentation is written by reading source code and transcribing it into prose. Human transcription introduces errors. The custom binary formats (not FlatBuffers payloads) are especially risky: NodeInfoResponse, WriteAck, DeleteAck, ExistsResponse, BatchReadResponse, PeerInfoResponse, and other v1.4.0 query responses all use hand-crafted binary layouts.
 
 **How to avoid:**
-1. Health/liveness should be a pure in-memory check: is the node running? Is the io_context not stopped? Return immediately. No storage access.
-2. Readiness can check lightweight state: `peer_count() > 0`, `!stopping_`, maybe `storage_.used_bytes()` (O(1) mdbx env info, no transaction needed).
-3. Do NOT open write transactions in health checks.
-4. Do NOT call `list_namespaces()` or any cursor-based scan from health checks.
-5. Classify Health as INLINE dispatch (like Subscribe/Unsubscribe) -- no co_spawn needed if no storage access.
+For each message type documented:
+1. Write the prose description
+2. Cross-reference against the FlatBuffers schema for field order and types
+3. Cross-reference against the handler code for payload encoding (especially hand-crafted binary formats)
+4. Verify byte offset arithmetic adds up (field sizes must sum to documented total size)
 
 **Warning signs:**
-- Health check latency spikes during compaction.
-- Health check opens a read or write transaction.
-- Kubernetes kills the pod because the liveness probe timed out during a long write.
+- Byte offset arithmetic in docs doesn't add up
+- Copy-paste errors between similar message types
+- SDK implementers report "connection drops" after sending messages that match docs
 
 **Phase to address:**
-Health/StorageStatus phase. Health must be designed as a zero-IO path. StorageStatus can use the O(1) `used_bytes()`/`used_data_bytes()` but should avoid cursor scans.
+Documentation phase. Every binary format description must include a verification step against the encoder source code.
 
 ---
 
-### Pitfall 7: NamespaceList Response Size Unbounded on Large Nodes
+### Pitfall 7: Missing systemd Security Hardening
 
 **What goes wrong:**
-The existing `list_namespaces()` storage method returns ALL namespaces as a vector. For a node storing 10,000 namespaces, the NamespaceList response would be `4 + 10000 * 40 = ~400 KB` (count + namespace_id:32 + latest_seq:8 per entry). This is within MAX_FRAME_SIZE but:
-1. The list_namespaces() cursor scan with seek-to-max per namespace is O(N * log(B)) where B is B-tree depth. For 10,000 namespaces, this could take 100+ ms.
-2. The response is built entirely in memory before sending.
-3. There is no pagination -- client gets everything or nothing.
-
-For the 1000-namespace Docker stress test, this is fine. For a production node with 100,000+ namespaces, this becomes a DoS vector: any client can trigger an expensive full scan.
+A service file with only `User=chromatindb` provides minimal isolation. A vulnerability in the daemon gives the attacker read access to the entire filesystem, write access to any file the user can write, and the ability to call any syscall. Without hardening, `systemd-analyze security chromatindb.service` scores 9.0+ (UNSAFE).
 
 **Why it happens:**
-The existing `list_namespaces()` was designed for internal use (integrity_scan, node info) where scanning all namespaces is acceptable. Exposing it as a client-facing query without pagination follows the "works in testing, fails in production" anti-pattern.
+Developers ship a minimal service file that "works" and skip hardening because it requires understanding many directives. The daemon appears to function identically with or without hardening, so the omission is invisible during testing.
 
 **How to avoid:**
-1. Add `offset` and `limit` parameters to the NamespaceList wire format.
-2. Implement a `list_namespaces_paginated(cursor_ns, limit)` storage method that uses `lower_bound(cursor_ns)` and returns up to `limit` entries plus a `has_more` flag.
-3. Cap limit at a reasonable value (e.g., 100, matching ListResponse cap).
-4. The response format should include the last namespace_id as a cursor for the next page.
+Include these directives in the service file:
+```ini
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/chromatindb /var/log/chromatindb /run/chromatindb
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+```
+These are all safe for chromatindb because it only needs: network access (TCP listen/connect), filesystem access (data dir, log dir, UDS socket), and standard crypto syscalls.
+
+Verify with: `systemd-analyze security chromatindb.service` -- target score below 5.0.
 
 **Warning signs:**
-- NamespaceList tests only create 1-5 namespaces.
-- No limit parameter in the request wire format.
-- Handler calls `storage_.list_namespaces()` directly without pagination.
+- `systemd-analyze security` scores above 7.0
+- Service file has no Protect*/Private*/Restrict* directives
 
 **Phase to address:**
-NamespaceList phase. Pagination must be in the wire format from the start -- retrofitting pagination is a breaking protocol change.
+systemd unit file creation phase. Add hardening directives from the start -- retrofitting is harder because each directive needs testing.
+
+---
+
+### Pitfall 8: sysusers.d / tmpfiles.d Redundant with systemd Unit Directives
+
+**What goes wrong:**
+Developers ship sysusers.d (creates chromatindb user), tmpfiles.d (creates directories), AND the systemd unit has `StateDirectory=`, `LogsDirectory=`, `RuntimeDirectory=`. Two mechanisms manage the same directories, leading to ownership conflicts or confusion about which is authoritative.
+
+**Why it happens:**
+Multiple guides recommend different approaches. All are correct in isolation, but combining them creates redundancy.
+
+**How to avoid:**
+Use this split:
+- **sysusers.d:** User/group creation only (this runs early at boot, before services). This is the only mechanism for user creation.
+- **systemd unit directives** (`StateDirectory=chromatindb`, `LogsDirectory=chromatindb`, `RuntimeDirectory=chromatindb`): Directory creation. These auto-create directories owned by the configured `User=` when the service starts.
+- **tmpfiles.d:** Only if directories must exist when the service is NOT running (e.g., for manual inspection). For chromatindb, this is unnecessary -- directories only need to exist while the service runs.
+
+Never use both tmpfiles.d and StateDirectory= for the same path.
+
+**Warning signs:**
+- `ls -la /var/lib/chromatindb` shows wrong owner
+- tmpfiles.d config references paths also in StateDirectory=
+- Install script also `mkdir -p` the same directories
+
+**Phase to address:**
+Distribution packaging design phase. Decide the mechanism once before writing any files.
+
+---
+
+### Pitfall 9: Default Config With Relative Paths Fails Under systemd
+
+**What goes wrong:**
+The production config ships with `"data_dir": "./data"`. Under systemd, WorkingDirectory defaults to root (`/`), so `./data` resolves to `/data`, creating data in an unexpected location. Operators start the service, it appears to work, but data is not in `/var/lib/chromatindb` where they expect it.
+
+**Why it happens:**
+Config defaults are designed for development (relative paths work when running from the project directory). Nobody tests the config under systemd's execution environment.
+
+**How to avoid:**
+Ship a production config with absolute paths matching the systemd unit layout:
+```json
+{
+  "data_dir": "/var/lib/chromatindb",
+  "log_file": "/var/log/chromatindb/node.log",
+  "uds_path": "/run/chromatindb/node.sock"
+}
+```
+The install script installs this to `/etc/chromatindb/chromatindb.conf` (only if file doesn't already exist). The systemd unit references it explicitly: `ExecStart=/usr/local/bin/chromatindb run --config /etc/chromatindb/chromatindb.conf`.
+
+**Warning signs:**
+- Data directory created in unexpected location after service start
+- Config file not found errors in journal
+- `--config` flag missing from ExecStart in service file
+
+**Phase to address:**
+Config template and systemd unit creation phase. Design them together so paths are consistent.
+
+---
+
+### Pitfall 10: Install Script Overwrites Operator-Modified Configs
+
+**What goes wrong:**
+Operator customizes `/etc/chromatindb/chromatindb.conf` with their bootstrap_peers, allowed_keys, and quota settings. Running install.sh to update binaries also overwrites their config with the default.
+
+**Why it happens:**
+Install scripts written as sequential "copy everything" without checking what already exists.
+
+**How to avoid:**
+Config install must be conditional:
+```bash
+if [ ! -f /etc/chromatindb/chromatindb.conf ]; then
+    install -m 0640 -o root -g chromatindb dist/chromatindb.conf /etc/chromatindb/chromatindb.conf
+else
+    echo "Config already exists, skipping. See dist/chromatindb.conf for new defaults."
+fi
+```
+Binaries and service files: always overwrite (vendor-managed). Config files: never overwrite. The install script must call `systemctl daemon-reload` after updating service files.
+
+**Warning signs:**
+- Script exits on second run with errors
+- Operator's customized config gets overwritten on upgrade
+- `systemctl daemon-reload` not called after service file changes
+
+**Phase to address:**
+Install script phase. Test by running the script twice on the same system.
 
 ---
 
@@ -210,99 +270,121 @@ NamespaceList phase. Pagination must be in the wire format from the start -- ret
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Using seq_num as timestamp proxy for TimeRange | No new sub-database, no migration | Imprecise results for non-monotonic timestamps (delegated writes, sync-received blobs) | v1.4.0 MVP -- add timestamp index later if clients need precision |
-| Returning all delegations without pagination | Simpler wire format | Unbounded response for namespaces with many delegates | Acceptable if namespace delegation count is naturally small (< 100) |
-| Health as inline dispatch with no storage check | Fastest possible response | Health "OK" doesn't guarantee storage is accessible | Acceptable -- StorageStatus provides deeper checks, Health is liveness only |
-| Hardcoded batch limits (e.g., 64 for BatchExists) | Simple, safe | Client can't request larger batches if network allows | Acceptable pre-SDK -- can be made configurable later |
+| Skipping install script testing on a fresh VM | Save 30 min of VM setup | Script breaks on real deployments, bad first impression | Never -- always test on a clean system |
+| Hardcoding paths instead of using systemd directives | Simpler service file | Breaks on non-standard installations, ownership bugs | Never -- StateDirectory is zero extra effort |
+| Copying config unconditionally in install script | Simpler script logic | Overwrites operator customizations on upgrade | Never -- always check before overwriting |
+| Documenting message types from memory | Faster writing | Wrong wire formats cause SDK bugs | Never -- always verify against source |
+| Shipping logrotate for spdlog-rotated logs | "Looks professional" | Dual rotation causes log loss | Never -- document spdlog's built-in rotation instead |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| transport.fbs enum extension | Adding new types after MAX without updating MAX sentinel | Always add before the closing brace; regenerate `transport_generated.h` and verify `TransportMsgType_MAX` updates |
-| Relay message filter | Adding request type but forgetting response type (or vice versa) | Always add both request AND response to `is_client_allowed()` -- responses flow node -> relay -> client |
-| NodeInfoResponse supported_types | Hardcoded array in peer_manager.cpp becomes stale | Update the `supported[]` array AND `types_count` every time a new client-facing type is added |
-| Storage method signatures | Using `std::span<const uint8_t>` (unsized) instead of `std::span<const uint8_t, 32>` for namespace/hash params | Use sized spans (`span<const uint8_t, 32>`) to get compile-time size checking -- matches existing API |
-| libmdbx cursor lifecycle | Opening cursor on a map that doesn't exist (typo in map name) | Maps are created at startup in `open_env()` -- new sub-databases need to be added there |
-| Binary wire format | Forgetting big-endian encoding for multi-byte integers | Use the existing `encode_be_u64()` / `encode_be_u32()` helpers; never use host-byte-order memcpy for wire integers |
+| systemd + spdlog logging | Shipping logrotate config for spdlog-managed files | Document that spdlog handles rotation internally; skip logrotate entirely for these paths |
+| systemd + UDS socket | Not setting `RuntimeDirectory=` for UDS path | Use `RuntimeDirectory=chromatindb` and configure UDS at `/run/chromatindb/node.sock` |
+| systemd + SIGTERM | Setting `KillMode=control-group` which SIGTERMs child processes too | Use `KillMode=mixed` so only main process gets SIGTERM, thread pool children get SIGKILL after timeout |
+| systemd + config reload | Not supporting `ExecReload=` for SIGHUP | Add `ExecReload=/bin/kill -HUP $MAINPID` to leverage existing SIGHUP handler |
+| systemd + metrics | No way to trigger SIGUSR1 from systemd | Document `systemctl kill -s SIGUSR1 chromatindb` for operators |
+| sysusers.d + Dockerfile | Dockerfile creates user with `groupadd/useradd`, sysusers.d uses different UID/GID | Ensure sysusers.d does not hardcode UID/GID (use `-` for system-allocated IDs); Docker and host users are independent |
+| Install script + SELinux | Binary installed to non-standard path lacks correct SELinux context | Use `restorecon` after install, or install to standard `/usr/local/bin/` which inherits correct context |
+| Relay + Node ordering | Relay starts before node UDS socket exists | Relay unit must have `After=chromatindb.service` + `Wants=chromatindb.service` |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| BatchRead fetching + decrypting N blobs sequentially | Response latency = N * decrypt_time (~0.5ms each) | Cap batch size at 16-32; consider parallel decrypt only if profiling shows bottleneck | > 64 blobs per batch |
-| NamespaceList full scan with seek-per-namespace | Latency grows linearly with namespace count | Paginate with limit; cache namespace list if needed | > 1000 namespaces |
-| TimeRange decrypting all blobs in seq range | CPU spike on large time windows | Enforce limit per request; stop iteration at limit | > 1000 blobs in time window |
-| DelegationList scanning entire delegation_map | Slow if delegation_map has entries for many namespaces | Prefix scan with `lower_bound([ns][0x00...])` and stop at namespace boundary | > 10000 total delegations across all namespaces |
-| StorageStatus calling `list_namespaces()` for tombstone count | Full namespace scan just to count tombstones | Use `txn.get_map_stat(tombstone_map).ms_entries` for O(1) tombstone count | Always -- there is no reason to scan |
-| Multiple concurrent BatchRead requests from same client | Pipelined requests each decrypt N blobs, multiplying IO-thread work | Per-connection concurrency limit or queue depth limit | > 4 concurrent batch requests |
+| systemd journal + JSON log format double-encoding | Journal stores structured data; JSON-in-journal makes parsing harder | Use `log_format=text` with journal (systemd captures metadata automatically) or `log_format=json` with file only | When operators try to parse journal entries with `jq` and get escaped JSON |
+| Config at `/etc/` with `data_dir` as relative path | Data goes to root filesystem, fills up root partition | Always use absolute paths in production config | First deployment on a real server |
+| tmpfiles.d age-based cleanup on data directory | tmpfiles `q` or `Q` rules with age spec can delete blob data | Never add age-based cleanup rules for the data directory; only use `d` (create) without age | When tmpfiles timer fires and data is older than the age threshold |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| BatchExists leaking tombstone existence | Client can probe whether a specific blob was deleted (information leak about deletion activity) | Return `exists=false` for tombstoned blobs (consistent with ExistsRequest: "tombstones return false") |
-| NamespaceList exposing all namespace IDs to any client | In closed-node mode, enumerating all namespaces reveals what pubkeys have stored data | Consider: should NamespaceList be filtered by ACL? Or is this acceptable since the client already authenticated? Document the decision. |
-| PeerInfo exposing peer IP addresses | Client can enumerate all connected peer IPs (network topology disclosure) | Only expose peer count, not addresses. Or expose only hashed identifiers. |
-| Health endpoint as availability oracle | External attacker probes health to confirm node is alive before targeting | Health should require authentication (relay enforces this since all client messages require PQ handshake) |
-| Unbounded batch requests as DoS amplification | Client sends BatchRead with 1000 hashes, node does 1000 storage lookups + decryptions | Enforce strict batch size limits in the handler (reject oversized requests with strike) |
+| Running service as root | Compromised daemon = root shell | `User=chromatindb` + `Group=chromatindb` in service file |
+| No systemd hardening directives | Compromised daemon can read/write entire filesystem | Add ProtectSystem=strict, ProtectHome=yes, NoNewPrivileges=yes, PrivateTmp=yes, PrivateDevices=yes |
+| master.key file readable by other users | Encryption at rest is meaningless if any user can read the key | StateDirectory sets 0750; master.key is already 0600. Verify ownership in install script. |
+| Config file with allowed_keys readable by world | Reveals which pubkeys are authorized | Install config with 0640 root:chromatindb permissions |
+| UDS socket accessible to all users | Any local process can send commands to the node | RuntimeDirectory with 0750; socket inherits directory permissions |
+| Install script with TOCTOU on file permissions | Files briefly world-readable during install | Use `install -o chromatindb -g chromatindb -m 0750` to set owner+permissions atomically |
+
+## UX Pitfalls
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Install script with no `--uninstall` option | Operators cannot cleanly remove the software | Ship an uninstall command or document manual removal steps |
+| README assumes reader built from source | Production operators installing from dist/ cannot follow "mkdir build" instructions | Separate "Building from Source" and "Installing from Package" sections |
+| PROTOCOL.md has no table of contents | 58 message types in one document is unnavigable | Add a TOC at the top with anchors to each message type section |
+| Default config example missing comments | Operators don't know what each option does | Ship a commented config or a separate config-reference section in README |
+| Relay is not clearly documented as optional | Operators install both services when they only need the node | Document when relay is needed (TCP clients with PQ handshake) vs when it is not (node-to-node only) |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **BatchExists:** Does it handle duplicate hashes in the request? (client sends same hash twice -- response should not have duplicates or should handle gracefully)
-- [ ] **BatchRead:** Does it respect MAX_FRAME_SIZE for the aggregate response? Build a test with N blobs whose total size approaches the limit.
-- [ ] **TimeRange:** Does it handle the case where `start_timestamp > end_timestamp`? (reject or return empty)
-- [ ] **TimeRange:** Does it handle microsecond vs second timestamp confusion? (blob.timestamp is seconds, but the field name is ambiguous -- verify units in wire format docs)
-- [ ] **DelegationList:** Does it return delegation blob hashes (so client can fetch the full delegation) or just delegate pubkey hashes? The delegation_map value is `[delegation_blob_hash:32]` -- decide what the client needs.
-- [ ] **NamespaceList:** Does it have pagination? Without it, works in tests but fails at scale.
-- [ ] **NamespaceStats:** Does it handle non-existent namespaces? (return zeros, not error -- consistent with get_namespace_quota returning {0,0} for unknown)
-- [ ] **Health:** Is it truly zero-IO? Check that no storage method is called.
-- [ ] **StorageStatus:** Does it include tombstone_map stats? The map stat is O(1) but must be explicitly queried.
-- [ ] **PeerInfo:** Does it avoid leaking peer IP addresses? Design the response format before implementation.
-- [ ] **All new types:** Are all 22 new enum values (11 request + 11 response) added to message_filter.cpp?
-- [ ] **All new types:** Are all new client-facing types added to NodeInfoResponse supported_types array?
-- [ ] **All new types:** Does PROTOCOL.md document the byte-level wire format for each new message?
+- [ ] **systemd unit:** Has `ExecReload=/bin/kill -HUP $MAINPID` -- verify SIGHUP config reload works via `systemctl reload chromatindb`
+- [ ] **systemd unit:** Has security hardening directives -- verify `systemd-analyze security chromatindb.service` scores below 5.0
+- [ ] **systemd unit:** Has `After=network-online.target` + `Wants=network-online.target` -- chromatindb needs network for peer connections
+- [ ] **systemd unit:** Has `TimeoutStopSec=120` -- graceful shutdown with in-flight sync needs time
+- [ ] **systemd unit:** Has `KillMode=mixed` -- only main process gets SIGTERM, thread pool children cleaned up by SIGKILL after timeout
+- [ ] **Relay unit:** Has `After=chromatindb.service` + `Wants=chromatindb.service` -- relay must not start before node
+- [ ] **Default config:** All paths are absolute (`data_dir`, `log_file`, `uds_path`) -- relative paths break under systemd
+- [ ] **Install script:** Idempotent -- running twice produces no errors and does not overwrite customized config
+- [ ] **Install script:** Calls `systemctl daemon-reload` after installing/updating service files
+- [ ] **README.md:** Version string matches current release -- verify against PROJECT.md or git tags
+- [ ] **README.md:** Test count matches `ctest -N` output
+- [ ] **README.md:** Message type count matches FlatBuffers schema enum
+- [ ] **PROTOCOL.md:** All 58 message types documented (not just the 40 from v1.3.0)
+- [ ] **PROTOCOL.md:** Hand-crafted binary format byte offsets verified against encoder source code
+- [ ] **sysusers.d:** Uses `-` for UID/GID (system-allocated, not hardcoded)
+- [ ] **No logrotate:** Confirm no logrotate config shipped for spdlog-managed log paths
+- [ ] **dist/ package:** Both `chromatindb` and `chromatindb_relay` binaries included
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Frame size exceeded in BatchRead | LOW | Add cumulative size check + partial flag; no wire format change needed if designed with partial from start |
-| AEAD nonce desync | HIGH | Debug via TSAN; fix by ensuring all send_message calls are on IO thread; may need to audit all 11 new handlers |
-| Missing relay filter entries | LOW | Add the missing case statements; write a relay integration test to prevent regression |
-| Unbounded NamespaceList | MEDIUM | Requires wire format change to add pagination; breaking change for any deployed clients |
-| Health blocking on storage | LOW | Remove storage calls from health handler; pure refactor |
-| TimeRange without index | MEDIUM | If seq_num proxy is too imprecise, adding a timestamp sub-database requires storage migration |
+| Wrong systemd Type= | LOW | Fix service file, `systemctl daemon-reload`, restart |
+| logrotate fighting spdlog | LOW | Remove logrotate config, restart daemon (spdlog reopens cleanly) |
+| TimeoutStopSec too short (data loss) | MEDIUM | libmdbx is crash-safe, but peer list/cursors may need recovery. Increase timeout, restart. Check integrity scan output. |
+| Stale docs shipped | MEDIUM | Audit and correct. Damage is to credibility with SDK implementers who may have built against wrong wire format. |
+| Install script overwrote custom config | HIGH | Operator must restore from backup. If no backup, recreate config from memory. |
+| Wrong wire format in PROTOCOL.md | HIGH | SDK implementers already wrote code against wrong docs. Requires coordinated doc fix + SDK patch. |
+| Hardcoded paths don't match system | LOW | Fix service file + config, daemon-reload, restart |
+| Missing service dependency (relay before node) | LOW | Add After=/Wants= to relay unit, daemon-reload |
+| Missing security hardening | MEDIUM | Add directives to unit file, daemon-reload, restart. No data loss but requires testing that hardening doesn't break functionality. |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Batch frame size overflow | BatchRead design phase | Test with aggregate response > 50 MiB; assert response fits in MAX_FRAME_SIZE |
-| AEAD nonce desync | Every handler phase | Run pipelined request tests under TSAN; verify all send_message calls are on IO thread |
-| Time-range scan cost | TimeRange phase | Benchmark TimeRange on 10,000-blob namespace; verify limit enforced |
-| Relay filter missing types | Every phase adding types | Test each new type through relay path; relay disconnect = failure |
-| DelegationList snapshot consistency | DelegationList phase | Implement as single-txn cursor scan; code review for multi-txn anti-pattern |
-| Health blocking IO | Health phase | Verify zero storage calls in health handler; measure latency during compaction |
-| NamespaceList unbounded | NamespaceList phase | Wire format includes limit + cursor; test with 1000+ namespaces |
-| NodeInfoResponse stale types | Final docs/integration phase | Assert supported_types count matches relay filter allowed count |
-| Timestamp unit confusion | TimeRange phase | Document units explicitly in PROTOCOL.md wire format; test with known timestamps |
-| Batch duplicate handling | BatchExists/BatchRead phase | Test with duplicate hashes in request; verify no crash or duplicate responses |
+| spdlog vs logrotate conflict | dist/ packaging | No logrotate config for spdlog paths; README documents spdlog rotation |
+| Wrong service Type= | systemd unit creation | `systemctl start && systemctl status` shows "active (running)" |
+| TimeoutStopSec too short | systemd unit creation | `systemctl stop` completes without SIGKILL in journal |
+| Path inconsistency | dist/ packaging (single session) | Install on fresh system, both services start and communicate |
+| Stale docs (numbers/versions) | Documentation refresh | Checklist verified against source code before merge |
+| Wire format doc errors | Documentation refresh | Every binary format cross-referenced against encoder source |
+| Missing security hardening | systemd unit creation | `systemd-analyze security` score below 5.0 |
+| tmpfiles.d/StateDirectory overlap | dist/ packaging design | Only one mechanism per directory; no tmpfiles.d if StateDirectory used |
+| Relative paths in default config | Config template creation | Service starts correctly with shipped config on fresh install |
+| Config overwrite on upgrade | Install script | Run script twice, config preserved |
 
 ## Sources
 
-- Codebase analysis: `db/net/connection.cpp` line 155 (`send_counter_++` in `send_encrypted`)
-- Codebase analysis: `db/peer/peer_manager.cpp` lines 523-538 (dispatch model comment block)
-- Codebase analysis: `db/storage/storage.cpp` lines 696-783 (`list_namespaces` cursor pattern)
-- Codebase analysis: `relay/core/message_filter.cpp` (explicit allow-list switch)
-- Codebase analysis: `db/net/framing.h` (`MAX_FRAME_SIZE` = 110 MiB)
-- Codebase analysis: `db/storage/storage.h` line 82 ("Thread safety: NOT thread-safe")
-- Project memory: PEX SIGSEGV (v1.0.0) -- AEAD nonce desync from concurrent SyncRejected writes
-- Project memory: IO-thread transfer pattern (v1.3.0 Phase 62) -- `co_await asio::post(ioc_)` before send_message
-- Project memory: Coroutine params by value (v0.9.0) -- const ref captures dangle across suspension points
-- Retrospective: v0.8.0 -- "Thread pool offload for stateless crypto is straightforward; the hard part is ensuring stateful AEAD is never accessed from workers"
-- Retrospective: v1.3.0 -- dispatch model classification (inline, coroutine-IO, coroutine-offload-transfer)
+- [systemd.service man page](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) -- Type=, TimeoutStopSec=, ExecReload= semantics
+- [systemd.exec man page](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) -- StateDirectory=, LogsDirectory=, RuntimeDirectory=, security hardening directives
+- [systemd.kill man page](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html) -- KillMode=, SendSIGKILL= behavior
+- [tmpfiles.d man page](https://www.freedesktop.org/software/systemd/man/latest/tmpfiles.d.html) -- directory creation rules, ownership semantics
+- [daemon(7) man page](https://www.freedesktop.org/software/systemd/man/latest/daemon.html) -- new-style daemon recommendations (Type=simple, sd_notify)
+- [spdlog issue #3464](https://github.com/gabime/spdlog/issues/3464) -- spdlog + external logrotate interaction; append mode; no external rotation support; SIGHUP handling recommendation from maintainer
+- [logrotate man page](https://man7.org/linux/man-pages/man8/logrotate.8.html) -- copytruncate window vulnerability
+- [systemd service hardening gist](https://gist.github.com/ageis/f5595e59b1cddb1513d1b425a323db04) -- comprehensive hardening directive reference
+- [Ctrl blog: systemd hardening 101](https://www.ctrl.blog/entry/systemd-service-hardening.html) -- practical hardening walkthrough
+- [systemd-tmpfiles guide](https://blogs.reliablepenguin.com/2025/12/22/systemd-tmpfiles-the-unsung-janitor-of-run-and-tmp) -- tmpfiles.d best practices, redundancy with StateDirectory
+- Source analysis: `db/logging/logging.cpp` -- confirms `rotating_file_sink_mt` handles its own rotation internally
+- Source analysis: `db/main.cpp` -- confirms foreground daemon (ioc.run() blocks, no fork, no sd_notify)
+- Source analysis: `db/net/server.cpp` line 15 -- confirms SIGTERM/SIGINT handling via `asio::signal_set`
+- Source analysis: `db/peer/peer_manager.h` lines 292-293 -- confirms SIGHUP/SIGUSR1 handling via `asio::signal_set`
+- Source analysis: `CMakeLists.txt` -- confirms two binaries: `chromatindb` (node) and `chromatindb_relay` (relay)
 
 ---
-*Pitfalls research for: chromatindb v1.4.0 Extended Query Suite*
-*Researched: 2026-03-26*
+*Pitfalls research for: chromatindb v1.5.0 Documentation & Distribution*
+*Researched: 2026-03-28*
