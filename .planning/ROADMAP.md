@@ -149,7 +149,7 @@ Full details: [milestones/v1.4.0-ROADMAP.md](milestones/v1.4.0-ROADMAP.md)
 **Plans**: 2 plans
 
 Plans:
-- [ ] 68-01-PLAN.md — Static distribution artifacts (systemd units, configs, sysusers.d, tmpfiles.d)
+- [x] 68-01-PLAN.md — Static distribution artifacts (systemd units, configs, sysusers.d, tmpfiles.d)
 - [ ] 68-02-PLAN.md — Install script with install and uninstall modes
 
 ### Phase 69: Documentation Refresh
@@ -175,5 +175,5 @@ Phases execute in numeric order: 68 -> 69
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 68. Production Distribution Kit | 0/2 | Not started | - |
+| 68. Production Distribution Kit | 1/2 | In Progress|  |
 | 69. Documentation Refresh | 0/? | Not started | - |

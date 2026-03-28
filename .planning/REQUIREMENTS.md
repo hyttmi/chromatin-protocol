@@ -9,12 +9,12 @@ Requirements for v1.5.0 Documentation & Distribution. Each maps to roadmap phase
 
 ### Distribution
 
-- [ ] **DIST-01**: dist/ contains hardened systemd unit file for chromatindb node (Type=simple, ProtectSystem=strict)
-- [ ] **DIST-02**: dist/ contains hardened systemd unit file for chromatindb_relay (Type=simple, ProtectSystem=strict)
-- [ ] **DIST-03**: dist/ contains default JSON config for chromatindb node with sane production defaults
-- [ ] **DIST-04**: dist/ contains default JSON config for chromatindb_relay with sane production defaults
-- [ ] **DIST-05**: dist/ contains sysusers.d config to create chromatindb system user/group
-- [ ] **DIST-06**: dist/ contains tmpfiles.d config for data, log, and config directories
+- [x] **DIST-01**: dist/ contains hardened systemd unit file for chromatindb node (Type=simple, ProtectSystem=strict)
+- [x] **DIST-02**: dist/ contains hardened systemd unit file for chromatindb_relay (Type=simple, ProtectSystem=strict)
+- [x] **DIST-03**: dist/ contains default JSON config for chromatindb node with sane production defaults
+- [x] **DIST-04**: dist/ contains default JSON config for chromatindb_relay with sane production defaults
+- [x] **DIST-05**: dist/ contains sysusers.d config to create chromatindb system user/group
+- [x] **DIST-06**: dist/ contains tmpfiles.d config for data, log, and config directories
 - [ ] **DIST-07**: dist/ contains install.sh that deploys all artifacts to FHS-standard locations
 
 ### Documentation
@@ -52,12 +52,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DIST-01 | Phase 68 | Pending |
-| DIST-02 | Phase 68 | Pending |
-| DIST-03 | Phase 68 | Pending |
-| DIST-04 | Phase 68 | Pending |
-| DIST-05 | Phase 68 | Pending |
-| DIST-06 | Phase 68 | Pending |
+| DIST-01 | Phase 68 | Complete |
+| DIST-02 | Phase 68 | Complete |
+| DIST-03 | Phase 68 | Complete |
+| DIST-04 | Phase 68 | Complete |
+| DIST-05 | Phase 68 | Complete |
+| DIST-06 | Phase 68 | Complete |
 | DIST-07 | Phase 68 | Pending |
 | DOCS-01 | Phase 69 | Pending |
 | DOCS-02 | Phase 69 | Pending |
