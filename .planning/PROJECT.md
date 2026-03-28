@@ -15,8 +15,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 **Goal:** Complete documentation refresh and production distribution package.
 
 **Target features:**
-- README.md updated with all 58 message types and current architecture
-- PROTOCOL.md updated with complete wire format documentation
+- ✓ README.md updated with all 58 message types and current architecture — Phase 69
+- ✓ PROTOCOL.md verified with complete wire format documentation (2 byte-offset fixes) — Phase 69
 - ✓ dist/ production kit: systemd units, default configs, tmpfiles.d, sysusers.d, install script — Phase 68
 
 ## Latest Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
@@ -168,9 +168,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.4.0 with ~28,000 LOC C++20, 560+ unit tests, 54 Docker integration tests. Phase 68 complete — production distribution kit (systemd units, configs, sysusers.d, tmpfiles.d, install.sh). v1.5.0 in progress.
-Built across 26 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (in progress).
-14 milestones, 68 phases, 138 plans, 270 requirements total.
+Shipped v1.4.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Phase 68-69 complete — production distribution kit and documentation refresh. v1.5.0 nearing completion.
+Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (in progress).
+14 milestones, 69 phases, 140 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -306,4 +306,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-28 after Phase 68 completion*
+*Last updated: 2026-03-28 after Phase 69 completion*
