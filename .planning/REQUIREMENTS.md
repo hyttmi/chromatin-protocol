@@ -15,7 +15,7 @@ Requirements for v1.5.0 Documentation & Distribution. Each maps to roadmap phase
 - [x] **DIST-04**: dist/ contains default JSON config for chromatindb_relay with sane production defaults
 - [x] **DIST-05**: dist/ contains sysusers.d config to create chromatindb system user/group
 - [x] **DIST-06**: dist/ contains tmpfiles.d config for data, log, and config directories
-- [ ] **DIST-07**: dist/ contains install.sh that deploys all artifacts to FHS-standard locations
+- [x] **DIST-07**: dist/ contains install.sh that deploys all artifacts to FHS-standard locations
 
 ### Documentation
 
@@ -58,7 +58,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DIST-04 | Phase 68 | Complete |
 | DIST-05 | Phase 68 | Complete |
 | DIST-06 | Phase 68 | Complete |
-| DIST-07 | Phase 68 | Pending |
+| DIST-07 | Phase 68 | Complete |
 | DOCS-01 | Phase 69 | Pending |
 | DOCS-02 | Phase 69 | Pending |
 | DOCS-03 | Phase 69 | Pending |
