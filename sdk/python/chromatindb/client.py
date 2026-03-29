@@ -50,7 +50,7 @@ class ChromatinClient:
             Async context manager that yields ChromatinClient.
 
         Usage:
-            async with ChromatinClient.connect("192.168.1.200", 4433, identity) as conn:
+            async with ChromatinClient.connect("192.168.1.200", 4201, identity) as conn:
                 await conn.ping()
         """
         client = cls.__new__(cls)

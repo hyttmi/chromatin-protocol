@@ -38,7 +38,7 @@ def relay_host() -> str:
 @pytest.fixture
 def relay_port() -> int:
     """Relay port for integration tests (env override: CHROMATINDB_RELAY_PORT)."""
-    return int(os.environ.get("CHROMATINDB_RELAY_PORT", "4433"))
+    return int(os.environ.get("CHROMATINDB_RELAY_PORT", "4201"))
 
 
 def load_vectors(filename: str) -> dict[str, Any]:

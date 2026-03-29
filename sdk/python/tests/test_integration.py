@@ -3,7 +3,7 @@
 These tests require a running chromatindb relay.
 Configure via environment variables (per D-13):
   CHROMATINDB_RELAY_HOST (default: 192.168.1.200)
-  CHROMATINDB_RELAY_PORT (default: 4433)
+  CHROMATINDB_RELAY_PORT (default: 4201)
 
 Run: pytest tests/test_integration.py -v -m integration
 Skip: automatically skipped if relay is unreachable
@@ -21,7 +21,7 @@ from chromatindb.exceptions import HandshakeError
 from chromatindb.identity import Identity
 
 RELAY_HOST = os.environ.get("CHROMATINDB_RELAY_HOST", "192.168.1.200")
-RELAY_PORT = int(os.environ.get("CHROMATINDB_RELAY_PORT", "4433"))
+RELAY_PORT = int(os.environ.get("CHROMATINDB_RELAY_PORT", "4201"))
 
 
 def _relay_reachable() -> bool:
