@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 71-01-PLAN.md
-last_updated: "2026-03-29T12:19:06Z"
-last_activity: 2026-03-29
+stopped_at: Phase 71 context gathered
+last_updated: "2026-03-29T12:14:18.241Z"
+last_activity: 2026-03-29 -- Phase 71 execution started
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 4
-  percent: 8
+  total_plans: 6
+  completed_plans: 3
+  percent: 6
 ---
 
 # Project State
@@ -21,24 +21,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.6.0 Python SDK -- Phase 70 executing
+**Current focus:** Phase 71 — transport-pq-handshake
 
 ## Current Position
 
-Phase: 71 of 74 (transport & pq handshake)
-Plan: 1 of 3 complete
+Phase: 71 (transport-pq-handshake) — EXECUTING
+Plan: 1 of 3
 Status: Executing Phase 71
-Last activity: 2026-03-29
+Last activity: 2026-03-29 -- Phase 71 execution started
 
-Progress: [#.........] 8%
+Progress: [#.........] 6%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 4
-- Average duration: 10min
-- Total execution time: 0.68 hours
+- Total plans completed: 1
+- Average duration: 27min
+- Total execution time: 0.45 hours
 
 **By Phase:**
 
@@ -47,10 +47,8 @@ Progress: [#.........] 8%
 | Phase 70 P01 | 4min | 2 tasks | 10 files |
 | Phase 70 P02 | 27min | 1 tasks | 3 files |
 
-| Phase 70 P03 | 7min | 2 tasks | 9 files |
-| Phase 71 P01 | 3min | 1 tasks | 5 files |
-
 *Updated after each plan completion*
+| Phase 70 P03 | 7min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -70,8 +68,6 @@ Progress: [#.........] 8%
 - [Phase 70 P03]: Pure-Python HKDF-SHA256 via stdlib hmac+hashlib (no libsodium HKDF binding needed)
 - [Phase 70 P03]: FlatBuffer payload decode via per-element Payload(j) loop -- avoids numpy dependency
 - [Phase 70 P03]: Removed auto-generated .pyi stubs from FlatBuffers codegen (buggy numpy and Literal types)
-- [Phase 71 P01]: ChromatinConnectionError alias avoids shadowing builtin ConnectionError
-- [Phase 71 P01]: pytest asyncio_mode=auto eliminates per-test @pytest.mark.asyncio decorators
 
 ### Pending Todos
 
@@ -83,6 +79,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-29T12:19:06Z
-Stopped at: Completed 71-01-PLAN.md
-Resume file: .planning/phases/71-transport-pq-handshake/71-01-SUMMARY.md
+Last session: 2026-03-29T10:15:23.029Z
+Stopped at: Phase 71 context gathered
+Resume file: .planning/phases/71-transport-pq-handshake/71-CONTEXT.md
