@@ -220,7 +220,7 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 70. Crypto Foundation & Identity | 0/3 | Planned | - |
+| 70. Crypto Foundation & Identity | 1/3 | In progress | - |
 | 71. Transport & PQ Handshake | 0/TBD | Not started | - |
 | 72. Core Data Operations | 0/TBD | Not started | - |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |

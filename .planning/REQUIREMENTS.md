@@ -47,9 +47,9 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 ### Packaging
 
-- [ ] **PKG-01**: SDK is pip-installable (pyproject.toml, sdk/python/ layout)
+- [x] **PKG-01**: SDK is pip-installable (pyproject.toml, sdk/python/ layout)
 - [ ] **PKG-02**: SDK includes getting started tutorial with usage examples
-- [ ] **PKG-03**: SDK has typed exception hierarchy mapping protocol errors
+- [x] **PKG-03**: SDK has typed exception hierarchy mapping protocol errors
 
 ### Documentation
 
@@ -108,9 +108,9 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 | PUBSUB-01 | Phase 73 | Pending |
 | PUBSUB-02 | Phase 73 | Pending |
 | PUBSUB-03 | Phase 73 | Pending |
-| PKG-01 | Phase 70 | Pending |
+| PKG-01 | Phase 70 | Complete |
 | PKG-02 | Phase 74 | Pending |
-| PKG-03 | Phase 70 | Pending |
+| PKG-03 | Phase 70 | Complete |
 | DOCS-01 | Phase 74 | Pending |
 
 **Coverage:**
