@@ -2,3 +2,9 @@ build/
 db/version.h
 deploy/results/
 deploy/configs/*-trusted.json
+
+# Python SDK
+sdk/python/.venv/
+__pycache__/
+*.egg-info/
+*.pyc
