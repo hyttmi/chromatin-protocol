@@ -10,24 +10,23 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Latest Milestone: v1.5.0 Documentation & Distribution (SHIPPED 2026-03-28)
+## Current Milestone: v1.6.0 Python SDK
+
+**Goal:** Python client SDK for chromatindb — connect to relay, PQ handshake, all 38 client message types, with tutorial and updated docs.
+
+**Target features:**
+- PQ-authenticated connection to relay (ML-KEM-1024 + ML-DSA-87 via liboqs-python)
+- ChaCha20-Poly1305 encrypted transport (AEAD framing, matching node wire format)
+- Full client API: write, read, delete, list, query (all 38 relay-allowed message types)
+- Pub/sub notifications (subscribe/unsubscribe/receive)
+- FlatBuffers wire protocol (Python runtime for encode/decode)
+- Pip-installable package under sdk/python/
+- Python SDK tutorial (getting started guide with usage examples)
+- Documentation refresh (README, PROTOCOL.md updated with SDK section)
+
+## Previous Milestone: v1.5.0 Documentation & Distribution (SHIPPED 2026-03-28)
 
 **Delivered:** Production deployment kit (install.sh, systemd units, configs) and full documentation refresh (README, PROTOCOL.md verified against source with 2 byte-offset fixes).
-
-## Previous Milestone: v1.4.0 Extended Query Suite (SHIPPED 2026-03-27)
-
-**Delivered:** 9 new query/response message type pairs (18 types, enums 41-58) expanding the client-facing API. HealthRequest was dropped (NodeInfoResponse already serves as health check).
-
-**Shipped features:**
-- NamespaceList query — paginated namespace enumeration
-- StorageStatus query — disk usage, quota headroom, tombstone counts
-- NamespaceStats query — per-namespace count, bytes, quota usage
-- BlobMetadata query — size, timestamp, TTL, signer without payload transfer
-- BatchExists query — check multiple blob hashes in one request
-- DelegationList query — active delegations for a namespace
-- BatchRead query — size-capped multi-blob fetch
-- PeerInfo query — trust-gated peer connection info
-- TimeRange query — blobs within a timestamp window
 
 ## Requirements
 
@@ -159,15 +158,25 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ README.md updated with v1.5.0 state, relay section, deployment section, all 58 message types — v1.5.0 Phase 69
 - ✓ PROTOCOL.md verified against encoder source for all 58 message types with byte-level accuracy — v1.5.0 Phase 69
 
+### Active
+
+- [ ] Python SDK: PQ-authenticated connection to relay
+- [ ] Python SDK: ChaCha20-Poly1305 encrypted transport
+- [ ] Python SDK: Full client API (all 38 relay-allowed message types)
+- [ ] Python SDK: Pub/sub notifications
+- [ ] Python SDK: Pip-installable package under sdk/python/
+- [ ] Python SDK: Getting started tutorial with usage examples
+- [ ] Documentation refresh with SDK section
+
 ### Future
 
-- Python SDK for connecting to relay
 - CLI tool for admin operations (quota check, list blobs, etc.)
+- C/C++/Rust/JS SDKs under sdk/ subdirectories
 - Performance benchmarks for Relay layer
 
 ## Context
 
-Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete.
+Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete. Relay message filter flipped from whitelist to blocklist (21 blocked peer-internal types) — new message types pass through without relay changes.
 Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d).
 15 milestones, 69 phases, 140 plans, 270 requirements total.
 
@@ -175,8 +184,10 @@ Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (
 
 Three-layer architecture (building bottom-up):
 - **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. Database layer is done.
-- **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Security boundary between untrusted clients and node.
-- **Layer 3 (FUTURE): Client/SDK** — Python SDK for developers, possibly CLI tool.
+- **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Blocklist approach — future-proof.
+- **Layer 3 (v1.6.0 IN PROGRESS): Python SDK** — pip-installable client library using liboqs-python for PQ crypto.
+
+**Live test environment:** 3-node KVM swarm (192.168.1.200-202) with relay on 200.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
 
@@ -308,4 +319,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-28 after v1.5.0 milestone*
+*Last updated: 2026-03-29 after v1.6.0 milestone start*
