@@ -9,7 +9,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 ### Transport
 
-- [ ] **XPORT-01**: SDK generates and persists ML-DSA-87 client identity keypairs
+- [x] **XPORT-01**: SDK generates and persists ML-DSA-87 client identity keypairs
 - [ ] **XPORT-02**: SDK performs ML-KEM-1024 key exchange with relay (PQ handshake initiator)
 - [ ] **XPORT-03**: SDK performs mutual ML-DSA-87 authentication during handshake
 - [ ] **XPORT-04**: SDK encrypts/decrypts all post-handshake frames with ChaCha20-Poly1305 AEAD
@@ -82,7 +82,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| XPORT-01 | Phase 70 | Pending |
+| XPORT-01 | Phase 70 | Complete |
 | XPORT-02 | Phase 71 | Pending |
 | XPORT-03 | Phase 71 | Pending |
 | XPORT-04 | Phase 71 | Pending |
