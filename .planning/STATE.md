@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 70-01-PLAN.md
-last_updated: "2026-03-29T08:16:08Z"
-last_activity: 2026-03-29 -- Phase 70 Plan 01 complete (SDK skeleton, exceptions, FlatBuffers)
+stopped_at: Completed 70-01-PLAN.md and 70-02-PLAN.md (Wave 1)
+last_updated: "2026-03-29T08:39:16Z"
+last_activity: 2026-03-29 -- Phase 70 Wave 1 complete (SDK skeleton + test vector generator)
 progress:
   total_phases: 5
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.6.0 Python SDK -- Phase 70 ready for planning
+**Current focus:** v1.6.0 Python SDK -- Phase 70 executing
 
 ## Current Position
 
 Phase: 70 of 74 (Crypto Foundation & Identity)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: Executing
-Last activity: 2026-03-29 -- Phase 70 Plan 01 complete (SDK skeleton, exceptions, FlatBuffers)
+Last activity: 2026-03-29 -- Phase 70 Wave 1 complete (SDK skeleton + test vector generator)
 
 Progress: [#.........] 6%
 
@@ -36,15 +36,15 @@ Progress: [#.........] 6%
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 27min
+- Total execution time: 0.45 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| Phase 70 P02 | 27min | 1 tasks | 3 files |
 
 *Updated after each plan completion*
 | Phase 70 P01 | 4min | 2 tasks | 10 files |
@@ -62,6 +62,8 @@ Progress: [#.........] 6%
 - [Phase 70 P01]: setuptools.build_meta backend (not _legacy) for Python 3.14 compatibility
 - [Phase 70 P01]: D-24 version override -- liboqs-python~=0.14.0, flatbuffers~=25.12 (research-corrected)
 - [Phase 70 P01]: FlatBuffers generated code excluded from ruff linting (auto-generated PascalCase)
+- [Phase 70 P02]: Test vector generator links chromatindb_lib, outputs JSON to stdout (same pattern as chromatindb_verify)
+- [Phase 70 P02]: SDK test vectors: C++ generates authoritative JSON, Python validates against it
 
 ### Pending Todos
 
@@ -73,6 +75,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-29T08:16:08Z
-Stopped at: Completed 70-01-PLAN.md
+Last session: 2026-03-29T08:39:16Z
+Stopped at: Completed 70-01-PLAN.md and 70-02-PLAN.md (Wave 1)
 Resume file: None

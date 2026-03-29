@@ -187,3 +187,9 @@ target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
 # =============================================================================
 add_executable(chromatindb_verify tools/verify_main.cpp)
 target_link_libraries(chromatindb_verify PRIVATE chromatindb_lib)
+
+# =============================================================================
+# Test vector generator (cross-language crypto vectors for SDK)
+# =============================================================================
+add_executable(chromatindb_test_vectors tools/test_vector_generator.cpp)
+target_link_libraries(chromatindb_test_vectors PRIVATE chromatindb_lib)
