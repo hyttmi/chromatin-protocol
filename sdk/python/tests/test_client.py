@@ -298,16 +298,15 @@ class TestTransportSendRequest:
         # Manually resolve futures to prevent hanging
 
         async def send_and_check(expected_id: int) -> None:
+            # Use a generic message type (not Ping, which now uses send_ping)
             task = asyncio.create_task(
-                transport.send_request(TransportMsgType.Ping, b"")
+                transport.send_request(10, b"test")
             )
             await asyncio.sleep(0.01)
             # Check that the pending dict has the expected request_id
             assert expected_id in transport._pending
             # Resolve the future so the task can complete
-            transport._pending[expected_id].set_result(
-                (TransportMsgType.Pong, b"")
-            )
+            transport._pending[expected_id].set_result((10, b"ok"))
             await task
 
         await send_and_check(1)
@@ -387,8 +386,7 @@ class TestChromatinClient:
 
         transport = Transport(reader, writer, send_key, recv_key, 1, 1)
 
-        # Feed a Pong response for request_id=1 (first auto-assigned)
-        # But we need the reader loop running to dispatch it
+        # Reader loop must be running to dispatch Pong
         transport.start()
 
         client = ChromatinClient(transport)
@@ -399,14 +397,14 @@ class TestChromatinClient:
         # Wait for the ping to be sent
         await asyncio.sleep(0.02)
 
-        # Now feed a Pong response with request_id=1
+        # C++ relay sends Pong with request_id=0 (doesn't echo client's id)
         feed_encrypted_frame(
             reader,
             msg_type=TransportMsgType.Pong,
             payload=b"",
             key=recv_key,
             counter=1,
-            request_id=1,
+            request_id=0,
         )
 
         # ping should complete

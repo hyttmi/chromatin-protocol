@@ -17,8 +17,6 @@ from chromatindb._handshake import perform_handshake
 from chromatindb._transport import Transport
 from chromatindb.exceptions import HandshakeError
 from chromatindb.identity import Identity
-from chromatindb.wire import TransportMsgType
-
 
 class ChromatinClient:
     """Async client for chromatindb relay.
@@ -103,4 +101,4 @@ class ChromatinClient:
 
     async def ping(self) -> None:
         """Send Ping and wait for Pong. Raises ConnectionError if disconnected."""
-        await self._transport.send_request(TransportMsgType.Ping, b"")
+        await self._transport.send_ping()

@@ -9,6 +9,7 @@ Internal module -- not part of public API (per D-03).
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 
 from chromatindb._framing import recv_encrypted, send_encrypted
 from chromatindb.exceptions import ConnectionError as ChromatinConnectionError
@@ -50,6 +51,7 @@ class Transport:
         self._pending: dict[int, asyncio.Future] = {}
         self._notifications: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._next_request_id = 1  # per D-09: auto-assigned, starts at 1
+        self._pending_pings: deque[asyncio.Future] = deque()
         self._reader_task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()  # serialize send_encrypted calls
 
@@ -75,11 +77,10 @@ class Transport:
                 if msg_type == TransportMsgType.Ping:
                     await self._send_pong()
                 elif msg_type == TransportMsgType.Pong:
-                    # Resolve pending ping future if exists
-                    if request_id in self._pending:
-                        self._pending.pop(request_id).set_result(
-                            (msg_type, payload)
-                        )
+                    # C++ relay sends Pong with request_id=0 (doesn't echo
+                    # client request_id), so resolve oldest pending ping.
+                    if self._pending_pings:
+                        self._pending_pings.popleft().set_result(None)
                 elif msg_type == TransportMsgType.Goodbye:
                     self._closed = True
                     break
@@ -128,6 +129,10 @@ class Transport:
             if not fut.done():
                 fut.set_exception(exc)
         self._pending.clear()
+        for fut in self._pending_pings:
+            if not fut.done():
+                fut.set_exception(exc)
+        self._pending_pings.clear()
 
     async def send_request(
         self,
@@ -158,6 +163,30 @@ class Transport:
             )
 
         return await fut
+
+    async def send_ping(self) -> None:
+        """Send Ping and wait for Pong.
+
+        Uses request_id=0 because the C++ relay replies with Pong
+        without echoing request_id. Pending pings are tracked in a
+        FIFO queue resolved by the reader loop.
+        """
+        if self._closed:
+            raise ChromatinConnectionError("connection is closed")
+
+        fut: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._pending_pings.append(fut)
+
+        msg = encode_transport_message(TransportMsgType.Ping, b"")
+        async with self._send_lock:
+            self._send_counter = await send_encrypted(
+                self._writer,
+                msg,
+                self._send_key,
+                self._send_counter,
+            )
+
+        await fut
 
     async def send_goodbye(self) -> None:
         """Send Goodbye message. Does not wait for response."""
