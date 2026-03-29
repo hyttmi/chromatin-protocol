@@ -146,7 +146,7 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
 - Integer phases (70, 71, ...): Planned milestone work
 - Decimal phases (71.1, 71.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 70: Crypto Foundation & Identity** - Verified PQ crypto primitives and client identity management
+- [x] **Phase 70: Crypto Foundation & Identity** - Verified PQ crypto primitives and client identity management (completed 2026-03-29)
 - [ ] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication
 - [ ] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node
 - [ ] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications
@@ -163,11 +163,11 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
   2. SHA3-256, HKDF-SHA256, and ChaCha20-Poly1305 produce byte-identical output to C++ for known test vectors
   3. SDK derives namespace from pubkey identically to C++ (SHA3-256(pubkey) == namespace)
   4. Project is pip-installable in editable mode with pyproject.toml, correct dependencies, exception hierarchy, and FlatBuffers generated code
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
-- [ ] 70-01-PLAN.md — SDK package skeleton, pyproject.toml, exception hierarchy, FlatBuffers codegen
+- [x] 70-01-PLAN.md — SDK package skeleton, pyproject.toml, exception hierarchy, FlatBuffers codegen
 - [x] 70-02-PLAN.md — C++ test vector generator binary, JSON crypto vectors
-- [ ] 70-03-PLAN.md — Crypto primitives, identity management, wire format, tested against C++ vectors
+- [x] 70-03-PLAN.md — Crypto primitives, identity management, wire format, tested against C++ vectors
 
 ### Phase 71: Transport & PQ Handshake
 **Goal**: SDK establishes a PQ-authenticated, AEAD-encrypted session with a live relay
@@ -220,7 +220,7 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 70. Crypto Foundation & Identity | 2/3 | In progress | - |
+| 70. Crypto Foundation & Identity | 3/3 | Complete | 2026-03-29 |
 | 71. Transport & PQ Handshake | 0/TBD | Not started | - |
 | 72. Core Data Operations | 0/TBD | Not started | - |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |

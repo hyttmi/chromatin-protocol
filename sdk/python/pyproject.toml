@@ -37,6 +37,15 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+exclude = ["chromatindb/generated/"]
+
+[[tool.mypy.overrides]]
+module = ["oqs", "oqs.*", "flatbuffers", "flatbuffers.*", "nacl", "nacl.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["chromatindb.generated.*"]
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

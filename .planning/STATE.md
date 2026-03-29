@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 70-01-PLAN.md and 70-02-PLAN.md (Wave 1)
-last_updated: "2026-03-29T08:39:16Z"
-last_activity: 2026-03-29 -- Phase 70 Wave 1 complete (SDK skeleton + test vector generator)
+stopped_at: Completed 70-03-PLAN.md (all plans done)
+last_updated: "2026-03-29T08:57:01Z"
+last_activity: 2026-03-29 -- Phase 70 all plans complete (3/3)
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 3
   percent: 6
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 70 of 74 (Crypto Foundation & Identity)
-Plan: 2 of 3 complete
-Status: Executing
-Last activity: 2026-03-29 -- Phase 70 Wave 1 complete (SDK skeleton + test vector generator)
+Plan: 3 of 3 complete
+Status: Executing — awaiting verification
+Last activity: 2026-03-29 -- Phase 70 all plans complete (3/3)
 
 Progress: [#.........] 6%
 
@@ -44,10 +44,11 @@ Progress: [#.........] 6%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
+| Phase 70 P01 | 4min | 2 tasks | 10 files |
 | Phase 70 P02 | 27min | 1 tasks | 3 files |
 
 *Updated after each plan completion*
-| Phase 70 P01 | 4min | 2 tasks | 10 files |
+| Phase 70 P03 | 7min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,9 @@ Progress: [#.........] 6%
 - [Phase 70 P01]: FlatBuffers generated code excluded from ruff linting (auto-generated PascalCase)
 - [Phase 70 P02]: Test vector generator links chromatindb_lib, outputs JSON to stdout (same pattern as chromatindb_verify)
 - [Phase 70 P02]: SDK test vectors: C++ generates authoritative JSON, Python validates against it
+- [Phase 70 P03]: Pure-Python HKDF-SHA256 via stdlib hmac+hashlib (no libsodium HKDF binding needed)
+- [Phase 70 P03]: FlatBuffer payload decode via per-element Payload(j) loop -- avoids numpy dependency
+- [Phase 70 P03]: Removed auto-generated .pyi stubs from FlatBuffers codegen (buggy numpy and Literal types)
 
 ### Pending Todos
 
@@ -75,6 +79,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-29T08:39:16Z
-Stopped at: Completed 70-01-PLAN.md and 70-02-PLAN.md (Wave 1)
+Last session: 2026-03-29T08:57:01Z
+Stopped at: Phase 70 all plans complete, awaiting verification
 Resume file: None
