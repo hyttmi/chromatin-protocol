@@ -178,9 +178,9 @@ Plans:
   2. SDK sends and receives AEAD-encrypted frames with correct per-direction nonce counters (no desync)
   3. SDK connects and disconnects cleanly (context manager, Goodbye message)
   4. Handshake follows C++ implementation (empty HKDF salt, correct endianness per field, nonce counters start at 1 post-handshake)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 Plans:
-- [ ] 71-01-PLAN.md — Encrypted frame IO layer (nonce, raw/AEAD send/recv, exceptions)
+- [x] 71-01-PLAN.md — Encrypted frame IO layer (nonce, raw/AEAD send/recv, exceptions)
 - [ ] 71-02-PLAN.md — PQ handshake, background reader transport, ChromatinClient context manager
 - [ ] 71-03-PLAN.md — Integration tests against live KVM relay + human verification
 
@@ -225,7 +225,7 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
-| 71. Transport & PQ Handshake | 0/3 | Not started | - |
+| 71. Transport & PQ Handshake | 1/3 | In Progress|  |
 | 72. Core Data Operations | 0/TBD | Not started | - |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
