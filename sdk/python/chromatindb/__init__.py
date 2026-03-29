@@ -17,16 +17,16 @@ from chromatindb.exceptions import (
 )
 
 __all__ = [
-    "__version__",
     "ChromatinError",
     "CryptoError",
-    "SignatureError",
+    "DecodeError",
     "DecryptionError",
-    "KeyDerivationError",
     "IdentityError",
+    "KeyDerivationError",
     "KeyFileError",
     "NamespaceError",
-    "WireError",
-    "DecodeError",
     "ProtocolError",
+    "SignatureError",
+    "WireError",
+    "__version__",
 ]
