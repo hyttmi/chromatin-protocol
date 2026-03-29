@@ -163,7 +163,11 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
   2. SHA3-256, HKDF-SHA256, and ChaCha20-Poly1305 produce byte-identical output to C++ for known test vectors
   3. SDK derives namespace from pubkey identically to C++ (SHA3-256(pubkey) == namespace)
   4. Project is pip-installable in editable mode with pyproject.toml, correct dependencies, exception hierarchy, and FlatBuffers generated code
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 70-01-PLAN.md — SDK package skeleton, pyproject.toml, exception hierarchy, FlatBuffers codegen
+- [ ] 70-02-PLAN.md — C++ test vector generator binary, JSON crypto vectors
+- [ ] 70-03-PLAN.md — Crypto primitives, identity management, wire format, tested against C++ vectors
 
 ### Phase 71: Transport & PQ Handshake
 **Goal**: SDK establishes a PQ-authenticated, AEAD-encrypted session with a live relay
@@ -216,7 +220,7 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 70. Crypto Foundation & Identity | 0/TBD | Not started | - |
+| 70. Crypto Foundation & Identity | 0/3 | Planned | - |
 | 71. Transport & PQ Handshake | 0/TBD | Not started | - |
 | 72. Core Data Operations | 0/TBD | Not started | - |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
