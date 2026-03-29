@@ -12,7 +12,9 @@ Hierarchy matches C++ error conditions:
   |   +-- NamespaceError
   +-- WireError
   |   +-- DecodeError
-  +-- ProtocolError (Phase 71+: HandshakeError, ConnectionError)
+  +-- ProtocolError
+      +-- HandshakeError
+      +-- ConnectionError
 """
 
 
@@ -57,4 +59,17 @@ class DecodeError(WireError):
 
 
 class ProtocolError(ChromatinError):
-    """Base for protocol-level errors (Phase 71+: HandshakeError, ConnectionError)."""
+    """Base for protocol-level errors."""
+
+
+class HandshakeError(ProtocolError):
+    """PQ handshake failed (timeout, auth verification, protocol mismatch)."""
+
+
+class ConnectionError(ProtocolError):
+    """Connection lost or transport-level failure.
+
+    Named ConnectionError to match C++ node convention. Does NOT shadow
+    the builtin ConnectionError because SDK code uses fully-qualified
+    chromatindb.exceptions.ConnectionError or imports explicitly.
+    """
