@@ -7,55 +7,37 @@ namespace chromatindb::relay::core {
 
 bool is_client_allowed(TransportMsgType type) {
     switch (type) {
-        // Client data operations
-        case TransportMsgType_Data:
-        case TransportMsgType_WriteAck:
-        case TransportMsgType_Delete:
-        case TransportMsgType_DeleteAck:
-        case TransportMsgType_ReadRequest:
-        case TransportMsgType_ReadResponse:
-        case TransportMsgType_ListRequest:
-        case TransportMsgType_ListResponse:
-        case TransportMsgType_StatsRequest:
-        case TransportMsgType_StatsResponse:
-        // Query extensions
-        case TransportMsgType_ExistsRequest:
-        case TransportMsgType_ExistsResponse:
-        case TransportMsgType_NodeInfoRequest:
-        case TransportMsgType_NodeInfoResponse:
-        // Phase 65: Node-level queries
-        case TransportMsgType_NamespaceListRequest:
-        case TransportMsgType_NamespaceListResponse:
-        case TransportMsgType_StorageStatusRequest:
-        case TransportMsgType_StorageStatusResponse:
-        case TransportMsgType_NamespaceStatsRequest:
-        case TransportMsgType_NamespaceStatsResponse:
-        // Phase 66: Blob-level queries
-        case TransportMsgType_MetadataRequest:
-        case TransportMsgType_MetadataResponse:
-        case TransportMsgType_BatchExistsRequest:
-        case TransportMsgType_BatchExistsResponse:
-        case TransportMsgType_DelegationListRequest:
-        case TransportMsgType_DelegationListResponse:
-        // Phase 67: Batch/range queries
-        case TransportMsgType_BatchReadRequest:
-        case TransportMsgType_BatchReadResponse:
-        case TransportMsgType_PeerInfoRequest:
-        case TransportMsgType_PeerInfoResponse:
-        case TransportMsgType_TimeRangeRequest:
-        case TransportMsgType_TimeRangeResponse:
-        // Pub/sub
-        case TransportMsgType_Subscribe:
-        case TransportMsgType_Unsubscribe:
-        case TransportMsgType_Notification:
-        // Keepalive and disconnect
-        case TransportMsgType_Ping:
-        case TransportMsgType_Pong:
-        case TransportMsgType_Goodbye:
-            return true;
-        // Default-deny: peer-only, handshake, internal, and unknown types
-        default:
+        // Invalid
+        case TransportMsgType_None:
+        // Handshake types
+        case TransportMsgType_KemPubkey:
+        case TransportMsgType_KemCiphertext:
+        case TransportMsgType_AuthSignature:
+        case TransportMsgType_AuthPubkey:
+        case TransportMsgType_TrustedHello:
+        case TransportMsgType_PQRequired:
+        // Peer sync types
+        case TransportMsgType_SyncRequest:
+        case TransportMsgType_SyncAccept:
+        case TransportMsgType_SyncComplete:
+        case TransportMsgType_SyncRejected:
+        case TransportMsgType_NamespaceList:
+        case TransportMsgType_BlobRequest:
+        case TransportMsgType_BlobTransfer:
+        case TransportMsgType_ReconcileInit:
+        case TransportMsgType_ReconcileRanges:
+        case TransportMsgType_ReconcileItems:
+        // Peer exchange
+        case TransportMsgType_PeerListRequest:
+        case TransportMsgType_PeerListResponse:
+        // Internal signals
+        case TransportMsgType_StorageFull:
+        case TransportMsgType_QuotaExceeded:
             return false;
+        // All other types (client operations, queries, pub/sub, keepalive)
+        // pass through — new message types work without relay changes.
+        default:
+            return true;
     }
 }
 

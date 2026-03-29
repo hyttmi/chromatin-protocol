@@ -12,7 +12,6 @@ using Catch::Matchers::ContainsSubstring;
 // ===== Message filter tests =====
 
 TEST_CASE("is_client_allowed permits client operation types", "[message_filter]") {
-    // 38 client-allowed types (16 per RELAY-03 + 4 query extensions + 6 node-level + 6 blob-level + 6 batch/range)
     CHECK(is_client_allowed(TransportMsgType_Data));
     CHECK(is_client_allowed(TransportMsgType_WriteAck));
     CHECK(is_client_allowed(TransportMsgType_Delete));
@@ -81,9 +80,9 @@ TEST_CASE("is_client_allowed blocks handshake and internal types", "[message_fil
     CHECK_FALSE(is_client_allowed(TransportMsgType_QuotaExceeded));
 }
 
-TEST_CASE("is_client_allowed default-denies unknown types", "[message_filter]") {
-    CHECK_FALSE(is_client_allowed(static_cast<TransportMsgType>(100)));
-    CHECK_FALSE(is_client_allowed(static_cast<TransportMsgType>(-1)));
+TEST_CASE("is_client_allowed allows unknown types (blocklist approach)", "[message_filter]") {
+    CHECK(is_client_allowed(static_cast<TransportMsgType>(100)));
+    CHECK(is_client_allowed(static_cast<TransportMsgType>(-1)));
 }
 
 TEST_CASE("type_name returns human-readable names", "[message_filter]") {

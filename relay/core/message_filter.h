@@ -6,22 +6,13 @@
 namespace chromatindb::relay::core {
 
 /// Check if a message type is allowed through the relay from a client.
-/// 38 client-allowed types:
-/// Allowed: Data, WriteAck, Delete, DeleteAck, ReadRequest, ReadResponse,
-///          ListRequest, ListResponse, StatsRequest, StatsResponse,
-///          ExistsRequest, ExistsResponse, NodeInfoRequest, NodeInfoResponse,
-///          NamespaceListRequest, NamespaceListResponse,
-///          StorageStatusRequest, StorageStatusResponse,
-///          NamespaceStatsRequest, NamespaceStatsResponse,
-///          MetadataRequest, MetadataResponse,
-///          BatchExistsRequest, BatchExistsResponse,
-///          DelegationListRequest, DelegationListResponse,
-///          BatchReadRequest, BatchReadResponse,
-///          PeerInfoRequest, PeerInfoResponse,
-///          TimeRangeRequest, TimeRangeResponse,
-///          Subscribe, Unsubscribe, Notification, Ping, Pong, Goodbye
-/// Blocked: All peer-only types, handshake types, None, unknown types.
-/// Per RELAY-03: default-deny on unknown types.
+/// Blocklist approach: only peer-internal types are blocked. New client-visible
+/// message types added to the node pass through without relay changes.
+/// Blocked: None, handshake (KemPubkey, KemCiphertext, AuthSignature, AuthPubkey,
+///          TrustedHello, PQRequired), sync (SyncRequest, SyncAccept, SyncComplete,
+///          SyncRejected, NamespaceList, BlobRequest, BlobTransfer, ReconcileInit,
+///          ReconcileRanges, ReconcileItems), PEX (PeerListRequest, PeerListResponse),
+///          internal signals (StorageFull, QuotaExceeded).
 bool is_client_allowed(chromatindb::wire::TransportMsgType type);
 
 /// Human-readable name for a message type (for logging blocked types per D-07).
