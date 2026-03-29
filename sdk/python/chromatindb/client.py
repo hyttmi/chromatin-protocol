@@ -60,7 +60,16 @@ class ChromatinClient:
         return client
 
     async def __aenter__(self) -> ChromatinClient:
-        reader, writer = await asyncio.open_connection(self._host, self._port)
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self._host, self._port),
+                timeout=self._timeout,
+            )
+        except asyncio.TimeoutError:
+            raise HandshakeError(
+                f"connection timed out after {self._timeout}s"
+            ) from None
+
         try:
             result = await asyncio.wait_for(
                 perform_handshake(reader, writer, self._identity),
