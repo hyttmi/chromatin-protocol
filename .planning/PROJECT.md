@@ -162,11 +162,12 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ ML-DSA-87 identity management (generate/load/save) interoperable with C++ node key format — v1.6.0 Phase 70
 - ✓ Python SDK pip-installable skeleton with exception hierarchy and FlatBuffers codegen — v1.6.0 Phase 70
 - ✓ C++ test vector generator for cross-language crypto validation — v1.6.0 Phase 70
+- ✓ Python SDK: AEAD-encrypted frame IO with nonce counter management — v1.6.0 Phase 71
+- ✓ Python SDK: PQ-authenticated connection to relay (ML-KEM-1024 handshake + ML-DSA-87 mutual auth) — v1.6.0 Phase 71
+- ✓ Python SDK: ChaCha20-Poly1305 encrypted transport with background reader and request dispatch — v1.6.0 Phase 71
+- ✓ Python SDK: ChromatinClient async context manager (connect, ping, goodbye) — v1.6.0 Phase 71
 
 ### Active
-
-- [ ] Python SDK: PQ-authenticated connection to relay
-- [ ] Python SDK: ChaCha20-Poly1305 encrypted transport
 - [ ] Python SDK: Full client API (all 38 relay-allowed message types)
 - [ ] Python SDK: Pub/sub notifications
 - [ ] Python SDK: Pip-installable package under sdk/python/
@@ -183,7 +184,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete. Relay message filter flipped from whitelist to blocklist (21 blocked peer-internal types) — new message types pass through without relay changes.
 Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d).
-15 milestones, 70 phases, 143 plans, 270 requirements total.
+15 milestones, 71 phases, 146 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
@@ -324,4 +325,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-29 after v1.6.0 milestone start*
+*Last updated: 2026-03-29 after Phase 71 (transport-pq-handshake) complete*
