@@ -147,7 +147,7 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
 - Decimal phases (71.1, 71.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 70: Crypto Foundation & Identity** - Verified PQ crypto primitives and client identity management (completed 2026-03-29)
-- [ ] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication
+- [x] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication (completed 2026-03-29)
 - [ ] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node
 - [ ] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications
 - [ ] **Phase 74: Packaging & Documentation** - Pip-installable SDK with tutorial and docs refresh
@@ -178,7 +178,7 @@ Plans:
   2. SDK sends and receives AEAD-encrypted frames with correct per-direction nonce counters (no desync)
   3. SDK connects and disconnects cleanly (context manager, Goodbye message)
   4. Handshake follows C++ implementation (empty HKDF salt, correct endianness per field, nonce counters start at 1 post-handshake)
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 71-01-PLAN.md — Encrypted frame IO layer (nonce, raw/AEAD send/recv, exceptions)
 - [x] 71-02-PLAN.md — PQ handshake, background reader transport, ChromatinClient context manager
@@ -225,7 +225,7 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
-| 71. Transport & PQ Handshake | 2/3 | In Progress|  |
+| 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
 | 72. Core Data Operations | 0/TBD | Not started | - |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
