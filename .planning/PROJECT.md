@@ -158,6 +158,11 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ README.md updated with v1.5.0 state, relay section, deployment section, all 58 message types — v1.5.0 Phase 69
 - ✓ PROTOCOL.md verified against encoder source for all 58 message types with byte-level accuracy — v1.5.0 Phase 69
 
+- ✓ SDK crypto primitives byte-identical to C++ (SHA3-256, HKDF-SHA256, ChaCha20-Poly1305, canonical signing input) — v1.6.0 Phase 70
+- ✓ ML-DSA-87 identity management (generate/load/save) interoperable with C++ node key format — v1.6.0 Phase 70
+- ✓ Python SDK pip-installable skeleton with exception hierarchy and FlatBuffers codegen — v1.6.0 Phase 70
+- ✓ C++ test vector generator for cross-language crypto validation — v1.6.0 Phase 70
+
 ### Active
 
 - [ ] Python SDK: PQ-authenticated connection to relay
@@ -178,7 +183,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete. Relay message filter flipped from whitelist to blocklist (21 blocked peer-internal types) — new message types pass through without relay changes.
 Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d).
-15 milestones, 69 phases, 140 plans, 270 requirements total.
+15 milestones, 70 phases, 143 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
