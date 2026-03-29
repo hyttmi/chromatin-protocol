@@ -82,42 +82,42 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| XPORT-01 | - | Pending |
-| XPORT-02 | - | Pending |
-| XPORT-03 | - | Pending |
-| XPORT-04 | - | Pending |
-| XPORT-05 | - | Pending |
-| XPORT-06 | - | Pending |
-| XPORT-07 | - | Pending |
-| DATA-01 | - | Pending |
-| DATA-02 | - | Pending |
-| DATA-03 | - | Pending |
-| DATA-04 | - | Pending |
-| DATA-05 | - | Pending |
-| DATA-06 | - | Pending |
-| QUERY-01 | - | Pending |
-| QUERY-02 | - | Pending |
-| QUERY-03 | - | Pending |
-| QUERY-04 | - | Pending |
-| QUERY-05 | - | Pending |
-| QUERY-06 | - | Pending |
-| QUERY-07 | - | Pending |
-| QUERY-08 | - | Pending |
-| QUERY-09 | - | Pending |
-| QUERY-10 | - | Pending |
-| PUBSUB-01 | - | Pending |
-| PUBSUB-02 | - | Pending |
-| PUBSUB-03 | - | Pending |
-| PKG-01 | - | Pending |
-| PKG-02 | - | Pending |
-| PKG-03 | - | Pending |
-| DOCS-01 | - | Pending |
+| XPORT-01 | Phase 70 | Pending |
+| XPORT-02 | Phase 71 | Pending |
+| XPORT-03 | Phase 71 | Pending |
+| XPORT-04 | Phase 71 | Pending |
+| XPORT-05 | Phase 71 | Pending |
+| XPORT-06 | Phase 70 | Pending |
+| XPORT-07 | Phase 71 | Pending |
+| DATA-01 | Phase 72 | Pending |
+| DATA-02 | Phase 72 | Pending |
+| DATA-03 | Phase 72 | Pending |
+| DATA-04 | Phase 72 | Pending |
+| DATA-05 | Phase 72 | Pending |
+| DATA-06 | Phase 72 | Pending |
+| QUERY-01 | Phase 73 | Pending |
+| QUERY-02 | Phase 73 | Pending |
+| QUERY-03 | Phase 73 | Pending |
+| QUERY-04 | Phase 73 | Pending |
+| QUERY-05 | Phase 73 | Pending |
+| QUERY-06 | Phase 73 | Pending |
+| QUERY-07 | Phase 73 | Pending |
+| QUERY-08 | Phase 73 | Pending |
+| QUERY-09 | Phase 73 | Pending |
+| QUERY-10 | Phase 73 | Pending |
+| PUBSUB-01 | Phase 73 | Pending |
+| PUBSUB-02 | Phase 73 | Pending |
+| PUBSUB-03 | Phase 73 | Pending |
+| PKG-01 | Phase 70 | Pending |
+| PKG-02 | Phase 74 | Pending |
+| PKG-03 | Phase 70 | Pending |
+| DOCS-01 | Phase 74 | Pending |
 
 **Coverage:**
 - v1.6.0 requirements: 30 total
-- Mapped to phases: 0
-- Unmapped: 30
+- Mapped to phases: 30
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-29 after initial definition*
+*Last updated: 2026-03-29 after roadmap creation*
