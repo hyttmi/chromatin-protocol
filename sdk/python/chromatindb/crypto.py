@@ -18,7 +18,7 @@ from nacl.bindings import (
 )
 
 from chromatindb._hkdf import hkdf_derive, hkdf_expand, hkdf_extract
-from chromatindb.exceptions import CryptoError, DecryptionError
+from chromatindb.exceptions import CryptoError
 
 # SHA3-256 constants
 SHA3_256_SIZE: int = 32
@@ -33,18 +33,18 @@ HKDF_PRK_SIZE: int = 32
 
 # Re-export HKDF functions for convenience
 __all__ = [
-    "SHA3_256_SIZE",
     "AEAD_KEY_SIZE",
     "AEAD_NONCE_SIZE",
     "AEAD_TAG_SIZE",
     "HKDF_PRK_SIZE",
-    "sha3_256",
-    "aead_encrypt",
+    "SHA3_256_SIZE",
     "aead_decrypt",
+    "aead_encrypt",
     "build_signing_input",
-    "hkdf_extract",
-    "hkdf_expand",
     "hkdf_derive",
+    "hkdf_expand",
+    "hkdf_extract",
+    "sha3_256",
 ]
 
 

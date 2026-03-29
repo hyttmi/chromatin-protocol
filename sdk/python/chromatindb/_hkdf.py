@@ -45,7 +45,8 @@ def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
         ValueError: If length is out of range.
     """
     if length < 1 or length > 255 * _HASH_LEN:
-        raise ValueError(f"HKDF expand length must be 1..{255 * _HASH_LEN}, got {length}")
+        msg = f"HKDF expand length must be 1..{255 * _HASH_LEN}, got {length}"
+        raise ValueError(msg)
     n = (length + _HASH_LEN - 1) // _HASH_LEN
     okm = b""
     t = b""
