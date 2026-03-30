@@ -11,15 +11,33 @@ Skip: automatically skipped if relay is unreachable
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
+import time
 
 import pytest
 
 from chromatindb import ChromatinClient
 from chromatindb.exceptions import HandshakeError
 from chromatindb.identity import Identity
-from chromatindb.types import WriteResult, ReadResult, DeleteResult, BlobRef, ListPage
+from chromatindb.types import (
+    BatchReadResult,
+    BlobRef,
+    DelegationList,
+    DeleteResult,
+    ListPage,
+    MetadataResult,
+    NamespaceListResult,
+    NamespaceStats,
+    NodeInfo,
+    Notification,
+    PeerInfo,
+    ReadResult,
+    StorageStatus,
+    TimeRangeResult,
+    WriteResult,
+)
 
 RELAY_HOST = os.environ.get("CHROMATINDB_RELAY_HOST", "192.168.1.200")
 RELAY_PORT = int(os.environ.get("CHROMATINDB_RELAY_PORT", "4201"))
@@ -234,3 +252,215 @@ async def test_full_blob_lifecycle() -> None:
 
         # Verify gone
         assert await conn.read_blob(identity.namespace, wr.blob_hash) is None
+
+
+# ------------------------------------------------------------------
+# Query integration tests (Phase 73, Plan 03)
+# ------------------------------------------------------------------
+
+
+async def test_metadata_query() -> None:
+    """Query blob metadata without payload (QUERY-01)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        original_data = b"metadata test payload"
+        wr = await conn.write_blob(data=original_data, ttl=3600)
+
+        result = await conn.metadata(identity.namespace, wr.blob_hash)
+        assert result is not None
+        assert isinstance(result, MetadataResult)
+        assert result.blob_hash == wr.blob_hash
+        assert result.ttl == 3600
+        assert result.timestamp > 0
+        assert result.data_size == len(original_data)
+        assert result.pubkey == identity.public_key
+        assert result.seq_num >= 1
+
+        # Not-found case: random hash returns None
+        fake_hash = b"\xab" * 32
+        not_found = await conn.metadata(identity.namespace, fake_hash)
+        assert not_found is None
+
+
+async def test_batch_exists() -> None:
+    """Batch-check blob existence (QUERY-02)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        wr1 = await conn.write_blob(data=b"batch exists 1", ttl=3600)
+        wr2 = await conn.write_blob(data=b"batch exists 2", ttl=3600)
+        fake_hash = b"\xcd" * 32
+
+        result = await conn.batch_exists(
+            identity.namespace, [wr1.blob_hash, wr2.blob_hash, fake_hash]
+        )
+        assert isinstance(result, dict)
+        assert result[wr1.blob_hash] is True
+        assert result[wr2.blob_hash] is True
+        assert result[fake_hash] is False
+
+
+async def test_batch_read() -> None:
+    """Batch-read multiple blobs (QUERY-03)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        data1 = b"batch read blob one"
+        data2 = b"batch read blob two"
+        wr1 = await conn.write_blob(data=data1, ttl=3600)
+        wr2 = await conn.write_blob(data=data2, ttl=3600)
+        fake_hash = b"\xef" * 32
+
+        result = await conn.batch_read(
+            identity.namespace, [wr1.blob_hash, wr2.blob_hash, fake_hash]
+        )
+        assert isinstance(result, BatchReadResult)
+        assert result.blobs[wr1.blob_hash] is not None
+        assert result.blobs[wr1.blob_hash].data == data1
+        assert result.blobs[wr2.blob_hash] is not None
+        assert result.blobs[wr2.blob_hash].data == data2
+        assert result.truncated is False
+
+
+async def test_time_range() -> None:
+    """Query blobs by time range (QUERY-04)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        now = int(time.time())
+        wr = await conn.write_blob(data=b"time range test", ttl=3600)
+
+        result = await conn.time_range(
+            identity.namespace, start_ts=now - 60, end_ts=now + 60
+        )
+        assert isinstance(result, TimeRangeResult)
+        assert len(result.entries) >= 1
+        found_hashes = [e.blob_hash for e in result.entries]
+        assert wr.blob_hash in found_hashes
+        for entry in result.entries:
+            assert len(entry.blob_hash) == 32
+            assert entry.seq_num > 0
+            assert now - 60 <= entry.timestamp <= now + 60
+
+
+async def test_namespace_list() -> None:
+    """List namespaces with at least one blob (QUERY-05)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        # Ensure at least one blob in this namespace
+        await conn.write_blob(data=b"namespace list test", ttl=3600)
+
+        result = await conn.namespace_list()
+        assert isinstance(result, NamespaceListResult)
+        assert len(result.namespaces) >= 1
+        # Our namespace should appear in the listing
+        ns_ids = [ns.namespace_id for ns in result.namespaces]
+        assert identity.namespace in ns_ids
+        for ns in result.namespaces:
+            assert len(ns.namespace_id) == 32
+            assert ns.blob_count >= 0
+        # Our namespace specifically must have blobs
+        our_ns = next(
+            ns for ns in result.namespaces
+            if ns.namespace_id == identity.namespace
+        )
+        assert our_ns.blob_count >= 1
+
+
+async def test_namespace_stats() -> None:
+    """Query per-namespace statistics (QUERY-06)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        await conn.write_blob(data=b"namespace stats test", ttl=3600)
+
+        result = await conn.namespace_stats(identity.namespace)
+        assert isinstance(result, NamespaceStats)
+        assert result.found is True
+        assert result.blob_count >= 1
+        assert result.total_bytes > 0
+
+        # Not-found namespace
+        random_ns = b"\xaa" * 32
+        not_found = await conn.namespace_stats(random_ns)
+        assert isinstance(not_found, NamespaceStats)
+        assert not_found.found is False
+
+
+async def test_storage_status() -> None:
+    """Query node storage status (QUERY-07)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        result = await conn.storage_status()
+        assert isinstance(result, StorageStatus)
+        assert result.total_blobs >= 0
+        assert result.namespace_count >= 0
+        assert result.used_data_bytes >= 0
+        assert result.mmap_bytes >= 0
+
+
+async def test_node_info() -> None:
+    """Query node info and capabilities (QUERY-08)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        result = await conn.node_info()
+        assert isinstance(result, NodeInfo)
+        assert isinstance(result.version, str)
+        assert len(result.version) > 0
+        assert isinstance(result.git_hash, str)
+        assert result.uptime_seconds >= 0
+        assert result.peer_count >= 0
+        assert isinstance(result.supported_types, list)
+        assert len(result.supported_types) > 0
+
+
+async def test_peer_info() -> None:
+    """Query peer info (QUERY-09, trust-gated)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        result = await conn.peer_info()
+        assert isinstance(result, PeerInfo)
+        assert result.peer_count >= 0
+        assert result.bootstrap_count >= 0
+        assert isinstance(result.peers, list)
+
+
+async def test_delegation_list() -> None:
+    """List delegations for a namespace (QUERY-10)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        result = await conn.delegation_list(identity.namespace)
+        assert isinstance(result, DelegationList)
+        assert isinstance(result.entries, list)
+        # May be empty if no delegations exist -- that is valid
+
+
+# ------------------------------------------------------------------
+# Pub/Sub integration tests (Phase 73, Plan 03)
+# ------------------------------------------------------------------
+
+
+async def test_subscribe_and_notification() -> None:
+    """Subscribe, write, receive notification, unsubscribe (PUBSUB-01/02/03)."""
+    identity = Identity.generate()
+    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+        ns = identity.namespace
+
+        # Subscribe
+        await conn.subscribe(ns)
+        assert ns in conn.subscriptions
+
+        # Write a blob (should trigger notification)
+        await conn.write_blob(data=b"pubsub test", ttl=3600)
+
+        # Consume first notification with timeout
+        async def _get_first():
+            async for notif in conn.notifications():
+                return notif
+
+        notification = await asyncio.wait_for(_get_first(), timeout=10.0)
+        assert isinstance(notification, Notification)
+        assert notification.namespace == ns
+        assert len(notification.blob_hash) == 32
+        assert notification.seq_num > 0
+        assert notification.is_tombstone is False
+
+        # Unsubscribe
+        await conn.unsubscribe(ns)
+        assert ns not in conn.subscriptions
