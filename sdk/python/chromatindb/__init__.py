@@ -4,6 +4,13 @@ __version__ = "0.1.0"
 
 from chromatindb._hkdf import hkdf_derive, hkdf_expand, hkdf_extract
 from chromatindb.client import ChromatinClient
+from chromatindb.types import (
+    BlobRef,
+    DeleteResult,
+    ListPage,
+    ReadResult,
+    WriteResult,
+)
 from chromatindb.crypto import (
     AEAD_KEY_SIZE,
     AEAD_NONCE_SIZE,
@@ -40,23 +47,28 @@ __all__ = [
     "AEAD_KEY_SIZE",
     "AEAD_NONCE_SIZE",
     "AEAD_TAG_SIZE",
+    "BlobRef",
     "SHA3_256_SIZE",
     "ChromatinClient",
     "ChromatinError",
     "ConnectionError",
     "CryptoError",
     "DecodeError",
+    "DeleteResult",
     "DecryptionError",
     "HandshakeError",
     "Identity",
     "IdentityError",
     "KeyDerivationError",
     "KeyFileError",
+    "ListPage",
     "NamespaceError",
     "ProtocolError",
+    "ReadResult",
     "SignatureError",
     "TransportMsgType",
     "WireError",
+    "WriteResult",
     "__version__",
     "aead_decrypt",
     "aead_encrypt",
