@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Phase 73 Plan 01 complete
-last_updated: "2026-03-30T14:49:43Z"
+stopped_at: Completed 73-02-PLAN.md
+last_updated: "2026-03-30T15:01:06.676Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
   percent: 26
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 73 (extended-queries-pub-sub) -- EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 73
-Last activity: 2026-03-30 -- Plan 01 complete
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-03-30
 
 Progress: [##........] 26%
 
@@ -54,6 +54,7 @@ Progress: [##........] 26%
 | Phase 72 P02 | 5min | 2 tasks | 3 files |
 | Phase 72 P03 | 2min | 2 tasks | 1 files |
 | Phase 73 P01 | 6min | 2 tasks | 4 files |
+| Phase 73 P02 | 6min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Progress: [##........] 26%
 - [Phase 73 P01]: Notification expanded beyond D-03 to include blob_size and is_tombstone from wire format
 - [Phase 73 P01]: All new decode functions return typed dataclasses (not raw tuples)
 - [Phase 73 P01]: PeerInfo single type with empty peers list for untrusted (not separate types)
+- [Phase 73]: subscribe/unsubscribe use fire-and-forget send_message since C++ node processes inline without response
+- [Phase 73]: notifications() async iterator uses 1s timeout on queue.get() to check transport.closed and exit cleanly
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T14:49:43Z
-Stopped at: Completed 73-01-PLAN.md
-Resume file: .planning/phases/73-extended-queries-pub-sub/73-01-SUMMARY.md
+Last session: 2026-03-30T15:01:06.673Z
+Stopped at: Completed 73-02-PLAN.md
+Resume file: None
