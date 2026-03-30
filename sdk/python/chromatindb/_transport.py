@@ -134,6 +134,29 @@ class Transport:
                 fut.set_exception(exc)
         self._pending_pings.clear()
 
+    async def send_message(self, msg_type: int, payload: bytes) -> None:
+        """Send a message without expecting a response (fire-and-forget).
+
+        Used for Subscribe/Unsubscribe which have no server response.
+
+        Args:
+            msg_type: TransportMsgType enum value.
+            payload: Message payload bytes.
+
+        Raises:
+            ConnectionError: If the transport is closed.
+        """
+        if self._closed:
+            raise ChromatinConnectionError("connection is closed")
+        msg = encode_transport_message(msg_type, payload)
+        async with self._send_lock:
+            self._send_counter = await send_encrypted(
+                self._writer,
+                msg,
+                self._send_key,
+                self._send_counter,
+            )
+
     async def send_request(
         self,
         msg_type: int,
