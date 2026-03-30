@@ -149,7 +149,7 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
 - [x] **Phase 70: Crypto Foundation & Identity** - Verified PQ crypto primitives and client identity management (completed 2026-03-29)
 - [x] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication (completed 2026-03-29)
 - [x] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node (completed 2026-03-30)
-- [ ] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications
+- [x] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications (completed 2026-03-30)
 - [ ] **Phase 74: Packaging & Documentation** - Pip-installable SDK with tutorial and docs refresh
 
 ## Phase Details
@@ -209,11 +209,11 @@ Plans:
   2. SDK queries node info, storage status, namespace list, namespace stats, peer info, delegation list, and time range -- all returning typed results
   3. SDK subscribes to a namespace, receives real-time notification when a blob is written, and unsubscribes cleanly
   4. Notification dispatch routes server-pushed messages (request_id=0) to an async iterator, separate from request-response correlation
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 73-01-PLAN.md — Types and codec for all query/pub-sub message types
 - [x] 73-02-PLAN.md — Client methods, transport send_message, __init__.py exports
-- [ ] 73-03-PLAN.md — Integration tests and human verification
+- [x] 73-03-PLAN.md — Integration tests and human verification
 
 ### Phase 74: Packaging & Documentation
 **Goal**: SDK is release-ready with tutorial, examples, and project documentation updated to reflect the Python client
@@ -235,5 +235,5 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
 | 72. Core Data Operations | 3/3 | Complete    | 2026-03-30 |
-| 73. Extended Queries & Pub/Sub | 2/3 | In Progress|  |
+| 73. Extended Queries & Pub/Sub | 3/3 | Complete   | 2026-03-30 |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
