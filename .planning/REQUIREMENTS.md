@@ -24,7 +24,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 - [x] **DATA-03**: SDK deletes blobs by owner via tombstone (Delete/DeleteAck)
 - [x] **DATA-04**: SDK lists blobs in a namespace with pagination (ListRequest/ListResponse)
 - [x] **DATA-05**: SDK checks blob existence without data transfer (ExistsRequest/ExistsResponse)
-- [ ] **DATA-06**: SDK sends keepalive (Ping/Pong)
+- [x] **DATA-06**: SDK sends keepalive (Ping/Pong)
 
 ### Extended Queries
 
@@ -94,7 +94,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 | DATA-03 | Phase 72 | Complete |
 | DATA-04 | Phase 72 | Complete |
 | DATA-05 | Phase 72 | Complete |
-| DATA-06 | Phase 72 | Pending |
+| DATA-06 | Phase 72 | Complete |
 | QUERY-01 | Phase 73 | Pending |
 | QUERY-02 | Phase 73 | Pending |
 | QUERY-03 | Phase 73 | Pending |

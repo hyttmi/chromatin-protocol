@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 72-01-PLAN.md
-last_updated: "2026-03-30T02:24:23Z"
+stopped_at: Completed 72-02-PLAN.md
+last_updated: "2026-03-30T02:36:06.110Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 7
+  total_plans: 9
+  completed_plans: 8
   percent: 23
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 72 (core-data-operations) -- EXECUTING
-Plan: 1 of 3 (COMPLETE)
-Status: Executing Phase 72
-Last activity: 2026-03-30 -- Phase 72 Plan 01 complete
+Plan: 2 of 3 (COMPLETE)
+Status: Ready to execute
+Last activity: 2026-03-30
 
 Progress: [##........] 23%
 
@@ -51,6 +51,7 @@ Progress: [##........] 23%
 | Phase 70 P03 | 7min | 2 tasks | 9 files |
 | Phase 71 P02 | 5min | 2 tasks | 7 files |
 | Phase 72 P01 | 4min | 2 tasks | 4 files |
+| Phase 72 P02 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,8 @@ Progress: [##........] 23%
 - [Phase 71]: Transport._writer typed as object for mock compatibility; notification queue maxsize=1000; request_id starts at 1; send_lock serializes outgoing frames
 - [Phase 72 P01]: Codec as standalone _codec.py module -- binary encode/decode separate from client.py high-level API
 - [Phase 72 P01]: decode_delete_ack separate function (not alias) -- independent error messages per type
+- [Phase 72]: Use SDK custom ConnectionError for D-16 timeout wrapping, not builtin
+- [Phase 72]: ML-DSA-87 signatures are non-deterministic -- test FlatBuffer fields individually, not byte comparison
 
 ### Pending Todos
 
@@ -84,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T02:24:23Z
-Stopped at: Completed 72-01-PLAN.md
-Resume file: .planning/phases/72-core-data-operations/72-01-SUMMARY.md
+Last session: 2026-03-30T02:36:06.107Z
+Stopped at: Completed 72-02-PLAN.md
+Resume file: None
