@@ -168,11 +168,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Python SDK: ChromatinClient async context manager (connect, ping, goodbye) — v1.6.0 Phase 71
 
 ### Active
-- [ ] Python SDK: Full client API (all 38 relay-allowed message types)
-- [ ] Python SDK: Pub/sub notifications
 - [ ] Python SDK: Pip-installable package under sdk/python/
 - [ ] Python SDK: Getting started tutorial with usage examples
 - [ ] Documentation refresh with SDK section
+
+### Validated in Phase 73
+- ✓ Python SDK: Full client API — all 10 query methods + 5 data ops returning typed results — v1.6.0 Phase 73
+- ✓ Python SDK: Pub/sub notifications (subscribe/unsubscribe/notifications async generator, D-06 auto-cleanup) — v1.6.0 Phase 73
 
 ### Future
 
@@ -183,8 +185,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 ## Context
 
 Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete. Relay message filter flipped from whitelist to blocklist (21 blocked peer-internal types) — new message types pass through without relay changes.
-Built across 27 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d).
-15 milestones, 71 phases, 146 plans, 270 requirements total.
+Python SDK Phase 73 complete: 342 unit tests + 24 integration tests, all 10 query methods + pub/sub working against live KVM relay.
+Built across 28 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (2d, in progress).
+15 milestones, 73 phases, 149 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
 
