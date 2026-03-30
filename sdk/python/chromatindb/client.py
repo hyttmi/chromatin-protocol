@@ -14,15 +14,35 @@ import time
 from types import TracebackType
 
 from chromatindb._codec import (
+    decode_batch_exists_response,
+    decode_batch_read_response,
+    decode_delegation_list_response,
     decode_delete_ack,
     decode_exists_response,
     decode_list_response,
+    decode_metadata_response,
+    decode_namespace_list_response,
+    decode_namespace_stats_response,
+    decode_node_info_response,
+    decode_notification,
+    decode_peer_info_response,
     decode_read_response,
+    decode_storage_status_response,
+    decode_time_range_response,
     decode_write_ack,
+    encode_batch_exists_request,
+    encode_batch_read_request,
     encode_blob_payload,
+    encode_delegation_list_request,
     encode_exists_request,
     encode_list_request,
+    encode_metadata_request,
+    encode_namespace_list_request,
+    encode_namespace_stats_request,
     encode_read_request,
+    encode_subscribe,
+    encode_time_range_request,
+    encode_unsubscribe,
     make_tombstone_data,
 )
 from chromatindb._handshake import perform_handshake
@@ -35,10 +55,20 @@ from chromatindb.exceptions import (
 )
 from chromatindb.identity import Identity
 from chromatindb.types import (
+    BatchReadResult,
     BlobRef,
+    DelegationList,
     DeleteResult,
     ListPage,
+    MetadataResult,
+    NamespaceListResult,
+    NamespaceStats,
+    NodeInfo,
+    Notification,
+    PeerInfo,
     ReadResult,
+    StorageStatus,
+    TimeRangeResult,
     WriteResult,
 )
 from chromatindb.wire import TransportMsgType
@@ -51,6 +81,7 @@ class ChromatinClient:
 
     def __init__(self, transport: Transport) -> None:
         self._transport = transport
+        self._subscriptions: set[bytes] = set()
 
     @classmethod
     def connect(
@@ -82,6 +113,7 @@ class ChromatinClient:
         client._identity = identity
         client._timeout = timeout
         client._transport = None  # type: ignore[assignment]
+        client._subscriptions: set[bytes] = set()
         return client
 
     async def __aenter__(self) -> ChromatinClient:
@@ -130,6 +162,16 @@ class ChromatinClient:
         exc_tb: TracebackType | None,
     ) -> None:
         if self._transport is not None:
+            # D-06: auto-cleanup subscriptions on disconnect
+            if self._subscriptions:
+                try:
+                    payload = encode_unsubscribe(list(self._subscriptions))
+                    await self._transport.send_message(
+                        TransportMsgType.Unsubscribe, payload
+                    )
+                except Exception:
+                    pass  # Best-effort on disconnect
+                self._subscriptions.clear()
             await self._transport.send_goodbye()
             await self._transport.stop()
 
@@ -352,3 +394,340 @@ class ChromatinClient:
 
         exists_flag, _ = decode_exists_response(resp_payload)
         return exists_flag
+
+    # ------------------------------------------------------------------
+    # Query operations
+    # ------------------------------------------------------------------
+
+    async def metadata(
+        self, namespace: bytes, blob_hash: bytes
+    ) -> MetadataResult | None:
+        """Query blob metadata without payload (QUERY-01).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+            blob_hash: 32-byte blob hash.
+
+        Returns:
+            MetadataResult with blob metadata, or None if not found.
+
+        Raises:
+            ValueError: If namespace or blob_hash is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_metadata_request(namespace, blob_hash)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.MetadataRequest, payload
+        )
+        if resp_type != TransportMsgType.MetadataResponse:
+            raise ProtocolError(
+                f"expected MetadataResponse (48), got type {resp_type}"
+            )
+        return decode_metadata_response(resp_payload)
+
+    async def batch_exists(
+        self, namespace: bytes, hashes: list[bytes]
+    ) -> dict[bytes, bool]:
+        """Batch-check blob existence (QUERY-02, per D-07/D-08).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+            hashes: List of 32-byte blob hashes to check.
+
+        Returns:
+            Dict mapping each hash to existence boolean.
+
+        Raises:
+            ValueError: If namespace or any hash is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_batch_exists_request(namespace, hashes)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.BatchExistsRequest, payload
+        )
+        if resp_type != TransportMsgType.BatchExistsResponse:
+            raise ProtocolError(
+                f"expected BatchExistsResponse (50), got type {resp_type}"
+            )
+        return decode_batch_exists_response(resp_payload, hashes)
+
+    async def batch_read(
+        self,
+        namespace: bytes,
+        hashes: list[bytes],
+        *,
+        cap_bytes: int = 0,
+    ) -> BatchReadResult:
+        """Batch-read multiple blobs (QUERY-03, per D-09).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+            hashes: List of 32-byte blob hashes to read.
+            cap_bytes: Max response size in bytes. 0 = server default (4 MiB).
+
+        Returns:
+            BatchReadResult with blobs dict and truncation flag.
+
+        Raises:
+            ValueError: If namespace or any hash is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_batch_read_request(namespace, hashes, cap_bytes)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.BatchReadRequest, payload
+        )
+        if resp_type != TransportMsgType.BatchReadResponse:
+            raise ProtocolError(
+                f"expected BatchReadResponse (54), got type {resp_type}"
+            )
+        return decode_batch_read_response(resp_payload)
+
+    async def time_range(
+        self,
+        namespace: bytes,
+        start_ts: int,
+        end_ts: int,
+        *,
+        limit: int = 100,
+    ) -> TimeRangeResult:
+        """Query blobs by time range (QUERY-04).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+            start_ts: Start timestamp in seconds (inclusive).
+            end_ts: End timestamp in seconds (inclusive).
+            limit: Max results (default 100, server clamps to [1, 100]).
+
+        Returns:
+            TimeRangeResult with entries and truncation flag.
+
+        Raises:
+            ValueError: If namespace is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_time_range_request(namespace, start_ts, end_ts, limit)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.TimeRangeRequest, payload
+        )
+        if resp_type != TransportMsgType.TimeRangeResponse:
+            raise ProtocolError(
+                f"expected TimeRangeResponse (58), got type {resp_type}"
+            )
+        return decode_time_range_response(resp_payload)
+
+    async def namespace_list(
+        self,
+        *,
+        after: bytes = b"\x00" * 32,
+        limit: int = 100,
+    ) -> NamespaceListResult:
+        """List namespaces with pagination (QUERY-05).
+
+        Args:
+            after: 32-byte namespace cursor. All zeros for first page.
+            limit: Max namespaces to return (default 100).
+
+        Returns:
+            NamespaceListResult with namespaces and cursor.
+
+        Raises:
+            ValueError: If after is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_namespace_list_request(after, limit)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.NamespaceListRequest, payload
+        )
+        if resp_type != TransportMsgType.NamespaceListResponse:
+            raise ProtocolError(
+                f"expected NamespaceListResponse (42), got type {resp_type}"
+            )
+        return decode_namespace_list_response(resp_payload)
+
+    async def namespace_stats(self, namespace: bytes) -> NamespaceStats:
+        """Query per-namespace statistics (QUERY-06).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+
+        Returns:
+            NamespaceStats with blob count, bytes, quotas.
+
+        Raises:
+            ValueError: If namespace is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_namespace_stats_request(namespace)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.NamespaceStatsRequest, payload
+        )
+        if resp_type != TransportMsgType.NamespaceStatsResponse:
+            raise ProtocolError(
+                f"expected NamespaceStatsResponse (46), got type {resp_type}"
+            )
+        return decode_namespace_stats_response(resp_payload)
+
+    async def storage_status(self) -> StorageStatus:
+        """Query node storage status (QUERY-07).
+
+        Returns:
+            StorageStatus with disk usage, quotas, counts.
+
+        Raises:
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.StorageStatusRequest, b""
+        )
+        if resp_type != TransportMsgType.StorageStatusResponse:
+            raise ProtocolError(
+                f"expected StorageStatusResponse (44), got type {resp_type}"
+            )
+        return decode_storage_status_response(resp_payload)
+
+    async def node_info(self) -> NodeInfo:
+        """Query node info and capabilities (QUERY-08).
+
+        Returns:
+            NodeInfo with version, capabilities, peer count, storage stats.
+
+        Raises:
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.NodeInfoRequest, b""
+        )
+        if resp_type != TransportMsgType.NodeInfoResponse:
+            raise ProtocolError(
+                f"expected NodeInfoResponse (40), got type {resp_type}"
+            )
+        return decode_node_info_response(resp_payload)
+
+    async def peer_info(self) -> PeerInfo:
+        """Query peer info (QUERY-09, trust-gated).
+
+        Returns:
+            PeerInfo with peer details (full if trusted, summary if untrusted).
+
+        Raises:
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.PeerInfoRequest, b""
+        )
+        if resp_type != TransportMsgType.PeerInfoResponse:
+            raise ProtocolError(
+                f"expected PeerInfoResponse (56), got type {resp_type}"
+            )
+        return decode_peer_info_response(resp_payload)
+
+    async def delegation_list(self, namespace: bytes) -> DelegationList:
+        """List delegations for a namespace (QUERY-10).
+
+        Args:
+            namespace: 32-byte namespace identifier.
+
+        Returns:
+            DelegationList with delegation entries.
+
+        Raises:
+            ValueError: If namespace is not 32 bytes.
+            ProtocolError: If response type is unexpected.
+            ConnectionError: If request times out.
+        """
+        payload = encode_delegation_list_request(namespace)
+        resp_type, resp_payload = await self._request_with_timeout(
+            TransportMsgType.DelegationListRequest, payload
+        )
+        if resp_type != TransportMsgType.DelegationListResponse:
+            raise ProtocolError(
+                f"expected DelegationListResponse (52), got type {resp_type}"
+            )
+        return decode_delegation_list_response(resp_payload)
+
+    # ------------------------------------------------------------------
+    # Pub/Sub operations
+    # ------------------------------------------------------------------
+
+    @property
+    def subscriptions(self) -> frozenset[bytes]:
+        """Currently subscribed namespaces (per D-05)."""
+        return frozenset(self._subscriptions)
+
+    async def subscribe(self, namespace: bytes) -> None:
+        """Subscribe to namespace notifications (PUBSUB-01, per D-04/D-05).
+
+        Fire-and-forget send -- the C++ node processes Subscribe inline
+        without sending a response.
+
+        Args:
+            namespace: 32-byte namespace identifier.
+
+        Raises:
+            ValueError: If namespace is not 32 bytes.
+            ConnectionError: If the transport is closed.
+        """
+        if len(namespace) != 32:
+            raise ValueError(
+                f"namespace must be 32 bytes, got {len(namespace)}"
+            )
+        payload = encode_subscribe([namespace])
+        await self._transport.send_message(
+            TransportMsgType.Subscribe, payload
+        )
+        self._subscriptions.add(namespace)
+
+    async def unsubscribe(self, namespace: bytes) -> None:
+        """Unsubscribe from namespace notifications (PUBSUB-02, per D-05).
+
+        Fire-and-forget send.
+
+        Args:
+            namespace: 32-byte namespace identifier.
+
+        Raises:
+            ValueError: If namespace is not 32 bytes.
+            ConnectionError: If the transport is closed.
+        """
+        if len(namespace) != 32:
+            raise ValueError(
+                f"namespace must be 32 bytes, got {len(namespace)}"
+            )
+        payload = encode_unsubscribe([namespace])
+        await self._transport.send_message(
+            TransportMsgType.Unsubscribe, payload
+        )
+        self._subscriptions.discard(namespace)
+
+    async def notifications(self):
+        """Async iterator yielding Notification objects (per D-01, D-02).
+
+        Yields Notification for all subscribed namespaces in a single
+        merged stream. Each notification carries its namespace.
+
+        Usage:
+            async for notif in conn.notifications():
+                print(f"New blob in {notif.namespace.hex()}")
+
+        Yields:
+            Notification objects.
+        """
+        while not self._transport.closed:
+            try:
+                msg_type, payload, _ = await asyncio.wait_for(
+                    self._transport.notifications.get(),
+                    timeout=1.0,
+                )
+            except asyncio.TimeoutError:
+                continue
+            if msg_type == TransportMsgType.Notification:
+                yield decode_notification(payload)
