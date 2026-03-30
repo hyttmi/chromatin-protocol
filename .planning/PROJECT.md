@@ -325,4 +325,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-29 after Phase 71 (transport-pq-handshake) complete*
+*Last updated: 2026-03-30 after Phase 72 (core-data-operations) complete — types, codec, 5 client methods, 88 tests, integration-verified against live relay*
