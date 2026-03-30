@@ -209,7 +209,11 @@ Plans:
   2. SDK queries node info, storage status, namespace list, namespace stats, peer info, delegation list, and time range -- all returning typed results
   3. SDK subscribes to a namespace, receives real-time notification when a blob is written, and unsubscribes cleanly
   4. Notification dispatch routes server-pushed messages (request_id=0) to an async iterator, separate from request-response correlation
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 73-01-PLAN.md — Types and codec for all query/pub-sub message types
+- [ ] 73-02-PLAN.md — Client methods, transport send_message, __init__.py exports
+- [ ] 73-03-PLAN.md — Integration tests and human verification
 
 ### Phase 74: Packaging & Documentation
 **Goal**: SDK is release-ready with tutorial, examples, and project documentation updated to reflect the Python client
@@ -231,5 +235,5 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
 | 72. Core Data Operations | 3/3 | Complete    | 2026-03-30 |
-| 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
+| 73. Extended Queries & Pub/Sub | 0/3 | Not started | - |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
