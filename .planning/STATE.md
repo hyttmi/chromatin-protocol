@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 72-02-PLAN.md
-last_updated: "2026-03-30T02:36:06.110Z"
+stopped_at: Completed 72-03-PLAN.md
+last_updated: "2026-03-30T02:42:30.046Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
   percent: 23
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 72 (core-data-operations) -- EXECUTING
-Plan: 2 of 3 (COMPLETE)
+Plan: 3 of 3 (COMPLETE)
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -52,6 +52,7 @@ Progress: [##........] 23%
 | Phase 71 P02 | 5min | 2 tasks | 7 files |
 | Phase 72 P01 | 4min | 2 tasks | 4 files |
 | Phase 72 P02 | 5min | 2 tasks | 3 files |
+| Phase 72 P03 | 2min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ Progress: [##........] 23%
 - [Phase 72 P01]: decode_delete_ack separate function (not alias) -- independent error messages per type
 - [Phase 72]: Use SDK custom ConnectionError for D-16 timeout wrapping, not builtin
 - [Phase 72]: ML-DSA-87 signatures are non-deterministic -- test FlatBuffer fields individually, not byte comparison
+- [Phase 72]: ML-DSA-87 non-deterministic signatures mean same data produces unique blob_hash -- duplicate test verifies distinct hashes
 
 ### Pending Todos
 
@@ -87,6 +89,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T02:36:06.107Z
-Stopped at: Completed 72-02-PLAN.md
+Last session: 2026-03-30T02:42:30.043Z
+Stopped at: Completed 72-03-PLAN.md
 Resume file: None

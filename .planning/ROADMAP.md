@@ -148,7 +148,7 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
 
 - [x] **Phase 70: Crypto Foundation & Identity** - Verified PQ crypto primitives and client identity management (completed 2026-03-29)
 - [x] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication (completed 2026-03-29)
-- [ ] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node
+- [x] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node (completed 2026-03-30)
 - [ ] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications
 - [ ] **Phase 74: Packaging & Documentation** - Pip-installable SDK with tutorial and docs refresh
 
@@ -194,11 +194,11 @@ Plans:
   3. SDK deletes a blob via tombstone and confirms deletion (subsequent read returns not-found)
   4. SDK lists blobs in a namespace with pagination and receives correct sequence-ordered results
   5. SDK checks blob existence without data transfer, returning correct boolean result
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 72-01-PLAN.md — Types module (result dataclasses) and codec module (binary payload encode/decode)
 - [x] 72-02-PLAN.md — ChromatinClient data operation methods and unit tests
-- [ ] 72-03-PLAN.md — Integration tests against live KVM relay + human verification
+- [x] 72-03-PLAN.md — Integration tests against live KVM relay + human verification
 
 ### Phase 73: Extended Queries & Pub/Sub
 **Goal**: SDK exposes all 38 client message types including batch operations, node introspection, and real-time namespace notifications
@@ -230,6 +230,6 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 |-------|----------------|--------|-----------|
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
-| 72. Core Data Operations | 2/3 | In Progress|  |
+| 72. Core Data Operations | 3/3 | Complete   | 2026-03-30 |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
