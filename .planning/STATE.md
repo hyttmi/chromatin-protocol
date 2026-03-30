@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Phase 73 context gathered
-last_updated: "2026-03-30T13:54:00.910Z"
+stopped_at: Phase 73 Plan 01 complete
+last_updated: "2026-03-30T14:49:43Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 9
-  completed_plans: 9
-  percent: 23
+  completed_plans: 10
+  percent: 26
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 
 ## Current Position
 
-Phase: 73
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-03-30
+Phase: 73 (extended-queries-pub-sub) -- EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 73
+Last activity: 2026-03-30 -- Plan 01 complete
 
-Progress: [##........] 23%
+Progress: [##........] 26%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [##........] 23%
 | Phase 72 P01 | 4min | 2 tasks | 4 files |
 | Phase 72 P02 | 5min | 2 tasks | 3 files |
 | Phase 72 P03 | 2min | 2 tasks | 1 files |
+| Phase 73 P01 | 6min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Progress: [##........] 23%
 - [Phase 72]: Use SDK custom ConnectionError for D-16 timeout wrapping, not builtin
 - [Phase 72]: ML-DSA-87 signatures are non-deterministic -- test FlatBuffer fields individually, not byte comparison
 - [Phase 72]: ML-DSA-87 non-deterministic signatures mean same data produces unique blob_hash -- duplicate test verifies distinct hashes
+- [Phase 73 P01]: Notification expanded beyond D-03 to include blob_size and is_tombstone from wire format
+- [Phase 73 P01]: All new decode functions return typed dataclasses (not raw tuples)
+- [Phase 73 P01]: PeerInfo single type with empty peers list for untrusted (not separate types)
 
 ### Pending Todos
 
@@ -89,6 +93,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T13:54:00.906Z
-Stopped at: Phase 73 context gathered
-Resume file: .planning/phases/73-extended-queries-pub-sub/73-CONTEXT.md
+Last session: 2026-03-30T14:49:43Z
+Stopped at: Completed 73-01-PLAN.md
+Resume file: .planning/phases/73-extended-queries-pub-sub/73-01-SUMMARY.md

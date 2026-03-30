@@ -28,22 +28,22 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 ### Extended Queries
 
-- [ ] **QUERY-01**: SDK queries blob metadata without payload (MetadataRequest/MetadataResponse)
-- [ ] **QUERY-02**: SDK batch-checks blob existence (BatchExistsRequest/BatchExistsResponse)
-- [ ] **QUERY-03**: SDK batch-reads multiple blobs (BatchReadRequest/BatchReadResponse)
-- [ ] **QUERY-04**: SDK queries blobs by time range (TimeRangeRequest/TimeRangeResponse)
-- [ ] **QUERY-05**: SDK lists namespaces (NamespaceListRequest/NamespaceListResponse)
-- [ ] **QUERY-06**: SDK queries per-namespace stats (NamespaceStatsRequest/NamespaceStatsResponse)
-- [ ] **QUERY-07**: SDK queries storage status (StorageStatusRequest/StorageStatusResponse)
-- [ ] **QUERY-08**: SDK queries node info and capabilities (NodeInfoRequest/NodeInfoResponse)
-- [ ] **QUERY-09**: SDK queries peer info (PeerInfoRequest/PeerInfoResponse)
-- [ ] **QUERY-10**: SDK lists delegations (DelegationListRequest/DelegationListResponse)
+- [x] **QUERY-01**: SDK queries blob metadata without payload (MetadataRequest/MetadataResponse)
+- [x] **QUERY-02**: SDK batch-checks blob existence (BatchExistsRequest/BatchExistsResponse)
+- [x] **QUERY-03**: SDK batch-reads multiple blobs (BatchReadRequest/BatchReadResponse)
+- [x] **QUERY-04**: SDK queries blobs by time range (TimeRangeRequest/TimeRangeResponse)
+- [x] **QUERY-05**: SDK lists namespaces (NamespaceListRequest/NamespaceListResponse)
+- [x] **QUERY-06**: SDK queries per-namespace stats (NamespaceStatsRequest/NamespaceStatsResponse)
+- [x] **QUERY-07**: SDK queries storage status (StorageStatusRequest/StorageStatusResponse)
+- [x] **QUERY-08**: SDK queries node info and capabilities (NodeInfoRequest/NodeInfoResponse)
+- [x] **QUERY-09**: SDK queries peer info (PeerInfoRequest/PeerInfoResponse)
+- [x] **QUERY-10**: SDK lists delegations (DelegationListRequest/DelegationListResponse)
 
 ### Pub/Sub
 
-- [ ] **PUBSUB-01**: SDK subscribes to namespace notifications (Subscribe)
-- [ ] **PUBSUB-02**: SDK unsubscribes from namespace notifications (Unsubscribe)
-- [ ] **PUBSUB-03**: SDK receives and dispatches notification callbacks (Notification)
+- [x] **PUBSUB-01**: SDK subscribes to namespace notifications (Subscribe)
+- [x] **PUBSUB-02**: SDK unsubscribes from namespace notifications (Unsubscribe)
+- [x] **PUBSUB-03**: SDK receives and dispatches notification callbacks (Notification)
 
 ### Packaging
 
@@ -95,19 +95,19 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 | DATA-04 | Phase 72 | Complete |
 | DATA-05 | Phase 72 | Complete |
 | DATA-06 | Phase 72 | Complete |
-| QUERY-01 | Phase 73 | Pending |
-| QUERY-02 | Phase 73 | Pending |
-| QUERY-03 | Phase 73 | Pending |
-| QUERY-04 | Phase 73 | Pending |
-| QUERY-05 | Phase 73 | Pending |
-| QUERY-06 | Phase 73 | Pending |
-| QUERY-07 | Phase 73 | Pending |
-| QUERY-08 | Phase 73 | Pending |
-| QUERY-09 | Phase 73 | Pending |
-| QUERY-10 | Phase 73 | Pending |
-| PUBSUB-01 | Phase 73 | Pending |
-| PUBSUB-02 | Phase 73 | Pending |
-| PUBSUB-03 | Phase 73 | Pending |
+| QUERY-01 | Phase 73 | Complete |
+| QUERY-02 | Phase 73 | Complete |
+| QUERY-03 | Phase 73 | Complete |
+| QUERY-04 | Phase 73 | Complete |
+| QUERY-05 | Phase 73 | Complete |
+| QUERY-06 | Phase 73 | Complete |
+| QUERY-07 | Phase 73 | Complete |
+| QUERY-08 | Phase 73 | Complete |
+| QUERY-09 | Phase 73 | Complete |
+| QUERY-10 | Phase 73 | Complete |
+| PUBSUB-01 | Phase 73 | Complete |
+| PUBSUB-02 | Phase 73 | Complete |
+| PUBSUB-03 | Phase 73 | Complete |
 | PKG-01 | Phase 70 | Complete |
 | PKG-02 | Phase 74 | Pending |
 | PKG-03 | Phase 70 | Complete |
