@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Phase 72 context gathered
-last_updated: "2026-03-29T14:14:06.050Z"
-last_activity: 2026-03-29
+stopped_at: Completed 72-01-PLAN.md
+last_updated: "2026-03-30T02:24:23Z"
+last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 6
-  completed_plans: 6
-  percent: 6
+  completed_plans: 7
+  percent: 23
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 71 — transport-pq-handshake
+**Current focus:** Phase 72 — core-data-operations
 
 ## Current Position
 
-Phase: 72
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-03-29
+Phase: 72 (core-data-operations) -- EXECUTING
+Plan: 1 of 3 (COMPLETE)
+Status: Executing Phase 72
+Last activity: 2026-03-30 -- Phase 72 Plan 01 complete
 
-Progress: [#.........] 6%
+Progress: [##........] 23%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [#.........] 6%
 *Updated after each plan completion*
 | Phase 70 P03 | 7min | 2 tasks | 9 files |
 | Phase 71 P02 | 5min | 2 tasks | 7 files |
+| Phase 72 P01 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,8 @@ Progress: [#.........] 6%
 - [Phase 70 P03]: FlatBuffer payload decode via per-element Payload(j) loop -- avoids numpy dependency
 - [Phase 70 P03]: Removed auto-generated .pyi stubs from FlatBuffers codegen (buggy numpy and Literal types)
 - [Phase 71]: Transport._writer typed as object for mock compatibility; notification queue maxsize=1000; request_id starts at 1; send_lock serializes outgoing frames
+- [Phase 72 P01]: Codec as standalone _codec.py module -- binary encode/decode separate from client.py high-level API
+- [Phase 72 P01]: decode_delete_ack separate function (not alias) -- independent error messages per type
 
 ### Pending Todos
 
@@ -81,6 +84,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-29T14:14:06.046Z
-Stopped at: Phase 72 context gathered
-Resume file: .planning/phases/72-core-data-operations/72-CONTEXT.md
+Last session: 2026-03-30T02:24:23Z
+Stopped at: Completed 72-01-PLAN.md
+Resume file: .planning/phases/72-core-data-operations/72-01-SUMMARY.md
