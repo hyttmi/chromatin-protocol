@@ -230,6 +230,6 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 |-------|----------------|--------|-----------|
 | 70. Crypto Foundation & Identity | 3/3 | Complete    | 2026-03-29 |
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
-| 72. Core Data Operations | 3/3 | Complete   | 2026-03-30 |
+| 72. Core Data Operations | 3/3 | Complete    | 2026-03-30 |
 | 73. Extended Queries & Pub/Sub | 0/TBD | Not started | - |
 | 74. Packaging & Documentation | 0/TBD | Not started | - |
