@@ -150,7 +150,7 @@ Full details: [milestones/v1.5.0-ROADMAP.md](milestones/v1.5.0-ROADMAP.md)
 - [x] **Phase 71: Transport & PQ Handshake** - Encrypted connection to relay with mutual PQ authentication (completed 2026-03-29)
 - [x] **Phase 72: Core Data Operations** - Write, read, delete, list, and exists against a live node (completed 2026-03-30)
 - [x] **Phase 73: Extended Queries & Pub/Sub** - All remaining message types and real-time notifications (completed 2026-03-30)
-- [ ] **Phase 74: Packaging & Documentation** - Pip-installable SDK with tutorial and docs refresh
+- [x] **Phase 74: Packaging & Documentation** - Pip-installable SDK with tutorial and docs refresh (completed 2026-03-31)
 
 ## Phase Details
 
@@ -223,7 +223,7 @@ Plans:
   1. Getting started tutorial walks a user from pip install through writing and reading their first blob
   2. README.md includes SDK section with installation, quick start, and link to tutorial
   3. PROTOCOL.md HKDF salt discrepancy is corrected to match C++ implementation (empty salt, not SHA3-256(pubkeys))
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 74-01-PLAN.md — SDK README, pyproject.toml metadata, getting started tutorial
 - [x] 74-02-PLAN.md — PROTOCOL.md HKDF salt fix and SDK Client Notes section
@@ -239,4 +239,4 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
 | 72. Core Data Operations | 3/3 | Complete    | 2026-03-30 |
 | 73. Extended Queries & Pub/Sub | 3/3 | Complete    | 2026-03-30 |
-| 74. Packaging & Documentation | 1/2 | In Progress|  |
+| 74. Packaging & Documentation | 1/2 | Complete    | 2026-03-31 |
