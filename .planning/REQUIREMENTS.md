@@ -87,38 +87,38 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IDENT-01 | — | Pending |
-| IDENT-02 | — | Pending |
-| IDENT-03 | — | Pending |
-| ENV-01 | — | Pending |
-| ENV-02 | — | Pending |
-| ENV-03 | — | Pending |
-| ENV-04 | — | Pending |
-| ENV-05 | — | Pending |
-| ENV-06 | — | Pending |
-| DIR-01 | — | Pending |
-| DIR-02 | — | Pending |
-| DIR-03 | — | Pending |
-| DIR-04 | — | Pending |
-| DIR-05 | — | Pending |
-| DIR-06 | — | Pending |
-| GRP-01 | — | Pending |
-| GRP-02 | — | Pending |
-| GRP-03 | — | Pending |
-| GRP-04 | — | Pending |
-| CLI-01 | — | Pending |
-| CLI-02 | — | Pending |
-| CLI-03 | — | Pending |
-| CLI-04 | — | Pending |
-| DOC-01 | — | Pending |
-| DOC-02 | — | Pending |
-| DOC-03 | — | Pending |
+| IDENT-01 | Phase 75 | Pending |
+| IDENT-02 | Phase 75 | Pending |
+| IDENT-03 | Phase 75 | Pending |
+| ENV-01 | Phase 75 | Pending |
+| ENV-02 | Phase 75 | Pending |
+| ENV-03 | Phase 75 | Pending |
+| ENV-04 | Phase 75 | Pending |
+| ENV-05 | Phase 75 | Pending |
+| ENV-06 | Phase 75 | Pending |
+| DIR-01 | Phase 76 | Pending |
+| DIR-02 | Phase 76 | Pending |
+| DIR-03 | Phase 76 | Pending |
+| DIR-04 | Phase 76 | Pending |
+| DIR-05 | Phase 76 | Pending |
+| DIR-06 | Phase 76 | Pending |
+| GRP-01 | Phase 77 | Pending |
+| GRP-02 | Phase 77 | Pending |
+| GRP-03 | Phase 77 | Pending |
+| GRP-04 | Phase 77 | Pending |
+| CLI-01 | Phase 77 | Pending |
+| CLI-02 | Phase 77 | Pending |
+| CLI-03 | Phase 77 | Pending |
+| CLI-04 | Phase 77 | Pending |
+| DOC-01 | Phase 78 | Pending |
+| DOC-02 | Phase 78 | Pending |
+| DOC-03 | Phase 78 | Pending |
 
 **Coverage:**
 - v1.7.0 requirements: 26 total
-- Mapped to phases: 0
-- Unmapped: 26 ⚠️
+- Mapped to phases: 26
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-31*
-*Last updated: 2026-03-31 after initial definition*
+*Last updated: 2026-03-31 after roadmap creation*
