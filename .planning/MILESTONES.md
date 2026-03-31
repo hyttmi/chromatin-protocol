@@ -1,5 +1,27 @@
 # Milestones
 
+## v1.6.0 Python SDK (Shipped: 2026-03-31)
+
+**Phases completed:** 5 phases, 14 plans, 24 tasks
+
+**Key accomplishments:**
+
+- Pip-installable chromatindb package with 11-class exception hierarchy, FlatBuffers codegen for all 58 message types, and 17 validation tests
+- C++ binary producing JSON known-answer vectors for SHA3-256, HKDF-SHA256, ChaCha20-Poly1305, build_signing_input, ML-DSA-87, and namespace derivation
+- All crypto primitives (SHA3-256, HKDF, AEAD, signing input) and ML-DSA-87 identity management validated byte-identical to C++ via test vectors, with FlatBuffers wire helpers
+- Length-prefixed frame IO with ChaCha20-Poly1305 AEAD encryption, counter-based nonce management, and 20 unit tests
+- ML-KEM-1024 PQ handshake initiator with HKDF session key derivation, background reader transport with request_id dispatch, and ChromatinClient async context manager with 21 unit tests
+- Frozen result dataclasses and binary codec for all 5 core data operations (write/read/delete/list/exists) with 44 unit tests
+- 5 async blob lifecycle methods (write/read/delete/list/exists) on ChromatinClient with 31 unit tests using mock transport
+- 9 integration tests verify all 5 data operations (write, read, delete, list, exists) plus pagination and lifecycle against live KVM relay at 192.168.1.200:4201
+- 13 frozen dataclasses and 20 binary encode/decode functions for all 10 query types plus 3 pub/sub message types, with full TDD unit test coverage
+- 10 async query methods, subscribe/unsubscribe/notifications, and auto-cleanup wired into ChromatinClient with full TDD unit test coverage
+- 11 integration tests proving all 10 query types plus pub/sub lifecycle work end-to-end against live KVM relay at 192.168.1.200:4201
+- PyPI-ready packaging metadata, SDK README with 19-method API table, and 187-line getting started tutorial covering identity through pub/sub
+- Fixed HKDF salt discrepancy (empty salt, not SHA3-256(pubkeys)) and added SDK Client Notes section with 6 protocol implementation gotchas
+
+---
+
 ## v1.5.0 Documentation & Distribution (Shipped: 2026-03-28)
 
 **Phases completed:** 2 phases, 4 plans, 8 tasks

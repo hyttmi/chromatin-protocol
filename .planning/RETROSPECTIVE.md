@@ -539,6 +539,45 @@
 
 ---
 
+## Milestone: v1.6.0 — Python SDK
+
+**Shipped:** 2026-03-31
+**Phases:** 5 | **Plans:** 14 | **Sessions:** ~4
+
+### What Was Built
+- Pip-installable Python SDK (sdk/python/) with liboqs-python for PQ crypto, PyNaCl for AEAD, asyncio transport
+- Crypto primitives byte-identical to C++ via JSON test vectors from dedicated C++ generator binary
+- PQ-authenticated transport: ML-KEM-1024 handshake + ML-DSA-87 mutual auth + ChaCha20-Poly1305 encrypted framing
+- Full async client API: 15 methods covering all 38 relay-allowed message types (5 data + 10 query + pub/sub + ping)
+- Real-time pub/sub with async iterator notifications, subscription tracking, and D-06 auto-cleanup on disconnect
+- 366 tests (342 unit + 24 integration against live KVM relay)
+- Getting started tutorial, SDK README with 19-method API overview, PROTOCOL.md HKDF salt fix
+
+### What Worked
+- TDD approach produced clean APIs — every codec function and client method written test-first
+- Cross-language test vectors caught endianness and encoding bugs early (Phase 70) that would have been painful to debug at transport level
+- Integration tests against live KVM swarm validated real protocol compatibility — not just mock-based correctness
+- Bottom-up phase ordering (crypto → transport → data → queries → docs) meant each phase built on proven foundations
+- Pure-Python HKDF implementation (stdlib hmac+hashlib) avoided C extension complexity while maintaining byte-identical output
+
+### What Was Inefficient
+- Phase 71 plan 03 (integration tests) was a manual verification checkpoint — could have been folded into plan 02
+- Mixed endianness (BE framing, LE auth payload) required careful per-field documentation — would benefit from a wire format spec generator
+
+### Patterns Established
+- C++ test vector generator pattern for cross-SDK validation — reusable for future C/Rust/JS SDKs
+- Fire-and-forget send pattern for protocol messages without server response (subscribe/unsubscribe)
+- Async iterator with timeout loop for server-pushed notifications
+- SDK custom exception hierarchy mapping protocol error codes
+
+### Key Lessons
+- ML-DSA-87 signatures are non-deterministic — same input produces different signatures, which means FlatBuffer-wrapped blobs have unique hashes each time. Tests must compare fields individually, not byte-compare.
+- HKDF salt was wrong in PROTOCOL.md (said SHA3-256(pubkeys), C++ uses empty salt) — SDK followed source code, not docs. Docs must be verified against implementation for crypto details.
+- TCP connect timeout must be separate from handshake timeout — non-routable IPs hang on SYN retransmit, not handshake.
+- FlatBuffers is not deterministic cross-language — Python and C++ produce different bytes for same logical message. Use server-returned blob_hash only.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -560,6 +599,7 @@
 | v1.3.0 | ~2 | 4 | Concurrent dispatch foundation — request_id, ExistsRequest, NodeInfoRequest, IO-thread transfer |
 | v1.4.0 | ~2 | 3 | 18 new query types, relay filter expansion, PROTOCOL.md update |
 | v1.5.0 | ~1 | 2 | Docs-only — dist/ kit, full doc refresh, PROTOCOL.md source verification |
+| v1.6.0 | ~4 | 5 | First SDK — Python client with PQ crypto, 366 tests, cross-language test vectors |
 
 ### Cumulative Quality
 
@@ -580,6 +620,7 @@
 | v1.3.0 | 551+ | 27,469 | ~105 | 12/12 |
 | v1.4.0 | 560+ | ~28,000 | ~110 | 14/14 |
 | v1.5.0 | 567 | ~29,600 | ~110 | 12/12 |
+| v1.6.0 | 933 | ~29,600 C++ + SDK | ~130 | 30/30 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -597,3 +638,5 @@
 12. Planning/implementation divergence happens silently — milestone audit is the last defense (v0.9.0 README vs cursor compaction)
 13. Relay as security boundary cleanly separates untrusted clients from trusted node — validated in v1.2.0
 14. Bookkeeping gaps (unchecked requirements, missing summaries) accumulate at high velocity — v1.3.0 had 3 unchecked requirements despite code being shipped
+15. Cross-language test vectors from an authoritative source (C++ generator) catch encoding bugs that unit tests miss — validated in v1.6.0 SDK crypto
+16. Protocol documentation must be verified against source code for crypto parameters — v1.6.0 found HKDF salt discrepancy that existed since v0.5.0

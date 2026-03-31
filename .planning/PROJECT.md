@@ -10,23 +10,14 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v1.6.0 Python SDK
+## Current State
 
-**Goal:** Python client SDK for chromatindb — connect to relay, PQ handshake, all 38 client message types, with tutorial and updated docs.
+**Latest shipped:** v1.6.0 Python SDK (2026-03-31)
+**Next milestone:** Not yet planned — run `/gsd:new-milestone` to start
 
-**Target features:**
-- PQ-authenticated connection to relay (ML-KEM-1024 + ML-DSA-87 via liboqs-python)
-- ChaCha20-Poly1305 encrypted transport (AEAD framing, matching node wire format)
-- Full client API: write, read, delete, list, query (all 38 relay-allowed message types)
-- Pub/sub notifications (subscribe/unsubscribe/receive)
-- FlatBuffers wire protocol (Python runtime for encode/decode)
-- Pip-installable package under sdk/python/
-- Python SDK tutorial (getting started guide with usage examples)
-- Documentation refresh (README, PROTOCOL.md updated with SDK section)
+## Previous Milestone: v1.6.0 Python SDK (SHIPPED 2026-03-31)
 
-## Previous Milestone: v1.5.0 Documentation & Distribution (SHIPPED 2026-03-28)
-
-**Delivered:** Production deployment kit (install.sh, systemd units, configs) and full documentation refresh (README, PROTOCOL.md verified against source with 2 byte-offset fixes).
+**Delivered:** Pip-installable Python SDK with PQ-authenticated transport (ML-KEM-1024 + ML-DSA-87), 15 async client methods covering all 38 relay-allowed message types, real-time pub/sub, 366 tests, getting started tutorial, and PROTOCOL.md corrections. 5 phases, 14 plans, 30 requirements — all complete.
 
 ## Requirements
 
@@ -167,15 +158,6 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Python SDK: ChaCha20-Poly1305 encrypted transport with background reader and request dispatch — v1.6.0 Phase 71
 - ✓ Python SDK: ChromatinClient async context manager (connect, ping, goodbye) — v1.6.0 Phase 71
 
-### Validated in Phase 74
-- ✓ Python SDK: Pip-installable package under sdk/python/ with PyPI-ready metadata — v1.6.0 Phase 74
-- ✓ Python SDK: Getting started tutorial with usage examples — v1.6.0 Phase 74
-- ✓ Documentation refresh: PROTOCOL.md HKDF salt fix + SDK Client Notes section — v1.6.0 Phase 74
-
-### Validated in Phase 73
-- ✓ Python SDK: Full client API — all 10 query methods + 5 data ops returning typed results — v1.6.0 Phase 73
-- ✓ Python SDK: Pub/sub notifications (subscribe/unsubscribe/notifications async generator, D-06 auto-cleanup) — v1.6.0 Phase 73
-
 ### Future
 
 - CLI tool for admin operations (quota check, list blobs, etc.)
@@ -184,26 +166,20 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.5.0 with ~29,600 LOC C++20, 567 unit tests, 49 Docker integration test scripts. Production deployment kit and full documentation refresh complete. Relay message filter flipped from whitelist to blocklist (21 blocked peer-internal types) — new message types pass through without relay changes.
-Python SDK v1.6.0 complete: 366 tests, 15+ client methods, PQ handshake, tutorial, PyPI-ready packaging, PROTOCOL.md corrected.
-Built across 28 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d).
-15 milestones, 74 phases, 151 plans, 270 requirements total.
+Shipped v1.6.0 with ~29,600 LOC C++20 + Python SDK under sdk/python/. 567 unit tests (C++), 366 tests (Python SDK), 49 Docker integration test scripts.
+Built across 29 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d).
+16 milestones, 74 phases, 151 plans, 270 requirements total.
 
-Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json.
+Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
-Three-layer architecture (building bottom-up):
-- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. Database layer is done.
+Three-layer architecture (all shipped):
+- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. 567 unit tests, 49 Docker integration tests.
 - **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Blocklist approach — future-proof.
-- **Layer 3 (v1.6.0 COMPLETE): Python SDK** — pip-installable client library using liboqs-python for PQ crypto. 366 tests, 15+ client methods, PQ handshake, tutorial.
+- **Layer 3 (v1.6.0 SHIPPED): Python SDK** — pip-installable client library. 15 async methods, 366 tests, PQ handshake, tutorial.
 
 **Live test environment:** 3-node KVM swarm (192.168.1.200-202) with relay on 200.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
-
-**Benchmark results (v0.8.0, Ryzen 5 5600U, Docker):**
-- 1 MiB ingest: 33.1 blobs/sec (+116% over v0.6.0 baseline of 15.3)
-- Reconciliation scaling: 1050ms for 10-blob delta on 1000-blob namespace (O(diff) confirmed)
-- Small namespace: no regression within 5% threshold
 
 ## Constraints
 
@@ -328,4 +304,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-31 after Phase 74 (packaging-documentation) complete — v1.6.0 Python SDK milestone complete, 366 tests, PyPI-ready, tutorial, PROTOCOL.md corrected*
+*Last updated: 2026-03-31 after v1.6.0 milestone complete*
