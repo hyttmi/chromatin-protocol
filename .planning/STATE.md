@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 73-03-PLAN.md
-last_updated: "2026-03-30T15:11:58.179Z"
+stopped_at: Completed 74-02-PLAN.md
+last_updated: "2026-03-31T14:02:06.440Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 14
+  completed_plans: 13
   percent: 26
 ---
 
@@ -56,6 +56,7 @@ Progress: [##........] 26%
 | Phase 73 P01 | 6min | 2 tasks | 4 files |
 | Phase 73 P02 | 6min | 2 tasks | 4 files |
 | Phase 73 P03 | 3min | 2 tasks | 1 files |
+| Phase 74 P02 | 1min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,8 @@ Progress: [##........] 26%
 - [Phase 73]: subscribe/unsubscribe use fire-and-forget send_message since C++ node processes inline without response
 - [Phase 73]: notifications() async iterator uses 1s timeout on queue.get() to check transport.closed and exit cleanly
 - [Phase 73]: NamespaceList blob_count >= 0 for other namespaces (deleted blobs leave 0-count entries on live node)
+- [Phase 74]: HKDF empty salt documented as matching C++ implementation -- SHA3-256(pubkeys) description was never implemented
+- [Phase 74]: SDK Client Notes section in PROTOCOL.md documents 6 cross-language protocol gotchas for future SDK developers
 
 ### Pending Todos
 
@@ -98,6 +101,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T15:06:51.535Z
-Stopped at: Completed 73-03-PLAN.md
+Last session: 2026-03-31T14:02:06.436Z
+Stopped at: Completed 74-02-PLAN.md
 Resume file: None

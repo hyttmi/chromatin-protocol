@@ -223,10 +223,10 @@ Plans:
   1. Getting started tutorial walks a user from pip install through writing and reading their first blob
   2. README.md includes SDK section with installation, quick start, and link to tutorial
   3. PROTOCOL.md HKDF salt discrepancy is corrected to match C++ implementation (empty salt, not SHA3-256(pubkeys))
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 74-01-PLAN.md — SDK README, pyproject.toml metadata, getting started tutorial
-- [ ] 74-02-PLAN.md — PROTOCOL.md HKDF salt fix and SDK Client Notes section
+- [x] 74-02-PLAN.md — PROTOCOL.md HKDF salt fix and SDK Client Notes section
 
 ## Progress
 
@@ -239,4 +239,4 @@ Phases execute in numeric order: 70 -> 71 -> 72 -> 73 -> 74
 | 71. Transport & PQ Handshake | 2/3 | Complete    | 2026-03-29 |
 | 72. Core Data Operations | 3/3 | Complete    | 2026-03-30 |
 | 73. Extended Queries & Pub/Sub | 3/3 | Complete    | 2026-03-30 |
-| 74. Packaging & Documentation | 0/2 | Not started | - |
+| 74. Packaging & Documentation | 1/2 | In Progress|  |
