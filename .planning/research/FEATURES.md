@@ -1,278 +1,287 @@
-# Feature Research: Python SDK for chromatindb
+# Feature Landscape: Client-Side PQ Envelope Encryption
 
-**Domain:** Python client SDK for binary-protocol database with PQ cryptography
-**Researched:** 2026-03-28
-**Confidence:** HIGH
+**Domain:** Client-side encryption with pubkey directory, groups, and envelope encryption for a PQ-secure blob store
+**Researched:** 2026-03-31
+**Overall confidence:** HIGH (core patterns well-understood, PQ-specific integration MEDIUM)
 
-## Feature Landscape
+## Context: What Already Exists
 
-### Table Stakes (Users Expect These)
+The Python SDK (v1.6.0) already provides:
+- `ChromatinClient` with 15 async methods (write_blob, read_blob, delete_blob, list_blobs, exists, 10 query methods, pub/sub)
+- `Identity` class managing ML-DSA-87 keypairs (generate, load, save, sign, verify)
+- ML-KEM-1024 handshake for transport encryption (liboqs-python `KeyEncapsulation`)
+- ChaCha20-Poly1305 AEAD (PyNaCl bindings)
+- HKDF-SHA256 (pure-Python stdlib implementation, byte-identical to libsodium)
+- SHA3-256 (hashlib stdlib)
+- Namespace ownership: `SHA3-256(pubkey) = namespace`
+- Delegation: owner writes `[0xDE 0x1E 0x6A 0x7E][delegate_pubkey:2592]` blob to grant write access
+- Tombstones: owner writes `[0xDE 0xAD 0xBE 0xEF][target_hash:32]` to delete blobs
+- Pub/sub notifications on namespace changes
 
-Features any Python database/network client must have. Missing these means the SDK feels broken, not just incomplete.
+**Key constraint:** All new features are pure SDK-side. No C++ node changes. The node stores signed blobs; it never interprets their contents. The encryption layer sits entirely in the SDK, making the node a zero-knowledge store.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Context manager connection lifecycle | Every Python DB client (redis-py, psycopg, boto3) supports `with client:` or `async with client:` for deterministic resource cleanup. Developers expect it. | LOW | `__enter__`/`__exit__` for sync, `__aenter__`/`__aexit__` for async. Handles TCP socket + AEAD state teardown (Goodbye message before close). |
-| Async-first API with `async`/`await` | The protocol uses persistent TCP connections with multiplexed request_id pipelining. This is inherently async. Python developers building on top of chromatindb will use asyncio (FastAPI, etc.). | MEDIUM | Use `asyncio.open_connection()` for TCP. All send/recv operations are coroutines. The AEAD framing (length-prefixed encrypted frames) maps naturally to asyncio stream reads. |
-| Typed exception hierarchy | redis-py has `ConnectionError`, `TimeoutError`, `ResponseError`. boto3 has `ClientError`, `BotoCoreError`. Developers catch specific exceptions for retry logic. | LOW | Base `ChromatinError`. Children: `ConnectionError` (TCP/handshake failures), `AuthenticationError` (PQ handshake signature verification failed, ACL rejection), `ProtocolError` (unexpected message type, malformed response), `StorageFullError`, `QuotaExceededError`, `TimeoutError`, `NotFoundError` (for read/exists returning absent). |
-| Write blobs with automatic signing | The whole point of the SDK. Client creates a blob with data + TTL, SDK handles SHA3-256 canonical hash, ML-DSA-87 signing, FlatBuffers encoding, and sends Data(8). Returns WriteAck with hash + seq_num + status. | HIGH | Requires: liboqs-python for ML-DSA-87 signing, hashlib.sha3_256 for canonical hash, FlatBuffers Python runtime for Blob encoding. The signing input is `SHA3-256(namespace_id || data || ttl_le32 || timestamp_le64)` -- SDK must construct this exactly. |
-| Read blobs by namespace + hash | `client.read(namespace, blob_hash)` sends ReadRequest(31), receives ReadResponse(32). Returns decoded blob or None. | MEDIUM | Decode FlatBuffer Blob from response payload. Return a typed `Blob` dataclass with namespace_id, data, ttl, timestamp, pubkey, signature fields. |
-| Delete blobs with tombstone signing | `client.delete(namespace, target_hash)` constructs tombstone data `[0xDE 0xAD 0xBE 0xEF][target_hash:32]`, signs it, sends Delete(17). Returns DeleteAck confirmation. | MEDIUM | Reuses the write path but with tombstone magic prefix and TTL=0. Only namespace owners can delete. |
-| List blobs with cursor pagination | `client.list(namespace, since_seq=0, limit=100)` sends ListRequest(33). Returns entries + has_more flag. Must support full iteration via `async for entry in client.list_all(namespace):`. | MEDIUM | The protocol already has cursor-based pagination (since_seq + has_more). SDK wraps this in an async iterator that auto-paginates. This is the pattern Google, Azure, and AWS SDKs all use for paginated results. |
-| Request-response correlation via request_id | The node echoes request_id and may respond out-of-order. SDK must assign unique request_ids, match responses to pending requests, and support concurrent in-flight requests. | HIGH | Internal dispatch table mapping request_id -> asyncio.Future. Background reader task receives frames, decrypts, extracts request_id, resolves the matching Future. This is the core multiplexing engine. |
-| Connection to relay with PQ handshake | The SDK connects to the relay (port 4201), performs the ML-KEM-1024 key exchange + ML-DSA-87 mutual authentication, derives AEAD session keys, then sends/receives encrypted frames. | HIGH | Four-message handshake: KemPubkey -> KemCiphertext -> AuthSignature -> AuthSignature. Key derivation via HKDF-SHA256. This is the single most complex feature -- it touches liboqs-python (ML-KEM-1024 encapsulate, ML-DSA-87 sign/verify), hashlib (SHA3-256 for salt), cryptography lib (HKDF-SHA256), and AEAD encryption setup. |
-| AEAD encrypted transport | All post-handshake frames use ChaCha20-Poly1305 with counter-based nonces. SDK must maintain send/recv nonce counters, encrypt outgoing frames, decrypt incoming frames, and handle the length-prefix framing. | HIGH | Nonce = 4 zero bytes + 8-byte big-endian counter. Counters start at 1 (0 used for auth). pysodium or PyNaCl low-level bindings for `crypto_aead_chacha20poly1305_ietf_encrypt/decrypt`. Must handle MAX_FRAME_SIZE (110 MiB). |
-| Identity management (keypair load/generate) | Developers need to create or load ML-DSA-87 signing keypairs. The keypair determines the namespace (SHA3-256 of pubkey). | MEDIUM | `Identity.generate()` creates new ML-DSA-87 keypair. `Identity.from_file(path)` loads existing keys (matching relay's SSH-style .key/.pub sibling pattern). `identity.namespace` property returns SHA3-256(pubkey). `identity.public_key`, `identity.secret_key` accessors. |
-| Keepalive (Ping/Pong) | The node has inactivity detection (default 120s). If the SDK doesn't send messages, the connection gets dropped. | LOW | Background task sends Ping(5) every N seconds when idle. Responds to incoming Ping with Pong(6). No request_id needed (keepalive is fire-and-forget). |
-| Timeout on all operations | Every request must have a configurable timeout. Hanging forever on a read is unacceptable. | LOW | Per-operation `timeout` kwarg, default from client config. Uses `asyncio.wait_for()`. On timeout, remove the pending Future from the dispatch table and raise `TimeoutError`. |
-| Graceful disconnect | Send Goodbye(7) before closing the socket. Clean up AEAD state and pending requests (cancel all Futures with `ConnectionError`). | LOW | Called from `__aexit__` / `close()`. Cancel background reader task, drain pending requests, send Goodbye, close socket. |
+## Table Stakes
 
-### Differentiators (Competitive Advantage)
+Features that any client-side encryption system must have. Without these, the encryption is either broken, unusable, or a toy.
 
-Features that elevate the SDK beyond a bare protocol wrapper. Not required for launch but create significant developer value.
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| Envelope encryption format | Standard pattern: symmetric DEK encrypts data, asymmetric KEK wraps DEK per-recipient. Every serious encryption system uses this (age, AWS KMS, KBFS, Signal). | MEDIUM | Existing: `aead_encrypt/decrypt`, `hkdf_derive`, `sha3_256`. New: ML-KEM-1024 encap/decap via `oqs.KeyEncapsulation` (already used in handshake). |
+| Multi-recipient key wrapping | A blob encrypted for N recipients must wrap the DEK N times (one per recipient's KEM public key). Single-recipient is useless for collaboration. age wraps file key per-recipient in stanzas; CMS has RecipientInfo structures. | MEDIUM | ML-KEM-1024 `encaps(pubkey)` returns `(ciphertext, shared_secret)`. Wrap DEK with each recipient's shared_secret. Each wrap = 1568 bytes of KEM ciphertext + 32 bytes AEAD-wrapped DEK + 16 bytes tag. |
+| Encrypted blob binary format | Self-describing binary header with version, recipient count, per-recipient wrapped keys, then AEAD ciphertext. Must be parseable without external state. Every encrypted format (age, AWS SDK, Cryptomator) puts all decryption metadata in the blob itself. | MEDIUM | Define: `[version:1][recipient_count:2][recipient_stanzas][nonce:12][ciphertext+tag]`. Each stanza: `[kem_pubkey_hash:32][kem_ciphertext:1568][wrapped_dek:48]`. |
+| Pubkey directory (key discovery) | Users must find each other's KEM public keys to encrypt to them. Without a directory, you need out-of-band key exchange for every recipient -- unusable. Keybase, Signal, and every E2EE system has key discovery. | HIGH | New: ML-KEM-1024 keypair generation per identity. Directory entries stored as blobs in a shared namespace. Uses existing delegation for write access. |
+| Encrypted write helper | `client.write_encrypted(data, recipients, ttl)` -- one-call API that handles key generation, multi-recipient wrapping, encryption, and blob write. Without this, developers manually construct envelope format -- error-prone and defeats the purpose. | LOW | Composes: DEK generation, per-recipient ML-KEM encap, AEAD encrypt, format assembly, `write_blob()`. |
+| Encrypted read helper | `client.read_encrypted(namespace, blob_hash)` -- reads blob, identifies recipient stanza for local identity, decapsulates DEK, decrypts payload. Returns plaintext or raises if not a recipient. | LOW | Composes: `read_blob()`, format parse, ML-KEM decap, AEAD decrypt. |
+| Identity with KEM keypair | Each identity needs both ML-DSA-87 (signing, already exists) and ML-KEM-1024 (encryption, new). The signing key proves who you are; the KEM key lets others encrypt to you. Two separate keys because signing keys must not be used for encryption (cryptographic hygiene). | MEDIUM | Add `kem_public_key` and KEM secret key to `Identity`. Generate alongside existing ML-DSA-87 keypair. Save/load .kem / .kem.pub files alongside .key / .pub. |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Pub/sub with async iterator | `async for notification in client.subscribe([ns1, ns2]):` yields Notification objects. Natural Python pattern (like NATS-py, aioredis). Real-time blob notifications without polling. | MEDIUM | Subscribe(19) registers namespaces. Background reader routes Notification(21) messages to an `asyncio.Queue`. The async iterator yields from the queue. Unsubscribe(20) on iterator exit or explicit call. Connection-scoped (server forgets subscriptions on disconnect). |
-| Sync (blocking) wrapper API | Not all Python code is async. Scripts, notebooks, CLI tools want `client.read(ns, hash)` without `await`. Azure SDK pattern: separate sync client class that wraps async internally. | MEDIUM | `ChromatinClient` (sync) wraps `AsyncChromatinClient` using `asyncio.run()` or a dedicated event loop thread. Same method names, same return types. Import from `chromatindb` (sync) or `chromatindb.aio` (async). Higher priority than most differentiators because many users will start with sync code. |
-| Batch operations | `client.batch_exists(namespace, [hash1, hash2, ...])` and `client.batch_read(namespace, [hash1, hash2, ...])` map to BatchExistsRequest(49) and BatchReadRequest(53). Single round-trip for multiple blobs. | LOW | Already supported by the protocol. SDK just needs to encode the request, decode the response array. BatchRead has a `cap_bytes` parameter and `truncated` flag that the SDK should expose. |
-| Node introspection | `client.node_info()` returns version, uptime, peer count, storage stats, supported message types. `client.storage_status()` returns disk usage. Used for monitoring and capability detection. | LOW | NodeInfoRequest(39), StorageStatusRequest(43). Simple request-response, no state. SDK can use `supported_types` from NodeInfoResponse to feature-detect what the connected node supports. |
-| Namespace operations | `client.list_namespaces()` with cursor pagination. `client.namespace_stats(ns)` for per-namespace counters. Useful for admin dashboards, data exploration. | LOW | NamespaceListRequest(41) with auto-pagination async iterator. NamespaceStatsRequest(45) returns blob count, bytes, delegation count, quotas. |
-| Blob metadata without data transfer | `client.metadata(namespace, blob_hash)` returns timestamp, TTL, size, seq_num, signer pubkey -- without downloading the blob data. | LOW | MetadataRequest(47). Useful for building indexes, checking freshness, auditing signers. Much cheaper than full read for large blobs. |
-| Delegation management | `client.delegate(delegate_pubkey)` creates a delegation blob (magic prefix + pubkey). `client.revoke_delegation(delegate_pubkey)` tombstones it. `client.list_delegations(namespace)` queries existing delegations. | MEDIUM | Delegation blob format: `[0xDE 0x1E 0x6A 0x7E][delegate_pubkey:2592]`. Signed by namespace owner. Revocation = tombstone the delegation blob hash. DelegationListRequest(51) for listing. |
-| Time range queries | `client.time_range(namespace, start_time, end_time, limit=100)` returns blob references within a time window. Useful for "get everything from the last hour." | LOW | TimeRangeRequest(57). Returns hash + seq + timestamp tuples. Client uses these with read/batch_read to fetch actual data. |
-| Peer info query | `client.peer_info()` returns connected peer information. Trust-gated (full detail only for trusted connections). | LOW | PeerInfoRequest(55). Admin/monitoring use case. |
-| Request pipelining | Send multiple requests without waiting for responses. Responses matched by request_id. Improves throughput for batch-style workloads. | MEDIUM | Already required by the dispatch table design (table stakes). The differentiator is exposing it ergonomically: `async with client.pipeline() as pipe: pipe.read(ns, h1); pipe.read(ns, h2); results = await pipe.execute()`. Optional -- individual await per call also pipelines naturally since the background reader processes responses as they arrive. |
-| Auto-reconnect with backoff | Connection drops in production. SDK should reconnect automatically with jittered exponential backoff, re-establish PQ handshake, and re-subscribe to pub/sub namespaces. | HIGH | Follows nats-py pattern: configurable `allow_reconnect`, `max_reconnect_attempts`, `reconnect_wait`. Callbacks for `disconnected_cb`, `reconnected_cb`, `error_cb`. Re-subscribes automatically. Pending requests get `ConnectionError`. Complex because it requires re-handshake and re-subscription state tracking. |
+### Detailed Analysis: Envelope Encryption Format
 
-### Anti-Features (Commonly Requested, Often Problematic)
+**How age does it (the gold standard for simplicity):**
+- Header: version line, then one "stanza" per recipient wrapping the same 128-bit file key
+- Each X25519 stanza: ephemeral pubkey + AEAD(wrap_key, file_key) where wrap_key = HKDF(DH_shared_secret, ephemeral_share || recipient)
+- Payload: HKDF(file_key, nonce, "payload") derives payload key, then ChaCha20-Poly1305 in 64 KiB chunks
+- Fixed nonce of zeros for key wrapping (one unique ephemeral key per recipient)
 
-Features that seem good but create real problems. Explicitly avoid these.
+**How this maps to chromatindb's PQ stack:**
+- Instead of X25519 DH, use ML-KEM-1024 encapsulation: `encaps(recipient_kem_pk)` -> `(ciphertext, shared_secret)`
+- Wrap DEK: `HKDF(shared_secret, "chromatindb-envelope-v1", 32)` -> `wrap_key`, then `AEAD(wrap_key, dek, nonce=zeros)`
+- The ML-KEM ciphertext is per-recipient (1568 bytes each, fixed size, no ambiguity)
+- Payload encryption: ChaCha20-Poly1305 with random 12-byte nonce (already have `aead_encrypt`)
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| Connection pooling | "I need multiple concurrent requests" | chromatindb supports request_id multiplexing -- a single connection handles unlimited concurrent requests. Multiple connections add AEAD state overhead, handshake latency, and connection limits at the node. Connection pools solve HTTP/1.1 head-of-line blocking, which does not exist here. | Single persistent connection with request_id multiplexing. One connection, many concurrent requests. Matches the protocol design. |
-| ORM / schema layer on top of blob storage | "I want to store Python objects, not bytes" | chromatindb is a blob store. Adding serialization opinions (pickle, msgpack, JSON) couples the SDK to application-layer concerns. Every ORM for blob stores ends up being a leaky abstraction that users fight against. | Provide raw bytes in, raw bytes out. Users choose their own serialization. Document examples with msgpack/JSON in the tutorial. |
-| Automatic key rotation | "Rotate my signing keys periodically" | Key rotation changes the namespace (SHA3-256 of pubkey). All existing data is in the old namespace. The protocol has no concept of key migration. Attempting to automate this creates data loss or orphaned namespaces. | Document that namespaces are permanently bound to keypairs. If users need key rotation, they create a new identity and use delegation for transition period. |
-| Transparent encryption of blob data | "Encrypt my data before storing" | The transport is already PQ-encrypted (AEAD). Data-at-rest encryption is handled by the node. Adding client-side encryption means the SDK manages more keys, and blobs become opaque to any other client that doesn't have the key. This is an application-layer concern. | Users who want E2E encryption do it in their application layer before passing bytes to the SDK. Document this pattern in the tutorial. |
-| Sync-only API (no async) | "I don't want to deal with asyncio" | The protocol is fundamentally async (persistent connection, multiplexed responses, server-pushed notifications). A sync-only API either blocks the event loop or hides an internal thread, creating debugging nightmares. | Async-first with a sync wrapper class (see Differentiators). The sync wrapper runs a dedicated asyncio event loop in a background thread. Same API surface, same behavior, no async keywords needed by the caller. |
-| Automatic retry on all errors | "Retry everything automatically" | StorageFull, QuotaExceeded, and AuthenticationError are not transient -- retrying them wastes resources and delays error reporting. Only connection-level failures and timeouts benefit from retry. | Retry only at connection level (reconnect). Individual operation failures surface immediately. Users implement their own retry logic with `tenacity` or similar for the specific errors they consider retransient. |
-| Thread-safe client | "Share one client across threads" | asyncio is single-threaded by design. Making the client thread-safe requires locks around the AEAD nonce counters, the dispatch table, and the socket. This adds overhead and complexity for a pattern that's fundamentally wrong (share the event loop, not the client). | One client per event loop (async) or one client per thread (sync wrapper creates its own loop). Document this clearly. |
-| Streaming large blob uploads | "Upload in chunks for 100 MiB blobs" | The protocol sends a complete FlatBuffer-encoded Blob in a single Data(8) message. There is no chunked upload protocol. The signing input requires the full data to compute SHA3-256. Streaming would require a protocol change. | Accept bytes or file path, load into memory, sign, send. For 100 MiB blobs, this means ~100 MiB in memory. Document the memory requirement. For very large data, users chunk at the application layer (multiple blobs). |
-| Caching layer | "Cache frequently read blobs locally" | Cache invalidation is hard. Pub/sub notifications could invalidate, but tombstones, TTL expiry, and delegation changes create complex invalidation logic. A cache that serves stale data is worse than no cache. | Users who need caching implement it in their application with their own invalidation strategy, possibly driven by pub/sub notifications. |
-| Multiple simultaneous node connections | "Connect to several nodes for redundancy" | chromatindb nodes replicate data via peer sync. Connecting to multiple nodes means duplicate writes (each write replicates to all peers), duplicate reads (any node has the data), and complex consistency decisions. The relay is the single entry point by design. | Connect to one relay. The relay forwards to the node, which replicates to peers. If the relay is down, reconnect with backoff. For HA, run multiple relays behind a load balancer (future concern, not SDK concern). |
+**Recommended format (binary, self-contained):**
+```
+[version: 1 byte = 0x01]
+[recipient_count: 2 bytes big-endian]
+For each recipient:
+  [kem_pubkey_hash: 32 bytes]     -- SHA3-256 of recipient's KEM pubkey (for identification)
+  [kem_ciphertext: 1568 bytes]    -- ML-KEM-1024 encapsulation output
+  [wrapped_dek: 48 bytes]         -- AEAD(wrap_key, dek:32) = ciphertext:32 + tag:16
+[nonce: 12 bytes]                 -- random, for payload encryption
+[ciphertext: variable]            -- AEAD(dek, plaintext, nonce, ad=header_bytes)
+```
+
+Total overhead per recipient: 32 + 1568 + 48 = 1648 bytes.
+Fixed overhead: 1 + 2 + 12 + 16 (AEAD tag) = 31 bytes.
+Single-recipient encrypted blob: 31 + 1648 = 1679 bytes overhead.
+
+**Why this format:** Compact binary (not text like age -- blobs are binary anyway), self-describing, no external state needed for decryption, and the header is authenticated as AD to the payload AEAD (binds recipients to ciphertext, prevents stanza substitution).
+
+### Detailed Analysis: Pubkey Directory
+
+The directory is the hardest feature. It determines how users discover each other.
+
+**How Keybase does it:** Global Merkle tree of public keys, server-mediated but cryptographically auditable. Heavy infrastructure.
+
+**How Signal does it:** Phone number -> identity key mapping on Signal servers. Contact discovery via SGX enclaves (complex).
+
+**How this should work for chromatindb (SIMPLE, no new infrastructure):**
+
+An "org directory" is a namespace owned by an admin identity. Users register by writing their public key info as a blob to that namespace (via delegation -- admin delegates write access to new members). Discovery is just `list_blobs(directory_namespace)` + `read_blob()` to get pubkeys.
+
+**Directory entry format (blob data):**
+```
+[magic: 4 bytes = 0xD1 0xEC 0x70 0x01]  -- "DIRECT01" nibble-ish
+[entry_type: 1 byte]                     -- 0x01 = user pubkey entry
+[signing_pubkey: 2592 bytes]             -- ML-DSA-87 pubkey (already known from blob signature)
+[kem_pubkey: 1568 bytes]                 -- ML-KEM-1024 encapsulation key (NEW)
+[display_name_len: 2 bytes big-endian]
+[display_name: variable, UTF-8]
+```
+
+**Key discovery flow:**
+1. Admin creates org namespace, delegates write access to users
+2. User generates Identity (ML-DSA-87 + ML-KEM-1024 keypair)
+3. User writes directory entry blob to org namespace (self-registration)
+4. Other users list org namespace, read entries, cache KEM pubkeys locally
+5. To encrypt for "alice": look up alice's KEM pubkey from directory, ML-KEM encaps to it
+
+**Why blobs-as-directory:** Zero new infrastructure. Directory entries are signed blobs that replicate across nodes automatically. Revocation = tombstone the user's directory entry blob. The node already handles replication, expiry, and access control.
+
+### Detailed Analysis: Multi-Recipient Key Wrapping
+
+**The pattern (from age, CMS, KBFS, and all envelope encryption systems):**
+1. Generate random 32-byte DEK (data encryption key)
+2. For each recipient: `(ct, ss) = ML-KEM-1024.encaps(recipient.kem_pubkey)`, then `wrap_key = HKDF(ss, info, 32)`, then `wrapped = AEAD(wrap_key, dek)`
+3. Encrypt payload with DEK
+4. Pack all KEM ciphertexts + wrapped DEKs into header
+
+**Recipient identification:** Each stanza includes `SHA3-256(recipient.kem_pubkey)` so the decryptor can scan stanzas for theirs without trying every decapsulation. age uses the recipient public key as an identifier in the stanza args.
+
+**Decryption flow:**
+1. Parse header, scan stanzas for `SHA3-256(my_kem_pubkey)`
+2. If found: `ss = ML-KEM-1024.decaps(my_kem_secret, kem_ciphertext)`
+3. `wrap_key = HKDF(ss, info, 32)`, then `dek = AEAD_decrypt(wrap_key, wrapped_dek)`
+4. Decrypt payload with DEK
+
+## Differentiators
+
+Features that set this apart from generic encryption libraries. Not expected, but valued.
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| Named groups in directory | Instead of listing N pubkeys per write, name a group ("engineering") and the SDK resolves member KEM pubkeys at encrypt time. Keybase teams, Signal groups, and GPG groups all provide this abstraction. | MEDIUM | Group entry in directory: `[magic][type=0x02][group_name][member_kem_pubkey_hashes]`. SDK resolves hashes to full KEM pubkeys from directory cache. |
+| Auto-encrypt-to-group helper | `client.write_to_group(data, "engineering", ttl)` -- resolves group members, wraps DEK for each, writes encrypted blob. One-liner for the common case. | LOW | Composes: group resolution + `write_encrypted()`. |
+| Self-encrypting write | `client.write_encrypted(data, ttl=3600)` with no explicit recipients encrypts to self only. Useful for private encrypted storage where only the writer can read back. | LOW | Default recipient = own KEM pubkey. Single-recipient envelope. |
+| Pubkey caching with invalidation | Cache directory entries locally, refresh on pub/sub notification. Avoids re-fetching directory on every encrypt. | LOW | In-memory dict `{kem_pubkey_hash: kem_pubkey}`. Subscribe to directory namespace. Invalidate on tombstone notifications. |
+| Streaming encryption for large blobs | For blobs approaching 100 MiB, encrypt in chunks (like age's 64 KiB STREAM construction) to avoid holding 200+ MiB in memory (plaintext + ciphertext). | HIGH | STREAM construction: chunk counter in nonce, final-chunk marker. Complex: different decryption flow, seekability concerns, chunk authentication. |
+| Re-encryption helper for revocation | When a member is removed from a group, re-encrypt existing blobs for remaining members. Automates the "read, decrypt, re-encrypt, write, tombstone old" cycle. | MEDIUM | Composes existing operations. Warning: O(blobs * members) -- expensive for large datasets. Practically useful only for small datasets or critical secrets. |
+
+### Detailed Analysis: Groups
+
+**How Signal does groups (Sender Keys):**
+- Each member generates a sender key (chain_key + signature_key)
+- Sender key distributed to all members via pairwise encrypted channels
+- Messages encrypted with sender's chain key, broadcast to group
+- On member removal: all members rotate sender keys
+
+**How Keybase does groups:**
+- Team has per-team key, encrypted to each member's per-user key
+- Key rotation on membership change (new key, re-encrypted for remaining members)
+- Role-based: readers, writers, admins
+- Subteams with independent keys
+
+**What chromatindb should do (MUCH simpler than either):**
+
+Groups are just named membership lists stored as blobs in the directory namespace. No shared group key. No key rotation protocol. When encrypting to a group, the SDK resolves the current member list and wraps the DEK for each member's KEM pubkey individually.
+
+**Why no shared group key:**
+1. chromatindb stores blobs, not streams -- there is no message ordering to optimize
+2. Envelope encryption already handles multi-recipient efficiently (1648 bytes per recipient)
+3. Shared group keys require key rotation on every membership change -- massive complexity
+4. Per-blob envelope encryption means removing a member from the group ONLY affects future blobs (old blobs they already have keys for remain accessible -- this is correct, they already read them)
+
+**Group entry format (blob data in directory namespace):**
+```
+[magic: 4 bytes = 0xD1 0xEC 0x70 0x01]
+[entry_type: 1 byte = 0x02]             -- group entry
+[group_name_len: 2 bytes big-endian]
+[group_name: variable, UTF-8]
+[member_count: 2 bytes big-endian]
+For each member:
+  [kem_pubkey_hash: 32 bytes]           -- SHA3-256 of member's KEM pubkey
+```
+
+**Group operations:**
+- Create group: admin writes group blob to directory namespace
+- Add member: admin writes updated group blob (new version), tombstones old
+- Remove member: same -- write new group blob without removed member, tombstone old
+- Resolve group: read group blob, look up each member's KEM pubkey from directory cache
+- Encrypt to group: resolve members, wrap DEK for each
+
+**Maximum group size consideration:**
+At 1648 bytes per recipient, a 100-member group adds ~161 KiB of header to every encrypted blob. With 100 MiB max blob size, this is negligible. A 1000-member group adds ~1.6 MiB, still fine. The practical limit is ML-KEM encapsulation time (~1ms per recipient on modern hardware), so 1000 recipients = ~1 second. Acceptable for batch operations, but encrypt-heavy workloads with very large groups should be noted.
+
+## Anti-Features
+
+Features to explicitly NOT build. Each one either adds complexity without proportional value, invites security mistakes, or conflicts with the system's design principles.
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| Shared group symmetric key | Requires key rotation protocol, re-encryption on every membership change, complex state management. Signal and Keybase invest enormous effort here because they need it for real-time messaging. chromatindb stores blobs -- per-blob envelope encryption is simpler and more secure. | Per-blob DEK wrapped individually for each group member. |
+| Key escrow / recovery | Admin ability to decrypt all blobs. Destroys zero-knowledge property. If the admin can read everything, you do not have client-side encryption -- you have server-side encryption with extra steps. | If a user loses their key, their data is gone. This is a feature, not a bug. Document it clearly. |
+| Proxy re-encryption | Academic technique where a proxy transforms ciphertext from one key to another without decrypting. Complex crypto, limited library support, and unnecessary when the client can just re-encrypt. | Client-side re-encryption helper: read, decrypt, re-encrypt for new recipients, write new blob. |
+| Forward secrecy per blob | Ratcheting the encryption key per blob (like Signal's double ratchet). Only makes sense for ordered message streams. Blobs are unordered, independently readable. | Fresh random DEK per blob provides per-blob key independence. That is sufficient. |
+| Homomorphic or searchable encryption | Ability to search or compute on encrypted data. Enormously complex, terrible performance, and not needed for a blob store. | Decrypt client-side, search locally. The SDK can provide `list_blobs()` with metadata filtering -- the blob hashes and timestamps are not encrypted. |
+| Certificate authority / PKI hierarchy | X.509-style trust chains for pubkey validation. Massive complexity, requires CA infrastructure, certificate parsing, revocation lists. | Self-certifying keys: SHA3-256(pubkey) = namespace = identity. Trust is based on knowing someone's namespace, not on certificate chains. The directory is a simple key-value store, not a trust hierarchy. |
+| Passphrase-based encryption | age supports scrypt-based encryption from a password. This requires strong passwords, is slow (by design), and mixes authentication models. chromatindb identities are already keypair-based. | All encryption uses KEM pubkeys. If someone wants passphrase protection, they encrypt their secret key file locally (out of scope for the SDK). |
+| Automatic re-encryption on group change | When a member is removed, automatically re-encrypting all historical blobs. This is O(blobs * members), potentially hours of computation, and the removed member already read those blobs. | Provide a manual re-encryption helper for specific blobs that need it. Accept that past blobs with revoked members remain accessible to those members (they already had access). |
+| Encrypted metadata / encrypted blob hashes | Encrypting blob sizes, timestamps, or access patterns. Metadata encryption is a separate (hard) problem. The node needs blob hashes and timestamps for sync, expiry, and queries. | Accept that the node sees blob metadata (size, timestamp, namespace, hash). Only the blob *data* is encrypted. This is the standard model (even Signal leaks metadata to servers). |
 
 ## Feature Dependencies
 
 ```
-[Identity Management]
-    |
-    +--requires--> [PQ Handshake (ML-KEM-1024 + ML-DSA-87)]
-    |                  |
-    |                  +--requires--> [AEAD Encrypted Transport]
-    |                                     |
-    |                                     +--requires--> [FlatBuffers Encoding/Decoding]
-    |                                     |                  |
-    |                                     |                  +--enables--> [Write Blobs]
-    |                                     |                  +--enables--> [Read Blobs]
-    |                                     |                  +--enables--> [All Query Operations]
-    |                                     |
-    |                                     +--requires--> [Request-Response Dispatch (request_id)]
-    |                                                        |
-    |                                                        +--enables--> [Request Pipelining]
-    |                                                        +--enables--> [Concurrent Operations]
-    |
-    +--enables--> [Blob Signing (Write/Delete)]
-
-[Keepalive] --requires--> [AEAD Encrypted Transport]
-
-[Pub/Sub Notifications] --requires--> [AEAD Encrypted Transport]
-                         --requires--> [Request-Response Dispatch] (for subscribe/unsubscribe)
-                         --independent of--> [Request-Response Dispatch] (notifications are server-pushed, request_id=0)
-
-[Sync Wrapper] --requires--> [Async Client] (wraps the complete async API)
-
-[Auto-Reconnect] --requires--> [Async Client]
-                  --enhances--> [Pub/Sub] (re-subscribes after reconnect)
-
-[Context Manager] --requires--> [Graceful Disconnect]
-
-[Batch Operations] --requires--> [AEAD Encrypted Transport]
-                    --requires--> [Request-Response Dispatch]
-
-[Delegation Management] --requires--> [Blob Signing]
-                        --requires--> [Identity Management]
-
-[All Query Ops (metadata, namespace list, stats, etc.)] --requires--> [AEAD Encrypted Transport]
-                                                                      [Request-Response Dispatch]
+Identity with KEM keypair
+  |
+  +---> Pubkey directory entries (users publish KEM pubkeys)
+  |       |
+  |       +---> User discovery (list/fetch from directory)
+  |       |       |
+  |       |       +---> Multi-recipient envelope encryption
+  |       |               |
+  |       |               +---> write_encrypted() / read_encrypted()
+  |       |               |
+  |       |               +---> Named groups (reference members by KEM pubkey hash)
+  |       |                       |
+  |       |                       +---> write_to_group() helper
+  |       |                       |
+  |       |                       +---> Group management (create/add/remove)
+  |       |
+  |       +---> Self-registration (write own entry to directory)
+  |
+  +---> Encrypted blob format (uses KEM for key wrapping)
+  |
+  +---> Revocation (tombstone directory entry, existing primitive)
 ```
 
-### Dependency Notes
+**Critical path:** Identity KEM keypair -> Encrypted blob format -> Pubkey directory -> Encrypted write/read helpers -> Groups
 
-- **PQ Handshake requires Identity**: The handshake signs the session fingerprint with the client's ML-DSA-87 key. No identity = no connection.
-- **AEAD Transport requires Handshake**: Session keys are derived from the handshake. The transport layer cannot function without completed key exchange.
-- **All operations require AEAD Transport**: Every message after the handshake is encrypted. There is no unencrypted message path for clients.
-- **Write/Delete require Identity for signing**: The blob signing input includes the namespace (derived from identity pubkey). The signature uses the identity's secret key.
-- **Pub/Sub is partially independent of request_id dispatch**: Subscribe/Unsubscribe are normal request-response. But Notification messages arrive asynchronously with request_id=0 and must be routed to the subscription queue, not the request dispatch table.
-- **Sync Wrapper requires complete Async Client**: The wrapper delegates every method to the async implementation. It cannot be built incrementally -- it needs the async API to be stable first.
+## MVP Recommendation
 
-## MVP Definition
+**Phase 1: Crypto primitives + encrypted blob format**
+1. Add ML-KEM-1024 keypair to Identity (generation, save/load, encapsulate/decapsulate)
+2. Define and implement encrypted blob binary format (envelope encryption)
+3. Implement `encrypt_blob(plaintext, recipient_kem_pubkeys) -> bytes` and `decrypt_blob(encrypted_bytes, my_kem_identity) -> bytes`
+4. Thorough test coverage including cross-validation with known test vectors
 
-### Launch With (v1)
+*Rationale:* The crypto layer must be rock-solid before building anything on top. This phase has zero dependency on the network -- pure local encryption/decryption.
 
-Minimum viable SDK -- enough for a developer to connect, store blobs, read them back, and iterate results.
+**Phase 2: Directory + user management**
+1. Define directory entry blob format (user pubkey entries, group entries)
+2. Implement `OrgDirectory` class that manages a directory namespace
+3. Self-registration: `directory.register(client, identity, display_name)`
+4. User discovery: `directory.list_users(client)`, `directory.get_user(client, name_or_hash)`
+5. Pubkey caching with pub/sub invalidation
 
-- [ ] **Identity management** -- generate/load ML-DSA-87 keypairs, derive namespace
-- [ ] **PQ handshake** -- ML-KEM-1024 key exchange + ML-DSA-87 mutual authentication with relay
-- [ ] **AEAD encrypted transport** -- ChaCha20-Poly1305 framing with counter nonces
-- [ ] **FlatBuffers encoding/decoding** -- TransportMessage and Blob encode/decode
-- [ ] **Request-response dispatch** -- request_id assignment, response matching, concurrent support
-- [ ] **Write blobs** -- canonical signing input, ML-DSA-87 sign, Data(8) + WriteAck(30)
-- [ ] **Read blobs** -- ReadRequest(31) + ReadResponse(32), return typed Blob or None
-- [ ] **Delete blobs** -- tombstone construction, Delete(17) + DeleteAck(18)
-- [ ] **List blobs with pagination** -- ListRequest(33) + ListResponse(34), auto-paginating async iterator
-- [ ] **Exists check** -- ExistsRequest(37) + ExistsResponse(38)
-- [ ] **Typed exceptions** -- ChromatinError hierarchy covering all error conditions
-- [ ] **Context manager** -- `async with` for connection lifecycle
-- [ ] **Keepalive** -- background Ping/Pong to prevent inactivity disconnect
-- [ ] **Timeout support** -- per-operation and default timeouts
-- [ ] **Graceful disconnect** -- Goodbye message, cleanup
+*Rationale:* The directory is what makes encryption usable. Without it, users must exchange KEM pubkeys out-of-band.
 
-### Add After Validation (v1.x)
+**Phase 3: Encrypted client helpers + groups**
+1. `client.write_encrypted(data, recipients_or_group, ttl)`
+2. `client.read_encrypted(namespace, blob_hash)`
+3. Group management: `directory.create_group()`, `directory.add_member()`, `directory.remove_member()`
+4. Group resolution: `directory.resolve_group(client, group_name) -> list[kem_pubkey]`
+5. `client.write_to_group(data, group_name, directory, ttl)`
 
-Features to add once the core write/read/list loop is proven.
+*Rationale:* Groups build on the directory and encryption primitives. The helpers compose everything into a simple API.
 
-- [ ] **Pub/sub notifications** -- async iterator for real-time blob change events
-- [ ] **Sync (blocking) wrapper** -- separate `ChromatinClient` class for non-async code
-- [ ] **Batch operations** -- batch_exists, batch_read for multi-blob efficiency
-- [ ] **Node introspection** -- node_info, storage_status, peer_info queries
-- [ ] **Namespace operations** -- list_namespaces, namespace_stats with pagination
-- [ ] **Blob metadata** -- metadata query without data transfer
-- [ ] **Delegation management** -- delegate, revoke, list_delegations
-- [ ] **Time range queries** -- time_range for temporal blob discovery
-- [ ] **Stats query** -- per-namespace stats (count, bytes, quota)
+**Defer:** Streaming encryption for large blobs (only needed if 100 MiB encrypted blobs are common), re-encryption helper (nice-to-have, not MVP), pubkey caching optimization (can start with fetch-every-time).
 
-### Future Consideration (v2+)
+## Complexity Budget
 
-Features to defer until the SDK has real users providing feedback.
+| Feature | Estimated New LOC | Test Count | Risk |
+|---------|-------------------|------------|------|
+| Identity KEM keypair | ~120 | ~20 | LOW -- same liboqs pattern as ML-DSA-87 |
+| Encrypted blob format | ~250 | ~40 | MEDIUM -- binary format correctness, edge cases |
+| Directory entry format | ~150 | ~25 | LOW -- just blob data encoding/decoding |
+| OrgDirectory class | ~300 | ~35 | MEDIUM -- network-dependent, delegation setup |
+| write/read_encrypted | ~150 | ~30 | LOW -- composes existing primitives |
+| Group management | ~200 | ~30 | LOW -- directory CRUD operations |
+| Group resolution + helpers | ~100 | ~20 | LOW -- lookup and compose |
+| **Total** | **~1270** | **~200** | |
 
-- [ ] **Auto-reconnect with backoff** -- defer because it requires re-subscription state tracking, is complex, and most initial users will be in controlled environments
-- [ ] **Request pipelining context** -- explicit `pipeline()` context manager for batch-submit patterns; individual `await` already pipelines naturally
-- [ ] **CLI tool** -- admin operations via command line; separate package, not part of SDK
-- [ ] **Capability negotiation** -- use NodeInfoResponse.supported_types to warn/error when calling unsupported operations
+## Key Design Decisions to Lock
 
-## Feature Prioritization Matrix
+1. **Separate KEM key from signing key.** Never use ML-DSA-87 for encryption. Never use ML-KEM-1024 for signing. Two-key identity is standard practice (GPG has signing + encryption subkeys, age has separate identity types).
 
-| Feature | User Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| PQ handshake + AEAD transport | HIGH | HIGH | P1 |
-| Identity management | HIGH | MEDIUM | P1 |
-| Write blobs (with signing) | HIGH | HIGH | P1 |
-| Read blobs | HIGH | MEDIUM | P1 |
-| Delete blobs | HIGH | MEDIUM | P1 |
-| List blobs (paginated) | HIGH | MEDIUM | P1 |
-| Request-response dispatch | HIGH | HIGH | P1 |
-| Typed exceptions | HIGH | LOW | P1 |
-| Context manager + graceful disconnect | HIGH | LOW | P1 |
-| Keepalive | MEDIUM | LOW | P1 |
-| Timeout support | HIGH | LOW | P1 |
-| Exists check | MEDIUM | LOW | P1 |
-| Pub/sub notifications | HIGH | MEDIUM | P2 |
-| Sync wrapper | HIGH | MEDIUM | P2 |
-| Batch exists/read | MEDIUM | LOW | P2 |
-| Node info + storage status | MEDIUM | LOW | P2 |
-| Namespace list + stats | MEDIUM | LOW | P2 |
-| Blob metadata | MEDIUM | LOW | P2 |
-| Delegation management | MEDIUM | MEDIUM | P2 |
-| Time range queries | LOW | LOW | P2 |
-| Stats query | LOW | LOW | P2 |
-| Peer info | LOW | LOW | P2 |
-| Auto-reconnect | MEDIUM | HIGH | P3 |
-| Pipeline context | LOW | MEDIUM | P3 |
+2. **Per-blob random DEK, not per-namespace key.** The product direction doc suggested per-namespace key with HKDF(master, salt=blob_hash). This is fragile -- compromise of the namespace master key exposes all blobs. Per-blob random DEK means compromising one blob's key reveals nothing about other blobs. This is how age works, and it is the correct pattern.
 
-**Priority key:**
-- P1: Must have for launch -- core connection, crypto, read/write loop
-- P2: Should have, add when core is stable -- remaining 38 message types, sync wrapper, pub/sub
-- P3: Nice to have, future consideration -- complex infrastructure features
+3. **No shared group key.** Groups are just named member lists. Each encrypted blob wraps the DEK individually for each member. This eliminates key rotation complexity entirely.
 
-## Competitor Feature Analysis
+4. **Directory entries are regular signed blobs.** No new protocol, no new message types, no node changes. A directory is a namespace with a known format for its blob data.
 
-| Feature | redis-py | boto3 (S3) | nats-py | cassandra-driver | Our Approach |
-|---------|----------|------------|---------|------------------|--------------|
-| Sync + Async | Separate `Redis` / `redis.asyncio.Redis` classes | aioboto3 wraps boto3 | Async-only | Sync with async futures | Async-first (`chromatindb.aio`), sync wrapper (`chromatindb`) |
-| Connection | `Redis(host, port)` context manager | `boto3.client('s3')` | `await nats.connect(url)` | `Cluster([ips]).connect()` | `await ChromatinClient.connect(host, port, identity)` |
-| Auth | Password/TLS | AWS credentials (IAM) | Token/NKey/JWT | Username/password | ML-DSA-87 keypair (Identity object) |
-| Write | `set(key, value)` | `put_object(Body=data)` | `publish(subject, data)` | `execute(INSERT ...)` | `write(data, ttl=0)` auto-signs with identity |
-| Read | `get(key)` returns bytes | `get_object()` returns stream | `subscribe(subject)` | `execute(SELECT ...)` | `read(namespace, hash)` returns Blob |
-| Pagination | SCAN cursor | `list_objects_v2(ContinuationToken)` | N/A | Auto-paging ResultSet | Auto-paging async iterator (`list_all()`) |
-| Pub/Sub | `pubsub.subscribe()`, `listen()` | N/A (use SNS) | `subscribe(subject, cb)` | N/A | `subscribe([namespaces])` async iterator |
-| Batch ops | Pipeline | `delete_objects()` (limited batch) | N/A | `execute_concurrent()` | `batch_exists()`, `batch_read()` protocol-native |
-| Error types | `ConnectionError`, `ResponseError` | `ClientError`, `BotoCoreError` | `NatsError` hierarchy | `DriverException` hierarchy | `ChromatinError` hierarchy |
-| Multiplexing | Pipeline (explicit batch) | Per-request connection | Single connection, subjects | Connection per host | request_id multiplexing (automatic) |
-| Reconnect | Built-in retry | Not applicable (HTTP) | `allow_reconnect=True` | Built-in reconnection | Deferred to P3 |
+5. **Header authenticated as AEAD associated data.** The recipients-and-wrapped-keys header is bound to the ciphertext via AEAD's AD parameter. This prevents an attacker from swapping recipient stanzas between blobs (stanza substitution attack).
 
-### Key Insight from Competitor Analysis
-
-The closest analogues are **redis-py** (persistent TCP connection, binary protocol, pub/sub) and **nats-py** (async-first, persistent connection, reconnection, pub/sub). boto3 and cassandra-driver have less relevant patterns because they use HTTP or their own multiplexing layers.
-
-chromatindb's request_id multiplexing is architecturally identical to HTTP/2 stream IDs or NATS request-reply -- a single connection handles all concurrency. This means **no connection pool needed**, which simplifies the SDK significantly compared to redis-py (which needs pools for sync pub/sub + commands on same connection).
-
-### Key SDK API Shape (Recommended)
-
-Based on competitor analysis, the recommended API surface:
-
-```python
-# Async API (primary)
-from chromatindb.aio import ChromatinClient
-from chromatindb import Identity
-
-identity = Identity.generate()
-# or: identity = Identity.from_file("~/.chromatindb/identity")
-
-async with ChromatinClient.connect("relay.example.com", 4201, identity) as client:
-    # Write
-    ack = await client.write(b"hello world", ttl=3600)
-    # ack.hash, ack.seq_num, ack.status
-
-    # Read
-    blob = await client.read(identity.namespace, ack.hash)
-    # blob.data, blob.timestamp, blob.ttl
-
-    # Delete
-    await client.delete(identity.namespace, ack.hash)
-
-    # List with auto-pagination
-    async for entry in client.list_all(identity.namespace):
-        print(entry.hash, entry.seq_num)
-
-    # Pub/sub
-    async for notification in client.subscribe([identity.namespace]):
-        print(notification.hash, notification.is_tombstone)
-
-# Sync API (wrapper)
-from chromatindb import ChromatinClient, Identity
-
-identity = Identity.from_file("~/.chromatindb/identity")
-with ChromatinClient.connect("relay.example.com", 4201, identity) as client:
-    ack = client.write(b"hello world", ttl=3600)
-    blob = client.read(identity.namespace, ack.hash)
-```
+6. **ML-KEM encapsulation per-recipient, not shared.** Each recipient gets their own ephemeral ML-KEM encapsulation. No key reuse across recipients. This provides IND-CCA2 security per the ML-KEM standard.
 
 ## Sources
 
-- [Azure SDK Python Design Guidelines](https://azure.github.io/azure-sdk/python_design.html) -- sync/async dual client pattern, naming conventions, pagination, exception hierarchy (HIGH confidence)
-- [redis-py asyncio documentation](https://redis.readthedocs.io/en/stable/examples/asyncio_examples.html) -- context manager pattern, connection pool ownership, pub/sub iteration (HIGH confidence)
-- [nats-py client](https://github.com/nats-io/nats.py) -- async-first design, reconnection with backoff, callback events (HIGH confidence)
-- [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) -- ML-DSA-87 Signature class, ML-KEM-1024 KeyEncapsulation class API (HIGH confidence)
-- [FlatBuffers Python runtime](https://flatbuffers.dev/languages/python/) -- Builder class, generated accessors, numpy optimization (HIGH confidence)
-- [Python hashlib SHA3-256](https://docs.python.org/3/library/hashlib.html) -- stdlib, no external dependency (HIGH confidence)
-- [cryptography library HKDF](https://cryptography.io/en/latest/hazmat/primitives/key-derivation-functions/) -- HKDF-SHA256 for session key derivation (HIGH confidence)
-- [libsodium IETF ChaCha20-Poly1305](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/ietf_chacha20-poly1305_construction) -- AEAD primitives for transport encryption (HIGH confidence)
-- [Google Page Iterators](https://googleapis.dev/python/google-api-core/latest/page_iterator.html) -- auto-pagination wrapper pattern (HIGH confidence)
-- [Cassandra Python Driver ResultSet](https://docs.datastax.com/en/developer/python-driver/3.18/api/cassandra/cluster/) -- transparent pagination in iterators (MEDIUM confidence)
-- [HTTPX Exception Hierarchy](https://www.python-httpx.org/exceptions/) -- ProtocolError, LocalProtocolError, RemoteProtocolError pattern (MEDIUM confidence)
-- [chromatindb PROTOCOL.md](../../../db/PROTOCOL.md) -- authoritative wire format for all 58 message types (HIGH confidence, primary source)
-
----
-*Feature research for: Python SDK for chromatindb*
-*Researched: 2026-03-28*
+- [age encryption specification (C2SP)](https://github.com/C2SP/C2SP/blob/main/age.md) -- envelope format, multi-recipient stanzas, STREAM payload encryption [HIGH confidence]
+- [age GitHub repository](https://github.com/FiloSottile/age) -- design philosophy, simplicity principles [HIGH confidence]
+- [Google Cloud envelope encryption docs](https://docs.cloud.google.com/kms/docs/envelope-encryption) -- DEK/KEK pattern, wrapping flow [HIGH confidence]
+- [Keybase KBFS crypto spec](https://book.keybase.io/docs/crypto/kbfs) -- per-block keys, TLF key distribution, rekeying [HIGH confidence]
+- [Keybase teams design](https://book.keybase.io/docs/teams/design) -- team key management, XOR key splitting, role-based access [MEDIUM confidence]
+- [Signal Protocol group encryption (Sender Keys)](https://signal.org/docs/) -- group key distribution, rotation on membership change [HIGH confidence]
+- [libsodium sealed boxes](https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes) -- anonymous encryption with ephemeral keypair [HIGH confidence]
+- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) -- KeyEncapsulation API for ML-KEM-1024 [HIGH confidence, verified against existing handshake code]
+- [NIST FIPS 203 (ML-KEM)](https://csrc.nist.gov/pubs/fips/203/final) -- ML-KEM-1024 security level, key/ciphertext sizes [HIGH confidence]
+- [AWS Encryption SDK message format](https://docs.aws.amazon.com/encryption-sdk/latest/developer-guide/message-format.html) -- header structure with encrypted data keys [MEDIUM confidence]
+- [RFC 5869 HKDF](https://datatracker.ietf.org/doc/html/rfc5869) -- KDF for key derivation from shared secrets [HIGH confidence, already implemented in SDK]

@@ -1,341 +1,304 @@
-# Stack Research: v1.6.0 Python SDK
+# Technology Stack: v1.7.0 Client-Side Encryption
 
-**Domain:** Python client SDK for post-quantum secure database protocol
-**Researched:** 2026-03-29
+**Project:** chromatindb Python SDK -- PQ envelope encryption, pubkey directory, group management
+**Researched:** 2026-03-31
 **Confidence:** HIGH
 
 ## Scope
 
-This research covers ONLY what is needed for the v1.6.0 Python SDK: PQ crypto bindings (liboqs-python), symmetric crypto (PyNaCl for ChaCha20-Poly1305 AEAD), key derivation (HKDF-SHA256), hashing (SHA3-256), wire format (FlatBuffers Python runtime), networking (asyncio), and packaging (pyproject.toml). The existing C++ node/relay stack is validated and locked -- not re-researched.
+This research covers ONLY what the v1.7.0 milestone adds to the existing Python SDK. The existing stack (liboqs-python, PyNaCl, flatbuffers, asyncio) is validated and shipped in v1.6.0 -- not re-researched here. Focus: ML-KEM-1024 for per-recipient key wrapping, ChaCha20-Poly1305 for data encryption, random key generation, serialization of the encrypted envelope format, and any new dependencies needed.
 
-## Recommended Stack
+## Verdict: Zero New Dependencies
 
-### Core Technologies
+**No new pip packages are needed.** Every capability required for v1.7.0 is already available in the existing SDK dependency set or Python stdlib.
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| liboqs-python | 0.14.1 | ML-KEM-1024 key encapsulation + ML-DSA-87 signing | Only maintained Python wrapper for liboqs. Provides `KeyEncapsulation("ML-KEM-1024")` and `Signature("ML-DSA-87")` classes that directly mirror the C++ liboqs usage. Auto-downloads liboqs shared library at runtime if not pre-installed. Requires Python >=3.9. |
-| PyNaCl | 1.6.2 | ChaCha20-Poly1305 IETF AEAD encryption/decryption | Python binding to libsodium. Exposes `nacl.bindings.crypto_aead_chacha20poly1305_ietf_encrypt()` and `_decrypt()` at the low-level bindings layer -- exactly the IETF construction (RFC 8439) that the C++ node uses. Bundles libsodium 1.0.20 -- no separate install needed. |
-| flatbuffers | 25.12.19 | FlatBuffers Python runtime for TransportMessage encode/decode | Official Google FlatBuffers Python runtime. Pure Python, no native dependencies. Builder supports `ForceDefaults(True)` for deterministic encoding matching C++ `ForceDefaults(true)`. |
-| hashlib (stdlib) | Python 3.11+ | SHA3-256 hashing for namespace derivation and canonical signing input | Part of Python standard library since 3.6. `hashlib.sha3_256()` backed by OpenSSL or HACL* fallback. Zero dependencies. Used for: `SHA3-256(pubkey)` = namespace, `SHA3-256(ns||data||ttl_le32||ts_le64)` = signing digest, session fingerprint computation. |
-| hmac (stdlib) | Python 3.11+ | HKDF-SHA256 extract/expand implementation | Part of Python standard library. Combined with hashlib provides RFC 5869 HKDF without any external dependency. |
-| asyncio (stdlib) | Python 3.11+ | Async TCP client with `asyncio.open_connection()` streams API | Standard library async networking. `StreamReader`/`StreamWriter` pattern matches the frame-oriented protocol well. Supports `await reader.readexactly(n)` for length-prefixed frame reading. No third-party async framework needed. |
-| pytest | 8.x | Test framework | Standard Python test framework. Supports fixtures, parametrize, async tests (via pytest-asyncio). Matches the project's test-first approach with Catch2 on the C++ side. |
+| Capability | Provider | Already in SDK? |
+|------------|----------|-----------------|
+| ML-KEM-1024 encapsulate/decapsulate | `liboqs-python~=0.14.0` via `oqs.KeyEncapsulation` | YES -- used in handshake + tests |
+| ML-KEM-1024 keypair generation + persistence | `liboqs-python~=0.14.0` via `generate_keypair()` / `export_secret_key()` | YES -- same pattern as ML-DSA-87 in `identity.py` |
+| ChaCha20-Poly1305 AEAD encrypt/decrypt | `pynacl~=1.5.0` via `nacl.bindings.crypto_aead_chacha20poly1305_ietf_*` | YES -- `crypto.py` aead_encrypt/aead_decrypt |
+| HKDF-SHA256 key derivation | Stdlib `hmac` + `hashlib` via `chromatindb._hkdf` | YES -- `_hkdf.py` |
+| SHA3-256 hashing | Stdlib `hashlib.sha3_256` | YES -- `crypto.py` sha3_256 |
+| Cryptographic random bytes | Stdlib `secrets.token_bytes()` | NEW usage but zero-dep (stdlib since Python 3.6) |
+| Encrypted envelope binary format | Stdlib `struct.pack` / `struct.unpack` | YES -- same pattern as `_codec.py` |
+| FlatBuffers blob encoding | `flatbuffers~=25.12` | YES -- `_codec.py` encode_blob_payload |
+| Directory/group data serialization | Stdlib `struct.pack` (binary) or `json` (stdlib) | YES -- no new dep needed |
 
-### Supporting Libraries
+## Existing SDK APIs to Reuse
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| pytest-asyncio | 0.24.x | Async test support for pytest | Always -- needed to test async connection/handshake/messaging code with `@pytest.mark.asyncio` |
-| mypy | 1.x | Static type checking | Development -- the SDK should be fully typed for developer experience. Type stubs exist for PyNaCl and flatbuffers. |
-| ruff | 0.8.x | Linting and formatting | Development -- replaces flake8 + black + isort in a single fast tool. |
+### ML-KEM-1024: `oqs.KeyEncapsulation("ML-KEM-1024")`
 
-### Development Tools
-
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| flatc (compiler) | Generate Python classes from .fbs schemas | Run `flatc --python -o sdk/python/src/chromatindb/ db/schemas/transport.fbs db/schemas/blob.fbs` to generate `wire/` Python modules. The generated code depends on the `flatbuffers` pip package. Version must match the flatbuffers runtime. Use the flatc binary already built by CMake in `build/_deps/flatbuffers-src/`. |
-| pip (editable install) | Development workflow | `pip install -e "sdk/python[dev]"` for editable install with dev dependencies. |
-
-## Python Version
-
-**Minimum: Python 3.11**
-
-Rationale:
-- liboqs-python requires >=3.9 (floor)
-- Python 3.11 added ExceptionGroup (useful for connection errors), significant performance improvements (10-60% faster), and is the oldest version still receiving security updates in 2026
-- Python 3.10 EOL is October 2026 -- cutting it too close
-- hashlib SHA3-256 available since 3.6, asyncio streams since 3.4 -- not constraining
-- Target the range 3.11-3.13 (3.14 in beta, not yet stable)
-
-## HKDF-SHA256: Stdlib Implementation (No External Dependency)
-
-**Critical decision: implement HKDF-SHA256 using only `hmac` + `hashlib` from stdlib.**
-
-PyNaCl does NOT expose HKDF bindings despite bundling libsodium 1.0.20 which has `crypto_kdf_hkdf_sha256_*`. The PyNaCl bindings directory contains `crypto_aead.py`, `crypto_box.py`, `crypto_generichash.py`, etc. but no `crypto_kdf.py`. This is a confirmed gap -- checked the PyNaCl source tree on GitHub.
-
-HKDF-SHA256 per RFC 5869 is trivially implementable in ~20 lines of Python using `hmac.new(key, msg, 'sha256')`. The C++ code uses libsodium's `crypto_kdf_hkdf_sha256_extract()` and `_expand()` which are the exact same RFC 5869 algorithm. No need to pull in the heavyweight `cryptography` package (which brings OpenSSL, Rust build toolchain, and C compilation) for 20 lines of HMAC operations.
+The SDK already exercises the full ML-KEM-1024 API:
 
 ```python
-# Reference implementation -- ~20 lines, zero dependencies beyond stdlib
-import hmac
-import hashlib
+# Encapsulation (sender side -- wrap a key for a recipient)
+kem = oqs.KeyEncapsulation("ML-KEM-1024")
+ciphertext, shared_secret = kem.encap_secret(recipient_public_key)
+# ciphertext: 1568 bytes, shared_secret: 32 bytes
 
-def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
-    """RFC 5869 Section 2.2: HKDF-Extract"""
-    if not salt:
-        salt = b'\x00' * 32  # HashLen zeros per RFC 5869
-    return hmac.new(salt, ikm, hashlib.sha256).digest()
-
-def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
-    """RFC 5869 Section 2.3: HKDF-Expand"""
-    hash_len = 32  # SHA-256 output
-    n = (length + hash_len - 1) // hash_len
-    okm = b''
-    t = b''
-    for i in range(1, n + 1):
-        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
-        okm += t
-    return okm[:length]
+# Decapsulation (recipient side -- unwrap the key)
+kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=recipient_secret_key)
+shared_secret = kem.decap_secret(ciphertext)
+# shared_secret: 32 bytes (identical to sender's)
 ```
 
-## Wire Protocol Integration Details
+**Already proven in the SDK:**
+- `_handshake.py:128` -- `KeyEncapsulation("ML-KEM-1024")` instantiation
+- `_handshake.py:148` -- `kem.decap_secret(kem_ct)` (initiator decapsulation)
+- `tests/test_handshake.py:185` -- `kem.encap_secret(sdk_kem_pk)` (mock responder encapsulation)
 
-### PQ Handshake (SDK is initiator)
+For envelope encryption, each recipient's wrapped key = `encap_secret(recipient_kem_pk)` producing a (1568-byte ciphertext, 32-byte shared_secret) pair. The shared_secret is then used via HKDF to derive the wrapping key for the per-blob symmetric key.
 
-The SDK always acts as the handshake initiator connecting to a relay. The exact sequence from the C++ source (`db/net/handshake.cpp`):
+### ML-KEM-1024 Key Sizes (Confirmed)
 
-1. **KemPubkey message (raw, unencrypted):** Generate ML-KEM-1024 ephemeral keypair. Build FlatBuffers `TransportMessage` with `type=KemPubkey(1)`, payload = `[kem_pubkey:1568B][signing_pubkey:2592B]`. Send as raw bytes (no length prefix, no encryption).
+| Parameter | Size | Source |
+|-----------|------|--------|
+| Public key | 1568 bytes | OQS docs, confirmed in `_handshake.py KEM_PK_SIZE` |
+| Secret key | 3168 bytes | OQS docs (FIPS 203) |
+| Ciphertext | 1568 bytes | OQS docs, confirmed in `_handshake.py KEM_CT_SIZE` |
+| Shared secret | 32 bytes | OQS docs, confirmed in `_handshake.py KEM_SS_SIZE` |
 
-2. **Receive KemCiphertext (raw):** Parse FlatBuffers `TransportMessage`, extract payload = `[ciphertext:1568B][responder_signing_pubkey:2592B]`. Call `KeyEncapsulation.decap_secret(ciphertext)` to recover shared secret.
+### ML-KEM-1024 Keypair Persistence
 
-3. **Key derivation (MUST match C++ implementation, NOT PROTOCOL.md):**
-   - HKDF Extract: `prk = hkdf_extract(salt=b'', ikm=shared_secret)` -- NOTE: empty salt, not SHA3-256(pubkeys) as PROTOCOL.md states. The C++ code passes empty salt.
-   - HKDF Expand: `init_to_resp = hkdf_expand(prk, b"chromatin-init-to-resp-v1", 32)`
-   - HKDF Expand: `resp_to_init = hkdf_expand(prk, b"chromatin-resp-to-init-v1", 32)`
-   - Session fingerprint: `SHA3-256(shared_secret || initiator_signing_pk || responder_signing_pk)` -- NOTE: this is a direct SHA3-256 hash, NOT an HKDF-expand with info3 as PROTOCOL.md describes.
-   - Initiator: send_key = init_to_resp, recv_key = resp_to_init.
+Use the same SSH-style `.key`/`.pub` pattern as ML-DSA-87 in `identity.py`:
 
-4. **AuthSignature (encrypted):** Sign session fingerprint with ML-DSA-87. Payload = `[pubkey_size:4B LE][signing_pubkey:2592B][signature]`. Wrap in `TransportMessage(type=AuthSignature(3))`, then AEAD-encrypt as a length-prefixed frame. Nonce counter starts at 0.
-
-5. **Receive AuthSignature (encrypted):** Decrypt with recv_key (counter 0). Verify responder's ML-DSA-87 signature over session fingerprint. Nonce counters now at 1 for both directions.
-
-### AEAD Frame Format
-
-After handshake, all messages are:
-```
-[4 bytes: big-endian uint32 ciphertext_length]
-[ciphertext_length bytes: ChaCha20-Poly1305 ciphertext + 16-byte tag]
-```
-
-Nonce format: `b'\x00\x00\x00\x00' + counter.to_bytes(8, 'big')` (4 zero bytes + 8-byte BE counter). Each direction maintains its own counter.
-
-### FlatBuffers Usage
-
-The SDK needs to encode/decode `TransportMessage` and `Blob` tables. Two approaches:
-
-1. **Generated code from flatc:** Run `flatc --python` on `db/schemas/transport.fbs` and `db/schemas/blob.fbs`. Produces Python classes with typed accessors. Clean but adds a code generation step.
-
-2. **Raw FlatBuffer builder:** Use `flatbuffers.Builder` directly. For the simple 3-field TransportMessage, manual construction is ~10 lines and avoids generated code. The Blob table is also simple (6 fields).
-
-**Recommendation:** Use flatc-generated code. The generated classes provide type safety, match the C++ approach, and the flatc binary already exists in the build tree. Commit the generated files so users don't need flatc installed.
-
-Builder must call `ForceDefaults(True)` to match the C++ `ForceDefaults(true)` for deterministic encoding. This is critical for signing -- the signing input includes FlatBuffer-encoded data that must be identical on both sides.
-
-### Canonical Signing Input
-
-For blob creation (write operation):
 ```python
-# Build signing input: SHA3-256(namespace_id || data || ttl_le32 || timestamp_le64)
-import struct
-signing_input = namespace_id + data + struct.pack('<I', ttl) + struct.pack('<Q', timestamp)
-digest = hashlib.sha3_256(signing_input).digest()
-signature = signer.sign(digest)  # ML-DSA-87
+# Generate
+kem = oqs.KeyEncapsulation("ML-KEM-1024")
+kem_public_key = bytes(kem.generate_keypair())   # 1568 bytes
+kem_secret_key = bytes(kem.export_secret_key())   # 3168 bytes
+
+# Save
+Path("identity.kem.pub").write_bytes(kem_public_key)
+Path("identity.kem.key").write_bytes(kem_secret_key)
+
+# Load
+kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=loaded_secret_key)
 ```
 
-## Package Structure
+**Decision: Extend the existing `Identity` class** to carry an optional ML-KEM-1024 keypair alongside the existing ML-DSA-87 keypair. File convention: `identity.key` / `identity.pub` (signing, existing) + `identity.kem.key` / `identity.kem.pub` (encryption, new).
 
-```
-sdk/python/
-  pyproject.toml
-  src/
-    chromatindb/
-      __init__.py          # Public API: Client, Identity, Blob
-      client.py            # Connection, handshake, request/response
-      identity.py          # ML-DSA-87 keypair management
-      crypto/
-        __init__.py
-        aead.py            # ChaCha20-Poly1305 encrypt/decrypt
-        hkdf.py            # HKDF-SHA256 (stdlib hmac + hashlib)
-        kem.py             # ML-KEM-1024 wrapper
-        signing.py         # ML-DSA-87 wrapper
-      wire/
-        __init__.py
-        transport.py       # TransportMessage encode/decode (flatc-generated)
-        blob.py            # Blob encode/decode (flatc-generated)
-        types.py           # TransportMsgType enum (flatc-generated or manual)
-        framing.py         # Length-prefixed AEAD frame read/write
-      protocol/
-        __init__.py
-        handshake.py       # PQ handshake initiator state machine
-        messages.py        # Request/response builders for all 38 message types
-  tests/
-    conftest.py            # Fixtures: test identity, temp keys
-    test_crypto.py         # AEAD, HKDF, signing round-trips
-    test_wire.py           # FlatBuffers encode/decode
-    test_handshake.py      # Handshake against real relay (integration)
-    test_client.py         # Full client operations (integration)
+### ChaCha20-Poly1305 AEAD: `crypto.aead_encrypt` / `crypto.aead_decrypt`
+
+Already in `crypto.py` with full validation. For envelope encryption:
+
+```python
+from chromatindb.crypto import aead_encrypt, aead_decrypt, AEAD_KEY_SIZE, AEAD_NONCE_SIZE
+
+# Encrypt blob data
+nonce = secrets.token_bytes(AEAD_NONCE_SIZE)  # 12 random bytes
+ciphertext = aead_encrypt(plaintext, ad=b"", nonce=nonce, key=data_key)
+
+# Decrypt
+plaintext = aead_decrypt(ciphertext, ad=b"", nonce=nonce, key=data_key)
 ```
 
-### pyproject.toml
+**Note:** For envelope encryption, we use random nonces (not counters) because each blob is independently encrypted with a unique per-blob key. Counter nonces are only needed for the transport layer where the same key encrypts multiple frames.
 
-```toml
-[build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+### HKDF-SHA256: `_hkdf.hkdf_derive`
 
-[project]
-name = "chromatindb"
-version = "0.1.0"
-description = "Python SDK for chromatindb post-quantum secure database"
-requires-python = ">=3.11"
-dependencies = [
-    "liboqs-python>=0.14.0",
-    "PyNaCl>=1.5.0",
-    "flatbuffers>=24.0.0",
-]
+Already in `_hkdf.py`. For envelope encryption key derivation:
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "mypy>=1.0",
-    "ruff>=0.8",
-]
+```python
+from chromatindb._hkdf import hkdf_derive
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-
-[tool.mypy]
-strict = true
-
-[tool.ruff]
-target-version = "py311"
+# Derive blob data key from KEM shared secret
+data_key = hkdf_derive(
+    salt=b"",
+    ikm=shared_secret,  # 32 bytes from KEM encap/decap
+    info=b"chromatindb-envelope-v1",
+    length=32,
+)
 ```
 
-## Installation
+### Cryptographic Random Bytes: `secrets.token_bytes()`
 
-```bash
-# User install
-pip install sdk/python/
+**New usage, zero new dependency.** The `secrets` module is stdlib since Python 3.6. Use for:
 
-# Developer install (editable with dev tools)
-pip install -e "sdk/python/[dev]"
+1. **Per-blob data encryption key (DEK):** `secrets.token_bytes(32)` -- 256-bit random key
+2. **AEAD nonce for data encryption:** `secrets.token_bytes(12)` -- 96-bit random nonce
 
-# Dependencies pulled automatically:
-#   liboqs-python>=0.14.0  (auto-downloads liboqs C library if not found)
-#   PyNaCl>=1.5.0          (bundles libsodium, no separate install)
-#   flatbuffers>=24.0.0    (pure Python, no native deps)
+Why `secrets.token_bytes()` over `os.urandom()`: Same underlying CSPRNG, but `secrets` is the canonical Python module for cryptographic randomness (PEP 506). Makes intent explicit.
+
+Why not `nacl.utils.random()`: Adds a runtime dependency call into libsodium for something stdlib handles identically. No interop benefit since this randomness isn't shared with the C++ node.
+
+## Encrypted Envelope Format (Serialization)
+
+The encrypted blob envelope is a binary format using `struct.pack`, following the same conventions as the rest of the SDK's `_codec.py` (big-endian multi-byte integers).
+
+### Proposed Wire Format
+
+```
+[version:1]                           -- Format version (0x01)
+[nonce:12]                            -- AEAD nonce for data encryption
+[recipient_count:2 BE]                -- Number of recipients (uint16)
+[recipients...]                       -- Per-recipient wrapped key blocks
+  [kem_pk_hash:32]                    -- SHA3-256(recipient_kem_public_key) for lookup
+  [kem_ciphertext:1568]               -- ML-KEM-1024 ciphertext from encap_secret()
+[encrypted_data_with_tag:N]           -- ChaCha20-Poly1305 ciphertext + 16-byte tag
 ```
 
-## Alternatives Considered
+Per-recipient block size: 32 + 1568 = 1600 bytes fixed.
+Total overhead per recipient: 1600 bytes.
+Fixed header overhead: 1 + 12 + 2 = 15 bytes + 16 bytes AEAD tag.
 
-| Recommended | Alternative | Why Not |
-|-------------|-------------|---------|
-| PyNaCl (libsodium bindings) | PyCryptodome | PyCryptodome has ChaCha20-Poly1305 and HKDF, but the C++ node uses libsodium. Using the same underlying C library via PyNaCl ensures byte-for-byte AEAD compatibility. PyCryptodome uses its own C implementations which could theoretically produce different behavior around edge cases (empty AD, nonce format). |
-| PyNaCl low-level bindings | PyNaCl high-level SecretBox | SecretBox uses XSalsa20-Poly1305 (24-byte nonce), not ChaCha20-Poly1305 IETF (12-byte nonce). The node protocol uses IETF ChaCha20-Poly1305 specifically. Must use `nacl.bindings.crypto_aead_chacha20poly1305_ietf_encrypt/decrypt`. |
-| stdlib hmac+hashlib for HKDF | `cryptography` package HKDF | The `cryptography` package requires OpenSSL headers, Rust compiler, and C compilation during pip install. Massive dependency for 20 lines of HMAC. Our project constraint is "No OpenSSL" -- adding it through the Python side contradicts the philosophy. stdlib HKDF is trivial, correct, and testable against RFC 5869 test vectors. |
-| stdlib hmac+hashlib for HKDF | `hkdf` pip package | Unmaintained (last release 2015). Only 50 lines of code. Not worth a dependency for something we can write inline with better typing. |
-| flatbuffers (Python runtime) | Manual binary struct packing | The transport.fbs and blob.fbs schemas define the canonical wire format. Using the flatbuffers runtime ensures forward compatibility when schemas evolve. Manual struct.pack would be fragile and need updating if fields are added. The runtime is pure Python, no native deps. |
-| asyncio streams | trio / anyio | asyncio is stdlib, zero dependency. The SDK connects to one relay at a time -- no need for trio's structured concurrency or anyio's multi-backend abstraction. YAGNI. |
-| asyncio streams | raw socket | `asyncio.open_connection()` returns `StreamReader`/`StreamWriter` which provide `readexactly()` for frame parsing and `drain()` for backpressure. Raw sockets would require reimplementing buffering. |
-| pytest | unittest (stdlib) | pytest is the de facto standard for Python testing. Fixtures, parametrize, and the pytest-asyncio plugin make async tests clean. unittest's class-based approach is more verbose for the same coverage. |
-| setuptools | hatchling / flit / pdm | setuptools is the most widely used build backend, works everywhere, and the project has no complex build requirements. The SDK is pure Python -- any build backend works. Setuptools is the conservative choice. |
+### Envelope Encryption Procedure
 
-## What NOT to Use
+1. Generate random DEK: `dek = secrets.token_bytes(32)`
+2. Generate random nonce: `nonce = secrets.token_bytes(12)`
+3. Encrypt data: `ciphertext = aead_encrypt(plaintext, ad=b"", nonce=nonce, key=dek)`
+4. For each recipient:
+   a. `kem = oqs.KeyEncapsulation("ML-KEM-1024")`
+   b. `kem_ct, shared_secret = kem.encap_secret(recipient_kem_pk)`
+   c. `wrapping_key = hkdf_derive(b"", shared_secret, b"chromatindb-envelope-v1", 32)`
+   d. `wrapped_dek = aead_encrypt(dek, ad=b"", nonce=nonce, key=wrapping_key)`
+5. Assemble envelope: version + nonce + recipient_count + recipient_blocks + ciphertext
+
+Wait -- step 4d wraps the DEK. The wrapped DEK is 32 + 16 = 48 bytes (32-byte key + 16-byte AEAD tag). This changes the per-recipient block:
+
+### Revised Per-Recipient Block
+
+```
+[kem_pk_hash:32]                    -- Recipient identifier
+[kem_ciphertext:1568]               -- ML-KEM-1024 encapsulation
+[wrapped_dek:48]                    -- AEAD-encrypted DEK (32 + 16 tag)
+```
+
+Per-recipient block: 32 + 1568 + 48 = 1648 bytes fixed.
+
+**All of this is serialized with `struct.pack` -- no new serialization library needed.**
+
+## Directory and Group Data Format
+
+User pubkeys, group definitions, and other directory entries are stored as regular blobs in the admin's namespace. The data payload needs a type tag to distinguish entry types.
+
+**Use a simple type-length-value (TLV) binary format with `struct.pack`:**
+
+```
+[entry_type:1]                        -- 0x01=user_pubkey, 0x02=group, 0x03=revocation
+[entry_data:variable]                 -- Type-specific payload
+```
+
+User pubkey entry: `[0x01][display_name_len:2 BE][display_name:N][signing_pk:2592][kem_pk:1568]`
+Group entry: `[0x02][group_name_len:2 BE][group_name:N][member_count:2 BE][member_pk_hash:32*N]`
+
+No JSON, no MessagePack, no protobuf. Binary `struct.pack` is consistent with the entire SDK wire protocol convention and adds zero dependencies.
+
+## What NOT to Add
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `cryptography` package | Pulls in OpenSSL + Rust compiler. Project constraint: "No OpenSSL." Only needed if PyNaCl lacked IETF ChaCha20-Poly1305 -- but it has it via low-level bindings. | PyNaCl for AEAD, stdlib for HKDF |
-| `pycryptodome` | Different C backend from the node's libsodium. Risk of subtle interop issues. Unnecessary when PyNaCl provides exactly what we need. | PyNaCl |
-| `pysha3` | Only needed for Python <3.6 which lacks hashlib.sha3_256(). We require >=3.11. | `hashlib.sha3_256()` from stdlib |
-| `pynacl` high-level `SecretBox` | Uses XSalsa20-Poly1305, not the protocol's ChaCha20-Poly1305 IETF. Wrong algorithm. | `nacl.bindings.crypto_aead_chacha20poly1305_ietf_*` |
-| `requests` / `httpx` | chromatindb uses raw TCP with a custom binary protocol, not HTTP. | `asyncio.open_connection()` for TCP sockets |
-| `protobuf` / `msgpack` | Wire format is FlatBuffers, matching the C++ node. Using a different serialization would be incompatible. | `flatbuffers` Python runtime |
-| Synchronous socket (stdlib `socket`) | Async is needed for pub/sub notifications which arrive asynchronously while the client may be sending requests. Sync would block on recv, unable to send concurrently. | asyncio streams with reader/writer |
+| `cryptography` package | Pulls OpenSSL + Rust compiler. Project constraint: "No OpenSSL." ML-KEM-1024 is in liboqs, ChaCha20 is in PyNaCl, HKDF is in stdlib. Zero reason to add this. | Existing deps |
+| `pycryptodome` | Different C backend from libsodium. Risk of subtle AEAD interop issues. No capability we lack. | PyNaCl |
+| `msgpack` / `cbor2` | Additional serialization dependency for a format we can express in ~20 lines of `struct.pack`. The entire SDK wire protocol uses `struct.pack`. Consistency > convenience. | `struct` (stdlib) |
+| `json` for envelope format | JSON is text-based, wastes bytes, and can't cleanly embed binary (base64 overhead). Binary `struct.pack` is what the SDK already uses for all wire encoding. | `struct` (stdlib) |
+| `nacl.utils.random()` | Calls into libsodium for randomness. `secrets.token_bytes()` uses the OS CSPRNG directly and is the canonical Python approach. No interop requirement. | `secrets.token_bytes()` (stdlib) |
+| New FlatBuffers schemas | Envelope encryption is SDK-layer, not wire protocol. The node stores opaque blobs -- it never interprets the encrypted payload. FlatBuffers overhead is unjustified for a format only the SDK reads. | `struct.pack` |
+| `age` encryption library | Age (actually-good-encryption) is for file encryption, not programmatic envelope crypto. Would add X25519 (non-PQ) dependency. We need ML-KEM-1024 (PQ). | Direct ML-KEM + ChaCha20 from existing deps |
+| Any hybrid KEM (X25519+ML-KEM) | chromatindb is PQ-only by design. ML-KEM-1024 alone. No classical fallback needed. | `oqs.KeyEncapsulation("ML-KEM-1024")` |
 
-## API Design Pattern
+## Recommended Stack (Complete for v1.7.0)
 
-The SDK should expose both sync and async interfaces:
+### Runtime Dependencies (unchanged from v1.6.0)
 
-```python
-# Async (primary, used with asyncio)
-async with chromatindb.connect("relay.example.com", 4201, identity) as client:
-    ack = await client.write(data, ttl=3600)
-    blob = await client.read(namespace, blob_hash)
+| Technology | Version | Purpose in v1.7.0 | Why |
+|------------|---------|-------------------|-----|
+| liboqs-python | ~=0.14.0 | ML-KEM-1024 `encap_secret()` / `decap_secret()` for per-recipient key wrapping; ML-KEM keypair generation and persistence | Already proven in SDK handshake + tests. `encap_secret(pubkey)` returns (ciphertext:1568, shared_secret:32). `decap_secret(ct)` returns shared_secret:32. |
+| PyNaCl | ~=1.5.0 | ChaCha20-Poly1305 AEAD for blob data encryption and DEK wrapping | Already proven in `crypto.py`. Same `aead_encrypt`/`aead_decrypt` functions, different keys. |
+| flatbuffers | ~=25.12 | FlatBuffers encoding for blob payloads written to network | Unchanged -- encrypted payload is stored inside the FlatBuffer `Blob.data` field as opaque bytes. |
 
-# Sync (convenience wrapper for scripts)
-with chromatindb.connect_sync("relay.example.com", 4201, identity) as client:
-    ack = client.write(data, ttl=3600)
+### Stdlib Usage (no pip install needed)
+
+| Module | Purpose in v1.7.0 | Notes |
+|--------|--------------------|-------|
+| `secrets` | `secrets.token_bytes(32)` for DEK generation, `secrets.token_bytes(12)` for AEAD nonce | NEW usage. Available since Python 3.6. Canonical for crypto randomness per PEP 506. |
+| `struct` | Binary envelope format encoding/decoding | Same pattern as existing `_codec.py`. No new patterns needed. |
+| `hmac` + `hashlib` | HKDF-SHA256 to derive wrapping key from KEM shared secret | Reuses existing `_hkdf.py` implementation. No changes. |
+| `hashlib` | SHA3-256 for recipient key hashing (`SHA3-256(kem_pk)` as identifier) | Reuses existing `crypto.sha3_256()`. No changes. |
+
+### Development Dependencies (unchanged from v1.6.0)
+
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| pytest | latest | Test framework |
+| ruff | latest | Linting and formatting |
+| mypy | latest | Static type checking |
+
+## pyproject.toml Changes
+
+**None.** The `dependencies` list stays exactly the same:
+
+```toml
+dependencies = [
+    "liboqs-python~=0.14.0",
+    "pynacl~=1.5.0",
+    "flatbuffers~=25.12",
+]
 ```
 
-The sync wrapper uses `asyncio.run()` internally. The async API is primary because pub/sub requires concurrent send/receive.
+## Key Integration Points
 
-## Critical Implementation Notes
+### 1. Identity Extension
 
-### 1. PROTOCOL.md vs C++ Source Discrepancy
+The existing `Identity` class in `identity.py` manages ML-DSA-87 signing keys. Extend it with an optional ML-KEM-1024 encryption keypair:
 
-The PROTOCOL.md describes the PQ handshake HKDF with `salt = SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)` and session fingerprint as HKDF-expand with `info3 = "chromatin-session-fp-v1"`.
+- `Identity.generate()` -- add KEM keypair generation alongside signing keypair
+- `Identity.save()` -- write `.kem.key` (3168 bytes) and `.kem.pub` (1568 bytes) sibling files
+- `Identity.load()` -- load KEM keys if present (backward-compatible: old identities without KEM keys still work for signing)
+- `Identity.kem_public_key` -- property returning 1568-byte KEM public key (or None)
+- `Identity.from_public_key()` -- accept optional `kem_public_key` parameter for verify+encrypt-to capability
 
-The actual C++ implementation (`db/net/handshake.cpp`) uses:
-- **Empty salt** for HKDF extract (not SHA3-256 of pubkeys)
-- **Session fingerprint** = `SHA3-256(shared_secret || initiator_pk || responder_pk)` (direct hash, not HKDF expand)
+### 2. Crypto Module Extension
 
-**The SDK MUST match the C++ implementation, not the PROTOCOL.md.** The C++ is the ground truth because the relay runs the C++ code. This discrepancy should be fixed in PROTOCOL.md as part of the v1.6.0 documentation refresh.
+Add to `crypto.py` (or a new `_envelope.py` internal module):
 
-### 2. KemPubkey/KemCiphertext Payload Format
+- `envelope_encrypt(plaintext, recipient_kem_pks) -> bytes` -- full envelope encryption
+- `envelope_decrypt(envelope, kem_secret_key, kem_public_key) -> bytes` -- find own recipient block, decap, unwrap DEK, decrypt
 
-The PROTOCOL.md describes KemPubkey as containing only the 1568-byte KEM public key. The C++ implementation actually sends `[kem_pubkey:1568B][signing_pubkey:2592B]` in the payload. Similarly, KemCiphertext payload is `[ciphertext:1568B][signing_pubkey:2592B]`.
+Both functions compose existing primitives: `secrets.token_bytes` + `oqs.KeyEncapsulation.encap_secret` + `hkdf_derive` + `aead_encrypt`.
 
-The SDK must use the actual C++ format: both KEM messages include the signing pubkey.
+### 3. Client API Extension
 
-### 3. Auth Payload Format
+Add to `ChromatinClient`:
 
-The AuthSignature payload is: `[pubkey_size:4B little-endian uint32][signing_pubkey:2592B][signature:variable]`. This format is used by both `encode_auth_payload()` and `decode_auth_payload()` in the C++ source.
+- `write_encrypted(data, ttl, recipients)` -- envelope encrypt then `write_blob()`
+- `read_encrypted(namespace, blob_hash)` -- `read_blob()` then envelope decrypt
 
-### 4. Nonce Counter Continuity
+These are thin wrappers composing `envelope_encrypt`/`envelope_decrypt` with the existing `write_blob`/`read_blob` methods.
 
-After the PQ handshake, the send counter is at 1 (one auth message sent) and the recv counter is at 1 (one auth message received). All subsequent AEAD frames continue from counter 1, not 0.
+### 4. Directory as Blob Convention
 
-### 5. request_id for Pipelining
+The pubkey directory and group definitions are stored as ordinary signed blobs in a designated namespace. The SDK provides helpers to:
 
-Every request message must include a client-chosen `request_id` (uint32). The node echoes it on the response. The SDK should use a simple incrementing counter per connection. This enables pipelining: send multiple requests without waiting for responses, match by `request_id`.
+- Publish own KEM public key to directory namespace
+- List and fetch KEM public keys from directory namespace
+- Create/update group definitions
+- Resolve group to member KEM public keys
 
-### 6. liboqs-python Runtime Dependency
+All using existing `write_blob`, `read_blob`, `list_blobs` client methods. No new wire types, no node changes.
 
-liboqs-python auto-downloads and compiles the liboqs C library on first import if not found. This requires CMake and a C compiler on the user's system. For production deployments, pre-install liboqs via system packages or provide a Docker image with liboqs pre-built. The SDK documentation should note this requirement.
+## Confidence Assessment
 
-## Dependency Count
-
-| Dependency | Type | Why Needed | Transitive Deps |
-|------------|------|-----------|-----------------|
-| liboqs-python | Runtime | ML-KEM-1024 + ML-DSA-87 PQ crypto | liboqs C library (auto-built) |
-| PyNaCl | Runtime | ChaCha20-Poly1305 IETF AEAD | cffi, libsodium (bundled) |
-| flatbuffers | Runtime | FlatBuffers Python runtime | None (pure Python) |
-| **Total: 3 runtime deps** | | | |
-
-Everything else (SHA3-256, HKDF-SHA256, asyncio, struct packing) comes from Python stdlib. This is the minimal possible dependency set for the protocol's requirements.
-
-## Version Compatibility
-
-| Package | Min Version | Max Tested | Notes |
-|---------|-------------|-----------|-------|
-| liboqs-python | 0.14.0 | 0.14.1 | Algorithm names "ML-KEM-1024" and "ML-DSA-87" stable since liboqs 0.10.0. Pin >=0.14.0 because earlier versions used "-ipd" suffix names. |
-| PyNaCl | 1.5.0 | 1.6.2 | IETF ChaCha20-Poly1305 low-level bindings available since 1.4.0. Pin >=1.5.0 for Python 3.11+ support. |
-| flatbuffers | 24.0.0 | 25.12.19 | Uses date-based versioning. ForceDefaults available for years. Pin >=24.0.0 as a reasonable floor. |
-| Python | 3.11 | 3.13 | hashlib.sha3_256, asyncio streams, struct, hmac all stable across this range. |
+| Claim | Confidence | Basis |
+|-------|------------|-------|
+| liboqs-python `encap_secret`/`decap_secret` API | HIGH | Used in SDK handshake tests; verified against liboqs-python source on GitHub |
+| ML-KEM-1024 key sizes (pk:1568, sk:3168, ct:1568, ss:32) | HIGH | OQS docs (FIPS 203), confirmed in `_handshake.py` constants |
+| PyNaCl ChaCha20-Poly1305 AEAD reuse | HIGH | Already proven byte-identical to C++ node in v1.6.0 |
+| HKDF-SHA256 stdlib reuse | HIGH | Already proven byte-identical to C++ node in v1.6.0 |
+| `secrets.token_bytes()` availability | HIGH | Python stdlib since 3.6; SDK requires >=3.10 |
+| No new dependencies needed | HIGH | Every capability mapped to existing dep or stdlib |
+| Envelope format via `struct.pack` | HIGH | Same pattern as all existing SDK wire encoding |
 
 ## Sources
 
-- [liboqs-python on PyPI](https://pypi.org/project/liboqs-python/) -- version 0.14.1, Python >=3.9, auto-download behavior (HIGH confidence)
-- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) -- API: KeyEncapsulation, Signature classes, algorithm name strings (HIGH confidence)
-- [ML-KEM on Open Quantum Safe](https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem.html) -- ML-KEM-1024 algorithm support confirmed (HIGH confidence)
-- [ML-DSA on Open Quantum Safe](https://openquantumsafe.org/liboqs/algorithms/sig/ml-dsa.html) -- ML-DSA-87 algorithm support confirmed (HIGH confidence)
-- [PyNaCl on PyPI](https://pypi.org/project/PyNaCl/) -- version 1.6.2, Python >=3.8, libsodium 1.0.20 bundled (HIGH confidence)
-- [PyNaCl crypto_aead.py source](https://github.com/pyca/pynacl/blob/main/src/nacl/bindings/crypto_aead.py) -- IETF ChaCha20-Poly1305 encrypt/decrypt confirmed (HIGH confidence)
-- [PyNaCl bindings directory](https://github.com/pyca/pynacl/tree/main/src/nacl/bindings) -- no crypto_kdf.py, HKDF not exposed (HIGH confidence, verified source tree)
-- [flatbuffers on PyPI](https://pypi.org/project/flatbuffers/) -- version 25.12.19 (HIGH confidence)
-- [FlatBuffers Python docs](https://flatbuffers.dev/languages/python/) -- ForceDefaults, flatc --python usage (HIGH confidence)
-- [Python hashlib docs](https://docs.python.org/3/library/hashlib.html) -- SHA3-256 available since Python 3.6 (HIGH confidence)
-- [Python hmac docs](https://docs.python.org/3/library/hmac.html) -- HMAC with any hashlib algorithm (HIGH confidence)
-- [Python asyncio streams docs](https://docs.python.org/3/library/asyncio-stream.html) -- open_connection, StreamReader/Writer (HIGH confidence)
-- [Python packaging guide](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/) -- pyproject.toml, src layout (HIGH confidence)
-- [libsodium 1.0.19 release](https://github.com/jedisct1/libsodium/releases/tag/1.0.19-RELEASE) -- HKDF added in 1.0.19 (HIGH confidence)
-- C++ source files: `db/net/handshake.cpp`, `db/crypto/kdf.cpp`, `db/crypto/aead.h`, `db/net/framing.h`, `db/schemas/transport.fbs`, `db/schemas/blob.fbs` -- ground truth for wire protocol (HIGH confidence, primary source)
+- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) -- `KeyEncapsulation` class API, `encap_secret()` / `decap_secret()` / `generate_keypair()` / `export_secret_key()` methods (HIGH confidence, source code verified)
+- [liboqs-python oqs.py source](https://github.com/open-quantum-safe/liboqs-python/blob/main/oqs/oqs.py) -- Full class definition with method signatures and `details` dictionary structure (HIGH confidence)
+- [ML-KEM on OQS](https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem.html) -- ML-KEM-1024 parameters: pk=1568, sk=3168, ct=1568, ss=32, NIST Level 5 (HIGH confidence)
+- [IETF PQ KEM for JOSE draft](https://datatracker.ietf.org/doc/draft-ietf-jose-pqc-kem/) -- Envelope encryption design patterns with ML-KEM (MEDIUM confidence, draft spec, used for design reference only)
+- [Python secrets module docs](https://docs.python.org/3/library/secrets.html) -- `secrets.token_bytes()`, available since Python 3.6 (HIGH confidence)
+- SDK source files: `_handshake.py`, `crypto.py`, `_hkdf.py`, `identity.py`, `_codec.py`, `client.py` -- existing implementations to reuse (HIGH confidence, primary source)
+- SDK test files: `tests/test_handshake.py` -- proves `encap_secret()` and `decap_secret()` already work with ML-KEM-1024 in the SDK (HIGH confidence)
 
 ---
-*Stack research for: chromatindb v1.6.0 Python SDK*
-*Researched: 2026-03-29*
+*Stack research for: chromatindb v1.7.0 Client-Side Encryption*
+*Researched: 2026-03-31*

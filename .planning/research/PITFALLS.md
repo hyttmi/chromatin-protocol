@@ -1,363 +1,369 @@
 # Pitfalls Research
 
-**Domain:** Python SDK client for chromatindb (PQ-crypto binary protocol interop with C++ server)
-**Researched:** 2026-03-28
-**Confidence:** HIGH (verified against C++ source code, protocol spec, and library documentation)
+**Domain:** Client-side PQ envelope encryption for chromatindb Python SDK
+**Researched:** 2026-03-31
+**Confidence:** HIGH (verified against FIPS 203, IETF drafts, CMS-KEM spec, existing codebase, and NIST SP 800-227)
 
 ## Critical Pitfalls
 
-### Pitfall 1: Mixed Endianness in Wire Protocol
+### Pitfall 1: Treating ML-KEM as Public-Key Encryption (It Is a KEM)
 
 **What goes wrong:**
-The chromatindb wire protocol uses **two different endianness conventions** within the same connection. The SDK developer assumes one convention and gets silent data corruption or decryption failures.
+The developer designs the envelope encryption system assuming ML-KEM can "encrypt a specific DEK to a recipient's public key" -- like RSA-OAEP would. They generate a random 32-byte DEK, then try to encapsulate it to the recipient. This is not how KEMs work. ML-KEM's `encapsulate()` generates its own random shared secret; the caller cannot choose what value gets encapsulated. The result: trying to pass a DEK into `encapsulate()` as input, getting confused by the API, or incorrectly using the shared secret as the DEK directly (breaking multi-recipient).
 
-- **Big-endian:** Frame length prefix (4 bytes), AEAD nonce counter (8 bytes in 12-byte nonce), all binary payload fields (seq_num, blob_count, timestamps in response payloads, Subscribe count, etc.)
-- **Little-endian:** Auth payload pubkey_size (4 bytes), canonical signing input fields (ttl as LE uint32, timestamp as LE uint64), FlatBuffers internal encoding
-
-A Python developer using `struct.pack('>I', length)` for frame headers will naturally reach for `'>I'` for all uint32 fields. But the auth payload's pubkey_size is `'<I'` (little-endian), and the signing input's ttl/timestamp are also little-endian. Getting this wrong means: auth messages the server cannot parse, signatures that never verify, or blob hashes that never match.
+Concretely with liboqs-python: `kem.encap_secret(recipient_pk)` returns `(ciphertext, shared_secret)` where `shared_secret` is random and cannot be chosen. There is no way to make it equal to a pre-existing DEK.
 
 **Why it happens:**
-FlatBuffers uses little-endian internally, and the signing input was designed to be endianness-explicit (LE for numeric fields). But the transport layer follows network byte order convention (BE). The auth payload was hand-encoded in the C++ codebase and inherited LE from the author's convention. There is no single "endianness rule" for the protocol -- you must know each field's encoding.
+RSA-KEM and RSA-OAEP allow the sender to encrypt an arbitrary message (like a DEK) to a public key. ML-KEM fundamentally cannot do this -- the IETF security considerations draft explicitly states "ML-KEM is not a drop-in replacement for RSA-KEM as RSA-KEM can encapsulate the same shared secret to many recipients whereas ML-KEM cannot." Developers familiar with RSA envelope encryption carry that mental model forward.
 
 **How to avoid:**
-Create a Python module with explicit encode/decode functions for every wire format, not generic helpers. Each function documents which endianness it uses:
+Use the KEM-then-Wrap pattern (matching CMS KEMRecipientInfo from RFC 9629):
 
 ```python
-# Frame header: always big-endian
-def encode_frame_length(length: int) -> bytes:
-    return struct.pack('>I', length)
+# CORRECT: KEM-then-Wrap pattern
+# 1. Generate a random DEK
+dek = os.urandom(32)
 
-# Auth payload pubkey_size: always little-endian
-def encode_auth_pubkey_size(size: int) -> bytes:
-    return struct.pack('<I', size)
+# 2. For each recipient, encapsulate to get a per-recipient shared secret
+ciphertext, shared_secret = kem.encap_secret(recipient_pk)
 
-# Signing input: ttl LE, timestamp LE
-def encode_signing_input_ttl(ttl: int) -> bytes:
-    return struct.pack('<I', ttl)
+# 3. Derive a key-encryption key (KEK) from the shared secret via HKDF
+kek = hkdf_derive(salt=b"", ikm=shared_secret,
+                   info=b"chromatindb-envelope-kek-v1", length=32)
 
-def encode_signing_input_timestamp(ts: int) -> bytes:
-    return struct.pack('<Q', ts)
+# 4. Wrap the DEK with the KEK using AEAD
+wrapped_dek = aead_encrypt(plaintext=dek, ad=context_bytes,
+                           nonce=nonce, key=kek)
+
+# 5. Store (kem_ciphertext, wrapped_dek) per recipient
 ```
-
-Write a comprehensive cross-language test: generate a signing input in C++ (via the existing unit tests or a small harness), capture the raw bytes, then verify Python produces identical bytes for the same input.
-
-**Warning signs:**
-- AEAD decrypt fails on the very first encrypted message (auth exchange) -- likely nonce or key derivation endianness wrong
-- Signatures verify locally in Python but the server rejects them -- likely signing input endianness wrong
-- WriteAck arrives but blob_hash/seq_num parse to nonsense values -- response payload endianness wrong
-
-**Phase to address:**
-Phase 1 (Transport layer). Encode/decode utilities must be locked down with byte-level tests before building anything on top.
-
----
-
-### Pitfall 2: AEAD Nonce Counter Desynchronization
-
-**What goes wrong:**
-The send and receive counters drift between the Python SDK and the relay/node. Every subsequent message fails AEAD decryption, and the connection is lost. The root cause is subtle: any message that is encrypted but not sent (or sent but not counted) breaks all subsequent communication.
-
-The C++ server increments `send_counter_` in `send_encrypted()` and `recv_counter_` in `recv_encrypted()` -- once per call, unconditionally. The PQ handshake auth exchange uses counters 0 (both directions), then the message loop starts at counter 1. The lightweight handshake does NOT use the auth counter -- the message loop starts at counter 0.
-
-**Why it happens:**
-Multiple causes:
-1. **Handshake path confusion:** PQ handshake consumes nonce 0 for auth in each direction. Lightweight handshake does NOT -- session starts at nonce 0. SDK must track which path was used and set initial counters accordingly.
-2. **Error handling that skips counter increment:** If the SDK encrypts a message, increments the counter, but the TCP send fails and the SDK retries, the counter is now ahead. Or if it reads a frame, increments recv_counter, but the frame is malformed and gets discarded -- counter is still incremented.
-3. **Python's GIL and async interaction:** If using asyncio and accidentally allowing two concurrent sends, the counter increment is not atomic -- two coroutines could grab the same counter value.
-
-**How to avoid:**
-- Track counters as a single atomic integer per direction, always incremented exactly once per encrypt/decrypt call, regardless of success/failure (matching the C++ behavior)
-- After PQ handshake: initial send_counter = 1, recv_counter = 1 (auth consumed 0)
-- After lightweight handshake: initial send_counter = 0, recv_counter = 0 (no auth exchange)
-- Never retry encryption with a new nonce -- if send fails, close the connection
-- Use a single-writer pattern for send operations (asyncio.Lock or queue)
-
-**Warning signs:**
-- First message after handshake works, second fails -- counter off-by-one from handshake path
-- Intermittent AEAD failures under concurrent request load -- race condition on counter
-- Connection works for exactly N messages then fails -- counter initialized wrong, coincidentally aligned for N frames
-
-**Phase to address:**
-Phase 1 (Transport layer). The AEAD framing layer must be tested against the running relay with a known-good message sequence before building higher layers.
-
----
-
-### Pitfall 3: HKDF Key Derivation Parameter Mismatch (PQ vs Lightweight Paths)
-
-**What goes wrong:**
-The SDK derives different session keys than the relay, causing every encrypted message to fail. The HKDF parameters differ fundamentally between the PQ and lightweight handshake paths, and the PROTOCOL.md documentation has a known discrepancy with the actual C++ implementation.
-
-**Actual C++ behavior (source of truth, verified in handshake.cpp):**
-
-**PQ path:**
-- HKDF IKM = ML-KEM shared secret (raw)
-- HKDF salt = **empty** (not SHA3-256 of pubkeys as PROTOCOL.md states)
-- HKDF info strings: `"chromatin-init-to-resp-v1"`, `"chromatin-resp-to-init-v1"`
-- Session fingerprint = SHA3-256(shared_secret || initiator_signing_pk || responder_signing_pk)
-
-**Lightweight path:**
-- HKDF IKM = initiator_nonce || responder_nonce (64 bytes)
-- HKDF salt = initiator_signing_pk || responder_signing_pk (5184 bytes, raw concatenation)
-- HKDF info strings: same as PQ path
-- Session fingerprint = SHA3-256(IKM || salt) = SHA3-256(nonces || pubkeys)
-
-**Why it happens:**
-The PROTOCOL.md says the PQ path uses `SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)` as the HKDF salt. The actual code uses empty salt. An SDK developer reading only PROTOCOL.md will implement the wrong derivation. Additionally, the two paths have completely different IKM/salt structures -- the lightweight path packs pubkeys into the salt (5184 bytes), while the PQ path uses no salt at all.
-
-**How to avoid:**
-- Implement from the C++ source code (`db/net/handshake.cpp`), NOT from PROTOCOL.md alone
-- Use pysodium's `crypto_kdf_hkdf_sha256_extract()` and `crypto_kdf_hkdf_sha256_expand()` to exactly match the libsodium calls
-- For PQ path: pass empty salt (`b""`) to extract, shared_secret as IKM
-- For lightweight path: pass concatenated pubkeys as salt, concatenated nonces as IKM
-- Write a test that performs the HKDF derivation for known inputs and compares against C++ test vector output
-
-**Warning signs:**
-- Handshake auth message decryption fails (wrong key derived)
-- Lightweight handshake fails but PQ works (or vice versa) -- path-specific parameter bug
-- Keys appear correct length (32 bytes) but every AEAD operation fails -- subtle IKM/salt swap
-
-**Phase to address:**
-Phase 1 (Transport layer). Must be the very first thing validated -- the entire security of the session depends on correct key derivation. Capture test vectors from C++ unit tests.
-
----
-
-### Pitfall 4: Canonical Signing Input Byte-for-Byte Mismatch
-
-**What goes wrong:**
-Python SDK produces blobs with valid-looking signatures that the C++ node always rejects. The canonical signing input `SHA3-256(namespace_id || data || ttl_le32 || timestamp_le64)` must produce the identical 32-byte digest on both sides. Any difference in concatenation order, endianness, or padding means the ML-DSA-87 signature computed by Python will never verify on the C++ side.
-
-**Why it happens:**
-The signing input is NOT the FlatBuffer encoding -- it is a custom canonical concatenation. The C++ code uses incremental SHA3-256 (liboqs `OQS_SHA3_sha3_256_inc_*`) to feed the fields directly into the sponge without intermediate allocation. Python must produce the exact same byte sequence before hashing.
-
-Specific traps:
-1. **ttl is uint32 little-endian (4 bytes):** Python's `struct.pack('<I', ttl)` -- not `'>I'`, not `'<Q'`
-2. **timestamp is uint64 little-endian (8 bytes):** Python's `struct.pack('<Q', timestamp)` -- not seconds-as-float, not nanoseconds
-3. **namespace_id is exactly 32 bytes:** Must be SHA3-256 of the signing public key, not the hex string
-4. **data is raw bytes:** The application payload, not base64 or hex encoded
-5. **Concatenation order matters:** namespace_id THEN data THEN ttl THEN timestamp, no separators
-
-**How to avoid:**
-Build and test the signing input before touching ML-DSA. Write a test that:
-1. Uses known values: namespace_id (32 zero bytes), data (b"hello"), ttl (3600), timestamp (1000000)
-2. Manually constructs: `b'\x00'*32 + b'hello' + struct.pack('<I', 3600) + struct.pack('<Q', 1000000)`
-3. Hashes with `hashlib.sha3_256()`
-4. Compares against the C++ `build_signing_input()` output for the same inputs
-
-Cross-language test vectors are non-negotiable here. Generate them from the C++ test suite.
-
-**Warning signs:**
-- Server responds with no WriteAck and disconnects -- signature verification failed, ingest rejected
-- Identical data produces different blob_hash values between Python and C++ -- the FlatBuffer encoding differs (separate issue) but this means dedup will not work
-
-**Phase to address:**
-Phase 2 (Blob operations). Signing input construction must be validated with cross-language test vectors before implementing any write operations.
-
----
-
-### Pitfall 5: FlatBuffers Cross-Language Encoding Non-Determinism
-
-**What goes wrong:**
-Python's FlatBuffer encoder produces valid but differently-ordered bytes than C++, causing two problems: (a) blob_hash (SHA3-256 of the encoded FlatBuffer) differs between Python and C++ for the same logical blob, breaking dedup and content-addressing; (b) the server cannot find blobs written by the SDK because the hash used as the storage key differs.
-
-**Why it happens:**
-FlatBuffers does NOT guarantee deterministic encoding across different language implementations. The format allows flexibility in vtable layout, field ordering within the buffer, and string/vector placement. Even with `ForceDefaults(True)` set on both sides, the Python and C++ builders may produce different byte layouts for the same logical message.
-
-The C++ code uses `builder.ForceDefaults(true)` and creates vectors/fields in a specific order (ns, pk, dt, sg, then CreateBlob with ttl/timestamp). The Python builder must use the exact same field creation order AND `builder.ForceDefaults(True)`.
-
-But even with identical API call order, the Python FlatBuffers runtime may use different internal allocation strategies, producing valid but byte-different buffers.
-
-**How to avoid:**
-Two strategies (use both):
-
-1. **For TransportMessage encoding:** Non-determinism is acceptable because the payload is opaque bytes and the message is not hashed. The server decodes the FlatBuffer, extracts type/payload/request_id, and discards the envelope.
-
-2. **For Blob encoding (critical):** The blob_hash = SHA3-256(encoded_flatbuffer). If Python encodes differently, the hash differs. The solution is to either:
-   - (a) Ensure the Python SDK uses the exact same field creation order and verifies byte-identical output against C++ test vectors, OR
-   - (b) Have the server compute the blob_hash on its side (which it already does -- the node hashes the received FlatBuffer bytes, not a re-encoded version). So the SDK must store/reference the hash that the node returns in WriteAck, not a locally-computed hash.
-
-   Option (b) is the safe path. The SDK should:
-   - Send the blob, receive WriteAck with the server-computed blob_hash
-   - Use that hash for all subsequent ReadRequest/ExistsRequest/DeleteRequest operations
-   - Never assume locally-computed FlatBuffer hash matches the server's hash
-
-**Warning signs:**
-- WriteAck returns a blob_hash different from what Python computed locally
-- ReadRequest with locally-computed hash returns "not found" but the blob exists
-- ExistsRequest returns false for a blob the SDK just wrote
-
-**Phase to address:**
-Phase 2 (Blob operations). The blob encoding must be tested for hash consistency, and the SDK API should be designed to always use server-returned hashes.
-
----
-
-### Pitfall 6: liboqs Version Mismatch Between Python and C++ Sides
-
-**What goes wrong:**
-The Python SDK uses a different version of liboqs than the C++ relay/node, causing incompatible key formats, signature sizes, or algorithm parameter changes. ML-DSA and ML-KEM went through NIST standardization with parameter changes between draft and final versions. A version mismatch means keys generated by one side cannot be used by the other.
-
-**Why it happens:**
-- liboqs-python is installed via pip and may pull a different liboqs version than the one built by the C++ project's CMake FetchContent
-- NIST FIPS 204 (ML-DSA) and FIPS 203 (ML-KEM) finalization changed algorithm identifiers and potentially internal parameters between liboqs versions
-- liboqs 0.12+ added context string support for ML-DSA; the C++ server does NOT use context strings (calls `OQS_SIG_sign` without context). If the Python side accidentally uses `sign_with_ctx_str`, signatures are incompatible.
-- Algorithm names changed: "Dilithium5" became "ML-DSA-87", "Kyber1024" became "ML-KEM-1024" across liboqs versions
-
-**How to avoid:**
-- Pin the exact same liboqs version in both the Python SDK requirements and the C++ CMakeLists.txt
-- Use the NIST final algorithm names: `"ML-DSA-87"` for signatures, `"ML-KEM-1024"` for KEM
-- Explicitly use `Signature.sign()` (without context), NOT `sign_with_ctx_str()`
-- Add a CI test that generates an ML-DSA-87 keypair in Python, signs a message, and verifies in C++ (and vice versa)
-- Check `OQS_SIG_ml_dsa_87_length_signature` matches between both builds (should be 4627 bytes max)
-
-**Warning signs:**
-- `ImportError` or `ValueError` when instantiating `oqs.Signature("ML-DSA-87")` -- wrong algorithm name for the installed version
-- Signature length differs from expected 4627 bytes
-- Public key length differs from expected 2592 bytes
-- KEM ciphertext length differs from expected 1568 bytes
-- Handshake fails at auth verification despite correct key derivation
-
-**Phase to address:**
-Phase 0 (Project setup / dependency management). Version pinning must happen before any crypto code is written.
-
----
-
-### Pitfall 7: TCP Stream Framing Incomplete Reads
-
-**What goes wrong:**
-The Python SDK reads partial frames from the TCP socket, attempts to decrypt incomplete ciphertext, and gets AEAD authentication failure. Or worse, it reads across a frame boundary, concatenating part of the next message into the current one.
-
-**Why it happens:**
-TCP is a stream protocol, not a message protocol. A single `socket.recv(4096)` call may return:
-- Less than 4 bytes (partial length header)
-- The header plus partial ciphertext
-- Multiple complete frames concatenated
-- Any split point within the data
-
-Python's `socket.recv()` returns whatever is available, not a complete message. Developers used to HTTP libraries or higher-level protocols forget this.
-
-**How to avoid:**
-Implement a strict framing layer that:
-1. Reads exactly 4 bytes for the length prefix (loop until complete)
-2. Reads exactly `length` bytes of ciphertext (loop until complete)
-3. Decrypts exactly that ciphertext
-4. Returns the plaintext
 
 ```python
-async def recv_frame(reader: asyncio.StreamReader) -> bytes:
-    header = await reader.readexactly(4)  # raises IncompleteReadError on EOF
-    length = struct.unpack('>I', header)[0]
-    if length > MAX_FRAME_SIZE:
-        raise ProtocolError(f"frame too large: {length}")
-    ciphertext = await reader.readexactly(length)
-    return ciphertext
+# WRONG: Trying to encapsulate a chosen DEK
+dek = os.urandom(32)
+ciphertext = kem.encapsulate(recipient_pk, dek)  # API doesn't work this way!
 ```
 
-Use `asyncio.StreamReader.readexactly()` -- it handles partial reads internally. Never use `read()` or `recv()` with a size hint.
+The KEM gives you a random shared secret; you derive a KEK from it; the KEK wraps your actual DEK. This two-layer approach is the only correct pattern for multi-recipient KEM envelope encryption.
 
 **Warning signs:**
-- Intermittent AEAD failures that correlate with message size or network latency
-- Works on localhost but fails over real network (Nagle's algorithm splits packets differently)
-- Works for small messages, fails for large blobs (more likely to be split across TCP segments)
+- Code that passes the DEK as an argument to `encap_secret()`
+- Single encapsulate call expected to produce the same shared secret for multiple recipients
+- No HKDF step between KEM output and AEAD key-wrap
+- Tests that assume `encapsulate` is deterministic
 
 **Phase to address:**
-Phase 1 (Transport layer). The framing layer is the foundation -- must be rock-solid before anything else.
+Envelope encryption implementation phase (likely Phase 1 of the milestone). The KEM-then-Wrap pattern must be established in the first plan that touches ML-KEM for encryption, before any multi-recipient work begins.
 
 ---
 
-### Pitfall 8: PQ Handshake Message Sequence Confusion (Raw vs Encrypted)
+### Pitfall 2: Multi-Recipient Shared Secret Assumption
 
 **What goes wrong:**
-The Python SDK encrypts a handshake message that should be sent raw, or sends raw a message that should be encrypted. The server cannot parse it and silently disconnects.
+For multi-recipient encryption, the developer encapsulates to each recipient and uses each recipient's unique shared secret as the per-recipient DEK. This means the data must be encrypted N times (once per recipient), because each recipient has a different key. At 100 MiB blobs and 50 group members, this means 5 GiB of ciphertext for a single blob. Alternatively, the developer tries to make all recipients get the same shared secret, which ML-KEM cannot do.
 
 **Why it happens:**
-The PQ handshake uses a mixed sequence:
-1. **KemPubkey (raw):** Initiator sends unencrypted FlatBuffer `[4B len][TransportMessage]`
-2. **KemCiphertext (raw):** Responder sends unencrypted FlatBuffer `[4B len][TransportMessage]`
-3. **AuthSignature (encrypted):** Initiator sends `[4B len][AEAD ciphertext of TransportMessage]`
-4. **AuthSignature (encrypted):** Responder sends `[4B len][AEAD ciphertext of TransportMessage]`
-
-Messages 1-2 are raw TransportMessage FlatBuffers with length prefix. Messages 3-4 are AEAD-encrypted TransportMessage FlatBuffers with length prefix. The framing is identical (`[4B BE len][data]`) -- only the data content differs (plaintext FlatBuffer vs AEAD ciphertext).
-
-Additionally, the KemPubkey payload contains BOTH the KEM public key AND the signing public key concatenated: `[kem_pk:1568][signing_pk:2592]` = 4160 bytes total. The KemCiphertext response also bundles: `[ciphertext:1568][signing_pk:2592]` = 4160 bytes. Missing the concatenated signing pubkey means the salt/fingerprint derivation is wrong.
+In RSA-based envelope encryption, you simply "encrypt the DEK to each recipient's public key." All recipients get the same DEK, and the data is encrypted once. With ML-KEM, each encapsulation produces a different random shared secret, so the naive approach gives each recipient a different key.
 
 **How to avoid:**
-Implement the handshake as an explicit state machine:
+One DEK, one data encryption, N key wraps:
+
+1. Generate a single random DEK (32 bytes)
+2. Encrypt the blob data once with the DEK (ChaCha20-Poly1305)
+3. For each recipient:
+   a. `encap_secret(recipient_pk)` -> `(ct_i, ss_i)`
+   b. Derive KEK_i from ss_i via HKDF
+   c. Wrap the DEK with KEK_i -> `wrapped_dek_i`
+4. Store: `[encrypted_data, [(ct_1, wrapped_dek_1), (ct_2, wrapped_dek_2), ...]]`
+
+Each recipient decapsulates their own `ct_i` to recover `ss_i`, derives `KEK_i`, unwraps the DEK, and decrypts the data. The data ciphertext is stored once. The per-recipient overhead is just ~1600 bytes (KEM ciphertext) + ~48 bytes (wrapped DEK with nonce + tag).
+
+**Warning signs:**
+- Blob data encrypted multiple times (once per recipient)
+- Storage multiplier proportional to recipient count
+- No distinction between DEK and KEK in the code
+
+**Phase to address:**
+Envelope encryption implementation phase. The data structure for encrypted blobs must be designed with multi-recipient in mind from day one -- retrofitting is a rewrite.
+
+---
+
+### Pitfall 3: Content-Addressed Hashing on Encrypted Data (Dedup Breaks)
+
+**What goes wrong:**
+chromatindb uses `SHA3-256(FlatBuffer(blob))` as the blob ID. When the same plaintext is encrypted twice (with different random nonces, different KEM shared secrets), it produces completely different ciphertext. Therefore, the same logical document written twice produces two different blob hashes and gets stored twice. The developer either:
+- (a) Is surprised that dedup stopped working and tries to "fix" it
+- (b) Tries convergent encryption (deriving the key from the plaintext hash) which leaks information
+- (c) Doesn't notice and storage bloats silently
+
+**Why it happens:**
+The existing system was designed around content-addressing where the same data produces the same hash. Encryption fundamentally breaks this property -- same plaintext with different nonces or different KEM encapsulations produces different ciphertext. This is a security feature, not a bug (IND-CPA security requires randomized encryption), but it conflicts with the storage model's dedup assumption.
+
+**How to avoid:**
+Accept that dedup breaks for encrypted blobs. This is the correct tradeoff. Document it explicitly:
+
+1. Encrypted blobs do not deduplicate. Each write produces a unique blob hash. This is expected and correct.
+2. Do NOT use convergent encryption (deriving the encryption key from `SHA3-256(plaintext)`). This leaks whether two encrypted blobs contain the same plaintext -- a classic side-channel attack. Academic literature has extensively documented this weakness.
+3. Client-side dedup (if needed in the future) should happen before encryption: the client checks if it already has a blob hash for this plaintext before encrypting and writing. But this requires client-side state.
+4. The namespace's sequence numbers and timestamps are the proper way to identify "latest version" of a logical document -- not content-addressing. Application-layer indexing (e.g., a metadata blob mapping filenames to blob hashes) handles this.
+
+The blob hash still serves its purpose: it uniquely identifies each encrypted blob, enables integrity verification, and the signature proves authorship. It just no longer serves as a dedup mechanism.
+
+**Warning signs:**
+- Code that computes a hash of the plaintext to use as a blob identifier
+- Deriving encryption keys from plaintext content
+- Tests asserting that writing the same data twice produces the same blob hash
+- Storage growth concerns attributed to "encryption overhead"
+
+**Phase to address:**
+First encrypted write/read phase. Must be a documented design decision in the plan, not discovered during testing. The README / getting-started guide should explicitly call out "encrypted blobs do not deduplicate."
+
+---
+
+### Pitfall 4: Nonce Reuse Between Transport AEAD and Data AEAD
+
+**What goes wrong:**
+The SDK already uses ChaCha20-Poly1305 IETF (12-byte nonce, counter-based) for the transport layer. The developer reuses the same nonce management approach (incrementing counter) for data encryption. But transport AEAD and data AEAD have fundamentally different requirements:
+
+- **Transport AEAD:** Sequential counter, never reused because connection is stateful and sequential. Single key per session. Counter starts at 1 post-handshake.
+- **Data AEAD:** Random nonces required because the same key may encrypt many independent blobs without sequential state. Or different keys per blob (then nonce can be anything).
+
+If the developer uses a counter-based nonce with the data encryption key and that counter resets (client restart, reconnect, different machine), the same (key, nonce) pair encrypts different data. ChaCha20-Poly1305 with nonce reuse leaks the XOR of plaintexts and enables authentication tag forgery.
+
+**Why it happens:**
+The existing `_framing.py` transport layer uses counter-based nonces successfully. Copy-pasting that pattern for data encryption seems natural. But transport nonces work because (a) there is exactly one counter per key per direction, and (b) the key is ephemeral (session-scoped). Data encryption keys may persist across sessions.
+
+**How to avoid:**
+Use random nonces for data AEAD, matching the existing C++ DARE pattern in `storage.cpp`:
+
 ```python
-class HandshakeState(Enum):
-    SEND_KEM_PUBKEY = 1      # send raw
-    RECV_KEM_CIPHERTEXT = 2  # recv raw
-    SEND_AUTH = 3             # send encrypted
-    RECV_AUTH = 4             # recv encrypted
-    COMPLETE = 5
+# CORRECT: Random nonce for data encryption (matches C++ DARE pattern)
+nonce = os.urandom(12)  # 12 bytes, random
+ct = aead_encrypt(plaintext=data, ad=ad, nonce=nonce, key=dek)
+envelope = version_byte + nonce + ct  # [1][12][N+16]
 ```
 
-Each state knows whether to use raw or encrypted I/O. Never allow calling the wrong I/O method for a given state.
+With IETF ChaCha20-Poly1305 (12-byte nonce), the birthday bound collision probability at 2^32 messages under one key gives a 2^-32 collision chance. This is acceptable for per-blob DEKs (each key encrypts exactly one blob). If a single DEK ever encrypted more than 2^32 messages, you would need XChaCha20-Poly1305 (24-byte nonce) instead -- but the envelope design uses a fresh DEK per blob, so this is not a concern.
+
+Critically: the data AEAD key must be completely independent from the transport session key. Different HKDF context labels enforce this separation.
 
 **Warning signs:**
-- Handshake hangs (server waiting for message, SDK sent wrong format)
-- Server logs "AEAD decrypt failed" during step 3 -- step 3 was sent raw instead of encrypted
-- Server logs "Invalid FlatBuffer" during step 1 -- step 1 was encrypted when it should be raw
+- `send_counter` or any incrementing counter used for data encryption nonces
+- Data encryption using the session key from the handshake
+- No `os.urandom()` call in the data encryption path
+- Same HKDF context label for transport keys and data encryption keys
 
 **Phase to address:**
-Phase 1 (Transport layer, handshake implementation). State machine must be explicit and tested step-by-step.
+Envelope encryption implementation phase. The nonce generation strategy must be specified in the plan and verified in unit tests (test that two encryptions of the same plaintext produce different ciphertext).
 
 ---
 
-### Pitfall 9: PyNaCl vs pysodium vs cffi Bindings for HKDF-SHA256
+### Pitfall 5: Encrypted Blob Format Without Version Byte
 
 **What goes wrong:**
-The SDK developer uses PyNaCl (the popular high-level libsodium binding) only to discover it does not expose `crypto_kdf_hkdf_sha256_extract()` and `crypto_kdf_hkdf_sha256_expand()` at the Python level. PyNaCl wraps a curated subset of libsodium, and HKDF-SHA256 is not in that subset. The developer either uses a different KDF (wrong output) or implements HKDF manually (error-prone).
+The developer designs an encrypted blob format without a version byte (or with an internal version that cannot be read without decryption). When the encryption scheme needs to change (algorithm migration, format extension, new KEM), every existing encrypted blob becomes unreadable because there is no way to determine which decryption path to use without trying them all. Alternatively, the developer puts the version inside the encrypted payload, requiring decryption before version detection -- creating a chicken-and-egg problem.
 
 **Why it happens:**
-PyNaCl focuses on high-level APIs (SecretBox, SealedBox, etc.) and does not expose all low-level libsodium functions. The HKDF functions were added to libsodium in v1.0.19 and are available in pysodium (which wraps all of libsodium via ctypes) but NOT in PyNaCl's high-level API.
+The current system already has a version byte for DARE (`ENCRYPTION_VERSION` in `storage.cpp`), but that is a node-internal concern. The client-side envelope format is a new format that lives inside the blob's `data` field (which the node treats as opaque bytes). Developers may not think to add versioning because "we only have one version" -- but PQ crypto is an evolving field and the format will change.
 
 **How to avoid:**
-Use **pysodium** (not PyNaCl) for all libsodium operations:
-- `pysodium.crypto_kdf_hkdf_sha256_extract(salt, ikm)` -- matches the C++ `crypto::KDF::extract()`
-- `pysodium.crypto_kdf_hkdf_sha256_expand(prk, info, output_len)` -- matches `crypto::KDF::expand()`
-- `pysodium.crypto_aead_chacha20poly1305_ietf_encrypt(msg, ad, nonce, key)` -- matches AEAD encrypt
-- `pysodium.crypto_aead_chacha20poly1305_ietf_decrypt(ciphertext, ad, nonce, key)` -- matches AEAD decrypt
+Define a clear envelope format with a plaintext header:
 
-Alternatively, use Python's `cryptography` library which has HKDF-SHA256, but ensure you call it with the exact same extract-then-expand two-step process (not the one-shot `HKDF` which may compute differently).
+```
+Encrypted Blob Data Field:
+[1 byte: envelope version (0x01)]
+[2 bytes: recipient count (BE uint16)]
+For each recipient:
+    [1568 bytes: ML-KEM-1024 ciphertext]
+    [12 bytes: wrap nonce]
+    [48 bytes: wrapped DEK (32 + 16 tag)]
+[12 bytes: data nonce]
+[N + 16 bytes: data ciphertext + tag]
+```
+
+Key design rules:
+1. **Version byte is first and plaintext.** Anyone can read it without decryption.
+2. **Recipient count is plaintext.** Allows parsing the per-recipient blocks without decryption.
+3. **KEM ciphertext is per-recipient.** Each recipient has their own block.
+4. **Data ciphertext is shared.** Encrypted once with the DEK.
+
+Reserve version 0x00 as invalid (catches uninitialized memory). Start at 0x01. When ML-KEM-1024 is replaced (or the AEAD changes), bump to 0x02 and the new code tries v2 first, falls back to v1.
 
 **Warning signs:**
-- `AttributeError: module 'nacl' has no attribute 'crypto_kdf_hkdf_sha256_extract'`
-- Using `hmac` + `hashlib` for manual HKDF produces different PRK than libsodium (edge cases with empty salt handling)
-- Mixed libraries (PyNaCl for AEAD, pysodium for HKDF) may link different libsodium versions
+- No version byte in the encrypted format
+- Version byte inside the encrypted payload
+- No plan for algorithm migration
+- Tests that hardcode magic offsets without referencing a version
 
 **Phase to address:**
-Phase 0 (Dependency selection). Choose pysodium from the start and use it consistently.
+Envelope encryption format design (first phase). This must be locked before any encrypted blobs are written to storage, because changing the format after data exists requires migration.
 
 ---
 
-### Pitfall 10: FlatBuffers Blob Field Ordering for Deterministic Encoding
+### Pitfall 6: Key Directory Trust Without Consistency Guarantees
 
 **What goes wrong:**
-The Python SDK creates FlatBuffer Blob fields in a different order than the C++ encoder, producing a valid but byte-different FlatBuffer. This means the blob_hash (SHA3-256 of the entire encoded FlatBuffer) computed by the SDK will not match the hash the server would compute if it re-encoded the same blob.
+The pubkey directory (org directory namespace) stores user public keys as signed blobs. Client A writes a new key for User X. Client B reads User X's key but gets a stale version (not yet replicated). Client B encrypts a message to User X's old key. If the old key was rotated due to compromise, Client B just encrypted data to a compromised key. Alternatively: an admin publishes a revocation but the recipient's SDK cache still has the old key.
+
+The directory is eventually consistent (blob replication is not instant). Any encryption decision based on directory state is based on a potentially stale snapshot.
 
 **Why it happens:**
-The C++ `encode_blob()` creates vectors and the Blob table in this exact order:
-1. `CreateVector(namespace_id)`
-2. `CreateVector(pubkey)`
-3. `CreateVector(data)`
-4. `CreateVector(signature)`
-5. `CreateBlob(builder, ns, pk, dt, ttl, timestamp, sg)`
-6. `builder.Finish(fb_blob)`
-
-FlatBuffers builds the buffer back-to-front. Vectors must be created before the table that references them. The order of vector creation affects their placement in the buffer, which affects the final byte layout.
-
-If the Python SDK creates vectors in a different order (e.g., signature before data), the buffer will be valid FlatBuffers but produce a different SHA3-256 hash.
+chromatindb is a decentralized replicated system with eventual consistency. There is no consensus protocol, no linearizable reads, no way to guarantee "I have the latest directory." The developer designs the directory as if reads are strongly consistent ("I fetched the key, so it is current"), but replication lag means the directory state can be arbitrarily behind.
 
 **How to avoid:**
-- Mirror the exact C++ field creation order in Python
-- Set `builder.ForceDefaults(True)` before creating any fields
-- Write a cross-language test: encode the same Blob in both C++ and Python, compare the raw bytes
-- If byte-identical encoding cannot be achieved, design the SDK to never compute blob_hash locally -- always use the server-returned hash from WriteAck
+Accept eventual consistency and design around it:
+
+1. **Key lookup returns a timestamp.** The SDK shows when the key was published. The application decides if it is "fresh enough."
+2. **Encryption to stale keys is not a security failure -- it is a liveness failure.** The recipient simply cannot decrypt (they no longer have the old private key after rotation). The sender retries with the updated key. This is annoying but not dangerous.
+3. **Revocation is best-effort, not instant.** Document that revoking a key does not retroactively protect data already encrypted to that key. Revocation prevents *future* encryption to the compromised key once the tombstone propagates.
+4. **Cache TTL on directory entries.** The SDK should re-fetch directory entries periodically (e.g., every 60 seconds) rather than caching indefinitely. The `TimeRangeRequest` query can efficiently check for updates.
+5. **Do not encrypt to keys older than a threshold without warning.** If a fetched key's timestamp is more than N hours old, the SDK should log a warning or raise. This catches the "completely disconnected from directory" case.
+6. **Pin-on-first-use (TOFU) is acceptable for initial trust.** The first time you see a user's key, trust it. If it changes, alert. This matches SSH's model and is appropriate for a decentralized system without a CA.
 
 **Warning signs:**
-- Locally computed blob_hash does not match WriteAck's blob_hash
-- FlatBuffer Verifier passes but hashes differ
+- Code that fetches a key once and caches it forever
+- No timestamp checking on directory entries
+- Revocation logic that assumes "tombstone published = everyone stopped using old key"
+- No retry logic for "recipient says they can't decrypt"
 
 **Phase to address:**
-Phase 2 (Blob operations). Cross-language encoding test is required before first write operation.
+Directory/user discovery phase. The cache invalidation and freshness strategy must be designed before the encryption helpers use directory keys. Group resolution (Pitfall 8) also depends on this.
+
+---
+
+### Pitfall 7: ML-KEM Encapsulation Key Stored in Directory Without Validation
+
+**What goes wrong:**
+Each user publishes an ML-KEM-1024 encapsulation (public) key to the directory. When another user fetches this key to encrypt data, they do not validate it. A corrupted or tampered key (bit flip in transit, malicious edit, truncated blob) causes `encap_secret()` to either: (a) produce a ciphertext that cannot be decapsulated (silent data loss), (b) crash the KEM implementation, or (c) leak information about the encapsulation process.
+
+The IETF ML-KEM security considerations draft explicitly warns: "a public key can be 'poisoned' such that a future adversary can recover the private key even though it will appear correct in normal usage." Additionally, FIPS 203 requires that both parties perform key checks: the Encapsulation Key Check on the public key, and the Decapsulation Key Check on the ciphertext.
+
+**Why it happens:**
+The existing signing key (`Identity.from_public_key()`) validates key size but not key structure. ML-DSA-87 public keys have a fixed 2592-byte size, and invalid keys simply produce verification failures. ML-KEM-1024 encapsulation keys also have a fixed size (1568 bytes), but FIPS 203 adds a modular reduction check that ensures the key encodes valid polynomial coefficients. Developers assume "right size = valid key" by analogy with the signing key validation.
+
+**How to avoid:**
+Validate encapsulation keys before use:
+
+1. **Size check:** ML-KEM-1024 encapsulation key must be exactly 1568 bytes.
+2. **Modular arithmetic check:** FIPS 203 Section 7.2 specifies an Encapsulation Key Check where the key is decoded and re-encoded to verify that all polynomial coefficients are in the valid range. liboqs may perform this internally during `encap_secret()` -- verify this and document it. If liboqs does not validate, implement the check.
+3. **Sign the encapsulation key.** The user's ML-DSA-87 identity should sign their ML-KEM-1024 encapsulation key when publishing it. Verifiers check the signature before trusting the encapsulation key. This prevents tampering in transit and binds the encryption key to the signing identity.
+4. **Test with malformed keys.** Unit tests should include truncated keys, all-zero keys, and keys with out-of-range coefficients.
+
+**Warning signs:**
+- `encap_secret()` called on a key with only a length check
+- No signature binding between signing identity and encryption key
+- No tests for malformed encapsulation keys
+- Directory entries that store raw encapsulation keys without a signature
+
+**Phase to address:**
+Self-registration / directory phase (when users publish keys). The validation must be in place before any encryption uses directory-sourced keys.
+
+---
+
+### Pitfall 8: Group Membership Race Conditions
+
+**What goes wrong:**
+Groups are stored as named member sets in the directory namespace. When encrypting to a group, the SDK resolves the group membership list, fetches each member's encapsulation key, and encrypts. But between the group resolution and the encryption:
+- A member was removed from the group (they should not receive the message, but already got a wrapped DEK)
+- A member was added to the group (they should receive the message, but their key was not fetched)
+- A member rotated their key (the SDK encrypted to the old key)
+
+In a decentralized system with eventual consistency, these races are not edge cases -- they are the normal operating condition.
+
+**Why it happens:**
+The group membership list and the member keys are separate blobs in the directory namespace. Fetching them is not atomic. Replication lag means different clients see different group states at the same time. There is no locking or transaction mechanism.
+
+**How to avoid:**
+Design for the race, not against it:
+
+1. **Snapshot semantics.** When encrypting to a group, fetch the group membership blob and all member keys. Record the group blob's hash and the member key hashes in the encrypted envelope metadata. This is "encrypted at group state X" -- not "encrypted to the current group."
+2. **Accept over-encryption.** If a removed member received a wrapped DEK, they can decrypt that specific message. This is acceptable because:
+   - Revocation is about preventing *future* access, not retroactive denial
+   - Re-encryption on every membership change is prohibitively expensive
+   - The removed member could have read the data before removal anyway
+3. **Accept under-encryption.** If a new member was not included, they cannot decrypt that specific message. The sender can re-encrypt if needed. This is a liveness issue, not a security issue.
+4. **Group versioning.** Each group membership change increments a version (the blob's seq_num in the directory). The encrypted envelope records which group version it was encrypted for. Recipients who cannot decrypt can request re-encryption referencing the group version.
+5. **Do not re-encrypt existing data on group changes.** This is an anti-feature that scales with (data_size * change_frequency). Instead, new data uses new group state. Old data remains readable by whoever was in the group at write time.
+
+**Warning signs:**
+- Locks or transactions in the group resolution code (impossible in a decentralized system)
+- Re-encryption triggered by group membership changes
+- Tests that assume atomic group + key fetch
+- No group version tracking in encrypted envelopes
+
+**Phase to address:**
+Groups phase. Group resolution logic must document these race semantics. Integration tests should verify that encryption works with stale group state (no crash, no silent failure).
+
+---
+
+### Pitfall 9: Missing HKDF Context Separation Between Key Derivation Domains
+
+**What goes wrong:**
+The system already uses HKDF-SHA256 in three contexts: transport key derivation (from ML-KEM shared secret), DARE key derivation (from master key), and now envelope encryption key derivation (from ML-KEM shared secret for wrapping). If any two of these use the same HKDF info/context label, keys derived in different contexts could collide if the IKM happens to be the same, breaking domain separation.
+
+Specifically: the transport handshake uses `"chromatin-init-to-resp-v1"` as the info label with the KEM shared secret as IKM. If the envelope encryption KEK derivation also uses a similar label, and if the IKM (different KEM shared secret) happened to collide (2^-256 probability but defense-in-depth matters), the derived keys would be identical.
+
+**Why it happens:**
+Developers see "we already have HKDF, just call it" and do not think about domain separation. Each HKDF context label creates a separate key derivation domain. Reusing labels across domains (transport vs envelope vs DARE) is a subtle but real cryptographic error.
+
+**How to avoid:**
+Establish a naming convention for HKDF context labels and document all existing labels:
+
+| Domain | HKDF Info Label | IKM Source |
+|--------|----------------|------------|
+| Transport (init->resp) | `chromatin-init-to-resp-v1` | KEM session shared secret |
+| Transport (resp->init) | `chromatin-resp-to-init-v1` | KEM session shared secret |
+| DARE | `chromatindb-dare-v1` | Node master key |
+| Envelope KEK | `chromatindb-envelope-kek-v1` | Per-recipient KEM shared secret |
+
+Rules:
+- Every new HKDF usage gets a unique context label
+- Labels include the version (`-v1`) for future migration
+- Labels include the domain (`dare`, `envelope`, `transport`)
+- All labels are documented in PROTOCOL.md alongside their existing counterparts
+
+**Warning signs:**
+- HKDF calls without a context/info parameter
+- Reusing an existing context label for a new purpose
+- No central registry of HKDF labels in the codebase or docs
+
+**Phase to address:**
+Envelope encryption implementation phase. The label must be chosen in the plan and added to PROTOCOL.md. This is a one-line decision but getting it wrong is a silent cryptographic failure.
+
+---
+
+### Pitfall 10: ML-KEM Keypair Lifecycle Confusion (Signing vs Encryption Identity)
+
+**What goes wrong:**
+Each user currently has one identity: an ML-DSA-87 signing keypair. The namespace is `SHA3-256(signing_pubkey)`. For envelope encryption, each user needs an additional ML-KEM-1024 keypair (encapsulation key for others to encrypt to, decapsulation key to decrypt). The developer either:
+- (a) Tries to use the ML-DSA-87 signing key for ML-KEM operations (incompatible algorithms)
+- (b) Creates a separate ML-KEM identity with no cryptographic binding to the signing identity
+- (c) Generates the ML-KEM keypair ephemerally instead of persisting it (every restart generates new keys, breaking decryption of old data)
+- (d) Stores the ML-KEM decapsulation key in the directory (catastrophic -- private keys must never be published)
+
+**Why it happens:**
+The existing `Identity` class manages only ML-DSA-87 keys. Adding a second keypair requires either extending `Identity` or creating a parallel class. The relationship between the two keypairs (the signing key authenticates the encryption key) is not obvious from the code structure. And ML-DSA-87 / ML-KEM-1024 look similar ("they are both liboqs") but serve completely different purposes.
+
+**How to avoid:**
+Extend the identity model cleanly:
+
+1. **One identity, two keypairs.** A user has:
+   - ML-DSA-87 signing keypair (existing, defines namespace)
+   - ML-KEM-1024 encryption keypair (new, published to directory)
+2. **Signing key authenticates encryption key.** The user publishes their ML-KEM-1024 encapsulation key as a signed blob in the directory, signed by their ML-DSA-87 key. Anyone fetching the encryption key verifies the signature.
+3. **Encryption keypair persisted alongside signing keypair.** The `.key` / `.pub` file convention extends: add `.enc.key` (ML-KEM-1024 decapsulation key, 3168 bytes) and `.enc.pub` (ML-KEM-1024 encapsulation key, 1568 bytes).
+4. **Decapsulation key NEVER published.** The directory stores only the encapsulation (public) key. The decapsulation (private) key stays on the user's machine.
+5. **Key rotation = new keypair + new directory blob.** The old keypair must be retained to decrypt data encrypted to the old key. A key history (or key chain) pattern is needed.
+
+**Warning signs:**
+- ML-KEM keypair generated in memory but not saved to disk
+- No file convention for encryption keys
+- Decapsulation key passed to any "publish" or "write to directory" function
+- No signature binding between signing and encryption keys
+- Old decapsulation keys discarded after rotation
+
+**Phase to address:**
+Self-registration phase (when users generate and publish keys). The identity model extension must happen before any envelope encryption code, because encryption depends on having persistable, authenticated encryption keys.
 
 ---
 
@@ -365,112 +371,108 @@ Phase 2 (Blob operations). Cross-language encoding test is required before first
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Use `cryptography` lib HKDF instead of pysodium | Fewer deps, familiar API | Potential extract/expand behavior differences with libsodium, separate code paths for AEAD vs KDF | Never -- use pysodium for both AEAD and HKDF |
-| Skip FlatBuffer determinism testing | Ship faster | Silent hash mismatches, broken dedup, data loss via phantom "not found" | Never -- must validate before write operations |
-| Hardcode message type enum values | Quick implementation | Breaks when server adds new types, no forward compatibility | MVP only -- replace with generated code from .fbs schema |
-| Use synchronous socket I/O | Simpler code | Cannot handle pub/sub notifications while sending requests, blocks on large reads | Phase 1 prototype only -- must be async for pub/sub |
-| Compute blob_hash locally | Avoid wait for WriteAck | Hash mismatch if FlatBuffer encoding differs | Never -- always use server-returned hash |
+| Hardcode single recipient (no multi-recipient) | Simpler format, faster shipping | Rewrite encrypted blob format for groups | Never -- design multi-recipient from day one, even if groups ship later |
+| Cache directory keys forever | No re-fetch overhead | Encrypt to revoked/rotated keys indefinitely | Never -- even a long TTL (5 min) is better than forever |
+| Skip encapsulation key validation | Fewer dependencies on FIPS 203 internals | Silent data loss on corrupted keys, potential key recovery attack | Never -- validate or at minimum sign the encapsulation key |
+| One HKDF label for all envelope operations | Less ceremony | Domain separation violation if scheme evolves | Never -- labels are cheap, collisions are catastrophic |
+| No envelope version byte | Simpler parser | Cannot migrate to new algorithms without breaking old data | Never -- one byte prevents a rewrite |
+| Convergent encryption for dedup | Restores content-addressing dedup | Leaks plaintext equality (IND-CPA violation), well-known attack | Never -- accept that encrypted blobs do not dedup |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| liboqs-python | Using old algorithm names ("Dilithium5", "Kyber1024") | Use NIST final names: "ML-DSA-87", "ML-KEM-1024" |
-| liboqs-python | Calling `sign_with_ctx_str()` (with context) | Use `sign()` (without context) -- server uses contextless signing |
-| liboqs-python | Assuming `encap_secret()` returns `(shared_secret, ciphertext)` | Returns `(ciphertext, shared_secret)` -- tuple order matters |
-| pysodium HKDF | Passing `None` for empty salt | Pass `b""` (empty bytes) -- pysodium may not handle None gracefully |
-| pysodium AEAD | Omitting associated data parameter | Pass `b""` for AD -- the server uses empty AD, not None |
-| pysodium AEAD | Using XChaCha20 variant | Must use IETF ChaCha20-Poly1305 (12-byte nonce), not XChaCha20 (24-byte nonce) |
-| FlatBuffers Python | Forgetting `builder.ForceDefaults(True)` | Must be called after creating Builder, before adding any fields |
-| FlatBuffers Python | Using `flatc --python` with wrong schema version | Generate Python bindings from the exact same .fbs files used by C++ build |
-| hashlib SHA3 | Using SHA-256 instead of SHA3-256 | `hashlib.sha3_256()` not `hashlib.sha256()` -- they are different algorithms |
+| liboqs `encap_secret()` | Passing a chosen key as an argument | Treat return value as the key; wrap your DEK with it |
+| liboqs ML-KEM keypair | Using `oqs.Signature` API patterns for `oqs.KeyEncapsulation` | `kem = oqs.KeyEncapsulation("ML-KEM-1024"); pk = kem.generate_keypair()` returns encapsulation key; `kem.decap_secret(ct)` recovers shared secret |
+| Existing `Identity` class | Extending it to hold KEM keys in the same oqs.Signature object | Create a separate `oqs.KeyEncapsulation` instance; ML-DSA-87 and ML-KEM-1024 are completely different algorithm types in liboqs |
+| Existing `crypto.aead_encrypt()` | Reusing transport nonce counter pattern for data AEAD | Use `os.urandom(12)` for data nonces; transport counter pattern is only for session-scoped sequential messages |
+| Existing `build_signing_input()` | Signing the encrypted data instead of signing metadata | Sign a canonical representation that includes the plaintext hash or the DEK commitment, not the ciphertext (which changes every encryption) |
+| Existing `client.write()` | Wrapping `client.write()` and assuming WriteAck blob_hash is deterministic | Encrypted blobs produce different hashes every time; use server-returned blob_hash exclusively |
+| Node blob validation | Assuming the node validates encrypted content structure | The node validates namespace ownership, signature, size. It has zero knowledge of the envelope format inside the `data` field. All envelope format validation is client-side only |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Synchronous crypto on main thread | UI/event loop freezes during ML-DSA sign (>10ms for 100 MiB blobs) | Run crypto in executor: `await loop.run_in_executor(None, sign_blob)` | Blobs > 1 MiB |
-| Allocating new FlatBufferBuilder per message | GC pressure, memory fragmentation | Reuse builder with `builder.Reset()` between messages | >100 messages/sec |
-| Re-reading full blob to compute hash | Double memory for large blobs | Hash the encoded FlatBuffer bytes in a streaming fashion, or use server-returned hash | Blobs > 10 MiB |
-| Buffering entire response before processing | OOM on BatchReadResponse with large blobs | Process blob entries incrementally from the response payload | Batch responses with >10 MiB total |
-| Creating new TCP connection per request | Connection overhead dominates (PQ handshake is ~10ms) | Connection pooling with persistent sessions | >10 requests/sec |
+| ML-KEM encapsulation per recipient per write | Write latency scales linearly with group size | Batch encapsulations; profile KEM overhead (ML-KEM-1024 encap is ~0.1ms so 100 recipients = 10ms, acceptable) | >1000 recipients per write |
+| Re-encrypting all data on group membership change | CPU and IO explosion on every member add/remove | Never re-encrypt; new writes use new group state, old data stays | Any group change with >10 blobs |
+| Per-blob HKDF derivation for DEK | HKDF overhead on every write and read | Minimal overhead (~microseconds); do not optimize by caching derived keys (security risk) | Not a real concern -- HKDF is fast |
+| Large encrypted blob envelopes | Per-recipient overhead ~1628 bytes * N recipients in blob data field | For large groups, this metadata is negligible vs blob data. For small blobs with many recipients, the metadata dominates | 100-byte blob encrypted to 100 recipients = 162,800 bytes overhead |
+| Directory key fetch on every encrypt | Network round-trip per encryption operation | Cache directory keys with TTL (60s); batch-fetch group member keys | High-frequency encrypted writes |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Storing ML-DSA-87 private key in plaintext file | Key theft = namespace impersonation | Use OS keyring or encrypted file with secure erase after loading |
-| Logging raw key bytes or shared secrets | Key material in log files | Never log crypto material; log only key fingerprints (SHA3-256 of pubkey, truncated) |
-| Not zeroing secret key memory after use | Key material remains in Python heap | Use `oqs.Signature` context manager (calls `__del__` which calls `OQS_SIG_free`); for pysodium keys, overwrite with zeros |
-| Accepting any server public key without verification | MITM during handshake | SDK must pin or verify relay's signing public key against known-good value |
-| Reusing AEAD nonce across connections | Nonce reuse breaks ChaCha20-Poly1305 security | Counters are per-connection, starting from 0/1 -- never share state between connections |
-| Using system time for blob timestamps without NTP | Timestamp validation rejection (1h future / 30d past thresholds) | Document that system clock must be roughly correct; consider using server time from NodeInfoResponse |
-
-## UX Pitfalls
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Exposing raw byte arrays for namespace_id | Developer must manually SHA3-256 hash their pubkey | Compute namespace_id automatically from the identity's public key |
-| Requiring manual nonce/counter management | Off-by-one errors crash the connection | Hide counters entirely inside the transport layer |
-| Synchronous connect + handshake | Application hangs during startup if relay is slow | Async connect with configurable timeout and clear error messages |
-| Exposing FlatBuffer internals in public API | Leaky abstraction, version coupling | Return Python dataclasses/NamedTuples from decode, accept them for encode |
-| Silent failure on auth rejection | Developer does not know why connection dropped | Raise specific exceptions: `AuthenticationError`, `AccessDeniedError`, `PQHandshakeError` |
-| No connection state visibility | Hard to debug "why is my SDK not working" | Provide `connection.state` property: CONNECTING, HANDSHAKE, AUTHENTICATED, CLOSED |
+| Using convergent encryption (key = hash of plaintext) | Confirms plaintext equality across encrypted blobs; classic chosen-plaintext attack on deterministic encryption | Generate fresh random DEK per blob; accept dedup loss |
+| Reusing data AEAD nonce with same key | XOR of plaintexts leaked; Poly1305 authentication broken; full plaintext recovery possible with known plaintext | Random nonce per encryption; fresh DEK per blob makes nonce reuse probability negligible |
+| Publishing ML-KEM decapsulation key to directory | Anyone can decrypt all data encrypted to that key -- total confidentiality loss | Only publish encapsulation (public) key; validate key sizes at publish time |
+| No signature on directory-published encapsulation key | Man-in-the-middle substitutes their own encapsulation key; all future encrypted data readable by attacker | Sign encapsulation key with ML-DSA-87 identity; verify signature before using key for encryption |
+| Encrypting to a key without checking if it has been tombstoned/revoked | Data encrypted to a compromised key | Check for key revocation (tombstone) before encrypting; warn if key has no recent heartbeat/refresh |
+| Same HKDF context label for envelope KEK and transport session key | Theoretical domain separation violation; could enable cross-protocol attacks if IKM collision occurs | Unique HKDF context labels per domain; document label registry |
+| Storing unwrapped DEK alongside encrypted data | Defeats the purpose of encryption; anyone with blob access has the key | DEK only exists in memory during encrypt/decrypt; only wrapped DEKs stored |
+| Missing associated data in key-wrap AEAD | Wrapped DEK can be transplanted between different encrypted blobs (ciphertext swapping attack) | Include blob context (namespace, timestamp, purpose) as AD in the key-wrap AEAD |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **PQ Handshake:** Tested with real relay, not just unit tests -- verify both PQ and lightweight paths
-- [ ] **AEAD framing:** Tested with messages larger than TCP MSS (~1460 bytes) -- ensures framing handles split reads
-- [ ] **Signing input:** Cross-validated against C++ test vector with non-trivial data (large blob, non-zero TTL, realistic timestamp)
-- [ ] **FlatBuffer encoding:** Blob hash compared between Python and C++ for identical input data
-- [ ] **Pub/sub:** Notification handler works while request/response is in flight -- requires async architecture
-- [ ] **request_id correlation:** Responses arrive out of order and are correctly matched -- requires pending-request map
-- [ ] **Reconnection:** SDK handles relay restart gracefully -- re-handshake, re-subscribe, reset counters
-- [ ] **Large blobs:** Successfully write and read a 100 MiB blob -- tests memory handling, frame size limits, timeout behavior
-- [ ] **Error responses:** SDK handles StorageFull, QuotaExceeded, SyncRejected gracefully -- not just success paths
-- [ ] **Connection cleanup:** No resource leaks on disconnect -- sockets closed, crypto state zeroed
+- [ ] **Envelope encryption:** Missing multi-recipient support -- verify N recipients can independently decrypt
+- [ ] **Envelope encryption:** Missing version byte in format -- verify format starts with version, is parseable without decryption
+- [ ] **Key directory:** Missing signature on encapsulation key -- verify directory entries bind signing identity to encryption key
+- [ ] **Key directory:** Missing cache invalidation -- verify SDK re-fetches keys periodically, not just once
+- [ ] **Key rotation:** Missing old key retention -- verify user can still decrypt data encrypted to previous keys after rotation
+- [ ] **Group encryption:** Missing group version in envelope -- verify envelope records which group state it was encrypted for
+- [ ] **Group encryption:** Missing stale-group handling -- verify encryption works (doesn't crash) with outdated group membership
+- [ ] **Nonce management:** Missing randomness in data AEAD -- verify nonces are `os.urandom(12)` not counter-based
+- [ ] **HKDF labels:** Verify all HKDF context labels are unique across transport, DARE, and envelope domains
+- [ ] **Identity model:** Missing encryption keypair persistence -- verify `.enc.key`/`.enc.pub` files survive client restart
+- [ ] **WriteAck handling:** Verify encrypted write tests use server-returned blob_hash, not client-computed hash
+- [ ] **Decapsulation key safety:** Verify decapsulation key never appears in any published blob or directory entry
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| AEAD nonce desync | LOW | Close connection, reconnect, re-handshake (counters reset to 0/1) |
-| Wrong HKDF parameters | MEDIUM | Fix derivation code, re-test against test vectors, reconnect |
-| FlatBuffer hash mismatch | MEDIUM | Switch to server-returned hashes only; if local hash needed, capture C++ test vectors |
-| liboqs version mismatch | HIGH | Pin version, rebuild, re-test all crypto operations, may need to regenerate all keys |
-| Signing input endianness wrong | MEDIUM | Fix struct.pack format strings, re-validate with test vectors, re-sign affected blobs |
-| Mixed endianness in payload parsing | LOW | Fix specific pack/unpack calls, add unit tests per message type |
+| KEM misuse (encrypting data directly with KEM) | HIGH | Redesign envelope format; re-encrypt all affected blobs with correct KEM-then-Wrap pattern |
+| No version byte in format | HIGH | Define v2 format with version byte; write migration tool to re-encrypt all v1 blobs; must retain v1 parser forever |
+| Nonce reuse in data AEAD | CRITICAL | Identify affected blobs; re-encrypt with fresh nonces; assess what plaintext may have leaked via XOR analysis |
+| Published decapsulation key | CRITICAL | Generate new keypair immediately; re-encrypt all data to new key; old key must be considered fully compromised |
+| Stale directory key cache | LOW | Flush cache; re-encrypt failed messages; add TTL to cache |
+| Missing signature on encapsulation key | MEDIUM | Publish signed key blob; SDK update to verify signatures; old unsigned keys should be distrusted with warning |
+| Group race (wrong members received DEK) | LOW | Accept as eventual consistency artifact; re-encrypt specific blobs if security-critical |
+| Missing HKDF domain separation | MEDIUM | Assign new unique labels; re-derive all keys; re-encrypt data if label collision was exploitable |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Mixed endianness | Phase 1 (Transport) | Byte-level tests for every encode/decode function, cross-language test vectors |
-| AEAD nonce desync | Phase 1 (Transport) | Integration test: 100-message exchange with relay, verify no decrypt failures |
-| HKDF parameter mismatch | Phase 1 (Transport) | Test vector comparison: known inputs -> known derived keys |
-| Signing input mismatch | Phase 2 (Blob ops) | Cross-language test: same input -> same 32-byte digest |
-| FlatBuffer non-determinism | Phase 2 (Blob ops) | Byte comparison of encoded blobs, or always use server hash |
-| liboqs version mismatch | Phase 0 (Setup) | CI test: Python sign -> C++ verify roundtrip |
-| TCP framing | Phase 1 (Transport) | Test with large messages (> MSS) over real TCP, not loopback only |
-| Handshake message sequence | Phase 1 (Transport) | State machine test: step through each state, verify raw vs encrypted |
-| PyNaCl vs pysodium | Phase 0 (Setup) | Import test for all required functions at project init |
-| FlatBuffer field ordering | Phase 2 (Blob ops) | Cross-language blob encoding comparison |
+| ML-KEM is a KEM not encryption (Pitfall 1) | Envelope encryption implementation | Unit test: encapsulate returns random shared secret; DEK is wrapped, not encapsulated |
+| Multi-recipient shared secret (Pitfall 2) | Envelope encryption format design | Unit test: 3 recipients decrypt same blob independently; data encrypted once |
+| Content-addressing + encryption (Pitfall 3) | Encrypted write helpers | Test: same plaintext written twice produces different blob_hash; documented in README |
+| Transport vs data AEAD nonce (Pitfall 4) | Envelope encryption implementation | Test: two encryptions of same data produce different ciphertext; no counter in data path |
+| Missing version byte (Pitfall 5) | Envelope format design (first plan) | Test: encrypted blob parses version without decryption; format documented in PROTOCOL.md |
+| Directory trust / staleness (Pitfall 6) | User discovery implementation | Test: SDK re-fetches keys after TTL; stale key produces warning, not crash |
+| Encapsulation key validation (Pitfall 7) | Self-registration / key publishing | Test: truncated key rejected; invalid key rejected; signature verified before use |
+| Group membership races (Pitfall 8) | Groups implementation | Test: encryption with stale group state succeeds; envelope contains group version |
+| HKDF domain separation (Pitfall 9) | Envelope encryption implementation | Code review: all HKDF labels unique; label registry in PROTOCOL.md |
+| Identity keypair lifecycle (Pitfall 10) | Self-registration / identity extension | Test: encryption keypair persisted to disk; old keys retained after rotation; decapsulation key never published |
 
 ## Sources
 
-- C++ source: `db/net/handshake.cpp` -- actual HKDF derivation, session fingerprint computation, auth payload encoding (LE pubkey_size) [HIGH confidence]
-- C++ source: `db/net/framing.cpp` -- nonce format (4 zero + 8-byte BE counter), frame format (4-byte BE length + ciphertext) [HIGH confidence]
-- C++ source: `db/net/connection.cpp` -- send_encrypted/recv_encrypted counter behavior, handshake state machine, TrustedHello payload format [HIGH confidence]
-- C++ source: `db/wire/codec.cpp` -- build_signing_input with LE ttl/timestamp, FlatBuffer encode order with ForceDefaults [HIGH confidence]
-- C++ source: `db/net/protocol.cpp` -- TransportCodec FlatBuffer encode with ForceDefaults(true) [HIGH confidence]
-- `db/PROTOCOL.md` -- wire format reference (NOTE: PQ handshake salt description differs from code) [HIGH confidence for transport/payload formats, MEDIUM for HKDF salt]
-- [liboqs-python API](https://github.com/open-quantum-safe/liboqs-python) -- Signature.sign(), KeyEncapsulation.encap_secret() method signatures [HIGH confidence]
-- [pysodium HKDF-SHA256 support](https://github.com/stef/pysodium) -- crypto_kdf_hkdf_sha256_extract/expand available since libsodium 1.0.19 [HIGH confidence]
-- [FlatBuffers Python builder](https://github.com/google/flatbuffers/blob/master/python/flatbuffers/builder.py) -- ForceDefaults method [HIGH confidence]
-- [FlatBuffers deterministic encoding discussion](https://groups.google.com/g/flatbuffers/c/v2RkM3KB1Qw) -- encoding NOT guaranteed deterministic across languages [MEDIUM confidence]
-- [libsodium IETF ChaCha20-Poly1305 docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/ietf_chacha20-poly1305_construction) -- nonce format, key/nonce/tag sizes [HIGH confidence]
-- [Python struct module](https://docs.python.org/3/library/struct.html) -- format strings for endianness-explicit packing [HIGH confidence]
+- [FIPS 203 -- Module-Lattice-Based Key-Encapsulation Mechanism Standard](https://csrc.nist.gov/pubs/fips/203/final)
+- [NIST SP 800-227 -- Recommendations for Key-Encapsulation Mechanisms](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-227.pdf)
+- [IETF draft-sfluhrer-cfrg-ml-kem-security-considerations-01](https://www.ietf.org/archive/id/draft-sfluhrer-cfrg-ml-kem-security-considerations-01.html) -- "ML-KEM is not a drop-in replacement for RSA-KEM"
+- [IETF draft-ietf-lamps-cms-kyber-10](https://www.ietf.org/archive/id/draft-ietf-lamps-cms-kyber-10.html) -- CMS KEMRecipientInfo with HKDF + AES-Wrap pattern
+- [ML-KEM Mythbusting -- Key Material](https://keymaterial.net/2025/11/27/ml-kem-mythbusting/) -- Static key reuse safety, implementation complexity
+- [When a KEM is not enough -- Neil Madden](https://neilmadden.blog/2021/02/16/when-a-kem-is-not-enough/) -- Multi-recipient KEM-DEM, key wrapping, Tag-KEMs
+- [Hybrid encryption and the KEM/DEM paradigm -- Neil Madden](https://neilmadden.blog/2021/01/22/hybrid-encryption-and-the-kem-dem-paradigm/) -- KEM-DEM architecture
+- [PKE vs KEM -- Prof Bill Buchanan](https://billatnapier.medium.com/how-public-key-encryption-pke-differs-from-key-encapsulation-methods-kems-7c52ea01f87b) -- Fundamental difference: KEM generates secret, sender does not choose it
+- [Cloudflare: Deep dive into post-quantum key encapsulation](https://blog.cloudflare.com/post-quantum-key-encapsulation/) -- KEM architecture
+- [XChaCha20-Poly1305 -- libsodium docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction) -- Random nonce safety with extended nonces
+- [IETF ChaCha20-Poly1305 -- libsodium docs](https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/ietf_chacha20-poly1305_construction) -- 12-byte nonce counter vs random guidance
+- [Azure Blob Storage client-side encryption v1 to v2 migration](https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption) -- Real-world format versioning migration pain
+- [Secure Deduplication of Encrypted Data (ePrint 2017/1089)](https://eprint.iacr.org/2017/1089.pdf) -- Why convergent encryption is insecure
+- Existing chromatindb source: `db/storage/storage.cpp` (DARE envelope format), `db/crypto/master_key.h` (HKDF label registry), `sdk/python/chromatindb/_handshake.py` (KEM session usage), `sdk/python/chromatindb/crypto.py` (AEAD primitives)
 
 ---
-*Pitfalls research for: Python SDK client for chromatindb PQ-crypto binary protocol*
-*Researched: 2026-03-28*
+*Pitfalls research for: client-side PQ envelope encryption in chromatindb Python SDK*
+*Researched: 2026-03-31*

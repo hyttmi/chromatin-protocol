@@ -1,475 +1,532 @@
-# Architecture Research: Python SDK for chromatindb
+# Architecture: Client-Side PQ Envelope Encryption (v1.7.0)
 
-**Domain:** Python SDK client library integrating with existing C++ relay/node system
-**Researched:** 2026-03-29
-**Confidence:** HIGH (based on direct source code analysis of relay, connection, handshake, framing, and protocol modules)
+**Domain:** PQ envelope encryption, pubkey directory, groups -- integrating with existing Python SDK
+**Researched:** 2026-03-31
+**Confidence:** HIGH (existing SDK source fully analyzed, crypto primitives verified against liboqs/PyNaCl docs)
 
-## System Overview
-
-```
-                     Python SDK (new)                           Existing C++ Infrastructure
-                 ========================              ==========================================
-
-  Application      sdk/python/
-  Code             chromatindb/
-                   +------------------+
-                   |   client.py      |  <-- Public API: ChromatinClient
-                   +--------+---------+
-                            |
-                   +--------v---------+
-                   |   session.py     |  <-- Connection lifecycle, request pipelining
-                   +--------+---------+
-                            |
-              +-------------+-------------+
-              |                           |
-     +--------v---------+     +-----------v----------+
-     |   handshake.py   |     |   messages.py        |  <-- 38 message type encoders/decoders
-     +--------+---------+     +-----------+----------+
-              |                           |
-     +--------v---------+     +-----------v----------+
-     |   crypto.py      |     |   wire.py            |  <-- FlatBuffers TransportMessage codec
-     +--------+---------+     +-----------+----------+
-              |                           |
-              +-------------+-------------+
-                            |
-                   +--------v---------+
-                   |   transport.py   |  <-- TCP socket, length-prefixed framing, AEAD
-                   +--------+---------+
-                            |
-                            | TCP
-                            v
-                   +------------------+
-                   |   Relay (C++)    |  <-- PQ handshake responder, message filter, UDS forwarder
-                   +--------+---------+
-                            | UDS (TrustedHello)
-                            v
-                   +------------------+
-                   |   Node (C++)     |  <-- Storage, sync, query engine
-                   +------------------+
-```
-
-### Component Responsibilities
-
-| Component | Responsibility | Integration Point |
-|-----------|----------------|-------------------|
-| `transport.py` | TCP socket, length-prefixed frame IO, AEAD encrypt/decrypt | Raw bytes over TCP to relay port |
-| `crypto.py` | ML-KEM-1024, ML-DSA-87, SHA3-256, HKDF-SHA256, ChaCha20-Poly1305, nonce management | liboqs-python for PQ, PyNaCl for symmetric, hashlib for SHA3 |
-| `handshake.py` | PQ handshake initiator state machine (KEM exchange + auth) | Sends/receives raw frames with relay's PQ responder |
-| `wire.py` | FlatBuffers TransportMessage encode/decode | Must produce bytes identical to C++ TransportCodec |
-| `messages.py` | Typed encoders/decoders for all 38 client message payloads | Binary wire formats matching PROTOCOL.md byte layouts |
-| `session.py` | Connection lifecycle, request_id pipelining, response routing | Manages handshake -> message loop -> graceful close |
-| `client.py` | Public API: connect, write, read, delete, list, query, subscribe | User-facing, hides protocol complexity |
-| `identity.py` | ML-DSA-87 keypair management, load/save, namespace derivation | Key file format compatible with node's .key/.pub files |
-
-## Recommended Project Structure
+## Existing SDK Architecture (Starting Point)
 
 ```
-sdk/python/
-+-- pyproject.toml            # Package metadata, dependencies, build config
-+-- chromatindb/
-|   +-- __init__.py           # Package root, re-exports ChromatinClient + Identity
-|   +-- client.py             # Public API: ChromatinClient class
-|   +-- session.py            # Connection + request pipelining + response dispatch
-|   +-- handshake.py          # PQ handshake initiator (KemPubkey -> AuthSignature)
-|   +-- transport.py          # TCP socket IO, length-prefixed frames, AEAD framing
-|   +-- crypto.py             # All crypto primitives: KEM, signing, AEAD, KDF, hashing
-|   +-- wire.py               # FlatBuffers TransportMessage codec
-|   +-- messages.py           # Per-type payload encoders/decoders (38 types)
-|   +-- identity.py           # ML-DSA-87 keypair: generate, load, save, namespace
-|   +-- exceptions.py         # ChromatinError hierarchy
-|   +-- constants.py          # Protocol constants (sizes, magic bytes, type enums)
-|   +-- _generated/           # FlatBuffers generated Python code
-|   |   +-- TransportMessage.py
-|   |   +-- Blob.py
-|   |   +-- TransportMsgType.py
-|   +-- py.typed              # PEP 561 marker
-+-- tests/
-|   +-- test_crypto.py        # Unit tests: AEAD, KDF, nonce, signing
-|   +-- test_handshake.py     # Handshake state machine tests with mock transport
-|   +-- test_wire.py          # FlatBuffers encode/decode round-trip
-|   +-- test_messages.py      # Payload encoder/decoder tests for all 38 types
-|   +-- test_transport.py     # Frame IO tests
-|   +-- test_session.py       # Connection lifecycle, pipelining
-|   +-- test_client.py        # High-level API tests
-|   +-- test_identity.py      # Key generation, load/save, namespace derivation
-|   +-- test_interop.py       # Cross-language interop with running relay (Docker)
-|   +-- conftest.py           # Shared fixtures
-+-- examples/
-|   +-- write_blob.py         # Minimal write example
-|   +-- read_blob.py          # Read by namespace + hash
-|   +-- subscribe.py          # Pub/sub notification listener
+sdk/python/chromatindb/
+  __init__.py          Public re-exports
+  client.py            ChromatinClient — async context manager, 15+ methods
+  types.py             18 frozen dataclasses (WriteResult, ReadResult, etc.)
+  _codec.py            31 encode/decode functions for wire payloads
+  _transport.py        Background reader, request_id dispatch, send_lock
+  _handshake.py        ML-KEM-1024 + ML-DSA-87 mutual auth (4-step)
+  _framing.py          AEAD frame IO with nonce counter management
+  crypto.py            SHA3-256, ChaCha20-Poly1305, HKDF-SHA256, build_signing_input
+  identity.py          Identity class — ML-DSA-87 keypair, sign/verify, namespace derivation
+  wire.py              FlatBuffers TransportMessage encode/decode
+  _hkdf.py             Pure-Python HKDF-SHA256 (RFC 5869)
+  exceptions.py        Hierarchy: ChromatinError > CryptoError > DecryptionError, etc.
+  generated/           FlatBuffers codegen (blob_generated.py, transport_generated.py)
 ```
 
-### Structure Rationale
+Key constraints from existing code:
+- `Identity` holds ML-DSA-87 only (signing). No KEM keypair.
+- `crypto.py` has ChaCha20-Poly1305 AEAD + HKDF-SHA256 + SHA3-256 -- all needed for envelope encryption.
+- `client.py` write_blob() builds: signing_input -> sign -> encode_blob_payload -> send. Returns server-assigned blob_hash.
+- Blobs are signed FlatBuffers: namespace + pubkey + data + ttl + timestamp + signature.
+- The node is "intentionally dumb" -- it stores opaque signed blobs. Encryption is purely client-side.
+- Directory/group data is stored as regular blobs with application-level magic prefixes (same pattern as delegations: 0xDE1E6A7E + pubkey).
 
-- **Flat module layout:** 8 modules at package root. No nested sub-packages. The domain is narrow (one protocol, one connection type) and deep nesting adds import friction without benefit.
-- **`_generated/`:** FlatBuffers codegen output isolated in a private sub-package. Generated files are committed (not generated at build time) because the `.fbs` schemas live in `db/schemas/` and the SDK user should not need `flatc` installed.
-- **`tests/` at package level:** Follows pytest conventions. `test_interop.py` requires a running relay (Docker) and is skipped in normal test runs.
-- **Separation of `crypto.py` from `handshake.py`:** Crypto module is pure primitives (encrypt, decrypt, sign, verify, hash, derive). Handshake module is protocol state machine logic that calls crypto. This keeps crypto testable with known test vectors.
-- **Separation of `wire.py` from `messages.py`:** Wire handles FlatBuffers TransportMessage envelope (type + payload + request_id). Messages handles the inner payload bytes for each specific message type. Different layers, different concerns.
+## New Module Layout
 
-## Architectural Patterns
+```
+sdk/python/chromatindb/
+  [existing modules unchanged]
 
-### Pattern 1: Counter-Based AEAD Nonce Management
+  NEW MODULES:
+  _envelope.py         Envelope encrypt/decrypt (KEM encap + AEAD)
+  _directory.py        Directory namespace management (user/group CRUD)
+  _directory_types.py  Directory-specific dataclasses (UserEntry, Group, etc.)
+```
 
-**What:** Each direction (send/recv) has an independent uint64 counter starting at 0. Nonce = 4 zero bytes + 8-byte big-endian counter. Counter increments after every frame, including handshake auth messages.
+### Why These Three Modules
 
-**Why critical:** The relay's C++ connection uses `send_counter_` and `recv_counter_` (connection.h:158-159). The SDK is the initiator, so its send counter maps to the relay's recv counter and vice versa. A single missed or double-counted frame causes AEAD decryption failure and connection death.
+**_envelope.py** -- Pure crypto, no network IO. Testable in isolation. Contains:
+- `envelope_encrypt(plaintext, recipient_kem_pks) -> EncryptedBlob` (multi-recipient)
+- `envelope_decrypt(encrypted_blob, kem_secret_key) -> bytes`
+- Encrypted blob binary format encode/decode
+- Per-blob random symmetric key generation
+- ML-KEM-1024 key wrapping per recipient
 
-**Implementation detail from source code:**
+**_directory.py** -- Directory operations built on existing client methods. Contains:
+- `DirectoryManager` class wrapping a `ChromatinClient`
+- User registration (publish pubkey to directory namespace)
+- User discovery (list/fetch pubkeys)
+- Group CRUD (create/update/list/resolve members)
+- Delegation management for the directory namespace
+- High-level `write_encrypted()` / `read_encrypted()` that combine directory lookups with envelope crypto
+
+**_directory_types.py** -- Frozen dataclasses for directory entries. Contains:
+- `UserEntry` (label, signing pubkey, KEM pubkey)
+- `Group` (name, member labels)
+- `EncryptedBlob` (ciphertext, wrapped keys, metadata)
+- `DirectoryConfig` (admin identity, directory namespace)
+
+### What Gets Modified
+
+**identity.py** -- Add optional ML-KEM-1024 keypair alongside ML-DSA-87:
+- `Identity.generate()` produces both signing + KEM keypairs
+- `Identity.load()` / `save()` reads/writes `.kem` sibling file (backward compatible: missing .kem = signing-only)
+- New properties: `kem_public_key`, `kem_secret_key`, `has_kem`
+- `Identity.from_public_keys(signing_pk, kem_pk)` for verify-only + decrypt-capable identities
+
+**client.py** -- Add convenience methods:
+- `write_encrypted(data, ttl, recipients)` -- encrypt then write
+- `read_encrypted(namespace, blob_hash)` -- read then decrypt
+- These are thin wrappers composing `_envelope` + existing `write_blob`/`read_blob`
+
+**types.py** -- Add new result types:
+- `EncryptedWriteResult` (extends WriteResult with encryption metadata)
+
+**exceptions.py** -- Add:
+- `DirectoryError(ChromatinError)` for directory operations
+- `EnvelopeError(CryptoError)` for envelope encrypt/decrypt failures
+
+**__init__.py** -- Re-export new public types.
+
+## Encrypted Blob Binary Format
+
+This is the critical design decision. The encrypted blob replaces the `data` field in the existing blob structure. The node sees opaque bytes -- it never knows the content is encrypted.
+
+### Format: `data` Field of an Encrypted Blob
+
+```
++--------+-------+------------------------------------------+
+| Offset | Size  | Field                                    |
++--------+-------+------------------------------------------+
+| 0      | 4     | Magic: 0xE0 0xCR 0x1P 0x70 ("encrypt0") |
+| 4      | 1     | Version: 0x01                            |
+| 5      | 1     | Algorithm suite: 0x01 (ML-KEM-1024 +     |
+|        |       |   ChaCha20-Poly1305 + HKDF-SHA256)       |
+| 6      | 2     | Recipient count (big-endian uint16)       |
+| 8      | 12    | Nonce (random, for data AEAD)             |
+| 20     | var   | Wrapped keys section (per recipient):     |
+|        |       |   [kem_pk_hash:32][kem_ciphertext:1568]   |
+|        |       |   = 1600 bytes per recipient              |
+| 20+N*  | var   | AEAD ciphertext (ChaCha20-Poly1305):      |
+| 1600   |       |   encrypted plaintext + 16-byte tag       |
++--------+-------+------------------------------------------+
+```
+
+### Design Rationale
+
+**Magic bytes (4 bytes):** `0xE0CR1P70` -- distinct from TOMBSTONE_MAGIC (0xDEADBEEF) and DELEGATION_MAGIC (0xDE1E6A7E). Allows any reader to identify encrypted blobs without out-of-band metadata.
+
+**Version byte:** Forward compatibility. Version 0x01 = current scheme. Future versions can change algorithm suite or format.
+
+**Algorithm suite byte:** Identifies the exact crypto algorithms. Suite 0x01 = ML-KEM-1024 (NIST Level 5) + ChaCha20-Poly1305 + HKDF-SHA256. Allows future upgrades (e.g., suite 0x02 for HQC when standardized).
+
+**Recipient count (uint16 BE):** Max 65535 recipients per blob. Realistic limit is ~60 (100 MiB blob size / 1600 bytes per recipient key wrap leaves ample room for data).
+
+**Wrapped keys section:** Each recipient gets:
+- `kem_pk_hash` (32 bytes): SHA3-256 of recipient's ML-KEM-1024 public key. Reader scans for their own hash to find their wrapped key.
+- `kem_ciphertext` (1568 bytes): ML-KEM-1024 encapsulation of the per-blob data key, using the recipient's KEM public key.
+
+**AEAD ciphertext:** The actual encrypted data. Key is derived from the per-blob shared secret (from KEM encapsulation). Nonce is the random 12 bytes from the header. Associated data = everything before the ciphertext (magic + version + suite + count + nonce + all wrapped keys) -- binds ciphertext to its metadata.
+
+### Why Not Per-Namespace Keys
+
+The product direction doc (project_product_direction.md) suggests per-namespace symmetric keys with HKDF(master, salt=blob_hash). This was the initial brainstorm but has problems:
+
+1. **Key distribution complexity:** Requires a separate key distribution namespace (`_keys`) and versioning.
+2. **Revocation is a nightmare:** Revoking access means re-encrypting every blob in the namespace with a new key.
+3. **Per-blob KEM is simpler and stronger:** Each blob has independent keying. Revoking a user = just stop including them as a recipient. Old blobs they could read remain readable (they had access at the time), but new blobs exclude them.
+4. **No key management infrastructure:** No need for key versioning, key epochs, or re-encryption jobs.
+
+Per-blob envelope encryption with recipient list is the standard KEM envelope pattern (HPKE-style). Use it.
+
+## Data Flow: Encrypted Write
+
+```
+Application code:
+  await client.write_encrypted(data=b"secret", ttl=3600, recipients=["alice", "bob"])
+
+1. Resolve recipients:
+   _directory.py resolves "alice" and "bob" to their ML-KEM-1024 public keys
+   by reading user entries from the directory namespace.
+
+2. Envelope encrypt (_envelope.py):
+   a. Generate random 32-byte per-blob data key (os.urandom)
+   b. Generate random 12-byte nonce (os.urandom)
+   c. For each recipient KEM public key:
+      - kem = oqs.KeyEncapsulation("ML-KEM-1024")
+      - kem_ct, shared_secret = kem.encap_secret(recipient_kem_pk)
+      - wrapped_key = aead_encrypt(data_key, b"", nonce_for_wrap, shared_secret)
+      Correction: simpler approach -- the KEM shared secret IS the wrapped key.
+      The data key is derived: data_key = HKDF(shared_secret, info="chromatin-envelope-v1", 32)
+      Wait, that means each recipient gets a DIFFERENT data key. Wrong.
+
+   CORRECT approach:
+   a. Generate random 32-byte data_key (os.urandom)
+   b. Generate random 12-byte nonce (os.urandom)
+   c. Encrypt plaintext: ciphertext = aead_encrypt(data, AD, nonce, data_key)
+   d. For each recipient KEM public key:
+      - kem_ct, kem_ss = encap_secret(recipient_kem_pk)
+      - wrapped_data_key = aead_encrypt(data_key, b"", wrap_nonce, kem_ss)
+        where wrap_nonce = SHA3-256(kem_ct)[:12]  (deterministic from ciphertext)
+      - Store: [SHA3-256(recipient_kem_pk):32][kem_ct:1568][wrapped_data_key:48]
+   e. AD = magic + version + suite + count + nonce + all_wrapped_keys_section
+
+   Actually, this is getting complex. Let me simplify.
+
+   SIMPLEST CORRECT approach:
+   a. Generate random 32-byte data_key
+   b. For each recipient:
+      - kem_ct, kem_ss = encap_secret(recipient_kem_pk)
+      - Use kem_ss to encrypt data_key:
+        wrapped = aead_encrypt(data_key, b"", fixed_nonce, kem_ss)
+        where fixed_nonce = b"\x00" * 12 (safe because kem_ss is unique per encap)
+   c. Encrypt data: ciphertext = aead_encrypt(plaintext, AD, random_nonce, data_key)
+   d. Assemble encrypted blob format
+
+3. Sign and write (existing path):
+   The encrypted_blob_bytes become the `data` field in write_blob().
+   build_signing_input(namespace, encrypted_blob_bytes, ttl, timestamp)
+   identity.sign(digest)
+   encode_blob_payload(namespace, pubkey, encrypted_blob_bytes, ttl, timestamp, sig)
+   send via transport
+
+4. Server stores the blob as-is. Returns blob_hash + seq_num.
+```
+
+### Revised Encrypted Blob Format (After Data Flow Analysis)
+
+```
++--------+-------+------------------------------------------+
+| Offset | Size  | Field                                    |
++--------+-------+------------------------------------------+
+| 0      | 4     | Magic: 0xE0 0xCE 0x10 0x70               |
+| 4      | 1     | Version: 0x01                            |
+| 5      | 1     | Algorithm suite: 0x01                    |
+| 6      | 2     | Recipient count N (big-endian uint16)    |
+| 8      | 12    | Data nonce (random)                      |
+| 20     | N *   | Per-recipient wrapped key entries:        |
+|        | 1648  |   [kem_pk_hash:32]                       |
+|        |       |   [kem_ciphertext:1568]                  |
+|        |       |   [wrapped_data_key:48]                  |
+|        |       |   (48 = 32 data_key + 16 AEAD tag)       |
+| 20+N*  | var   | AEAD ciphertext + 16-byte tag            |
+| 1648   |       |                                          |
++--------+-------+------------------------------------------+
+```
+
+Each wrapped key entry is 1648 bytes (32 + 1568 + 48). The wrapped_data_key is the 32-byte data_key encrypted with ChaCha20-Poly1305 using the KEM shared secret as key and zero nonce (safe: KEM shared secret is unique per encapsulation, never reused).
+
+**AD for data AEAD:** All bytes from offset 0 through end of wrapped keys section. This binds the ciphertext to the recipient list -- any modification to recipients invalidates the data ciphertext.
+
+## Data Flow: Encrypted Read
+
+```
+Application code:
+  result = await client.read_encrypted(namespace, blob_hash)
+
+1. Read blob (existing path):
+   read_result = await client.read_blob(namespace, blob_hash)
+   Returns ReadResult(data=encrypted_blob_bytes, ttl, timestamp, signature)
+
+2. Parse encrypted blob (_envelope.py):
+   a. Check magic bytes at offset 0-3
+   b. Read version, suite, recipient_count, nonce
+   c. Scan wrapped key entries for SHA3-256(my_kem_pk)
+   d. If not found: raise EnvelopeError("not a recipient")
+
+3. Unwrap data key:
+   a. Extract kem_ciphertext from my entry
+   b. kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=my_kem_sk)
+   c. kem_ss = kem.decap_secret(kem_ciphertext)
+   d. data_key = aead_decrypt(wrapped_data_key, b"", zero_nonce, kem_ss)
+   e. If None: raise EnvelopeError("key unwrap failed")
+
+4. Decrypt data:
+   a. Reconstruct AD from header + all wrapped key entries
+   b. plaintext = aead_decrypt(ciphertext, AD, data_nonce, data_key)
+   c. If None: raise EnvelopeError("data decryption failed")
+
+5. Return plaintext + metadata
+```
+
+## Directory Namespace Architecture
+
+The directory is a regular chromatindb namespace owned by an organization admin. Users publish their public keys as blobs in this namespace via delegation.
+
+### Directory Namespace Setup
+
+```
+Admin identity:
+  signing_pk  -> namespace = SHA3-256(admin_signing_pk)
+  This namespace IS the org directory.
+
+For each user who should be in the org:
+  1. Admin creates delegation: write_blob(data=DELEGATION_MAGIC + user_signing_pk)
+     This grants user write access to the directory namespace.
+  2. User self-registers: write_blob to admin's namespace with their key material.
+```
+
+### Directory Blob Types (New Magic Prefixes)
+
+All directory data lives as blobs in the directory namespace. Distinguished by magic prefix:
+
+```
+USER_ENTRY_MAGIC  = 0xD1 0xC7 0x00 0x01   ("directory user entry v1")
+GROUP_MAGIC       = 0xD1 0xC7 0x00 0x02   ("directory group v1")
+```
+
+**User Entry Blob Data Format:**
+```
++--------+-------+------------------------------------------+
+| Offset | Size  | Field                                    |
++--------+-------+------------------------------------------+
+| 0      | 4     | Magic: USER_ENTRY_MAGIC                  |
+| 4      | 1     | Version: 0x01                            |
+| 5      | 1     | Label length (uint8, max 255)            |
+| 6      | var   | Label (UTF-8 string, e.g., "alice")      |
+| 6+L    | 2592  | ML-DSA-87 signing public key             |
+| 6+L+   | 1568  | ML-KEM-1024 encryption public key        |
+| 2592   |       |                                          |
++--------+-------+------------------------------------------+
+Total: 4 + 1 + 1 + L + 2592 + 1568 = 4166 + L bytes
+```
+
+**Group Blob Data Format:**
+```
++--------+-------+------------------------------------------+
+| Offset | Size  | Field                                    |
++--------+-------+------------------------------------------+
+| 0      | 4     | Magic: GROUP_MAGIC                       |
+| 4      | 1     | Version: 0x01                            |
+| 5      | 1     | Name length (uint8, max 255)             |
+| 6      | var   | Group name (UTF-8, e.g., "engineering")  |
+| 6+N    | 2     | Member count (big-endian uint16)          |
+| 8+N    | var   | Per-member:                              |
+|        |       |   [label_len:1][label:var]               |
++--------+-------+------------------------------------------+
+```
+
+Groups store member labels (not pubkeys). On encrypt, the SDK resolves each label to its KEM public key by scanning the directory. This keeps group blobs small and means group membership is always resolved at encrypt-time against the latest directory state.
+
+### Directory Operations Mapped to Existing Client Methods
+
+| Directory Operation | Underlying SDK Method | Notes |
+|---|---|---|
+| Create directory | `write_blob()` (admin identity) | First blob establishes namespace |
+| Grant user access | `write_blob()` with DELEGATION_MAGIC data | Admin delegates write access |
+| Self-register | `write_blob()` to admin namespace | User writes USER_ENTRY blob (delegated) |
+| List users | `list_blobs()` + `read_blob()` per entry | Filter by USER_ENTRY_MAGIC prefix |
+| Fetch user pubkeys | `read_blob()` on specific user entry | Parse USER_ENTRY format |
+| Create group | `write_blob()` with GROUP_MAGIC data | Admin or delegated user writes group blob |
+| Update group | `delete_blob()` old + `write_blob()` new | Tombstone + replace pattern |
+| List groups | `list_blobs()` + `read_blob()` per entry | Filter by GROUP_MAGIC prefix |
+| Revoke user | `delete_blob()` delegation + `delete_blob()` user entry | Tombstone both |
+
+**No new wire types. No server changes. Everything is blobs.**
+
+### Directory Caching
+
+`DirectoryManager` should cache user entries (pubkeys) in memory during a session. The KEM public keys (1568 bytes each) are large, and fetching them for every encrypt is wasteful.
+
+Cache invalidation: subscribe to the directory namespace. When a Notification arrives, invalidate the relevant cache entry. Simple, reactive, built on existing pub/sub.
 
 ```python
-def make_nonce(counter: int) -> bytes:
-    """4 zero bytes + 8-byte big-endian counter = 12-byte AEAD nonce."""
-    return b'\x00\x00\x00\x00' + counter.to_bytes(8, 'big')
+class DirectoryManager:
+    def __init__(self, client: ChromatinClient, admin_namespace: bytes):
+        self._client = client
+        self._admin_namespace = admin_namespace
+        self._user_cache: dict[str, UserEntry] = {}  # label -> UserEntry
+        self._group_cache: dict[str, Group] = {}      # name -> Group
 ```
 
-**Counter lifecycle:**
-1. Both send_counter and recv_counter start at 0
-2. During PQ handshake, the initiator's first encrypted send (AuthSignature) uses send_counter=0
-3. The initiator's first encrypted recv (peer's AuthSignature) uses recv_counter=0
-4. After handshake completes, counters are at send=1, recv=1
-5. Each subsequent send_message increments send_counter, each recv_message increments recv_counter
-6. Counters NEVER reset, NEVER skip
+## Identity Extension for KEM
 
-**Trade-offs:** Simple and correct, but any frame loss or duplication is unrecoverable. The protocol has no retry/reorder mechanism -- connection must be restarted on any AEAD failure.
+The existing `Identity` class manages ML-DSA-87 only. For v1.7.0, it needs an optional ML-KEM-1024 keypair.
 
-### Pattern 2: Length-Prefixed Frame IO (All Phases)
+### Key File Layout
 
-**What:** Every frame on the wire (including raw handshake messages) uses `[4-byte big-endian uint32 length][payload]`. After handshake, the payload is AEAD ciphertext. During handshake, the payload is raw FlatBuffer bytes.
+```
+Current (v1.6.0):
+  mykey.key   (4896 bytes, ML-DSA-87 secret key)
+  mykey.pub   (2592 bytes, ML-DSA-87 public key)
 
-**CRITICAL NOTE -- PROTOCOL.md discrepancy:** PROTOCOL.md states KemPubkey "is NOT length-prefixed." This is incorrect. The C++ `send_raw()` method (connection.cpp:107-123) always writes `[4-byte BE length header][data]`. The SDK MUST length-prefix all messages including handshake KEM exchange.
+Extended (v1.7.0, backward compatible):
+  mykey.key   (4896 bytes, ML-DSA-87 secret key)     [unchanged]
+  mykey.pub   (2592 bytes, ML-DSA-87 public key)     [unchanged]
+  mykey.kem   (3168 bytes, ML-KEM-1024 secret key)   [NEW, optional]
+  mykey.kpub  (1568 bytes, ML-KEM-1024 public key)   [NEW, optional]
+```
 
-**Python implementation approach:**
+Backward compatibility: `Identity.load()` checks for `.kem`/`.kpub` files. If absent, `has_kem` is False and encryption features are unavailable. `Identity.generate()` always creates both keypairs going forward.
+
+### Identity API Changes
 
 ```python
-async def send_raw(self, data: bytes) -> None:
-    """Send length-prefixed frame (used for both raw and encrypted)."""
-    header = len(data).to_bytes(4, 'big')
-    self._writer.write(header + data)
-    await self._writer.drain()
+class Identity:
+    # Existing (unchanged):
+    @property
+    def public_key(self) -> bytes: ...       # ML-DSA-87 (2592 bytes)
+    @property
+    def namespace(self) -> bytes: ...        # SHA3-256(signing_pk)
+    @property
+    def can_sign(self) -> bool: ...
+    def sign(self, message: bytes) -> bytes: ...
+    @staticmethod
+    def verify(message, signature, public_key) -> bool: ...
 
-async def recv_raw(self) -> bytes:
-    """Receive length-prefixed frame."""
-    header = await self._reader.readexactly(4)
-    length = int.from_bytes(header, 'big')
-    if length > MAX_FRAME_SIZE:
-        raise ProtocolError(f"frame exceeds max size: {length}")
-    return await self._reader.readexactly(length)
+    # New:
+    @property
+    def kem_public_key(self) -> bytes | None: ...   # ML-KEM-1024 (1568 bytes)
+    @property
+    def kem_secret_key(self) -> bytes | None: ...   # ML-KEM-1024 (3168 bytes)
+    @property
+    def has_kem(self) -> bool: ...
+
+    @classmethod
+    def generate(cls) -> Identity:
+        # Now generates BOTH ML-DSA-87 + ML-KEM-1024 keypairs
+
+    @classmethod
+    def from_public_keys(cls, signing_pk: bytes, kem_pk: bytes | None = None) -> Identity:
+        # Verify-only identity, optionally with KEM public key for encrypting TO them
 ```
 
-### Pattern 3: Request Pipelining with request_id Correlation
+## Component Boundaries
 
-**What:** The client assigns a unique uint32 `request_id` to each request. The node echoes it in the response. Responses may arrive out of order because the node processes requests concurrently (thread pool offload for heavy ops).
+| Component | Responsibility | Depends On |
+|---|---|---|
+| `_envelope.py` | Encrypt/decrypt blob data using KEM envelope scheme | `crypto.py` (AEAD, HKDF, SHA3-256), `oqs` (ML-KEM-1024) |
+| `_directory.py` | User/group CRUD in directory namespace, caching | `client.py` (read/write/list/delete/subscribe), `_envelope.py`, `_directory_types.py` |
+| `_directory_types.py` | Frozen dataclasses for directory entries | None (pure data) |
+| `identity.py` (modified) | ML-DSA-87 + ML-KEM-1024 keypair management | `oqs`, `crypto.py` |
+| `client.py` (modified) | High-level encrypt/decrypt convenience methods | `_envelope.py`, `_directory.py` |
 
-**Implementation in session.py:**
+### Dependency Graph
+
+```
+client.py
+  |
+  +-- _directory.py
+  |     |
+  |     +-- _envelope.py
+  |     |     |
+  |     |     +-- crypto.py (AEAD, HKDF, SHA3)
+  |     |     +-- oqs (ML-KEM-1024)
+  |     |
+  |     +-- _directory_types.py
+  |     +-- _codec.py (existing encode/decode)
+  |     +-- types.py (existing result types)
+  |
+  +-- _envelope.py (also used directly for low-level encrypt/decrypt)
+  +-- identity.py (extended with KEM)
+```
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Putting KEM Keypair in a Separate Class
+**What:** Creating `EncryptionIdentity` or `KEMIdentity` separate from `Identity`.
+**Why bad:** Users already have Identity objects. Forcing them to manage two separate identity objects for signing vs encryption creates confusion and doubles key management code.
+**Instead:** Extend the existing Identity class with optional KEM fields. One identity, two purposes.
+
+### Anti-Pattern 2: Encrypting the FlatBuffer Instead of the Data
+**What:** Encrypting the entire FlatBuffer blob payload and storing that.
+**Why bad:** The node needs to verify the signature on the FlatBuffer. If the entire FlatBuffer is encrypted, the node cannot verify ownership and will reject the blob.
+**Instead:** Encrypt only the application data. The `data` field of the FlatBuffer contains the encrypted blob format. The FlatBuffer itself (with namespace, pubkey, signature) remains in the clear for node verification.
+
+### Anti-Pattern 3: Modifying the Node for Encrypted Blobs
+**What:** Adding encryption awareness to the C++ node.
+**Why bad:** The node is intentionally dumb. Client-side encryption means the node NEVER needs to know about encryption. Adding node-side logic couples layers and defeats zero-knowledge storage.
+**Instead:** All encryption/decryption is in the SDK. The node sees opaque `data` bytes.
+
+### Anti-Pattern 4: Storing KEM Public Keys in a Separate Namespace
+**What:** Creating a special `_keys` namespace for public key storage.
+**Why bad:** Requires a separate identity to own `_keys`. Who owns it? How is it bootstrapped? Adds unnecessary complexity.
+**Instead:** Store user entries (including KEM public keys) in the org admin's directory namespace. The admin owns it, delegates write access to users. Uses existing delegation primitive.
+
+### Anti-Pattern 5: Group Blobs Containing Full Public Keys
+**What:** Storing all member KEM public keys inside the group blob.
+**Why bad:** Each ML-KEM-1024 public key is 1568 bytes. A 50-member group would be 78KB for the group blob alone. Group updates require re-writing all keys.
+**Instead:** Store member labels in the group blob. Resolve labels to KEM public keys at encrypt-time by reading user entries from the directory. Keeps group blobs tiny.
+
+## Patterns to Follow
+
+### Pattern 1: Magic Prefix Dispatch
+**What:** Use 4-byte magic prefixes to identify blob content type.
+**When:** Whenever a new blob type is introduced.
+**Why:** Consistent with existing TOMBSTONE_MAGIC and DELEGATION_MAGIC patterns. Any code can identify blob type without external metadata.
 
 ```python
-class Session:
-    def __init__(self):
-        self._next_request_id: int = 1
-        self._pending: dict[int, asyncio.Future] = {}
-
-    async def request(self, msg_type: int, payload: bytes) -> tuple[int, bytes]:
-        """Send request and await correlated response."""
-        rid = self._next_request_id
-        self._next_request_id = (self._next_request_id + 1) & 0xFFFFFFFF
-        future = asyncio.get_event_loop().create_future()
-        self._pending[rid] = future
-        await self._send_message(msg_type, payload, rid)
-        return await future  # Returns (response_type, response_payload)
+ENCRYPTED_BLOB_MAGIC = bytes([0xE0, 0xCE, 0x10, 0x70])
+USER_ENTRY_MAGIC     = bytes([0xD1, 0xC7, 0x00, 0x01])
+GROUP_MAGIC          = bytes([0xD1, 0xC7, 0x00, 0x02])
 ```
 
-**Trade-offs:** Enables concurrent queries over a single connection. Requires a background task to dispatch received messages to pending futures by request_id. Server-initiated messages (Notification, type 21) always have request_id=0 and are dispatched to a notification callback, not the pending map.
-
-### Pattern 4: FlatBuffers TransportMessage Envelope
-
-**What:** All messages are wrapped in a FlatBuffers TransportMessage with three fields: `type` (byte enum), `payload` (byte vector), `request_id` (uint32). The C++ uses `ForceDefaults(true)` to ensure deterministic encoding.
-
-**SDK approach:** Use generated Python FlatBuffers code from `flatc --python` against `db/schemas/transport.fbs`. The generated code produces `TransportMessage.py` with Builder and accessor classes.
-
-**Encoding must match C++ exactly:**
-
-```python
-import flatbuffers
-from chromatindb._generated import TransportMessage, TransportMsgType
-
-def encode_transport(msg_type: int, payload: bytes, request_id: int = 0) -> bytes:
-    builder = flatbuffers.Builder(len(payload) + 64)
-    builder.ForceDefaults(True)  # CRITICAL: matches C++ ForceDefaults(true)
-    payload_vec = builder.CreateByteVector(payload)
-    TransportMessage.Start(builder)
-    TransportMessage.AddType(builder, msg_type)
-    TransportMessage.AddPayload(builder, payload_vec)
-    TransportMessage.AddRequestId(builder, request_id)
-    msg = TransportMessage.End(builder)
-    builder.Finish(msg)
-    return bytes(builder.Output())
-```
-
-**Note on `builder.Output()`:** FlatBuffers Python builder returns bytes in reverse order from C++. The `Finish()` call handles this, but `Output()` returns a bytearray that should be converted to bytes. The wire format produced is identical to C++ -- this has been verified in the FlatBuffers test suite.
-
-## Data Flow
-
-### PQ Handshake Flow (SDK as Initiator)
-
-```
-SDK (Python)                                Relay (C++)
-    |                                           |
-    |  1. Generate ephemeral ML-KEM-1024 keypair |
-    |     using liboqs KeyEncapsulation           |
-    |                                           |
-    |-- [raw] KemPubkey ----------------------->|  TransportMessage(type=1)
-    |   payload: [kem_pk:1568][signing_pk:2592] |  payload: [kem_pk:1568][signing_pk:2592]
-    |   Framing: [4B length][flatbuffer bytes]  |
-    |                                           |  Relay decodes, encapsulates -> shared_secret
-    |<-- [raw] KemCiphertext -------------------|  TransportMessage(type=2)
-    |   payload: [ciphertext:1568][signing_pk:2592]  payload: [ct:1568][relay_pk:2592]
-    |                                           |
-    |  2. Decapsulate -> shared_secret          |
-    |  3. Derive session keys:                  |
-    |     PRK = HKDF-Extract(salt=empty,        |  (Same derivation on relay side)
-    |                        ikm=shared_secret) |
-    |     send_key = HKDF-Expand(PRK,           |
-    |       "chromatin-init-to-resp-v1", 32)    |
-    |     recv_key = HKDF-Expand(PRK,           |
-    |       "chromatin-resp-to-init-v1", 32)    |
-    |     fingerprint = SHA3-256(shared_secret   |
-    |       || init_signing_pk || resp_signing_pk)|
-    |                                           |
-    |-- [encrypted, nonce=0] AuthSignature ---->|  TransportMessage(type=3)
-    |   payload: [pk_len:4 LE][signing_pk:2592] |  AEAD encrypt with send_key, nonce counter 0
-    |            [ML-DSA-87 sig over fingerprint]|
-    |                                           |
-    |<-- [encrypted, nonce=0] AuthSignature ----|  TransportMessage(type=3)
-    |   payload: [pk_len:4 LE][relay_pk:2592]   |  AEAD decrypt with recv_key, nonce counter 0
-    |            [ML-DSA-87 sig over fingerprint]|
-    |                                           |
-    |  4. Verify relay's signature over         |
-    |     session fingerprint                   |
-    |                                           |
-    |  Counters now: send=1, recv=1             |
-    |  Session established.                     |
-```
-
-### CRITICAL: Key Derivation -- Code vs PROTOCOL.md Discrepancy
-
-**PROTOCOL.md states:** salt = SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)
-
-**Actual C++ code (handshake.cpp:21-28):**
-```cpp
-std::span<const uint8_t> empty_salt{};
-auto prk = crypto::KDF::extract(empty_salt, shared_secret);
-```
-
-**The code uses EMPTY salt, not SHA3-256 of pubkeys.** The SDK MUST follow the code (empty salt), not PROTOCOL.md. The session fingerprint computation also differs: the code computes `SHA3-256(shared_secret || init_pk || resp_pk)` directly, not via HKDF expand with a "session-fp" context string.
-
-**Verified key derivation (from handshake.cpp):**
-1. `PRK = HKDF-SHA256-Extract(salt=empty, ikm=shared_secret)` -- empty salt, shared_secret as IKM
-2. `init_to_resp_key = HKDF-SHA256-Expand(PRK, "chromatin-init-to-resp-v1", 32)` -- SDK send_key
-3. `resp_to_init_key = HKDF-SHA256-Expand(PRK, "chromatin-resp-to-init-v1", 32)` -- SDK recv_key
-4. `fingerprint = SHA3-256(shared_secret || init_signing_pk || resp_signing_pk)` -- plain hash, NOT HKDF
-
-### Auth Payload Wire Format
-
-The AuthSignature payload (type 3) carries:
-
-```
-[pk_size: 4 bytes LITTLE-ENDIAN uint32]  <-- Note: LE, not BE
-[signing_pubkey: pk_size bytes]           <-- 2592 bytes for ML-DSA-87
-[signature: remaining bytes]              <-- ML-DSA-87 signature over fingerprint
-```
-
-This is explicitly little-endian for the size prefix (handshake.cpp:119-124), unlike most other protocol fields which use big-endian. The SDK must encode `pk_size` as LE here.
-
-### Message Loop Flow (Post-Handshake)
-
-```
-SDK                                         Relay                    Node
- |                                           |                        |
- |-- [AEAD] TransportMessage(type, payload)->|                        |
- |   request_id = client-assigned            | is_client_allowed()?   |
- |                                           | YES: forward to node   |
- |                                           |-- [UDS AEAD] forward ->|
- |                                           |                        | process
- |                                           |<- [UDS AEAD] response -|
- |<- [AEAD] TransportMessage(resp, payload) -|                        |
- |   request_id echoed from request          |                        |
- |                                           |                        |
- |   Server-initiated (notifications):       |                        |
- |<- [AEAD] Notification(request_id=0) ------|<- Notification --------|
-```
-
-### Notification Dispatch Flow
-
-```
-Background recv loop:
-    frame = await recv_encrypted()
-    msg = decode_transport(frame)
-    if msg.request_id != 0 and msg.request_id in pending:
-        pending[msg.request_id].set_result((msg.type, msg.payload))
-    elif msg.type == Notification:
-        notification_callback(decode_notification(msg.payload))
-    elif msg.type == Ping:
-        await send_message(Pong, b'', request_id=0)
-    elif msg.type == Goodbye:
-        close()
-    elif msg.type == StorageFull or msg.type == QuotaExceeded:
-        # These may echo a request_id OR be spontaneous
-        if msg.request_id in pending:
-            pending[msg.request_id].set_exception(StorageError(...))
-```
-
-## Integration Points with Existing C++ Code
-
-### Relay PQ Handshake Responder (relay_session.cpp + connection.cpp)
-
-The relay accepts TCP clients and runs the PQ handshake as responder. Key integration details:
-
-| Aspect | Relay Behavior | SDK Must Match |
-|--------|---------------|----------------|
-| First message | Expects KemPubkey (type 1) or TrustedHello (type 23) | SDK sends KemPubkey (always PQ, never trusted) |
-| KemPubkey payload | `[kem_pk:1568][signing_pk:2592]` = 4160 bytes | Exact byte layout, sizes |
-| KemCiphertext response | `[ciphertext:1568][signing_pk:2592]` = 4160 bytes | Parse at fixed offsets |
-| Auth payload | `[pk_len:4 LE][pubkey][signature]` | LE uint32 for pk_len |
-| AEAD | ChaCha20-Poly1305 IETF, empty AD, counter nonce | Identical AEAD params |
-| FlatBuffers | `ForceDefaults(true)`, standard encoding | ForceDefaults(True) in Python builder |
-
-**SDK always uses PQ handshake, never TrustedHello.** The SDK connects to the relay over TCP (not UDS). The relay is never a trusted peer for external clients. The TrustedHello path is relay-to-node only.
-
-### Relay Message Filter (message_filter.cpp)
-
-The relay uses a blocklist approach. These 21 types are blocked; everything else passes:
-
-| Blocked Types | Reason |
-|---------------|--------|
-| None (0) | Invalid |
-| KemPubkey (1), KemCiphertext (2), AuthSignature (3), AuthPubkey (4) | Handshake |
-| TrustedHello (23), PQRequired (24) | Handshake |
-| SyncRequest (9) through SyncComplete (14) | Peer sync |
-| ReconcileInit (26), ReconcileRanges (27), ReconcileItems (28) | Peer sync |
-| SyncRejected (29) | Peer sync |
-| PeerListRequest (15), PeerListResponse (16) | PEX |
-| StorageFull (22), QuotaExceeded (25) | Internal signals (blocked client->node, but node->client allowed) |
-
-**If the SDK sends a blocked type, the relay disconnects immediately** (teardown "blocked message type"). The SDK must never send any blocked type.
-
-### FlatBuffers Schema Compatibility
-
-The SDK uses the same `.fbs` schemas as the C++ code:
-- `db/schemas/transport.fbs` -- TransportMessage + TransportMsgType enum
-- `db/schemas/blob.fbs` -- Blob table (for Data/Delete/Read payloads)
-
-Generated Python code must come from the same schema version. Generate with:
-```bash
-flatc --python -o sdk/python/chromatindb/_generated/ db/schemas/transport.fbs db/schemas/blob.fbs
-```
-
-### Key File Format Compatibility
-
-The node stores keys as raw binary files: `node.pub` (2592 bytes, ML-DSA-87 public key) and `node.key` (4896 bytes, ML-DSA-87 secret key). The SDK should use the same format for its identity files so keys can be inspected/compared across implementations.
-
-## Crypto Library Mapping
-
-| C++ Primitive | Python Library | Function |
-|---------------|---------------|----------|
-| `OQS_KEM("ML-KEM-1024")` | `liboqs.KeyEncapsulation("ML-KEM-1024")` | `.generate_keypair()`, `.encap_secret(pk)`, `.decap_secret(ct)` |
-| `OQS_SIG("ML-DSA-87")` | `liboqs.Signature("ML-DSA-87")` | `.sign(msg)`, `.verify(msg, sig, pk)` |
-| `crypto_aead_chacha20poly1305_ietf_encrypt` | `nacl.bindings.crypto_aead_chacha20poly1305_ietf_encrypt` | `(msg, aad, nonce, key)` |
-| `crypto_aead_chacha20poly1305_ietf_decrypt` | `nacl.bindings.crypto_aead_chacha20poly1305_ietf_decrypt` | `(ct, aad, nonce, key)` |
-| `crypto_kdf_hkdf_sha256_extract` + `_expand` | `cryptography.hazmat.primitives.kdf.hkdf` | `HKDF(algorithm=SHA256(), ...)` or separate Extract/Expand |
-| `SHA3-256` | `hashlib.sha3_256` | stdlib, no external dep |
-
-**HKDF strategy:** Use the `cryptography` library for HKDF-SHA256. It is widely available, stable, and implements RFC 5869 identically to libsodium. Use `HKDFExpand` for the expand step (we need separate extract/expand calls since the code does them independently). The `cryptography` library's HKDF with SHA-256 produces identical output to libsodium's `crypto_kdf_hkdf_sha256_extract/expand` -- both implement the same RFC.
-
-**AEAD strategy:** Use PyNaCl's `nacl.bindings.crypto_aead_chacha20poly1305_ietf_encrypt/decrypt` because it is a direct binding to the same libsodium functions the C++ code uses. This eliminates any possibility of subtle behavioral differences in AAD handling or tag placement.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Sharing Send Counter Across Coroutines
-
-**What people do:** Allow multiple concurrent coroutines to call `send_encrypted()` without serialization.
-**Why it's wrong:** The AEAD nonce is derived from `send_counter_`. If two sends interleave, they may use the same nonce or use nonces out of order. On the relay side, `recv_counter_` increments linearly -- any mismatch means AEAD decrypt failure and connection death. This exact bug was the root cause of the PEX SIGSEGV in the C++ node (v1.0.0 Phase 52).
-**Do this instead:** Serialize all sends through a single asyncio.Lock or channel. Only one frame in flight at a time on the send path.
-
-### Anti-Pattern 2: Assuming Message Order Matches Request Order
-
-**What people do:** Send request A then request B, assume response A arrives before response B.
-**Why it's wrong:** The node dispatches requests concurrently. A ReadRequest for a large blob may complete after a NodeInfoRequest sent later. The `request_id` field exists precisely because ordering is not guaranteed.
-**Do this instead:** Always match responses by `request_id`. Use a dict of pending futures keyed by `request_id`.
-
-### Anti-Pattern 3: Using the `cryptography` Library for AEAD
-
-**What people do:** Use `cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305` instead of PyNaCl's low-level binding.
-**Why it's wrong:** The `cryptography` library's ChaCha20-Poly1305 has a different API surface for AAD handling. PyNaCl's `crypto_aead_chacha20poly1305_ietf_encrypt/decrypt` directly maps to libsodium's API with `aad=None` for empty AD -- matching the C++ `std::span<const uint8_t> empty_ad{}` exactly.
-**Do this instead:** Use PyNaCl's `nacl.bindings.crypto_aead_chacha20poly1305_ietf_encrypt` for the AEAD layer. It is a direct binding to the same libsodium function the C++ code uses.
-
-### Anti-Pattern 4: Generating FlatBuffers at Runtime
-
-**What people do:** Try to build FlatBuffers manually with struct.pack instead of using the generated Python code.
-**Why it's wrong:** FlatBuffers has a specific binary format (vtable, offsets, alignment) that is not trivially reproducible. Hand-crafted bytes will not verify with `VerifyTransportMessageBuffer` on the C++ side.
-**Do this instead:** Use `flatc --python` to generate Python classes from `transport.fbs` and `blob.fbs`. Commit the generated code. Use the Builder API.
-
-### Anti-Pattern 5: Forgetting ForceDefaults(True)
-
-**What people do:** Create FlatBuffers without ForceDefaults, so default-valued fields (like `request_id = 0`) are omitted from the binary.
-**Why it's wrong:** The C++ side always uses `ForceDefaults(true)`. While the FlatBuffers spec says default fields can be omitted, the C++ encoder explicitly includes them. If the Python encoder omits them, the binary output differs and the C++ verifier may behave differently.
-**Do this instead:** Always set `builder.ForceDefaults(True)` before building TransportMessage.
-
-## Build Order and Dependencies
-
-### Phase 1: Foundation (no relay needed)
-
-Build order driven by dependency graph:
-
-1. **constants.py** -- Zero dependencies. Protocol constants, type enums, sizes.
-2. **exceptions.py** -- Zero dependencies. Error hierarchy.
-3. **crypto.py** -- Depends on liboqs-python, PyNaCl, cryptography, hashlib. Pure functions, testable with known vectors.
-4. **wire.py** -- Depends on FlatBuffers generated code. TransportMessage encode/decode.
-5. **identity.py** -- Depends on crypto.py. Keypair management.
-
-All testable with unit tests, no network needed.
-
-### Phase 2: Protocol Layer (mock transport)
-
-6. **transport.py** -- Depends on crypto.py. TCP + framing. Testable with mock sockets.
-7. **messages.py** -- Depends on constants.py. Payload encoders/decoders for all 38 types. Testable with round-trip encode/decode.
-8. **handshake.py** -- Depends on crypto.py, wire.py, transport.py. Testable with mock transport (pre-recorded relay responses).
-
-### Phase 3: Session and Client (needs relay)
-
-9. **session.py** -- Depends on handshake.py, wire.py, transport.py, messages.py. Connection lifecycle + pipelining.
-10. **client.py** -- Depends on session.py, identity.py, messages.py. Public API.
-
-Integration testing requires a running relay + node (Docker).
-
-## Scaling Considerations
-
-| Concern | Single Connection | Multiple Connections |
-|---------|------------------|---------------------|
-| Throughput | ~33 blobs/sec for 1 MiB (relay benchmark baseline) | Connection pool with round-robin |
-| Pipelining | 2^32 outstanding requests per connection | Unlikely to be bottleneck |
-| Memory | One 110 MiB frame buffer worst case | Pool size * frame buffer |
-| Latency | PQ handshake ~10-50ms (KEM + DSA ops) | Amortized by persistent connections |
-
-### Scaling Priorities
-
-1. **First bottleneck:** PQ handshake latency. ML-KEM-1024 encapsulation + ML-DSA-87 sign/verify takes ~10-50ms. Mitigate with persistent connections (reconnect on failure, do not reconnect per request).
-2. **Second bottleneck:** Single-connection send serialization. AEAD nonce management requires serialized sends. For write-heavy workloads, a connection pool with multiple relay connections would help, but this is a future optimization -- single connection is sufficient for SDK v1.
+### Pattern 2: Blob-as-Record
+**What:** All structured data stored as blobs with magic prefix + version + fields.
+**When:** Storing user entries, groups, encrypted data.
+**Why:** No new infrastructure needed. Leverages existing signed blob storage, replication, and query. Everything is blobs.
+
+### Pattern 3: Tombstone + Replace for Updates
+**What:** To update a record (e.g., group membership), tombstone the old blob and write a new one.
+**When:** Group membership changes, user key rotation.
+**Why:** chromatindb is append-only with tombstones. There is no in-place update. Tombstone + write is the canonical mutation pattern.
+
+### Pattern 4: Subscribe for Cache Invalidation
+**What:** Subscribe to directory namespace, invalidate cache entries on notifications.
+**When:** DirectoryManager is active and caching user/group data.
+**Why:** Reactive cache invalidation using existing pub/sub. No polling needed.
+
+### Pattern 5: Zero-Nonce for Unique-Key AEAD
+**What:** Use all-zeros nonce when the AEAD key is unique and never reused.
+**When:** Wrapping data_key with KEM shared secret. Each KEM encapsulation produces a unique shared secret, so the nonce never repeats for a given key.
+**Why:** Simpler than deriving a nonce. Cryptographically safe because the key uniqueness guarantee comes from KEM.
+
+## Suggested Build Order
+
+The build order follows dependency depth -- build leaves first, then composites.
+
+### Phase 1: Identity Extension + Envelope Crypto
+**Build:** Extend `identity.py` with KEM keypair, create `_envelope.py`
+**Rationale:** No network IO needed. Purely crypto. Fully testable with unit tests.
+**Dependencies:** `crypto.py` (existing), `oqs` (existing dep)
+**Delivers:** `Identity` with KEM + `envelope_encrypt()`/`envelope_decrypt()` + encrypted blob format
+
+### Phase 2: Directory Types + Directory Manager (Read Path)
+**Build:** Create `_directory_types.py`, create `_directory.py` with user/group encode/decode + discovery (read-only)
+**Rationale:** Depends on Phase 1 (UserEntry contains KEM pubkey). Read path is simpler than write.
+**Dependencies:** Phase 1, `client.py` (existing read/list methods)
+**Delivers:** Parse user entries and groups from blobs, list users, fetch pubkeys, resolve groups to KEM pubkeys
+
+### Phase 3: Directory Manager (Write Path) + Client Integration
+**Build:** Add directory write operations (register, create group, update group, revoke) + `write_encrypted()`/`read_encrypted()` on ChromatinClient
+**Rationale:** Depends on Phase 2 (directory read for recipient resolution). Full integration.
+**Dependencies:** Phase 1, Phase 2
+**Delivers:** Complete encrypted write/read flow, user self-registration, group management
+
+### Phase 4: Polish + Documentation
+**Build:** Cache with pub/sub invalidation, error handling edge cases, README, tutorial updates
+**Rationale:** Polish after core is working. Cache is an optimization, not critical path.
+**Dependencies:** Phase 3
+**Delivers:** Production-ready encrypted storage with caching, documentation
+
+## Scalability Considerations
+
+| Concern | At 10 users | At 100 users | At 1000 users |
+|---|---|---|---|
+| Encrypted blob size overhead | 1 recipient: ~1.7KB header | 10 recipients: ~16.5KB header | 100 recipients: ~165KB header. Acceptable for most blob sizes. |
+| Directory scan for user lookup | Trivial: list_blobs returns <10 entries | Moderate: may need pagination | Consider label-indexed lookup blob. Scan is O(N) per page. |
+| Group resolution | Trivial | Cache eliminates repeated lookups | Same -- cache handles it |
+| KEM encapsulation per recipient | ~1ms each, 10ms total | ~100ms | ~1s. CPU-bound. Acceptable for write path. |
+| Identity file size | 12.8KB (DSA + KEM keys) | Same per user | Same per user |
+
+The 1000-user case for directory scan could be optimized later with an index blob that maps labels to blob hashes, but this is YAGNI for v1.7.0. The list_blobs pagination handles it adequately.
 
 ## Sources
 
-- [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) -- Python bindings for ML-KEM-1024, ML-DSA-87
-- [liboqs-python on PyPI](https://pypi.org/project/liboqs-python/) -- pip-installable package
-- [PyNaCl](https://pynacl.readthedocs.io/) -- Python libsodium bindings (ChaCha20-Poly1305 IETF AEAD)
-- [PyNaCl crypto_aead source](https://github.com/pyca/pynacl/blob/main/src/nacl/bindings/crypto_aead.py) -- Low-level AEAD API
-- [cryptography library HKDF](https://cryptography.io/en/latest/hazmat/primitives/key-derivation-functions/) -- HKDF-SHA256 via hazmat primitives
-- [FlatBuffers Python docs](https://flatbuffers.dev/languages/python/) -- Python runtime for FlatBuffers
-- [flatbuffers on PyPI](https://pypi.org/project/flatbuffers/) -- pip-installable runtime
-- [Python hashlib SHA3](https://docs.python.org/3/library/hashlib.html) -- Stdlib SHA3-256 support (since Python 3.6)
-- [libsodium HKDF docs](https://doc.libsodium.org/key_derivation/hkdf) -- HKDF-SHA256 reference (added in libsodium 1.0.19)
-- Direct source code analysis: `db/net/connection.cpp`, `db/net/handshake.cpp`, `db/net/framing.cpp`, `db/net/protocol.cpp`, `relay/core/relay_session.cpp`, `relay/core/message_filter.cpp`
-
----
-*Architecture research for: Python SDK integrating with chromatindb relay*
-*Researched: 2026-03-29*
+- ML-KEM-1024 key sizes: [Open Quantum Safe ML-KEM docs](https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem.html) -- PUBLIC_KEY=1568, SECRET_KEY=3168, CT=1568, SS=32
+- liboqs-python KEM API: [GitHub liboqs-python](https://github.com/open-quantum-safe/liboqs-python) -- KeyEncapsulation(alg, secret_key=), generate_keypair(), encap_secret(pk), decap_secret(ct), export_secret_key()
+- FIPS 203 ML-KEM standard: [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final)
+- KEM envelope pattern: [Wikipedia KEM](https://en.wikipedia.org/wiki/Key_encapsulation_mechanism) + HPKE draft
+- Existing SDK source: Direct analysis of all 12 modules under sdk/python/chromatindb/
+- Delegation format: db/wire/codec.h DELEGATION_MAGIC (0xDE1E6A7E) + 2592-byte pubkey
+- Tombstone format: db/wire/codec.h TOMBSTONE_MAGIC (0xDEADBEEF) + 32-byte target hash

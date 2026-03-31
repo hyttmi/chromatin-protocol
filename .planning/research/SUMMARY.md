@@ -1,204 +1,187 @@
 # Project Research Summary
 
-**Project:** chromatindb v1.6.0 Python SDK
-**Domain:** Python client SDK for binary-protocol PQ-secure database
-**Researched:** 2026-03-29
+**Project:** chromatindb v1.7.0 — Client-Side PQ Envelope Encryption
+**Domain:** Post-quantum envelope encryption with pubkey directory and group management in a Python SDK
+**Researched:** 2026-03-31
 **Confidence:** HIGH
 
 ## Executive Summary
 
-The chromatindb Python SDK wraps an existing, proven C++ binary protocol. The core challenge is not designing a new protocol but rather achieving exact byte-for-byte interoperability with the running relay and node. The three fundamental difficulties are: (1) key derivation that differs between the C++ implementation and PROTOCOL.md documentation, requiring the SDK to follow the code not the docs; (2) mixed endianness in the wire format — big-endian for framing, little-endian for auth payload and signing input fields; and (3) FlatBuffers encoding determinism, which is not guaranteed across languages and requires a deliberate strategy. All three are well-understood with clear mitigations. This is an implementation precision problem, not an unsolved design problem.
+v1.7.0 adds client-side PQ envelope encryption to the existing Python SDK. The feature set is well-understood: envelope encryption is a mature pattern (age, AWS KMS, CMS) and every required cryptographic primitive is already present in the SDK dependency set — no new pip packages are needed. The implementation is entirely SDK-side; the C++ node remains a zero-knowledge store with no changes required.
 
-The recommended approach is a minimal 3-dependency Python package (liboqs-python, PyNaCl, flatbuffers) with stdlib handling HKDF-SHA256 and SHA3-256. The SDK is async-first using asyncio streams, with a sync wrapper for non-async callers. The architecture layers cleanly from bottom (transport framing + AEAD) to top (public ChromatinClient API), and each layer is independently testable. The build order is strictly bottoms-up — crypto primitives and wire codecs must be validated against C++ test vectors before any higher layers are written.
+The recommended approach is standard KEM-DEM (Key Encapsulation Mechanism — Data Encapsulation Mechanism): generate a random per-blob data encryption key (DEK), encrypt the blob data once with ChaCha20-Poly1305, then for each recipient use ML-KEM-1024 `encap_secret()` to obtain a per-recipient shared secret, derive a key-encryption key (KEK) via HKDF, and wrap the DEK with the KEK. The pubkey directory is implemented as ordinary signed blobs in an admin-owned namespace — no new infrastructure, no new wire types, no node changes. Groups are named member lists stored as blobs; group encryption resolves members at encrypt-time and wraps the DEK individually for each.
 
-The primary risk is invisible interop failure: a handshake may appear to complete but derive the wrong session keys, or a blob may be written and acknowledged but be unreadable because the local hash computation differs from the server's. The mitigation is mandatory cross-language test vectors at every crypto and encoding boundary before those components are considered done. All critical pitfalls are preventable with disciplined implementation order and testing; none require architectural changes after the fact.
+The primary risks are all cryptographic design risks, not engineering risks. The most critical: ML-KEM is NOT RSA — the caller cannot choose what value gets encapsulated, so the two-layer KEM-then-Wrap pattern is mandatory for multi-recipient support. Secondary risks are nonce management (data AEAD must use random nonces, not the transport layer's counter), missing version bytes in the envelope format (locks in an unmigrateable format), and binding the published KEM encapsulation key to the signing identity (prevents man-in-the-middle key substitution). All of these are preventable by locking design decisions in the first phase plan before any code is written.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The SDK requires exactly 3 runtime pip dependencies plus Python stdlib. liboqs-python provides ML-KEM-1024 and ML-DSA-87 PQ primitives and is the only maintained Python wrapper for liboqs. PyNaCl provides ChaCha20-Poly1305 IETF AEAD via direct libsodium bindings — using the same underlying C library as the node eliminates any behavioral divergence. The flatbuffers Python runtime (pure Python, no native deps) handles TransportMessage and Blob encoding; code is generated with `flatc --python` from the existing `db/schemas/` files and committed to the repo so users do not need flatc installed. HKDF-SHA256 and SHA3-256 use stdlib `hmac` + `hashlib` exclusively — PyNaCl does not expose HKDF bindings, and adding the `cryptography` package would pull in OpenSSL, violating the project's no-OpenSSL constraint.
+The v1.7.0 stack is identical to v1.6.0 — zero new dependencies. Every capability needed for envelope encryption is already present: ML-KEM-1024 via liboqs-python (already exercised in the handshake), ChaCha20-Poly1305 AEAD via PyNaCl (already in `crypto.py`), HKDF-SHA256 via stdlib `hmac`/`hashlib` (already in `_hkdf.py`), and binary format encoding via stdlib `struct` (already the pattern throughout `_codec.py`). The only new stdlib usage is `secrets.token_bytes()` for DEK and nonce generation, which is available since Python 3.6 and is the canonical PEP 506 approach to cryptographic randomness.
 
-**Core technologies:**
-- **liboqs-python 0.14.1**: ML-KEM-1024 + ML-DSA-87 — only maintained Python PQ wrapper, mirrors C++ liboqs API directly
-- **PyNaCl 1.6.2**: ChaCha20-Poly1305 IETF AEAD via `nacl.bindings.crypto_aead_chacha20poly1305_ietf_*` — same libsodium backend as the C++ node, eliminates interop risk
-- **flatbuffers 25.12.19**: Wire format encoding/decoding — pure Python, ForceDefaults(True) required for determinism; generated code committed to repo
-- **hashlib + hmac (stdlib)**: SHA3-256 hashing + HKDF-SHA256 per RFC 5869 — zero dependencies, correct, testable against RFC test vectors
-- **asyncio (stdlib)**: TCP networking via StreamReader/StreamWriter with `readexactly()` for frame parsing — no third-party async framework needed
-- **pytest 8.x + pytest-asyncio 0.24.x**: Test framework with async support — mirrors C++ Catch2 approach
-- **Python 3.11 minimum**: liboqs-python requires >=3.9; 3.11 adds significant performance improvements and is still receiving security updates
+**Core technologies (unchanged from v1.6.0):**
+- `liboqs-python ~=0.14.0`: ML-KEM-1024 `encap_secret()` / `decap_secret()` for per-recipient key wrapping — already proven in `_handshake.py`
+- `pynacl ~=1.5.0`: ChaCha20-Poly1305 AEAD for DEK wrapping and blob data encryption — existing `aead_encrypt`/`aead_decrypt` functions
+- `flatbuffers ~=25.12`: Blob payload encoding for network writes — envelope ciphertext stored as opaque bytes in the `data` field, FlatBuffers unchanged
+- `secrets` (stdlib): `secrets.token_bytes(32)` for DEK, `secrets.token_bytes(12)` for AEAD nonce — new usage, zero-dep
+- `struct` (stdlib): Binary envelope format encode/decode — same pattern as all existing `_codec.py` work
+
+**pyproject.toml `dependencies` list:** no changes needed.
 
 ### Expected Features
 
-The SDK has a clear MVP (table stakes) and a well-defined post-validation feature set. The dependency chain is strict: identity management is a prerequisite for the PQ handshake, which is a prerequisite for AEAD transport, which is a prerequisite for all operations. This ordering is non-negotiable and directly governs the implementation phase structure.
+The feature set follows the age/CMS multi-recipient envelope encryption pattern adapted to the PQ stack.
 
-**Must have (table stakes — v1 launch):**
-- Identity management (ML-DSA-87 keypair generate/load, namespace = SHA3-256(pubkey)) — prerequisite for everything
-- PQ handshake (ML-KEM-1024 exchange + ML-DSA-87 mutual auth with relay) — session establishment
-- AEAD encrypted transport (ChaCha20-Poly1305, counter nonces, length-prefixed framing) — all comms are encrypted
-- FlatBuffers encode/decode (TransportMessage + Blob) — mandatory wire format
-- Request-response dispatch (request_id assignment + asyncio.Future correlation table) — concurrency model
-- Write blobs with canonical signing (Data + WriteAck) — primary use case
-- Read blobs (ReadRequest/ReadResponse, typed Blob dataclass) — primary use case
-- Delete blobs with tombstone signing (Delete + DeleteAck) — primary use case
-- List blobs with auto-paginating async iterator (ListRequest/ListResponse) — primary use case
-- Exists check (ExistsRequest/ExistsResponse) — lightweight membership query
-- Context manager (`async with`) for connection lifecycle — every Python client expects this
-- Typed exception hierarchy (ChromatinError, ConnectionError, AuthenticationError, ProtocolError, etc.)
-- Keepalive (background Ping/Pong) — relay drops idle connections at 120s inactivity
-- Per-operation timeout support via `asyncio.wait_for`
-- Graceful disconnect (Goodbye message, cleanup pending futures)
+**Must have (table stakes):**
+- Envelope encryption format — self-describing binary header with version, recipient count, per-recipient wrapped keys, then AEAD ciphertext. Must be parseable without external state.
+- Multi-recipient key wrapping — single DEK, encrypted once; per-recipient KEM encapsulation + AEAD-wrapped DEK. One DEK for N recipients or the data would need to be encrypted N times.
+- Identity with ML-KEM-1024 keypair — extend existing `Identity` class with optional `.kem` / `.kpub` files alongside existing `.key` / `.pub`. One identity, two keypairs (sign + encrypt).
+- Pubkey directory — user KEM pubkeys stored as signed blobs in an admin-owned namespace. Self-registration via delegation. No new infrastructure.
+- `write_encrypted()` / `read_encrypted()` on `ChromatinClient` — thin wrappers composing envelope crypto with existing `write_blob`/`read_blob`.
 
-**Should have (post-v1 validation):**
-- Pub/sub notifications (async iterator yielding Notification objects for real-time blob events)
-- Sync (blocking) wrapper class — scripts, notebooks, and CLI tools need this
-- Batch exists/read (BatchExistsRequest, BatchReadRequest) — single round-trip for multiple blobs
-- Node introspection (NodeInfoRequest, StorageStatusRequest) — monitoring + capability detection
-- Namespace operations (NamespaceListRequest with auto-pagination, NamespaceStatsRequest)
-- Blob metadata query (MetadataRequest — size, TTL, signer without data transfer)
-- Delegation management (delegate, revoke, DelegationListRequest)
-- Time range queries (TimeRangeRequest — temporal blob discovery)
+**Should have (differentiators):**
+- Named groups in directory — group blob stores member labels; SDK resolves to KEM pubkeys at encrypt-time. Eliminates per-blob recipient enumeration.
+- `write_to_group()` helper — one-liner for the common case.
+- Self-encrypting write (no explicit recipients = encrypt to self only).
+- Directory key caching with pub/sub invalidation — avoids re-fetching on every encrypt.
 
-**Defer (v2+):**
-- Auto-reconnect with backoff — complex re-subscription state tracking; defer until real users need it
-- Explicit pipeline() context manager — individual awaits already pipeline naturally via request_id multiplexing
-- CLI tool — separate package, not part of the SDK
+**Defer to v2+:**
+- Streaming encryption for large blobs (STREAM construction). Only needed if encrypted 100 MiB blobs become common; per-blob in-memory encryption is fine for typical usage.
+- Re-encryption helper for revocation. O(blobs x members), expensive, manual is fine for v1.7.0.
+- Client-side dedup before encryption (requires client-side state tracking).
 
-**Anti-features to avoid:**
-- Connection pooling — request_id multiplexing on a single persistent connection makes it unnecessary
-- ORM or schema layer — blob store is bytes-in, bytes-out; serialization is the caller's concern
-- Transparent client-side data encryption — application-layer concern, not SDK concern
-- Automatic retry on all errors — StorageFull and AuthenticationError are not transient; only reconnect-level failures warrant retry
+**Anti-features (never build):**
+- Shared group symmetric key — requires key rotation on every membership change; per-blob envelope encryption is simpler and equally secure for a blob store.
+- Key escrow — destroys zero-knowledge property.
+- Convergent encryption — leaks plaintext equality, classic chosen-plaintext attack.
+- Automatic re-encryption on group membership change — scales catastrophically with data volume.
 
 ### Architecture Approach
 
-The SDK is a flat package under `sdk/python/chromatindb/` with 10 modules and no nested sub-packages. Flat layout is correct for a single-protocol, single-connection-type domain — nesting adds import friction without benefit. Generated FlatBuffers code lives in `_generated/` (private sub-package, committed to repo). Integration tests that require a live relay are in `test_interop.py` and are skipped in unit test runs.
+The feature is implemented in three new modules plus targeted extensions to two existing modules. `_envelope.py` handles pure crypto (encrypt/decrypt, format encode/decode) with no network IO — fully unit-testable in isolation. `_directory.py` wraps `ChromatinClient` to manage user and group CRUD in a directory namespace, composing envelope crypto with existing `read_blob`/`write_blob`/`list_blobs`/`subscribe` methods. `_directory_types.py` holds frozen dataclasses for directory entries. The C++ node is never touched — all encryption is opaque bytes in the `data` field of a standard signed blob.
 
 **Major components:**
-1. **transport.py** — TCP socket via asyncio streams, length-prefixed frame IO (`readexactly()`), AEAD encrypt/decrypt with counter nonces, single asyncio.Lock on the send path
-2. **crypto.py** — Pure primitive functions: ML-KEM-1024, ML-DSA-87, SHA3-256, HKDF-SHA256, ChaCha20-Poly1305, nonce generation; fully testable with known vectors before any network code runs
-3. **handshake.py** — PQ handshake initiator as explicit state machine (SEND_KEM_PUBKEY → RECV_KEM_CIPHERTEXT → SEND_AUTH → RECV_AUTH → COMPLETE); explicit raw vs encrypted I/O per state
-4. **wire.py** — FlatBuffers TransportMessage encode/decode; ForceDefaults(True) mandatory; uses `_generated/` code from flatc
-5. **messages.py** — Binary payload encoders/decoders for all 38 client-facing message types; endianness explicit per field
-6. **session.py** — Connection lifecycle, request_id counter, `dict[int, asyncio.Future]` dispatch table, background recv coroutine routing by request_id and message type
-7. **client.py** — Public API: connect, write, read, delete, list, subscribe, and all query methods
-8. **identity.py** — ML-DSA-87 keypair: generate, load/save raw binary files (compatible with node .key/.pub format), namespace derivation
+1. `_envelope.py` — Encrypt blob data with per-blob random DEK; ML-KEM-1024 encap/decap per recipient; binary format encode/decode. Depends on `crypto.py` and `oqs`.
+2. `_directory.py` — `DirectoryManager` class: user registration, user discovery, group CRUD, group resolution, in-memory cache with pub/sub invalidation. Depends on existing client + envelope.
+3. `_directory_types.py` — Frozen dataclasses: `UserEntry`, `Group`, `EncryptedBlob`, `DirectoryConfig`.
+4. `identity.py` (extended) — Add optional ML-KEM-1024 keypair fields, `.kem`/`.kpub` file persistence, backward-compatible `load()`.
+5. `client.py` (extended) — Add `write_encrypted()`, `read_encrypted()` convenience methods.
 
-**Key patterns:**
-- Serialized send path via asyncio.Lock — AEAD nonce counter cannot tolerate concurrent senders
-- Background recv coroutine routes: request_id != 0 → pending Futures dict; Notification (type 21) → asyncio.Queue; Ping → immediate Pong; Goodbye → connection close
-- Never compute blob_hash locally — always use server-returned hash from WriteAck (FlatBuffer encoding non-determinism risk)
-- Async-first primary API with sync wrapper that runs a dedicated asyncio event loop thread
+**Encrypted blob format (binary, big-endian):**
+```
+[magic:4][version:1][suite:1][recipient_count:2 BE][data_nonce:12]
+[N x (kem_pk_hash:32 + kem_ciphertext:1568 + wrapped_dek:48)]
+[ciphertext + 16-byte AEAD tag]
+```
+Per-recipient overhead: 1648 bytes fixed. Fixed header: 20 bytes + 16-byte AEAD tag.
+
+**Directory namespace:** Admin-owned, users self-register via delegation (existing primitive). User entry blobs: `USER_ENTRY_MAGIC` + signing pubkey + KEM pubkey + label + signature. Group blobs: `GROUP_MAGIC` + name + member labels. No new wire types.
+
+**Key patterns to follow:**
+- Magic prefix dispatch (4-byte magic at offset 0) — consistent with `TOMBSTONE_MAGIC`, `DELEGATION_MAGIC`
+- Tombstone + replace for updates (chromatindb is append-only; group membership changes use this pattern)
+- Subscribe for cache invalidation (existing pub/sub, no polling)
+- Zero nonce for unique-key AEAD (wrapping DEK with KEM shared secret — key is unique per encapsulation)
 
 ### Critical Pitfalls
 
-1. **PROTOCOL.md/C++ implementation discrepancy** — PROTOCOL.md states PQ handshake HKDF uses `SHA3-256(pubkeys)` as salt; the C++ code (`handshake.cpp:21-28`) uses empty salt. Session fingerprint is also computed as a direct SHA3-256 hash (not HKDF expand). Implement from the C++ source, not the doc. Fix PROTOCOL.md as part of v1.6.0.
+1. **ML-KEM is a KEM, not RSA-style encryption** — `encap_secret()` returns a random shared secret the caller cannot choose. The mandatory two-layer pattern: random DEK -> per-recipient `encap_secret()` -> derive KEK via HKDF -> wrap DEK with KEK via AEAD. No HKDF step or a counter-nonce from transport reused here means broken multi-recipient encryption.
 
-2. **Mixed wire format endianness** — Frame length prefix is big-endian; auth payload pubkey_size is little-endian; signing input ttl/timestamp fields are little-endian; FlatBuffers is internally little-endian. Write per-field encode/decode functions with explicit format strings — never assume a single convention. Validate with cross-language test vectors.
+2. **Nonce reuse between transport AEAD and data AEAD** — Transport uses counter-based nonces (stateful, session-scoped). Data AEAD must use `secrets.token_bytes(12)` random nonces. A per-blob fresh DEK means even accidental nonce collision wouldn't reuse the same (key, nonce) pair, but relying on that is fragile. Random nonces are required.
 
-3. **AEAD nonce counter desynchronization** — Any missed or double-counted encrypt/decrypt call permanently corrupts the session. After PQ handshake, both counters start at 1 (auth exchange consumed counter 0). Serialize all sends through a single asyncio.Lock. Never retry encryption with a new nonce — close and reconnect instead.
+3. **Missing version byte in envelope format** — Encrypted blobs without a plaintext version byte cannot be migrated when ML-KEM-1024 is superseded (HQC, or a version bump). The format must be frozen with a version byte before any blobs are written to storage. Changing the format afterwards requires migration tooling.
 
-4. **FlatBuffer blob encoding non-determinism** — Python and C++ FlatBuffer builders may produce byte-different output for the same logical Blob, causing blob_hash mismatches. Design the SDK to never compute blob_hash locally — always use the hash returned in WriteAck. Validate with cross-language byte comparison test before any write operations.
+4. **Missing HKDF domain separation** — Three HKDF domains exist: transport (`chromatin-init-to-resp-v1`, `chromatin-resp-to-init-v1`), DARE (`chromatindb-dare-v1`), envelope KEK (`chromatindb-envelope-kek-v1`). Each must have a unique context label. Reuse is a silent cryptographic failure.
 
-5. **liboqs version and API details** — Use NIST final algorithm names ("ML-DSA-87", "ML-KEM-1024"), not old names ("Dilithium5", "Kyber1024"). Use `sign()` not `sign_with_ctx_str()`. Note that `encap_secret()` returns `(ciphertext, shared_secret)` — tuple order is easy to swap silently. Pin liboqs version in pyproject.toml to match the C++ CMakeLists.txt.
+5. **No signature binding between signing and encryption keys** — Users publish ML-KEM-1024 encapsulation keys to the directory. Without signing these with the ML-DSA-87 identity key, a MITM can substitute their own encapsulation key. Every `UserEntry` must include an ML-DSA-87 signature over the KEM public key.
 
 ## Implications for Roadmap
 
-Implementation follows a strict bottom-up dependency order. Each phase must be complete and validated before the next begins — there are no parallel tracks because everything depends on the crypto and framing layer being correct. Cross-language test vectors must be established early; adding them retroactively is expensive.
+The research is clear on phase ordering: build leaves before composites, pure crypto before network, format before helpers.
 
-### Phase 1: Project Setup and Crypto Foundation
-**Rationale:** The single greatest risk is invisible interop failure at the crypto boundary. This phase eliminates that risk before writing any protocol code. liboqs version must be pinned to match the C++ build. Crypto test vectors must be captured from C++ before any higher-level code is written.
-**Delivers:** pyproject.toml with pinned dependencies, `constants.py`, `exceptions.py`, `crypto.py` with verified test vectors (ML-KEM-1024, ML-DSA-87, SHA3-256, HKDF-SHA256, ChaCha20-Poly1305, nonce generation), `identity.py` with keypair generation/load/save and namespace derivation.
-**Addresses:** Identity management (table stakes prerequisite), liboqs version alignment
-**Avoids:** Pitfall 6 (liboqs version mismatch), algorithm name confusion, HKDF PyNaCl gap, `encap_secret()` tuple order trap
+### Phase 1: Identity Extension + Envelope Crypto
 
-### Phase 2: Transport Layer and PQ Handshake
-**Rationale:** The handshake and AEAD framing are the foundation for everything else. Validating against a real relay early surfaces any interop issues before they compound into higher layers. This is the highest-risk technical work — all three critical endianness/nonce/HKDF pitfalls manifest here.
-**Delivers:** `transport.py` (TCP + length-prefixed framing + AEAD), `wire.py` (FlatBuffers TransportMessage codec with ForceDefaults(True)), `handshake.py` (explicit state machine, raw vs encrypted per state). Successfully completes a PQ handshake against a live relay.
-**Uses:** liboqs-python (ML-KEM-1024 encap/decap), PyNaCl (ChaCha20-Poly1305 IETF), stdlib HKDF, asyncio streams
-**Avoids:** Pitfall 1 (endianness — BE frame header, LE auth payload), Pitfall 2 (nonce desync — serialized send, counters start at 1 post-PQ-handshake), Pitfall 3 (HKDF mismatch — empty salt, not SHA3-256(pubkeys)), Pitfall 7 (TCP framing — readexactly not recv), Pitfall 8 (raw vs encrypted state machine)
+**Rationale:** Foundation for everything else. No network IO — fully unit-testable. The envelope format is a locked design decision that cannot change after blobs are written to storage. KEM keypair persistence must exist before any directory or encryption helpers are built.
+**Delivers:** Extended `Identity` with ML-KEM-1024 keypair (generate, save, load, backward-compatible); `_envelope.py` with `envelope_encrypt()` / `envelope_decrypt()`; encrypted blob binary format (magic, version byte, suite byte, multi-recipient wrapped keys, AEAD ciphertext with authenticated header).
+**Addresses:** Envelope encryption format (table stakes), Identity with KEM keypair (table stakes).
+**Avoids:** Pitfall 1 (KEM misuse), Pitfall 4 (nonce reuse), Pitfall 5 (missing version byte), Pitfall 9 (HKDF domain separation), Pitfall 10 (keypair lifecycle).
 
-### Phase 3: Core Request-Response (Write, Read, Delete, List, Exists)
-**Rationale:** With handshake proven against the live relay, the session layer and primary blob operations deliver the table-stakes write/read/list loop. Blob signing and FlatBuffer determinism risks are resolved here with mandatory cross-language test vectors.
-**Delivers:** `messages.py` (payload encoders/decoders for all P1 message types), `session.py` (request_id dispatch table + background recv loop), `client.py` with write/read/delete/list/exists API. First complete end-to-end blob round-trip against a running node.
-**Implements:** Request-response dispatch with asyncio.Future dict, auto-paginating list iterator
-**Avoids:** Pitfall 4 (signing input — LE ttl/timestamp, correct field concatenation order, cross-language test vector), Pitfall 5 (FlatBuffer hash — use server-returned WriteAck hash, never local hash), Pitfall 10 (FlatBuffer field ordering — mirror C++ codec.cpp vector creation order)
+### Phase 2: Directory Types + Directory Read Path
 
-### Phase 4: Extended Query Suite and Pub/Sub
-**Rationale:** With core CRUD proven, the remaining 38 message types are lower-risk additions sharing the same infrastructure. Pub/sub is the most architecturally distinct addition (notifications are server-pushed, request_id=0, routed to asyncio.Queue not pending dict) and benefits from the stable recv loop established in Phase 3. Sync wrapper requires the complete async API to be stable before it can be built.
-**Delivers:** Pub/sub subscribe/unsubscribe/notification routing, batch exists/read, node info, namespace list/stats, blob metadata, delegation management, time range queries, peer info, stats. Sync wrapper class (`chromatindb.ChromatinClient` wrapping `chromatindb.aio.ChromatinClient`).
-**Addresses:** All P2 features from FEATURES.md
-**Avoids:** Relay message filter blocklist — SDK must never send sync/PEX/handshake message types; relay disconnects immediately on blocked type
+**Rationale:** Depends on Phase 1 (UserEntry contains KEM pubkey — format must be defined first). Read path is simpler than write and proves the format works before any data is committed. Separating read from write reduces integration surface per phase.
+**Delivers:** `_directory_types.py` frozen dataclasses; `_directory.py` user/group blob format encode/decode; `DirectoryManager` list users, fetch KEM pubkeys, resolve groups to KEM pubkeys; in-memory cache with TTL.
+**Addresses:** Pubkey directory (table stakes), user discovery.
+**Avoids:** Pitfall 7 (encapsulation key validation — verify size and signature before use), Pitfall 6 (eventual consistency — cache with TTL, not indefinitely).
 
-### Phase 5: Integration Testing and Documentation Corrections
-**Rationale:** Docker-based integration tests against a real relay+node are the only way to verify the full protocol stack end-to-end. The project standard (established in v1.0.0) is Docker for all E2E tests. Additionally, PROTOCOL.md has known discrepancies with the C++ implementation that must be corrected as part of v1.6.0.
-**Delivers:** `test_interop.py` Docker test suite covering all phases, `examples/` directory (write_blob.py, read_blob.py, subscribe.py), PROTOCOL.md corrections (HKDF salt, KemPubkey payload format includes signing pubkey, session fingerprint computation), package release configuration.
-**Research flag:** None — Docker test infrastructure already established in the repo
+### Phase 3: Directory Write Path + Client Integration
+
+**Rationale:** Depends on Phase 2 (read path must exist for recipient resolution). Completes the full encrypt-write and read-decrypt cycle. Group management builds on directory read infrastructure.
+**Delivers:** User self-registration (`DirectoryManager.register()`); group CRUD (create, add member, remove member, list); `ChromatinClient.write_encrypted()` / `read_encrypted()`; `write_to_group()` helper; pub/sub cache invalidation.
+**Addresses:** `write_encrypted` / `read_encrypted` (table stakes), groups (differentiator), group management, self-registration.
+**Avoids:** Pitfall 8 (group membership races — snapshot semantics, accept over/under-encryption as correct, record group version in envelope), Pitfall 3 (content-addressing breaks for encrypted blobs — explicit documented design decision).
+
+### Phase 4: Documentation + Polish
+
+**Rationale:** Polish after core is working. Error handling edge cases, README encryption API section, tutorial updates, and PROTOCOL.md with HKDF label registry and envelope format spec.
+**Delivers:** README encryption section; tutorial updates; PROTOCOL.md envelope format + HKDF label registry; explicit error handling for malformed envelopes, not-a-recipient, stale keys.
 
 ### Phase Ordering Rationale
 
-- Foundation-first ordering is mandatory: AEAD framing failures produce opaque errors that look like bugs at any layer above; crypto correctness cannot be assumed and must be verified with test vectors before any protocol code is written.
-- Cross-language test vectors must be captured from the C++ test suite during Phase 2 and Phase 3 — adding them retroactively after discovering discrepancies is significantly more expensive.
-- Pub/sub is deferred to Phase 4 because it requires the background recv loop to distinguish notification messages from correlated responses; building this cleanly requires the request-response path to be stable first.
-- Sync wrapper is deferred until Phase 4 because it wraps the complete async API — it cannot be built incrementally.
-- All integration tests use Docker, not in-process test servers with shared ports (project feedback standard from v1.0.0).
+- Phase 1 before Phase 2 because `UserEntry` contains a KEM public key — Identity KEM extension and envelope format must be defined first.
+- Phase 2 read-only before Phase 3 write because self-registration requires correct format encode/decode proven before writing directory entries to live storage.
+- Groups (Phase 3) after directory read (Phase 2) because group resolution requires fetching member KEM pubkeys from the directory.
+- Documentation last (Phase 4) because the API surface must be stable before writing tutorials.
+- The encrypted blob format must be frozen in Phase 1 before any blobs are written. Retroactively changing the format requires migration tooling and a flag day.
 
 ### Research Flags
 
-Phases needing deeper research during planning: None. All implementation details are resolved by direct C++ source code analysis. The research files contain exact byte layouts, function signatures, HKDF parameters, and test vector strategies — no unknowns remain at the architecture level.
+Phases likely needing deeper research during planning:
+- **None.** The research is comprehensive and all design decisions are resolved. The PITFALLS.md covers every sharp edge with specific prevention strategies and code patterns. The ARCHITECTURE.md provides complete build order, component boundaries, and data flows.
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1 (Setup):** Dependency management and pyproject.toml are well-documented standard Python packaging.
-- **Phase 3 (Core ops):** All message payload formats documented in PROTOCOL.md + `db/wire/codec.cpp`.
-- **Phase 4 (Extended queries):** All 38 message types documented; patterns established in Phase 3.
-- **Phase 5 (Integration):** Docker test pattern already established in the repo.
+Phases with standard patterns (skip `/gsd:research-phase`):
+- **All four phases** — domain is well-documented, cryptographic patterns are established (KEM-DEM, HKDF domain separation, blob-as-record), and the existing SDK architecture provides clear extension points for every new component.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All dependencies verified on PyPI; version compatibility confirmed; PyNaCl HKDF gap confirmed by source tree inspection of PyNaCl bindings directory (no crypto_kdf.py); liboqs-python auto-download behavior documented |
-| Features | HIGH | All 38 client message types documented in PROTOCOL.md; prioritization based on established SDK patterns (redis-py, nats-py, boto3); dependency graph verified against C++ architecture |
-| Architecture | HIGH | Based on direct source analysis of relay + node C++ code: handshake.cpp, connection.cpp, framing.cpp, codec.cpp, relay_session.cpp, message_filter.cpp; wire format verified at byte level |
-| Pitfalls | HIGH | All critical pitfalls identified from direct source code; PROTOCOL.md discrepancy explicitly verified against handshake.cpp:21-28; endianness verified in framing.cpp (BE) and codec.cpp (LE signing input) |
+| Stack | HIGH | Zero new dependencies confirmed. All API usage verified against liboqs-python source and existing SDK tests. ML-KEM-1024 key sizes confirmed against FIPS 203. |
+| Features | HIGH | Envelope encryption pattern well-documented (age, CMS, AWS KMS). PQ-specific integration covered by IETF KEM drafts and existing SDK handshake code. |
+| Architecture | HIGH | All existing modules analyzed directly. Component boundaries are clear. New modules have no circular dependencies. Format design verified against existing `_codec.py` conventions. |
+| Pitfalls | HIGH | Pitfalls verified against FIPS 203, IETF ML-KEM security considerations, CMS-KEM spec (RFC 9629), and existing codebase. Phase-to-pitfall mapping complete. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **HKDF implementation choice:** STACK.md recommends stdlib hmac+hashlib for HKDF-SHA256. PITFALLS.md recommends pysodium for exact libsodium parity. Both produce RFC 5869 compliant output. Phase 1 should resolve this with a test vector comparison — if stdlib HKDF matches libsodium output for the empty-salt case (highly likely), use stdlib to avoid the pysodium dependency. If any edge case differs, use pysodium instead.
-
-- **PROTOCOL.md discrepancy:** The PQ handshake HKDF salt and session fingerprint computation differ between PROTOCOL.md and the C++ source. Phase 5 must correct PROTOCOL.md. All implementation phases must follow the C++ source (empty salt, direct SHA3-256 for fingerprint), not the documentation.
-
-- **FlatBuffer blob hash strategy:** The safe default is to always use server-returned WriteAck hashes and never compute blob_hash locally. If Phase 3 cross-language byte comparison succeeds (Python and C++ produce identical Blob FlatBuffer bytes), locally-computed hashes could be offered as an optimization. Treat local hash computation as a validated addition, not a starting assumption.
-
-- **liboqs runtime installation:** liboqs-python auto-downloads and compiles the C library on first import if not pre-installed, requiring CMake and a C compiler. Production deployments need a Docker image with liboqs pre-built. Document this clearly in Phase 5; consider providing a Dockerfile or referencing the existing project Dockerfile as a base.
+- **Wrap nonce for DEK wrapping:** ARCHITECTURE.md settled on zero nonce (safe because KEM shared secret is unique per encapsulation). PITFALLS.md Pitfall 5 suggests a separate wrap nonce field may be clearer. The Phase 1 plan should explicitly lock this decision and add a code comment explaining why zero nonce is safe in this context.
+- **liboqs internal key validation:** PITFALLS.md Pitfall 7 notes that FIPS 203 requires an Encapsulation Key Check, and it is unclear whether liboqs-python performs this check internally during `encap_secret()`. The Phase 1 plan should verify this against liboqs source and add an explicit size + structure check if liboqs does not handle it.
+- **Signature field in UserEntry:** FEATURES.md and PITFALLS.md both require that each published KEM public key be signed with the user's ML-DSA-87 identity. ARCHITECTURE.md's `UserEntry` format does not explicitly include this field. The Phase 2 plan must include the signature field in the user entry blob format specification.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- C++ source `db/net/handshake.cpp` — HKDF derivation (empty salt confirmed at lines 21-28), session fingerprint (direct SHA3-256), auth payload encoding (LE pubkey_size)
-- C++ source `db/net/connection.cpp` — nonce format (4 zero bytes + 8-byte BE counter), counter lifecycle, counter starts at 0/1 after PQ handshake
-- C++ source `db/net/framing.cpp` — frame length prefix (4-byte BE), AEAD frame structure
-- C++ source `db/wire/codec.cpp` — signing input construction (LE ttl/timestamp), FlatBuffer field creation order for Blob
-- C++ source `db/net/protocol.cpp` — TransportCodec FlatBuffer encoding with ForceDefaults(true)
-- C++ source `relay/core/relay_session.cpp`, `relay/core/message_filter.cpp` — relay PQ handshake responder behavior, blocked message types (21 blocked types)
-- `db/PROTOCOL.md` — wire format reference (HKDF salt section has confirmed discrepancy with implementation; all other formats verified correct)
-- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) — KeyEncapsulation, Signature API; encap_secret() returns (ciphertext, shared_secret)
-- [liboqs-python on PyPI](https://pypi.org/project/liboqs-python/) — version 0.14.1, Python >=3.9, auto-download C library behavior
-- [PyNaCl on PyPI](https://pypi.org/project/PyNaCl/) + [crypto_aead.py source](https://github.com/pyca/pynacl/blob/main/src/nacl/bindings/crypto_aead.py) — IETF ChaCha20-Poly1305 confirmed; HKDF absence confirmed by reviewing bindings directory
-- [flatbuffers on PyPI](https://pypi.org/project/flatbuffers/) + [FlatBuffers Python docs](https://flatbuffers.dev/languages/python/) — ForceDefaults, flatc --python usage
-- [Python hashlib docs](https://docs.python.org/3/library/hashlib.html) — SHA3-256 stdlib availability since Python 3.6
-- [Python hmac docs](https://docs.python.org/3/library/hmac.html) — HMAC-SHA256 for RFC 5869 HKDF implementation
-- [Python asyncio streams docs](https://docs.python.org/3/library/asyncio-stream.html) — readexactly(), StreamReader/Writer
+- liboqs-python GitHub / oqs.py source — `KeyEncapsulation` API, key sizes, `encap_secret()` / `decap_secret()` / `generate_keypair()` / `export_secret_key()` methods
+- OQS ML-KEM docs (openquantumsafe.org) — ML-KEM-1024 parameters: pk=1568, sk=3168, ct=1568, ss=32, NIST Level 5
+- NIST FIPS 203 — ML-KEM-1024 Encapsulation Key Check, algorithm specification
+- age encryption specification (C2SP) — multi-recipient stanzas, KEM-DEM pattern, STREAM payload construction
+- IETF RFC 5869 HKDF — key derivation for KEM shared secrets
+- Existing SDK source (sdk/python/chromatindb/, all 12 modules) — extension point analysis
+- Existing C++ source (db/storage/storage.cpp, db/crypto/master_key.h) — DARE format, HKDF label registry
 
 ### Secondary (MEDIUM confidence)
-- [Azure SDK Python Design Guidelines](https://azure.github.io/azure-sdk/python_design.html) — sync/async dual client pattern, exception hierarchy conventions
-- [redis-py asyncio docs](https://redis.readthedocs.io/en/stable/examples/asyncio_examples.html) — context manager, pub/sub iteration patterns
-- [nats-py client](https://github.com/nats-io/nats.py) — async-first design, reconnect with backoff, callback events
-- [FlatBuffers deterministic encoding discussion](https://groups.google.com/g/flatbuffers/c/v2RkM3KB1Qw) — encoding not guaranteed deterministic across language implementations
-- [libsodium HKDF docs](https://doc.libsodium.org/key_derivation/hkdf) — HKDF-SHA256 added in libsodium 1.0.19; same RFC 5869 algorithm
+- IETF draft-sfluhrer-cfrg-ml-kem-security-considerations-01 — "ML-KEM is not a drop-in replacement for RSA-KEM"
+- IETF draft-ietf-lamps-cms-kyber-10 / RFC 9629 — CMS KEMRecipientInfo with HKDF + AEAD-Wrap pattern
+- IETF draft-ietf-jose-pqc-kem — KEM envelope encryption design patterns
+- Google Cloud envelope encryption docs — DEK/KEK two-layer pattern
+- Keybase KBFS crypto spec / teams design — group key distribution and re-encryption tradeoffs
+- Neil Madden blog (multi-recipient KEM-DEM, Tag-KEMs) — KEM-DEM architecture analysis
+- NIST SP 800-227 — Recommendations for Key-Encapsulation Mechanisms
+
+### Tertiary (LOW confidence)
+- Azure Blob Storage client-side encryption migration — format versioning migration pain (illustrative)
+- Secure Deduplication of Encrypted Data (ePrint 2017/1089) — convergent encryption weaknesses
 
 ---
-*Research completed: 2026-03-29*
+*Research completed: 2026-03-31*
 *Ready for roadmap: yes*
