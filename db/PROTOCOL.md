@@ -66,7 +66,7 @@ Initiator                              Responder
     |                                      |
     |   Both derive session keys via HKDF-SHA256:
     |     ikm    = shared_secret (ML-KEM output)
-    |     salt   = SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)
+    |     salt   = (empty)
     |     info1  = "chromatin-init-to-resp-v1"  -->  initiator-to-responder key (32 bytes)
     |     info2  = "chromatin-resp-to-init-v1"  -->  responder-to-initiator key (32 bytes)
     |     info3  = "chromatin-session-fp-v1"    -->  session fingerprint (32 bytes)
@@ -88,7 +88,7 @@ Initiator                              Responder
 - **Responder-to-initiator key** (32 bytes) -- the reverse
 - **Session fingerprint** (32 bytes) -- signed by both sides for mutual authentication
 
-The HKDF salt is `SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)`. At this point, the initiator does not yet know the responder's signing pubkey, so the responder's portion is initially unknown and filled in after the auth exchange.
+The HKDF salt is empty (zero-length). The shared secret from ML-KEM-1024 provides sufficient entropy as the sole IKM input.
 
 **Message 3 -- AuthSignature (encrypted):** The initiator sends its ML-DSA-87 signing public key (2592 bytes) and a signature over the session fingerprint. This is the first AEAD-encrypted frame, using the initiator-to-responder key with nonce counter 0.
 
