@@ -10,10 +10,18 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current State
+## Current Milestone: v1.7.0 Client-Side Encryption
 
-**Latest shipped:** v1.6.0 Python SDK (2026-03-31)
-**Next milestone:** Not yet planned — run `/gsd:new-milestone` to start
+**Goal:** PQ envelope encryption in the Python SDK with pubkey directory, user/group management, and simple helpers — enabling zero-knowledge storage where nodes never see plaintext.
+
+**Target features:**
+- Org directory namespace (owned by admin, users write via delegation)
+- Self-registration (generate keypair, publish pubkey to directory)
+- User discovery (list users, fetch pubkeys from directory)
+- Groups (named member sets in directory, SDK resolves on encrypt)
+- PQ envelope encryption (ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping)
+- Encrypted write/read helpers (simple API on ChromatinClient)
+- Revocation via existing primitives (tombstone pubkey + ACL removal)
 
 ## Previous Milestone: v1.6.0 Python SDK (SHIPPED 2026-03-31)
 
@@ -158,11 +166,22 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Python SDK: ChaCha20-Poly1305 encrypted transport with background reader and request dispatch — v1.6.0 Phase 71
 - ✓ Python SDK: ChromatinClient async context manager (connect, ping, goodbye) — v1.6.0 Phase 71
 
+### Active
+
+- [ ] Org directory namespace with admin ownership and user delegation
+- [ ] Self-registration — publish pubkey to directory
+- [ ] User discovery — list users, fetch pubkeys from directory
+- [ ] Groups — named member sets stored in directory namespace
+- [ ] PQ envelope encryption — ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping
+- [ ] Encrypted write/read helpers on ChromatinClient
+- [ ] Revocation via tombstone + ACL (existing primitives)
+
 ### Future
 
 - CLI tool for admin operations (quota check, list blobs, etc.)
 - C/C++/Rust/JS SDKs under sdk/ subdirectories
 - Performance benchmarks for Relay layer
+- Re-encryption on revocation (if compliance use case demands it)
 
 ## Context
 
@@ -304,4 +323,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-31 after v1.6.0 milestone complete*
+*Last updated: 2026-03-31 after v1.7.0 milestone started*
