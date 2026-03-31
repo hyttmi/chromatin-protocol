@@ -66,7 +66,7 @@ Initiator                              Responder
     |                                      |
     |   Both derive session keys via HKDF-SHA256:
     |     ikm    = shared_secret (ML-KEM output)
-    |     salt   = SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)
+    |     salt   = (empty)
     |     info1  = "chromatin-init-to-resp-v1"  -->  initiator-to-responder key (32 bytes)
     |     info2  = "chromatin-resp-to-init-v1"  -->  responder-to-initiator key (32 bytes)
     |     info3  = "chromatin-session-fp-v1"    -->  session fingerprint (32 bytes)
@@ -88,7 +88,7 @@ Initiator                              Responder
 - **Responder-to-initiator key** (32 bytes) -- the reverse
 - **Session fingerprint** (32 bytes) -- signed by both sides for mutual authentication
 
-The HKDF salt is `SHA3-256(initiator_signing_pubkey || responder_signing_pubkey)`. At this point, the initiator does not yet know the responder's signing pubkey, so the responder's portion is initially unknown and filled in after the auth exchange.
+The HKDF salt is empty (zero-length). The shared secret from ML-KEM-1024 provides sufficient entropy as the sole IKM input.
 
 **Message 3 -- AuthSignature (encrypted):** The initiator sends its ML-DSA-87 signing public key (2592 bytes) and a signature over the session fingerprint. This is the first AEAD-encrypted frame, using the initiator-to-responder key with nonce counter 0.
 
@@ -825,3 +825,35 @@ Validation: `start_timestamp > end_timestamp` triggers a strike.
 | 5+ | N*48 | entries | Per-entry: [blob_hash:32][seq_num:8 big-endian][timestamp:8 big-endian] |
 
 Implementation scans the namespace's sequence map (up to 10,000 entries) and filters by timestamp range. Returns blob references only (not full blob data). Clients use ReadRequest or BatchReadRequest to fetch the actual blob data.
+
+## SDK Client Notes
+
+Implementation details for SDK developers connecting to chromatindb via relay.
+
+### AEAD Nonce Counters
+
+Post-handshake AEAD nonce counters start at 1 in both directions, not 0. Nonce 0 is consumed by the AuthSignature messages (Message 3 and Message 4) during the PQ handshake. Each direction maintains an independent counter.
+
+### Ping/Pong Behavior
+
+The C++ relay sends Pong responses with `request_id = 0`, regardless of the request_id sent in the Ping. SDK implementations should use a dedicated send path for Ping that does not rely on request_id correlation. A FIFO pending queue for Pong responses works well.
+
+### Wire Format Endianness
+
+The protocol uses mixed endianness:
+- **Big-endian:** Frame length prefix (4 bytes), most wire format fields
+- **Little-endian:** Auth payload `pubkey_size` field (4 bytes), canonical signing input fields `ttl` (4 bytes) and `timestamp` (8 bytes)
+
+SDK implementations must encode/decode each field with the correct byte order.
+
+### Exception Hierarchy
+
+The Python SDK defines `chromatindb.exceptions.ConnectionError` which inherits from `ProtocolError`, not from Python's builtin `ConnectionError`. This is intentional -- SDK connection errors are protocol-level events, not OS-level socket errors. Code that catches `builtins.ConnectionError` will not catch SDK connection timeouts.
+
+### FlatBuffers Determinism
+
+FlatBuffers serialization is not deterministic across languages. The same logical message may produce different bytes in Python vs C++. Always use the server-returned `blob_hash` (from WriteAck) rather than computing it client-side from the serialized FlatBuffer.
+
+### ML-DSA-87 Signature Non-determinism
+
+ML-DSA-87 signatures are non-deterministic -- signing the same data twice produces different signatures. Since the FlatBuffer blob includes the signature, this means writing identical data produces a different `blob_hash` each time. SDK tests should verify individual fields (data, ttl, timestamp) rather than comparing serialized bytes.

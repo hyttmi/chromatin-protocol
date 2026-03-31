@@ -226,7 +226,7 @@ Plans:
 **Plans:** 1/2 plans executed
 Plans:
 - [x] 74-01-PLAN.md — SDK README, pyproject.toml metadata, getting started tutorial
-- [ ] 74-02-PLAN.md — PROTOCOL.md HKDF salt fix and SDK Client Notes section
+- [x] 74-02-PLAN.md — PROTOCOL.md HKDF salt fix and SDK Client Notes section
 
 ## Progress
 

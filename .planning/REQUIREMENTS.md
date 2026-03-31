@@ -53,7 +53,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 
 ### Documentation
 
-- [ ] **DOCS-01**: README and PROTOCOL.md updated with SDK section and HKDF discrepancy fixes
+- [x] **DOCS-01**: README and PROTOCOL.md updated with SDK section and HKDF discrepancy fixes
 
 ## Future Requirements
 
@@ -111,7 +111,7 @@ Requirements for Python SDK milestone. Each maps to roadmap phases.
 | PKG-01 | Phase 70 | Complete |
 | PKG-02 | Phase 74 | Complete |
 | PKG-03 | Phase 70 | Complete |
-| DOCS-01 | Phase 74 | Pending |
+| DOCS-01 | Phase 74 | Complete |
 
 **Coverage:**
 - v1.6.0 requirements: 30 total

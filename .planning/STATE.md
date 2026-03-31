@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.6.0
 milestone_name: Python SDK
 status: executing
-stopped_at: Completed 74-01-PLAN.md
+stopped_at: Completed 74-02-PLAN.md
 last_updated: "2026-03-31T14:02:40.647Z"
 last_activity: 2026-03-30
 progress:
@@ -57,6 +57,7 @@ Progress: [##........] 26%
 | Phase 73 P02 | 6min | 2 tasks | 4 files |
 | Phase 73 P03 | 3min | 2 tasks | 1 files |
 | Phase 74 P01 | 3min | 2 tasks | 4 files |
+| Phase 74 P02 | 1min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,8 @@ Progress: [##........] 26%
 - [Phase 73]: NamespaceList blob_count >= 0 for other namespaces (deleted blobs leave 0-count entries on live node)
 - [Phase 74]: README.md in sdk/python/ doubles as PyPI long_description (readme field in pyproject.toml)
 - [Phase 74]: API overview split into four tables: Data, Query, Pub/Sub, Utility
+- [Phase 74]: HKDF empty salt documented as matching C++ implementation -- SHA3-256(pubkeys) description was never implemented
+- [Phase 74]: SDK Client Notes section in PROTOCOL.md documents 6 cross-language protocol gotchas for future SDK developers
 
 ### Pending Todos
 
@@ -102,5 +105,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-31T14:02:40.643Z
-Stopped at: Completed 74-01-PLAN.md
+Stopped at: Completed 74-02-PLAN.md
 Resume file: None
