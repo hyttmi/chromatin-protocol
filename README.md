@@ -8,6 +8,8 @@ chromatindb is a standalone daemon that stores cryptographically signed blobs or
 
 See [db/README.md](db/README.md) for full documentation including build instructions, configuration reference, protocol overview, and deployment scenarios.
 
+See [Python SDK](sdk/python/README.md) for the pip-installable client library.
+
 ## License
 
 MIT
