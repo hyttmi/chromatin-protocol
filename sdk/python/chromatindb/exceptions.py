@@ -6,6 +6,8 @@ Hierarchy matches C++ error conditions:
   +-- CryptoError
   |   +-- SignatureError
   |   +-- DecryptionError
+  |   +-- NotARecipientError
+  |   +-- MalformedEnvelopeError
   |   +-- KeyDerivationError
   +-- IdentityError
   |   +-- KeyFileError
@@ -32,6 +34,14 @@ class SignatureError(CryptoError):
 
 class DecryptionError(CryptoError):
     """AEAD decryption or authentication failed."""
+
+
+class NotARecipientError(CryptoError):
+    """Identity not found in envelope recipient list."""
+
+
+class MalformedEnvelopeError(CryptoError):
+    """Envelope has invalid magic, version, or is truncated."""
 
 
 class KeyDerivationError(CryptoError):
