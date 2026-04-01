@@ -2,6 +2,7 @@
 
 __version__ = "0.1.0"
 
+from chromatindb._envelope import envelope_decrypt, envelope_encrypt, envelope_parse
 from chromatindb._hkdf import hkdf_derive, hkdf_expand, hkdf_extract
 from chromatindb.client import ChromatinClient
 from chromatindb.types import (
@@ -109,6 +110,9 @@ __all__ = [
     "build_signing_input",
     "decode_transport_message",
     "encode_transport_message",
+    "envelope_decrypt",
+    "envelope_encrypt",
+    "envelope_parse",
     "hkdf_derive",
     "hkdf_expand",
     "hkdf_extract",
