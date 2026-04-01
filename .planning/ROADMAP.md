@@ -172,7 +172,11 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
   3. A recipient can decrypt an envelope by locating their stanza (via KEM pubkey hash), decapsulating with their secret key, and recovering the original plaintext
   4. An envelope encrypted for recipients A and B cannot be decrypted by recipient C (non-recipients are rejected cleanly)
   5. The envelope binary format includes version byte, cipher suite byte, and authenticates the header as AEAD associated data (preventing stanza substitution)
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 75-01-PLAN.md -- Identity extension with ML-KEM-1024 keypair + exceptions
+- [ ] 75-02-PLAN.md -- Envelope encrypt/decrypt/parse + tests + test vectors
 
 ### Phase 76: Directory & User Discovery
 **Goal**: Users can publish their encryption pubkeys to a shared directory and discover other users' pubkeys for encryption
@@ -212,7 +216,7 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Identity Extension & Envelope Crypto | 0/? | Not started | - |
+| 75. Identity Extension & Envelope Crypto | 0/2 | Planning complete | - |
 | 76. Directory & User Discovery | 0/? | Not started | - |
 | 77. Groups & Encrypted Client Helpers | 0/? | Not started | - |
 | 78. Documentation & Polish | 0/? | Not started | - |
