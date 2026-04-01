@@ -26,7 +26,7 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 
 - [ ] **DIR-01**: Admin can create an org directory backed by a namespace they own
 - [ ] **DIR-02**: User can self-register by publishing a signed UserEntry blob to the directory via delegation
-- [ ] **DIR-03**: UserEntry contains signing pubkey, KEM pubkey, display name, and ML-DSA-87 signature over KEM pubkey
+- [x] **DIR-03**: UserEntry contains signing pubkey, KEM pubkey, display name, and ML-DSA-87 signature over KEM pubkey
 - [ ] **DIR-04**: User can list all registered users in a directory
 - [ ] **DIR-05**: User can fetch another user's KEM pubkey by display name or pubkey hash
 - [ ] **DIR-06**: SDK caches directory entries in memory and invalidates via pub/sub notifications
@@ -98,7 +98,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENV-06 | Phase 75 | Complete |
 | DIR-01 | Phase 76 | Pending |
 | DIR-02 | Phase 76 | Pending |
-| DIR-03 | Phase 76 | Pending |
+| DIR-03 | Phase 76 | Complete |
 | DIR-04 | Phase 76 | Pending |
 | DIR-05 | Phase 76 | Pending |
 | DIR-06 | Phase 76 | Pending |

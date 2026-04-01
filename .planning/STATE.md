@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7.0
 milestone_name: Client-Side Encryption
 status: executing
-stopped_at: Phase 76 context gathered
-last_updated: "2026-04-01T16:05:21.824Z"
+stopped_at: Completed 76-01-PLAN.md
+last_updated: "2026-04-01T16:28:32.794Z"
 last_activity: 2026-04-01
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 12
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-01)
 ## Current Position
 
 Phase: 76 of 78 (directory & user discovery)
-Plan: Not started
+Plan: 2 of 2
 Status: Ready to execute
 Last activity: 2026-04-01
 
@@ -53,6 +53,7 @@ Progress: [█░░░░░░░░░] 12%
 
 *Updated after each plan completion*
 | Phase 75 P02 | 4min | 2 tasks | 5 files |
+| Phase 76 P01 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ Recent decisions affecting current work:
 - [Phase 75]: Two-pass AD construction for envelope KEM-then-Wrap: Pass 1 encapsulates, Pass 2 wraps DEK with AD from partial header + all pk_hash+kem_ct pairs
 - [Phase 75]: Zero nonce safe for DEK wrapping because KEM shared secret is unique per encapsulation, so HKDF-derived KEK never reused
 - [Phase 75]: Full header (fixed + all stanzas) as AEAD AD for data encryption prevents stanza substitution attacks
+- [Phase 76]: UserEntry kem_sig is remainder of blob (no length prefix) -- variable-length ML-DSA-87 sigs
 
 ### Pending Todos
 
@@ -85,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T16:05:21.821Z
-Stopped at: Phase 76 context gathered
-Resume file: .planning/phases/76-directory-user-discovery/76-CONTEXT.md
+Last session: 2026-04-01T16:28:32.790Z
+Stopped at: Completed 76-01-PLAN.md
+Resume file: None
