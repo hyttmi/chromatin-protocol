@@ -156,7 +156,7 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
 **Milestone Goal:** PQ envelope encryption in the Python SDK with pubkey directory, user/group management, and simple helpers -- enabling zero-knowledge storage where nodes never see plaintext.
 
 - [x] **Phase 75: Identity Extension & Envelope Crypto** - ML-KEM-1024 keypair on Identity + PQ envelope encrypt/decrypt with versioned binary format (completed 2026-04-01)
-- [ ] **Phase 76: Directory & User Discovery** - Admin-owned directory namespace with self-registration, user listing, pubkey fetch, and cached lookups
+- [x] **Phase 76: Directory & User Discovery** - Admin-owned directory namespace with self-registration, user listing, pubkey fetch, and cached lookups (completed 2026-04-01)
 - [ ] **Phase 77: Groups & Encrypted Client Helpers** - Named group management + write_encrypted/read_encrypted/write_to_group on ChromatinClient
 - [ ] **Phase 78: Documentation & Polish** - PROTOCOL.md envelope spec, SDK README encryption section, tutorial with encryption workflow
 
@@ -187,11 +187,11 @@ Plans:
   2. User can self-register by publishing a UserEntry blob (signing pubkey + KEM pubkey + display name + ML-DSA-87 signature over KEM pubkey) to the directory
   3. User can list all registered users in a directory and fetch any user's KEM pubkey by display name or pubkey hash
   4. SDK caches directory entries in memory and automatically invalidates the cache when pub/sub notifications arrive for the directory namespace
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 76-01-PLAN.md -- UserEntry codec, DirectoryEntry dataclass, DirectoryError exception, and unit tests
-- [ ] 76-02-PLAN.md -- Directory class with registration, listing, caching, pub/sub invalidation, and unit tests
+- [x] 76-02-PLAN.md -- Directory class with registration, listing, caching, pub/sub invalidation, and unit tests
 
 ### Phase 77: Groups & Encrypted Client Helpers
 **Goal**: Users can manage named groups and encrypt/decrypt blobs with simple one-liner helpers on ChromatinClient
@@ -222,6 +222,6 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
-| 76. Directory & User Discovery | 1/2 | In Progress|  |
+| 76. Directory & User Discovery | 2/2 | Complete   | 2026-04-01 |
 | 77. Groups & Encrypted Client Helpers | 0/? | Not started | - |
 | 78. Documentation & Polish | 0/? | Not started | - |
