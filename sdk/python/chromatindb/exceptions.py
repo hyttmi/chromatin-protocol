@@ -15,8 +15,9 @@ Hierarchy matches C++ error conditions:
   +-- WireError
   |   +-- DecodeError
   +-- ProtocolError
-      +-- HandshakeError
-      +-- ConnectionError
+  |   +-- HandshakeError
+  |   +-- ConnectionError
+  +-- DirectoryError
 """
 
 
@@ -83,3 +84,7 @@ class ConnectionError(ProtocolError):
     the builtin ConnectionError because SDK code uses fully-qualified
     chromatindb.exceptions.ConnectionError or imports explicitly.
     """
+
+
+class DirectoryError(ChromatinError):
+    """Directory operation failed."""

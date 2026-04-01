@@ -2,6 +2,13 @@
 
 __version__ = "0.1.0"
 
+from chromatindb._directory import (
+    DirectoryEntry,
+    decode_user_entry,
+    encode_user_entry,
+    make_delegation_data,
+    verify_user_entry,
+)
 from chromatindb._envelope import envelope_decrypt, envelope_encrypt, envelope_parse
 from chromatindb._hkdf import hkdf_derive, hkdf_expand, hkdf_extract
 from chromatindb.client import ChromatinClient
@@ -42,6 +49,7 @@ from chromatindb.exceptions import (
     CryptoError,
     DecodeError,
     DecryptionError,
+    DirectoryError,
     HandshakeError,
     IdentityError,
     KeyDerivationError,
@@ -75,6 +83,8 @@ __all__ = [
     "DelegationList",
     "DeleteResult",
     "DecryptionError",
+    "DirectoryEntry",
+    "DirectoryError",
     "HandshakeError",
     "Identity",
     "IdentityError",
@@ -109,12 +119,16 @@ __all__ = [
     "aead_encrypt",
     "build_signing_input",
     "decode_transport_message",
+    "decode_user_entry",
     "encode_transport_message",
+    "encode_user_entry",
     "envelope_decrypt",
     "envelope_encrypt",
     "envelope_parse",
     "hkdf_derive",
     "hkdf_expand",
     "hkdf_extract",
+    "make_delegation_data",
     "sha3_256",
+    "verify_user_entry",
 ]
