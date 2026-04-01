@@ -172,7 +172,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - [ ] Self-registration — publish pubkey to directory
 - [ ] User discovery — list users, fetch pubkeys from directory
 - [ ] Groups — named member sets stored in directory namespace
-- [ ] PQ envelope encryption — ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping
+- [x] PQ envelope encryption — ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping — Validated in Phase 75
 - [ ] Encrypted write/read helpers on ChromatinClient
 - [ ] Revocation via tombstone + ACL (existing primitives)
 
@@ -185,9 +185,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.6.0 with ~29,600 LOC C++20 + Python SDK under sdk/python/. 567 unit tests (C++), 366 tests (Python SDK), 49 Docker integration test scripts.
-Built across 29 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d).
-16 milestones, 74 phases, 151 plans, 270 requirements total.
+Shipped v1.6.0 with ~29,600 LOC C++20 + Python SDK under sdk/python/. 567 unit tests (C++), 411 tests (Python SDK), 49 Docker integration test scripts.
+Built across 30 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (in progress).
+16 milestones, 75 phases, 153 plans, 270 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
@@ -323,4 +323,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-31 after v1.7.0 milestone started*
+*Last updated: 2026-04-01 after Phase 75 (identity extension + envelope crypto) complete*
