@@ -3,6 +3,7 @@
 __version__ = "0.1.0"
 
 from chromatindb._directory import (
+    Directory,
     DirectoryEntry,
     decode_user_entry,
     encode_user_entry,
@@ -83,6 +84,7 @@ __all__ = [
     "DelegationList",
     "DeleteResult",
     "DecryptionError",
+    "Directory",
     "DirectoryEntry",
     "DirectoryError",
     "HandshakeError",
