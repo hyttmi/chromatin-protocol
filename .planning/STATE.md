@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.7.0
 milestone_name: Client-Side Encryption
 status: executing
-stopped_at: Completed 75-01-PLAN.md
-last_updated: "2026-04-01T15:45:45Z"
-last_activity: 2026-04-01 -- Plan 75-01 executed (Identity KEM extension + envelope exceptions)
+stopped_at: Completed 75-02-PLAN.md
+last_updated: "2026-04-01T15:55:51.134Z"
+last_activity: 2026-04-01
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
   percent: 12
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-31)
 ## Current Position
 
 Phase: 75 of 78 (Identity Extension & Envelope Crypto)
-Plan: 1 of 2 complete in current phase
-Status: Executing Phase 75
-Last activity: 2026-04-01 -- Plan 75-01 executed (Identity KEM extension + envelope exceptions)
+Plan: 2 of 2 complete in current phase
+Status: Ready to execute
+Last activity: 2026-04-01
 
 Progress: [█░░░░░░░░░] 12%
 
@@ -52,6 +52,7 @@ Progress: [█░░░░░░░░░] 12%
 - Trend: Starting
 
 *Updated after each plan completion*
+| Phase 75 P02 | 4min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Recent decisions affecting current work:
 - Identity.generate() always produces both ML-DSA-87 + ML-KEM-1024 keypairs (75-01)
 - save() requires KEM keypair, from_public_key() unchanged for backward compat (75-01)
 - KEM secret key not exposed as property (only internal _kem for decap) (75-01)
+- [Phase 75]: Two-pass AD construction for envelope KEM-then-Wrap: Pass 1 encapsulates, Pass 2 wraps DEK with AD from partial header + all pk_hash+kem_ct pairs
+- [Phase 75]: Zero nonce safe for DEK wrapping because KEM shared secret is unique per encapsulation, so HKDF-derived KEK never reused
+- [Phase 75]: Full header (fixed + all stanzas) as AEAD AD for data encryption prevents stanza substitution attacks
 
 ### Pending Todos
 
@@ -81,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T15:45:45Z
-Stopped at: Completed 75-01-PLAN.md
-Resume file: .planning/phases/75-identity-extension-envelope-crypto/75-01-SUMMARY.md
+Last session: 2026-04-01T15:55:51.130Z
+Stopped at: Completed 75-02-PLAN.md
+Resume file: None

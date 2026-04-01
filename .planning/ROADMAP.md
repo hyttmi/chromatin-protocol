@@ -155,7 +155,7 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
 
 **Milestone Goal:** PQ envelope encryption in the Python SDK with pubkey directory, user/group management, and simple helpers -- enabling zero-knowledge storage where nodes never see plaintext.
 
-- [ ] **Phase 75: Identity Extension & Envelope Crypto** - ML-KEM-1024 keypair on Identity + PQ envelope encrypt/decrypt with versioned binary format
+- [x] **Phase 75: Identity Extension & Envelope Crypto** - ML-KEM-1024 keypair on Identity + PQ envelope encrypt/decrypt with versioned binary format (completed 2026-04-01)
 - [ ] **Phase 76: Directory & User Discovery** - Admin-owned directory namespace with self-registration, user listing, pubkey fetch, and cached lookups
 - [ ] **Phase 77: Groups & Encrypted Client Helpers** - Named group management + write_encrypted/read_encrypted/write_to_group on ChromatinClient
 - [ ] **Phase 78: Documentation & Polish** - PROTOCOL.md envelope spec, SDK README encryption section, tutorial with encryption workflow
@@ -172,11 +172,11 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
   3. A recipient can decrypt an envelope by locating their stanza (via KEM pubkey hash), decapsulating with their secret key, and recovering the original plaintext
   4. An envelope encrypted for recipients A and B cannot be decrypted by recipient C (non-recipients are rejected cleanly)
   5. The envelope binary format includes version byte, cipher suite byte, and authenticates the header as AEAD associated data (preventing stanza substitution)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 75-01-PLAN.md -- Identity extension with ML-KEM-1024 keypair + exceptions
-- [ ] 75-02-PLAN.md -- Envelope encrypt/decrypt/parse + tests + test vectors
+- [x] 75-02-PLAN.md -- Envelope encrypt/decrypt/parse + tests + test vectors
 
 ### Phase 76: Directory & User Discovery
 **Goal**: Users can publish their encryption pubkeys to a shared directory and discover other users' pubkeys for encryption
@@ -216,7 +216,7 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Identity Extension & Envelope Crypto | 1/2 | In Progress|  |
+| 75. Identity Extension & Envelope Crypto | 2/2 | Complete   | 2026-04-01 |
 | 76. Directory & User Discovery | 0/? | Not started | - |
 | 77. Groups & Encrypted Client Helpers | 0/? | Not started | - |
 | 78. Documentation & Polish | 0/? | Not started | - |

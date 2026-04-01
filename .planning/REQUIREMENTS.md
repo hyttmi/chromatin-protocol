@@ -15,12 +15,12 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 
 ### Envelope Encryption
 
-- [ ] **ENV-01**: SDK encrypts blob data with a random per-blob DEK using ChaCha20-Poly1305
-- [ ] **ENV-02**: SDK wraps DEK per-recipient via ML-KEM-1024 encapsulation + HKDF-derived KEK
-- [ ] **ENV-03**: Encrypted blob uses versioned binary format (magic, version, suite, recipient stanzas, AEAD ciphertext)
-- [ ] **ENV-04**: Envelope header is authenticated as AEAD associated data (prevents stanza substitution)
-- [ ] **ENV-05**: Recipient can decrypt by finding their stanza (via KEM pubkey hash), decapsulating, and unwrapping DEK
-- [ ] **ENV-06**: HKDF uses unique domain label "chromatindb-envelope-kek-v1" for key wrapping derivation
+- [x] **ENV-01**: SDK encrypts blob data with a random per-blob DEK using ChaCha20-Poly1305
+- [x] **ENV-02**: SDK wraps DEK per-recipient via ML-KEM-1024 encapsulation + HKDF-derived KEK
+- [x] **ENV-03**: Encrypted blob uses versioned binary format (magic, version, suite, recipient stanzas, AEAD ciphertext)
+- [x] **ENV-04**: Envelope header is authenticated as AEAD associated data (prevents stanza substitution)
+- [x] **ENV-05**: Recipient can decrypt by finding their stanza (via KEM pubkey hash), decapsulating, and unwrapping DEK
+- [x] **ENV-06**: HKDF uses unique domain label "chromatindb-envelope-kek-v1" for key wrapping derivation
 
 ### Directory
 
@@ -90,12 +90,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IDENT-01 | Phase 75 | Complete |
 | IDENT-02 | Phase 75 | Complete |
 | IDENT-03 | Phase 75 | Complete |
-| ENV-01 | Phase 75 | Pending |
-| ENV-02 | Phase 75 | Pending |
-| ENV-03 | Phase 75 | Pending |
-| ENV-04 | Phase 75 | Pending |
-| ENV-05 | Phase 75 | Pending |
-| ENV-06 | Phase 75 | Pending |
+| ENV-01 | Phase 75 | Complete |
+| ENV-02 | Phase 75 | Complete |
+| ENV-03 | Phase 75 | Complete |
+| ENV-04 | Phase 75 | Complete |
+| ENV-05 | Phase 75 | Complete |
+| ENV-06 | Phase 75 | Complete |
 | DIR-01 | Phase 76 | Pending |
 | DIR-02 | Phase 76 | Pending |
 | DIR-03 | Phase 76 | Pending |
