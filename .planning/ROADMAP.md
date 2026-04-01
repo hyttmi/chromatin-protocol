@@ -216,7 +216,7 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 75. Identity Extension & Envelope Crypto | 2/2 | Complete   | 2026-04-01 |
+| 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
 | 76. Directory & User Discovery | 0/? | Not started | - |
 | 77. Groups & Encrypted Client Helpers | 0/? | Not started | - |
 | 78. Documentation & Polish | 0/? | Not started | - |
