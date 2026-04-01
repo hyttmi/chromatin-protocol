@@ -187,6 +187,11 @@ Plans:
   2. User can self-register by publishing a UserEntry blob (signing pubkey + KEM pubkey + display name + ML-DSA-87 signature over KEM pubkey) to the directory
   3. User can list all registered users in a directory and fetch any user's KEM pubkey by display name or pubkey hash
   4. SDK caches directory entries in memory and automatically invalidates the cache when pub/sub notifications arrive for the directory namespace
+**Plans:** 2 plans
+
+Plans:
+- [ ] 76-01-PLAN.md -- UserEntry codec, DirectoryEntry dataclass, DirectoryError exception, and unit tests
+- [ ] 76-02-PLAN.md -- Directory class with registration, listing, caching, pub/sub invalidation, and unit tests
 
 ### Phase 77: Groups & Encrypted Client Helpers
 **Goal**: Users can manage named groups and encrypt/decrypt blobs with simple one-liner helpers on ChromatinClient
@@ -217,6 +222,6 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
-| 76. Directory & User Discovery | 0/? | Not started | - |
+| 76. Directory & User Discovery | 0/2 | Not started | - |
 | 77. Groups & Encrypted Client Helpers | 0/? | Not started | - |
 | 78. Documentation & Polish | 0/? | Not started | - |
