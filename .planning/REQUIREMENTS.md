@@ -9,9 +9,9 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 
 ### Identity
 
-- [ ] **IDENT-01**: User can generate an identity with both ML-DSA-87 signing and ML-KEM-1024 encryption keypairs
-- [ ] **IDENT-02**: User can save and load identity with .key/.pub (signing) and .kem/.kpub (encryption) files
-- [ ] **IDENT-03**: Identity exposes KEM public key for directory publishing and encryption operations
+- [x] **IDENT-01**: User can generate an identity with both ML-DSA-87 signing and ML-KEM-1024 encryption keypairs
+- [x] **IDENT-02**: User can save and load identity with .key/.pub (signing) and .kem/.kpub (encryption) files
+- [x] **IDENT-03**: Identity exposes KEM public key for directory publishing and encryption operations
 
 ### Envelope Encryption
 
@@ -87,9 +87,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IDENT-01 | Phase 75 | Pending |
-| IDENT-02 | Phase 75 | Pending |
-| IDENT-03 | Phase 75 | Pending |
+| IDENT-01 | Phase 75 | Complete |
+| IDENT-02 | Phase 75 | Complete |
+| IDENT-03 | Phase 75 | Complete |
 | ENV-01 | Phase 75 | Pending |
 | ENV-02 | Phase 75 | Pending |
 | ENV-03 | Phase 75 | Pending |
