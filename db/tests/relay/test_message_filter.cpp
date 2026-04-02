@@ -53,7 +53,7 @@ TEST_CASE("is_client_allowed permits client operation types", "[message_filter]"
 }
 
 TEST_CASE("is_client_allowed blocks peer operation types", "[message_filter]") {
-    // 14 peer-only types
+    // 17 peer-only types (14 original + BlobNotify + BlobFetch + BlobFetchResponse)
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncRequest));
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncAccept));
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncComplete));
@@ -70,6 +70,9 @@ TEST_CASE("is_client_allowed blocks peer operation types", "[message_filter]") {
     CHECK_FALSE(is_client_allowed(TransportMsgType_TrustedHello));
     // Push notifications (peer-internal)
     CHECK_FALSE(is_client_allowed(TransportMsgType_BlobNotify));
+    // Targeted blob fetch (peer-internal)
+    CHECK_FALSE(is_client_allowed(TransportMsgType_BlobFetch));
+    CHECK_FALSE(is_client_allowed(TransportMsgType_BlobFetchResponse));
 }
 
 TEST_CASE("is_client_allowed blocks handshake and internal types", "[message_filter]") {

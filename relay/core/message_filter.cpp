@@ -35,6 +35,9 @@ bool is_client_allowed(TransportMsgType type) {
         case TransportMsgType_QuotaExceeded:
         // Push notifications (peer-internal)
         case TransportMsgType_BlobNotify:
+        // Targeted blob fetch (peer-internal)
+        case TransportMsgType_BlobFetch:
+        case TransportMsgType_BlobFetchResponse:
             return false;
         // All other types (client operations, queries, pub/sub, keepalive)
         // pass through — new message types work without relay changes.
