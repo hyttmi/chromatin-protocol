@@ -10,7 +10,26 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current State: v1.7.0 Client-Side Encryption (SHIPPED 2026-04-02)
+## Current Milestone: v2.0.0 Event-Driven Architecture
+
+**Goal:** Replace timer-paced sync with push-based notifications and targeted fetch, achieving sub-second cross-node propagation. Overhaul maintenance paths from periodic scanning to event-driven processing.
+
+**Target features:**
+- Push-based sync: blob ingested → notify all connected peers immediately
+- Targeted blob fetch: peer fetches specific blob from notification (skip full reconciliation)
+- Reconcile-on-connect: full reconciliation only on peer connect/reconnect
+- Safety-net reconciliation: infrequent background check (10-15 min) as monitoring signal
+- Event-driven expiry: next-expiry timer instead of periodic full scan
+- Disconnect-triggered cursor cleanup: compact cursors on peer disconnect, not 6-hour timer
+- SDK auto-reconnect: ChromatinClient reconnects transparently on connection loss
+- Connection keepalive: bidirectional ping/pong heartbeat for faster dead connection detection
+- Full documentation refresh: PROTOCOL.md, README.md, SDK docs updated for new sync model
+
+**Constraints:**
+- Breaking protocol changes are fine — only deployed on home KVM, no production users
+- Pre-production: no backward compatibility needed
+
+## Previous Milestone: v1.7.0 Client-Side Encryption (SHIPPED 2026-04-02)
 
 **Delivered:** PQ envelope encryption in the Python SDK — pubkey directory with admin delegation and user self-registration, named group management, write_encrypted/read_encrypted/write_to_group helpers, PROTOCOL.md envelope spec, and tutorial. 4 phases, 8 plans, 26 requirements — all complete. Zero new pip dependencies.
 
@@ -327,4 +346,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after v1.7.0 Client-Side Encryption milestone*
+*Last updated: 2026-04-02 after starting v2.0.0 Event-Driven Architecture milestone*

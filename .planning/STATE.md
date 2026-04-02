@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.7.0
-milestone_name: Client-Side Encryption
-status: complete
-stopped_at: Milestone complete
+milestone: v2.0.0
+milestone_name: Event-Driven Architecture
+status: defining
+stopped_at: Defining requirements
 last_updated: "2026-04-02"
 last_activity: 2026-04-02
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,23 +21,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Planning next milestone
+**Current focus:** v2.0.0 Event-Driven Architecture — defining requirements
 
 ## Current Position
 
-Phase: 78 (final)
-Plan: All complete
-Status: v1.7.0 milestone shipped
-Last activity: 2026-04-02
-
-Progress: [██████████] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-02 — Milestone v2.0.0 started
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-All v1.7.0 decisions archived to milestones/v1.7.0-ROADMAP.md.
+Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
+
+- Breaking protocol changes OK — only deployed on home KVM, no production users
+- Push-based sync model: blob ingested → notify peers → targeted fetch
+- Reconciliation becomes fallback (on-connect + rare safety-net), not primary sync
+- Event-driven expiry: next-expiry timer replaces periodic full scan
+- Cursor cleanup on disconnect, not 6-hour timer
 
 ### Pending Todos
 
@@ -56,6 +60,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-02
-Last activity: 2026-04-02 - Completed quick task 260402-a2o: Split allowed_keys into allowed_client_keys and allowed_peer_keys
-Stopped at: Quick task 260402-a2o complete
+Last activity: 2026-04-02 — Milestone v2.0.0 started
+Stopped at: Defining requirements
 Resume file: None
