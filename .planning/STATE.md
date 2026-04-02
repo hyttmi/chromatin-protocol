@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: Completed 79-03-PLAN.md
-last_updated: "2026-04-02T12:59:45Z"
-last_activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
+stopped_at: Phase 79 context gathered
+last_updated: "2026-04-02T11:34:31.396Z"
+last_activity: 2026-04-02 -- Phase 79 execution started
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 0
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 79 -- Send Queue & Push Notifications
+**Current focus:** Phase 79 — send-queue-push-notifications
 
 ## Current Position
 
-Phase: 79 (1 of 7 in v2.0.0) -- Send Queue & Push Notifications
-Plan: 3 of 3 in current phase
-Status: In progress
-Last activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
+Phase: 79 (send-queue-push-notifications) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 79
+Last activity: 2026-04-02 -- Phase 79 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -45,11 +45,6 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Event-driven expiry (Phase 81) independent of push sync -- parallelizable
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
-- [Phase 79]: close_gracefully() enqueues Goodbye then sets closing_ flag to avoid self-rejection
-- [Phase 79]: Send queue drain coroutine started via awaitable_operators (&&) alongside message_loop
-- [Phase 79]: Source parameter on ingest stored in IngestResult, not via separate engine callback
-- [Phase 79]: notify_subscribers removed entirely, replaced by on_blob_ingested unified fan-out
-- [Phase 79]: Client writes pass nullptr source to notify ALL peers (no exclusion for clients)
 
 ### Pending Todos
 
@@ -68,7 +63,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02T12:59:45Z
-Last activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
-Stopped at: Completed 79-03-PLAN.md
-Resume file: None
+Last session: 2026-04-02T11:09:32.229Z
+Last activity: 2026-04-02 -- Roadmap created for v2.0.0
+Stopped at: Phase 79 context gathered
+Resume file: .planning/phases/79-send-queue-push-notifications/79-CONTEXT.md
