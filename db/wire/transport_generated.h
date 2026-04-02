@@ -80,11 +80,13 @@ enum TransportMsgType : int8_t {
   TransportMsgType_TimeRangeRequest = 57,
   TransportMsgType_TimeRangeResponse = 58,
   TransportMsgType_BlobNotify = 59,
+  TransportMsgType_BlobFetch = 60,
+  TransportMsgType_BlobFetchResponse = 61,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_BlobNotify
+  TransportMsgType_MAX = TransportMsgType_BlobFetchResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[60] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[62] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -145,13 +147,15 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[60] {
     TransportMsgType_PeerInfoResponse,
     TransportMsgType_TimeRangeRequest,
     TransportMsgType_TimeRangeResponse,
-    TransportMsgType_BlobNotify
+    TransportMsgType_BlobNotify,
+    TransportMsgType_BlobFetch,
+    TransportMsgType_BlobFetchResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[61] = {
+  static const char * const names[63] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -212,19 +216,24 @@ inline const char * const *EnumNamesTransportMsgType() {
     "TimeRangeRequest",
     "TimeRangeResponse",
     "BlobNotify",
+    "BlobFetch",
+    "BlobFetchResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_BlobNotify)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_BlobFetchResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }
 
 struct TransportMessage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef TransportMessageBuilder Builder;
+  static FLATBUFFERS_CONSTEXPR_CPP11 const char *GetFullyQualifiedName() {
+    return "chromatindb.wire.TransportMessage";
+  }
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TYPE = 4,
     VT_PAYLOAD = 6,

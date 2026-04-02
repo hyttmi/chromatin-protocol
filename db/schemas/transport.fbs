@@ -75,7 +75,10 @@ enum TransportMsgType : byte {
     TimeRangeRequest = 57,
     TimeRangeResponse = 58,
     // Phase 79: Push notifications
-    BlobNotify = 59
+    BlobNotify = 59,
+    // Phase 80: Targeted blob fetch
+    BlobFetch = 60,
+    BlobFetchResponse = 61
 }
 
 table TransportMessage {
