@@ -10,18 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v1.7.0 Client-Side Encryption
+## Current State: v1.7.0 Client-Side Encryption (SHIPPED 2026-04-02)
 
-**Goal:** PQ envelope encryption in the Python SDK with pubkey directory, user/group management, and simple helpers — enabling zero-knowledge storage where nodes never see plaintext.
-
-**Target features:**
-- Org directory namespace (owned by admin, users write via delegation)
-- Self-registration (generate keypair, publish pubkey to directory)
-- User discovery (list users, fetch pubkeys from directory)
-- Groups (named member sets in directory, SDK resolves on encrypt)
-- PQ envelope encryption (ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping)
-- Encrypted write/read helpers (simple API on ChromatinClient)
-- Revocation via existing primitives (tombstone pubkey + ACL removal)
+**Delivered:** PQ envelope encryption in the Python SDK — pubkey directory with admin delegation and user self-registration, named group management, write_encrypted/read_encrypted/write_to_group helpers, PROTOCOL.md envelope spec, and tutorial. 4 phases, 8 plans, 26 requirements — all complete. Zero new pip dependencies.
 
 ## Previous Milestone: v1.6.0 Python SDK (SHIPPED 2026-03-31)
 
@@ -166,35 +157,39 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Python SDK: ChaCha20-Poly1305 encrypted transport with background reader and request dispatch — v1.6.0 Phase 71
 - ✓ Python SDK: ChromatinClient async context manager (connect, ping, goodbye) — v1.6.0 Phase 71
 
+- ✓ PQ envelope encryption — ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping — v1.7.0 Phase 75
+- ✓ Org directory namespace with admin ownership and user delegation — v1.7.0 Phase 76
+- ✓ Self-registration — publish pubkey to directory — v1.7.0 Phase 76
+- ✓ User discovery — list users, fetch pubkeys from directory — v1.7.0 Phase 76
+- ✓ Groups — named member sets stored in directory namespace — v1.7.0 Phase 77
+- ✓ Encrypted write/read helpers on ChromatinClient — v1.7.0 Phase 77
+- ✓ PROTOCOL.md envelope format spec + HKDF label registry — v1.7.0 Phase 78
+- ✓ SDK README encryption API docs + getting started encryption workflow — v1.7.0 Phase 78
+
 ### Active
 
-- [x] Org directory namespace with admin ownership and user delegation — Validated in Phase 76
-- [x] Self-registration — publish pubkey to directory — Validated in Phase 76
-- [x] User discovery — list users, fetch pubkeys from directory — Validated in Phase 76
-- [x] Groups — named member sets stored in directory namespace — Validated in Phase 77
-- [x] PQ envelope encryption — ChaCha20-Poly1305 data + ML-KEM-1024 key wrapping — Validated in Phase 75
-- [x] Encrypted write/read helpers on ChromatinClient — Validated in Phase 77
 - [ ] Revocation via tombstone + ACL (existing primitives)
+- [ ] CLI tool for admin operations (quota check, list blobs, etc.)
+- [ ] C/C++/Rust/JS SDKs under sdk/ subdirectories
 
 ### Future
 
-- CLI tool for admin operations (quota check, list blobs, etc.)
-- C/C++/Rust/JS SDKs under sdk/ subdirectories
 - Performance benchmarks for Relay layer
 - Re-encryption on revocation (if compliance use case demands it)
+- Streaming encryption for blobs >10 MiB
 
 ## Context
 
-Shipped v1.6.0 with ~29,600 LOC C++20 + Python SDK under sdk/python/. 567 unit tests (C++), 503 tests (Python SDK), 49 Docker integration test scripts.
-Built across 33 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (in progress).
-16 milestones, 77 phases, 157 plans, 270 requirements total.
+Shipped v1.7.0 with ~29,600 LOC C++20 + Python SDK (4,418 LOC, 656 tests) under sdk/python/. 567 unit tests (C++), 49 Docker integration test scripts.
+Built across 35 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d).
+17 milestones, 78 phases, 159 plans, 296 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
 Three-layer architecture (all shipped):
 - **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. 567 unit tests, 49 Docker integration tests.
 - **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Blocklist approach — future-proof.
-- **Layer 3 (v1.6.0 SHIPPED): Python SDK** — pip-installable client library. 15 async methods, 366 tests, PQ handshake, tutorial.
+- **Layer 3 (v1.7.0 SHIPPED): Python SDK** — pip-installable client library. 18 async methods, 656 tests, PQ handshake, envelope encryption, directory, groups, tutorial.
 
 **Live test environment:** 3-node KVM swarm (192.168.1.200-202) with relay on 200.
 
@@ -305,6 +300,15 @@ Three-layer architecture (all shipped):
 | No logrotate for spdlog-managed paths | spdlog handles rotation internally; external logrotate causes log loss with copytruncate | ✓ Good — Phase 68 |
 | PROTOCOL.md byte-level source verification | Systematic comparison against peer_manager.cpp encoder; found 2 real discrepancies | ✓ Good — Phase 69 |
 
+| KEM-then-Wrap envelope pattern | ML-KEM cannot choose encapsulated value (unlike RSA); HKDF derives KEK from shared secret, wraps random DEK | ✓ Good — Phase 75 |
+| Two-pass AD construction for envelope | Pass 1 encapsulates KEM; Pass 2 wraps DEK with full stanza context as AD | ✓ Good — Phase 75 |
+| Zero nonce safe for DEK wrapping | KEM shared secret unique per encapsulation → HKDF-derived KEK never reused | ✓ Good — Phase 75 |
+| UserEntry kem_sig as remainder (no length prefix) | ML-DSA-87 sigs are variable-length; remainder-of-blob avoids length field | ✓ Good — Phase 76 |
+| Drain-and-requeue for directory cache invalidation | Observes transport queue notifications without background task — simpler lifecycle | ✓ Good — Phase 76 |
+| Group members as SHA3-256(signing_pk) hashes | 32 bytes each vs 2592-byte pubkeys; directory lookup resolves at encrypt-time | ✓ Good — Phase 77 |
+| write_to_group silently skips unresolvable members | Partial encryption safer than failing; group membership may be stale | ✓ Good — Phase 77 |
+| HKDF label registry in PROTOCOL.md | Four labels documented: 2 transport, 1 DARE, 1 envelope KEK — prevents accidental reuse | ✓ Good — Phase 78 |
+
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
@@ -323,4 +327,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after Phase 78 (documentation & polish) complete — v1.7.0 milestone done*
+*Last updated: 2026-04-02 after v1.7.0 Client-Side Encryption milestone*

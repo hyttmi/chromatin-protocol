@@ -578,6 +578,52 @@
 
 ---
 
+## Milestone: v1.7.0 — Client-Side Encryption
+
+**Shipped:** 2026-04-02
+**Phases:** 4 | **Plans:** 8 | **Sessions:** ~3
+
+### What Was Built
+- ML-KEM-1024 encryption keypair extension on Identity with 4-file persistence (.key/.pub/.kem/.kpub)
+- PQ envelope encryption module (_envelope.py): multi-recipient KEM-then-Wrap with versioned binary format, sorted stanzas, AEAD AD binding
+- Directory class (_directory.py): admin-owned namespace, user self-registration via delegation, cached O(1) lookups, pub/sub cache invalidation
+- Group management: GRPE binary codec, 5 Directory methods (create/add/remove/list/get), latest-timestamp-wins resolution
+- Encrypted client helpers: write_encrypted(), read_encrypted(), write_to_group() composing envelope crypto with blob storage
+- PROTOCOL.md envelope format spec (105 lines) with HKDF label registry (4 labels)
+- SDK README encryption API section + getting-started tutorial encryption workflow
+
+### What Worked
+- Zero new pip dependencies — all primitives (ML-KEM-1024, ChaCha20-Poly1305, HKDF-SHA256, SHA3-256) already in SDK from v1.6.0
+- Zero C++ node changes — pure SDK-side work, node remains a zero-knowledge store
+- Research phase (.planning/research/) done before v1.7.0 roadmap — STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY.md prevented scope creep
+- Binary codec pattern (magic + version + length-prefixed fields) established in v1.6.0 reused cleanly for UENT and GRPE formats
+- Delegation + tombstone already worked in protocol — directory/groups used existing primitives without any C++ changes
+- All 8 plans executed cleanly with auto-advance — no deviations or re-planning needed
+
+### What Was Inefficient
+- Nothing significant — the hardest crypto design decision (KEM-then-Wrap + two-pass AD construction) was resolved during research, not during execution
+- UserEntry at ~8.6-9 KB per entry is large due to PQ key sizes, but unavoidable with ML-DSA-87 + ML-KEM-1024
+
+### Patterns Established
+- Envelope binary format frozen in Phase 75 before any encrypted blobs written — format stability before adoption
+- TYPE_CHECKING imports to break circular dependencies between client.py and _directory.py
+- Drain-and-requeue pattern for cache invalidation via pub/sub (simpler than background task)
+- Content-addressed dedup intentionally breaks on encrypted data — each encryption produces unique ciphertext, and this is correct
+
+### Key Lessons
+- KEM-then-Wrap is the only correct pattern for ML-KEM envelope encryption — ML-KEM is NOT RSA, you cannot choose the encapsulated value
+- HKDF domain separation labels must be unique per purpose and documented in a registry — 4 labels now tracked in PROTOCOL.md
+- Per-recipient overhead (1648 bytes: 32 hash + 1568 KEM ct + 48 wrapped DEK) is significant but unavoidable with ML-KEM-1024
+- Groups as blobs (not shared keys) avoids key rotation protocol on membership changes — per-blob wrapping is simpler and equally secure for a blob store
+- write_to_group silently skipping unresolvable members is the right default — partial encryption is safer than failing the entire operation
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for agents)
+- Sessions: ~3
+- Notable: Fastest SDK milestone (2 days for 4 phases, 26 requirements) — zero new deps and existing protocol primitives accelerated delivery
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -600,6 +646,7 @@
 | v1.4.0 | ~2 | 3 | 18 new query types, relay filter expansion, PROTOCOL.md update |
 | v1.5.0 | ~1 | 2 | Docs-only — dist/ kit, full doc refresh, PROTOCOL.md source verification |
 | v1.6.0 | ~4 | 5 | First SDK — Python client with PQ crypto, 366 tests, cross-language test vectors |
+| v1.7.0 | ~3 | 4 | Client-side encryption — envelope crypto, directory, groups, encrypted helpers, zero new deps |
 
 ### Cumulative Quality
 
@@ -621,6 +668,7 @@
 | v1.4.0 | 560+ | ~28,000 | ~110 | 14/14 |
 | v1.5.0 | 567 | ~29,600 | ~110 | 12/12 |
 | v1.6.0 | 933 | ~29,600 C++ + SDK | ~130 | 30/30 |
+| v1.7.0 | 1,223 | ~29,600 C++ + 4,418 SDK | ~140 | 26/26 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -640,3 +688,5 @@
 14. Bookkeeping gaps (unchecked requirements, missing summaries) accumulate at high velocity — v1.3.0 had 3 unchecked requirements despite code being shipped
 15. Cross-language test vectors from an authoritative source (C++ generator) catch encoding bugs that unit tests miss — validated in v1.6.0 SDK crypto
 16. Protocol documentation must be verified against source code for crypto parameters — v1.6.0 found HKDF salt discrepancy that existed since v0.5.0
+17. Zero new dependencies is achievable when building on a solid crypto foundation — v1.7.0 added envelope encryption, directory, and groups using only v1.6.0 primitives
+18. KEM-then-Wrap is mandatory for ML-KEM envelope encryption — cannot choose encapsulated value like RSA; research phase caught this before implementation

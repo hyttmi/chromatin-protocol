@@ -1,5 +1,22 @@
 # Milestones
 
+## v1.7.0 Client-Side Encryption (Shipped: 2026-04-02)
+
+**Phases completed:** 4 phases, 8 plans, 15 tasks
+
+**Key accomplishments:**
+
+- ML-KEM-1024 encryption keypair added to SDK Identity with 4-file persistence, from_public_keys() constructor, and NotARecipientError/MalformedEnvelopeError exceptions
+- PQ multi-recipient envelope encryption with KEM-then-Wrap pattern, sorted stanzas, AEAD AD binding, and 31 comprehensive tests
+- UserEntry binary codec with ML-DSA-87 KEM cross-key binding, DirectoryEntry dataclass, and DirectoryError exception
+- Directory class with admin delegation, user self-registration, cached O(1) lookups, and pub/sub invalidation via drain-and-requeue
+- Named group CRUD with GRPE binary codec, 5 Directory methods, and cache extension with latest-timestamp-wins resolution
+- Three ChromatinClient convenience methods (write_encrypted, read_encrypted, write_to_group) composing envelope encryption with blob storage, plus GroupEntry re-exports
+- Byte-level Client-Side Envelope Encryption section added to PROTOCOL.md with binary format tables, HKDF label registry (4 labels), KEM-then-Wrap pattern, AEAD parameters, and decryption steps
+- Encryption API tables in README and end-to-end encryption workflow tutorial covering identity, directory, registration, groups, and encrypted I/O
+
+---
+
 ## v1.6.0 Python SDK (Shipped: 2026-03-31)
 
 **Phases completed:** 5 phases, 14 plans, 24 tasks
