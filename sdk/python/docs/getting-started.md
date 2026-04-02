@@ -158,14 +158,126 @@ using `asyncio.create_task` while performing other operations in the main
 coroutine. Subscriptions are automatically cleaned up when the context
 manager exits.
 
+## Encrypted Write and Read
+
+chromatindb supports client-side envelope encryption. Data is encrypted
+before leaving your machine -- the node stores ciphertext only
+(zero-knowledge storage). `Identity.generate()` automatically creates
+ML-KEM-1024 encryption keypairs alongside ML-DSA-87 signing keys.
+
+```python
+async with ChromatinClient.connect("192.168.1.200", 4201, identity) as client:
+    # Encrypt to self only (no recipients = self-only)
+    result = await client.write_encrypted(b"My secret data", ttl=3600)
+    print(f"Encrypted blob: {result.blob_hash.hex()}")
+
+    # Decrypt (only the sender can read it)
+    plaintext = await client.read_encrypted(identity.namespace, result.blob_hash)
+    print(plaintext)  # b"My secret data"
+```
+
+The blob stored on the node is an opaque envelope -- the node never sees
+plaintext. Content-addressed deduplication does not apply to encrypted blobs
+because identical plaintext produces different ciphertext each time.
+
+To encrypt for multiple recipients, pass a list of identities:
+
+```python
+    # Encrypt for multiple recipients
+    alice = Identity.generate()
+    bob = Identity.generate()
+
+    result = await client.write_encrypted(
+        b"Shared secret", ttl=3600, recipients=[alice, bob]
+    )
+
+    # Any recipient (or the sender) can decrypt
+    # Others get NotARecipientError
+```
+
+The sender is always auto-included as a recipient. Each recipient adds
+1648 bytes of overhead to the envelope.
+
+## Directory Setup
+
+Before encrypting for other users, you need a directory -- a shared registry
+of encryption public keys. The directory admin creates it, then delegates
+write access so users can self-register.
+
+```python
+from chromatindb import Directory
+
+# Admin creates a directory (backed by the admin's namespace)
+admin = Identity.generate()
+
+async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+    directory = Directory(client, admin)
+
+    # Delegate write access to a user so they can register
+    user_identity = Identity.generate()
+    await directory.delegate(user_identity)
+```
+
+The directory is a logical layer over the existing blob store. It uses the
+admin's namespace for storage and delegation for access control.
+
+## User Registration
+
+Users register by publishing a UserEntry blob containing their signing key,
+encryption key, and display name. The KEM public key is signed with ML-DSA-87
+to prevent key substitution attacks.
+
+```python
+# User connects and registers in the directory
+async with ChromatinClient.connect("192.168.1.200", 4201, user_identity) as client:
+    user_dir = Directory(client, user_identity, directory_namespace=admin.namespace)
+
+    await user_dir.register("alice")
+
+    # List all registered users
+    users = await user_dir.list_users()
+    for u in users:
+        print(f"User: {u.display_name}")
+```
+
+## Groups and Group Encryption
+
+Groups are named member lists. The directory admin creates groups and manages
+membership. Any user can then encrypt data for an entire group with a single
+call.
+
+```python
+# Admin creates a group (needs admin client connection)
+async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+    admin_dir = Directory(client, admin)
+    await admin_dir.create_group("engineering", members=[user_identity])
+
+    # Encrypt for all group members
+    result = await client.write_to_group(
+        b"Team announcement", "engineering", admin_dir, ttl=3600
+    )
+    print(f"Group blob: {result.blob_hash.hex()}")
+
+    # List groups
+    groups = await admin_dir.list_groups()
+    for g in groups:
+        print(f"Group: {g.name}, members: {len(g.members)}")
+```
+
+`write_to_group` resolves group membership at call time. Members are
+identified by SHA3-256 hash of their signing public key.
+
 ## Error Handling
 
 ```python
 from chromatindb.exceptions import (
-    ChromatinError,      # Base for all SDK errors
-    HandshakeError,      # PQ handshake failure (timeout, auth, protocol)
-    ConnectionError,     # Timeout or disconnect (inherits ProtocolError, NOT builtin)
-    ProtocolError,       # Unexpected server response
+    ChromatinError,          # Base for all SDK errors
+    HandshakeError,          # PQ handshake failure (timeout, auth, protocol)
+    ConnectionError,         # Timeout or disconnect (inherits ProtocolError, NOT builtin)
+    ProtocolError,           # Unexpected server response
+    NotARecipientError,      # Not an envelope recipient
+    MalformedEnvelopeError,  # Invalid envelope format
+    DirectoryError,          # Group/directory operation failed
 )
 
 try:
@@ -185,3 +297,6 @@ confusion.
 - All operations are async -- use `asyncio.run()` or integrate with your async framework
 - The SDK uses post-quantum cryptography (ML-DSA-87, ML-KEM-1024) automatically -- no configuration needed
 - Blobs are signed with your identity and verified by the node before storage
+- Encrypt data with `write_encrypted()` for zero-knowledge storage
+- Set up a directory for user discovery and group management
+- See [PROTOCOL.md](../../db/PROTOCOL.md) for the envelope binary format specification
