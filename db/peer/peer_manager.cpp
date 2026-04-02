@@ -165,10 +165,15 @@ void PeerManager::start() {
     start_time_ = std::chrono::steady_clock::now();
 
     // Log access control mode
-    if (acl_.is_closed_mode()) {
-        spdlog::info("access control: closed mode ({} allowed keys)", acl_.allowed_count());
+    if (acl_.is_client_closed_mode()) {
+        spdlog::info("client access control: closed mode ({} allowed keys)", acl_.client_allowed_count());
     } else {
-        spdlog::info("access control: open mode");
+        spdlog::info("client access control: open mode");
+    }
+    if (acl_.is_peer_closed_mode()) {
+        spdlog::info("peer access control: closed mode ({} allowed keys)", acl_.peer_allowed_count());
+    } else {
+        spdlog::info("peer access control: open mode");
     }
 
     // Set up SIGHUP handler for config reload (only if config path was provided)
@@ -301,11 +306,19 @@ bool PeerManager::should_accept_connection() {
 
 void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     // ACL check: derive peer namespace hash and verify against allowed list.
+    // Branch on connection type: UDS = client, TCP = peer.
     // Must happen BEFORE adding to peers_ so unauthorized peers never see data.
     auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
-    if (!acl_.is_allowed(std::span<const uint8_t, 32>(peer_ns))) {
+
+    bool allowed = conn->is_uds()
+        ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
+        : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
+
+    if (!allowed) {
         auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
-        spdlog::warn("access denied: namespace={} ip={}", full_hex, conn->remote_address());
+        spdlog::warn("access denied ({}): namespace={} ip={}",
+                     conn->is_uds() ? "client" : "peer",
+                     full_hex, conn->remote_address());
         // Signal ACL rejection to Server for backoff tracking (outbound only)
         if (!conn->connect_address().empty()) {
             server_.notify_acl_rejected(conn->connect_address());
@@ -2141,7 +2154,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
     // PEX exchange: send PeerListRequest and wait for response (inline, no concurrent send)
     // Skip in closed mode -- don't advertise or discover peers
-    if (!acl_.is_closed_mode()) {
+    if (!acl_.is_peer_closed_mode()) {
         std::span<const uint8_t> empty{};
         if (!co_await conn->send_message(wire::TransportMsgType_PeerListRequest, empty)) {
             spdlog::debug("PEX: failed to send PeerListRequest to {}", conn->remote_address());
@@ -2545,7 +2558,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
     // PEX exchange: wait for PeerListRequest from initiator, then respond (inline, no concurrent send)
     // Skip in closed mode -- don't share peer addresses
-    if (!acl_.is_closed_mode()) {
+    if (!acl_.is_peer_closed_mode()) {
         auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
             auto addresses = build_peer_list_response(conn->remote_address());
@@ -2640,7 +2653,7 @@ bool PeerManager::is_trusted_address(const asio::ip::address& addr) const {
 }
 
 void PeerManager::reload_config() {
-    spdlog::info("reloading allowed_keys from {}...", config_path_.string());
+    spdlog::info("reloading access control from {}...", config_path_.string());
 
     // Re-read config file
     config::Config new_cfg;
@@ -2651,28 +2664,37 @@ void PeerManager::reload_config() {
         return;
     }
 
-    // Validate new allowed_keys
+    // Validate both key lists
     try {
-        config::validate_allowed_keys(new_cfg.allowed_keys);
+        config::validate_allowed_keys(new_cfg.allowed_client_keys);
+        config::validate_allowed_keys(new_cfg.allowed_peer_keys);
     } catch (const std::exception& e) {
         spdlog::error("config reload rejected (malformed key): {} (keeping current config)", e.what());
         return;
     }
 
     // Reload ACL
-    auto result = acl_.reload(new_cfg.allowed_keys);
+    auto result = acl_.reload(new_cfg.allowed_client_keys, new_cfg.allowed_peer_keys);
 
     // Log diff summary
-    spdlog::info("config reload: +{} keys, -{} keys", result.added, result.removed);
+    spdlog::info("config reload: client keys +{} -{}, peer keys +{} -{}",
+                 result.client_added, result.client_removed,
+                 result.peer_added, result.peer_removed);
 
-    if (acl_.is_closed_mode()) {
-        spdlog::info("access control: closed mode ({} allowed keys)", acl_.allowed_count());
+    if (acl_.is_client_closed_mode()) {
+        spdlog::info("client access control: closed mode ({} allowed keys)", acl_.client_allowed_count());
     } else {
-        spdlog::info("access control: open mode");
+        spdlog::info("client access control: open mode");
+    }
+    if (acl_.is_peer_closed_mode()) {
+        spdlog::info("peer access control: closed mode ({} allowed keys)", acl_.peer_allowed_count());
+    } else {
+        spdlog::info("peer access control: open mode");
     }
 
-    // Disconnect revoked peers
-    if (result.removed > 0 || acl_.is_closed_mode()) {
+    // Disconnect revoked peers (check both lists)
+    if (result.client_removed > 0 || result.peer_removed > 0 ||
+        acl_.is_client_closed_mode() || acl_.is_peer_closed_mode()) {
         disconnect_unauthorized_peers();
     }
 
@@ -2792,7 +2814,10 @@ void PeerManager::disconnect_unauthorized_peers() {
 
     for (const auto& peer : peers_) {
         auto peer_ns = crypto::sha3_256(peer.connection->peer_pubkey());
-        if (!acl_.is_allowed(std::span<const uint8_t, 32>(peer_ns))) {
+        bool peer_allowed = peer.connection->is_uds()
+            ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
+            : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
+        if (!peer_allowed) {
             to_disconnect.push_back(peer.connection);
         }
     }
@@ -3029,7 +3054,7 @@ asio::awaitable<void> PeerManager::handle_pex_as_responder(net::Connection::Ptr 
     if (!peer || peer->syncing) co_return;
 
     // In closed mode, don't respond to PEX requests (no address sharing)
-    if (acl_.is_closed_mode()) co_return;
+    if (acl_.is_peer_closed_mode()) co_return;
 
     peer->syncing = true;
     // NOTE: do NOT clear sync_inbox -- PeerListRequest is already queued in it
@@ -3086,7 +3111,7 @@ asio::awaitable<void> PeerManager::pex_timer_loop() {
         if (ec || stopping_) co_return;
 
         // Skip PEX entirely in closed mode -- don't advertise or discover peers
-        if (acl_.is_closed_mode()) continue;
+        if (acl_.is_peer_closed_mode()) continue;
 
         co_await request_peers_from_all();
     }

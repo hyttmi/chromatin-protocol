@@ -162,21 +162,22 @@ TEST_CASE("Default config has max_storage_bytes 0 (unlimited)", "[config][capaci
 }
 
 // =============================================================================
-// ACL: allowed_keys config tests
+// ACL: allowed_client_keys / allowed_peer_keys config tests
 // =============================================================================
 
-TEST_CASE("Default config has empty allowed_keys", "[config][acl]") {
+TEST_CASE("Default config has empty allowed_client_keys and allowed_peer_keys", "[config][acl]") {
     Config cfg;
-    REQUIRE(cfg.allowed_keys.empty());
+    REQUIRE(cfg.allowed_client_keys.empty());
+    REQUIRE(cfg.allowed_peer_keys.empty());
     REQUIRE(cfg.config_path.empty());
 }
 
-TEST_CASE("load_config parses allowed_keys from JSON array", "[config][acl]") {
-    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_acl.json";
+TEST_CASE("load_config parses allowed_client_keys from JSON array", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_acl_client.json";
     {
         std::ofstream f(tmp);
         f << R"({
-            "allowed_keys": [
+            "allowed_client_keys": [
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
                 "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
             ]
@@ -184,14 +185,32 @@ TEST_CASE("load_config parses allowed_keys from JSON array", "[config][acl]") {
     }
 
     auto cfg = load_config(tmp);
-    REQUIRE(cfg.allowed_keys.size() == 2);
-    REQUIRE(cfg.allowed_keys[0] == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
-    REQUIRE(cfg.allowed_keys[1] == "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+    REQUIRE(cfg.allowed_client_keys.size() == 2);
+    REQUIRE(cfg.allowed_client_keys[0] == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+    REQUIRE(cfg.allowed_client_keys[1] == "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
     std::filesystem::remove(tmp);
 }
 
-TEST_CASE("load_config with missing allowed_keys results in empty vector", "[config][acl]") {
+TEST_CASE("load_config parses allowed_peer_keys from JSON array", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_acl_peer.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "allowed_peer_keys": [
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+            ]
+        })";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.allowed_peer_keys.size() == 1);
+    REQUIRE(cfg.allowed_peer_keys[0] == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config with missing key lists results in empty vectors", "[config][acl]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_no_acl.json";
     {
         std::ofstream f(tmp);
@@ -199,31 +218,33 @@ TEST_CASE("load_config with missing allowed_keys results in empty vector", "[con
     }
 
     auto cfg = load_config(tmp);
-    REQUIRE(cfg.allowed_keys.empty());
+    REQUIRE(cfg.allowed_client_keys.empty());
+    REQUIRE(cfg.allowed_peer_keys.empty());
 
     std::filesystem::remove(tmp);
 }
 
-TEST_CASE("load_config with empty allowed_keys array results in empty vector", "[config][acl]") {
+TEST_CASE("load_config with empty key arrays results in empty vectors", "[config][acl]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_empty_acl.json";
     {
         std::ofstream f(tmp);
-        f << R"({"allowed_keys": []})";
+        f << R"({"allowed_client_keys": [], "allowed_peer_keys": []})";
     }
 
     auto cfg = load_config(tmp);
-    REQUIRE(cfg.allowed_keys.empty());
+    REQUIRE(cfg.allowed_client_keys.empty());
+    REQUIRE(cfg.allowed_peer_keys.empty());
 
     std::filesystem::remove(tmp);
 }
 
-TEST_CASE("load_config throws on key with wrong length", "[config][acl]") {
+TEST_CASE("load_config throws on peer key with wrong length", "[config][acl]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_len.json";
 
     SECTION("too short (63 chars)") {
         {
             std::ofstream f(tmp);
-            f << R"({"allowed_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b"]})";
+            f << R"({"allowed_peer_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b"]})";
         }
         REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
     }
@@ -231,7 +252,7 @@ TEST_CASE("load_config throws on key with wrong length", "[config][acl]") {
     SECTION("too long (65 chars)") {
         {
             std::ofstream f(tmp);
-            f << R"({"allowed_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2a"]})";
+            f << R"({"allowed_peer_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2a"]})";
         }
         REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
     }
@@ -239,12 +260,12 @@ TEST_CASE("load_config throws on key with wrong length", "[config][acl]") {
     std::filesystem::remove(tmp);
 }
 
-TEST_CASE("load_config throws on key with non-hex characters", "[config][acl]") {
+TEST_CASE("load_config throws on client key with non-hex characters", "[config][acl]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_bad_hex.json";
     {
         std::ofstream f(tmp);
         // 'g' is not a hex char
-        f << R"({"allowed_keys": ["g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"]})";
+        f << R"({"allowed_client_keys": ["g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"]})";
     }
 
     REQUIRE_THROWS_AS(load_config(tmp), std::runtime_error);
@@ -252,15 +273,31 @@ TEST_CASE("load_config throws on key with non-hex characters", "[config][acl]") 
     std::filesystem::remove(tmp);
 }
 
-TEST_CASE("load_config accepts uppercase hex in allowed_keys", "[config][acl]") {
+TEST_CASE("load_config accepts uppercase hex in allowed_peer_keys", "[config][acl]") {
     auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_upper.json";
     {
         std::ofstream f(tmp);
-        f << R"({"allowed_keys": ["A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"]})";
+        f << R"({"allowed_peer_keys": ["A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"]})";
     }
 
     auto cfg = load_config(tmp);
-    REQUIRE(cfg.allowed_keys.size() == 1);
+    REQUIRE(cfg.allowed_peer_keys.size() == 1);
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("old allowed_keys field is treated as unknown key", "[config][acl]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_old_key.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"allowed_keys": ["a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"]})";
+    }
+
+    // Should load without error (unknown keys are warned, not rejected)
+    auto cfg = load_config(tmp);
+    // The old field is not parsed into any config field
+    REQUIRE(cfg.allowed_client_keys.empty());
+    REQUIRE(cfg.allowed_peer_keys.empty());
 
     std::filesystem::remove(tmp);
 }

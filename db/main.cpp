@@ -185,7 +185,7 @@ int cmd_run(int argc, char* argv[]) {
     }
     asio::io_context ioc;
 
-    chromatindb::acl::AccessControl acl(config.allowed_keys, identity.namespace_id());
+    chromatindb::acl::AccessControl acl(config.allowed_client_keys, config.allowed_peer_keys, identity.namespace_id());
     chromatindb::peer::PeerManager pm(config, identity, engine, storage, ioc, pool, acl, config.config_path);
     pm.start();
 

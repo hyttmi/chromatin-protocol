@@ -147,7 +147,7 @@ TEST_CASE("daemon starts with unreachable bootstrap peers", "[daemon]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
     PeerManager pm(cfg, id, eng, store, ioc, pool, acl);
 
     // Should not throw
@@ -207,8 +207,8 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
 
     // Create PeerManagers on shared io_context
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
     cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
@@ -272,8 +272,8 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     REQUIRE(r2.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
     cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
@@ -345,9 +345,9 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
 
     // Create PeerManagers on shared io_context
     asio::io_context ioc;
-    AccessControl acl_a(cfg_a.allowed_keys, id_a.namespace_id());
-    AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
-    AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
+    AccessControl acl_a({}, cfg_a.allowed_peer_keys, id_a.namespace_id());
+    AccessControl acl_b({}, cfg_b.allowed_peer_keys, id_b.namespace_id());
+    AccessControl acl_c({}, cfg_c.allowed_peer_keys, id_c.namespace_id());
     PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, pool, acl_a);
     pm_a.start();
     cfg_b.bootstrap_peers = {listening_address(pm_a.listening_port())};

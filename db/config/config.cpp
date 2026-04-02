@@ -63,7 +63,7 @@ Config load_config(const std::filesystem::path& path) {
         "bind_address", "storage_path", "data_dir", "bootstrap_peers",
         "log_level", "max_peers", "sync_interval_seconds", "max_storage_bytes",
         "rate_limit_bytes_per_sec", "rate_limit_burst", "sync_namespaces",
-        "allowed_keys", "trusted_peers", "full_resync_interval",
+        "allowed_client_keys", "allowed_peer_keys", "trusted_peers", "full_resync_interval",
         "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
@@ -112,13 +112,22 @@ Config load_config(const std::filesystem::path& path) {
         validate_allowed_keys(cfg.sync_namespaces);  // Same 64-char hex format
     }
 
-    if (j.contains("allowed_keys") && j["allowed_keys"].is_array()) {
-        for (const auto& key : j["allowed_keys"]) {
+    if (j.contains("allowed_client_keys") && j["allowed_client_keys"].is_array()) {
+        for (const auto& key : j["allowed_client_keys"]) {
             if (key.is_string()) {
-                cfg.allowed_keys.push_back(key.get<std::string>());
+                cfg.allowed_client_keys.push_back(key.get<std::string>());
             }
         }
-        validate_allowed_keys(cfg.allowed_keys);
+        validate_allowed_keys(cfg.allowed_client_keys);
+    }
+
+    if (j.contains("allowed_peer_keys") && j["allowed_peer_keys"].is_array()) {
+        for (const auto& key : j["allowed_peer_keys"]) {
+            if (key.is_string()) {
+                cfg.allowed_peer_keys.push_back(key.get<std::string>());
+            }
+        }
+        validate_allowed_keys(cfg.allowed_peer_keys);
     }
 
     if (j.contains("trusted_peers") && j["trusted_peers"].is_array()) {

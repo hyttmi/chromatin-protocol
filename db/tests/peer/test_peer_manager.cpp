@@ -63,7 +63,7 @@ TEST_CASE("PeerManager starts with unreachable bootstrap", "[peer]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
     PeerManager pm(cfg, id, eng, store, ioc, pool, acl);
 
     // Should not throw
@@ -92,7 +92,7 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
     PeerManager pm(cfg, id, eng, store, ioc, pool, acl);
 
     pm.start();
@@ -171,7 +171,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
-    cfg1.allowed_keys = {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
+    cfg1.allowed_peer_keys = {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
 
     // Node2 is open mode, bootstraps to node1
     Config cfg2;
@@ -194,11 +194,11 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
-    REQUIRE(acl1.is_closed_mode());
-    REQUIRE_FALSE(acl2.is_closed_mode());
+    REQUIRE(acl1.is_peer_closed_mode());
+    REQUIRE_FALSE(acl2.is_peer_closed_mode());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -235,7 +235,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     cfg1.data_dir = tmp1.path.string();
     cfg1.sync_interval_seconds = 1;
     cfg1.max_peers = 32;
-    cfg1.allowed_keys = {id2_ns_hex};
+    cfg1.allowed_peer_keys = {id2_ns_hex};
 
     // Node2 is also in closed mode and allows id1's namespace
     auto id1_ns_hex = to_hex(id1.namespace_id());
@@ -245,7 +245,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     cfg2.data_dir = tmp2.path.string();
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
-    cfg2.allowed_keys = {id1_ns_hex};
+    cfg2.allowed_peer_keys = {id1_ns_hex};
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -261,13 +261,13 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
-    REQUIRE(acl1.is_closed_mode());
-    REQUIRE(acl2.is_closed_mode());
-    REQUIRE(acl1.is_allowed(id2.namespace_id()));
-    REQUIRE(acl2.is_allowed(id1.namespace_id()));
+    REQUIRE(acl1.is_peer_closed_mode());
+    REQUIRE(acl2.is_peer_closed_mode());
+    REQUIRE(acl1.is_peer_allowed(id2.namespace_id()));
+    REQUIRE(acl2.is_peer_allowed(id1.namespace_id()));
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -305,7 +305,7 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": [")" << id2_ns_hex << R"("]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_peer_keys": [")" << id2_ns_hex << R"("]})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -318,7 +318,7 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     cfg2.data_dir = tmp2.path.string();
     cfg2.sync_interval_seconds = 1;
     cfg2.max_peers = 32;
-    cfg2.allowed_keys = {id1_ns_hex};
+    cfg2.allowed_peer_keys = {id1_ns_hex};
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -327,8 +327,8 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
     pm1.start();
@@ -343,10 +343,10 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     REQUIRE(pm1.peer_count() == 1);
     REQUIRE(pm2.peer_count() == 1);
 
-    // Now rewrite config to REMOVE id2 from allowed_keys (revocation)
+    // Now rewrite config to REMOVE id2 from allowed_peer_keys (revocation)
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_peer_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
     }
 
     // Trigger reload (same as what SIGHUP handler calls)
@@ -372,7 +372,7 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_peer_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]})";
     }
 
     auto cfg1 = chromatindb::config::load_config(config_path);
@@ -383,7 +383,7 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
     pm1.start();
@@ -391,8 +391,8 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     // Drain start-up handlers (including SIGHUP coroutine setup)
     ioc.run_for(std::chrono::milliseconds(100));
 
-    REQUIRE(acl1.is_closed_mode());
-    REQUIRE(acl1.allowed_count() == 1);
+    REQUIRE(acl1.is_peer_closed_mode());
+    REQUIRE(acl1.peer_allowed_count() == 1);
 
     // Corrupt the config file
     {
@@ -404,8 +404,8 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     pm1.reload_config();
 
     // ACL should still be in closed mode with 1 key (fail-safe)
-    REQUIRE(acl1.is_closed_mode());
-    REQUIRE(acl1.allowed_count() == 1);
+    REQUIRE(acl1.is_peer_closed_mode());
+    REQUIRE(acl1.peer_allowed_count() == 1);
 
     pm1.stop();
     ioc.run_for(std::chrono::seconds(2));
@@ -416,7 +416,7 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
 
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
 
-    // Write config file with NO allowed_keys (open mode)
+    // Write config file with NO allowed_peer_keys (open mode)
     auto config_path = tmp1.path / "config.json";
     {
         std::ofstream f(config_path);
@@ -431,23 +431,23 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
     pm1.start();
 
-    REQUIRE_FALSE(acl1.is_closed_mode());
+    REQUIRE_FALSE(acl1.is_peer_closed_mode());
 
-    // Rewrite config to add allowed_keys (switch to closed mode)
+    // Rewrite config to add allowed_peer_keys (switch to closed mode)
     {
         std::ofstream f(config_path);
-        f << R"({"bind_address": "127.0.0.1:0", "allowed_keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]})";
+        f << R"({"bind_address": "127.0.0.1:0", "allowed_peer_keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]})";
     }
 
     pm1.reload_config();
 
-    REQUIRE(acl1.is_closed_mode());
-    REQUIRE(acl1.allowed_count() == 1);
+    REQUIRE(acl1.is_peer_closed_mode());
+    REQUIRE(acl1.peer_allowed_count() == 1);
 
     pm1.stop();
     ioc.run_for(std::chrono::seconds(1));
@@ -470,14 +470,14 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     cfg_a.data_dir = tmp1.path.string();
     cfg_a.sync_interval_seconds = 1;
     cfg_a.max_peers = 32;
-    cfg_a.allowed_keys = {ns_b, ns_c};
+    cfg_a.allowed_peer_keys = {ns_b, ns_c};
 
     Config cfg_b;
     cfg_b.bind_address = "127.0.0.1:0";
     cfg_b.data_dir = tmp2.path.string();
     cfg_b.sync_interval_seconds = 1;
     cfg_b.max_peers = 32;
-    cfg_b.allowed_keys = {ns_a, ns_c};
+    cfg_b.allowed_peer_keys = {ns_a, ns_c};
 
     // Node C only knows B (not A). In open mode it would discover A via PEX.
     // In closed mode, PEX is disabled, so C should NOT discover A.
@@ -486,7 +486,7 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     cfg_c.data_dir = tmp3.path.string();
     cfg_c.sync_interval_seconds = 1;
     cfg_c.max_peers = 32;
-    cfg_c.allowed_keys = {ns_a, ns_b};
+    cfg_c.allowed_peer_keys = {ns_a, ns_b};
 
     Storage store_a(tmp1.path.string());
     Storage store_b(tmp2.path.string());
@@ -504,9 +504,9 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     REQUIRE(r_a.accepted);
 
     asio::io_context ioc;
-    AccessControl acl_a(cfg_a.allowed_keys, id_a.namespace_id());
-    AccessControl acl_b(cfg_b.allowed_keys, id_b.namespace_id());
-    AccessControl acl_c(cfg_c.allowed_keys, id_c.namespace_id());
+    AccessControl acl_a({}, cfg_a.allowed_peer_keys, id_a.namespace_id());
+    AccessControl acl_b({}, cfg_b.allowed_peer_keys, id_b.namespace_id());
+    AccessControl acl_c({}, cfg_c.allowed_peer_keys, id_c.namespace_id());
 
     PeerManager pm_a(cfg_a, id_a, eng_a, store_a, ioc, pool, acl_a);
     pm_a.start();
@@ -687,8 +687,8 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -777,8 +777,8 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -857,8 +857,8 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -936,8 +936,8 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -1011,7 +1011,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
     PeerManager pm(cfg, id, eng, store, ioc, pool, acl);
 
     bool notified = false;
@@ -1111,8 +1111,8 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     auto blob_hash = ingest_result.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1198,8 +1198,8 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         REQUIRE(r.accepted);
 
         asio::io_context ioc;
-        AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-        AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+        AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+        AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
         PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
         pm1.start();
@@ -1267,8 +1267,8 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         REQUIRE(r2.accepted);
 
         asio::io_context ioc;
-        AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-        AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+        AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+        AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
         PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
         pm1.start();
@@ -1329,8 +1329,8 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -1439,8 +1439,8 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1495,7 +1495,7 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
 
@@ -1542,7 +1542,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1625,7 +1625,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     cfg1.sync_interval_seconds = 60;  // Node1 does not initiate sync
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 10;  // 10-second cooldown on inbound SyncRequest
-    cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
+    cfg1.allowed_peer_keys = {id2_ns_hex};  // Closed mode: skip PEX
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
@@ -1633,7 +1633,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     cfg2.sync_interval_seconds = 1;   // Node2 syncs every 1s (hits cooldown)
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;   // No cooldown on node2
-    cfg2.allowed_keys = {id1_ns_hex};  // Closed mode: skip PEX
+    cfg2.allowed_peer_keys = {id1_ns_hex};  // Closed mode: skip PEX
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -1642,8 +1642,8 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1688,7 +1688,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     cfg1.sync_interval_seconds = 60;   // Node1 does not initiate sync
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;    // Disabled -- no cooldown
-    cfg1.allowed_keys = {id2_ns_hex};  // Closed mode: skip PEX
+    cfg1.allowed_peer_keys = {id2_ns_hex};  // Closed mode: skip PEX
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
@@ -1696,7 +1696,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     cfg2.sync_interval_seconds = 1;    // Node2 syncs every 1s
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
-    cfg2.allowed_keys = {id1_ns_hex};  // Closed mode: skip PEX
+    cfg2.allowed_peer_keys = {id1_ns_hex};  // Closed mode: skip PEX
 
     Storage store1(tmp1.path.string());
     Storage store2(tmp2.path.string());
@@ -1705,8 +1705,8 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1769,8 +1769,8 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     }
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1835,8 +1835,8 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1909,8 +1909,8 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     REQUIRE(r2.accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -1976,7 +1976,7 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
     pm1.start();
@@ -2060,8 +2060,8 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     REQUIRE(run_async(pool, eng1.ingest(blob2)).accepted);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -2111,7 +2111,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1, config_path);
     pm1.start();
@@ -2214,8 +2214,8 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
-    AccessControl acl2(cfg2.allowed_keys, id2.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
     pm1.start();
@@ -2254,7 +2254,7 @@ TEST_CASE("Inactivity timeout disabled when config is 0", "[peer][inactivity]") 
     BlobEngine eng1(store1, pool);
 
     asio::io_context ioc;
-    AccessControl acl1(cfg1.allowed_keys, id1.namespace_id());
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
 
@@ -2316,7 +2316,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
 
@@ -2382,7 +2382,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
 
@@ -2467,7 +2467,7 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
 
@@ -2566,7 +2566,7 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     auto stored_hash = result.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -2658,7 +2658,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -2808,7 +2808,7 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     REQUIRE(run_async(pool, eng.ingest(b3)).accepted);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -2904,7 +2904,7 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3015,7 +3015,7 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     REQUIRE(run_async(pool, eng.ingest(d1)).accepted);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3136,7 +3136,7 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     auto stored_hash = r1.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3272,7 +3272,7 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     auto hash2 = r2.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3365,7 +3365,7 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
         std::span<const uint8_t>(delegate2.public_key()));
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3478,7 +3478,7 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     auto hash3 = r3.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3580,7 +3580,7 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     BlobEngine eng(store, pool);
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));
@@ -3689,7 +3689,7 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     auto hash3 = r3.ack->blob_hash;
 
     asio::io_context ioc;
-    AccessControl acl(cfg.allowed_keys, server_id.namespace_id());
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
     PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
     pm.start();
     ioc.run_for(std::chrono::milliseconds(200));

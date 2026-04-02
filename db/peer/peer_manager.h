@@ -158,7 +158,7 @@ public:
         uint32_t blob_size,
         bool is_tombstone);
 
-    /// Reload allowed_keys from config file and disconnect revoked peers.
+    /// Reload allowed_client_keys and allowed_peer_keys from config file and disconnect revoked peers.
     /// Public for testing; called internally by SIGHUP handler.
     void reload_config();
 

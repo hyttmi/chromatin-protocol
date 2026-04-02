@@ -24,74 +24,130 @@ AccessControl::NamespaceHash AccessControl::hex_to_bytes(const std::string& hex)
     return result;
 }
 
-AccessControl::AccessControl(const std::vector<std::string>& hex_keys,
+AccessControl::AccessControl(const std::vector<std::string>& client_hex_keys,
+                             const std::vector<std::string>& peer_hex_keys,
                              std::span<const uint8_t, 32> own_namespace) {
     std::copy(own_namespace.begin(), own_namespace.end(), own_namespace_.begin());
 
-    configured_count_ = hex_keys.size();
-    for (const auto& hex : hex_keys) {
-        allowed_keys_.insert(hex_to_bytes(hex));
+    client_configured_count_ = client_hex_keys.size();
+    for (const auto& hex : client_hex_keys) {
+        allowed_client_keys_.insert(hex_to_bytes(hex));
+    }
+    if (client_configured_count_ > 0) {
+        allowed_client_keys_.insert(own_namespace_);
     }
 
-    // Always allow own namespace (even if not listed)
-    if (configured_count_ > 0) {
-        allowed_keys_.insert(own_namespace_);
+    peer_configured_count_ = peer_hex_keys.size();
+    for (const auto& hex : peer_hex_keys) {
+        allowed_peer_keys_.insert(hex_to_bytes(hex));
+    }
+    if (peer_configured_count_ > 0) {
+        allowed_peer_keys_.insert(own_namespace_);
     }
 }
 
-bool AccessControl::is_allowed(std::span<const uint8_t, 32> namespace_hash) const {
-    if (!is_closed_mode()) {
-        return true;  // Open mode: allow all
+bool AccessControl::is_client_allowed(std::span<const uint8_t, 32> namespace_hash) const {
+    if (!is_client_closed_mode()) {
+        return true;  // Open mode: allow all clients
     }
 
     NamespaceHash key;
     std::copy(namespace_hash.begin(), namespace_hash.end(), key.begin());
-    return allowed_keys_.count(key) > 0;
+    return allowed_client_keys_.count(key) > 0;
 }
 
-bool AccessControl::is_closed_mode() const {
-    return configured_count_ > 0;
-}
-
-size_t AccessControl::allowed_count() const {
-    return configured_count_;
-}
-
-AccessControl::ReloadResult AccessControl::reload(const std::vector<std::string>& hex_keys) {
-    // Build new set (without own namespace for accurate diff)
-    std::set<NamespaceHash> new_keys;
-    for (const auto& hex : hex_keys) {
-        new_keys.insert(hex_to_bytes(hex));
+bool AccessControl::is_peer_allowed(std::span<const uint8_t, 32> namespace_hash) const {
+    if (!is_peer_closed_mode()) {
+        return true;  // Open mode: allow all peers
     }
 
-    // Build old configured set (without own namespace)
-    std::set<NamespaceHash> old_keys;
-    for (const auto& key : allowed_keys_) {
-        if (key != own_namespace_) {
-            old_keys.insert(key);
-        }
-    }
+    NamespaceHash key;
+    std::copy(namespace_hash.begin(), namespace_hash.end(), key.begin());
+    return allowed_peer_keys_.count(key) > 0;
+}
 
-    // Compute diff
+bool AccessControl::is_client_closed_mode() const {
+    return client_configured_count_ > 0;
+}
+
+bool AccessControl::is_peer_closed_mode() const {
+    return peer_configured_count_ > 0;
+}
+
+size_t AccessControl::client_allowed_count() const {
+    return client_configured_count_;
+}
+
+size_t AccessControl::peer_allowed_count() const {
+    return peer_configured_count_;
+}
+
+AccessControl::ReloadResult AccessControl::reload(const std::vector<std::string>& client_hex_keys,
+                                                   const std::vector<std::string>& peer_hex_keys) {
     ReloadResult result;
-    for (const auto& key : new_keys) {
-        if (old_keys.count(key) == 0) {
-            result.added++;
+
+    // --- Client keys ---
+    {
+        std::set<NamespaceHash> new_keys;
+        for (const auto& hex : client_hex_keys) {
+            new_keys.insert(hex_to_bytes(hex));
         }
-    }
-    for (const auto& key : old_keys) {
-        if (new_keys.count(key) == 0) {
-            result.removed++;
+
+        std::set<NamespaceHash> old_keys;
+        for (const auto& key : allowed_client_keys_) {
+            if (key != own_namespace_) {
+                old_keys.insert(key);
+            }
+        }
+
+        for (const auto& key : new_keys) {
+            if (old_keys.count(key) == 0) {
+                result.client_added++;
+            }
+        }
+        for (const auto& key : old_keys) {
+            if (new_keys.count(key) == 0) {
+                result.client_removed++;
+            }
+        }
+
+        allowed_client_keys_ = std::move(new_keys);
+        client_configured_count_ = client_hex_keys.size();
+        if (client_configured_count_ > 0) {
+            allowed_client_keys_.insert(own_namespace_);
         }
     }
 
-    // Swap
-    allowed_keys_ = std::move(new_keys);
-    configured_count_ = hex_keys.size();
+    // --- Peer keys ---
+    {
+        std::set<NamespaceHash> new_keys;
+        for (const auto& hex : peer_hex_keys) {
+            new_keys.insert(hex_to_bytes(hex));
+        }
 
-    // Re-add own namespace if in closed mode
-    if (configured_count_ > 0) {
-        allowed_keys_.insert(own_namespace_);
+        std::set<NamespaceHash> old_keys;
+        for (const auto& key : allowed_peer_keys_) {
+            if (key != own_namespace_) {
+                old_keys.insert(key);
+            }
+        }
+
+        for (const auto& key : new_keys) {
+            if (old_keys.count(key) == 0) {
+                result.peer_added++;
+            }
+        }
+        for (const auto& key : old_keys) {
+            if (new_keys.count(key) == 0) {
+                result.peer_removed++;
+            }
+        }
+
+        allowed_peer_keys_ = std::move(new_keys);
+        peer_configured_count_ = peer_hex_keys.size();
+        if (peer_configured_count_ > 0) {
+            allowed_peer_keys_.insert(own_namespace_);
+        }
     }
 
     return result;
