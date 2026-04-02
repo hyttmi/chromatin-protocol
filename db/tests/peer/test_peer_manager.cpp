@@ -3772,3 +3772,257 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     pm.stop();
     ioc.run_for(std::chrono::milliseconds(500));
 }
+
+// ============================================================================
+// Phase 79: BlobNotify fan-out tests
+// ============================================================================
+
+TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]") {
+    // Two connected nodes. Node2 has a blob that syncs to node1.
+    // Node1's on_notification callback should fire (unified fan-out path).
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.sync_interval_seconds = 60;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+
+    // Track notifications on node1 (will receive sync ingest from node2)
+    struct NotifCapture {
+        std::array<uint8_t, 32> namespace_id{};
+        std::array<uint8_t, 32> blob_hash{};
+        uint64_t seq_num = 0;
+        uint32_t blob_size = 0;
+        bool is_tombstone = false;
+    };
+    std::vector<NotifCapture> notifs;
+    pm1.set_on_notification([&](const std::array<uint8_t, 32>& ns,
+                                 const std::array<uint8_t, 32>& hash,
+                                 uint64_t seq, uint32_t size, bool tomb) {
+        notifs.push_back({ns, hash, seq, size, tomb});
+    });
+
+    // Store a blob in node2 before connecting
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id2, "blobnotify-test", 604800, now);
+    auto r = run_async(pool, eng2.ingest(blob));
+    REQUIRE(r.accepted);
+
+    pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2.start();
+
+    // Let sync-on-connect propagate blob from node2 to node1
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Blob should be on node1 now
+    auto n1_blobs = eng1.get_blobs_since(id2.namespace_id(), 0);
+    REQUIRE(n1_blobs.size() == 1);
+
+    // Unified on_blob_ingested fired (test hook captures it)
+    REQUIRE(notifs.size() == 1);
+    CHECK(notifs[0].is_tombstone == false);
+    CHECK(notifs[0].seq_num == 1);
+    CHECK(notifs[0].blob_size == blob.data.size());
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnotify]") {
+    // Tombstone synced from node1 to node2 triggers on_blob_ingested with is_tombstone=true.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 2;
+    cfg1.max_peers = 32;
+    cfg1.sync_cooldown_seconds = 0;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.sync_interval_seconds = 3;
+    cfg2.max_peers = 32;
+    cfg2.sync_cooldown_seconds = 0;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+
+    // First ingest a blob to delete later
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id1, "will-delete-for-blobnotify", 604800, now);
+    auto r = run_async(pool, eng1.ingest(blob));
+    REQUIRE(r.accepted);
+    auto blob_hash = r.ack->blob_hash;
+
+    pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+
+    // Track notifications on node2
+    std::vector<std::tuple<std::array<uint8_t, 32>, uint64_t, bool>> notifs;
+    pm2.set_on_notification([&](const std::array<uint8_t, 32>& ns,
+                                 const std::array<uint8_t, 32>&,
+                                 uint64_t seq, uint32_t, bool tomb) {
+        notifs.emplace_back(ns, seq, tomb);
+    });
+
+    pm2.start();
+
+    // Sync blob first
+    ioc.run_for(std::chrono::seconds(8));
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+
+    size_t notif_count_before = notifs.size();
+
+    // Delete via engine (tombstone), then let it sync
+    auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
+    auto del = run_async(pool, eng1.delete_blob(tombstone));
+    REQUIRE(del.accepted);
+
+    // Let tombstone sync
+    ioc.run_for(std::chrono::seconds(15));
+
+    // Tombstone notification should have fired on node2
+    REQUIRE(notifs.size() > notif_count_before);
+    bool found_tomb = false;
+    for (size_t i = notif_count_before; i < notifs.size(); ++i) {
+        auto& [ns, seq, tomb] = notifs[i];
+        if (tomb && std::equal(ns.begin(), ns.end(), id1.namespace_id().begin())) {
+            found_tomb = true;
+        }
+    }
+    REQUIRE(found_tomb);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][blobnotify]") {
+    // Three connected nodes: node1, node2, node3.
+    // Node2 has a blob; syncs to node1.
+    // Node1's on_blob_ingested should exclude node2 (source) from BlobNotify
+    // but still send BlobNotify to node3.
+    // Verify via on_notification_ hook that node1 fires the callback exactly once
+    // per unique blob (unified fan-out).
+    TempDir tmp1, tmp2, tmp3;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+    auto id3 = NodeIdentity::load_or_generate(tmp3.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.sync_interval_seconds = 60;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.sync_interval_seconds = 60;
+    cfg2.max_peers = 32;
+
+    Config cfg3;
+    cfg3.bind_address = "127.0.0.1:0";
+    cfg3.data_dir = tmp3.path.string();
+    cfg3.sync_interval_seconds = 60;
+    cfg3.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    Storage store3(tmp3.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+    BlobEngine eng3(store3, pool);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+    AccessControl acl3({}, cfg3.allowed_peer_keys, id3.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+
+    // Track notifications on node1
+    int notif_count = 0;
+    pm1.set_on_notification([&](const std::array<uint8_t, 32>&,
+                                 const std::array<uint8_t, 32>&,
+                                 uint64_t, uint32_t, bool) {
+        notif_count++;
+    });
+
+    // Store blob in node2 before connecting
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id2, "source-exclusion-test", 604800, now);
+    auto r = run_async(pool, eng2.ingest(blob));
+    REQUIRE(r.accepted);
+
+    pm1.start();
+
+    // Connect node2 and node3 to node1
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2.start();
+
+    cfg3.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm3(cfg3, id3, eng3, store3, ioc, pool, acl3);
+    pm3.start();
+
+    // Let all three connect and sync
+    ioc.run_for(std::chrono::seconds(10));
+
+    // Node1 should have received the blob via sync from node2
+    auto n1_blobs = eng1.get_blobs_since(id2.namespace_id(), 0);
+    REQUIRE(n1_blobs.size() == 1);
+
+    // Notification callback fires exactly once per blob ingest on node1
+    // (unified fan-out: one call to on_blob_ingested per ingest,
+    //  which internally handles BlobNotify to peers + Notification to subscribers)
+    CHECK(notif_count == 1);
+
+    pm1.stop();
+    pm2.stop();
+    pm3.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}

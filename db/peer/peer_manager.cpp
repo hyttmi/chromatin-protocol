@@ -154,12 +154,12 @@ PeerManager::PeerManager(const config::Config& config,
         uds_acceptor_->set_pool(pool);
     }
 
-    // Set up sync-received blob notification callback
+    // Set up sync-received blob notification callback (unified fan-out)
     sync_proto_.set_on_blob_ingested(
         [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
                uint64_t seq, uint32_t size, bool tombstone,
-               net::Connection::Ptr /*source*/) {
-            notify_subscribers(ns, hash, seq, size, tombstone);
+               net::Connection::Ptr source) {
+            on_blob_ingested(ns, hash, seq, size, tombstone, std::move(source));
         });
 }
 
@@ -689,14 +689,15 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
                                                  std::span<const uint8_t>(ack_payload), request_id);
-                    // Notify subscribers about tombstone
+                    // Notify all peers about tombstone
                     if (ack.status == engine::IngestStatus::stored) {
-                        notify_subscribers(
+                        on_blob_ingested(
                             blob.namespace_id,
                             ack.blob_hash,
                             ack.seq_num,
                             static_cast<uint32_t>(blob.data.size()),
-                            true);  // tombstone notification
+                            true,      // tombstone
+                            nullptr);  // Client write: notify ALL peers
                     }
                 } else if (result.error.has_value()) {
                     spdlog::warn("delete rejected from {}: {}",
@@ -1634,7 +1635,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 // engine_.ingest() internally calls crypto::offload(pool_, ...) which
                 // resumes this coroutine on the thread pool. All subsequent code must
                 // run on the IO thread: send_message (AEAD nonce safety),
-                // notify_subscribers (peers_ access), metrics_, record_strike.
+                // on_blob_ingested (peers_ access), metrics_, record_strike.
                 co_await asio::post(ioc_, asio::use_awaitable);
                 // Send WriteAck for all accepted ingests (stored + duplicate)
                 if (result.accepted && result.ack.has_value()) {
@@ -1651,12 +1652,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
                 if (result.accepted && result.ack.has_value() &&
                     result.ack->status == engine::IngestStatus::stored) {
-                    notify_subscribers(
+                    on_blob_ingested(
                         blob.namespace_id,
                         result.ack->blob_hash,
                         result.ack->seq_num,
                         static_cast<uint32_t>(blob.data.size()),
-                        wire::is_tombstone(blob.data));
+                        wire::is_tombstone(blob.data),
+                        nullptr);  // Client write: notify ALL peers
                     ++metrics_.ingests;
                 } else if (result.accepted) {
                     ++metrics_.ingests;  // Duplicate or already-known blob
@@ -2065,7 +2067,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                               conn->remote_address(), static_cast<int>(msg->type));
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = co_await sync_proto_.ingest_blobs(blobs);
+                    auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
@@ -2464,7 +2466,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = co_await sync_proto_.ingest_blobs(blobs);
+                    auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
@@ -2918,32 +2920,45 @@ std::vector<std::string> PeerManager::decode_peer_list(std::span<const uint8_t> 
 }
 
 // =============================================================================
-// Pub/Sub notification dispatch
+// Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
 // =============================================================================
 
-void PeerManager::notify_subscribers(
+void PeerManager::on_blob_ingested(
     const std::array<uint8_t, 32>& namespace_id,
     const std::array<uint8_t, 32>& blob_hash,
     uint64_t seq_num,
     uint32_t blob_size,
-    bool is_tombstone) {
+    bool is_tombstone,
+    net::Connection::Ptr source) {
     // Test hook -- fire notification callback if set
     if (on_notification_) {
         on_notification_(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
     }
 
-    // Build notification payload once
+    // Build notification payload once (77 bytes) -- reuse existing encode_notification
     auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
 
-    // Fan out to all subscribed peers
+    // BlobNotify (type 59) to all TCP peers except source (PUSH-01, PUSH-07, PUSH-08)
+    for (auto& peer : peers_) {
+        if (peer.connection == source) continue;  // Source exclusion (D-06, D-09)
+        if (peer.connection->is_uds()) continue;  // UDS = client, not peer
+
+        auto conn = peer.connection;
+        auto payload_copy = payload;
+        asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
+            co_await conn->send_message(wire::TransportMsgType_BlobNotify,
+                                         std::span<const uint8_t>(p));
+        }, asio::detached);
+    }
+
+    // Notification (type 21) to subscribed clients -- existing pub/sub behavior
     for (auto& peer : peers_) {
         if (peer.subscribed_namespaces.count(namespace_id)) {
             auto conn = peer.connection;
-            auto payload_copy = payload;  // Copy for each co_spawn
-            asio::co_spawn(ioc_, [conn, payload_copy = std::move(payload_copy)]() -> asio::awaitable<void> {
-                co_await conn->send_message(
-                    wire::TransportMsgType_Notification,
-                    std::span<const uint8_t>(payload_copy));
+            auto payload_copy = payload;
+            asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
+                co_await conn->send_message(wire::TransportMsgType_Notification,
+                                             std::span<const uint8_t>(p));
             }, asio::detached);
         }
     }
