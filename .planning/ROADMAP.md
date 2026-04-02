@@ -217,6 +217,11 @@ Plans:
   1. PROTOCOL.md contains the complete envelope binary format specification and the HKDF label registry lists all four domain labels (two transport, one DARE, one envelope KEK)
   2. SDK README has an encryption API section documenting write_encrypted, read_encrypted, write_to_group, directory setup, and group management
   3. Getting started tutorial includes a complete encryption workflow example (identity generation through encrypted write/read)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 78-01-PLAN.md -- PROTOCOL.md envelope format spec, HKDF label registry, KEM-then-Wrap pattern, AEAD parameters
+- [ ] 78-02-PLAN.md -- SDK README encryption API section + getting-started tutorial encryption workflow
 
 ## Progress
 
@@ -228,4 +233,4 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
 | 76. Directory & User Discovery | 2/2 | Complete    | 2026-04-01 |
 | 77. Groups & Encrypted Client Helpers | 2/2 | Complete    | 2026-04-02 |
-| 78. Documentation & Polish | 0/? | Not started | - |
+| 78. Documentation & Polish | 0/2 | Not started | - |
