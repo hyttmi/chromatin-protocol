@@ -68,6 +68,8 @@ TEST_CASE("is_client_allowed blocks peer operation types", "[message_filter]") {
     CHECK_FALSE(is_client_allowed(TransportMsgType_BlobTransfer));
     CHECK_FALSE(is_client_allowed(TransportMsgType_StorageFull));
     CHECK_FALSE(is_client_allowed(TransportMsgType_TrustedHello));
+    // Push notifications (peer-internal)
+    CHECK_FALSE(is_client_allowed(TransportMsgType_BlobNotify));
 }
 
 TEST_CASE("is_client_allowed blocks handshake and internal types", "[message_filter]") {

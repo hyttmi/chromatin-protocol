@@ -73,7 +73,9 @@ enum TransportMsgType : byte {
     PeerInfoRequest = 55,
     PeerInfoResponse = 56,
     TimeRangeRequest = 57,
-    TimeRangeResponse = 58
+    TimeRangeResponse = 58,
+    // Phase 79: Push notifications
+    BlobNotify = 59
 }
 
 table TransportMessage {

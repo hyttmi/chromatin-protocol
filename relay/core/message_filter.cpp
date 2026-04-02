@@ -33,6 +33,8 @@ bool is_client_allowed(TransportMsgType type) {
         // Internal signals
         case TransportMsgType_StorageFull:
         case TransportMsgType_QuotaExceeded:
+        // Push notifications (peer-internal)
+        case TransportMsgType_BlobNotify:
             return false;
         // All other types (client operations, queries, pub/sub, keepalive)
         // pass through — new message types work without relay changes.
