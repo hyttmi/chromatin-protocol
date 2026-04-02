@@ -466,6 +466,15 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
     spdlog::info("Peer {} disconnected ({})", ns_hex,
                  graceful ? "graceful" : "timeout");
 
+    // Phase 80: Clean pending BlobFetch entries for this peer (D-09 fire-and-forget cleanup)
+    for (auto it = pending_fetches_.begin(); it != pending_fetches_.end(); ) {
+        if (it->second == conn) {
+            it = pending_fetches_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Remove from peers
     peers_.erase(
         std::remove_if(peers_.begin(), peers_.end(),
@@ -659,6 +668,22 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                          peer_display_name(conn), namespaces.size(),
                          peer->subscribed_namespaces.size());
         }
+        return;
+    }
+
+    // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
+    if (type == wire::TransportMsgType_BlobNotify) {
+        on_blob_notify(conn, std::move(payload));
+        return;
+    }
+
+    if (type == wire::TransportMsgType_BlobFetch) {
+        handle_blob_fetch(conn, std::move(payload));
+        return;
+    }
+
+    if (type == wire::TransportMsgType_BlobFetchResponse) {
+        handle_blob_fetch_response(conn, std::move(payload));
         return;
     }
 
@@ -2962,6 +2987,125 @@ void PeerManager::on_blob_ingested(
             }, asio::detached);
         }
     }
+}
+
+// =============================================================================
+// Phase 80: Targeted blob fetch
+// =============================================================================
+
+void PeerManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
+    // BlobNotify payload: [namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
+    if (payload.size() != 77) return;
+
+    auto* peer = find_peer(conn);
+    if (!peer) return;
+
+    std::array<uint8_t, 32> ns{}, hash{};
+    std::memcpy(ns.data(), payload.data(), 32);
+    std::memcpy(hash.data(), payload.data() + 32, 32);
+
+    // D-07: Suppress during active sync with this peer
+    if (peer->syncing) {
+        spdlog::debug("BlobNotify from {} suppressed: sync active", peer_display_name(conn));
+        return;
+    }
+
+    // D-04: Already have this blob?
+    if (storage_.has_blob(ns, hash)) return;
+
+    // D-05: Already fetching this blob?
+    if (pending_fetches_.count(hash)) return;
+    pending_fetches_.emplace(hash, conn);
+
+    // Send BlobFetch: [namespace_id:32][blob_hash:32] = 64 bytes
+    // Using namespace_id+hash because storage_.get_blob() requires compound key
+    // (corrected from D-01 hash-only design -- see RESEARCH.md)
+    asio::co_spawn(ioc_, [this, conn, ns, hash]() -> asio::awaitable<void> {
+        std::vector<uint8_t> fetch_payload(64);
+        std::memcpy(fetch_payload.data(), ns.data(), 32);
+        std::memcpy(fetch_payload.data() + 32, hash.data(), 32);
+        co_await conn->send_message(wire::TransportMsgType_BlobFetch,
+                                     std::span<const uint8_t>(fetch_payload));
+    }, asio::detached);
+}
+
+void PeerManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
+    // BlobFetch payload: [namespace_id:32][blob_hash:32] = 64 bytes
+    if (payload.size() != 64) return;
+
+    // co_spawn on ioc_ for storage lookup + send (same pattern as ReadRequest)
+    asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        std::array<uint8_t, 32> ns{}, hash{};
+        std::memcpy(ns.data(), payload.data(), 32);
+        std::memcpy(hash.data(), payload.data() + 32, 32);
+
+        auto blob = storage_.get_blob(ns, hash);
+        if (blob) {
+            auto encoded = wire::encode_blob(*blob);
+            std::vector<uint8_t> resp(1 + encoded.size());
+            resp[0] = 0x00;  // D-03: found
+            std::memcpy(resp.data() + 1, encoded.data(), encoded.size());
+            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
+                                         std::span<const uint8_t>(resp));
+        } else {
+            std::vector<uint8_t> resp = {0x01};  // D-03: not-found
+            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
+                                         std::span<const uint8_t>(resp));
+        }
+    }, asio::detached);
+}
+
+void PeerManager::handle_blob_fetch_response(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
+    if (payload.empty()) return;
+
+    uint8_t status = payload[0];
+    if (status == 0x01) {
+        // D-08: Not-found -- debug log, pending set entry stays until disconnect (harmless)
+        spdlog::debug("BlobFetchResponse not-found from {}", peer_display_name(conn));
+        return;
+    }
+    if (status != 0x00 || payload.size() < 2) return;
+
+    // co_spawn with engine offload (same pattern as Data handler, CONC-03)
+    asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
+        try {
+            auto blob = wire::decode_blob(
+                std::span<const uint8_t>(payload.data() + 1, payload.size() - 1));
+
+            auto result = co_await engine_.ingest(blob, conn);
+
+            // CONC-03: Transfer back to IO thread before accessing PeerManager state
+            co_await asio::post(ioc_, asio::use_awaitable);
+
+            // Clean pending set using ack blob_hash (Pitfall 5 from RESEARCH.md)
+            if (result.accepted && result.ack.has_value()) {
+                pending_fetches_.erase(result.ack->blob_hash);
+
+                if (result.ack->status == engine::IngestStatus::stored) {
+                    // Fan-out notification to other peers (source=conn excludes sender)
+                    on_blob_ingested(
+                        blob.namespace_id,
+                        result.ack->blob_hash,
+                        result.ack->seq_num,
+                        static_cast<uint32_t>(blob.data.size()),
+                        wire::is_tombstone(blob.data),
+                        conn);  // Source exclusion: don't notify the peer we fetched from
+                    ++metrics_.ingests;
+                } else {
+                    // Duplicate -- already had it (race with concurrent sync)
+                    ++metrics_.ingests;
+                }
+            } else if (!result.accepted && result.error.has_value()) {
+                // D-10: Failed ingestion -- log warning, no disconnect, no strike
+                spdlog::warn("BlobFetchResponse ingest rejected from {}: {}",
+                             peer_display_name(conn), result.error_detail);
+            }
+        } catch (const std::exception& e) {
+            // D-10: Malformed response -- log warning, no disconnect, no strike
+            spdlog::warn("malformed BlobFetchResponse from {}: {}",
+                         conn->remote_address(), e.what());
+        }
+    }, asio::detached);
 }
 
 // =============================================================================
