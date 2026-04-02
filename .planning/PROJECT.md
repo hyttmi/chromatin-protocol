@@ -323,4 +323,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after Phase 77 (groups & encrypted client helpers) complete*
+*Last updated: 2026-04-02 after Phase 78 (documentation & polish) complete — v1.7.0 milestone done*
