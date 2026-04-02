@@ -9,6 +9,7 @@ Type=simple
 User=chromatindb
 Group=chromatindb
 ExecStart=/usr/local/bin/chromatindb_relay run --config /etc/chromatindb/relay.json
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 

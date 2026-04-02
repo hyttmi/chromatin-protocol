@@ -1,4 +1,5 @@
 #include "db/peer/peer_manager.h"
+#include "db/logging/logging.h"
 #include "db/peer/sync_reject.h"
 #include "db/sync/reconciliation.h"
 #include "db/util/hex.h"
@@ -2768,6 +2769,10 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: {} per-namespace quota overrides",
                      new_cfg.namespace_quotas.size());
     }
+
+    // Reload log level
+    chromatindb::logging::set_level(new_cfg.log_level);
+    spdlog::info("config reload: log_level={}", new_cfg.log_level);
 
     // Reload trusted_peers
     try {

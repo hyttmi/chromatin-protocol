@@ -19,6 +19,10 @@ void init(const std::string& level = "info",
           uint32_t max_files = 3,
           const std::string& log_format = "text");
 
+/// Change the log level at runtime (e.g. on SIGHUP config reload).
+/// Updates the default logger, all registered named loggers, and the global level.
+void set_level(const std::string& level);
+
 /// Get or create a named logger.
 /// Uses shared sinks from init() so all loggers write to both console and file.
 std::shared_ptr<spdlog::logger> get_logger(const std::string& name);

@@ -63,6 +63,17 @@ void init(const std::string& level,
     spdlog::set_default_logger(default_logger);
 }
 
+void set_level(const std::string& level) {
+    auto new_level = parse_level(level);
+    if (new_level == global_level) return;
+
+    global_level = new_level;
+    spdlog::default_logger()->set_level(global_level);
+    spdlog::apply_all([](std::shared_ptr<spdlog::logger> logger) {
+        logger->set_level(global_level);
+    });
+}
+
 std::shared_ptr<spdlog::logger> get_logger(const std::string& name) {
     auto logger = spdlog::get(name);
     if (!logger) {
