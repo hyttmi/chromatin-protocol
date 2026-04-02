@@ -346,4 +346,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after starting v2.0.0 Event-Driven Architecture milestone*
+*Last updated: 2026-04-02 — Phase 79 complete: per-connection send queue + BlobNotify fan-out (v2.0.0)*
