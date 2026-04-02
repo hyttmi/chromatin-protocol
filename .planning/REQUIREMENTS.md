@@ -33,10 +33,10 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 
 ### Groups
 
-- [ ] **GRP-01**: Admin can create a named group in the directory with an initial member list
-- [ ] **GRP-02**: Admin can add or remove members from a group
-- [ ] **GRP-03**: User can list groups and view group membership
-- [ ] **GRP-04**: SDK resolves group name to member KEM pubkeys at encrypt-time
+- [x] **GRP-01**: Admin can create a named group in the directory with an initial member list
+- [x] **GRP-02**: Admin can add or remove members from a group
+- [x] **GRP-03**: User can list groups and view group membership
+- [x] **GRP-04**: SDK resolves group name to member KEM pubkeys at encrypt-time
 
 ### Client Helpers
 
@@ -102,10 +102,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DIR-04 | Phase 76 | Complete |
 | DIR-05 | Phase 76 | Complete |
 | DIR-06 | Phase 76 | Complete |
-| GRP-01 | Phase 77 | Pending |
-| GRP-02 | Phase 77 | Pending |
-| GRP-03 | Phase 77 | Pending |
-| GRP-04 | Phase 77 | Pending |
+| GRP-01 | Phase 77 | Complete |
+| GRP-02 | Phase 77 | Complete |
+| GRP-03 | Phase 77 | Complete |
+| GRP-04 | Phase 77 | Complete |
 | CLI-01 | Phase 77 | Pending |
 | CLI-02 | Phase 77 | Pending |
 | CLI-03 | Phase 77 | Pending |

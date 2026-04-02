@@ -203,10 +203,10 @@ Plans:
   3. User can call write_encrypted(data, recipients) which encrypts and stores a blob, and read_encrypted(blob_hash) which fetches, finds stanza, decrypts and returns plaintext
   4. User can call write_to_group(data, group_name) to encrypt for all current group members (SDK resolves group to KEM pubkeys at encrypt-time)
   5. User can call write_encrypted(data) with no recipients to encrypt to self only
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 77-01-PLAN.md -- GroupEntry dataclass, GRPE binary codec, Directory group methods, cache extension, and unit tests
+- [x] 77-01-PLAN.md -- GroupEntry dataclass, GRPE binary codec, Directory group methods, cache extension, and unit tests
 - [ ] 77-02-PLAN.md -- write_encrypted, read_encrypted, write_to_group on ChromatinClient + GroupEntry re-export + unit tests
 
 ### Phase 78: Documentation & Polish
@@ -227,5 +227,5 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 |-------|----------------|--------|-----------|
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
 | 76. Directory & User Discovery | 2/2 | Complete    | 2026-04-01 |
-| 77. Groups & Encrypted Client Helpers | 0/2 | Not started | - |
+| 77. Groups & Encrypted Client Helpers | 1/2 | In Progress|  |
 | 78. Documentation & Polish | 0/? | Not started | - |
