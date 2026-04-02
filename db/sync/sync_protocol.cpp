@@ -63,7 +63,9 @@ void SyncProtocol::set_on_blob_ingested(OnBlobIngested callback) {
     on_blob_ingested_ = std::move(callback);
 }
 
-asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(const std::vector<wire::BlobData>& blobs) {
+asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
+    const std::vector<wire::BlobData>& blobs,
+    std::shared_ptr<net::Connection> source) {
     SyncStats stats;
     uint64_t now = clock_();
     uint32_t storage_full_count = 0;
@@ -76,7 +78,7 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(const std::vector<wire::Bl
             continue;
         }
 
-        auto result = co_await engine_.ingest(blob);
+        auto result = co_await engine_.ingest(blob, source);
         if (result.accepted) {
             stats.blobs_received++;
             // Notify subscribers about successful sync-received ingest
@@ -88,7 +90,8 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(const std::vector<wire::Bl
                     result.ack->blob_hash,
                     result.ack->seq_num,
                     static_cast<uint32_t>(blob.data.size()),
-                    wire::is_tombstone(blob.data));
+                    wire::is_tombstone(blob.data),
+                    source);
             }
         } else if (result.error.has_value()) {
             if (*result.error == engine::IngestError::storage_full) {

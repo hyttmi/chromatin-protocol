@@ -99,7 +99,9 @@ std::pair<uint64_t, uint64_t> BlobEngine::effective_quota(
     return {namespace_quota_bytes_, namespace_quota_count_};
 }
 
-asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
+asio::awaitable<IngestResult> BlobEngine::ingest(
+    const wire::BlobData& blob,
+    std::shared_ptr<net::Connection> source) {
     // Step 0: Size check (cheapest possible -- one integer comparison)
     if (blob.data.size() > net::MAX_BLOB_DATA_SIZE) {
         spdlog::warn("Ingest rejected: blob data size {} exceeds max {}",
@@ -224,7 +226,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
         ack.seq_num = 0;  // Not looked up for dedup short-circuit (safe: see RESEARCH.md Pitfall 5)
         ack.status = IngestStatus::duplicate;
         ack.replication_count = 1;
-        co_return IngestResult::success(std::move(ack));
+        auto result = IngestResult::success(std::move(ack));
+        result.source = std::move(source);
+        co_return result;
     }
 
     // Step 3: Second dispatch -- build_signing_input + verify BUNDLED (most expensive)
@@ -272,7 +276,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
             ack.seq_num = store_result.seq_num;
             ack.status = IngestStatus::stored;
             ack.replication_count = 1;
-            co_return IngestResult::success(std::move(ack));
+            auto result = IngestResult::success(std::move(ack));
+            result.source = std::move(source);
+            co_return result;
         }
         case storage::StoreResult::Status::Duplicate: {
             WriteAck ack;
@@ -280,7 +286,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
             ack.seq_num = store_result.seq_num;
             ack.status = IngestStatus::duplicate;
             ack.replication_count = 1;
-            co_return IngestResult::success(std::move(ack));
+            auto result = IngestResult::success(std::move(ack));
+            result.source = std::move(source);
+            co_return result;
         }
         case storage::StoreResult::Status::Error:
             co_return IngestResult::rejection(IngestError::storage_error,
@@ -291,7 +299,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(const wire::BlobData& blob) {
     co_return IngestResult::rejection(IngestError::storage_error, "unknown status");
 }
 
-asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& delete_request) {
+asio::awaitable<IngestResult> BlobEngine::delete_blob(
+    const wire::BlobData& delete_request,
+    std::shared_ptr<net::Connection> source) {
     // The delete_request is a BlobData where:
     //   data = tombstone data (4-byte magic + 32-byte target hash = 36 bytes)
     //   ttl = 0 (permanent)
@@ -378,7 +388,9 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& dele
             ack.seq_num = store_result.seq_num;
             ack.status = IngestStatus::stored;
             ack.replication_count = 1;
-            co_return IngestResult::success(std::move(ack));
+            auto result = IngestResult::success(std::move(ack));
+            result.source = std::move(source);
+            co_return result;
         }
         case storage::StoreResult::Status::Duplicate: {
             // Idempotent: tombstone already exists
@@ -387,7 +399,9 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(const wire::BlobData& dele
             ack.seq_num = store_result.seq_num;
             ack.status = IngestStatus::duplicate;
             ack.replication_count = 1;
-            co_return IngestResult::success(std::move(ack));
+            auto result = IngestResult::success(std::move(ack));
+            result.source = std::move(source);
+            co_return result;
         }
         case storage::StoreResult::Status::Error:
             co_return IngestResult::rejection(IngestError::storage_error,

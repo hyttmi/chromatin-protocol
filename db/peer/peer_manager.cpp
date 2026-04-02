@@ -157,7 +157,8 @@ PeerManager::PeerManager(const config::Config& config,
     // Set up sync-received blob notification callback
     sync_proto_.set_on_blob_ingested(
         [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
-               uint64_t seq, uint32_t size, bool tombstone) {
+               uint64_t seq, uint32_t size, bool tombstone,
+               net::Connection::Ptr /*source*/) {
             notify_subscribers(ns, hash, seq, size, tombstone);
         });
 }

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,6 +16,8 @@
 #include "db/crypto/thread_pool.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
+
+namespace chromatindb::net { class Connection; }
 
 namespace chromatindb::engine {
 
@@ -49,6 +52,7 @@ struct IngestResult {
     std::optional<WriteAck> ack;
     std::optional<IngestError> error;
     std::string error_detail;
+    std::shared_ptr<net::Connection> source;  // For notification fan-out (nullptr = client write)
 
     /// Create a successful ingest result.
     static IngestResult success(WriteAck ack);
@@ -97,7 +101,9 @@ public:
     /// Two-dispatch pattern: duplicates pay only one pool round-trip (blob_hash).
     ///
     /// @return IngestResult with WriteAck on success or error on rejection.
-    asio::awaitable<IngestResult> ingest(const wire::BlobData& blob);
+    asio::awaitable<IngestResult> ingest(
+        const wire::BlobData& blob,
+        std::shared_ptr<net::Connection> source = nullptr);
 
     /// Delete a blob by creating a signed tombstone.
     ///
@@ -111,7 +117,9 @@ public:
     ///
     /// Validation: same pipeline as ingest (structural -> namespace -> signature).
     /// On success: deletes target blob if present, stores tombstone, returns ack.
-    asio::awaitable<IngestResult> delete_blob(const wire::BlobData& delete_request);
+    asio::awaitable<IngestResult> delete_blob(
+        const wire::BlobData& delete_request,
+        std::shared_ptr<net::Connection> source = nullptr);
 
     /// Query blobs in a namespace since a given seq_num.
     /// Returns blobs with seq_num > since_seq in ascending order.
