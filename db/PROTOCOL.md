@@ -857,3 +857,108 @@ FlatBuffers serialization is not deterministic across languages. The same logica
 ### ML-DSA-87 Signature Non-determinism
 
 ML-DSA-87 signatures are non-deterministic -- signing the same data twice produces different signatures. Since the FlatBuffer blob includes the signature, this means writing identical data produces a different `blob_hash` each time. SDK tests should verify individual fields (data, ttl, timestamp) rather than comparing serialized bytes.
+
+## Client-Side Envelope Encryption
+
+Multi-recipient envelope encryption for zero-knowledge storage. The node never sees plaintext -- all encryption and decryption happens in the SDK.
+
+### Overview
+
+Envelope encryption uses the KEM-then-Wrap pattern:
+
+1. A random 32-byte Data Encryption Key (DEK) encrypts the plaintext once with ChaCha20-Poly1305
+2. For each recipient: ML-KEM-1024 encapsulation produces a shared secret, HKDF-SHA256 derives a Key Encryption Key (KEK) using the info label `chromatindb-envelope-kek-v1` and empty salt, and the KEK wraps the DEK via ChaCha20-Poly1305 with a zero nonce
+3. The sender is always auto-included as a recipient (cannot lock yourself out)
+4. Recipient stanzas are sorted by `pk_hash` (SHA3-256 of KEM public key) for O(log N) binary search during decryption
+
+Content-addressed deduplication breaks on encrypted data because identical plaintext produces different ciphertext (random DEK, random nonce). This is expected and correct -- it is a fundamental property of randomized encryption.
+
+### Envelope Binary Format
+
+An envelope is a self-contained binary blob stored as the data payload of a standard chromatindb blob. The format is:
+
+```
+[magic:4][version:1][suite:1][recipient_count:2 BE][data_nonce:12][N x stanza:1648][ciphertext+tag]
+```
+
+**Fixed header (20 bytes):**
+
+| Offset | Size | Field | Encoding | Description |
+|--------|------|-------|----------|-------------|
+| 0 | 4 | magic | `CENV` (0x43454E56) | Envelope format identifier |
+| 4 | 1 | version | uint8 | Format version (0x01) |
+| 5 | 1 | suite | uint8 | Cipher suite (0x01 = ML-KEM-1024 + ChaCha20-Poly1305) |
+| 6 | 2 | recipient_count | big-endian uint16 | Number of recipient stanzas (1-256) |
+| 8 | 12 | data_nonce | raw bytes | Random nonce for data AEAD encryption |
+
+**Per-recipient stanza (1648 bytes each, sorted by pk_hash):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 32 | kem_pk_hash | SHA3-256 of recipient's ML-KEM-1024 public key |
+| 32 | 1568 | kem_ciphertext | ML-KEM-1024 encapsulation ciphertext |
+| 1600 | 48 | wrapped_dek | AEAD-encrypted DEK (32-byte key + 16-byte Poly1305 tag) |
+
+**Data payload (variable):**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 20 + N*1648 | variable | ciphertext | ChaCha20-Poly1305 encrypted data + 16-byte tag |
+
+Total envelope size: `20 + (N * 1648) + len(plaintext) + 16` bytes
+
+Per-recipient overhead: 1648 bytes (32 hash + 1568 KEM ciphertext + 48 wrapped DEK)
+
+### AEAD Parameters
+
+#### Data Encryption
+
+| Parameter | Value |
+|-----------|-------|
+| Algorithm | ChaCha20-Poly1305 (IETF, RFC 8439) |
+| Key | Random 32-byte DEK (`secrets.token_bytes(32)`) |
+| Nonce | Random 12 bytes (`secrets.token_bytes(12)`) -- NOT counter-based |
+| Associated data | Full envelope header: fixed header (20 bytes) + all recipient stanzas (N * 1648 bytes) |
+| Tag | 16 bytes (appended to ciphertext) |
+
+The data nonce is random, in contrast to transport AEAD nonces which use a counter (4 zero bytes + 8-byte big-endian counter). Random nonces are correct here because each envelope uses a fresh random DEK -- the same key is never used twice.
+
+#### DEK Wrapping
+
+| Parameter | Value |
+|-----------|-------|
+| Algorithm | ChaCha20-Poly1305 (IETF, RFC 8439) |
+| Key | 32-byte KEK derived via HKDF-SHA256 from ML-KEM shared secret |
+| Nonce | 12 zero bytes (0x000000000000000000000000) |
+| Associated data | Partial header (fixed 20 bytes) + all pk_hash (32 bytes each) + all kem_ciphertext (1568 bytes each) accumulated so far |
+| Output | 48 bytes (32-byte DEK + 16-byte Poly1305 tag) |
+
+Zero nonce is safe because the HKDF-derived KEK is unique per KEM encapsulation -- the ML-KEM shared secret is different for every recipient in every envelope, so the key is never reused.
+
+The KEK is derived as: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes.
+
+### HKDF Label Registry
+
+All HKDF-SHA256 domain separation labels used in the chromatindb protocol:
+
+| Label | Purpose | Salt | IKM | Output | Source |
+|-------|---------|------|-----|--------|--------|
+| `chromatin-init-to-resp-v1` | Transport send key (initiator) / recv key (responder) | empty | ML-KEM shared secret | 32 bytes | Handshake (Step 2) |
+| `chromatin-resp-to-init-v1` | Transport recv key (initiator) / send key (responder) | empty | ML-KEM shared secret | 32 bytes | Handshake (Step 2) |
+| `chromatindb-dare-v1` | Data-at-rest encryption key (node-level) | empty | Node master key | 32 bytes | Node storage |
+| `chromatindb-envelope-kek-v1` | Envelope KEK for DEK wrapping (per-recipient) | empty | ML-KEM shared secret (per encapsulation) | 32 bytes | Envelope encryption |
+
+The session fingerprint shown in the handshake diagram (`chromatin-session-fp-v1`) is NOT an HKDF derivation. Both C++ and Python compute it as `SHA3-256(shared_secret + init_pk + resp_pk)`.
+
+### Decryption
+
+To decrypt an envelope:
+
+1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01
+2. Compute `SHA3-256(own_kem_public_key)` to get own pk_hash
+3. Binary search the sorted stanzas for a matching pk_hash
+4. If not found, reject with NotARecipientError
+5. Decapsulate `kem_ciphertext` with own KEM secret key to recover the shared secret
+6. Derive KEK: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes
+7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
+8. Decrypt data ciphertext with DEK and `data_nonce` from header, using the full header (fixed header + all recipient stanzas) as associated data
