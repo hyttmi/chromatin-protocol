@@ -44,6 +44,19 @@ from chromatindb.generated.blob_generated import (
 TOMBSTONE_MAGIC: bytes = b"\xDE\xAD\xBE\xEF"
 
 
+def _fb_vector_bytes(obj: object, field_offset: int, length: int) -> bytes:
+    """Extract byte vector from FlatBuffer object via buffer slice (zero-copy).
+
+    Avoids per-element Python loop that FlatBuffers codegen produces.
+    """
+    if length == 0:
+        return b""
+    import flatbuffers.number_types as nt
+    o = nt.UOffsetTFlags.py_type(obj._tab.Offset(field_offset))
+    start = obj._tab.Vector(o)
+    return bytes(obj._tab.Bytes[start:start + length])
+
+
 def make_tombstone_data(target_hash: bytes) -> bytes:
     """Build tombstone data: 4-byte magic + 32-byte target blob hash.
 
@@ -203,10 +216,10 @@ def decode_read_response(
     fb_bytes = payload[1:]
     blob = Blob.GetRootAs(fb_bytes, 0)
 
-    data = bytes(blob.Data(j) for j in range(blob.DataLength()))
+    data = _fb_vector_bytes(blob, 8, blob.DataLength())
     ttl = blob.Ttl()
     timestamp = blob.Timestamp()
-    signature = bytes(blob.Signature(j) for j in range(blob.SignatureLength()))
+    signature = _fb_vector_bytes(blob, 14, blob.SignatureLength())
 
     return data, ttl, timestamp, signature
 

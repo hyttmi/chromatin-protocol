@@ -75,7 +75,11 @@ def decode_transport_message(data: bytes) -> tuple[int, bytes, int]:
             payload = b""
         else:
             length: int = msg.PayloadLength()
-            payload = bytes([msg.Payload(j) for j in range(length)])
+            # Extract payload via buffer slice (not per-byte Python loop)
+            import flatbuffers.number_types as nt
+            o = nt.UOffsetTFlags.py_type(msg._tab.Offset(6))
+            start = msg._tab.Vector(o)
+            payload = bytes(msg._tab.Bytes[start:start + length])
         request_id = msg.RequestId()
     except DecodeError:
         raise
