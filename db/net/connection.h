@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -134,6 +135,12 @@ private:
     /// Run the message read loop after handshake.
     asio::awaitable<void> message_loop();
 
+    /// Enqueue an encoded message and wait for the drain coroutine to send it.
+    asio::awaitable<bool> enqueue_send(std::vector<uint8_t> encoded);
+
+    /// Single drain coroutine that serializes all outbound writes.
+    asio::awaitable<void> drain_send_queue();
+
     /// Send a single encrypted frame over the socket.
     asio::awaitable<bool> send_raw(std::span<const uint8_t> data);
 
@@ -153,6 +160,18 @@ private:
     bool authenticated_ = false;
     bool closed_ = false;
     bool received_goodbye_ = false;
+    bool closing_ = false;  // Set after Goodbye enqueued, rejects new sends
+
+    // Send queue (Phase 79 PUSH-04)
+    struct PendingMessage {
+        std::vector<uint8_t> encoded;     // TransportCodec::encode() result
+        asio::steady_timer* completion;   // Owned by enqueue_send coroutine's stack
+        bool* result_ptr;                 // Points to local in enqueue_send
+    };
+    std::deque<PendingMessage> send_queue_;
+    asio::steady_timer send_signal_{socket_.get_executor()};
+    bool drain_running_ = false;
+    static constexpr size_t MAX_SEND_QUEUE = 1024;
 
     SessionKeys session_keys_;
     uint64_t send_counter_ = 0;

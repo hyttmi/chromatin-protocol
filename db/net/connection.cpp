@@ -95,6 +95,7 @@ Connection::Ptr Connection::create_uds_outbound(asio::local::stream_protocol::so
 void Connection::close() {
     if (closed_) return;
     closed_ = true;
+    send_signal_.cancel();  // Wake drain coroutine so it exits
     asio::error_code ec;
     socket_.shutdown(asio::socket_base::shutdown_both, ec);
     socket_.close(ec);
@@ -759,10 +760,9 @@ asio::awaitable<void> Connection::message_loop() {
 
         switch (decoded->type) {
             case wire::TransportMsgType_Ping: {
-                // Reply with Pong
+                // Reply with Pong -- through send queue for AEAD nonce ordering
                 std::span<const uint8_t> empty{};
-                auto pong = TransportCodec::encode(wire::TransportMsgType_Pong, empty);
-                co_await send_encrypted(pong);
+                co_await send_message(wire::TransportMsgType_Pong, empty);
                 break;
             }
             case wire::TransportMsgType_Pong:
@@ -801,7 +801,11 @@ asio::awaitable<bool> Connection::run() {
     // This allows PeerManager to set up message routing and start sync.
     if (ready_cb_) ready_cb_(self);
 
-    co_await message_loop();
+    // Run message_loop and drain_send_queue concurrently.
+    // When message_loop exits (socket closed/error), close() sets closed_=true
+    // and cancels send_signal_, causing drain_send_queue to exit.
+    using namespace asio::experimental::awaitable_operators;
+    co_await (message_loop() && drain_send_queue());
 
     if (close_cb_) close_cb_(self, received_goodbye_);
     co_return true;
@@ -811,7 +815,73 @@ asio::awaitable<bool> Connection::send_message(wire::TransportMsgType type,
                                                 std::span<const uint8_t> payload,
                                                 uint32_t request_id) {
     auto msg = TransportCodec::encode(type, payload, request_id);
-    co_return co_await send_encrypted(msg);
+    co_return co_await enqueue_send(std::move(msg));
+}
+
+asio::awaitable<bool> Connection::enqueue_send(std::vector<uint8_t> encoded) {
+    if (closed_ || closing_) co_return false;
+    if (send_queue_.size() >= MAX_SEND_QUEUE) {
+        spdlog::warn("send queue full ({} messages), disconnecting {}",
+                     MAX_SEND_QUEUE, remote_addr_);
+        close();
+        co_return false;
+    }
+    bool result = false;
+    asio::steady_timer completion(socket_.get_executor());
+    completion.expires_after(std::chrono::hours(24));
+
+    send_queue_.push_back({std::move(encoded), &completion, &result});
+    send_signal_.cancel();  // Wake drain coroutine
+
+    auto [ec] = co_await completion.async_wait(use_nothrow);
+    // ec == operation_aborted means drain coroutine processed our message
+    co_return result;
+}
+
+asio::awaitable<void> Connection::drain_send_queue() {
+    auto self = shared_from_this();
+    drain_running_ = true;
+
+    while (!closed_) {
+        while (!send_queue_.empty() && !closed_) {
+            auto msg = std::move(send_queue_.front());
+            send_queue_.pop_front();
+
+            bool ok = co_await send_encrypted(msg.encoded);
+
+            // Signal the waiting caller
+            if (msg.result_ptr) *msg.result_ptr = ok;
+            if (msg.completion) msg.completion->cancel();
+
+            if (!ok) {
+                // Write failed -- drain remaining messages as failures
+                while (!send_queue_.empty()) {
+                    auto& m = send_queue_.front();
+                    if (m.result_ptr) *m.result_ptr = false;
+                    if (m.completion) m.completion->cancel();
+                    send_queue_.pop_front();
+                }
+                break;
+            }
+        }
+
+        if (closed_) break;
+
+        // Wait for new messages (timer-cancel wakeup pattern)
+        send_signal_.expires_after(std::chrono::hours(24));
+        auto [ec] = co_await send_signal_.async_wait(use_nothrow);
+        // ec == operation_aborted means new message was enqueued (cancel woke us)
+    }
+
+    // Drain remaining on close: signal all waiters as failed
+    while (!send_queue_.empty()) {
+        auto& m = send_queue_.front();
+        if (m.result_ptr) *m.result_ptr = false;
+        if (m.completion) m.completion->cancel();
+        send_queue_.pop_front();
+    }
+
+    drain_running_ = false;
 }
 
 asio::awaitable<void> Connection::close_gracefully() {
@@ -820,10 +890,26 @@ asio::awaitable<void> Connection::close_gracefully() {
         co_return;
     }
 
-    // Send goodbye message
+    // Enqueue Goodbye through the queue. We encode it manually and enqueue
+    // directly so we can set closing_ AFTER the message enters the queue
+    // but BEFORE we await completion. This ensures Goodbye is accepted
+    // while new sends from other coroutines are rejected.
     std::span<const uint8_t> empty{};
     auto goodbye = TransportCodec::encode(wire::TransportMsgType_Goodbye, empty);
-    co_await send_encrypted(goodbye);
+
+    // Enqueue without going through send_message() so we can control
+    // the closing_ flag timing precisely.
+    if (send_queue_.size() >= MAX_SEND_QUEUE) {
+        close();
+        co_return;
+    }
+    bool result = false;
+    asio::steady_timer completion(socket_.get_executor());
+    completion.expires_after(std::chrono::hours(24));
+    send_queue_.push_back({std::move(goodbye), &completion, &result});
+    closing_ = true;  // Now reject all subsequent sends
+    send_signal_.cancel();
+    auto [ec] = co_await completion.async_wait(use_nothrow);
 
     close();
 }

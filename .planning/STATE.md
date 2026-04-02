@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: Completed 79-01-PLAN.md
-last_updated: "2026-04-02"
-last_activity: 2026-04-02 -- Completed plan 79-01 (wire type BlobNotify=59 + relay filter)
+stopped_at: Completed 79-02-PLAN.md
+last_updated: "2026-04-02T12:14:56.467Z"
+last_activity: 2026-04-02 -- Completed 79-02 send queue implementation
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 3
+  total_plans: 0
   completed_plans: 1
-  percent: 5
+  percent: 0
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Phase: 79 (1 of 7 in v2.0.0) -- Send Queue & Push Notifications
-Plan: 1 of 3 in current phase
-Status: Executing
-Last activity: 2026-04-02 -- Completed plan 79-01 (wire type BlobNotify=59 + relay filter)
+Plan: 2 of TBD in current phase
+Status: In progress
+Last activity: 2026-04-02 -- Completed 79-02 send queue implementation
 
-Progress: [█░░░░░░░░░] 5%
+Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 
@@ -45,7 +45,8 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Event-driven expiry (Phase 81) independent of push sync -- parallelizable
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
-- BlobNotify assigned wire type 59, following sequential numbering after TimeRangeResponse=58
+- [Phase 79]: close_gracefully() enqueues Goodbye then sets closing_ flag to avoid self-rejection
+- [Phase 79]: Send queue drain coroutine started via awaitable_operators (&&) alongside message_loop
 
 ### Pending Todos
 
@@ -64,7 +65,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02
-Last activity: 2026-04-02 -- Completed plan 79-01 (wire type BlobNotify=59 + relay filter)
-Stopped at: Completed 79-01-PLAN.md
+Last session: 2026-04-02T12:14:56.463Z
+Last activity: 2026-04-02 -- Roadmap created for v2.0.0
+Stopped at: Completed 79-02-PLAN.md
 Resume file: None
