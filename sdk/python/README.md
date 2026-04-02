@@ -25,9 +25,15 @@ identity = Identity.generate()
 
 async def main():
     async with ChromatinClient.connect("relay-host", 4201, identity) as client:
+        # Plaintext write/read
         result = await client.write_blob(b"Hello, chromatindb!", ttl=3600)
         blob = await client.read_blob(identity.namespace, result.blob_hash)
         print(blob.data)  # b"Hello, chromatindb!"
+
+        # Encrypted write/read (self-only, zero-knowledge storage)
+        enc_result = await client.write_encrypted(b"Secret data", ttl=3600)
+        plaintext = await client.read_encrypted(identity.namespace, enc_result.blob_hash)
+        print(plaintext)  # b"Secret data"
 
 asyncio.run(main())
 ```
@@ -66,6 +72,36 @@ asyncio.run(main())
 | `subscribe(namespace)` | Subscribe to namespace notifications | `None` |
 | `unsubscribe(namespace)` | Unsubscribe from notifications | `None` |
 | `notifications()` | Async iterator for real-time events | `AsyncIterator[Notification]` |
+
+### Encryption
+
+**Encryption Operations:**
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `write_encrypted(data, ttl, recipients=)` | Encrypt and write a blob (self-only if no recipients) | `WriteResult` |
+| `read_encrypted(namespace, blob_hash)` | Fetch and decrypt an encrypted blob | `bytes \| None` |
+| `write_to_group(data, group_name, directory, ttl)` | Encrypt for all group members and write | `WriteResult` |
+
+**Directory & Groups:**
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `Directory(client, identity)` | Create directory (admin mode) | `Directory` |
+| `Directory(client, identity, directory_namespace=)` | Create directory (user mode) | `Directory` |
+| `directory.delegate(identity)` | Grant write access to a user | `WriteResult` |
+| `directory.register(display_name)` | Self-register in the directory | `bytes` |
+| `directory.list_users()` | List all registered users | `list[DirectoryEntry]` |
+| `directory.get_user(display_name)` | Look up user by name | `DirectoryEntry \| None` |
+| `directory.get_user_by_pubkey(pubkey_hash)` | Look up user by pubkey hash | `DirectoryEntry \| None` |
+| `directory.create_group(name, members)` | Create a named group (admin) | `WriteResult` |
+| `directory.add_member(group_name, member)` | Add member to group (admin) | `WriteResult` |
+| `directory.remove_member(group_name, member)` | Remove member from group (admin) | `WriteResult` |
+| `directory.list_groups()` | List all groups | `list[GroupEntry]` |
+| `directory.get_group(group_name)` | Look up group by name | `GroupEntry \| None` |
+| `directory.refresh()` | Force cache invalidation | `None` |
+
+`Directory`, `DirectoryEntry`, and `GroupEntry` are all importable from `chromatindb`.
 
 ### Utility
 
