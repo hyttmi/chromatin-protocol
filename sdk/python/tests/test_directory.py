@@ -10,12 +10,18 @@ import pytest
 
 from chromatindb._directory import (
     DELEGATION_MAGIC,
+    GROUPENTRY_MAGIC,
+    GROUPENTRY_MIN_SIZE,
+    GROUPENTRY_VERSION,
+    GroupEntry,
     USERENTRY_MAGIC,
     USERENTRY_MIN_SIZE,
     USERENTRY_VERSION,
     Directory,
     DirectoryEntry,
+    decode_group_entry,
     decode_user_entry,
+    encode_group_entry,
     encode_user_entry,
     make_delegation_data,
     verify_user_entry,
@@ -764,3 +770,49 @@ class TestCache:
         assert d._dirty is False
         # Notification still in queue (wasn't drained)
         assert not client._transport.notifications.empty()
+
+
+# ---------------------------------------------------------------------------
+# GroupEntry codec (TDD RED for Task 1)
+# ---------------------------------------------------------------------------
+
+
+class TestGroupEntryCodecRed:
+    """Minimal TDD RED tests for GroupEntry codec -- must fail before implementation."""
+
+    def test_encode_decode_roundtrip(self) -> None:
+        """encode then decode returns matching name and member hashes."""
+        hash_a = b"\xaa" * 32
+        hash_b = b"\xbb" * 32
+        encoded = encode_group_entry("team", [hash_a, hash_b])
+        result = decode_group_entry(encoded)
+        assert result is not None
+        name, members = result
+        assert name == "team"
+        assert members == [hash_a, hash_b]
+
+    def test_magic_and_version(self) -> None:
+        """First 4 bytes are GRPE, byte 5 is 0x01."""
+        encoded = encode_group_entry("test", [b"\x00" * 32])
+        assert encoded[:4] == b"GRPE"
+        assert encoded[4] == 0x01
+
+    def test_empty_members(self) -> None:
+        """Empty member list encodes/decodes correctly."""
+        encoded = encode_group_entry("empty", [])
+        result = decode_group_entry(encoded)
+        assert result is not None
+        name, members = result
+        assert name == "empty"
+        assert members == []
+
+    def test_decode_returns_none_for_bad_magic(self) -> None:
+        """Wrong magic returns None."""
+        assert decode_group_entry(b"XXXX\x01\x00\x04test\x00\x00") is None
+
+    def test_group_entry_frozen(self) -> None:
+        """GroupEntry is a frozen dataclass."""
+        ge = GroupEntry(name="g", members=[], blob_hash=b"\x00" * 32, timestamp=100)
+        assert ge.name == "g"
+        with pytest.raises(AttributeError):
+            ge.name = "x"  # type: ignore[misc]
