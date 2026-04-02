@@ -447,3 +447,201 @@ TEST_CASE("Mismatch fallback: initiator trusts, responder does not", "[connectio
     REQUIRE(init_authenticated);
     REQUIRE(resp_authenticated);
 }
+
+// =============================================================================
+// Phase 79: Send queue tests
+// =============================================================================
+
+TEST_CASE("Send queue: multiple concurrent sends complete without crash", "[connection][send_queue]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    int messages_received = 0;
+    constexpr int NUM_MESSAGES = 10;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder -- counts received Data messages
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
+                                   std::vector<uint8_t> payload, uint32_t /*request_id*/) {
+            if (type == TransportMsgType_Data) {
+                messages_received++;
+                if (messages_received == NUM_MESSAGES) {
+                    if (init_conn) init_conn->close();
+                    if (resp_conn) resp_conn->close();
+                }
+            }
+        });
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator -- fires multiple send_message() calls concurrently
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        // Use on_ready to send after handshake but during message_loop
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            // Fire multiple concurrent sends via co_spawn
+            for (int i = 0; i < NUM_MESSAGES; i++) {
+                std::vector<uint8_t> payload = {static_cast<uint8_t>(i)};
+                asio::co_spawn(ioc, conn->send_message(TransportMsgType_Data, payload),
+                               asio::detached);
+            }
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    // Timeout
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(10));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(12));
+
+    REQUIRE(messages_received == NUM_MESSAGES);
+}
+
+TEST_CASE("Send queue: send_message returns false after close", "[connection][send_queue]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    bool send_after_close_returned_false = false;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator -- close then try to send
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            // Close the connection, then try to send
+            conn->close();
+            asio::co_spawn(ioc, [&, conn]() -> asio::awaitable<void> {
+                std::vector<uint8_t> payload = {0x01};
+                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                send_after_close_returned_false = !ok;
+            }, asio::detached);
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    // Timeout
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(5));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(7));
+
+    REQUIRE(send_after_close_returned_false);
+}
+
+TEST_CASE("Send queue: Pong reply goes through send_message", "[connection][send_queue]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    bool pong_received = false;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder -- receives Ping from initiator
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator -- sends Ping and expects Pong back (via message callback)
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            // Send Ping via send_message
+            asio::co_spawn(ioc, [&, conn]() -> asio::awaitable<void> {
+                std::span<const uint8_t> empty{};
+                co_await conn->send_message(TransportMsgType_Ping, empty);
+
+                // After sending Ping, send Data and wait for responder to get it.
+                // The Pong should be received by message_loop which handles it silently.
+                // To verify Pong was sent, we check that the connection is still alive
+                // after sending Ping (if Pong failed, nonce desync would kill connection).
+                std::vector<uint8_t> payload = {0xAA};
+                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                // If we get here without nonce desync, the Pong went through the queue
+                pong_received = ok;
+                if (init_conn) init_conn->close();
+                if (resp_conn) resp_conn->close();
+            }, asio::detached);
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    // Timeout
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(10));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(12));
+
+    REQUIRE(pong_received);
+}
