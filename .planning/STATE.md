@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: Completed 79-02-PLAN.md
-last_updated: "2026-04-02T12:14:56.467Z"
-last_activity: 2026-04-02 -- Completed 79-02 send queue implementation
+stopped_at: Completed 79-03-PLAN.md
+last_updated: "2026-04-02T12:59:45Z"
+last_activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 1
+  total_plans: 3
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Phase: 79 (1 of 7 in v2.0.0) -- Send Queue & Push Notifications
-Plan: 2 of TBD in current phase
+Plan: 3 of 3 in current phase
 Status: In progress
-Last activity: 2026-04-02 -- Completed 79-02 send queue implementation
+Last activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -47,6 +47,9 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
 - [Phase 79]: close_gracefully() enqueues Goodbye then sets closing_ flag to avoid self-rejection
 - [Phase 79]: Send queue drain coroutine started via awaitable_operators (&&) alongside message_loop
+- [Phase 79]: Source parameter on ingest stored in IngestResult, not via separate engine callback
+- [Phase 79]: notify_subscribers removed entirely, replaced by on_blob_ingested unified fan-out
+- [Phase 79]: Client writes pass nullptr source to notify ALL peers (no exclusion for clients)
 
 ### Pending Todos
 
@@ -65,7 +68,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02T12:14:56.463Z
-Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Completed 79-02-PLAN.md
+Last session: 2026-04-02T12:59:45Z
+Last activity: 2026-04-02 -- Completed 79-03 unified BlobNotify fan-out
+Stopped at: Completed 79-03-PLAN.md
 Resume file: None

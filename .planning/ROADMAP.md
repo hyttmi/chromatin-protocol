@@ -169,7 +169,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 
 **Milestone Goal:** Replace timer-paced sync with push-based notifications and targeted fetch, achieving sub-second cross-node propagation. Overhaul maintenance from periodic scanning to event-driven processing. Add SDK connection resilience.
 
-- [ ] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter
+- [x] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter (completed 2026-04-02)
 - [ ] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop
 - [ ] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan
 - [ ] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup
@@ -192,8 +192,8 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 **Plans**: 3 plans
 Plans:
 - [x] 79-01-PLAN.md -- Wire type BlobNotify=59 + relay filter
-- [ ] 79-02-PLAN.md -- Per-connection send queue with drain coroutine
-- [ ] 79-03-PLAN.md -- Unified engine callback + PeerManager BlobNotify fan-out
+- [x] 79-02-PLAN.md -- Per-connection send queue with drain coroutine
+- [x] 79-03-PLAN.md -- Unified engine callback + PeerManager BlobNotify fan-out
 
 ### Phase 80: Targeted Blob Fetch
 **Goal**: Peers can fetch a specific blob by hash after receiving a push notification, without triggering full reconciliation
@@ -267,7 +267,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 79. Send Queue & Push Notifications | 1/3 | Executing | - |
+| 79. Send Queue & Push Notifications | 3/3 | Complete   | 2026-04-02 |
 | 80. Targeted Blob Fetch | 0/TBD | Not started | - |
 | 81. Event-Driven Expiry | 0/TBD | Not started | - |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
