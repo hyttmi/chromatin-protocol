@@ -12,6 +12,10 @@ from __future__ import annotations
 import asyncio
 import time
 from types import TracebackType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chromatindb._directory import Directory
 
 from chromatindb._codec import (
     decode_batch_exists_response,
@@ -45,11 +49,13 @@ from chromatindb._codec import (
     encode_unsubscribe,
     make_tombstone_data,
 )
+from chromatindb._envelope import envelope_decrypt, envelope_encrypt
 from chromatindb._handshake import perform_handshake
 from chromatindb._transport import Transport
 from chromatindb.crypto import build_signing_input
 from chromatindb.exceptions import (
     ConnectionError as ChromatinConnectionError,
+    DirectoryError,
     HandshakeError,
     ProtocolError,
 )
@@ -731,3 +737,88 @@ class ChromatinClient:
                 continue
             if msg_type == TransportMsgType.Notification:
                 yield decode_notification(payload)
+
+    # ------------------------------------------------------------------
+    # Encrypted helpers
+    # ------------------------------------------------------------------
+
+    async def write_encrypted(
+        self,
+        data: bytes,
+        ttl: int,
+        recipients: list[Identity] | None = None,
+    ) -> WriteResult:
+        """Encrypt data and write as a blob.
+
+        Args:
+            data: Plaintext bytes to encrypt.
+            ttl: Time-to-live in seconds.
+            recipients: Recipient identities (each must have KEM pubkey).
+                None or omitted: encrypt to self only (CLI-04).
+
+        Returns:
+            WriteResult with blob_hash, seq_num, duplicate.
+
+        Raises:
+            ValueError: If sender or any recipient lacks KEM keypair.
+        """
+        all_recipients = recipients if recipients is not None else []
+        envelope = envelope_encrypt(data, all_recipients, self._identity)
+        return await self.write_blob(envelope, ttl)
+
+    async def read_encrypted(
+        self, namespace: bytes, blob_hash: bytes
+    ) -> bytes | None:
+        """Fetch and decrypt an encrypted blob.
+
+        Args:
+            namespace: 32-byte namespace identifier.
+            blob_hash: 32-byte blob hash.
+
+        Returns:
+            Decrypted plaintext bytes, or None if blob not found.
+
+        Raises:
+            NotARecipientError: If blob exists but caller is not a recipient.
+            MalformedEnvelopeError: If blob data is not a valid envelope.
+            DecryptionError: If AEAD authentication fails.
+        """
+        result = await self.read_blob(namespace, blob_hash)
+        if result is None:
+            return None
+        return envelope_decrypt(result.data, self._identity)
+
+    async def write_to_group(
+        self,
+        data: bytes,
+        group_name: str,
+        directory: Directory,
+        ttl: int,
+    ) -> WriteResult:
+        """Encrypt data for all group members and write as a blob.
+
+        Resolves group membership at call time via directory cache (GRP-04).
+        Silently skips members whose UserEntry is not in the directory.
+
+        Args:
+            data: Plaintext bytes to encrypt.
+            group_name: Name of the group in the directory.
+            directory: Directory instance for group and member resolution.
+            ttl: Time-to-live in seconds.
+
+        Returns:
+            WriteResult with blob_hash, seq_num, duplicate.
+
+        Raises:
+            DirectoryError: If group not found in directory.
+            ValueError: If any resolved member lacks KEM pubkey.
+        """
+        group = await directory.get_group(group_name)
+        if group is None:
+            raise DirectoryError(f"Group not found: {group_name}")
+        recipients: list[Identity] = []
+        for member_hash in group.members:
+            entry = await directory.get_user_by_pubkey(member_hash)
+            if entry is not None:
+                recipients.append(entry.identity)
+        return await self.write_encrypted(data, ttl, recipients)
