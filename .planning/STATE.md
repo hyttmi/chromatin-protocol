@@ -47,8 +47,15 @@ None.
 
 None.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260402-a2o | Split allowed_keys into allowed_client_keys and allowed_peer_keys | 2026-04-02 | 681f92b | [260402-a2o-split-allowed-keys-into-allowed-client-k](./quick/260402-a2o-split-allowed-keys-into-allowed-client-k/) |
+
 ## Session Continuity
 
 Last session: 2026-04-02
-Stopped at: Milestone v1.7.0 completed and archived
+Last activity: 2026-04-02 - Completed quick task 260402-a2o: Split allowed_keys into allowed_client_keys and allowed_peer_keys
+Stopped at: Quick task 260402-a2o complete
 Resume file: None
