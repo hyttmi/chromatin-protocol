@@ -27,16 +27,19 @@ void print_usage(const char* prog) {
     std::cerr << "chromatindb " << VERSION << "\n\n"
               << "Usage: " << prog << " <command> [options]\n\n"
               << "Commands:\n"
-              << "  run       Start the daemon\n"
-              << "  keygen    Generate identity keypair\n"
-              << "  version   Print version\n\n"
+              << "  run        Start the daemon\n"
+              << "  keygen     Generate identity keypair\n"
+              << "  show-key   Print namespace (public key hash)\n"
+              << "  version    Print version\n\n"
               << "Run options:\n"
               << "  --config <path>     JSON config file\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n"
               << "  --log-level <lvl>   Log level: trace|debug|info|warn|error (default: info)\n\n"
               << "Keygen options:\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n"
-              << "  --force             Overwrite existing identity\n";
+              << "  --force             Overwrite existing identity\n\n"
+              << "Show-key options:\n"
+              << "  --data-dir <path>   Data directory (default: ./data)\n";
 }
 
 int cmd_version() {
@@ -74,6 +77,27 @@ int cmd_keygen(int argc, char* argv[]) {
 
     std::cout << "Generated identity at " << data_dir << "/" << std::endl;
     std::cout << "Namespace: " << to_hex(identity.namespace_id()) << std::endl;
+
+    return 0;
+}
+
+int cmd_show_key(int argc, char* argv[]) {
+    std::string data_dir = "./data";
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--data-dir" && i + 1 < argc) {
+            data_dir = argv[++i];
+        }
+    }
+
+    try {
+        auto identity = chromatindb::identity::NodeIdentity::load_from(data_dir);
+        std::cout << "Namespace: " << to_hex(identity.namespace_id()) << std::endl;
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
@@ -188,6 +212,7 @@ int main(int argc, char* argv[]) {
 
     if (cmd == "run") return cmd_run(argc - 1, argv + 1);
     if (cmd == "keygen") return cmd_keygen(argc - 1, argv + 1);
+    if (cmd == "show-key") return cmd_show_key(argc - 1, argv + 1);
     if (cmd == "version" || cmd == "--version" || cmd == "-v") return cmd_version();
     if (cmd == "help" || cmd == "--help" || cmd == "-h") { print_usage(argv[0]); return 0; }
 

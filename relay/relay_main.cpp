@@ -27,14 +27,17 @@ void print_usage(const char* prog) {
     std::cerr << "chromatindb_relay " << VERSION << "\n\n"
               << "Usage: " << prog << " <command> [options]\n\n"
               << "Commands:\n"
-              << "  run       Start the relay\n"
-              << "  keygen    Generate relay identity keypair\n"
-              << "  version   Print version\n\n"
+              << "  run        Start the relay\n"
+              << "  keygen     Generate relay identity keypair\n"
+              << "  show-key   Print public key hash\n"
+              << "  version    Print version\n\n"
               << "Run options:\n"
               << "  --config <path>     JSON config file (required)\n\n"
               << "Keygen options:\n"
               << "  --output <path>     Secret key output path (writes <path> + sibling .pub)\n"
-              << "  --force             Overwrite existing identity\n";
+              << "  --force             Overwrite existing identity\n\n"
+              << "Show-key options:\n"
+              << "  --key <path>        Secret key path (reads sibling .pub)\n";
 }
 
 int cmd_version() {
@@ -75,6 +78,32 @@ int cmd_keygen(int argc, char* argv[]) {
 
     std::cout << "Generated relay identity" << std::endl;
     std::cout << "Public key hash: " << to_hex(identity.public_key_hash()) << std::endl;
+
+    return 0;
+}
+
+int cmd_show_key(int argc, char* argv[]) {
+    std::string key_path;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--key" && i + 1 < argc) {
+            key_path = argv[++i];
+        }
+    }
+
+    if (key_path.empty()) {
+        std::cerr << "Error: --key <path> is required" << std::endl;
+        return 1;
+    }
+
+    try {
+        auto identity = chromatindb::relay::identity::RelayIdentity::load_from(key_path);
+        std::cout << "Public key hash: " << to_hex(identity.public_key_hash()) << std::endl;
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
@@ -259,6 +288,7 @@ int main(int argc, char* argv[]) {
 
     if (cmd == "run") return cmd_run(argc - 1, argv + 1);
     if (cmd == "keygen") return cmd_keygen(argc - 1, argv + 1);
+    if (cmd == "show-key") return cmd_show_key(argc - 1, argv + 1);
     if (cmd == "version" || cmd == "--version" || cmd == "-v") return cmd_version();
     if (cmd == "help" || cmd == "--help" || cmd == "-h") { print_usage(argv[0]); return 0; }
 
