@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
-status: defining
-stopped_at: Defining requirements
+status: ready_to_plan
+stopped_at: Roadmap created, ready to plan Phase 79
 last_updated: "2026-04-02"
 last_activity: 2026-04-02
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,14 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v2.0.0 Event-Driven Architecture — defining requirements
+**Current focus:** Phase 79 -- Send Queue & Push Notifications
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-02 — Milestone v2.0.0 started
+Phase: 79 (1 of 7 in v2.0.0) -- Send Queue & Push Notifications
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-04-02 -- Roadmap created for v2.0.0 (7 phases, 28 requirements)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 
@@ -37,11 +39,12 @@ Last activity: 2026-04-02 — Milestone v2.0.0 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 
-- Breaking protocol changes OK — only deployed on home KVM, no production users
-- Push-based sync model: blob ingested → notify peers → targeted fetch
-- Reconciliation becomes fallback (on-connect + rare safety-net), not primary sync
-- Event-driven expiry: next-expiry timer replaces periodic full scan
-- Cursor cleanup on disconnect, not 6-hour timer
+- Breaking protocol changes OK -- only deployed on home KVM, no production users
+- Send queue (PUSH-04) is Phase 79 -- prerequisite for all concurrent send paths
+- Notification suppression during sync co-located with push infrastructure (Phase 79)
+- Event-driven expiry (Phase 81) independent of push sync -- parallelizable
+- Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
+- Phases 81, 83, 84 can be built in parallel with phases 80, 82
 
 ### Pending Todos
 
@@ -49,7 +52,8 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- Phase 79 (Send Queue): Most impactful structural change to C++ Connection class in 78 phases. Research-phase recommended.
+- Phase 84 (SDK Auto-Reconnect): Reconnection touches transport, handshake, client layers. Research-phase recommended.
 
 ### Quick Tasks Completed
 
@@ -60,6 +64,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-02
-Last activity: 2026-04-02 — Milestone v2.0.0 started
-Stopped at: Defining requirements
+Last activity: 2026-04-02 -- Roadmap created for v2.0.0
+Stopped at: Roadmap created, ready to plan Phase 79
 Resume file: None

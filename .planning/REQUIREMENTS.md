@@ -85,40 +85,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PUSH-01 | — | Pending |
-| PUSH-02 | — | Pending |
-| PUSH-03 | — | Pending |
-| PUSH-04 | — | Pending |
-| PUSH-05 | — | Pending |
-| PUSH-06 | — | Pending |
-| PUSH-07 | — | Pending |
-| PUSH-08 | — | Pending |
-| MAINT-01 | — | Pending |
-| MAINT-02 | — | Pending |
-| MAINT-03 | — | Pending |
-| MAINT-04 | — | Pending |
-| MAINT-05 | — | Pending |
-| MAINT-06 | — | Pending |
-| MAINT-07 | — | Pending |
-| CONN-01 | — | Pending |
-| CONN-02 | — | Pending |
-| CONN-03 | — | Pending |
-| CONN-04 | — | Pending |
-| CONN-05 | — | Pending |
-| WIRE-01 | — | Pending |
-| WIRE-02 | — | Pending |
-| WIRE-03 | — | Pending |
-| WIRE-04 | — | Pending |
-| DOC-01 | — | Pending |
-| DOC-02 | — | Pending |
-| DOC-03 | — | Pending |
-| DOC-04 | — | Pending |
+| PUSH-01 | Phase 79 | Pending |
+| PUSH-02 | Phase 79 | Pending |
+| PUSH-03 | Phase 79 | Pending |
+| PUSH-04 | Phase 79 | Pending |
+| PUSH-05 | Phase 80 | Pending |
+| PUSH-06 | Phase 80 | Pending |
+| PUSH-07 | Phase 79 | Pending |
+| PUSH-08 | Phase 79 | Pending |
+| MAINT-01 | Phase 81 | Pending |
+| MAINT-02 | Phase 81 | Pending |
+| MAINT-03 | Phase 81 | Pending |
+| MAINT-04 | Phase 82 | Pending |
+| MAINT-05 | Phase 82 | Pending |
+| MAINT-06 | Phase 82 | Pending |
+| MAINT-07 | Phase 82 | Pending |
+| CONN-01 | Phase 83 | Pending |
+| CONN-02 | Phase 83 | Pending |
+| CONN-03 | Phase 84 | Pending |
+| CONN-04 | Phase 84 | Pending |
+| CONN-05 | Phase 84 | Pending |
+| WIRE-01 | Phase 79 | Pending |
+| WIRE-02 | Phase 80 | Pending |
+| WIRE-03 | Phase 80 | Pending |
+| WIRE-04 | Phase 79 | Pending |
+| DOC-01 | Phase 85 | Pending |
+| DOC-02 | Phase 85 | Pending |
+| DOC-03 | Phase 85 | Pending |
+| DOC-04 | Phase 85 | Pending |
 
 **Coverage:**
 - v2.0.0 requirements: 28 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 28
+- Mapped to phases: 28/28
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 after research synthesis*
+*Last updated: 2026-04-02 after roadmap creation*
