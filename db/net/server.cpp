@@ -123,6 +123,9 @@ asio::awaitable<void> Server::accept_loop() {
             continue;
         }
 
+        // Disable Nagle for low-latency framed protocol
+        socket.set_option(asio::ip::tcp::no_delay(true));
+
         spdlog::info("accepted connection from {}",
             socket.remote_endpoint().address().to_string());
 
@@ -174,6 +177,7 @@ asio::awaitable<void> Server::connect_to_peer(std::string address) {
         co_return;
     }
 
+    socket.set_option(asio::ip::tcp::no_delay(true));
     spdlog::info("connected to {}", address);
 
     auto conn = Connection::create_outbound(std::move(socket), identity_);
@@ -282,6 +286,7 @@ asio::awaitable<void> Server::reconnect_loop(std::string address) {
             continue;
         }
 
+        socket.set_option(asio::ip::tcp::no_delay(true));
         spdlog::info("reconnected to {}", address);
 
         auto conn = Connection::create_outbound(std::move(socket), identity_);

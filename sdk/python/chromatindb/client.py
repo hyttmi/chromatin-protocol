@@ -125,9 +125,16 @@ class ChromatinClient:
     async def __aenter__(self) -> ChromatinClient:
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self._host, self._port),
+                asyncio.open_connection(
+                    self._host, self._port, limit=4 * 1024 * 1024
+                ),
                 timeout=self._timeout,
             )
+            # Disable Nagle for low-latency framed protocol
+            sock = writer.transport.get_extra_info("socket")
+            if sock is not None:
+                import socket
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except asyncio.TimeoutError:
             raise HandshakeError(
                 f"connection timed out after {self._timeout}s"

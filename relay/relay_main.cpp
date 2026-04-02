@@ -192,6 +192,9 @@ int cmd_run(int argc, char* argv[]) {
                 if (!ep_ec) client_addr = ep.address().to_string() + ":" + std::to_string(ep.port());
             }
 
+            // Disable Nagle for low-latency framed protocol
+            socket.set_option(asio::ip::tcp::no_delay(true));
+
             spdlog::info("client connecting from {}", client_addr);
 
             // Create inbound connection (PQ handshake as responder, per RELAY-01)
