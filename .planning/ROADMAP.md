@@ -206,7 +206,7 @@ Plans:
   4. A peer that already has the notified blob does not send a BlobFetch (local dedup check)
 **Plans**: 2 plans
 Plans:
-- [ ] 80-01-PLAN.md -- Wire types BlobFetch=60 + BlobFetchResponse=61 + relay filter
+- [x] 80-01-PLAN.md -- Wire types BlobFetch=60 + BlobFetchResponse=61 + relay filter
 - [ ] 80-02-PLAN.md -- BlobNotify receive handler + BlobFetch/BlobFetchResponse handlers + dedup + tests
 
 ### Phase 81: Event-Driven Expiry
@@ -271,7 +271,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
-| 80. Targeted Blob Fetch | 0/2 | Not started | - |
+| 80. Targeted Blob Fetch | 1/2 | In Progress|  |
 | 81. Event-Driven Expiry | 0/TBD | Not started | - |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |

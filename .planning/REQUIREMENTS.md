@@ -39,8 +39,8 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 ### Wire Protocol
 
 - [x] **WIRE-01**: New message type BlobNotify (type 59) — peer-internal push notification
-- [ ] **WIRE-02**: New message type BlobFetch (type 60) — targeted blob request by hash
-- [ ] **WIRE-03**: New message type BlobFetchResponse (type 61) — response with blob data or not-found
+- [x] **WIRE-02**: New message type BlobFetch (type 60) — targeted blob request by hash
+- [x] **WIRE-03**: New message type BlobFetchResponse (type 61) — response with blob data or not-found
 - [x] **WIRE-04**: Relay message filter updated to block types 59-61 (peer-internal only)
 
 ### Documentation
@@ -106,8 +106,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-04 | Phase 84 | Pending |
 | CONN-05 | Phase 84 | Pending |
 | WIRE-01 | Phase 79 | Complete |
-| WIRE-02 | Phase 80 | Pending |
-| WIRE-03 | Phase 80 | Pending |
+| WIRE-02 | Phase 80 | Complete |
+| WIRE-03 | Phase 80 | Complete |
 | WIRE-04 | Phase 79 | Complete |
 | DOC-01 | Phase 85 | Pending |
 | DOC-02 | Phase 85 | Pending |
