@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.7.0
 milestone_name: Client-Side Encryption
-status: planning
-stopped_at: Phase 78 context gathered
-last_updated: "2026-04-02T03:05:38.331Z"
+status: executing
+stopped_at: Completed 78-01-PLAN.md
+last_updated: "2026-04-02T03:22:26.302Z"
 last_activity: 2026-04-02
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
   percent: 12
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v1.7.0 Client-Side Encryption -- Phase 78 next
+**Current focus:** Phase 78 — documentation-polish
 
 ## Current Position
 
-Phase: 78 of 78 (documentation & polish)
-Plan: Not started
-Status: Ready to plan
+Phase: 78 (documentation-polish) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
 Last activity: 2026-04-02
 
 Progress: [█░░░░░░░░░] 12%
@@ -57,6 +57,7 @@ Progress: [█░░░░░░░░░] 12%
 | Phase 76 P02 | 5min | 2 tasks | 3 files |
 | Phase 77 P01 | 6min | 2 tasks | 2 files |
 | Phase 77 P02 | 4min | 2 tasks | 3 files |
+| Phase 78 P01 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Recent decisions affecting current work:
 - [Phase 77]: Group members stored as SHA3-256(signing_pk) hashes (32 bytes each) for compactness -- directory lookup resolves to full KEM pubkey at encrypt-time
 - [Phase 77]: TYPE_CHECKING import for Directory avoids circular import in client.py
 - [Phase 77]: write_to_group silently skips unresolvable members -- partial encryption safer than failing
+- [Phase 78]: Envelope spec section placed after SDK Client Notes as final major section in PROTOCOL.md
+- [Phase 78]: HKDF Label Registry explicitly notes session fingerprint is NOT HKDF to prevent confusion
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T03:05:38.328Z
-Stopped at: Phase 78 context gathered
-Resume file: .planning/phases/78-documentation-polish/78-CONTEXT.md
+Last session: 2026-04-02T03:22:26.299Z
+Stopped at: Completed 78-01-PLAN.md
+Resume file: None

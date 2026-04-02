@@ -158,7 +158,7 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
 - [x] **Phase 75: Identity Extension & Envelope Crypto** - ML-KEM-1024 keypair on Identity + PQ envelope encrypt/decrypt with versioned binary format (completed 2026-04-01)
 - [x] **Phase 76: Directory & User Discovery** - Admin-owned directory namespace with self-registration, user listing, pubkey fetch, and cached lookups (completed 2026-04-01)
 - [x] **Phase 77: Groups & Encrypted Client Helpers** - Named group management + write_encrypted/read_encrypted/write_to_group on ChromatinClient (completed 2026-04-02)
-- [ ] **Phase 78: Documentation & Polish** - PROTOCOL.md envelope spec, SDK README encryption section, tutorial with encryption workflow
+- [x] **Phase 78: Documentation & Polish** - PROTOCOL.md envelope spec, SDK README encryption section, tutorial with encryption workflow (completed 2026-04-02)
 
 ## Phase Details
 
@@ -217,11 +217,11 @@ Plans:
   1. PROTOCOL.md contains the complete envelope binary format specification and the HKDF label registry lists all four domain labels (two transport, one DARE, one envelope KEK)
   2. SDK README has an encryption API section documenting write_encrypted, read_encrypted, write_to_group, directory setup, and group management
   3. Getting started tutorial includes a complete encryption workflow example (identity generation through encrypted write/read)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 78-01-PLAN.md -- PROTOCOL.md envelope format spec, HKDF label registry, KEM-then-Wrap pattern, AEAD parameters
-- [ ] 78-02-PLAN.md -- SDK README encryption API section + getting-started tutorial encryption workflow
+- [x] 78-01-PLAN.md -- PROTOCOL.md envelope format spec, HKDF label registry, KEM-then-Wrap pattern, AEAD parameters
+- [x] 78-02-PLAN.md -- SDK README encryption API section + getting-started tutorial encryption workflow
 
 ## Progress
 
@@ -233,4 +233,4 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
 | 76. Directory & User Discovery | 2/2 | Complete    | 2026-04-01 |
 | 77. Groups & Encrypted Client Helpers | 2/2 | Complete    | 2026-04-02 |
-| 78. Documentation & Polish | 0/2 | Not started | - |
+| 78. Documentation & Polish | 2/2 | Complete   | 2026-04-02 |
