@@ -48,8 +48,8 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 ### Documentation
 
 - [x] **DOC-01**: PROTOCOL.md updated with envelope format spec and HKDF label registry
-- [ ] **DOC-02**: SDK README updated with encryption API section
-- [ ] **DOC-03**: Getting started tutorial updated with encryption workflow example
+- [x] **DOC-02**: SDK README updated with encryption API section
+- [x] **DOC-03**: Getting started tutorial updated with encryption workflow example
 
 ## Future Requirements
 
@@ -111,8 +111,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLI-03 | Phase 77 | Complete |
 | CLI-04 | Phase 77 | Complete |
 | DOC-01 | Phase 78 | Complete |
-| DOC-02 | Phase 78 | Pending |
-| DOC-03 | Phase 78 | Pending |
+| DOC-02 | Phase 78 | Complete |
+| DOC-03 | Phase 78 | Complete |
 
 **Coverage:**
 - v1.7.0 requirements: 26 total
