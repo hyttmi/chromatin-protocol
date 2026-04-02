@@ -412,3 +412,287 @@ class TestChromatinClient:
 
         reader.feed_eof()
         await transport.stop()
+
+
+# ---------------------------------------------------------------------------
+# Encrypted helper tests (77-02)
+# ---------------------------------------------------------------------------
+
+from chromatindb.crypto import sha3_256
+
+
+class TestEncryptedHelpers:
+    """Tests for write_encrypted, read_encrypted, and write_to_group."""
+
+    @pytest.fixture
+    def client_with_identity(self) -> tuple[ChromatinClient, Identity]:
+        """Create a ChromatinClient with a real identity (no transport)."""
+        identity = Identity.generate()
+        client = ChromatinClient.__new__(ChromatinClient)
+        client._transport = MagicMock()
+        client._identity = identity
+        client._subscriptions = set()
+        return client, identity
+
+    async def test_write_encrypted_with_recipients(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_encrypted calls envelope_encrypt then write_blob."""
+        from chromatindb.types import WriteResult
+
+        client, identity = client_with_identity
+        other = Identity.generate()
+
+        with patch(
+            "chromatindb.client.envelope_encrypt", return_value=b"envelope_data"
+        ) as mock_encrypt:
+            client.write_blob = AsyncMock(
+                return_value=WriteResult(
+                    blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+                )
+            )
+            result = await client.write_encrypted(b"hello", 3600, recipients=[other])
+
+        mock_encrypt.assert_called_once_with(b"hello", [other], identity)
+        client.write_blob.assert_called_once_with(b"envelope_data", 3600)
+        assert isinstance(result, WriteResult)
+        assert result.blob_hash == b"\x00" * 32
+
+    async def test_write_encrypted_self_only_no_recipients(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_encrypted with no recipients encrypts to self only."""
+        from chromatindb.types import WriteResult
+
+        client, identity = client_with_identity
+
+        with patch(
+            "chromatindb.client.envelope_encrypt", return_value=b"envelope_data"
+        ) as mock_encrypt:
+            client.write_blob = AsyncMock(
+                return_value=WriteResult(
+                    blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+                )
+            )
+            await client.write_encrypted(b"hello", 3600)
+
+        mock_encrypt.assert_called_once_with(b"hello", [], identity)
+
+    async def test_write_encrypted_self_only_explicit_none(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_encrypted with recipients=None encrypts to self only."""
+        from chromatindb.types import WriteResult
+
+        client, identity = client_with_identity
+
+        with patch(
+            "chromatindb.client.envelope_encrypt", return_value=b"envelope_data"
+        ) as mock_encrypt:
+            client.write_blob = AsyncMock(
+                return_value=WriteResult(
+                    blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+                )
+            )
+            await client.write_encrypted(b"hello", 3600, recipients=None)
+
+        mock_encrypt.assert_called_once_with(b"hello", [], identity)
+
+    async def test_write_encrypted_empty_list(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_encrypted with recipients=[] encrypts to self only."""
+        from chromatindb.types import WriteResult
+
+        client, identity = client_with_identity
+
+        with patch(
+            "chromatindb.client.envelope_encrypt", return_value=b"envelope_data"
+        ) as mock_encrypt:
+            client.write_blob = AsyncMock(
+                return_value=WriteResult(
+                    blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+                )
+            )
+            await client.write_encrypted(b"hello", 3600, recipients=[])
+
+        mock_encrypt.assert_called_once_with(b"hello", [], identity)
+
+    async def test_read_encrypted_found(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """read_encrypted fetches blob and decrypts envelope."""
+        from chromatindb.types import ReadResult
+
+        client, identity = client_with_identity
+
+        client.read_blob = AsyncMock(
+            return_value=ReadResult(
+                data=b"envelope", ttl=3600, timestamp=100, signature=b"sig"
+            )
+        )
+        with patch(
+            "chromatindb.client.envelope_decrypt", return_value=b"plaintext"
+        ) as mock_decrypt:
+            result = await client.read_encrypted(b"\x00" * 32, b"\x01" * 32)
+
+        client.read_blob.assert_called_once_with(b"\x00" * 32, b"\x01" * 32)
+        mock_decrypt.assert_called_once_with(b"envelope", identity)
+        assert result == b"plaintext"
+
+    async def test_read_encrypted_not_found(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """read_encrypted returns None if blob not found."""
+        client, _ = client_with_identity
+        client.read_blob = AsyncMock(return_value=None)
+
+        result = await client.read_encrypted(b"\x00" * 32, b"\x01" * 32)
+        assert result is None
+
+    async def test_read_encrypted_not_a_recipient(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """read_encrypted raises NotARecipientError if not a recipient."""
+        from chromatindb.exceptions import NotARecipientError
+        from chromatindb.types import ReadResult
+
+        client, _ = client_with_identity
+
+        client.read_blob = AsyncMock(
+            return_value=ReadResult(
+                data=b"envelope", ttl=3600, timestamp=100, signature=b"sig"
+            )
+        )
+        with patch(
+            "chromatindb.client.envelope_decrypt",
+            side_effect=NotARecipientError("not a recipient"),
+        ):
+            with pytest.raises(NotARecipientError):
+                await client.read_encrypted(b"\x00" * 32, b"\x01" * 32)
+
+    async def test_write_to_group_resolves_members(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_to_group resolves group members and delegates to write_encrypted."""
+        from chromatindb._directory import DirectoryEntry, GroupEntry
+        from chromatindb.types import WriteResult
+
+        client, _ = client_with_identity
+
+        id_a = Identity.generate()
+        id_b = Identity.generate()
+        member_hash_a = sha3_256(id_a.public_key)
+        member_hash_b = sha3_256(id_b.public_key)
+        entry_a = DirectoryEntry(identity=id_a, display_name="Alice", blob_hash=b"\x01" * 32)
+        entry_b = DirectoryEntry(identity=id_b, display_name="Bob", blob_hash=b"\x02" * 32)
+
+        directory = MagicMock()
+        directory.get_group = AsyncMock(
+            return_value=GroupEntry(
+                name="team",
+                members=[member_hash_a, member_hash_b],
+                blob_hash=b"\x00" * 32,
+                timestamp=100,
+            )
+        )
+        directory.get_user_by_pubkey = AsyncMock(
+            side_effect=lambda h: entry_a if h == member_hash_a else entry_b if h == member_hash_b else None
+        )
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        result = await client.write_to_group(b"hello", "team", directory, 3600)
+
+        directory.get_group.assert_called_once_with("team")
+        client.write_encrypted.assert_called_once_with(
+            b"hello", 3600, [id_a, id_b]
+        )
+        assert isinstance(result, WriteResult)
+
+    async def test_write_to_group_not_found(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_to_group raises DirectoryError if group not found."""
+        from chromatindb.exceptions import DirectoryError
+
+        client, _ = client_with_identity
+
+        directory = MagicMock()
+        directory.get_group = AsyncMock(return_value=None)
+
+        with pytest.raises(DirectoryError, match="Group not found: team"):
+            await client.write_to_group(b"hello", "team", directory, 3600)
+
+    async def test_write_to_group_skips_unresolvable(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_to_group silently skips members not in directory."""
+        from chromatindb._directory import DirectoryEntry, GroupEntry
+        from chromatindb.types import WriteResult
+
+        client, _ = client_with_identity
+
+        id_a = Identity.generate()
+        member_hash_a = sha3_256(id_a.public_key)
+        member_hash_b = b"\xbb" * 32  # Unresolvable
+        entry_a = DirectoryEntry(identity=id_a, display_name="Alice", blob_hash=b"\x01" * 32)
+
+        directory = MagicMock()
+        directory.get_group = AsyncMock(
+            return_value=GroupEntry(
+                name="team",
+                members=[member_hash_a, member_hash_b],
+                blob_hash=b"\x00" * 32,
+                timestamp=100,
+            )
+        )
+        directory.get_user_by_pubkey = AsyncMock(
+            side_effect=lambda h: entry_a if h == member_hash_a else None
+        )
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"hello", "team", directory, 3600)
+
+        # Only the resolvable member should be in recipients
+        client.write_encrypted.assert_called_once_with(
+            b"hello", 3600, [id_a]
+        )
+
+    async def test_write_to_group_empty_group(
+        self, client_with_identity: tuple[ChromatinClient, Identity]
+    ) -> None:
+        """write_to_group with empty members calls write_encrypted with empty list."""
+        from chromatindb._directory import GroupEntry
+        from chromatindb.types import WriteResult
+
+        client, _ = client_with_identity
+
+        directory = MagicMock()
+        directory.get_group = AsyncMock(
+            return_value=GroupEntry(
+                name="empty-team",
+                members=[],
+                blob_hash=b"\x00" * 32,
+                timestamp=100,
+            )
+        )
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\x00" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"hello", "empty-team", directory, 3600)
+
+        client.write_encrypted.assert_called_once_with(b"hello", 3600, [])
