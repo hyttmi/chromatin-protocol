@@ -10,7 +10,7 @@
 #   3. The authorized peer pair still functions (sync works)
 #
 # Topology: 3 nodes on 172.28.0.0/16
-#   Node1 (172.28.0.2): closed-garden, allowed_keys = [Node2's namespace]
+#   Node1 (172.28.0.2): closed-garden, allowed_peer_keys = [Node2's namespace]
 #   Node2 (172.28.0.3): authorized peer, bootstraps to Node1
 #   Node3 (172.28.0.4): intruder with fresh identity, bootstraps to Node1
 # =============================================================================
@@ -105,12 +105,12 @@ docker rm -f "$NODE2_CONTAINER" 2>/dev/null || true
 
 log "--- Phase 2: Start closed-garden topology ---"
 
-# Create Node1 config with allowed_keys (closed garden: only Node2 allowed)
+# Create Node1 config with allowed_peer_keys (closed garden: only Node2 allowed)
 TEMP_NODE1_CONFIG=$(mktemp /tmp/node1-closed-XXXXXX.json)
 cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
-  "allowed_keys": ["$NODE2_NS"],
+  "allowed_peer_keys": ["$NODE2_NS"],
   "log_level": "debug",
   "sync_interval_seconds": 5
 }
@@ -260,7 +260,7 @@ log "--- Check 3: Authorized pair sync works ---"
 # Inject blobs into Node2 (open mode, accepts any connection).
 # Blobs sync from Node2 to Node1 via the authorized connection.
 # We cannot inject into Node1 directly because the closed garden rejects
-# loadgen's fresh identity (not in allowed_keys).
+# loadgen's fresh identity (not in allowed_peer_keys).
 run_loadgen 172.28.0.3 --count 3 --size 256 --ttl 3600
 
 wait_sync "$NODE1_CONTAINER" 3

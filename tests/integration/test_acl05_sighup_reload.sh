@@ -3,14 +3,14 @@
 # ACL-05: SIGHUP ACL Hot-Reload
 #
 # Verifies:
-#   Phase 1 (add key): After SIGHUP with a newly-added key in allowed_keys,
+#   Phase 1 (add key): After SIGHUP with a newly-added key in allowed_peer_keys,
 #     a previously-rejected node connects successfully.
 #   Phase 2 (remove key): After SIGHUP with the key removed, the connected
 #     node is disconnected.
 #
 # Topology: 3 nodes on 172.29.0.0/16
 #   Node1 (172.29.0.2): closed-garden, config edited at runtime via SIGHUP
-#   Node2 (172.29.0.3): always-authorized peer (in allowed_keys from start)
+#   Node2 (172.29.0.3): always-authorized peer (in allowed_peer_keys from start)
 #   Node3 (172.29.0.4): initially unauthorized, added via SIGHUP, then removed
 #
 # Method: Uses volume-mounted config files (NOT :ro) so host edits propagate.
@@ -156,12 +156,12 @@ docker rm -f "$NODE3_CONTAINER" 2>/dev/null || true
 
 log "--- Starting closed-garden topology ---"
 
-# Node1 config: allowed_keys = [Node2] only. Writable mount for SIGHUP.
+# Node1 config: allowed_peer_keys = [Node2] only. Writable mount for SIGHUP.
 TEMP_NODE1_CONFIG=$(mktemp /tmp/node1-acl05-XXXXXX.json)
 cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
-  "allowed_keys": ["$NODE2_NS"],
+  "allowed_peer_keys": ["$NODE2_NS"],
   "log_level": "debug",
   "sync_interval_seconds": 5
 }
@@ -270,7 +270,7 @@ log "--- Phase 1: Add Node3 key via SIGHUP ---"
 cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
-  "allowed_keys": ["$NODE2_NS", "$NODE3_NS"],
+  "allowed_peer_keys": ["$NODE2_NS", "$NODE3_NS"],
   "log_level": "debug",
   "sync_interval_seconds": 5
 }
@@ -325,7 +325,7 @@ log "--- Phase 2: Remove Node3 key via SIGHUP ---"
 cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
-  "allowed_keys": ["$NODE2_NS"],
+  "allowed_peer_keys": ["$NODE2_NS"],
   "log_level": "debug",
   "sync_interval_seconds": 5
 }

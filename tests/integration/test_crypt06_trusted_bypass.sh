@@ -137,8 +137,8 @@ if [[ -z "$NODE2_NS" ]]; then
 fi
 log "Discovered node2 namespace: $NODE2_NS"
 
-# Create a temporary node1 config with both trusted_peers AND allowed_keys.
-# allowed_keys restricts which identities are accepted -- the impostor's
+# Create a temporary node1 config with both trusted_peers AND allowed_peer_keys.
+# allowed_peer_keys restricts which identities are accepted -- the impostor's
 # fresh identity will not match node2's namespace, triggering "access denied".
 TEMP_CONFIG=$(mktemp /tmp/node1-trusted-restricted-XXXXXX.json)
 cat > "$TEMP_CONFIG" <<EOCFG
@@ -147,7 +147,7 @@ cat > "$TEMP_CONFIG" <<EOCFG
   "log_level": "debug",
   "sync_interval_seconds": 5,
   "trusted_peers": ["172.28.0.3"],
-  "allowed_keys": ["$NODE2_NS"]
+  "allowed_peer_keys": ["$NODE2_NS"]
 }
 EOCFG
 chmod 644 "$TEMP_CONFIG"  # Container runs as chromatindb user, needs read access
@@ -164,7 +164,7 @@ $COMPOSE_TRUSTED rm -f node1
 # Restart node1 manually with the restricted config mount.
 # Use a fresh data volume (no named volume) so node1 gets a clean state.
 # The test is about connection-level ACL rejection, not data continuity.
-log "Starting node1 with restricted config (trusted_peers + allowed_keys)..."
+log "Starting node1 with restricted config (trusted_peers + allowed_peer_keys)..."
 docker run -d --name chromatindb-test-node1 \
     --network chromatindb-test_test-net \
     --ip 172.28.0.2 \
@@ -177,7 +177,7 @@ wait_healthy chromatindb-test-node1
 
 # Start impostor on 172.28.0.3 (the trusted IP) with a fresh identity.
 # The impostor generates a new identity key on startup (fresh data dir = new key).
-# Its namespace will NOT match node2's namespace in allowed_keys.
+# Its namespace will NOT match node2's namespace in allowed_peer_keys.
 # Use a temp config with IP-based bootstrap (Compose DNS won't resolve for manual docker run).
 IMPOSTOR_CONFIG=$(mktemp /tmp/impostor-XXXXXX.json)
 cat > "$IMPOSTOR_CONFIG" <<EOCFG
@@ -202,7 +202,7 @@ sleep 10
 
 # Verify rejection -- strict pass condition, no soft fallback.
 # The "access denied" log comes from peer_manager.cpp:286 when acl_.is_allowed()
-# returns false because the impostor's namespace is not in allowed_keys.
+# returns false because the impostor's namespace is not in allowed_peer_keys.
 NODE1_POST_LOGS=$(docker logs chromatindb-test-node1 2>&1)
 
 if echo "$NODE1_POST_LOGS" | grep -q "access denied"; then

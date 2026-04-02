@@ -128,7 +128,7 @@ UDS is an alternative transport for local process communication, enabling applic
 **Handshake:** UDS connections always use the TrustedHello path (local connections are inherently trusted). The full PQ key exchange is skipped. Session keys are derived via HKDF from the exchanged signing public keys, identical to the trusted TCP peer handshake.
 
 **Enforcement:** UDS connections receive the same enforcement as TCP peers:
-- ACL gating (allowed_keys checked after handshake)
+- ACL gating (allowed_client_keys checked for UDS, allowed_peer_keys for TCP connections after handshake)
 - Rate limiting (token bucket per-connection)
 - Namespace quotas
 - Connection limit (max_peers counts UDS connections)
@@ -141,7 +141,7 @@ UDS is an alternative transport for local process communication, enabling applic
 
 All subsequent messages are AEAD-encrypted `TransportMessage` frames using the established session keys. Nonce counters continue incrementing from where the handshake left off.
 
-If the node has `allowed_keys` configured, it checks the peer's signing public key namespace (`SHA3-256(peer_pubkey)`) against the access control list immediately after the handshake. Unauthorized peers are silently disconnected.
+If the node has `allowed_peer_keys` configured (for TCP connections) or `allowed_client_keys` (for UDS connections), it checks the peer's signing public key namespace (`SHA3-256(peer_pubkey)`) against the appropriate access control list immediately after the handshake. Unauthorized connections are silently disconnected.
 
 ## Storing a Blob
 

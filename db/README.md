@@ -120,7 +120,8 @@ Create a JSON config file and pass it with `--config`:
   "bind_address": "0.0.0.0:4200",
   "data_dir": "./data",
   "bootstrap_peers": ["192.168.1.10:4200"],
-  "allowed_keys": [],
+  "allowed_client_keys": [],
+  "allowed_peer_keys": [],
   "trusted_peers": [],
   "max_peers": 32,
   "sync_interval_seconds": 60,
@@ -151,7 +152,8 @@ Create a JSON config file and pass it with `--config`:
 - **bind_address** -- address and port to listen on (default: `0.0.0.0:4200`)
 - **data_dir** -- directory for identity keys and blob storage (default: `./data`)
 - **bootstrap_peers** -- list of `host:port` strings to connect to on startup
-- **allowed_keys** -- namespace hashes (hex) of peers allowed to connect; empty means open mode
+- **allowed_client_keys** -- namespace hashes (hex) of clients allowed to connect via UDS (through relay); empty means no restriction
+- **allowed_peer_keys** -- namespace hashes (hex) of peers allowed to connect via TCP for sync; empty means any peer that completes PQ handshake can sync
 - **trusted_peers** -- IP addresses (no ports) whose connections use a lightweight handshake without ML-KEM-1024 key exchange; localhost (127.0.0.1, ::1) is always trusted implicitly (default: `[]`)
 - **max_peers** -- maximum number of simultaneous peer connections (default: `32`)
 - **sync_interval_seconds** -- interval between periodic sync rounds in seconds (default: `60`)
@@ -183,7 +185,7 @@ chromatindb responds to the following Unix signals at runtime:
 
 - **SIGTERM** -- Graceful shutdown. Stops accepting new connections, drains in-flight coroutines, saves the persistent peer list, and exits cleanly. The shutdown is bounded; if draining takes too long, the process exits with a non-zero exit code.
 
-- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated `allowed_keys` list are disconnected immediately. SIGHUP also resets all ACL reconnection backoff counters, allowing immediate retry to peers that were previously rejecting connections.
+- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_client_keys`, `allowed_peer_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated access control lists are disconnected immediately. SIGHUP also resets all ACL reconnection backoff counters, allowing immediate retry to peers that were previously rejecting connections.
 
 - **SIGUSR1** -- Metrics dump. Logs a snapshot of current runtime metrics via spdlog, including: active connections, storage bytes used, total blobs ingested, total sync rounds completed, total rejections, rate-limited disconnections, and uptime.
 
@@ -233,18 +235,21 @@ chromatindb run --config config-b.json
 
 ### Closed Mode with ACLs
 
-Populate `allowed_keys` with the namespace hashes of permitted peers. Only listed peers can establish connections; all others are silently rejected after handshake.
+Populate `allowed_client_keys` and/or `allowed_peer_keys` with the namespace hashes of permitted connections. Client keys restrict UDS connections (from relays/clients); peer keys restrict TCP connections (from other nodes). Each list is independent -- a node can restrict which clients connect via relay while keeping peer sync open (or vice versa).
 
 ```json
 {
-  "allowed_keys": [
+  "allowed_client_keys": [
+    "a1b2c3d4e5f6...64-char-hex-namespace-hash..."
+  ],
+  "allowed_peer_keys": [
     "a1b2c3d4e5f6...64-char-hex-namespace-hash...",
     "f6e5d4c3b2a1...64-char-hex-namespace-hash..."
   ]
 }
 ```
 
-The node enters closed mode implicitly when `allowed_keys` is non-empty. Reload the config at runtime by sending `SIGHUP` -- the node re-reads `allowed_keys` without restarting.
+The node enters closed mode for each list independently when the list is non-empty. Reload the config at runtime by sending `SIGHUP` -- the node re-reads both key lists without restarting.
 
 ### Rate-Limited Public Node
 

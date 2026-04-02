@@ -4,7 +4,7 @@
 #
 # Verifies two layers of MITM protection:
 #   Part A -- Identity-based rejection: a node with wrong identity key is
-#             rejected when allowed_keys is configured (ACL enforcement).
+#             rejected when allowed_peer_keys is configured (ACL enforcement).
 #   Part B -- Session fingerprint uniqueness: two separate sessions between
 #             the same nodes produce different session fingerprints, proving
 #             the fingerprint includes ephemeral KEM material (not just static
@@ -84,14 +84,14 @@ log "Tearing down open-mode topology..."
 $COMPOSE_STD down -v --remove-orphans 2>/dev/null || true
 sleep 2
 
-# Step 2: Create node1 config with allowed_keys = [node2's namespace]
+# Step 2: Create node1 config with allowed_peer_keys = [node2's namespace]
 # If we got node2's namespace, use it; otherwise use a dummy that doesn't match node3
 if [[ -n "$NODE2_NS" ]]; then
     ALLOWED_NS="$NODE2_NS"
 else
     # Use a known-invalid namespace that won't match any node
     ALLOWED_NS="0000000000000000000000000000000000000000000000000000000000000001"
-    log "WARN: Could not extract node2 NS, using dummy allowed_keys"
+    log "WARN: Could not extract node2 NS, using dummy allowed_peer_keys"
 fi
 
 TMP_CONFIG=$(mktemp /tmp/node1-acl-XXXXXX.json)
@@ -100,12 +100,12 @@ cat > "$TMP_CONFIG" <<EOJSON
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
   "sync_interval_seconds": 5,
-  "allowed_keys": ["$ALLOWED_NS"]
+  "allowed_peer_keys": ["$ALLOWED_NS"]
 }
 EOJSON
 
 # Step 3: Start node1 manually with ACL config, then node3-mitm to attempt connection
-log "Starting node1 (with allowed_keys) + node3-mitm (unauthorized identity)..."
+log "Starting node1 (with allowed_peer_keys) + node3-mitm (unauthorized identity)..."
 
 # Ensure the MITM network exists (compose creates it), then remove pre-created containers
 docker compose -f "$SCRIPT_DIR/docker-compose.mitm.yml" -p chromatindb-test up -d --no-start 2>/dev/null || true
@@ -144,7 +144,7 @@ docker run -d --name chromatindb-test-node3-mitm \
     -v "$MITM_CONFIG:/config/node3-mitm.json:ro" \
     chromatindb:test \
     run --config /config/node3-mitm.json --data-dir /data --log-level debug
-# node3-mitm generates a fresh identity on startup -- its namespace won't match allowed_keys
+# node3-mitm generates a fresh identity on startup -- its namespace won't match allowed_peer_keys
 sleep 10  # Give time for connection attempt and rejection
 
 # Step 4: Verify node3-mitm is rejected
@@ -240,7 +240,7 @@ pass "Part B: Sync functional after session restart"
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
     pass "CRYPT-05: MITM rejection verification PASSED"
-    pass "  - Wrong identity rejected via allowed_keys ACL"
+    pass "  - Wrong identity rejected via allowed_peer_keys ACL"
     pass "  - Unauthorized node received zero data"
     pass "  - Multiple PQ handshakes confirm ephemeral KEM per session"
     exit 0
