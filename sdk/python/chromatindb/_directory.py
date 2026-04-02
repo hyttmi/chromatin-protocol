@@ -59,6 +59,104 @@ class DirectoryEntry:
     blob_hash: bytes
 
 
+# GroupEntry magic bytes and version (D-01, D-02)
+GROUPENTRY_MAGIC: bytes = b"GRPE"
+GROUPENTRY_VERSION: int = 0x01
+
+# Minimum GroupEntry size: magic(4) + ver(1) + name_len(2) + member_count(2)
+GROUPENTRY_MIN_SIZE: int = 9
+
+
+@dataclass(frozen=True)
+class GroupEntry:
+    """A group entry from the directory (D-13).
+
+    Groups are named member lists stored as blobs in the admin namespace.
+    Members are identified by SHA3-256(signing_pk) hashes.
+
+    Attributes:
+        name: Group name (UTF-8).
+        members: List of 32-byte SHA3-256(signing_pk) hashes.
+        blob_hash: 32-byte hash of the blob containing this entry.
+        timestamp: Blob timestamp for latest-timestamp-wins resolution.
+    """
+
+    name: str
+    members: list[bytes]  # 32-byte SHA3-256(signing_pk) hashes
+    blob_hash: bytes  # 32-byte hash of the blob
+    timestamp: int  # blob timestamp for latest-timestamp-wins
+
+
+def encode_group_entry(name: str, members: list[bytes]) -> bytes:
+    """Encode a GroupEntry blob for directory storage.
+
+    Binary format (D-03):
+      [GRPE:4][version:1][name_len:2 BE][name:N][member_count:2 BE][N x member_hash:32]
+
+    Args:
+        name: Group name (UTF-8, max 65535 bytes encoded).
+        members: List of 32-byte SHA3-256(signing_pk) hashes.
+
+    Returns:
+        GroupEntry blob bytes.
+
+    Raises:
+        ValueError: If name too long or member hash wrong size.
+    """
+    name_bytes = name.encode("utf-8")
+    if len(name_bytes) > 65535:
+        raise ValueError(f"Group name too long: {len(name_bytes)} bytes")
+    for m in members:
+        if len(m) != 32:
+            raise ValueError(f"Member hash must be 32 bytes, got {len(m)}")
+    return (
+        GROUPENTRY_MAGIC
+        + struct.pack("B", GROUPENTRY_VERSION)
+        + struct.pack(">H", len(name_bytes))
+        + name_bytes
+        + struct.pack(">H", len(members))
+        + b"".join(members)
+    )
+
+
+def decode_group_entry(data: bytes) -> tuple[str, list[bytes]] | None:
+    """Decode a GroupEntry blob.
+
+    Returns None for invalid data (wrong magic, too short, version mismatch,
+    truncated name, truncated members).
+
+    Args:
+        data: Raw blob bytes.
+
+    Returns:
+        (name, members) tuple, or None if invalid.
+    """
+    if len(data) < GROUPENTRY_MIN_SIZE:
+        return None
+    if data[:4] != GROUPENTRY_MAGIC:
+        return None
+    if data[4] != GROUPENTRY_VERSION:
+        return None
+    offset = 5
+    name_len = struct.unpack(">H", data[offset : offset + 2])[0]
+    offset += 2
+    if offset + name_len > len(data):
+        return None
+    name = data[offset : offset + name_len].decode("utf-8")
+    offset += name_len
+    if offset + 2 > len(data):
+        return None
+    member_count = struct.unpack(">H", data[offset : offset + 2])[0]
+    offset += 2
+    if offset + member_count * 32 > len(data):
+        return None
+    members = []
+    for _ in range(member_count):
+        members.append(data[offset : offset + 32])
+        offset += 32
+    return name, members
+
+
 def encode_user_entry(identity: Identity, display_name: str) -> bytes:
     """Encode a UserEntry blob for directory registration.
 
@@ -226,6 +324,8 @@ class Directory:
         self._by_pubkey_hash: dict[bytes, DirectoryEntry] = {}
         self._dirty: bool = False
         self._subscribed: bool = False
+        # Group index (D-12)
+        self._groups: dict[str, GroupEntry] = {}
 
     async def delegate(self, delegate_identity: Identity) -> WriteResult:
         """Grant write access to a delegate's signing key in directory namespace.
@@ -327,15 +427,143 @@ class Directory:
             await self._populate_cache()
         return self._by_pubkey_hash.get(pubkey_hash)
 
+    # -----------------------------------------------------------------
+    # Group management (GRP-01 through GRP-04)
+    # -----------------------------------------------------------------
+
+    async def create_group(
+        self, name: str, members: list[Identity]
+    ) -> WriteResult:
+        """Create a named group with an initial member list.
+
+        Per D-08, D-10, GRP-01: admin-only, writes GRPE blob to directory
+        namespace with member hashes derived from signing pubkeys.
+
+        Args:
+            name: Group name (UTF-8).
+            members: List of Identity objects to include in the group.
+
+        Returns:
+            WriteResult from the node.
+
+        Raises:
+            DirectoryError: If not in admin mode.
+        """
+        if not self._is_admin:
+            raise DirectoryError("only admin can create groups")
+        member_hashes = [sha3_256(m.public_key) for m in members]
+        group_data = encode_group_entry(name, member_hashes)
+        result = await self._client.write_blob(group_data, ttl=0)
+        self._dirty = True
+        return result
+
+    async def add_member(
+        self, group_name: str, member: Identity
+    ) -> WriteResult:
+        """Add a member to an existing group via read-modify-write.
+
+        Per D-07, D-09, GRP-02: reads current group, appends member hash,
+        writes new group blob.
+
+        Args:
+            group_name: Name of the group to modify.
+            member: Identity to add.
+
+        Returns:
+            WriteResult from the node.
+
+        Raises:
+            DirectoryError: If not admin, group not found, or member already present.
+        """
+        if not self._is_admin:
+            raise DirectoryError("only admin can modify groups")
+        group = await self.get_group(group_name)
+        if group is None:
+            raise DirectoryError(f"group not found: {group_name}")
+        member_hash = sha3_256(member.public_key)
+        if member_hash in group.members:
+            raise DirectoryError(
+                f"member already in group: {group_name}"
+            )
+        new_members = list(group.members) + [member_hash]
+        group_data = encode_group_entry(group_name, new_members)
+        result = await self._client.write_blob(group_data, ttl=0)
+        self._dirty = True
+        return result
+
+    async def remove_member(
+        self, group_name: str, member: Identity
+    ) -> WriteResult:
+        """Remove a member from an existing group via read-modify-write.
+
+        Per D-07, D-09, GRP-02: reads current group, filters out member hash,
+        writes new group blob.
+
+        Args:
+            group_name: Name of the group to modify.
+            member: Identity to remove.
+
+        Returns:
+            WriteResult from the node.
+
+        Raises:
+            DirectoryError: If not admin, group not found, or member not present.
+        """
+        if not self._is_admin:
+            raise DirectoryError("only admin can modify groups")
+        group = await self.get_group(group_name)
+        if group is None:
+            raise DirectoryError(f"group not found: {group_name}")
+        member_hash = sha3_256(member.public_key)
+        if member_hash not in group.members:
+            raise DirectoryError(
+                f"member not in group: {group_name}"
+            )
+        new_members = [m for m in group.members if m != member_hash]
+        group_data = encode_group_entry(group_name, new_members)
+        result = await self._client.write_blob(group_data, ttl=0)
+        self._dirty = True
+        return result
+
+    async def list_groups(self) -> list[GroupEntry]:
+        """List all groups in the directory.
+
+        Per GRP-03: returns cached group entries, populating cache if needed.
+
+        Returns:
+            List of GroupEntry objects.
+        """
+        await self._check_invalidation()
+        if self._cache is None or self._dirty:
+            await self._populate_cache()
+        return list(self._groups.values())
+
+    async def get_group(self, group_name: str) -> GroupEntry | None:
+        """Look up a group by name.
+
+        Per GRP-03: O(1) lookup from group index.
+
+        Args:
+            group_name: Exact group name to match.
+
+        Returns:
+            GroupEntry if found, None otherwise.
+        """
+        await self._check_invalidation()
+        if self._cache is None or self._dirty:
+            await self._populate_cache()
+        return self._groups.get(group_name)
+
     def refresh(self) -> None:
         """Explicitly invalidate the cache (D-23).
 
-        Next call to list_users/get_user/get_user_by_pubkey will
-        trigger a full rebuild from the directory namespace.
+        Next call to list_users/get_user/get_user_by_pubkey/list_groups/get_group
+        will trigger a full rebuild from the directory namespace.
         """
         self._cache = None
         self._by_name.clear()
         self._by_pubkey_hash.clear()
+        self._groups.clear()
         self._dirty = False
 
     async def _populate_cache(self) -> None:
@@ -352,6 +580,7 @@ class Directory:
         cache: dict[bytes, DirectoryEntry] = {}
         by_name: dict[str, DirectoryEntry] = {}
         by_pubkey_hash: dict[bytes, DirectoryEntry] = {}
+        groups_by_name: dict[str, GroupEntry] = {}
 
         cursor = 0
         while True:
@@ -365,27 +594,45 @@ class Directory:
                 if result is None:
                     continue  # Deleted or expired
 
+                # Try UserEntry first
                 parsed = decode_user_entry(result.data)
-                if parsed is None:
-                    continue  # Not a UserEntry (delegation blob, tombstone, etc.)
+                if parsed is not None:
+                    signing_pk, kem_pk, display_name, kem_sig = parsed
+                    if not verify_user_entry(signing_pk, kem_pk, kem_sig):
+                        logger.warning(
+                            "Skipping UserEntry with invalid kem_sig: %s",
+                            blob_ref.blob_hash.hex(),
+                        )
+                        continue
 
-                signing_pk, kem_pk, display_name, kem_sig = parsed
-                if not verify_user_entry(signing_pk, kem_pk, kem_sig):
-                    logger.warning(
-                        "Skipping UserEntry with invalid kem_sig: %s",
-                        blob_ref.blob_hash.hex(),
+                    identity = Identity.from_public_keys(signing_pk, kem_pk)
+                    entry = DirectoryEntry(
+                        identity=identity,
+                        display_name=display_name,
+                        blob_hash=blob_ref.blob_hash,
                     )
+                    cache[blob_ref.blob_hash] = entry
+                    by_name[display_name] = entry
+                    by_pubkey_hash[sha3_256(signing_pk)] = entry
                     continue
 
-                identity = Identity.from_public_keys(signing_pk, kem_pk)
-                entry = DirectoryEntry(
-                    identity=identity,
-                    display_name=display_name,
-                    blob_hash=blob_ref.blob_hash,
-                )
-                cache[blob_ref.blob_hash] = entry
-                by_name[display_name] = entry
-                by_pubkey_hash[sha3_256(signing_pk)] = entry
+                # Try GroupEntry (D-11)
+                group_parsed = decode_group_entry(result.data)
+                if group_parsed is not None:
+                    group_name, group_members = group_parsed
+                    group_entry = GroupEntry(
+                        name=group_name,
+                        members=group_members,
+                        blob_hash=blob_ref.blob_hash,
+                        timestamp=result.timestamp,
+                    )
+                    # Latest-timestamp-wins (D-06)
+                    existing = groups_by_name.get(group_name)
+                    if existing is None or group_entry.timestamp > existing.timestamp:
+                        groups_by_name[group_name] = group_entry
+                    continue
+
+                # Neither UserEntry nor GroupEntry -- skip (delegation, tombstone, etc.)
 
             if page.cursor is None:
                 break
@@ -394,6 +641,7 @@ class Directory:
         self._cache = cache
         self._by_name = by_name
         self._by_pubkey_hash = by_pubkey_hash
+        self._groups = groups_by_name
         self._dirty = False
 
     async def _check_invalidation(self) -> None:
