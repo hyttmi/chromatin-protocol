@@ -157,7 +157,7 @@ Full details: [milestones/v1.6.0-ROADMAP.md](milestones/v1.6.0-ROADMAP.md)
 
 - [x] **Phase 75: Identity Extension & Envelope Crypto** - ML-KEM-1024 keypair on Identity + PQ envelope encrypt/decrypt with versioned binary format (completed 2026-04-01)
 - [x] **Phase 76: Directory & User Discovery** - Admin-owned directory namespace with self-registration, user listing, pubkey fetch, and cached lookups (completed 2026-04-01)
-- [ ] **Phase 77: Groups & Encrypted Client Helpers** - Named group management + write_encrypted/read_encrypted/write_to_group on ChromatinClient
+- [x] **Phase 77: Groups & Encrypted Client Helpers** - Named group management + write_encrypted/read_encrypted/write_to_group on ChromatinClient (completed 2026-04-02)
 - [ ] **Phase 78: Documentation & Polish** - PROTOCOL.md envelope spec, SDK README encryption section, tutorial with encryption workflow
 
 ## Phase Details
@@ -203,11 +203,11 @@ Plans:
   3. User can call write_encrypted(data, recipients) which encrypts and stores a blob, and read_encrypted(blob_hash) which fetches, finds stanza, decrypts and returns plaintext
   4. User can call write_to_group(data, group_name) to encrypt for all current group members (SDK resolves group to KEM pubkeys at encrypt-time)
   5. User can call write_encrypted(data) with no recipients to encrypt to self only
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 77-01-PLAN.md -- GroupEntry dataclass, GRPE binary codec, Directory group methods, cache extension, and unit tests
-- [ ] 77-02-PLAN.md -- write_encrypted, read_encrypted, write_to_group on ChromatinClient + GroupEntry re-export + unit tests
+- [x] 77-02-PLAN.md -- write_encrypted, read_encrypted, write_to_group on ChromatinClient + GroupEntry re-export + unit tests
 
 ### Phase 78: Documentation & Polish
 **Goal**: All encryption features are documented with protocol spec, API reference, and tutorial so a new user can start encrypting blobs without reading source code
@@ -227,5 +227,5 @@ Phases execute in numeric order: 75 -> 76 -> 77 -> 78
 |-------|----------------|--------|-----------|
 | 75. Identity Extension & Envelope Crypto | 2/2 | Complete    | 2026-04-01 |
 | 76. Directory & User Discovery | 2/2 | Complete    | 2026-04-01 |
-| 77. Groups & Encrypted Client Helpers | 1/2 | In Progress|  |
+| 77. Groups & Encrypted Client Helpers | 2/2 | Complete   | 2026-04-02 |
 | 78. Documentation & Polish | 0/? | Not started | - |

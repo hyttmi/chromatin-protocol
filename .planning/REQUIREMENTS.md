@@ -40,10 +40,10 @@ Requirements for client-side PQ envelope encryption. Each maps to roadmap phases
 
 ### Client Helpers
 
-- [ ] **CLI-01**: User can call write_encrypted(data, recipients) to encrypt and store a blob
-- [ ] **CLI-02**: User can call read_encrypted(blob_hash) to fetch, find stanza, decrypt and return plaintext
-- [ ] **CLI-03**: User can call write_to_group(data, group_name) to encrypt for all group members
-- [ ] **CLI-04**: User can call write_encrypted(data) with no recipients to encrypt to self only
+- [x] **CLI-01**: User can call write_encrypted(data, recipients) to encrypt and store a blob
+- [x] **CLI-02**: User can call read_encrypted(blob_hash) to fetch, find stanza, decrypt and return plaintext
+- [x] **CLI-03**: User can call write_to_group(data, group_name) to encrypt for all group members
+- [x] **CLI-04**: User can call write_encrypted(data) with no recipients to encrypt to self only
 
 ### Documentation
 
@@ -106,10 +106,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GRP-02 | Phase 77 | Complete |
 | GRP-03 | Phase 77 | Complete |
 | GRP-04 | Phase 77 | Complete |
-| CLI-01 | Phase 77 | Pending |
-| CLI-02 | Phase 77 | Pending |
-| CLI-03 | Phase 77 | Pending |
-| CLI-04 | Phase 77 | Pending |
+| CLI-01 | Phase 77 | Complete |
+| CLI-02 | Phase 77 | Complete |
+| CLI-03 | Phase 77 | Complete |
+| CLI-04 | Phase 77 | Complete |
 | DOC-01 | Phase 78 | Pending |
 | DOC-02 | Phase 78 | Pending |
 | DOC-03 | Phase 78 | Pending |
