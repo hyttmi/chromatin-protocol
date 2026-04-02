@@ -1,532 +1,688 @@
-# Architecture: Client-Side PQ Envelope Encryption (v1.7.0)
+# Architecture Patterns
 
-**Domain:** PQ envelope encryption, pubkey directory, groups -- integrating with existing Python SDK
-**Researched:** 2026-03-31
-**Confidence:** HIGH (existing SDK source fully analyzed, crypto primitives verified against liboqs/PyNaCl docs)
+**Domain:** Event-driven sync integration for chromatindb v2.0.0
+**Researched:** 2026-04-02
+**Overall confidence:** HIGH (analysis based on direct codebase inspection, not external sources)
 
-## Existing SDK Architecture (Starting Point)
+## Recommended Architecture
 
-```
-sdk/python/chromatindb/
-  __init__.py          Public re-exports
-  client.py            ChromatinClient — async context manager, 15+ methods
-  types.py             18 frozen dataclasses (WriteResult, ReadResult, etc.)
-  _codec.py            31 encode/decode functions for wire payloads
-  _transport.py        Background reader, request_id dispatch, send_lock
-  _handshake.py        ML-KEM-1024 + ML-DSA-87 mutual auth (4-step)
-  _framing.py          AEAD frame IO with nonce counter management
-  crypto.py            SHA3-256, ChaCha20-Poly1305, HKDF-SHA256, build_signing_input
-  identity.py          Identity class — ML-DSA-87 keypair, sign/verify, namespace derivation
-  wire.py              FlatBuffers TransportMessage encode/decode
-  _hkdf.py             Pure-Python HKDF-SHA256 (RFC 5869)
-  exceptions.py        Hierarchy: ChromatinError > CryptoError > DecryptionError, etc.
-  generated/           FlatBuffers codegen (blob_generated.py, transport_generated.py)
-```
+Replace timer-paced sync with push-based notifications and targeted fetch. The existing single-threaded Asio event loop, PeerManager, Connection, and Storage are preserved. Changes are surgical: new message types, new notification paths, modified timer loops, one new Storage API, and SDK reconnect logic.
 
-Key constraints from existing code:
-- `Identity` holds ML-DSA-87 only (signing). No KEM keypair.
-- `crypto.py` has ChaCha20-Poly1305 AEAD + HKDF-SHA256 + SHA3-256 -- all needed for envelope encryption.
-- `client.py` write_blob() builds: signing_input -> sign -> encode_blob_payload -> send. Returns server-assigned blob_hash.
-- Blobs are signed FlatBuffers: namespace + pubkey + data + ttl + timestamp + signature.
-- The node is "intentionally dumb" -- it stores opaque signed blobs. Encryption is purely client-side.
-- Directory/group data is stored as regular blobs with application-level magic prefixes (same pattern as delegations: 0xDE1E6A7E + pubkey).
-
-## New Module Layout
+### Architecture Overview
 
 ```
-sdk/python/chromatindb/
-  [existing modules unchanged]
-
-  NEW MODULES:
-  _envelope.py         Envelope encrypt/decrypt (KEM encap + AEAD)
-  _directory.py        Directory namespace management (user/group CRUD)
-  _directory_types.py  Directory-specific dataclasses (UserEntry, Group, etc.)
+CLIENT WRITE                PEER SYNC (existing reconciliation)
+     |                              |
+     v                              v
+  engine_.ingest()            sync_proto_.ingest_blobs()
+     |                              |
+     v                              v
+  [WriteAck to client]        [SyncComplete to peer]
+     |                              |
+     +------> notify_all_peers() <--+  (NEW: replaces notify_subscribers scope)
+                    |
+          +---------+---------+
+          |                   |
+     [BlobNotify to     [BlobNotify to
+      peer A]             peer B]
+          |                   |
+          v                   v
+     on_peer_message     on_peer_message
+     (BlobNotify)        (BlobNotify)
+          |                   |
+          v                   v
+     targeted_fetch()    targeted_fetch()
+     (BlobFetch for      (BlobFetch for
+      single hash)        single hash)
 ```
 
-### Why These Three Modules
+### Key Architectural Principle
 
-**_envelope.py** -- Pure crypto, no network IO. Testable in isolation. Contains:
-- `envelope_encrypt(plaintext, recipient_kem_pks) -> EncryptedBlob` (multi-recipient)
-- `envelope_decrypt(encrypted_blob, kem_secret_key) -> bytes`
-- Encrypted blob binary format encode/decode
-- Per-blob random symmetric key generation
-- ML-KEM-1024 key wrapping per recipient
-
-**_directory.py** -- Directory operations built on existing client methods. Contains:
-- `DirectoryManager` class wrapping a `ChromatinClient`
-- User registration (publish pubkey to directory namespace)
-- User discovery (list/fetch pubkeys)
-- Group CRUD (create/update/list/resolve members)
-- Delegation management for the directory namespace
-- High-level `write_encrypted()` / `read_encrypted()` that combine directory lookups with envelope crypto
-
-**_directory_types.py** -- Frozen dataclasses for directory entries. Contains:
-- `UserEntry` (label, signing pubkey, KEM pubkey)
-- `Group` (name, member labels)
-- `EncryptedBlob` (ciphertext, wrapped keys, metadata)
-- `DirectoryConfig` (admin identity, directory namespace)
-
-### What Gets Modified
-
-**identity.py** -- Add optional ML-KEM-1024 keypair alongside ML-DSA-87:
-- `Identity.generate()` produces both signing + KEM keypairs
-- `Identity.load()` / `save()` reads/writes `.kem` sibling file (backward compatible: missing .kem = signing-only)
-- New properties: `kem_public_key`, `kem_secret_key`, `has_kem`
-- `Identity.from_public_keys(signing_pk, kem_pk)` for verify-only + decrypt-capable identities
-
-**client.py** -- Add convenience methods:
-- `write_encrypted(data, ttl, recipients)` -- encrypt then write
-- `read_encrypted(namespace, blob_hash)` -- read then decrypt
-- These are thin wrappers composing `_envelope` + existing `write_blob`/`read_blob`
-
-**types.py** -- Add new result types:
-- `EncryptedWriteResult` (extends WriteResult with encryption metadata)
-
-**exceptions.py** -- Add:
-- `DirectoryError(ChromatinError)` for directory operations
-- `EnvelopeError(CryptoError)` for envelope encrypt/decrypt failures
-
-**__init__.py** -- Re-export new public types.
-
-## Encrypted Blob Binary Format
-
-This is the critical design decision. The encrypted blob replaces the `data` field in the existing blob structure. The node sees opaque bytes -- it never knows the content is encrypted.
-
-### Format: `data` Field of an Encrypted Blob
-
-```
-+--------+-------+------------------------------------------+
-| Offset | Size  | Field                                    |
-+--------+-------+------------------------------------------+
-| 0      | 4     | Magic: 0xE0 0xCR 0x1P 0x70 ("encrypt0") |
-| 4      | 1     | Version: 0x01                            |
-| 5      | 1     | Algorithm suite: 0x01 (ML-KEM-1024 +     |
-|        |       |   ChaCha20-Poly1305 + HKDF-SHA256)       |
-| 6      | 2     | Recipient count (big-endian uint16)       |
-| 8      | 12    | Nonce (random, for data AEAD)             |
-| 20     | var   | Wrapped keys section (per recipient):     |
-|        |       |   [kem_pk_hash:32][kem_ciphertext:1568]   |
-|        |       |   = 1600 bytes per recipient              |
-| 20+N*  | var   | AEAD ciphertext (ChaCha20-Poly1305):      |
-| 1600   |       |   encrypted plaintext + 16-byte tag       |
-+--------+-------+------------------------------------------+
-```
-
-### Design Rationale
-
-**Magic bytes (4 bytes):** `0xE0CR1P70` -- distinct from TOMBSTONE_MAGIC (0xDEADBEEF) and DELEGATION_MAGIC (0xDE1E6A7E). Allows any reader to identify encrypted blobs without out-of-band metadata.
-
-**Version byte:** Forward compatibility. Version 0x01 = current scheme. Future versions can change algorithm suite or format.
-
-**Algorithm suite byte:** Identifies the exact crypto algorithms. Suite 0x01 = ML-KEM-1024 (NIST Level 5) + ChaCha20-Poly1305 + HKDF-SHA256. Allows future upgrades (e.g., suite 0x02 for HQC when standardized).
-
-**Recipient count (uint16 BE):** Max 65535 recipients per blob. Realistic limit is ~60 (100 MiB blob size / 1600 bytes per recipient key wrap leaves ample room for data).
-
-**Wrapped keys section:** Each recipient gets:
-- `kem_pk_hash` (32 bytes): SHA3-256 of recipient's ML-KEM-1024 public key. Reader scans for their own hash to find their wrapped key.
-- `kem_ciphertext` (1568 bytes): ML-KEM-1024 encapsulation of the per-blob data key, using the recipient's KEM public key.
-
-**AEAD ciphertext:** The actual encrypted data. Key is derived from the per-blob shared secret (from KEM encapsulation). Nonce is the random 12 bytes from the header. Associated data = everything before the ciphertext (magic + version + suite + count + nonce + all wrapped keys) -- binds ciphertext to its metadata.
-
-### Why Not Per-Namespace Keys
-
-The product direction doc (project_product_direction.md) suggests per-namespace symmetric keys with HKDF(master, salt=blob_hash). This was the initial brainstorm but has problems:
-
-1. **Key distribution complexity:** Requires a separate key distribution namespace (`_keys`) and versioning.
-2. **Revocation is a nightmare:** Revoking access means re-encrypting every blob in the namespace with a new key.
-3. **Per-blob KEM is simpler and stronger:** Each blob has independent keying. Revoking a user = just stop including them as a recipient. Old blobs they could read remain readable (they had access at the time), but new blobs exclude them.
-4. **No key management infrastructure:** No need for key versioning, key epochs, or re-encryption jobs.
-
-Per-blob envelope encryption with recipient list is the standard KEM envelope pattern (HPKE-style). Use it.
-
-## Data Flow: Encrypted Write
-
-```
-Application code:
-  await client.write_encrypted(data=b"secret", ttl=3600, recipients=["alice", "bob"])
-
-1. Resolve recipients:
-   _directory.py resolves "alice" and "bob" to their ML-KEM-1024 public keys
-   by reading user entries from the directory namespace.
-
-2. Envelope encrypt (_envelope.py):
-   a. Generate random 32-byte per-blob data key (os.urandom)
-   b. Generate random 12-byte nonce (os.urandom)
-   c. For each recipient KEM public key:
-      - kem = oqs.KeyEncapsulation("ML-KEM-1024")
-      - kem_ct, shared_secret = kem.encap_secret(recipient_kem_pk)
-      - wrapped_key = aead_encrypt(data_key, b"", nonce_for_wrap, shared_secret)
-      Correction: simpler approach -- the KEM shared secret IS the wrapped key.
-      The data key is derived: data_key = HKDF(shared_secret, info="chromatin-envelope-v1", 32)
-      Wait, that means each recipient gets a DIFFERENT data key. Wrong.
-
-   CORRECT approach:
-   a. Generate random 32-byte data_key (os.urandom)
-   b. Generate random 12-byte nonce (os.urandom)
-   c. Encrypt plaintext: ciphertext = aead_encrypt(data, AD, nonce, data_key)
-   d. For each recipient KEM public key:
-      - kem_ct, kem_ss = encap_secret(recipient_kem_pk)
-      - wrapped_data_key = aead_encrypt(data_key, b"", wrap_nonce, kem_ss)
-        where wrap_nonce = SHA3-256(kem_ct)[:12]  (deterministic from ciphertext)
-      - Store: [SHA3-256(recipient_kem_pk):32][kem_ct:1568][wrapped_data_key:48]
-   e. AD = magic + version + suite + count + nonce + all_wrapped_keys_section
-
-   Actually, this is getting complex. Let me simplify.
-
-   SIMPLEST CORRECT approach:
-   a. Generate random 32-byte data_key
-   b. For each recipient:
-      - kem_ct, kem_ss = encap_secret(recipient_kem_pk)
-      - Use kem_ss to encrypt data_key:
-        wrapped = aead_encrypt(data_key, b"", fixed_nonce, kem_ss)
-        where fixed_nonce = b"\x00" * 12 (safe because kem_ss is unique per encap)
-   c. Encrypt data: ciphertext = aead_encrypt(plaintext, AD, random_nonce, data_key)
-   d. Assemble encrypted blob format
-
-3. Sign and write (existing path):
-   The encrypted_blob_bytes become the `data` field in write_blob().
-   build_signing_input(namespace, encrypted_blob_bytes, ttl, timestamp)
-   identity.sign(digest)
-   encode_blob_payload(namespace, pubkey, encrypted_blob_bytes, ttl, timestamp, sig)
-   send via transport
-
-4. Server stores the blob as-is. Returns blob_hash + seq_num.
-```
-
-### Revised Encrypted Blob Format (After Data Flow Analysis)
-
-```
-+--------+-------+------------------------------------------+
-| Offset | Size  | Field                                    |
-+--------+-------+------------------------------------------+
-| 0      | 4     | Magic: 0xE0 0xCE 0x10 0x70               |
-| 4      | 1     | Version: 0x01                            |
-| 5      | 1     | Algorithm suite: 0x01                    |
-| 6      | 2     | Recipient count N (big-endian uint16)    |
-| 8      | 12    | Data nonce (random)                      |
-| 20     | N *   | Per-recipient wrapped key entries:        |
-|        | 1648  |   [kem_pk_hash:32]                       |
-|        |       |   [kem_ciphertext:1568]                  |
-|        |       |   [wrapped_data_key:48]                  |
-|        |       |   (48 = 32 data_key + 16 AEAD tag)       |
-| 20+N*  | var   | AEAD ciphertext + 16-byte tag            |
-| 1648   |       |                                          |
-+--------+-------+------------------------------------------+
-```
-
-Each wrapped key entry is 1648 bytes (32 + 1568 + 48). The wrapped_data_key is the 32-byte data_key encrypted with ChaCha20-Poly1305 using the KEM shared secret as key and zero nonce (safe: KEM shared secret is unique per encapsulation, never reused).
-
-**AD for data AEAD:** All bytes from offset 0 through end of wrapped keys section. This binds the ciphertext to the recipient list -- any modification to recipients invalidates the data ciphertext.
-
-## Data Flow: Encrypted Read
-
-```
-Application code:
-  result = await client.read_encrypted(namespace, blob_hash)
-
-1. Read blob (existing path):
-   read_result = await client.read_blob(namespace, blob_hash)
-   Returns ReadResult(data=encrypted_blob_bytes, ttl, timestamp, signature)
-
-2. Parse encrypted blob (_envelope.py):
-   a. Check magic bytes at offset 0-3
-   b. Read version, suite, recipient_count, nonce
-   c. Scan wrapped key entries for SHA3-256(my_kem_pk)
-   d. If not found: raise EnvelopeError("not a recipient")
-
-3. Unwrap data key:
-   a. Extract kem_ciphertext from my entry
-   b. kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=my_kem_sk)
-   c. kem_ss = kem.decap_secret(kem_ciphertext)
-   d. data_key = aead_decrypt(wrapped_data_key, b"", zero_nonce, kem_ss)
-   e. If None: raise EnvelopeError("key unwrap failed")
-
-4. Decrypt data:
-   a. Reconstruct AD from header + all wrapped key entries
-   b. plaintext = aead_decrypt(ciphertext, AD, data_nonce, data_key)
-   c. If None: raise EnvelopeError("data decryption failed")
-
-5. Return plaintext + metadata
-```
-
-## Directory Namespace Architecture
-
-The directory is a regular chromatindb namespace owned by an organization admin. Users publish their public keys as blobs in this namespace via delegation.
-
-### Directory Namespace Setup
-
-```
-Admin identity:
-  signing_pk  -> namespace = SHA3-256(admin_signing_pk)
-  This namespace IS the org directory.
-
-For each user who should be in the org:
-  1. Admin creates delegation: write_blob(data=DELEGATION_MAGIC + user_signing_pk)
-     This grants user write access to the directory namespace.
-  2. User self-registers: write_blob to admin's namespace with their key material.
-```
-
-### Directory Blob Types (New Magic Prefixes)
-
-All directory data lives as blobs in the directory namespace. Distinguished by magic prefix:
-
-```
-USER_ENTRY_MAGIC  = 0xD1 0xC7 0x00 0x01   ("directory user entry v1")
-GROUP_MAGIC       = 0xD1 0xC7 0x00 0x02   ("directory group v1")
-```
-
-**User Entry Blob Data Format:**
-```
-+--------+-------+------------------------------------------+
-| Offset | Size  | Field                                    |
-+--------+-------+------------------------------------------+
-| 0      | 4     | Magic: USER_ENTRY_MAGIC                  |
-| 4      | 1     | Version: 0x01                            |
-| 5      | 1     | Label length (uint8, max 255)            |
-| 6      | var   | Label (UTF-8 string, e.g., "alice")      |
-| 6+L    | 2592  | ML-DSA-87 signing public key             |
-| 6+L+   | 1568  | ML-KEM-1024 encryption public key        |
-| 2592   |       |                                          |
-+--------+-------+------------------------------------------+
-Total: 4 + 1 + 1 + L + 2592 + 1568 = 4166 + L bytes
-```
-
-**Group Blob Data Format:**
-```
-+--------+-------+------------------------------------------+
-| Offset | Size  | Field                                    |
-+--------+-------+------------------------------------------+
-| 0      | 4     | Magic: GROUP_MAGIC                       |
-| 4      | 1     | Version: 0x01                            |
-| 5      | 1     | Name length (uint8, max 255)             |
-| 6      | var   | Group name (UTF-8, e.g., "engineering")  |
-| 6+N    | 2     | Member count (big-endian uint16)          |
-| 8+N    | var   | Per-member:                              |
-|        |       |   [label_len:1][label:var]               |
-+--------+-------+------------------------------------------+
-```
-
-Groups store member labels (not pubkeys). On encrypt, the SDK resolves each label to its KEM public key by scanning the directory. This keeps group blobs small and means group membership is always resolved at encrypt-time against the latest directory state.
-
-### Directory Operations Mapped to Existing Client Methods
-
-| Directory Operation | Underlying SDK Method | Notes |
-|---|---|---|
-| Create directory | `write_blob()` (admin identity) | First blob establishes namespace |
-| Grant user access | `write_blob()` with DELEGATION_MAGIC data | Admin delegates write access |
-| Self-register | `write_blob()` to admin namespace | User writes USER_ENTRY blob (delegated) |
-| List users | `list_blobs()` + `read_blob()` per entry | Filter by USER_ENTRY_MAGIC prefix |
-| Fetch user pubkeys | `read_blob()` on specific user entry | Parse USER_ENTRY format |
-| Create group | `write_blob()` with GROUP_MAGIC data | Admin or delegated user writes group blob |
-| Update group | `delete_blob()` old + `write_blob()` new | Tombstone + replace pattern |
-| List groups | `list_blobs()` + `read_blob()` per entry | Filter by GROUP_MAGIC prefix |
-| Revoke user | `delete_blob()` delegation + `delete_blob()` user entry | Tombstone both |
-
-**No new wire types. No server changes. Everything is blobs.**
-
-### Directory Caching
-
-`DirectoryManager` should cache user entries (pubkeys) in memory during a session. The KEM public keys (1568 bytes each) are large, and fetching them for every encrypt is wasteful.
-
-Cache invalidation: subscribe to the directory namespace. When a Notification arrives, invalidate the relevant cache entry. Simple, reactive, built on existing pub/sub.
-
-```python
-class DirectoryManager:
-    def __init__(self, client: ChromatinClient, admin_namespace: bytes):
-        self._client = client
-        self._admin_namespace = admin_namespace
-        self._user_cache: dict[str, UserEntry] = {}  # label -> UserEntry
-        self._group_cache: dict[str, Group] = {}      # name -> Group
-```
-
-## Identity Extension for KEM
-
-The existing `Identity` class manages ML-DSA-87 only. For v1.7.0, it needs an optional ML-KEM-1024 keypair.
-
-### Key File Layout
-
-```
-Current (v1.6.0):
-  mykey.key   (4896 bytes, ML-DSA-87 secret key)
-  mykey.pub   (2592 bytes, ML-DSA-87 public key)
-
-Extended (v1.7.0, backward compatible):
-  mykey.key   (4896 bytes, ML-DSA-87 secret key)     [unchanged]
-  mykey.pub   (2592 bytes, ML-DSA-87 public key)     [unchanged]
-  mykey.kem   (3168 bytes, ML-KEM-1024 secret key)   [NEW, optional]
-  mykey.kpub  (1568 bytes, ML-KEM-1024 public key)   [NEW, optional]
-```
-
-Backward compatibility: `Identity.load()` checks for `.kem`/`.kpub` files. If absent, `has_kem` is False and encryption features are unavailable. `Identity.generate()` always creates both keypairs going forward.
-
-### Identity API Changes
-
-```python
-class Identity:
-    # Existing (unchanged):
-    @property
-    def public_key(self) -> bytes: ...       # ML-DSA-87 (2592 bytes)
-    @property
-    def namespace(self) -> bytes: ...        # SHA3-256(signing_pk)
-    @property
-    def can_sign(self) -> bool: ...
-    def sign(self, message: bytes) -> bytes: ...
-    @staticmethod
-    def verify(message, signature, public_key) -> bool: ...
-
-    # New:
-    @property
-    def kem_public_key(self) -> bytes | None: ...   # ML-KEM-1024 (1568 bytes)
-    @property
-    def kem_secret_key(self) -> bytes | None: ...   # ML-KEM-1024 (3168 bytes)
-    @property
-    def has_kem(self) -> bool: ...
-
-    @classmethod
-    def generate(cls) -> Identity:
-        # Now generates BOTH ML-DSA-87 + ML-KEM-1024 keypairs
-
-    @classmethod
-    def from_public_keys(cls, signing_pk: bytes, kem_pk: bytes | None = None) -> Identity:
-        # Verify-only identity, optionally with KEM public key for encrypting TO them
-```
+**Push notifications reuse the existing pub/sub fan-out pattern.** The current `notify_subscribers()` only notifies peers with explicit subscriptions. Push sync extends this: after ingest, notify ALL connected peers (not just subscribers). This is a broadening of scope, not a new mechanism. The existing `encode_notification()` wire format already contains all the metadata a peer needs to decide whether to fetch.
 
 ## Component Boundaries
 
-| Component | Responsibility | Depends On |
-|---|---|---|
-| `_envelope.py` | Encrypt/decrypt blob data using KEM envelope scheme | `crypto.py` (AEAD, HKDF, SHA3-256), `oqs` (ML-KEM-1024) |
-| `_directory.py` | User/group CRUD in directory namespace, caching | `client.py` (read/write/list/delete/subscribe), `_envelope.py`, `_directory_types.py` |
-| `_directory_types.py` | Frozen dataclasses for directory entries | None (pure data) |
-| `identity.py` (modified) | ML-DSA-87 + ML-KEM-1024 keypair management | `oqs`, `crypto.py` |
-| `client.py` (modified) | High-level encrypt/decrypt convenience methods | `_envelope.py`, `_directory.py` |
+### New Components
 
-### Dependency Graph
+| Component | File | Responsibility | Communicates With |
+|-----------|------|---------------|-------------------|
+| `BlobNotify` message type | `transport.fbs` | Push notification to peers on ingest | PeerManager (sender), Connection (wire) |
+| `BlobFetch` message type | `transport.fbs` | Targeted single-blob fetch request | PeerManager (handler), SyncProtocol (data) |
+| `BlobFetchResponse` message type | `transport.fbs` | Single-blob response to BlobFetch | PeerManager (encoder), Connection (wire) |
+| `next_expiry_time()` Storage API | `storage.h/.cpp` | Peek at earliest expiry key from MDBX | PeerManager (timer scheduling) |
+| SDK auto-reconnect | `client.py` | Transparent reconnection on connection loss | Transport, Handshake |
+| Connection keepalive | `peer_manager.cpp` | Bidirectional ping/pong heartbeat | Connection (send), PeerManager (dead detect) |
+
+### Modified Components
+
+| Component | File | What Changes | Why |
+|-----------|------|-------------|-----|
+| `PeerManager::notify_all_peers()` | `peer_manager.cpp` | New method: fan-out BlobNotify to ALL connected peers | Push sync |
+| `PeerManager::on_peer_message()` | `peer_manager.cpp` | Handle BlobNotify + BlobFetch message types | Receive push notifications, serve targeted fetches |
+| `PeerManager::on_peer_connected()` | `peer_manager.cpp` | Trigger full reconciliation on connect (instead of sync timer) | Reconcile-on-connect |
+| `PeerManager::sync_timer_loop()` | `peer_manager.cpp` | Change interval from 60s to 600-900s (safety net only) | No longer primary sync mechanism |
+| `PeerManager::expiry_scan_loop()` | `peer_manager.cpp` | Replace periodic scan with next-expiry timer scheduling | Event-driven expiry |
+| `PeerManager::cursor_compaction_loop()` | `peer_manager.cpp` | Replace 6h timer with disconnect-triggered compaction | Immediate cleanup |
+| `PeerManager::on_peer_disconnected()` | `peer_manager.cpp` | Add cursor compaction call | Disconnect-triggered cleanup |
+| `Storage::run_expiry_scan()` | `storage.cpp` | Keep as-is (batch scan still used by next-expiry approach) | No change needed |
+| `transport.fbs` | `db/schemas/` | Add BlobNotify=59, BlobFetch=60, BlobFetchResponse=61 | Wire protocol |
+| `message_filter.cpp` | `relay/core/` | Block BlobNotify, BlobFetch, BlobFetchResponse (peer-internal) | Relay security |
+| SDK `Transport._reader_loop()` | `_transport.py` | Detect connection loss, signal reconnect | Auto-reconnect |
+| SDK `ChromatinClient` | `client.py` | Add reconnect loop, re-subscribe on reconnect | Transparent recovery |
+
+### Unchanged Components
+
+| Component | Why Unchanged |
+|-----------|--------------|
+| `Connection` class | Message loop already dispatches arbitrary types; no structural change |
+| `SyncProtocol` class | Reconciliation algorithm unchanged; still used on-connect and safety-net |
+| `Storage::store_blob()` | Already creates expiry index entries; no schema change needed |
+| `BlobEngine` | Ingest pipeline unchanged; notification happens in PeerManager after ingest |
+| `Reconciliation` | XOR-fingerprint algorithm unchanged; just invoked at different times |
+| `Handshake` | No protocol changes to connection establishment |
+| `Relay session forwarding` | Blocklist approach means new peer-internal types auto-blocked if added to blocklist |
+
+## Data Flow: Push-Based Sync
+
+### Flow 1: Client writes a blob (happy path)
 
 ```
-client.py
-  |
-  +-- _directory.py
-  |     |
-  |     +-- _envelope.py
-  |     |     |
-  |     |     +-- crypto.py (AEAD, HKDF, SHA3)
-  |     |     +-- oqs (ML-KEM-1024)
-  |     |
-  |     +-- _directory_types.py
-  |     +-- _codec.py (existing encode/decode)
-  |     +-- types.py (existing result types)
-  |
-  +-- _envelope.py (also used directly for low-level encrypt/decrypt)
-  +-- identity.py (extended with KEM)
+1. Client sends Data message via relay
+2. Relay forwards to node via UDS
+3. PeerManager::on_peer_message(Data) spawns coroutine:
+   a. engine_.ingest(blob) -> co_await (thread pool offload)
+   b. co_await asio::post(ioc_) -> back on IO thread
+   c. conn->send_message(WriteAck) -> ack to client
+   d. notify_all_peers(namespace_id, blob_hash, seq_num, size, is_tombstone)
+      -> for each peer in peers_:
+         -> co_spawn: conn->send_message(BlobNotify, encoded_notification)
 ```
 
-## Anti-Patterns to Avoid
+### Flow 2: Peer receives push notification
 
-### Anti-Pattern 1: Putting KEM Keypair in a Separate Class
-**What:** Creating `EncryptionIdentity` or `KEMIdentity` separate from `Identity`.
-**Why bad:** Users already have Identity objects. Forcing them to manage two separate identity objects for signing vs encryption creates confusion and doubles key management code.
-**Instead:** Extend the existing Identity class with optional KEM fields. One identity, two purposes.
+```
+1. PeerManager::on_peer_message(BlobNotify):
+   a. Decode notification: namespace_id, blob_hash, seq_num, size, is_tombstone
+   b. Check: storage_.has_blob(namespace_id, blob_hash)?
+      - YES: already have it, ignore
+      - NO: fetch it
+   c. Send BlobFetch request: [namespace_id:32][blob_hash:32]
+   d. Wait for BlobFetchResponse (reuse sync message queue or inline response)
+   e. engine_.ingest(blob) -> validate + store
+   f. On success: notify_all_peers() -> cascade to other peers
+```
 
-### Anti-Pattern 2: Encrypting the FlatBuffer Instead of the Data
-**What:** Encrypting the entire FlatBuffer blob payload and storing that.
-**Why bad:** The node needs to verify the signature on the FlatBuffer. If the entire FlatBuffer is encrypted, the node cannot verify ownership and will reject the blob.
-**Instead:** Encrypt only the application data. The `data` field of the FlatBuffer contains the encrypted blob format. The FlatBuffer itself (with namespace, pubkey, signature) remains in the clear for node verification.
+### Flow 3: Reconciliation on connect
 
-### Anti-Pattern 3: Modifying the Node for Encrypted Blobs
-**What:** Adding encryption awareness to the C++ node.
-**Why bad:** The node is intentionally dumb. Client-side encryption means the node NEVER needs to know about encryption. Adding node-side logic couples layers and defeats zero-knowledge storage.
-**Instead:** All encryption/decryption is in the SDK. The node sees opaque `data` bytes.
+```
+1. PeerManager::on_peer_connected() (initiator side):
+   a. co_spawn: run_sync_with_peer(conn)  [EXISTING - no change]
+2. Full reconciliation runs as today (Phase A/B/C with XOR fingerprints)
+3. After reconciliation: PEX exchange [EXISTING - no change]
+```
 
-### Anti-Pattern 4: Storing KEM Public Keys in a Separate Namespace
-**What:** Creating a special `_keys` namespace for public key storage.
-**Why bad:** Requires a separate identity to own `_keys`. Who owns it? How is it bootstrapped? Adds unnecessary complexity.
-**Instead:** Store user entries (including KEM public keys) in the org admin's directory namespace. The admin owns it, delegates write access to users. Uses existing delegation primitive.
+### Flow 4: Event-driven expiry
 
-### Anti-Pattern 5: Group Blobs Containing Full Public Keys
-**What:** Storing all member KEM public keys inside the group blob.
-**Why bad:** Each ML-KEM-1024 public key is 1568 bytes. A 50-member group would be 78KB for the group blob alone. Group updates require re-writing all keys.
-**Instead:** Store member labels in the group blob. Resolve labels to KEM public keys at encrypt-time by reading user entries from the directory. Keeps group blobs tiny.
+```
+1. On startup / after each expiry scan / after blob ingest:
+   a. Call storage_.next_expiry_time() -> peek expiry_map first key
+   b. If has_expiry: schedule timer for (expiry_time - now)
+   c. If no_expiry: no timer (wait for next ingest to re-check)
+2. Timer fires:
+   a. Call storage_.run_expiry_scan() -> purge all expired blobs
+   b. Re-schedule: call next_expiry_time() again, set new timer
+```
+
+### Flow 5: SDK auto-reconnect
+
+```
+1. Transport._reader_loop() catches connection error:
+   a. Sets _closed = True
+   b. Cancels all pending futures with ConnectionError
+   c. Signals reconnect event
+2. ChromatinClient reconnect loop:
+   a. Wait jittered backoff (1s, 2s, 4s, ... up to 60s)
+   b. TCP connect + PQ handshake
+   c. Create new Transport, start reader
+   d. Re-subscribe to previously tracked namespaces
+   e. Resume normal operation
+```
+
+### Flow 6: Connection keepalive
+
+```
+1. PeerManager sends Ping to all peers periodically (30s interval)
+2. Connection::message_loop() handles Pong (already exists for client path)
+3. Receiver-side inactivity timeout (EXISTING) catches dead peers
+4. SDK responds to Ping with Pong (already exists in Transport._reader_loop())
+```
+
+## New Message Types
+
+### BlobNotify (type = 59)
+
+Push notification sent to ALL connected peers when a blob is successfully ingested (stored, not duplicate).
+
+**Wire format:** Identical to existing Notification (type 21) payload:
+```
+[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
+```
+Total: 77 bytes.
+
+**Rationale for separate type vs reusing Notification:** Notification (type 21) is subscription-gated and client-facing. BlobNotify (type 59) is peer-internal and unconditional. Separate types allow:
+- Relay to block BlobNotify (peer-internal) while allowing Notification (client-facing)
+- Peers to handle them differently (BlobNotify triggers fetch; Notification is informational)
+- No behavioral change to existing pub/sub subscription semantics
+
+### BlobFetch (type = 60)
+
+Targeted single-blob fetch request. Sent by a peer that received a BlobNotify for a blob it doesn't have.
+
+**Wire format:**
+```
+[namespace_id:32][blob_hash:32]
+```
+Total: 64 bytes.
+
+**Differences from existing BlobRequest (type 12):**
+- BlobRequest is sync-protocol-only, gated by syncing state, and carries multiple hashes
+- BlobFetch is standalone, requires no active sync session, and fetches exactly one blob
+- BlobFetch is handled inline (no sync session needed), making it fast
+
+### BlobFetchResponse (type = 61)
+
+Response to BlobFetch. Contains the full FlatBuffer-encoded blob, or empty if not found.
+
+**Wire format:**
+```
+[found:1][blob_flatbuffer:N]  (if found=1)
+[found:1]                     (if found=0, total 1 byte)
+```
+
+**Why not reuse BlobTransfer (type 13):** BlobTransfer uses count-prefixed multi-blob encoding with length prefixes. BlobFetchResponse is simpler -- always exactly one blob (or not found). Different encoding avoids confusing sync state.
 
 ## Patterns to Follow
 
-### Pattern 1: Magic Prefix Dispatch
-**What:** Use 4-byte magic prefixes to identify blob content type.
-**When:** Whenever a new blob type is introduced.
-**Why:** Consistent with existing TOMBSTONE_MAGIC and DELEGATION_MAGIC patterns. Any code can identify blob type without external metadata.
+### Pattern 1: Timer-Cancel for Event-Driven Expiry
 
-```python
-ENCRYPTED_BLOB_MAGIC = bytes([0xE0, 0xCE, 0x10, 0x70])
-USER_ENTRY_MAGIC     = bytes([0xD1, 0xC7, 0x00, 0x01])
-GROUP_MAGIC          = bytes([0xD1, 0xC7, 0x00, 0x02])
+**What:** Replace the fixed-interval `expiry_scan_loop()` with a next-expiry-targeted timer.
+
+**When:** Any time the next expiry time changes (blob ingest, expiry scan completion).
+
+**Current code (to replace):**
+```cpp
+// Current: fixed interval, scans everything
+asio::awaitable<void> PeerManager::expiry_scan_loop() {
+    while (!stopping_) {
+        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
+        co_await timer.async_wait(...);
+        storage_.run_expiry_scan();
+    }
+}
 ```
 
-### Pattern 2: Blob-as-Record
-**What:** All structured data stored as blobs with magic prefix + version + fields.
-**When:** Storing user entries, groups, encrypted data.
-**Why:** No new infrastructure needed. Leverages existing signed blob storage, replication, and query. Everything is blobs.
+**New code (sketch):**
+```cpp
+asio::awaitable<void> PeerManager::expiry_scan_loop() {
+    while (!stopping_) {
+        auto next = storage_.next_expiry_time();
+        if (!next.has_value()) {
+            // No blobs with TTL -- wait for wake signal
+            timer.expires_at(asio::steady_timer::time_point::max());
+        } else {
+            auto now = static_cast<uint64_t>(std::time(nullptr));
+            auto delay = std::chrono::seconds(
+                next.value() > now ? next.value() - now : 0);
+            timer.expires_after(delay);
+        }
+        co_await timer.async_wait(...);
+        if (stopping_) co_return;
+        storage_.run_expiry_scan();
+        // Loop re-peeks next_expiry_time on next iteration
+    }
+}
+```
 
-### Pattern 3: Tombstone + Replace for Updates
-**What:** To update a record (e.g., group membership), tombstone the old blob and write a new one.
-**When:** Group membership changes, user key rotation.
-**Why:** chromatindb is append-only with tombstones. There is no in-place update. Tombstone + write is the canonical mutation pattern.
+**Wake mechanism:** After `engine_.ingest()` stores a blob with TTL > 0, cancel the expiry timer (`expiry_timer_->cancel()`) to force re-evaluation. This reuses the existing timer-cancel pattern already used for SIGHUP and shutdown.
 
-### Pattern 4: Subscribe for Cache Invalidation
-**What:** Subscribe to directory namespace, invalidate cache entries on notifications.
-**When:** DirectoryManager is active and caching user/group data.
-**Why:** Reactive cache invalidation using existing pub/sub. No polling needed.
+### Pattern 2: Notification Fan-Out (Broadened Scope)
 
-### Pattern 5: Zero-Nonce for Unique-Key AEAD
-**What:** Use all-zeros nonce when the AEAD key is unique and never reused.
-**When:** Wrapping data_key with KEM shared secret. Each KEM encapsulation produces a unique shared secret, so the nonce never repeats for a given key.
-**Why:** Simpler than deriving a nonce. Cryptographically safe because the key uniqueness guarantee comes from KEM.
+**What:** Extend the existing `notify_subscribers()` pattern to notify ALL peers.
+
+**Current:** `notify_subscribers()` iterates `peers_` and sends only to those with matching `subscribed_namespaces`.
+
+**New:** `notify_all_peers()` iterates `peers_` and sends BlobNotify to ALL peers (no subscription check). This is the same pattern but with the filter removed.
+
+```cpp
+void PeerManager::notify_all_peers(
+    const std::array<uint8_t, 32>& namespace_id,
+    const std::array<uint8_t, 32>& blob_hash,
+    uint64_t seq_num,
+    uint32_t blob_size,
+    bool is_tombstone,
+    net::Connection::Ptr source = nullptr) {
+    auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
+    for (auto& peer : peers_) {
+        if (peer.connection == source) continue;  // Don't notify source
+        if (peer.connection->is_uds()) continue;  // Skip client connections
+        auto conn = peer.connection;
+        auto payload_copy = payload;
+        asio::co_spawn(ioc_, [conn, payload_copy = std::move(payload_copy)]() -> asio::awaitable<void> {
+            co_await conn->send_message(
+                wire::TransportMsgType_BlobNotify,
+                std::span<const uint8_t>(payload_copy));
+        }, asio::detached);
+    }
+    // Also fire existing subscriber notifications for client-facing pub/sub
+    notify_subscribers(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
+}
+```
+
+**Critical:** Must skip UDS connections. Push sync is peer-to-peer; clients use pub/sub subscriptions. Also must still call `notify_subscribers()` for backward-compatible client notifications.
+
+### Pattern 3: Inline BlobFetch Handling (No Sync Session)
+
+**What:** Handle BlobFetch in the message dispatch without requiring a sync session.
+
+**Current model:** BlobRequest (type 12) is only processed within an active sync session (routed through `route_sync_message()` to `handle_sync_as_responder()`).
+
+**New model:** BlobFetch is handled inline in `on_peer_message()`, like ReadRequest or ExistsRequest. No sync session needed. This is the key performance win -- no SyncRequest/SyncAccept handshake, just request/respond.
+
+```cpp
+if (type == wire::TransportMsgType_BlobFetch) {
+    asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+        if (payload.size() != 64) { record_strike(conn, "bad BlobFetch"); co_return; }
+        std::array<uint8_t, 32> ns, hash;
+        std::memcpy(ns.data(), payload.data(), 32);
+        std::memcpy(hash.data(), payload.data() + 32, 32);
+        auto blob = engine_.get_blob(ns, hash);
+        co_await asio::post(ioc_, asio::use_awaitable);
+        if (blob.has_value()) {
+            auto encoded = wire::encode_blob(blob.value());
+            std::vector<uint8_t> response(1 + encoded.size());
+            response[0] = 1; // found
+            std::memcpy(response.data() + 1, encoded.data(), encoded.size());
+            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse, response, request_id);
+        } else {
+            uint8_t not_found = 0;
+            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse, {&not_found, 1}, request_id);
+        }
+    }, asio::detached);
+    return;
+}
+```
+
+**Dispatch model:** coroutine-offload-transfer (same as Data/Delete handlers). `engine_.get_blob()` reads from MDBX. Must post back to IO thread before send_message (AEAD nonce safety).
+
+### Pattern 4: Disconnect-Triggered Cursor Compaction
+
+**What:** Move cursor cleanup from periodic timer to disconnect event.
+
+**Current:** 6-hour timer, scans all cursor peers, prunes disconnected ones.
+
+**New:** On `on_peer_disconnected()`, immediately clean up cursors for the disconnecting peer.
+
+```cpp
+void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
+    // Existing: remove from peers_, log, metrics
+    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+    // ... existing peer removal logic ...
+
+    // Immediate cursor cleanup for disconnected peer
+    auto removed = storage_.delete_peer_cursors(peer_hash);
+    if (removed > 0) {
+        spdlog::debug("cursor cleanup: removed {} entries for disconnected peer", removed);
+    }
+}
+```
+
+**Remove:** The `cursor_compaction_loop()` coroutine and `cursor_compaction_timer_` member. No longer needed.
+
+### Pattern 5: SDK Reconnect with State Preservation
+
+**What:** Auto-reconnect in ChromatinClient that preserves subscription state.
+
+**Design:**
+
+```python
+class ChromatinClient:
+    def __init__(self, ...):
+        self._subscriptions: set[bytes] = set()  # EXISTING
+        self._auto_reconnect = True               # NEW
+        self._reconnect_task: asyncio.Task | None = None  # NEW
+        self._max_reconnect_delay = 60.0           # NEW
+        self._intentional_close = False            # NEW
+
+    async def _reconnect_loop(self):
+        delay = 1.0
+        while self._auto_reconnect and not self._intentional_close:
+            jitter = random.uniform(0, delay * 0.1)
+            await asyncio.sleep(delay + jitter)
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self._host, self._port, ...),
+                    timeout=self._timeout)
+                result = await asyncio.wait_for(
+                    perform_handshake(reader, writer, self._identity),
+                    timeout=self._timeout)
+                self._transport = Transport(reader, writer, *result[:4])
+                self._transport.start()
+                if self._subscriptions:
+                    payload = encode_subscribe(list(self._subscriptions))
+                    await self._transport.send_message(TransportMsgType.Subscribe, payload)
+                return  # Success
+            except Exception:
+                delay = min(delay * 2, self._max_reconnect_delay)
+```
+
+**Key decisions:**
+- Subscriptions tracked as `set[bytes]` (already exists) -- re-issued on reconnect
+- Pending requests at disconnect time get ConnectionError (existing behavior in `_cancel_all_pending`)
+- New requests during reconnect raise ConnectionError (existing `_closed` check)
+- Intentional close (`__aexit__` / `goodbye()`) sets `_intentional_close = True` to stop reconnect loop
+
+### Pattern 6: Server-Initiated Keepalive (Ping From Node)
+
+**What:** Node sends Ping to all connected peers periodically.
+
+**Current:** Inactivity timeout is receiver-side only (check `last_message_time`). No active keepalive from the node. Client SDK can `send_ping()` but the node never initiates Ping to peers.
+
+**Concern:** Adding node-initiated Ping introduces bidirectional keepalive messages. The project memory states "Receiver-side inactivity (not Ping sender) avoids AEAD nonce desync from bidirectional keepalive messages." This was the v0.9.0 design decision.
+
+**Resolution:** The nonce desync issue was about concurrent writes on a single connection (two coroutines writing Ping + sync data simultaneously). In the current architecture, all send_message calls happen on the IO thread (via `co_await asio::post(ioc_)`). The co_spawn-on-ioc model serializes writes. The original concern was valid when sends could happen from multiple threads -- that is no longer the case. Each co_spawn'd coroutine yields at co_await, allowing other coroutines to run, but never concurrently on the same connection. The send_counter_ is accessed only from the IO thread, so there is no race.
+
+**Implementation:** Add a `keepalive_loop()` coroutine in PeerManager:
+
+```cpp
+asio::awaitable<void> PeerManager::keepalive_loop() {
+    while (!stopping_) {
+        asio::steady_timer timer(ioc_);
+        keepalive_timer_ = &timer;
+        timer.expires_after(std::chrono::seconds(30));
+        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+        keepalive_timer_ = nullptr;
+        if (ec || stopping_) co_return;
+        for (auto& peer : peers_) {
+            if (peer.connection->is_uds()) continue;
+            auto conn = peer.connection;
+            asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
+                std::span<const uint8_t> empty{};
+                co_await conn->send_message(wire::TransportMsgType_Ping, empty);
+            }, asio::detached);
+        }
+    }
+}
+```
+
+**Effect:** With node sending Ping every 30s, the receiver-side inactivity timeout (default 120s) on the REMOTE node will detect dead connections within 120s instead of waiting for sync timer or PEX. This gives faster dead peer detection without changing the existing inactivity mechanism.
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Fetch Loop on BlobNotify
+
+**What:** Receiving a BlobNotify and immediately sending BlobFetch without checking local storage.
+
+**Why bad:** Leads to redundant fetches. If three peers all notify us about the same blob, we'd fetch it three times. Only the first succeeds; the other two are wasted bandwidth.
+
+**Instead:** Always check `storage_.has_blob()` before sending BlobFetch. This is an O(1) MDBX key lookup (no data read) -- the exact same `has_blob()` used by ExistsRequest.
+
+### Anti-Pattern 2: Cascading BlobNotify Storm
+
+**What:** When a fetched blob is ingested, calling `notify_all_peers()` which notifies the peer we just fetched from.
+
+**Why bad:** The source peer already has the blob. Sending BlobNotify back to it creates a pointless round-trip (they'll check has_blob() and ignore, but it wastes bandwidth).
+
+**Instead:** In `notify_all_peers()`, accept an optional source connection pointer and skip it in the fan-out loop.
+
+### Anti-Pattern 3: Expiry Timer Precision Obsession
+
+**What:** Trying to fire expiry exactly at the millisecond a blob expires.
+
+**Why bad:** Over-engineering. The expiry_map is already keyed by [expiry_ts_be:8][hash:32], so the first key is the earliest expiry. But blobs with the same second-resolution timestamp would all fire together anyway.
+
+**Instead:** Round to the nearest second (which is what we already have -- timestamps are seconds). Fire the timer, run a batch scan that catches everything expired up to `now`. Simple, efficient, correct.
+
+### Anti-Pattern 4: Reconnect Without Backoff
+
+**What:** SDK reconnecting immediately and repeatedly on connection loss.
+
+**Why bad:** If the relay is down, tight reconnect loops waste CPU, battery, and can trigger rate limiting when the relay comes back up.
+
+**Instead:** Jittered exponential backoff (1s base, 2x growth, 60s cap, 10% jitter). This matches the existing C++ node reconnect design (auto-reconnect with jittered exponential backoff, 1s-60s, validated in v0.9.0).
+
+### Anti-Pattern 5: Holding MDBX Write Transaction During Network IO
+
+**What:** Opening an MDBX write transaction, then co_await-ing a network send before committing.
+
+**Why bad:** MDBX write transactions block all other writes. If the network send blocks (slow peer), all blob storage is stalled.
+
+**Instead:** Complete the MDBX transaction first, THEN do network IO. This is already the pattern used everywhere (ingest -> post to IO thread -> send), but must be maintained for the new BlobFetch handler.
+
+### Anti-Pattern 6: BlobNotify During Active Sync
+
+**What:** Processing BlobNotify messages from a peer while a reconciliation session with that peer is in progress.
+
+**Why bad:** Could lead to duplicate fetches (reconciliation discovers the same blob the push notification told us about). Wastes bandwidth and creates confusing log output.
+
+**Instead:** When `peer->syncing == true`, silently drop BlobNotify from that peer. Reconciliation will handle catch-up. This is the same pattern used for SyncRequest (silently dropped when peer is syncing, to avoid AEAD nonce desync).
+
+## MDBX Schema Changes for Event-Driven Expiry
+
+### No Schema Changes Required
+
+The existing expiry sub-database already has the perfect structure for event-driven expiry:
+
+```
+expiry_map key:   [expiry_ts_be:8][blob_hash:32]  (40 bytes)
+expiry_map value: [namespace_id:32]                 (32 bytes)
+```
+
+Keys are sorted by `expiry_ts_be` (big-endian) then `blob_hash`. This means:
+- **Cursor to first = earliest expiry.** `cursor.to_first()` gives the blob that expires soonest. This is O(1) -- MDBX B-tree lookup.
+- **No secondary index needed.** The expiry_map IS the index, already sorted by time.
+- **Batch scan works unchanged.** `run_expiry_scan()` walks from first until `expiry_ts > now`.
+
+### New Storage API: next_expiry_time()
+
+```cpp
+/// Peek at the earliest expiry timestamp in the expiry index.
+/// O(1) B-tree lookup (cursor to first key, read first 8 bytes).
+/// @return Expiry timestamp in seconds, or nullopt if no blobs have TTL.
+std::optional<uint64_t> Storage::next_expiry_time();
+```
+
+Implementation:
+
+```cpp
+std::optional<uint64_t> Storage::next_expiry_time() {
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->expiry_map);
+        auto first = cursor.to_first(false);
+        if (!first.done) return std::nullopt;  // Empty expiry map
+        auto key = cursor.current(false).key;
+        if (key.length() < 8) return std::nullopt;
+        return decode_be_u64(static_cast<const uint8_t*>(key.data()));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+```
+
+This is the only Storage change. No new sub-databases, no schema migration, no index rebuild.
+
+## Notification Trigger Points
+
+Blob ingestion can happen through three existing paths plus one new path. All must trigger `notify_all_peers()`:
+
+| Path | Current Notification | New Notification |
+|------|---------------------|------------------|
+| Client Data (via relay) | `notify_subscribers()` in Data handler (line ~1653) | Replace with `notify_all_peers()` which also calls `notify_subscribers()` |
+| Client Delete (via relay) | `notify_subscribers()` in Delete handler (line ~693) | Replace with `notify_all_peers()` which also calls `notify_subscribers()` |
+| Sync ingest (peer-to-peer) | `on_blob_ingested_` callback -> `notify_subscribers()` (line ~161) | Replace with `notify_all_peers()` with source exclusion |
+| BlobFetch response ingest | N/A (new path) | `notify_all_peers()` after ingest, with source exclusion |
+
+The `on_blob_ingested_` callback in SyncProtocol (set up at PeerManager constructor, line 159-162) already fires `notify_subscribers()`. Changing this to call `notify_all_peers(source_conn)` ensures sync-received blobs propagate via push to other peers, excluding the peer we received them from.
+
+## FlatBuffer Schema Changes
+
+Add three new message types to `db/schemas/transport.fbs`:
+
+```flatbuffers
+// Phase 79: Push-based sync
+BlobNotify = 59,
+BlobFetch = 60,
+BlobFetchResponse = 61,
+```
+
+These are peer-internal types. The relay message filter must block all three (add to the switch block in `message_filter.cpp`).
+
+The relay's `default: return true;` pattern means all other new types pass through, but these three MUST be explicitly blocked since they carry peer-internal sync data.
+
+## Safety Net Reconciliation
+
+The existing `sync_timer_loop()` becomes a safety net. Changes:
+- **Interval:** from `sync_interval_seconds` (default 60s) to a longer interval (600-900s configurable)
+- **Purpose:** from "primary sync mechanism" to "monitoring signal + catch-up for missed pushes"
+- **Behavior:** unchanged (full reconciliation via XOR-fingerprint algorithm)
+
+Consider: add a new config field `safety_net_interval_seconds` (default 600) and deprecate using `sync_interval_seconds` for this purpose. Or just increase the default and document it.
 
 ## Suggested Build Order
 
-The build order follows dependency depth -- build leaves first, then composites.
+Dependencies flow downward. Each phase depends on those above it.
 
-### Phase 1: Identity Extension + Envelope Crypto
-**Build:** Extend `identity.py` with KEM keypair, create `_envelope.py`
-**Rationale:** No network IO needed. Purely crypto. Fully testable with unit tests.
-**Dependencies:** `crypto.py` (existing), `oqs` (existing dep)
-**Delivers:** `Identity` with KEM + `envelope_encrypt()`/`envelope_decrypt()` + encrypted blob format
+### Phase 1: Push Notification Infrastructure (Foundation)
 
-### Phase 2: Directory Types + Directory Manager (Read Path)
-**Build:** Create `_directory_types.py`, create `_directory.py` with user/group encode/decode + discovery (read-only)
-**Rationale:** Depends on Phase 1 (UserEntry contains KEM pubkey). Read path is simpler than write.
-**Dependencies:** Phase 1, `client.py` (existing read/list methods)
-**Delivers:** Parse user entries and groups from blobs, list users, fetch pubkeys, resolve groups to KEM pubkeys
+**Scope:**
+1. Add BlobNotify/BlobFetch/BlobFetchResponse to transport.fbs, regenerate flatc headers
+2. Add `notify_all_peers()` method to PeerManager (with source exclusion and UDS skip)
+3. Wire notify_all_peers() into all three existing ingest paths (client Data, client Delete, sync ingest callback)
+4. Update relay message filter to block three new types
+5. Update NodeInfoResponse supported_types
 
-### Phase 3: Directory Manager (Write Path) + Client Integration
-**Build:** Add directory write operations (register, create group, update group, revoke) + `write_encrypted()`/`read_encrypted()` on ChromatinClient
-**Rationale:** Depends on Phase 2 (directory read for recipient resolution). Full integration.
-**Dependencies:** Phase 1, Phase 2
-**Delivers:** Complete encrypted write/read flow, user self-registration, group management
+**Why first:** Everything else depends on the new message types existing. This phase is purely additive -- no existing behavior changes. Push notifications go out, but no peer acts on them yet.
 
-### Phase 4: Polish + Documentation
-**Build:** Cache with pub/sub invalidation, error handling edge cases, README, tutorial updates
-**Rationale:** Polish after core is working. Cache is an optimization, not critical path.
-**Dependencies:** Phase 3
-**Delivers:** Production-ready encrypted storage with caching, documentation
+**Test strategy:** Verify BlobNotify is sent to all peers after client write. Verify relay blocks new types. Verify existing pub/sub notifications still work.
+
+### Phase 2: Targeted Blob Fetch (Complete the Push Loop)
+
+**Scope:**
+1. BlobFetch handler in on_peer_message() (inline coroutine, no sync session)
+2. BlobFetchResponse handler in on_peer_message() (decode, ingest, cascade)
+3. BlobNotify handler: check has_blob(), send BlobFetch if missing, receive response, ingest
+4. Dedup guard: skip BlobNotify from syncing peers
+5. Dedup guard: has_blob() check before fetch
+
+**Why second:** Depends on Phase 1 message types. This completes the push sync loop: notify -> check -> fetch -> ingest -> cascade.
+
+**Test strategy:** Two-node: write blob on A, verify B receives via push (not timer sync). Three-node: write on A, verify B gets it via push, C gets it via cascade from B.
+
+### Phase 3: Event-Driven Expiry
+
+**Scope:**
+1. Add `Storage::next_expiry_time()` method
+2. Rewrite `expiry_scan_loop()` to use next-expiry timer instead of fixed interval
+3. Add expiry timer wake on blob ingest (cancel timer when new blob has TTL)
+4. Deprecate or repurpose `expiry_scan_interval_seconds` config
+
+**Why third:** Independent of push sync. No dependencies on Phase 1 or 2. Can technically be built in parallel.
+
+**Test strategy:** Ingest blob with TTL=5. Verify expiry fires within 1-2s of expiry time (not on 60s scan). Ingest blob with TTL=0 (permanent). Verify no timer scheduled when no TTL blobs exist.
+
+### Phase 4: Reconcile-on-Connect + Safety Net
+
+**Scope:**
+1. Verify on_peer_connected() already triggers reconciliation for initiator (it does)
+2. Change sync_timer_loop() interval to configurable safety-net value (default 600s)
+3. Add config field for safety net interval
+4. Disconnect-triggered cursor compaction (add to on_peer_disconnected())
+5. Remove cursor_compaction_loop() and cursor_compaction_timer_ member
+
+**Why fourth:** Depends on push sync working (Phase 2). Once push sync handles ongoing propagation, the sync timer becomes redundant for normal operation.
+
+**Test strategy:** Connect two nodes, verify reconciliation runs immediately. Disconnect, write on A, reconnect, verify B catches up. Verify cursor cleaned on disconnect. Verify safety-net reconciliation fires after 600s.
+
+### Phase 5: Connection Keepalive
+
+**Scope:**
+1. Add `keepalive_loop()` coroutine to PeerManager
+2. Add `keepalive_timer_` member, wire into cancel_all_timers() and stop()
+3. Send Ping to all TCP peers every 30s
+4. Verify existing inactivity detection catches dead peers faster with keepalive traffic
+
+**Why fifth:** Independent of push sync but enhances reliability. The existing receiver-side inactivity timeout already exists; keepalive just ensures regular traffic flow.
+
+**Test strategy:** Kill node A's network interface. Verify node B detects dead connection within 120s (inactivity timeout). Measure detection time with vs without keepalive.
+
+### Phase 6: SDK Auto-Reconnect
+
+**Scope:**
+1. Add reconnect loop to ChromatinClient (jittered exponential backoff)
+2. Track subscriptions for re-subscribe on reconnect (set already exists)
+3. Handle connection loss signal from Transport to Client
+4. Distinguish intentional close from connection loss
+5. Test with relay restart scenario
+
+**Why sixth:** Depends on nothing on the C++ side. Building it last means the server-side architecture is stable and tested.
+
+**Test strategy:** Connect SDK client. Kill relay. Verify auto-reconnect with backoff. Verify subscriptions restored after reconnect. Verify pending requests fail with ConnectionError.
+
+### Phase 7: Documentation Refresh
+
+**Scope:**
+1. PROTOCOL.md: new message types (BlobNotify, BlobFetch, BlobFetchResponse), updated sync model description
+2. README.md: updated architecture description, new sync behavior
+3. SDK README: auto-reconnect API
+4. SDK getting-started tutorial: reconnect handling
+
+**Why last:** Documents the final state after all behavior is implemented and tested.
+
+## Phase Dependency Graph
+
+```
+Phase 1 (Push Infra) -----> Phase 2 (Blob Fetch) -----> Phase 4 (Reconcile + Safety Net)
+
+Phase 3 (Event Expiry)  [independent, can parallel with 1-2]
+
+Phase 5 (Keepalive)      [independent, can parallel with 3-4]
+
+Phase 6 (SDK Reconnect)  [independent, can parallel with 3-5]
+
+Phase 7 (Docs)           [depends on all above]
+```
+
+**Parallelizable groups:**
+- Group A: Phase 1, Phase 3 (no dependency between them)
+- Group B: Phase 2 (needs Phase 1), Phase 5 (independent)
+- Group C: Phase 4 (needs Phase 2), Phase 6 (independent)
+- Group D: Phase 7 (needs all)
 
 ## Scalability Considerations
 
-| Concern | At 10 users | At 100 users | At 1000 users |
-|---|---|---|---|
-| Encrypted blob size overhead | 1 recipient: ~1.7KB header | 10 recipients: ~16.5KB header | 100 recipients: ~165KB header. Acceptable for most blob sizes. |
-| Directory scan for user lookup | Trivial: list_blobs returns <10 entries | Moderate: may need pagination | Consider label-indexed lookup blob. Scan is O(N) per page. |
-| Group resolution | Trivial | Cache eliminates repeated lookups | Same -- cache handles it |
-| KEM encapsulation per recipient | ~1ms each, 10ms total | ~100ms | ~1s. CPU-bound. Acceptable for write path. |
-| Identity file size | 12.8KB (DSA + KEM keys) | Same per user | Same per user |
+| Concern | At 3 nodes (current KVM) | At 10 nodes | At 100 nodes |
+|---------|--------------------------|-------------|--------------|
+| BlobNotify fan-out | 2 messages per ingest | 9 messages | 99 messages -- acceptable for small blobs |
+| BlobFetch after notify | At most 2 fetches | At most 9 | 99 concurrent fetches of same blob from source |
+| has_blob() dedup check | Trivial | Trivial | 99 MDBX reads -- still O(1) each |
+| Notification bandwidth | 77 bytes x 2 = 154B overhead | 77 x 9 = 693B | 77 x 99 = 7.6 KB per ingest |
+| Expiry timer precision | Exact (O(1) MDBX peek) | Exact | Exact |
+| Cursor storage on disconnect | ~2 peers x N ns | ~10 peers | Delete large cursor sets on disconnect |
 
-The 1000-user case for directory scan could be optimized later with an index blob that maps labels to blob hashes, but this is YAGNI for v1.7.0. The list_blobs pagination handles it adequately.
+**At 100 nodes (future concern, not current):** The fan-out of 99 BlobFetch requests to a single source node could be a bottleneck for large blobs. Mitigation options for the future: fetch from any peer that has it (gossip-style), or batch-acknowledge multiple BlobNotify before fetching. Not needed for the 3-node KVM deployment.
 
 ## Sources
 
-- ML-KEM-1024 key sizes: [Open Quantum Safe ML-KEM docs](https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem.html) -- PUBLIC_KEY=1568, SECRET_KEY=3168, CT=1568, SS=32
-- liboqs-python KEM API: [GitHub liboqs-python](https://github.com/open-quantum-safe/liboqs-python) -- KeyEncapsulation(alg, secret_key=), generate_keypair(), encap_secret(pk), decap_secret(ct), export_secret_key()
-- FIPS 203 ML-KEM standard: [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final)
-- KEM envelope pattern: [Wikipedia KEM](https://en.wikipedia.org/wiki/Key_encapsulation_mechanism) + HPKE draft
-- Existing SDK source: Direct analysis of all 12 modules under sdk/python/chromatindb/
-- Delegation format: db/wire/codec.h DELEGATION_MAGIC (0xDE1E6A7E) + 2592-byte pubkey
-- Tombstone format: db/wire/codec.h TOMBSTONE_MAGIC (0xDEADBEEF) + 32-byte target hash
+All analysis based on direct codebase inspection:
+- `db/peer/peer_manager.h` / `.cpp` -- PeerManager, sync, expiry, notification, cursor compaction
+- `db/storage/storage.h` / `.cpp` -- MDBX schema (7 sub-databases), expiry_map key format, run_expiry_scan()
+- `db/engine/engine.h` / `.cpp` -- ingest pipeline, get_blob()
+- `db/sync/sync_protocol.h` / `.cpp` -- reconciliation, on_blob_ingested callback
+- `db/sync/reconciliation.h` / `.cpp` -- XOR-fingerprint algorithm
+- `db/net/connection.h` / `.cpp` -- message loop, send_message, Connection::Ptr
+- `db/wire/codec.h` -- blob encoding/decoding, tombstone/delegation utilities
+- `db/schemas/transport.fbs` -- current 58 message types (None through TimeRangeResponse)
+- `db/config/config.h` -- timer configuration, all SIGHUP-reloadable fields
+- `relay/core/message_filter.h` / `.cpp` -- blocklist approach, 21 blocked types
+- `sdk/python/chromatindb/_transport.py` -- background reader loop, notification queue, send_lock
+- `sdk/python/chromatindb/client.py` -- ChromatinClient lifecycle, subscription tracking, connect()

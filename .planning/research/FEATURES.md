@@ -1,287 +1,215 @@
-# Feature Landscape: Client-Side PQ Envelope Encryption
+# Feature Research: Event-Driven Sync for Distributed Blob Stores
 
-**Domain:** Client-side encryption with pubkey directory, groups, and envelope encryption for a PQ-secure blob store
-**Researched:** 2026-03-31
-**Overall confidence:** HIGH (core patterns well-understood, PQ-specific integration MEDIUM)
+**Domain:** Push-based replication and event-driven maintenance in distributed blob stores
+**Researched:** 2026-04-02
+**Confidence:** HIGH (patterns well-established across CouchDB, Syncthing, Cassandra, IPFS, Redis)
 
-## Context: What Already Exists
+## Feature Landscape
 
-The Python SDK (v1.6.0) already provides:
-- `ChromatinClient` with 15 async methods (write_blob, read_blob, delete_blob, list_blobs, exists, 10 query methods, pub/sub)
-- `Identity` class managing ML-DSA-87 keypairs (generate, load, save, sign, verify)
-- ML-KEM-1024 handshake for transport encryption (liboqs-python `KeyEncapsulation`)
-- ChaCha20-Poly1305 AEAD (PyNaCl bindings)
-- HKDF-SHA256 (pure-Python stdlib implementation, byte-identical to libsodium)
-- SHA3-256 (hashlib stdlib)
-- Namespace ownership: `SHA3-256(pubkey) = namespace`
-- Delegation: owner writes `[0xDE 0x1E 0x6A 0x7E][delegate_pubkey:2592]` blob to grant write access
-- Tombstones: owner writes `[0xDE 0xAD 0xBE 0xEF][target_hash:32]` to delete blobs
-- Pub/sub notifications on namespace changes
+### Table Stakes (Users Expect These)
 
-**Key constraint:** All new features are pure SDK-side. No C++ node changes. The node stores signed blobs; it never interprets their contents. The encryption layer sits entirely in the SDK, making the node a zero-knowledge store.
+Features that any push-based sync system must have. Without these, the event-driven architecture is incomplete or fragile.
 
-## Table Stakes
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Push notification on blob ingest | Core value prop of event-driven sync. CouchDB continuous changes feed, Syncthing Index Update, IPFS Bitswap wantlist fulfillment -- all notify peers immediately on new data. Without this, "event-driven" is marketing. | MEDIUM | New wire type: BlobNotify (namespace:32 + blob_hash:32 + seq_num:8 + blob_size:4 + is_tombstone:1). Sent to all connected peers on ingest. Reuse existing Notification payload format (already 77 bytes, identical structure). Peer-to-peer analog of client-facing Notification type 21. |
+| Targeted blob fetch from notification | Peer receives BlobNotify, fetches that specific blob without full reconciliation. IPFS Bitswap: wantlist -> block response. CouchDB: changes feed -> doc fetch. This is the "O(1) fetch" that replaces "O(diff) reconciliation" for real-time updates. | MEDIUM | New wire types: BlobFetchRequest (namespace:32 + blob_hash:32) and BlobFetchResponse (reuse single-blob-transfer format). Leverage existing SyncProtocol::get_blobs_by_hashes() for lookup. Must handle "blob not found" (peer may have expired/deleted it). |
+| Reconcile-on-connect (initial sync) | Every distributed system reconciles state on connection establishment. Syncthing sends full Index on connect. Cassandra uses anti-entropy on node join. CouchDB replicates from last_seq. Without this, peers that reconnect after downtime have stale data until the next periodic sync (10-15 min is too long). | LOW | Already built: run_sync_with_peer() fires on_peer_connected -> on_ready. Just need to keep this behavior as the PRIMARY catchup mechanism. No new code, but must be explicitly preserved in the new architecture. |
+| Safety-net periodic reconciliation | All production systems keep a fallback anti-entropy mechanism. Cassandra: nodetool repair. CouchDB: periodic replication check. Syncthing: periodic full index rescan. The push path can lose messages (TCP buffer full, transient disconnect, race conditions). A 10-15 min background reconciliation catches anything missed. | LOW | Reuse existing sync_timer_loop() but increase interval from 60s to 600-900s. This becomes a monitoring signal, not the primary sync path. Log when safety-net finds discrepancies (indicates push path bugs). |
+| Application-level keepalive (Ping/Pong heartbeat) | RabbitMQ, gRPC, WebSocket protocols all use application-level heartbeats because TCP keepalive defaults are too slow (2 hours on Linux). Dead connection detection in <30s requires app-level pings. Bidirectional: both sides send, both sides monitor. | MEDIUM | New bidirectional heartbeat. Currently the C++ node only does receiver-side inactivity timeout (120s, no pings sent). Must add: node sends periodic Ping (e.g., every 15s), expects Pong within timeout. Existing Ping/Pong wire types (5/6) already exist. Must be careful about AEAD nonce interaction -- existing decision "receiver-side inactivity (not Ping sender)" was to avoid nonce desync, but with sequential send_counter_ serialization this is safe. |
+| SDK auto-reconnect with exponential backoff | PubNub, websockets library, gRPC -- all production SDKs auto-reconnect transparently. Without this, every connection drop requires manual application-level retry. Users expect `async with` to "just work" across transient failures. | HIGH | Requires reworking ChromatinClient from single-use context manager to persistent connection with reconnect loop. Jittered exponential backoff (1s min, 30s max). Must re-establish PQ handshake on each reconnect (new AEAD session). Restore subscriptions after reconnect. Highest complexity feature because it touches transport, handshake, and client layers. |
+| SDK subscription restoration on reconnect | WebSocket best practices, PubNub SDK, RingCentral -- all restore subscriptions automatically after reconnect. Without this, any reconnect silently drops pub/sub subscriptions and the application misses notifications with no error. | MEDIUM | Track `_subscriptions` set (already done in client.py). After successful reconnect + handshake, re-send Subscribe messages for all tracked namespaces. Must happen before returning control to caller. Gap between disconnect and reconnect means missed notifications -- document this limitation. |
 
-Features that any client-side encryption system must have. Without these, the encryption is either broken, unusable, or a toy.
+### Differentiators (Competitive Advantage)
 
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| Envelope encryption format | Standard pattern: symmetric DEK encrypts data, asymmetric KEK wraps DEK per-recipient. Every serious encryption system uses this (age, AWS KMS, KBFS, Signal). | MEDIUM | Existing: `aead_encrypt/decrypt`, `hkdf_derive`, `sha3_256`. New: ML-KEM-1024 encap/decap via `oqs.KeyEncapsulation` (already used in handshake). |
-| Multi-recipient key wrapping | A blob encrypted for N recipients must wrap the DEK N times (one per recipient's KEM public key). Single-recipient is useless for collaboration. age wraps file key per-recipient in stanzas; CMS has RecipientInfo structures. | MEDIUM | ML-KEM-1024 `encaps(pubkey)` returns `(ciphertext, shared_secret)`. Wrap DEK with each recipient's shared_secret. Each wrap = 1568 bytes of KEM ciphertext + 32 bytes AEAD-wrapped DEK + 16 bytes tag. |
-| Encrypted blob binary format | Self-describing binary header with version, recipient count, per-recipient wrapped keys, then AEAD ciphertext. Must be parseable without external state. Every encrypted format (age, AWS SDK, Cryptomator) puts all decryption metadata in the blob itself. | MEDIUM | Define: `[version:1][recipient_count:2][recipient_stanzas][nonce:12][ciphertext+tag]`. Each stanza: `[kem_pubkey_hash:32][kem_ciphertext:1568][wrapped_dek:48]`. |
-| Pubkey directory (key discovery) | Users must find each other's KEM public keys to encrypt to them. Without a directory, you need out-of-band key exchange for every recipient -- unusable. Keybase, Signal, and every E2EE system has key discovery. | HIGH | New: ML-KEM-1024 keypair generation per identity. Directory entries stored as blobs in a shared namespace. Uses existing delegation for write access. |
-| Encrypted write helper | `client.write_encrypted(data, recipients, ttl)` -- one-call API that handles key generation, multi-recipient wrapping, encryption, and blob write. Without this, developers manually construct envelope format -- error-prone and defeats the purpose. | LOW | Composes: DEK generation, per-recipient ML-KEM encap, AEAD encrypt, format assembly, `write_blob()`. |
-| Encrypted read helper | `client.read_encrypted(namespace, blob_hash)` -- reads blob, identifies recipient stanza for local identity, decapsulates DEK, decrypts payload. Returns plaintext or raises if not a recipient. | LOW | Composes: `read_blob()`, format parse, ML-KEM decap, AEAD decrypt. |
-| Identity with KEM keypair | Each identity needs both ML-DSA-87 (signing, already exists) and ML-KEM-1024 (encryption, new). The signing key proves who you are; the KEM key lets others encrypt to you. Two separate keys because signing keys must not be used for encryption (cryptographic hygiene). | MEDIUM | Add `kem_public_key` and KEM secret key to `Identity`. Generate alongside existing ML-DSA-87 keypair. Save/load .kem / .kem.pub files alongside .key / .pub. |
+Features that go beyond table stakes. Not required for correctness, but provide measurable quality-of-life or performance benefits.
 
-### Detailed Analysis: Envelope Encryption Format
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Event-driven expiry (next-expiry timer) | Replace periodic full-table scan with targeted timer set to the soonest expiring blob. Redis uses lazy expiry + periodic sampling. CouchDB doesn't expire at all. Most systems scan periodically. A next-expiry timer is more CPU-efficient: sleep until the next expiry, process it, set timer to the next one. Especially valuable when most blobs are permanent (TTL=0). | MEDIUM | Requires Storage to expose get_next_expiry_timestamp(). On blob store: if new blob's expiry < current timer target, reset timer. On expiry event: process expired blob, query next expiry, set new timer. Edge case: bulk inserts may thrash the timer -- use a small coalescing window (100ms). Falls back to periodic scan if no TTL blobs exist. |
+| Disconnect-triggered cursor cleanup | Replace 6-hour cursor compaction timer with immediate cleanup on peer disconnect. Currently cursors for disconnected peers accumulate for up to 6 hours. Immediate cleanup reduces memory waste and database entries. | LOW | Hook into on_peer_disconnected(). Call storage_.delete_cursors_for_peer(peer_pubkey_hash). Simple, no timer needed. The 6h timer was a YAGNI compromise when event-driven cleanup wasn't available -- now it is. |
+| Connection-scoped push state | Track which blobs each peer has been notified about. Prevents redundant notifications and enables smart push decisions. Syncthing tracks per-peer index state. IPFS Bitswap tracks per-peer wantlists. | HIGH | Not recommended for v2.0.0. The existing reconciliation protocol handles de-duplication on connect. Push notifications are cheap (77 bytes). Duplicate fetch requests are detected by content-addressing. The complexity of per-peer bloom filters or notification bitmaps is not justified yet. |
+| Notification coalescing / batching | Batch multiple BlobNotify messages into a single frame when multiple blobs arrive in rapid succession. Reduces frame overhead and AEAD encryption operations. gRPC supports message batching. Syncthing batches Index Update messages. | LOW | Simple coalescing: collect notifications for 10-50ms, send as batch. Wire format: [count:4][notification:77]*N. Low complexity, measurable throughput improvement during bulk ingest. Defer to v2.1 if not needed for correctness. |
 
-**How age does it (the gold standard for simplicity):**
-- Header: version line, then one "stanza" per recipient wrapping the same 128-bit file key
-- Each X25519 stanza: ephemeral pubkey + AEAD(wrap_key, file_key) where wrap_key = HKDF(DH_shared_secret, ephemeral_share || recipient)
-- Payload: HKDF(file_key, nonce, "payload") derives payload key, then ChaCha20-Poly1305 in 64 KiB chunks
-- Fixed nonce of zeros for key wrapping (one unique ephemeral key per recipient)
+### Anti-Features (Commonly Requested, Often Problematic)
 
-**How this maps to chromatindb's PQ stack:**
-- Instead of X25519 DH, use ML-KEM-1024 encapsulation: `encaps(recipient_kem_pk)` -> `(ciphertext, shared_secret)`
-- Wrap DEK: `HKDF(shared_secret, "chromatindb-envelope-v1", 32)` -> `wrap_key`, then `AEAD(wrap_key, dek, nonce=zeros)`
-- The ML-KEM ciphertext is per-recipient (1568 bytes each, fixed size, no ambiguity)
-- Payload encryption: ChaCha20-Poly1305 with random 12-byte nonce (already have `aead_encrypt`)
+Features that seem good but create problems in this specific context.
 
-**Recommended format (binary, self-contained):**
-```
-[version: 1 byte = 0x01]
-[recipient_count: 2 bytes big-endian]
-For each recipient:
-  [kem_pubkey_hash: 32 bytes]     -- SHA3-256 of recipient's KEM pubkey (for identification)
-  [kem_ciphertext: 1568 bytes]    -- ML-KEM-1024 encapsulation output
-  [wrapped_dek: 48 bytes]         -- AEAD(wrap_key, dek:32) = ciphertext:32 + tag:16
-[nonce: 12 bytes]                 -- random, for payload encryption
-[ciphertext: variable]            -- AEAD(dek, plaintext, nonce, ad=header_bytes)
-```
-
-Total overhead per recipient: 32 + 1568 + 48 = 1648 bytes.
-Fixed overhead: 1 + 2 + 12 + 16 (AEAD tag) = 31 bytes.
-Single-recipient encrypted blob: 31 + 1648 = 1679 bytes overhead.
-
-**Why this format:** Compact binary (not text like age -- blobs are binary anyway), self-describing, no external state needed for decryption, and the header is authenticated as AD to the payload AEAD (binds recipients to ciphertext, prevents stanza substitution).
-
-### Detailed Analysis: Pubkey Directory
-
-The directory is the hardest feature. It determines how users discover each other.
-
-**How Keybase does it:** Global Merkle tree of public keys, server-mediated but cryptographically auditable. Heavy infrastructure.
-
-**How Signal does it:** Phone number -> identity key mapping on Signal servers. Contact discovery via SGX enclaves (complex).
-
-**How this should work for chromatindb (SIMPLE, no new infrastructure):**
-
-An "org directory" is a namespace owned by an admin identity. Users register by writing their public key info as a blob to that namespace (via delegation -- admin delegates write access to new members). Discovery is just `list_blobs(directory_namespace)` + `read_blob()` to get pubkeys.
-
-**Directory entry format (blob data):**
-```
-[magic: 4 bytes = 0xD1 0xEC 0x70 0x01]  -- "DIRECT01" nibble-ish
-[entry_type: 1 byte]                     -- 0x01 = user pubkey entry
-[signing_pubkey: 2592 bytes]             -- ML-DSA-87 pubkey (already known from blob signature)
-[kem_pubkey: 1568 bytes]                 -- ML-KEM-1024 encapsulation key (NEW)
-[display_name_len: 2 bytes big-endian]
-[display_name: variable, UTF-8]
-```
-
-**Key discovery flow:**
-1. Admin creates org namespace, delegates write access to users
-2. User generates Identity (ML-DSA-87 + ML-KEM-1024 keypair)
-3. User writes directory entry blob to org namespace (self-registration)
-4. Other users list org namespace, read entries, cache KEM pubkeys locally
-5. To encrypt for "alice": look up alice's KEM pubkey from directory, ML-KEM encaps to it
-
-**Why blobs-as-directory:** Zero new infrastructure. Directory entries are signed blobs that replicate across nodes automatically. Revocation = tombstone the user's directory entry blob. The node already handles replication, expiry, and access control.
-
-### Detailed Analysis: Multi-Recipient Key Wrapping
-
-**The pattern (from age, CMS, KBFS, and all envelope encryption systems):**
-1. Generate random 32-byte DEK (data encryption key)
-2. For each recipient: `(ct, ss) = ML-KEM-1024.encaps(recipient.kem_pubkey)`, then `wrap_key = HKDF(ss, info, 32)`, then `wrapped = AEAD(wrap_key, dek)`
-3. Encrypt payload with DEK
-4. Pack all KEM ciphertexts + wrapped DEKs into header
-
-**Recipient identification:** Each stanza includes `SHA3-256(recipient.kem_pubkey)` so the decryptor can scan stanzas for theirs without trying every decapsulation. age uses the recipient public key as an identifier in the stanza args.
-
-**Decryption flow:**
-1. Parse header, scan stanzas for `SHA3-256(my_kem_pubkey)`
-2. If found: `ss = ML-KEM-1024.decaps(my_kem_secret, kem_ciphertext)`
-3. `wrap_key = HKDF(ss, info, 32)`, then `dek = AEAD_decrypt(wrap_key, wrapped_dek)`
-4. Decrypt payload with DEK
-
-## Differentiators
-
-Features that set this apart from generic encryption libraries. Not expected, but valued.
-
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| Named groups in directory | Instead of listing N pubkeys per write, name a group ("engineering") and the SDK resolves member KEM pubkeys at encrypt time. Keybase teams, Signal groups, and GPG groups all provide this abstraction. | MEDIUM | Group entry in directory: `[magic][type=0x02][group_name][member_kem_pubkey_hashes]`. SDK resolves hashes to full KEM pubkeys from directory cache. |
-| Auto-encrypt-to-group helper | `client.write_to_group(data, "engineering", ttl)` -- resolves group members, wraps DEK for each, writes encrypted blob. One-liner for the common case. | LOW | Composes: group resolution + `write_encrypted()`. |
-| Self-encrypting write | `client.write_encrypted(data, ttl=3600)` with no explicit recipients encrypts to self only. Useful for private encrypted storage where only the writer can read back. | LOW | Default recipient = own KEM pubkey. Single-recipient envelope. |
-| Pubkey caching with invalidation | Cache directory entries locally, refresh on pub/sub notification. Avoids re-fetching directory on every encrypt. | LOW | In-memory dict `{kem_pubkey_hash: kem_pubkey}`. Subscribe to directory namespace. Invalidate on tombstone notifications. |
-| Streaming encryption for large blobs | For blobs approaching 100 MiB, encrypt in chunks (like age's 64 KiB STREAM construction) to avoid holding 200+ MiB in memory (plaintext + ciphertext). | HIGH | STREAM construction: chunk counter in nonce, final-chunk marker. Complex: different decryption flow, seekability concerns, chunk authentication. |
-| Re-encryption helper for revocation | When a member is removed from a group, re-encrypt existing blobs for remaining members. Automates the "read, decrypt, re-encrypt, write, tombstone old" cycle. | MEDIUM | Composes existing operations. Warning: O(blobs * members) -- expensive for large datasets. Practically useful only for small datasets or critical secrets. |
-
-### Detailed Analysis: Groups
-
-**How Signal does groups (Sender Keys):**
-- Each member generates a sender key (chain_key + signature_key)
-- Sender key distributed to all members via pairwise encrypted channels
-- Messages encrypted with sender's chain key, broadcast to group
-- On member removal: all members rotate sender keys
-
-**How Keybase does groups:**
-- Team has per-team key, encrypted to each member's per-user key
-- Key rotation on membership change (new key, re-encrypted for remaining members)
-- Role-based: readers, writers, admins
-- Subteams with independent keys
-
-**What chromatindb should do (MUCH simpler than either):**
-
-Groups are just named membership lists stored as blobs in the directory namespace. No shared group key. No key rotation protocol. When encrypting to a group, the SDK resolves the current member list and wraps the DEK for each member's KEM pubkey individually.
-
-**Why no shared group key:**
-1. chromatindb stores blobs, not streams -- there is no message ordering to optimize
-2. Envelope encryption already handles multi-recipient efficiently (1648 bytes per recipient)
-3. Shared group keys require key rotation on every membership change -- massive complexity
-4. Per-blob envelope encryption means removing a member from the group ONLY affects future blobs (old blobs they already have keys for remain accessible -- this is correct, they already read them)
-
-**Group entry format (blob data in directory namespace):**
-```
-[magic: 4 bytes = 0xD1 0xEC 0x70 0x01]
-[entry_type: 1 byte = 0x02]             -- group entry
-[group_name_len: 2 bytes big-endian]
-[group_name: variable, UTF-8]
-[member_count: 2 bytes big-endian]
-For each member:
-  [kem_pubkey_hash: 32 bytes]           -- SHA3-256 of member's KEM pubkey
-```
-
-**Group operations:**
-- Create group: admin writes group blob to directory namespace
-- Add member: admin writes updated group blob (new version), tombstones old
-- Remove member: same -- write new group blob without removed member, tombstone old
-- Resolve group: read group blob, look up each member's KEM pubkey from directory cache
-- Encrypt to group: resolve members, wrap DEK for each
-
-**Maximum group size consideration:**
-At 1648 bytes per recipient, a 100-member group adds ~161 KiB of header to every encrypted blob. With 100 MiB max blob size, this is negligible. A 1000-member group adds ~1.6 MiB, still fine. The practical limit is ML-KEM encapsulation time (~1ms per recipient on modern hardware), so 1000 recipients = ~1 second. Acceptable for batch operations, but encrypt-heavy workloads with very large groups should be noted.
-
-## Anti-Features
-
-Features to explicitly NOT build. Each one either adds complexity without proportional value, invites security mistakes, or conflicts with the system's design principles.
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Shared group symmetric key | Requires key rotation protocol, re-encryption on every membership change, complex state management. Signal and Keybase invest enormous effort here because they need it for real-time messaging. chromatindb stores blobs -- per-blob envelope encryption is simpler and more secure. | Per-blob DEK wrapped individually for each group member. |
-| Key escrow / recovery | Admin ability to decrypt all blobs. Destroys zero-knowledge property. If the admin can read everything, you do not have client-side encryption -- you have server-side encryption with extra steps. | If a user loses their key, their data is gone. This is a feature, not a bug. Document it clearly. |
-| Proxy re-encryption | Academic technique where a proxy transforms ciphertext from one key to another without decrypting. Complex crypto, limited library support, and unnecessary when the client can just re-encrypt. | Client-side re-encryption helper: read, decrypt, re-encrypt for new recipients, write new blob. |
-| Forward secrecy per blob | Ratcheting the encryption key per blob (like Signal's double ratchet). Only makes sense for ordered message streams. Blobs are unordered, independently readable. | Fresh random DEK per blob provides per-blob key independence. That is sufficient. |
-| Homomorphic or searchable encryption | Ability to search or compute on encrypted data. Enormously complex, terrible performance, and not needed for a blob store. | Decrypt client-side, search locally. The SDK can provide `list_blobs()` with metadata filtering -- the blob hashes and timestamps are not encrypted. |
-| Certificate authority / PKI hierarchy | X.509-style trust chains for pubkey validation. Massive complexity, requires CA infrastructure, certificate parsing, revocation lists. | Self-certifying keys: SHA3-256(pubkey) = namespace = identity. Trust is based on knowing someone's namespace, not on certificate chains. The directory is a simple key-value store, not a trust hierarchy. |
-| Passphrase-based encryption | age supports scrypt-based encryption from a password. This requires strong passwords, is slow (by design), and mixes authentication models. chromatindb identities are already keypair-based. | All encryption uses KEM pubkeys. If someone wants passphrase protection, they encrypt their secret key file locally (out of scope for the SDK). |
-| Automatic re-encryption on group change | When a member is removed, automatically re-encrypting all historical blobs. This is O(blobs * members), potentially hours of computation, and the removed member already read those blobs. | Provide a manual re-encryption helper for specific blobs that need it. Accept that past blobs with revoked members remain accessible to those members (they already had access). |
-| Encrypted metadata / encrypted blob hashes | Encrypting blob sizes, timestamps, or access patterns. Metadata encryption is a separate (hard) problem. The node needs blob hashes and timestamps for sync, expiry, and queries. | Accept that the node sees blob metadata (size, timestamp, namespace, hash). Only the blob *data* is encrypted. This is the standard model (even Signal leaks metadata to servers). |
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| Guaranteed delivery / message queue for push | "What if a peer misses a notification?" | Adding delivery guarantees (ACKs, retry queues, sequence tracking per peer) turns a simple push into a complex message broker. Cassandra's hinted handoff requires per-target hint storage, replay logic, and garbage collection. Redis Pub/Sub explicitly chose fire-and-forget because reliable delivery adds enormous complexity. The safety-net reconciliation catches any missed pushes within 10-15 minutes. | Fire-and-forget push + reconcile-on-connect + safety-net periodic reconciliation. Three-layer defense is simpler and more robust than guaranteed delivery. |
+| Gossip protocol for propagation | "Use epidemic gossip to spread updates to all nodes" | Gossip is for large clusters (100+ nodes) where direct notification to all peers is impractical. chromatindb has max_peers=32, fully meshed. Direct notification to all connected peers is O(peers) and already more efficient than gossip's O(log N * fanout) rounds. Gossip adds message amplification, probabilistic delivery, and convergence delays. | Direct push to all connected peers. With max_peers=32, this is at most 32 sends per blob ingest -- trivial. |
+| Causal ordering / vector clocks for push notifications | "Ensure notifications arrive in causal order" | Notifications are advisory ("go fetch this"). Ordering doesn't matter because the fetch is idempotent and content-addressed. If blob B depends on blob A, the application layer handles ordering, not the sync layer. Vector clocks add per-message metadata overhead and require merge logic. | Unordered notifications + content-addressed fetch. Application builds ordering from blob timestamps/seq_nums if needed. |
+| Push-based delete propagation (eager tombstone push) | "Push tombstones immediately like blob notifications" | Tombstones ARE blobs in chromatindb (signed, stored, replicated). They already flow through the same push notification path. No special handling needed. Trying to add a separate "delete propagation" mechanism creates a parallel channel that can diverge. | Tombstones use the exact same BlobNotify path. is_tombstone flag in the notification lets peers handle them appropriately. |
+| SDK transparent retry for write operations | "Retry writes automatically on reconnect" | Writes are NOT idempotent in user intent (same data produces same hash, but user may not want double-writes of different data). Auto-retrying a write after reconnect risks: (1) writing stale data if the application state changed, (2) masking failures the application should handle. Reads are safe to retry; writes are not. | Retry reads and queries transparently. Surface write failures to the application. Let the caller decide whether to retry a write. |
+| Full-state push (send blob data in notification) | "Include blob data in the notification to avoid a round-trip" | Blob data can be up to 100 MiB. Pushing full blobs would overwhelm peers with unwanted data (they may not care about all namespaces). CouchDB changes feed sends metadata, not document content. IPFS Bitswap sends block only when wantlisted. The pull model (notify metadata, fetch on demand) is universally preferred for large objects. | Push metadata-only notification (77 bytes). Peer decides whether to fetch based on namespace interest. |
 
 ## Feature Dependencies
 
 ```
-Identity with KEM keypair
-  |
-  +---> Pubkey directory entries (users publish KEM pubkeys)
-  |       |
-  |       +---> User discovery (list/fetch from directory)
-  |       |       |
-  |       |       +---> Multi-recipient envelope encryption
-  |       |               |
-  |       |               +---> write_encrypted() / read_encrypted()
-  |       |               |
-  |       |               +---> Named groups (reference members by KEM pubkey hash)
-  |       |                       |
-  |       |                       +---> write_to_group() helper
-  |       |                       |
-  |       |                       +---> Group management (create/add/remove)
-  |       |
-  |       +---> Self-registration (write own entry to directory)
-  |
-  +---> Encrypted blob format (uses KEM for key wrapping)
-  |
-  +---> Revocation (tombstone directory entry, existing primitive)
+[Push Notification on Ingest]
+    |
+    +--enables--> [Targeted Blob Fetch]
+    |                 |
+    |                 +--requires--> new BlobFetchRequest/Response wire types
+    |
+    +--enhances--> [Safety-Net Reconciliation]
+    |                 (push handles real-time, reconciliation catches gaps)
+    |
+    +--independent--> [Reconcile-on-Connect]
+                      (already exists, preserved as-is)
+
+[Application-Level Keepalive]
+    |
+    +--enables--> [SDK Auto-Reconnect]
+    |                 |
+    |                 +--requires--> dead connection detection
+    |                 +--requires--> [SDK Subscription Restoration]
+    |
+    +--enhances--> existing receiver-side inactivity timeout
+                   (replace 120s passive detection with 15-30s active detection)
+
+[Event-Driven Expiry]
+    |
+    +--requires--> Storage::get_next_expiry_timestamp()
+    +--independent--> all sync features (orthogonal concern)
+
+[Disconnect-Triggered Cursor Cleanup]
+    |
+    +--requires--> on_peer_disconnected hook (already exists)
+    +--replaces--> cursor_compaction_loop (6h timer)
 ```
 
-**Critical path:** Identity KEM keypair -> Encrypted blob format -> Pubkey directory -> Encrypted write/read helpers -> Groups
+### Dependency Notes
 
-## MVP Recommendation
+- **Push Notification requires no new dependencies:** Reuses existing Notification payload format and on_blob_ingested callback infrastructure. The SyncProtocol already has set_on_blob_ingested() which fires for sync-received blobs. Direct ingests (client writes) also need to trigger push.
+- **Targeted Blob Fetch requires Push Notification:** Without notifications, there's nothing to trigger a targeted fetch. The notification carries the (namespace, blob_hash) needed for the fetch request.
+- **SDK Auto-Reconnect requires Keepalive:** Without bidirectional heartbeat, dead connections are detected by the 120s inactivity timeout (receiver-side only). Keepalive pings bring detection down to ~15-30s, enabling faster reconnect.
+- **SDK Subscription Restoration requires Auto-Reconnect:** Subscriptions are connection-scoped in the C++ node. A new connection = empty subscription set. Must re-subscribe after reconnect.
+- **Event-Driven Expiry is independent:** Can be implemented in any phase, has no dependency on sync features. However, implementing it alongside the other event-driven changes is logical for consistency.
+- **Disconnect-Triggered Cursor Cleanup is independent:** Simple hook, no dependency on push notification. Can replace the 6h timer in any phase.
 
-**Phase 1: Crypto primitives + encrypted blob format**
-1. Add ML-KEM-1024 keypair to Identity (generation, save/load, encapsulate/decapsulate)
-2. Define and implement encrypted blob binary format (envelope encryption)
-3. Implement `encrypt_blob(plaintext, recipient_kem_pubkeys) -> bytes` and `decrypt_blob(encrypted_bytes, my_kem_identity) -> bytes`
-4. Thorough test coverage including cross-validation with known test vectors
+## MVP Definition
 
-*Rationale:* The crypto layer must be rock-solid before building anything on top. This phase has zero dependency on the network -- pure local encryption/decryption.
+### Launch With (v2.0.0)
 
-**Phase 2: Directory + user management**
-1. Define directory entry blob format (user pubkey entries, group entries)
-2. Implement `OrgDirectory` class that manages a directory namespace
-3. Self-registration: `directory.register(client, identity, display_name)`
-4. User discovery: `directory.list_users(client)`, `directory.get_user(client, name_or_hash)`
-5. Pubkey caching with pub/sub invalidation
+The minimum set to replace timer-paced sync with event-driven sync and achieve sub-second cross-node propagation.
 
-*Rationale:* The directory is what makes encryption usable. Without it, users must exchange KEM pubkeys out-of-band.
+- [x] Push notification on blob ingest -- the core value prop
+- [x] Targeted blob fetch from notification -- completes the push->fetch loop
+- [x] Reconcile-on-connect preserved -- catchup after downtime
+- [x] Safety-net periodic reconciliation (10-15 min) -- correctness backstop
+- [x] Application-level bidirectional keepalive -- dead connection detection
+- [x] SDK auto-reconnect with exponential backoff -- transparent recovery
+- [x] SDK subscription restoration on reconnect -- pub/sub continuity
+- [x] Event-driven expiry (next-expiry timer) -- replace periodic scan
+- [x] Disconnect-triggered cursor cleanup -- replace 6h timer
+- [x] Documentation refresh -- PROTOCOL.md, README, SDK docs
 
-**Phase 3: Encrypted client helpers + groups**
-1. `client.write_encrypted(data, recipients_or_group, ttl)`
-2. `client.read_encrypted(namespace, blob_hash)`
-3. Group management: `directory.create_group()`, `directory.add_member()`, `directory.remove_member()`
-4. Group resolution: `directory.resolve_group(client, group_name) -> list[kem_pubkey]`
-5. `client.write_to_group(data, group_name, directory, ttl)`
+### Add After Validation (v2.x)
 
-*Rationale:* Groups build on the directory and encryption primitives. The helpers compose everything into a simple API.
+Features to add once the core event-driven sync is proven in the KVM test swarm.
 
-**Defer:** Streaming encryption for large blobs (only needed if 100 MiB encrypted blobs are common), re-encryption helper (nice-to-have, not MVP), pubkey caching optimization (can start with fetch-every-time).
+- [ ] Notification coalescing/batching -- if bulk ingest performance is an issue
+- [ ] Per-peer notification deduplication -- if notification volume becomes a problem
+- [ ] Configurable heartbeat interval -- YAGNI until operator requests it
 
-## Complexity Budget
+### Future Consideration (v3+)
 
-| Feature | Estimated New LOC | Test Count | Risk |
-|---------|-------------------|------------|------|
-| Identity KEM keypair | ~120 | ~20 | LOW -- same liboqs pattern as ML-DSA-87 |
-| Encrypted blob format | ~250 | ~40 | MEDIUM -- binary format correctness, edge cases |
-| Directory entry format | ~150 | ~25 | LOW -- just blob data encoding/decoding |
-| OrgDirectory class | ~300 | ~35 | MEDIUM -- network-dependent, delegation setup |
-| write/read_encrypted | ~150 | ~30 | LOW -- composes existing primitives |
-| Group management | ~200 | ~30 | LOW -- directory CRUD operations |
-| Group resolution + helpers | ~100 | ~20 | LOW -- lookup and compose |
-| **Total** | **~1270** | **~200** | |
+Features to defer until the system needs to scale beyond current architecture.
 
-## Key Design Decisions to Lock
+- [ ] Gossip-based propagation -- only if peer count grows beyond direct notification limits
+- [ ] Guaranteed delivery with hint storage -- only if safety-net reconciliation proves insufficient
+- [ ] Vector clocks / causal ordering -- only if application layer needs it
 
-1. **Separate KEM key from signing key.** Never use ML-DSA-87 for encryption. Never use ML-KEM-1024 for signing. Two-key identity is standard practice (GPG has signing + encryption subkeys, age has separate identity types).
+## Feature Prioritization Matrix
 
-2. **Per-blob random DEK, not per-namespace key.** The product direction doc suggested per-namespace key with HKDF(master, salt=blob_hash). This is fragile -- compromise of the namespace master key exposes all blobs. Per-blob random DEK means compromising one blob's key reveals nothing about other blobs. This is how age works, and it is the correct pattern.
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Push notification on ingest | HIGH | MEDIUM | P1 |
+| Targeted blob fetch | HIGH | MEDIUM | P1 |
+| Reconcile-on-connect (preserve) | HIGH | LOW | P1 |
+| Safety-net reconciliation (reconfig) | HIGH | LOW | P1 |
+| Bidirectional keepalive | HIGH | MEDIUM | P1 |
+| Event-driven expiry | MEDIUM | MEDIUM | P1 |
+| Disconnect-triggered cursor cleanup | MEDIUM | LOW | P1 |
+| SDK auto-reconnect | HIGH | HIGH | P1 |
+| SDK subscription restoration | MEDIUM | MEDIUM | P1 |
+| Documentation refresh | HIGH | MEDIUM | P1 |
+| Notification coalescing | LOW | LOW | P3 |
 
-3. **No shared group key.** Groups are just named member lists. Each encrypted blob wraps the DEK individually for each member. This eliminates key rotation complexity entirely.
+**Priority key:**
+- P1: Must have for v2.0.0 launch (all features in this milestone are P1 per PROJECT.md)
+- P2: Should have, add when possible
+- P3: Nice to have, future consideration
 
-4. **Directory entries are regular signed blobs.** No new protocol, no new message types, no node changes. A directory is a namespace with a known format for its blob data.
+## Competitor Feature Analysis
 
-5. **Header authenticated as AEAD associated data.** The recipients-and-wrapped-keys header is bound to the ciphertext via AEAD's AD parameter. This prevents an attacker from swapping recipient stanzas between blobs (stanza substitution attack).
+| Feature | CouchDB | Syncthing | Cassandra | IPFS Bitswap | chromatindb v2.0.0 |
+|---------|---------|-----------|-----------|--------------|---------------------|
+| Push notification | Continuous changes feed (HTTP long-poll) | Index Update message (BEP) | Write-to-all-replicas (direct) | Wantlist fulfillment | BlobNotify to all connected peers |
+| Fetch mechanism | GET /db/doc_id | Block Request/Response | Read from coordinator | Block request by CID | BlobFetchRequest/Response |
+| Initial sync | Replicate from last_seq | Full Index on connect | Anti-entropy with Merkle trees | Bitswap session wantlist | XOR-fingerprint reconciliation (existing) |
+| Anti-entropy | Continuous replication monitors | Periodic full rescan | nodetool repair + read repair | None (wantlist is ongoing) | Safety-net reconciliation (10-15 min) |
+| Keepalive | HTTP/TCP level | BEP Ping message | Gossip heartbeat (1s) | libp2p connection manager | Bidirectional Ping/Pong (15-30s) |
+| Dead connection detection | HTTP timeout | BEP timeout | Gossip failure detector (phi) | libp2p identify | Keepalive timeout + inactivity timeout |
+| Expiry handling | No built-in expiry | No expiry (file sync) | TTL per column, lazy + compaction | Pin/unpin + GC | Next-expiry timer (event-driven) |
+| Client reconnect | HTTP retry (stateless) | Automatic reconnect (BEP) | Driver-level reconnect | libp2p reconnect | SDK auto-reconnect with jittered backoff |
+| Subscription restore | N/A (HTTP polling) | N/A (always syncs all folders) | N/A | N/A | Re-subscribe tracked namespaces on reconnect |
 
-6. **ML-KEM encapsulation per-recipient, not shared.** Each recipient gets their own ephemeral ML-KEM encapsulation. No key reuse across recipients. This provides IND-CCA2 security per the ML-KEM standard.
+### Key Takeaways from Competitor Analysis
+
+1. **CouchDB's changes feed** is the closest analog to chromatindb's push notification. The key lesson: changes feed sends metadata (doc_id, rev, seq), not full documents. chromatindb should do the same: send notification metadata, let the peer fetch.
+
+2. **Syncthing's Index Update** is a batch notification mechanism. After the initial full Index, only changed files are sent as Index Updates. chromatindb's per-blob BlobNotify is finer-grained but the principle is the same.
+
+3. **Cassandra's hinted handoff** is heavyweight for chromatindb's scale. With max 32 peers and direct connectivity, fire-and-forget push + reconciliation is simpler and sufficient.
+
+4. **IPFS Bitswap's wantlist** is demand-driven (pull), not push. chromatindb's push model is better for its use case (replicate everything to all peers) because peers don't need to express interest -- they just receive.
+
+5. **All systems keep a fallback anti-entropy mechanism.** No system trusts push alone. chromatindb's safety-net reconciliation follows this universal pattern.
+
+## Implementation Notes for Roadmap
+
+### C++ Node Changes (Estimated)
+
+1. **New wire types** (2): BlobFetchRequest (type 59?), BlobFetchResponse (type 60?)
+2. **Push notification path**: Hook into BlobEngine::ingest success path (both client writes and sync-received). Call notify_all_peers() instead of just notify_subscribers(). Separate concept: peer-to-peer BlobNotify vs client-facing Notification.
+3. **Bidirectional keepalive**: PeerManager sends periodic Ping, monitors Pong response. Replace passive inactivity_check_loop with active keepalive_loop.
+4. **Safety-net timer**: Change sync_interval_seconds default from 60 to 600-900.
+5. **Event-driven expiry**: Add Storage::get_next_expiry_timestamp(). Rewrite expiry_scan_loop to use targeted timer.
+6. **Cursor cleanup**: Add cursor deletion to on_peer_disconnected. Remove cursor_compaction_loop (or reduce to very infrequent safety check).
+7. **Relay filter update**: Add BlobFetchRequest/Response to allowed types if clients need targeted fetch.
+
+### Python SDK Changes (Estimated)
+
+1. **Auto-reconnect wrapper**: Rework ChromatinClient.connect() to support reconnection. Internal reconnect loop with jittered exponential backoff (1s-30s).
+2. **Subscription restoration**: After reconnect, re-send Subscribe for all tracked namespaces.
+3. **Read/query retry**: Transparently retry read-only operations on ConnectionError. Do NOT retry writes.
+4. **Keepalive integration**: Client must respond to server Ping with Pong (already implemented in _transport.py _send_pong). May also need client-initiated Ping for its own dead connection detection.
+
+### Documentation Changes
+
+1. **PROTOCOL.md**: New BlobNotify and BlobFetchRequest/Response wire formats. Updated sync model description. Keepalive specification.
+2. **README.md**: Updated architecture description reflecting event-driven sync.
+3. **SDK README + tutorial**: Auto-reconnect usage, subscription behavior on reconnect.
 
 ## Sources
 
-- [age encryption specification (C2SP)](https://github.com/C2SP/C2SP/blob/main/age.md) -- envelope format, multi-recipient stanzas, STREAM payload encryption [HIGH confidence]
-- [age GitHub repository](https://github.com/FiloSottile/age) -- design philosophy, simplicity principles [HIGH confidence]
-- [Google Cloud envelope encryption docs](https://docs.cloud.google.com/kms/docs/envelope-encryption) -- DEK/KEK pattern, wrapping flow [HIGH confidence]
-- [Keybase KBFS crypto spec](https://book.keybase.io/docs/crypto/kbfs) -- per-block keys, TLF key distribution, rekeying [HIGH confidence]
-- [Keybase teams design](https://book.keybase.io/docs/teams/design) -- team key management, XOR key splitting, role-based access [MEDIUM confidence]
-- [Signal Protocol group encryption (Sender Keys)](https://signal.org/docs/) -- group key distribution, rotation on membership change [HIGH confidence]
-- [libsodium sealed boxes](https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes) -- anonymous encryption with ephemeral keypair [HIGH confidence]
-- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) -- KeyEncapsulation API for ML-KEM-1024 [HIGH confidence, verified against existing handshake code]
-- [NIST FIPS 203 (ML-KEM)](https://csrc.nist.gov/pubs/fips/203/final) -- ML-KEM-1024 security level, key/ciphertext sizes [HIGH confidence]
-- [AWS Encryption SDK message format](https://docs.aws.amazon.com/encryption-sdk/latest/developer-guide/message-format.html) -- header structure with encrypted data keys [MEDIUM confidence]
-- [RFC 5869 HKDF](https://datatracker.ietf.org/doc/html/rfc5869) -- KDF for key derivation from shared secrets [HIGH confidence, already implemented in SDK]
+- [CouchDB Replication Protocol](https://docs.couchdb.org/en/stable/replication/protocol.html) -- changes feed, continuous replication
+- [CouchDB Changes API](https://docs.couchdb.org/en/stable/api/database/changes.html) -- since parameter, longpoll/continuous feed types
+- [Syncthing BEP v1 Protocol](https://docs.syncthing.net/specs/bep-v1.html) -- Index/Index Update messages, ClusterConfig, Request/Response
+- [IPFS Bitswap Protocol](https://specs.ipfs.tech/bitswap-protocol/) -- wantlist, HAVE/DONT_HAVE, block exchange
+- [Cassandra Hinted Handoff](https://cassandra.apache.org/doc/4.0/cassandra/operating/hints.html) -- hint storage, segment replay
+- [Cassandra Gossip Protocol](https://docs.datastax.com/en/cassandra-oss/3.x/cassandra/architecture/archGossipAbout.html) -- failure detection, state propagation
+- [Redis Keyspace Notifications](https://redis.io/docs/latest/develop/pubsub/keyspace-notifications/) -- event-driven expiry, fire-and-forget pub/sub
+- [RabbitMQ Heartbeats](https://www.rabbitmq.com/docs/heartbeats) -- TCP keepalive vs application-level heartbeat comparison
+- [gRPC Connection Backoff Protocol](https://grpc.github.io/grpc/core/md_doc_connection-backoff.html) -- jittered exponential backoff spec
+- [gRPC Keepalive](https://grpc.io/docs/guides/keepalive/) -- HTTP/2 PING-based keepalive, dead connection detection
+- [WebSocket Reconnection Guide](https://websocket.org/guides/reconnection/) -- state sync, subscription restoration
+- [PubNub Asyncio Reconnection Policies](https://www.pubnub.com/docs/sdks/asyncio/reconnection-policies) -- Python SDK auto-reconnect patterns
+- [Anti-Entropy in Distributed Systems](https://systemdesignschool.io/blog/anti-entropy) -- push/pull/push-pull reconciliation patterns
+
+---
+*Feature research for: event-driven sync in distributed blob stores*
+*Researched: 2026-04-02*

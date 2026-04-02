@@ -1,304 +1,442 @@
-# Technology Stack: v1.7.0 Client-Side Encryption
+# Stack Research: v2.0.0 Event-Driven Architecture
 
-**Project:** chromatindb Python SDK -- PQ envelope encryption, pubkey directory, group management
-**Researched:** 2026-03-31
+**Project:** chromatindb -- push-based sync, event-driven expiry, SDK auto-reconnect, bidirectional keepalive
+**Researched:** 2026-04-02
 **Confidence:** HIGH
 
 ## Scope
 
-This research covers ONLY what the v1.7.0 milestone adds to the existing Python SDK. The existing stack (liboqs-python, PyNaCl, flatbuffers, asyncio) is validated and shipped in v1.6.0 -- not re-researched here. Focus: ML-KEM-1024 for per-recipient key wrapping, ChaCha20-Poly1305 for data encryption, random key generation, serialization of the encrypted envelope format, and any new dependencies needed.
+This research covers ONLY what the v2.0.0 milestone adds or changes in the existing stack. The validated stack (Standalone Asio 1.38.0, libmdbx, FlatBuffers, Python SDK with asyncio/PyNaCl/liboqs-python) is shipped and NOT re-researched. Focus: Asio patterns for push notifications and event-driven timers, libmdbx ordered key lookups for next-expiry, asyncio reconnect patterns for the SDK, and bidirectional keepalive on both C++ and Python sides.
 
 ## Verdict: Zero New Dependencies
 
-**No new pip packages are needed.** Every capability required for v1.7.0 is already available in the existing SDK dependency set or Python stdlib.
+**No new C++ or Python packages are needed.** Every capability required for v2.0.0 is already available in the existing stack.
 
-| Capability | Provider | Already in SDK? |
-|------------|----------|-----------------|
-| ML-KEM-1024 encapsulate/decapsulate | `liboqs-python~=0.14.0` via `oqs.KeyEncapsulation` | YES -- used in handshake + tests |
-| ML-KEM-1024 keypair generation + persistence | `liboqs-python~=0.14.0` via `generate_keypair()` / `export_secret_key()` | YES -- same pattern as ML-DSA-87 in `identity.py` |
-| ChaCha20-Poly1305 AEAD encrypt/decrypt | `pynacl~=1.5.0` via `nacl.bindings.crypto_aead_chacha20poly1305_ietf_*` | YES -- `crypto.py` aead_encrypt/aead_decrypt |
-| HKDF-SHA256 key derivation | Stdlib `hmac` + `hashlib` via `chromatindb._hkdf` | YES -- `_hkdf.py` |
-| SHA3-256 hashing | Stdlib `hashlib.sha3_256` | YES -- `crypto.py` sha3_256 |
-| Cryptographic random bytes | Stdlib `secrets.token_bytes()` | NEW usage but zero-dep (stdlib since Python 3.6) |
-| Encrypted envelope binary format | Stdlib `struct.pack` / `struct.unpack` | YES -- same pattern as `_codec.py` |
-| FlatBuffers blob encoding | `flatbuffers~=25.12` | YES -- `_codec.py` encode_blob_payload |
-| Directory/group data serialization | Stdlib `struct.pack` (binary) or `json` (stdlib) | YES -- no new dep needed |
+| Capability | Provider | Already Available? | Notes |
+|------------|----------|--------------------|-------|
+| Push notification to peers after ingest | `asio::io_context` single-thread dispatch | YES | `notify_subscribers()` already fans out; extend to peer-level notifications |
+| New wire message types (BlobNotify, BlobFetch) | FlatBuffers `transport.fbs` enum extension | YES | Add 2-4 new enum values to `TransportMsgType` |
+| Event-driven expiry timer (next-deadline) | `asio::steady_timer` with `expires_after()` reschedule | YES | Replace fixed-interval scan loop with dynamic deadline |
+| Next-expiry-time query from storage | libmdbx `cursor.to_first()` on `expiry_map` | YES | Keys are `[expiry_ts_be:8][hash:32]` -- first key IS the earliest expiry |
+| Disconnect-triggered cursor cleanup | `on_peer_disconnected()` callback | YES | Already exists; replace 6h timer with immediate action |
+| SDK auto-reconnect with backoff | Python `asyncio.sleep()` + exponential backoff | YES | Stdlib only; no new pip deps |
+| SDK transparent request retry | Python `asyncio` exception handling + re-dispatch | YES | Wrap `_request_with_timeout` with retry logic |
+| Bidirectional keepalive (C++ node) | `asio::steady_timer` periodic Ping sender | YES | Timer-cancel pattern already used for 8+ coroutines |
+| Bidirectional keepalive (Python SDK) | `asyncio.Task` periodic Ping sender | YES | Transport already has `send_ping()` and `_send_pong()` |
+| Safety-net reconciliation (background) | `asio::steady_timer` with long interval | YES | Same pattern as existing `sync_timer_loop()` |
 
-## Existing SDK APIs to Reuse
+## C++ Node: Asio Patterns for New Features
 
-### ML-KEM-1024: `oqs.KeyEncapsulation("ML-KEM-1024")`
+### 1. Push-Based Peer Sync Notifications
 
-The SDK already exercises the full ML-KEM-1024 API:
+**Pattern:** Extend existing `notify_subscribers()` fan-out to all connected peers (not just pub/sub subscribers).
+
+The current architecture already has the exact mechanism needed:
+1. Blob ingested via `engine_.ingest()` -> WriteAck sent
+2. `notify_subscribers()` already fires for pub/sub subscribers after ingest
+3. For push sync: add a parallel `notify_peers()` call that sends a new `BlobNotify` message to ALL connected peers (not just subscribers)
+
+**Why this works with existing Asio patterns:**
+- `PeerManager` runs on single `io_context` thread -- no locking needed
+- `peers_` deque already iterated in `notify_subscribers()`
+- `co_spawn(ioc_, ...)` with `asio::detached` for async send per peer (proven pattern in `notify_subscribers`)
+- Notification is fire-and-forget -- no response expected, no request_id
+
+**New wire types needed:**
+```
+BlobNotify = 59,     // Peer -> Peer: "I have this blob"
+BlobFetchRequest = 60,   // Peer -> Peer: "Send me this blob"
+BlobFetchResponse = 61   // Peer -> Peer: "Here is the blob"
+```
+
+`BlobNotify` payload: `[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]`
+-- identical to existing `Notification` payload format (77 bytes). Reuse `encode_notification()`.
+
+`BlobFetchRequest` payload: `[namespace_id:32][blob_hash:32]` (64 bytes)
+
+`BlobFetchResponse` payload: FlatBuffer-encoded blob (same as `BlobTransfer` in sync). Or a 1-byte "not found" status.
+
+**Why NOT use `asio::experimental::channel`:**
+Although Asio 1.38.0 ships `experimental::channel<>` and `experimental::concurrent_channel<>`, they are unnecessary here because:
+1. The codebase runs on a single `io_context` thread -- no producer/consumer coordination needed
+2. The existing `co_spawn` + detached fire-and-forget pattern is proven in 78 phases
+3. Channels add complexity (buffer sizing, backpressure semantics) for zero benefit
+4. The `experimental::` namespace signals instability -- the API may change
+
+**Use `asio::experimental::channel` only if** a future milestone introduces multi-io_context architecture (currently: YAGNI).
+
+### 2. Event-Driven Expiry Timer
+
+**Pattern:** Replace fixed-interval `expiry_scan_loop()` with a dynamic deadline timer that fires at exactly the next expiry time.
+
+**Current implementation (to be replaced):**
+```cpp
+// Polls every expiry_scan_interval_seconds_ (default 60s)
+asio::awaitable<void> PeerManager::expiry_scan_loop() {
+    while (!stopping_) {
+        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
+        co_await timer.async_wait(...);
+        storage_.run_expiry_scan();
+    }
+}
+```
+
+**New implementation pattern:**
+```cpp
+asio::awaitable<void> PeerManager::expiry_timer_loop() {
+    while (!stopping_) {
+        auto next = storage_.get_next_expiry_time();  // NEW Storage API
+        if (!next.has_value()) {
+            // No blobs with TTL -- sleep for a long interval, reschedule on ingest
+            timer.expires_after(std::chrono::hours(1));
+        } else {
+            auto now = storage::system_clock_seconds();
+            auto delay = (*next > now) ? (*next - now) : 0;
+            timer.expires_after(std::chrono::seconds(delay));
+        }
+        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+        if (ec || stopping_) co_return;
+        storage_.run_expiry_scan();  // Purge all expired blobs
+        // Loop re-reads next expiry time
+    }
+}
+```
+
+**Reschedule trigger:** After every `store_blob()` with TTL > 0, check if the new blob's expiry is earlier than the current timer deadline. If yes, cancel the timer to force re-evaluation:
+```cpp
+if (expiry_timer_ && new_expiry < current_expiry_deadline_) {
+    expiry_timer_->cancel();  // Wakes coroutine, re-reads next expiry
+}
+```
+
+**New Storage API needed:**
+```cpp
+/// Return the earliest expiry timestamp, or nullopt if no blobs have TTL.
+/// O(1): reads first key from expiry_map B-tree cursor.
+std::optional<uint64_t> get_next_expiry_time();
+```
+
+This is trivially implemented using `cursor.to_first()` on `expiry_map` -- the first key's first 8 bytes (big-endian) are the earliest expiry timestamp. The expiry_map is already keyed as `[expiry_ts_be:8][hash:32]`, so B-tree ordering gives us the earliest expiry for free. This is a read-only operation in a read transaction -- zero overhead.
+
+**Why `steady_timer` and not `system_timer`:**
+The existing codebase exclusively uses `asio::steady_timer` (monotonic clock). Expiry times are stored as wall-clock seconds, but the timer only needs to know "how many seconds until expiry" (relative delay), not an absolute deadline. `expires_after(seconds(delay))` works correctly with `steady_timer`.
+
+### 3. Disconnect-Triggered Cursor Cleanup
+
+**Pattern:** Move cursor compaction from 6-hour timer to immediate action in `on_peer_disconnected()`.
+
+**Current implementation:**
+```cpp
+asio::awaitable<void> PeerManager::cursor_compaction_loop() {
+    while (!stopping_) {
+        timer.expires_after(std::chrono::hours(6));
+        co_await timer.async_wait(...);
+        // Prune cursors for disconnected peers
+    }
+}
+```
+
+**New implementation:** Delete `cursor_compaction_loop()` entirely. In `on_peer_disconnected()`:
+```cpp
+void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
+    // ... existing cleanup ...
+    // Compact cursors for this peer immediately
+    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+    storage_.delete_peer_cursors(peer_hash);
+}
+```
+
+`delete_peer_cursors()` already exists in `Storage` and is O(n) in number of namespaces for that peer -- typically small. No Asio pattern change needed; just call it synchronously from the existing callback.
+
+### 4. Bidirectional Keepalive (C++ Node Side)
+
+**Pattern:** Add a periodic Ping sender coroutine alongside the existing receiver-side inactivity timeout.
+
+**Current state:** Node has receiver-side inactivity detection only (disconnect if no message received for N seconds). There is NO active Ping sending from the node.
+
+**New addition:**
+```cpp
+asio::awaitable<void> PeerManager::keepalive_loop() {
+    while (!stopping_) {
+        timer.expires_after(std::chrono::seconds(keepalive_interval_seconds_));
+        co_await timer.async_wait(...);
+        // Send Ping to all connected peers
+        for (auto& peer : peers_) {
+            co_spawn(ioc_, send_keepalive_ping(peer.connection), asio::detached);
+        }
+    }
+}
+```
+
+**Keepalive interval:** Should be less than `inactivity_timeout_seconds / 2` to ensure the remote side sees traffic before its timeout fires. With default `inactivity_timeout_seconds = 120`, a 30-second keepalive interval is appropriate. This matches the existing 30-second inactivity check sweep interval.
+
+**Wire protocol:** Uses existing `Ping`/`Pong` messages (types 5/6). No new message types needed.
+
+**Interaction with existing inactivity check:**
+- `inactivity_check_loop()` remains as-is -- it detects dead peers that don't respond to Pings
+- `keepalive_loop()` ensures both sides see traffic, enabling faster dead-connection detection
+- `last_message_time` is already updated at top of `on_peer_message()` for ALL message types including Pong
+
+### 5. Reconcile-On-Connect
+
+**Pattern:** Trigger full reconciliation when a peer connects, instead of waiting for the next sync timer tick.
+
+In `on_peer_connected()`, after ACL check:
+```cpp
+asio::co_spawn(ioc_, run_sync_with_peer(conn), asio::detached);
+```
+
+This already happens implicitly in the current architecture (sync timer fires periodically), but making it explicit on connect reduces initial sync delay from 0-60s to immediate.
+
+### 6. Safety-Net Reconciliation
+
+**Pattern:** Keep a low-frequency background reconciliation timer (10-15 minutes) as a monitoring safety net.
+
+```cpp
+// Replace current sync_timer_loop() 60s interval with 600-900s
+timer.expires_after(std::chrono::seconds(safety_net_reconciliation_seconds_));
+```
+
+This is the existing `sync_timer_loop()` with a longer interval. The `sync_interval_seconds` config field already supports this -- just change the default from 60 to 600.
+
+## Python SDK: Auto-Reconnect and Keepalive
+
+### 7. SDK Auto-Reconnect with Transparent Retry
+
+**Pattern:** Wrap `ChromatinClient` connection lifecycle with automatic reconnection on connection loss. No new pip dependencies.
+
+**Architecture decision: Reconnect inside `ChromatinClient`, NOT in `Transport`.**
+
+Reconnection requires re-establishing the TCP connection and re-performing the PQ handshake (new AEAD keys, new nonce counters). This means creating a new `Transport` instance entirely -- the old one is dead. Therefore, reconnect logic belongs in `ChromatinClient` which owns the connection parameters.
+
+**Implementation pattern:**
+```python
+class ChromatinClient:
+    def __init__(self, transport: Transport) -> None:
+        self._transport = transport
+        self._subscriptions: set[bytes] = set()
+        # Reconnect state
+        self._reconnect_enabled = False
+        self._max_reconnect_attempts = 0  # 0 = unlimited
+        self._reconnect_delay = 1.0  # Starting backoff (seconds)
+        self._max_reconnect_delay = 60.0  # Cap
+        self._reconnecting = False
+
+    async def _reconnect(self) -> None:
+        """Re-establish connection with exponential backoff + jitter."""
+        delay = self._reconnect_delay
+        attempts = 0
+        while True:
+            attempts += 1
+            if self._max_reconnect_attempts > 0 and attempts > self._max_reconnect_attempts:
+                raise ChromatinConnectionError("max reconnect attempts exceeded")
+            try:
+                await self._connect()  # TCP + handshake
+                await self._restore_subscriptions()  # Re-subscribe
+                return
+            except Exception:
+                jitter = random.uniform(0, delay * 0.25)
+                await asyncio.sleep(delay + jitter)
+                delay = min(delay * 2, self._max_reconnect_delay)
+```
+
+**Transparent retry for requests:**
+```python
+async def _request_with_retry(self, msg_type: int, payload: bytes) -> tuple[int, bytes]:
+    """Send request, reconnect on failure, retry once."""
+    try:
+        return await self._request_with_timeout(msg_type, payload)
+    except ChromatinConnectionError:
+        if not self._reconnect_enabled:
+            raise
+        await self._reconnect()
+        return await self._request_with_timeout(msg_type, payload)
+```
+
+**Key decisions:**
+- **One retry after reconnect, not infinite retries.** If the retry also fails, raise to caller. Prevents silent infinite loops.
+- **Re-subscribe after reconnect.** `self._subscriptions` tracks active subscriptions; replay them on the new connection. This is why subscriptions are connection-scoped.
+- **Jitter: 0-25% of delay.** Matches the AWS Full Jitter algorithm. Prevents thundering herd if multiple SDK clients reconnect simultaneously.
+- **No new pip deps.** `random` and `asyncio.sleep` are stdlib.
+
+**`connect()` factory change:**
+```python
+@classmethod
+def connect(
+    cls,
+    host: str,
+    port: int,
+    identity: Identity,
+    *,
+    timeout: float = 10.0,
+    auto_reconnect: bool = False,
+    max_reconnect_attempts: int = 0,
+    reconnect_delay: float = 1.0,
+    max_reconnect_delay: float = 60.0,
+) -> ChromatinClient:
+```
+
+### 8. SDK Bidirectional Keepalive
+
+**Pattern:** Background `asyncio.Task` that sends periodic Ping to keep the connection alive and detect dead servers.
 
 ```python
-# Encapsulation (sender side -- wrap a key for a recipient)
-kem = oqs.KeyEncapsulation("ML-KEM-1024")
-ciphertext, shared_secret = kem.encap_secret(recipient_public_key)
-# ciphertext: 1568 bytes, shared_secret: 32 bytes
-
-# Decapsulation (recipient side -- unwrap the key)
-kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=recipient_secret_key)
-shared_secret = kem.decap_secret(ciphertext)
-# shared_secret: 32 bytes (identical to sender's)
+async def _keepalive_loop(self) -> None:
+    """Periodic Ping sender for dead connection detection."""
+    while not self._transport.closed:
+        await asyncio.sleep(self._keepalive_interval)
+        try:
+            await asyncio.wait_for(self._transport.send_ping(), timeout=10.0)
+        except (ChromatinConnectionError, asyncio.TimeoutError):
+            if self._reconnect_enabled:
+                await self._reconnect()
+            else:
+                break
 ```
 
-**Already proven in the SDK:**
-- `_handshake.py:128` -- `KeyEncapsulation("ML-KEM-1024")` instantiation
-- `_handshake.py:148` -- `kem.decap_secret(kem_ct)` (initiator decapsulation)
-- `tests/test_handshake.py:185` -- `kem.encap_secret(sdk_kem_pk)` (mock responder encapsulation)
+**Transport already handles Pong response** -- the `_reader_loop` resolves the pending ping future when Pong arrives. No changes to `Transport` needed.
 
-For envelope encryption, each recipient's wrapped key = `encap_secret(recipient_kem_pk)` producing a (1568-byte ciphertext, 32-byte shared_secret) pair. The shared_secret is then used via HKDF to derive the wrapping key for the per-blob symmetric key.
+**Default interval:** 30 seconds, matching the C++ node's keepalive/inactivity check interval.
 
-### ML-KEM-1024 Key Sizes (Confirmed)
+## Storage Layer: New API for Event-Driven Expiry
 
-| Parameter | Size | Source |
-|-----------|------|--------|
-| Public key | 1568 bytes | OQS docs, confirmed in `_handshake.py KEM_PK_SIZE` |
-| Secret key | 3168 bytes | OQS docs (FIPS 203) |
-| Ciphertext | 1568 bytes | OQS docs, confirmed in `_handshake.py KEM_CT_SIZE` |
-| Shared secret | 32 bytes | OQS docs, confirmed in `_handshake.py KEM_SS_SIZE` |
+### `get_next_expiry_time()` Implementation
 
-### ML-KEM-1024 Keypair Persistence
-
-Use the same SSH-style `.key`/`.pub` pattern as ML-DSA-87 in `identity.py`:
-
-```python
-# Generate
-kem = oqs.KeyEncapsulation("ML-KEM-1024")
-kem_public_key = bytes(kem.generate_keypair())   # 1568 bytes
-kem_secret_key = bytes(kem.export_secret_key())   # 3168 bytes
-
-# Save
-Path("identity.kem.pub").write_bytes(kem_public_key)
-Path("identity.kem.key").write_bytes(kem_secret_key)
-
-# Load
-kem = oqs.KeyEncapsulation("ML-KEM-1024", secret_key=loaded_secret_key)
+```cpp
+std::optional<uint64_t> Storage::get_next_expiry_time() {
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->expiry_map);
+        auto first = cursor.to_first(false);
+        if (!first.done) return std::nullopt;  // No entries
+        auto key = cursor.current(false).key;
+        if (key.length() < 8) return std::nullopt;
+        return decode_be_u64(static_cast<const uint8_t*>(key.data()));
+    } catch (const std::exception& e) {
+        spdlog::error("get_next_expiry_time error: {}", e.what());
+        return std::nullopt;
+    }
+}
 ```
 
-**Decision: Extend the existing `Identity` class** to carry an optional ML-KEM-1024 keypair alongside the existing ML-DSA-87 keypair. File convention: `identity.key` / `identity.pub` (signing, existing) + `identity.kem.key` / `identity.kem.pub` (encryption, new).
+**Why this is O(1):** libmdbx stores keys in sorted B-tree order. `cursor.to_first()` navigates to the leftmost leaf -- a single tree traversal, O(log n) in B-tree depth but effectively O(1) for practical database sizes (libmdbx B-tree depth is typically 2-4 levels for millions of entries). The expiry_map key prefix is `[expiry_ts_be:8]` in big-endian, so the smallest timestamp is always the first key.
 
-### ChaCha20-Poly1305 AEAD: `crypto.aead_encrypt` / `crypto.aead_decrypt`
+**No index changes needed.** The existing `expiry_map` with `[expiry_ts_be:8][hash:32]` key format already provides sorted-by-timestamp ordering. This is the same B-tree the existing `run_expiry_scan()` iterates -- we are just reading the first entry without scanning.
 
-Already in `crypto.py` with full validation. For envelope encryption:
+## Wire Protocol Changes
 
-```python
-from chromatindb.crypto import aead_encrypt, aead_decrypt, AEAD_KEY_SIZE, AEAD_NONCE_SIZE
+### New Message Types
 
-# Encrypt blob data
-nonce = secrets.token_bytes(AEAD_NONCE_SIZE)  # 12 random bytes
-ciphertext = aead_encrypt(plaintext, ad=b"", nonce=nonce, key=data_key)
+| Type | Value | Direction | Purpose |
+|------|-------|-----------|---------|
+| `BlobNotify` | 59 | Peer -> Peer | Push notification: "I have blob X" |
+| `BlobFetchRequest` | 60 | Peer -> Peer | "Send me blob X" |
+| `BlobFetchResponse` | 61 | Peer -> Peer | Blob data or not-found |
 
-# Decrypt
-plaintext = aead_decrypt(ciphertext, ad=b"", nonce=nonce, key=data_key)
-```
+**Total after v2.0.0:** 61 message types (up from 58 in v1.5.0).
 
-**Note:** For envelope encryption, we use random nonces (not counters) because each blob is independently encrypted with a unique per-blob key. Counter nonces are only needed for the transport layer where the same key encrypts multiple frames.
+**BlobNotify payload format:** Identical to existing `Notification` (type 21) payload:
+`[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]` (77 bytes)
 
-### HKDF-SHA256: `_hkdf.hkdf_derive`
+Re-using the same format means `encode_notification()` and `decode_notification()` work for both pub/sub (client) notifications and peer sync notifications with zero code duplication.
 
-Already in `_hkdf.py`. For envelope encryption key derivation:
+**BlobFetchRequest payload format:**
+`[namespace_id:32][blob_hash:32]` (64 bytes)
 
-```python
-from chromatindb._hkdf import hkdf_derive
+Same format as `ReadRequest` payload but routed peer-to-peer instead of client-to-node.
 
-# Derive blob data key from KEM shared secret
-data_key = hkdf_derive(
-    salt=b"",
-    ikm=shared_secret,  # 32 bytes from KEM encap/decap
-    info=b"chromatindb-envelope-v1",
-    length=32,
-)
-```
+**BlobFetchResponse payload format:**
+- Success: `[status:1=0x00][flatbuffer_encoded_blob:N]`
+- Not found: `[status:1=0x01]`
 
-### Cryptographic Random Bytes: `secrets.token_bytes()`
+The status byte distinguishes "here is the blob" from "I don't have it" without needing separate message types.
 
-**New usage, zero new dependency.** The `secrets` module is stdlib since Python 3.6. Use for:
+### Relay Filter Update
 
-1. **Per-blob data encryption key (DEK):** `secrets.token_bytes(32)` -- 256-bit random key
-2. **AEAD nonce for data encryption:** `secrets.token_bytes(12)` -- 96-bit random nonce
+The relay message filter (blocklist) must be updated:
+- `BlobNotify` (59): BLOCK -- peer-internal, not client-facing
+- `BlobFetchRequest` (60): BLOCK -- peer-internal
+- `BlobFetchResponse` (61): BLOCK -- peer-internal
 
-Why `secrets.token_bytes()` over `os.urandom()`: Same underlying CSPRNG, but `secrets` is the canonical Python module for cryptographic randomness (PEP 506). Makes intent explicit.
+These are peer-to-peer sync primitives and must not pass through the relay to clients. The relay's blocklist approach (block known peer types, allow everything else) means these MUST be explicitly added to the block list.
 
-Why not `nacl.utils.random()`: Adds a runtime dependency call into libsodium for something stdlib handles identically. No interop benefit since this randomness isn't shared with the C++ node.
+## Configuration Changes
 
-## Encrypted Envelope Format (Serialization)
+### New Config Fields
 
-The encrypted blob envelope is a binary format using `struct.pack`, following the same conventions as the rest of the SDK's `_codec.py` (big-endian multi-byte integers).
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `keepalive_interval_seconds` | `uint32_t` | 30 | Ping interval for bidirectional keepalive |
+| `safety_net_reconciliation_seconds` | `uint32_t` | 600 | Background full-reconciliation interval (replaces sync_interval_seconds for pull-based sync) |
 
-### Proposed Wire Format
+### Modified Config Fields
 
-```
-[version:1]                           -- Format version (0x01)
-[nonce:12]                            -- AEAD nonce for data encryption
-[recipient_count:2 BE]                -- Number of recipients (uint16)
-[recipients...]                       -- Per-recipient wrapped key blocks
-  [kem_pk_hash:32]                    -- SHA3-256(recipient_kem_public_key) for lookup
-  [kem_ciphertext:1568]               -- ML-KEM-1024 ciphertext from encap_secret()
-[encrypted_data_with_tag:N]           -- ChaCha20-Poly1305 ciphertext + 16-byte tag
-```
+| Field | Old Default | New Default | Reason |
+|-------|-------------|-------------|--------|
+| `sync_interval_seconds` | 60 | Repurposed or removed | Replaced by push notifications + safety-net timer |
+| `expiry_scan_interval_seconds` | 60 | Removed | Replaced by event-driven next-expiry timer |
 
-Per-recipient block size: 32 + 1568 = 1600 bytes fixed.
-Total overhead per recipient: 1600 bytes.
-Fixed header overhead: 1 + 12 + 2 = 15 bytes + 16 bytes AEAD tag.
+### Removed Timer Loops
 
-### Envelope Encryption Procedure
+| Timer | Current | Replacement |
+|-------|---------|-------------|
+| `cursor_compaction_loop()` | 6-hour periodic | Immediate on `on_peer_disconnected()` |
+| `expiry_scan_loop()` | 60s periodic scan | `expiry_timer_loop()` with dynamic deadline |
+| `sync_timer_loop()` | 60s periodic sync | Safety-net at 600s; primary sync is push-based |
 
-1. Generate random DEK: `dek = secrets.token_bytes(32)`
-2. Generate random nonce: `nonce = secrets.token_bytes(12)`
-3. Encrypt data: `ciphertext = aead_encrypt(plaintext, ad=b"", nonce=nonce, key=dek)`
-4. For each recipient:
-   a. `kem = oqs.KeyEncapsulation("ML-KEM-1024")`
-   b. `kem_ct, shared_secret = kem.encap_secret(recipient_kem_pk)`
-   c. `wrapping_key = hkdf_derive(b"", shared_secret, b"chromatindb-envelope-v1", 32)`
-   d. `wrapped_dek = aead_encrypt(dek, ad=b"", nonce=nonce, key=wrapping_key)`
-5. Assemble envelope: version + nonce + recipient_count + recipient_blocks + ciphertext
+### New Timer Loops
 
-Wait -- step 4d wraps the DEK. The wrapped DEK is 32 + 16 = 48 bytes (32-byte key + 16-byte AEAD tag). This changes the per-recipient block:
+| Timer | Interval | Purpose |
+|-------|----------|---------|
+| `keepalive_loop()` | 30s | Send Ping to all peers |
+| `expiry_timer_loop()` | Dynamic (next expiry time) | Fire at exact expiry deadline |
+| `safety_net_reconciliation_loop()` | 600s | Full reconciliation as monitoring signal |
 
-### Revised Per-Recipient Block
+## Alternatives Considered
 
-```
-[kem_pk_hash:32]                    -- Recipient identifier
-[kem_ciphertext:1568]               -- ML-KEM-1024 encapsulation
-[wrapped_dek:48]                    -- AEAD-encrypted DEK (32 + 16 tag)
-```
+| Recommended | Alternative | Why Not |
+|-------------|-------------|---------|
+| Fire-and-forget `co_spawn` for peer notifications | `asio::experimental::channel<>` | Single io_context thread -- no producer/consumer needed; channel is experimental and adds complexity for zero benefit |
+| `steady_timer` with dynamic `expires_after()` for expiry | Dedicated expiry watcher thread | Single-threaded Asio model is proven; adding threads would require mutex on storage access |
+| Reconnect in `ChromatinClient` (owns connection params) | Reconnect in `Transport` (lower level) | Transport is stateless after handshake; reconnection requires new TCP + new PQ handshake = new Transport |
+| Reuse `Notification` payload format for `BlobNotify` | New dedicated format | Identical fields; zero code duplication in encoder/decoder |
+| Immediate cursor cleanup on disconnect | Keep 6-hour timer with shorter interval | Timers waste CPU when the exact event (disconnect) is already observable |
+| 30s keepalive with 120s inactivity timeout | Configurable keepalive with auto-derived timeout | KISS -- 30s/120s is well-proven in production systems (SSH default is 15s/45s) |
+| `BlobFetchResponse` with status byte | Separate `BlobFetchNotFound` message type | One message type with status byte is simpler than two types; matches `WriteAck` pattern |
+| stdlib `random` for jitter | `secrets` module | Jitter is not a security-critical random value; `random` is faster and clearer |
 
-Per-recipient block: 32 + 1568 + 48 = 1648 bytes fixed.
-
-**All of this is serialized with `struct.pack` -- no new serialization library needed.**
-
-## Directory and Group Data Format
-
-User pubkeys, group definitions, and other directory entries are stored as regular blobs in the admin's namespace. The data payload needs a type tag to distinguish entry types.
-
-**Use a simple type-length-value (TLV) binary format with `struct.pack`:**
-
-```
-[entry_type:1]                        -- 0x01=user_pubkey, 0x02=group, 0x03=revocation
-[entry_data:variable]                 -- Type-specific payload
-```
-
-User pubkey entry: `[0x01][display_name_len:2 BE][display_name:N][signing_pk:2592][kem_pk:1568]`
-Group entry: `[0x02][group_name_len:2 BE][group_name:N][member_count:2 BE][member_pk_hash:32*N]`
-
-No JSON, no MessagePack, no protobuf. Binary `struct.pack` is consistent with the entire SDK wire protocol convention and adds zero dependencies.
-
-## What NOT to Add
+## What NOT to Use
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `cryptography` package | Pulls OpenSSL + Rust compiler. Project constraint: "No OpenSSL." ML-KEM-1024 is in liboqs, ChaCha20 is in PyNaCl, HKDF is in stdlib. Zero reason to add this. | Existing deps |
-| `pycryptodome` | Different C backend from libsodium. Risk of subtle AEAD interop issues. No capability we lack. | PyNaCl |
-| `msgpack` / `cbor2` | Additional serialization dependency for a format we can express in ~20 lines of `struct.pack`. The entire SDK wire protocol uses `struct.pack`. Consistency > convenience. | `struct` (stdlib) |
-| `json` for envelope format | JSON is text-based, wastes bytes, and can't cleanly embed binary (base64 overhead). Binary `struct.pack` is what the SDK already uses for all wire encoding. | `struct` (stdlib) |
-| `nacl.utils.random()` | Calls into libsodium for randomness. `secrets.token_bytes()` uses the OS CSPRNG directly and is the canonical Python approach. No interop requirement. | `secrets.token_bytes()` (stdlib) |
-| New FlatBuffers schemas | Envelope encryption is SDK-layer, not wire protocol. The node stores opaque blobs -- it never interprets the encrypted payload. FlatBuffers overhead is unjustified for a format only the SDK reads. | `struct.pack` |
-| `age` encryption library | Age (actually-good-encryption) is for file encryption, not programmatic envelope crypto. Would add X25519 (non-PQ) dependency. We need ML-KEM-1024 (PQ). | Direct ML-KEM + ChaCha20 from existing deps |
-| Any hybrid KEM (X25519+ML-KEM) | chromatindb is PQ-only by design. ML-KEM-1024 alone. No classical fallback needed. | `oqs.KeyEncapsulation("ML-KEM-1024")` |
+| `asio::experimental::channel<>` | Still experimental in Asio 1.38.0; API may change; unnecessary for single-threaded dispatch | Direct `co_spawn` per-peer fan-out |
+| `asio::system_timer` / `asio::deadline_timer` | Wall-clock timers affected by NTP/manual adjustments; codebase exclusively uses `steady_timer` | `asio::steady_timer` with `expires_after()` relative delay |
+| Python `tenacity` or `backoff` libraries | New pip dependency for something achievable in ~20 lines of stdlib | Stdlib `asyncio.sleep` + `random.uniform` |
+| Dedicated watcher thread for expiry | Breaks single-threaded invariant; requires mutex on storage | `steady_timer` reschedule in io_context thread |
+| `asyncio.Queue` for reconnect signaling | Over-engineering; reconnect is triggered by exception in request path | Direct `try/except` in `_request_with_retry` |
+| WebSocket keepalive frames | Not applicable -- custom binary protocol over TCP | Existing `Ping`/`Pong` message types (5/6) |
 
-## Recommended Stack (Complete for v1.7.0)
+## Version Compatibility
 
-### Runtime Dependencies (unchanged from v1.6.0)
-
-| Technology | Version | Purpose in v1.7.0 | Why |
-|------------|---------|-------------------|-----|
-| liboqs-python | ~=0.14.0 | ML-KEM-1024 `encap_secret()` / `decap_secret()` for per-recipient key wrapping; ML-KEM keypair generation and persistence | Already proven in SDK handshake + tests. `encap_secret(pubkey)` returns (ciphertext:1568, shared_secret:32). `decap_secret(ct)` returns shared_secret:32. |
-| PyNaCl | ~=1.5.0 | ChaCha20-Poly1305 AEAD for blob data encryption and DEK wrapping | Already proven in `crypto.py`. Same `aead_encrypt`/`aead_decrypt` functions, different keys. |
-| flatbuffers | ~=25.12 | FlatBuffers encoding for blob payloads written to network | Unchanged -- encrypted payload is stored inside the FlatBuffer `Blob.data` field as opaque bytes. |
-
-### Stdlib Usage (no pip install needed)
-
-| Module | Purpose in v1.7.0 | Notes |
-|--------|--------------------|-------|
-| `secrets` | `secrets.token_bytes(32)` for DEK generation, `secrets.token_bytes(12)` for AEAD nonce | NEW usage. Available since Python 3.6. Canonical for crypto randomness per PEP 506. |
-| `struct` | Binary envelope format encoding/decoding | Same pattern as existing `_codec.py`. No new patterns needed. |
-| `hmac` + `hashlib` | HKDF-SHA256 to derive wrapping key from KEM shared secret | Reuses existing `_hkdf.py` implementation. No changes. |
-| `hashlib` | SHA3-256 for recipient key hashing (`SHA3-256(kem_pk)` as identifier) | Reuses existing `crypto.sha3_256()`. No changes. |
-
-### Development Dependencies (unchanged from v1.6.0)
-
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| pytest | latest | Test framework |
-| ruff | latest | Linting and formatting |
-| mypy | latest | Static type checking |
-
-## pyproject.toml Changes
-
-**None.** The `dependencies` list stays exactly the same:
-
-```toml
-dependencies = [
-    "liboqs-python~=0.14.0",
-    "pynacl~=1.5.0",
-    "flatbuffers~=25.12",
-]
-```
-
-## Key Integration Points
-
-### 1. Identity Extension
-
-The existing `Identity` class in `identity.py` manages ML-DSA-87 signing keys. Extend it with an optional ML-KEM-1024 encryption keypair:
-
-- `Identity.generate()` -- add KEM keypair generation alongside signing keypair
-- `Identity.save()` -- write `.kem.key` (3168 bytes) and `.kem.pub` (1568 bytes) sibling files
-- `Identity.load()` -- load KEM keys if present (backward-compatible: old identities without KEM keys still work for signing)
-- `Identity.kem_public_key` -- property returning 1568-byte KEM public key (or None)
-- `Identity.from_public_key()` -- accept optional `kem_public_key` parameter for verify+encrypt-to capability
-
-### 2. Crypto Module Extension
-
-Add to `crypto.py` (or a new `_envelope.py` internal module):
-
-- `envelope_encrypt(plaintext, recipient_kem_pks) -> bytes` -- full envelope encryption
-- `envelope_decrypt(envelope, kem_secret_key, kem_public_key) -> bytes` -- find own recipient block, decap, unwrap DEK, decrypt
-
-Both functions compose existing primitives: `secrets.token_bytes` + `oqs.KeyEncapsulation.encap_secret` + `hkdf_derive` + `aead_encrypt`.
-
-### 3. Client API Extension
-
-Add to `ChromatinClient`:
-
-- `write_encrypted(data, ttl, recipients)` -- envelope encrypt then `write_blob()`
-- `read_encrypted(namespace, blob_hash)` -- `read_blob()` then envelope decrypt
-
-These are thin wrappers composing `envelope_encrypt`/`envelope_decrypt` with the existing `write_blob`/`read_blob` methods.
-
-### 4. Directory as Blob Convention
-
-The pubkey directory and group definitions are stored as ordinary signed blobs in a designated namespace. The SDK provides helpers to:
-
-- Publish own KEM public key to directory namespace
-- List and fetch KEM public keys from directory namespace
-- Create/update group definitions
-- Resolve group to member KEM public keys
-
-All using existing `write_blob`, `read_blob`, `list_blobs` client methods. No new wire types, no node changes.
-
-## Confidence Assessment
-
-| Claim | Confidence | Basis |
-|-------|------------|-------|
-| liboqs-python `encap_secret`/`decap_secret` API | HIGH | Used in SDK handshake tests; verified against liboqs-python source on GitHub |
-| ML-KEM-1024 key sizes (pk:1568, sk:3168, ct:1568, ss:32) | HIGH | OQS docs (FIPS 203), confirmed in `_handshake.py` constants |
-| PyNaCl ChaCha20-Poly1305 AEAD reuse | HIGH | Already proven byte-identical to C++ node in v1.6.0 |
-| HKDF-SHA256 stdlib reuse | HIGH | Already proven byte-identical to C++ node in v1.6.0 |
-| `secrets.token_bytes()` availability | HIGH | Python stdlib since 3.6; SDK requires >=3.10 |
-| No new dependencies needed | HIGH | Every capability mapped to existing dep or stdlib |
-| Envelope format via `struct.pack` | HIGH | Same pattern as all existing SDK wire encoding |
+| Component | Current Version | Required Changes | Compatibility Notes |
+|-----------|-----------------|------------------|---------------------|
+| Standalone Asio | 1.38.0 | None | All features used (steady_timer, co_spawn, use_awaitable) are stable, non-experimental |
+| libmdbx | latest via FetchContent | None | cursor.to_first() on sorted map is core API since inception |
+| FlatBuffers | latest via FetchContent | Add 3 enum values to transport.fbs | Backward-incompatible wire change; acceptable per project constraints |
+| liboqs-python | ~=0.14.0 | None | Not involved in v2.0.0 changes |
+| PyNaCl | ~=1.5.0 | None | Not involved in v2.0.0 changes |
+| flatbuffers (Python) | ~=25.12 | Regenerate transport_generated.py | Auto-generated from transport.fbs |
+| Python | >=3.10 | None | asyncio, random, secrets all in stdlib |
 
 ## Sources
 
-- [liboqs-python GitHub](https://github.com/open-quantum-safe/liboqs-python) -- `KeyEncapsulation` class API, `encap_secret()` / `decap_secret()` / `generate_keypair()` / `export_secret_key()` methods (HIGH confidence, source code verified)
-- [liboqs-python oqs.py source](https://github.com/open-quantum-safe/liboqs-python/blob/main/oqs/oqs.py) -- Full class definition with method signatures and `details` dictionary structure (HIGH confidence)
-- [ML-KEM on OQS](https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem.html) -- ML-KEM-1024 parameters: pk=1568, sk=3168, ct=1568, ss=32, NIST Level 5 (HIGH confidence)
-- [IETF PQ KEM for JOSE draft](https://datatracker.ietf.org/doc/draft-ietf-jose-pqc-kem/) -- Envelope encryption design patterns with ML-KEM (MEDIUM confidence, draft spec, used for design reference only)
-- [Python secrets module docs](https://docs.python.org/3/library/secrets.html) -- `secrets.token_bytes()`, available since Python 3.6 (HIGH confidence)
-- SDK source files: `_handshake.py`, `crypto.py`, `_hkdf.py`, `identity.py`, `_codec.py`, `client.py` -- existing implementations to reuse (HIGH confidence, primary source)
-- SDK test files: `tests/test_handshake.py` -- proves `encap_secret()` and `decap_secret()` already work with ML-KEM-1024 in the SDK (HIGH confidence)
+- Standalone Asio [1.38.0 documentation](https://think-async.com/Asio/asio-1.38.0/doc/) -- steady_timer, co_spawn, use_awaitable (verified in project's FetchContent build)
+- Asio experimental::channel [1.30.2 reference](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/experimental__concurrent_channel.html) -- evaluated and rejected for this use case
+- Asio [steady_timer reference](https://think-async.com/Asio/asio-1.36.0/doc/asio/reference/steady_timer.html) -- expires_after, cancel, expires_at behavior verified
+- libmdbx [GitHub repository](https://github.com/erthink/libmdbx) -- cursor.to_first() B-tree traversal confirmed
+- AWS [Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) -- Full Jitter algorithm referenced for SDK reconnect
+- Existing codebase: `db/peer/peer_manager.h` (timer-cancel pattern, notify_subscribers), `db/storage/storage.cpp` (expiry_map key format), `sdk/python/chromatindb/_transport.py` (Ping/Pong handling), `sdk/python/chromatindb/client.py` (subscription tracking, connect pattern)
 
 ---
-*Stack research for: chromatindb v1.7.0 Client-Side Encryption*
-*Researched: 2026-03-31*
+*Stack research for: v2.0.0 Event-Driven Architecture*
+*Researched: 2026-04-02*
