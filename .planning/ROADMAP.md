@@ -191,7 +191,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   5. The relay rejects BlobNotify (type 59) from client connections (peer-internal only)
 **Plans**: 3 plans
 Plans:
-- [ ] 79-01-PLAN.md -- Wire type BlobNotify=59 + relay filter
+- [x] 79-01-PLAN.md -- Wire type BlobNotify=59 + relay filter
 - [ ] 79-02-PLAN.md -- Per-connection send queue with drain coroutine
 - [ ] 79-03-PLAN.md -- Unified engine callback + PeerManager BlobNotify fan-out
 
@@ -267,7 +267,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 79. Send Queue & Push Notifications | 0/3 | Planning complete | - |
+| 79. Send Queue & Push Notifications | 1/3 | Executing | - |
 | 80. Targeted Blob Fetch | 0/TBD | Not started | - |
 | 81. Event-Driven Expiry | 0/TBD | Not started | - |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
