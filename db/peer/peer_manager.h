@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -24,6 +25,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace chromatindb::peer {
@@ -77,6 +79,15 @@ struct NodeMetrics {
     uint64_t full_resyncs = 0;            // Full resync rounds triggered
     uint64_t quota_rejections = 0;        // Namespace quota exceeded rejections
     uint64_t sync_rejections = 0;          // Sync rate limit rejections (cooldown + session + byte rate)
+};
+
+/// Hash functor for 32-byte arrays (first 8 bytes as uint64_t -- sufficient entropy for blob hashes).
+struct ArrayHash32 {
+    size_t operator()(const std::array<uint8_t, 32>& arr) const noexcept {
+        uint64_t h;
+        std::memcpy(&h, arr.data(), sizeof(h));
+        return static_cast<size_t>(h);
+    }
 };
 
 /// Manages peer connections, sync scheduling, and connection policies.
@@ -264,6 +275,16 @@ private:
         bool is_tombstone,
         net::Connection::Ptr source);
 
+    // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
+    /// Handle incoming BlobNotify: dedup check, send BlobFetch if needed.
+    void on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t> payload);
+
+    /// Handle incoming BlobFetch: look up blob, send BlobFetchResponse.
+    void handle_blob_fetch(net::Connection::Ptr conn, std::vector<uint8_t> payload);
+
+    /// Handle incoming BlobFetchResponse: ingest blob, clean pending set.
+    void handle_blob_fetch_response(net::Connection::Ptr conn, std::vector<uint8_t> payload);
+
     // Cursor-aware sync helpers
     enum class FullResyncReason { None, Periodic, TimeGap };
     FullResyncReason check_full_resync(
@@ -321,6 +342,10 @@ private:
     uint64_t last_compaction_time_ = 0;           // Epoch seconds of last successful compaction
     uint64_t compaction_count_ = 0;               // Monotonic counter of successful compactions
     NotificationCallback on_notification_;        // Test hook for notification dispatch
+    // Phase 80: Track in-flight BlobFetch requests for dedup (D-05)
+    // Maps blob_hash -> connection that we sent the BlobFetch to.
+    // Cleaned on: successful ingest (by hash), peer disconnect (by connection).
+    std::unordered_map<std::array<uint8_t, 32>, net::Connection::Ptr, ArrayHash32> pending_fetches_;
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;
 };
