@@ -13,8 +13,8 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 - [x] **PUSH-02**: Notification contains namespace, blob hash, sequence number, size, and tombstone flag (77-byte payload)
 - [x] **PUSH-03**: Notifications are suppressed during active reconciliation to prevent notification storms
 - [x] **PUSH-04**: Per-connection send queue serializes all outbound messages to prevent AEAD nonce desync
-- [ ] **PUSH-05**: Peer receiving a BlobNotify can fetch the specific blob via targeted BlobFetch request (skip full reconciliation)
-- [ ] **PUSH-06**: BlobFetch is handled inline in the message loop (no sync session handshake required)
+- [x] **PUSH-05**: Peer receiving a BlobNotify can fetch the specific blob via targeted BlobFetch request (skip full reconciliation)
+- [x] **PUSH-06**: BlobFetch is handled inline in the message loop (no sync session handshake required)
 - [x] **PUSH-07**: Node does not send BlobNotify back to the peer that originated the blob (source exclusion)
 - [x] **PUSH-08**: Push notifications are delivered to currently-connected peers only; disconnected peers recover via reconcile-on-connect
 
@@ -89,8 +89,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PUSH-02 | Phase 79 | Complete |
 | PUSH-03 | Phase 79 | Complete |
 | PUSH-04 | Phase 79 | Complete |
-| PUSH-05 | Phase 80 | Pending |
-| PUSH-06 | Phase 80 | Pending |
+| PUSH-05 | Phase 80 | Complete |
+| PUSH-06 | Phase 80 | Complete |
 | PUSH-07 | Phase 79 | Complete |
 | PUSH-08 | Phase 79 | Complete |
 | MAINT-01 | Phase 81 | Pending |
