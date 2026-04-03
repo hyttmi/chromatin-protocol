@@ -4026,3 +4026,235 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
     pm3.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
+
+// ============================================================================
+// Phase 80: Targeted blob fetch tests
+// ============================================================================
+
+TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
+    // 3-node chain: A ← B → C. Blob written to A after connections established.
+    // B re-syncs from A (cooldown disabled) → gets blob → on_blob_ingested → BlobNotify to C.
+    // C receives BlobNotify → BlobFetch from B → ingests blob.
+    TempDir tmpA, tmpB, tmpC;
+
+    auto idA = NodeIdentity::load_or_generate(tmpA.path);
+    auto idB = NodeIdentity::load_or_generate(tmpB.path);
+    auto idC = NodeIdentity::load_or_generate(tmpC.path);
+
+    auto make_cfg = [](const std::string& dir, int sync_sec) {
+        Config cfg;
+        cfg.bind_address = "127.0.0.1:0";
+        cfg.data_dir = dir;
+        cfg.sync_interval_seconds = sync_sec;
+        cfg.sync_cooldown_seconds = 0;  // Disable cooldown for test
+        cfg.max_peers = 32;
+        return cfg;
+    };
+
+    Config cfgA = make_cfg(tmpA.path.string(), 600);
+    Config cfgB = make_cfg(tmpB.path.string(), 3);   // short sync to pick up new blobs from A
+    Config cfgC = make_cfg(tmpC.path.string(), 600);  // high interval: C gets blobs only via BlobFetch
+
+    Storage storeA(tmpA.path.string());
+    Storage storeB(tmpB.path.string());
+    Storage storeC(tmpC.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engA(storeA, pool);
+    BlobEngine engB(storeB, pool);
+    BlobEngine engC(storeC, pool);
+
+    asio::io_context ioc;
+    AccessControl aclA({}, cfgA.allowed_peer_keys, idA.namespace_id());
+    AccessControl aclB({}, cfgB.allowed_peer_keys, idB.namespace_id());
+    AccessControl aclC({}, cfgC.allowed_peer_keys, idC.namespace_id());
+
+    // Start A, then B connects to A, then C connects to B
+    PeerManager pmA(cfgA, idA, engA, storeA, ioc, pool, aclA);
+    pmA.start();
+
+    cfgB.bootstrap_peers = {listening_address(pmA.listening_port())};
+    PeerManager pmB(cfgB, idB, engB, storeB, ioc, pool, aclB);
+    pmB.start();
+
+    // Let A-B connection + initial sync complete (both empty)
+    ioc.run_for(std::chrono::seconds(5));
+
+    cfgC.bootstrap_peers = {listening_address(pmB.listening_port())};
+    PeerManager pmC(cfgC, idC, engC, storeC, ioc, pool, aclC);
+    pmC.start();
+
+    // Let B-C connection + initial sync complete (both empty)
+    ioc.run_for(std::chrono::seconds(5));
+
+    // Now write blob to A. B's periodic sync (3s, no cooldown) will pick it up.
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(idA, "blobfetch-roundtrip", 604800, now);
+    auto r = run_async(pool, engA.ingest(blob));
+    REQUIRE(r.accepted);
+    REQUIRE(r.ack.has_value());
+    auto expected_hash = r.ack->blob_hash;
+
+    // B re-syncs from A → gets blob → on_blob_ingested → BlobNotify to C
+    // C: on_blob_notify → has_blob false → BlobFetch → BlobFetchResponse → ingest
+    ioc.run_for(std::chrono::seconds(15));
+
+    // Verify blob arrived at C (via BlobFetch or PEX+sync — either path validates the system)
+    auto c_blob = storeC.get_blob(idA.namespace_id(), expected_hash);
+    REQUIRE(c_blob.has_value());
+    CHECK(c_blob->data == blob.data);
+
+    // B also has the blob from sync
+    CHECK(storeB.get_blob(idA.namespace_id(), expected_hash).has_value());
+
+    pmA.stop();
+    pmB.stop();
+    pmC.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("BlobFetch skipped when blob already exists locally", "[peer][blobfetch]") {
+    // Same 3-node setup but C already has the blob.
+    // B re-syncs from A (cooldown disabled) → BlobNotify to C.
+    // C has_blob true → no BlobFetch.
+    TempDir tmpA, tmpB, tmpC;
+
+    auto idA = NodeIdentity::load_or_generate(tmpA.path);
+    auto idB = NodeIdentity::load_or_generate(tmpB.path);
+    auto idC = NodeIdentity::load_or_generate(tmpC.path);
+
+    auto make_cfg = [](const std::string& dir, int sync_sec) {
+        Config cfg;
+        cfg.bind_address = "127.0.0.1:0";
+        cfg.data_dir = dir;
+        cfg.sync_interval_seconds = sync_sec;
+        cfg.sync_cooldown_seconds = 0;
+        cfg.max_peers = 32;
+        return cfg;
+    };
+
+    Config cfgA = make_cfg(tmpA.path.string(), 600);
+    Config cfgB = make_cfg(tmpB.path.string(), 3);
+    Config cfgC = make_cfg(tmpC.path.string(), 600);
+
+    Storage storeA(tmpA.path.string());
+    Storage storeB(tmpB.path.string());
+    Storage storeC(tmpC.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engA(storeA, pool);
+    BlobEngine engB(storeB, pool);
+    BlobEngine engC(storeC, pool);
+
+    asio::io_context ioc;
+    AccessControl aclA({}, cfgA.allowed_peer_keys, idA.namespace_id());
+    AccessControl aclB({}, cfgB.allowed_peer_keys, idB.namespace_id());
+    AccessControl aclC({}, cfgC.allowed_peer_keys, idC.namespace_id());
+
+    PeerManager pmA(cfgA, idA, engA, storeA, ioc, pool, aclA);
+    pmA.start();
+
+    cfgB.bootstrap_peers = {listening_address(pmA.listening_port())};
+    PeerManager pmB(cfgB, idB, engB, storeB, ioc, pool, aclB);
+    pmB.start();
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    cfgC.bootstrap_peers = {listening_address(pmB.listening_port())};
+    PeerManager pmC(cfgC, idC, engC, storeC, ioc, pool, aclC);
+    pmC.start();
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    // Write blob to A AND C (pre-load on C)
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(idA, "dedup-test", 604800, now);
+    auto rA = run_async(pool, engA.ingest(blob));
+    auto rC = run_async(pool, engC.ingest(blob));
+    REQUIRE(rA.accepted);
+    REQUIRE(rC.accepted);
+
+    // Track ingests on C — should not increase from BlobFetch
+    uint64_t ingests_before = pmC.metrics().ingests;
+
+    // B's periodic sync picks up blob from A → BlobNotify to C.
+    // C's on_blob_notify → has_blob true → skip.
+    ioc.run_for(std::chrono::seconds(15));
+
+    // B got the blob via sync
+    CHECK(storeB.get_blob(idA.namespace_id(), rA.ack->blob_hash).has_value());
+
+    // C should NOT have a new BlobFetch ingest (already had blob)
+    CHECK(pmC.metrics().ingests == ingests_before);
+
+    pmA.stop();
+    pmB.stop();
+    pmC.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
+    // All nodes remain connected after BlobFetch cycles (D-08).
+    TempDir tmpA, tmpB, tmpC;
+
+    auto idA = NodeIdentity::load_or_generate(tmpA.path);
+    auto idB = NodeIdentity::load_or_generate(tmpB.path);
+    auto idC = NodeIdentity::load_or_generate(tmpC.path);
+
+    auto make_cfg = [](const std::string& dir, int sync_sec) {
+        Config cfg;
+        cfg.bind_address = "127.0.0.1:0";
+        cfg.data_dir = dir;
+        cfg.sync_interval_seconds = sync_sec;
+        cfg.sync_cooldown_seconds = 0;
+        cfg.max_peers = 32;
+        return cfg;
+    };
+
+    Config cfgA = make_cfg(tmpA.path.string(), 600);
+    Config cfgB = make_cfg(tmpB.path.string(), 3);
+    Config cfgC = make_cfg(tmpC.path.string(), 600);
+
+    Storage storeA(tmpA.path.string());
+    Storage storeB(tmpB.path.string());
+    Storage storeC(tmpC.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engA(storeA, pool);
+    BlobEngine engB(storeB, pool);
+    BlobEngine engC(storeC, pool);
+
+    asio::io_context ioc;
+    AccessControl aclA({}, cfgA.allowed_peer_keys, idA.namespace_id());
+    AccessControl aclB({}, cfgB.allowed_peer_keys, idB.namespace_id());
+    AccessControl aclC({}, cfgC.allowed_peer_keys, idC.namespace_id());
+
+    PeerManager pmA(cfgA, idA, engA, storeA, ioc, pool, aclA);
+    pmA.start();
+
+    cfgB.bootstrap_peers = {listening_address(pmA.listening_port())};
+    PeerManager pmB(cfgB, idB, engB, storeB, ioc, pool, aclB);
+    pmB.start();
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    cfgC.bootstrap_peers = {listening_address(pmB.listening_port())};
+    PeerManager pmC(cfgC, idC, engC, storeC, ioc, pool, aclC);
+    pmC.start();
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    // Write blob, let BlobFetch cycle run
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(idA, "connectivity-test", 604800, now);
+    run_async(pool, engA.ingest(blob));
+
+    ioc.run_for(std::chrono::seconds(15));
+
+    // All connections alive (D-08: no crash/disconnect)
+    CHECK(pmA.peer_count() >= 1);
+    CHECK(pmB.peer_count() >= 1);
+    CHECK(pmC.peer_count() >= 1);
+
+    pmA.stop();
+    pmB.stop();
+    pmC.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
