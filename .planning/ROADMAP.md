@@ -219,7 +219,7 @@ Plans:
   3. Ingesting a blob with a TTL shorter than the current timer target causes the timer to rearm earlier
 **Plans**: 2 plans
 Plans:
-- [ ] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
+- [x] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
 - [ ] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
 
 ### Phase 82: Reconcile-on-Connect & Safety Net
@@ -275,7 +275,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 |-------|----------------|--------|-----------|
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
 | 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
-| 81. Event-Driven Expiry | 0/2 | Not started | - |
+| 81. Event-Driven Expiry | 1/2 | In Progress|  |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
