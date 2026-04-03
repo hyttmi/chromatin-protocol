@@ -445,6 +445,62 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
 }
 
 // ============================================================================
+// Phase 81-01: get_earliest_expiry()
+// ============================================================================
+
+TEST_CASE("get_earliest_expiry returns nullopt when empty", "[storage][earliest-expiry]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    REQUIRE_FALSE(store.get_earliest_expiry().has_value());
+}
+
+TEST_CASE("get_earliest_expiry returns earliest time", "[storage][earliest-expiry]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    // Blob expiring at 1100 (ts=1000, ttl=100)
+    auto blob1 = make_test_blob(0x01, "early", 100, 1000);
+    store.store_blob(blob1);
+
+    // Blob expiring at 2000 (ts=1000, ttl=1000)
+    auto blob2 = make_test_blob(0x01, "late", 1000, 1000);
+    store.store_blob(blob2);
+
+    auto earliest = store.get_earliest_expiry();
+    REQUIRE(earliest.has_value());
+    REQUIRE(*earliest == 1100);
+}
+
+TEST_CASE("get_earliest_expiry skips TTL=0 blobs", "[storage][earliest-expiry]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    auto permanent = make_test_blob(0x01, "permanent", 0, 1000);
+    store.store_blob(permanent);
+
+    REQUIRE_FALSE(store.get_earliest_expiry().has_value());
+}
+
+TEST_CASE("get_earliest_expiry updates after scan", "[storage][earliest-expiry]") {
+    TempDir tmp;
+    uint64_t fake_time = 1000;
+    Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
+
+    auto blob1 = make_test_blob(0x01, "first", 100, 1000);   // expires 1100
+    auto blob2 = make_test_blob(0x01, "second", 200, 1000);  // expires 1200
+    store.store_blob(blob1);
+    store.store_blob(blob2);
+
+    REQUIRE(*store.get_earliest_expiry() == 1100);
+
+    fake_time = 1101;
+    store.run_expiry_scan();  // Purges blob1
+
+    REQUIRE(*store.get_earliest_expiry() == 1200);
+}
+
+// ============================================================================
 // Plan 03-01: StoreResult struct, list_namespaces, duplicate seq_num
 // ============================================================================
 
