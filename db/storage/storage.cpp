@@ -1132,6 +1132,24 @@ size_t Storage::run_expiry_scan() {
     return purged;
 }
 
+std::optional<uint64_t> Storage::get_earliest_expiry() const {
+    try {
+        auto txn = impl_->env.start_read();
+        auto cursor = txn.open_cursor(impl_->expiry_map);
+        auto first = cursor.to_first(false);
+        if (!first.done) return std::nullopt;
+
+        auto key_data = cursor.current(false).key;
+        if (key_data.length() < 8) return std::nullopt;
+
+        return decode_be_u64(
+            static_cast<const uint8_t*>(key_data.data()));
+    } catch (const std::exception& e) {
+        spdlog::error("get_earliest_expiry: {}", e.what());
+        return std::nullopt;
+    }
+}
+
 uint64_t Storage::used_bytes() const {
     // Returns mmap file geometry (mi_geo.current), NOT actual data volume.
     // Freed pages are reused internally by libmdbx's B-tree garbage collector.

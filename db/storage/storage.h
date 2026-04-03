@@ -202,6 +202,11 @@ public:
     /// @return Number of blobs purged.
     size_t run_expiry_scan();
 
+    /// Query the earliest expiry timestamp in the expiry_map.
+    /// O(1) via MDBX cursor seek to first key.
+    /// @return The earliest expiry timestamp (wall-clock seconds), or nullopt if no expiring blobs.
+    std::optional<uint64_t> get_earliest_expiry() const;
+
     /// Return the current mmap geometry size in bytes.
     /// Uses mdbx env info mi_geo.current (O(1), authoritative).
     /// Note: This is the mmap file geometry, NOT the actual data volume.
