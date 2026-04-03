@@ -242,8 +242,13 @@ void PeerManager::start() {
     // Start periodic peer list flush timer (30s)
     asio::co_spawn(ioc_, peer_flush_timer_loop(), asio::detached);
 
-    // Start cancellable expiry scan coroutine
-    asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
+    // Start event-driven expiry timer (D-06: replaces periodic scan)
+    auto earliest = storage_.get_earliest_expiry();
+    if (earliest.has_value()) {
+        next_expiry_target_ = *earliest;
+        asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
+    }
+    // If no expiring blobs, timer stays disarmed. on_blob_ingested() will spawn loop on first TTL>0 ingest.
 
     // Start periodic metrics log timer (60s)
     asio::co_spawn(ioc_, metrics_timer_loop(), asio::detached);
@@ -2879,20 +2884,42 @@ void PeerManager::disconnect_unauthorized_peers() {
 // =============================================================================
 
 asio::awaitable<void> PeerManager::expiry_scan_loop() {
+    expiry_loop_running_ = true;
     while (!stopping_) {
+        uint64_t target = next_expiry_target_;
+        if (target == 0) break;  // No expiry target -- exit loop
+
+        // Convert wall-clock expiry to steady_timer duration (Pitfall 3: underflow guard)
+        uint64_t now = storage::system_clock_seconds();
+        auto duration = (target > now)
+            ? std::chrono::seconds(target - now)
+            : std::chrono::seconds(0);  // Already expired, fire immediately
+
         asio::steady_timer timer(ioc_);
         expiry_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
+        timer.expires_after(duration);
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
         expiry_timer_ = nullptr;
-        if (ec || stopping_) co_return;
+        if (stopping_) break;
+        if (ec) continue;  // Cancelled (rearmed by on_blob_ingested) -- loop back to read new target
 
+        // D-05: Process ALL expired blobs in one scan
         auto purged = storage_.run_expiry_scan();
         if (purged > 0) {
             spdlog::info("expiry scan: purged {} blobs", purged);
         }
+
+        // D-01/MAINT-02: Rearm to next earliest expiry from storage (source of truth)
+        auto next = storage_.get_earliest_expiry();
+        if (next.has_value()) {
+            next_expiry_target_ = *next;
+        } else {
+            next_expiry_target_ = 0;
+            break;  // No more expiring blobs -- exit loop
+        }
     }
+    expiry_loop_running_ = false;
 }
 
 // =============================================================================
