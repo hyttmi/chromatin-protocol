@@ -346,4 +346,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-03 — Phase 80 complete: targeted blob fetch via BlobNotify→BlobFetch (v2.0.0)*
+*Last updated: 2026-04-03 — Phase 81 complete: event-driven expiry replaces periodic scan (v2.0.0)*
