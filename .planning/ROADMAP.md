@@ -207,7 +207,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 80-01-PLAN.md -- Wire types BlobFetch=60 + BlobFetchResponse=61 + relay filter
-- [ ] 80-02-PLAN.md -- BlobNotify receive handler + BlobFetch/BlobFetchResponse handlers + dedup + tests
+- [x] 80-02-PLAN.md -- BlobNotify receive handler + BlobFetch/BlobFetchResponse handlers + dedup + tests
 
 ### Phase 81: Event-Driven Expiry
 **Goal**: Expired blobs are purged at exactly the right time instead of waiting for a periodic scan
@@ -217,7 +217,10 @@ Plans:
   1. After the last blob with a given expiry time is ingested, the expiry timer fires at that exact second (not up to 60s later)
   2. Processing one expired blob automatically rearms the timer to the next earliest expiry (chain processing without gaps)
   3. Ingesting a blob with a TTL shorter than the current timer target causes the timer to rearm earlier
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
+- [ ] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
 
 ### Phase 82: Reconcile-on-Connect & Safety Net
 **Goal**: Peers catch up on missed blobs via full reconciliation on connect, with a long-interval safety net and graceful cursor lifecycle
@@ -271,8 +274,8 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
-| 80. Targeted Blob Fetch | 1/2 | Complete    | 2026-04-03 |
-| 81. Event-Driven Expiry | 0/TBD | Not started | - |
+| 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
+| 81. Event-Driven Expiry | 0/2 | Not started | - |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
