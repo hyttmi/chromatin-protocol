@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: Phase 80 context gathered
-last_updated: "2026-04-03T07:38:41.394Z"
+stopped_at: Phase 81 context gathered
+last_updated: "2026-04-03T13:38:52.529Z"
 last_activity: 2026-04-03
 progress:
   total_phases: 7
@@ -63,7 +63,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02T14:57:17.525Z
+Last session: 2026-04-03T13:38:52.516Z
 Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Phase 80 context gathered
-Resume file: .planning/phases/80-targeted-blob-fetch/80-CONTEXT.md
+Stopped at: Phase 81 context gathered
+Resume file: .planning/phases/81-event-driven-expiry/81-CONTEXT.md
