@@ -273,6 +273,7 @@ private:
         uint64_t seq_num,
         uint32_t blob_size,
         bool is_tombstone,
+        uint64_t expiry_time,
         net::Connection::Ptr source);
 
     // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
@@ -337,7 +338,9 @@ private:
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
-    uint32_t expiry_scan_interval_seconds_ = 60;  // SIGHUP-reloadable (Phase 54)
+    uint32_t expiry_scan_interval_seconds_ = 60;  // Deprecated (v2.0.0): ignored, expiry is event-driven. Kept for config file compatibility.
+    uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise
+    bool expiry_loop_running_ = false;   // Prevents double co_spawn of expiry_scan_loop
     uint32_t compaction_interval_hours_ = 6;      // SIGHUP-reloadable (Phase 55)
     uint64_t last_compaction_time_ = 0;           // Epoch seconds of last successful compaction
     uint64_t compaction_count_ = 0;               // Monotonic counter of successful compactions

@@ -157,9 +157,9 @@ PeerManager::PeerManager(const config::Config& config,
     // Set up sync-received blob notification callback (unified fan-out)
     sync_proto_.set_on_blob_ingested(
         [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
-               uint64_t seq, uint32_t size, bool tombstone,
+               uint64_t seq, uint32_t size, bool tombstone, uint64_t expiry_time,
                net::Connection::Ptr source) {
-            on_blob_ingested(ns, hash, seq, size, tombstone, std::move(source));
+            on_blob_ingested(ns, hash, seq, size, tombstone, expiry_time, std::move(source));
         });
 }
 
@@ -716,12 +716,16 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                                  std::span<const uint8_t>(ack_payload), request_id);
                     // Notify all peers about tombstone
                     if (ack.status == engine::IngestStatus::stored) {
+                        uint64_t expiry_time = (blob.ttl > 0)
+                            ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
+                            : 0;
                         on_blob_ingested(
                             blob.namespace_id,
                             ack.blob_hash,
                             ack.seq_num,
                             static_cast<uint32_t>(blob.data.size()),
                             true,      // tombstone
+                            expiry_time,
                             nullptr);  // Client write: notify ALL peers
                     }
                 } else if (result.error.has_value()) {
@@ -1677,12 +1681,16 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
                 if (result.accepted && result.ack.has_value() &&
                     result.ack->status == engine::IngestStatus::stored) {
+                    uint64_t expiry_time = (blob.ttl > 0)
+                        ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
+                        : 0;
                     on_blob_ingested(
                         blob.namespace_id,
                         result.ack->blob_hash,
                         result.ack->seq_num,
                         static_cast<uint32_t>(blob.data.size()),
                         wire::is_tombstone(blob.data),
+                        expiry_time,
                         nullptr);  // Client write: notify ALL peers
                     ++metrics_.ingests;
                 } else if (result.accepted) {
@@ -2954,6 +2962,7 @@ void PeerManager::on_blob_ingested(
     uint64_t seq_num,
     uint32_t blob_size,
     bool is_tombstone,
+    uint64_t expiry_time,
     net::Connection::Ptr source) {
     // Test hook -- fire notification callback if set
     if (on_notification_) {
@@ -2985,6 +2994,20 @@ void PeerManager::on_blob_ingested(
                 co_await conn->send_message(wire::TransportMsgType_Notification,
                                              std::span<const uint8_t>(p));
             }, asio::detached);
+        }
+    }
+
+    // Event-driven expiry: check if new blob expires sooner than current target (D-03, MAINT-03)
+    if (expiry_time > 0) {
+        if (next_expiry_target_ == 0 || expiry_time < next_expiry_target_) {
+            next_expiry_target_ = expiry_time;
+            if (expiry_loop_running_) {
+                // Rearm existing timer
+                if (expiry_timer_) expiry_timer_->cancel();
+            } else {
+                // Spawn new loop (was idle -- no expiring blobs existed)
+                asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
+            }
         }
     }
 }
@@ -3082,6 +3105,9 @@ void PeerManager::handle_blob_fetch_response(net::Connection::Ptr conn, std::vec
                 pending_fetches_.erase(result.ack->blob_hash);
 
                 if (result.ack->status == engine::IngestStatus::stored) {
+                    uint64_t expiry_time = (blob.ttl > 0)
+                        ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
+                        : 0;
                     // Fan-out notification to other peers (source=conn excludes sender)
                     on_blob_ingested(
                         blob.namespace_id,
@@ -3089,6 +3115,7 @@ void PeerManager::handle_blob_fetch_response(net::Connection::Ptr conn, std::vec
                         result.ack->seq_num,
                         static_cast<uint32_t>(blob.data.size()),
                         wire::is_tombstone(blob.data),
+                        expiry_time,
                         conn);  // Source exclusion: don't notify the peer we fetched from
                     ++metrics_.ingests;
                 } else {

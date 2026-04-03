@@ -85,12 +85,16 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
             if (result.ack.has_value() &&
                 result.ack->status == engine::IngestStatus::stored &&
                 on_blob_ingested_) {
+                uint64_t expiry_time = (blob.ttl > 0)
+                    ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
+                    : 0;
                 on_blob_ingested_(
                     blob.namespace_id,
                     result.ack->blob_hash,
                     result.ack->seq_num,
                     static_cast<uint32_t>(blob.data.size()),
                     wire::is_tombstone(blob.data),
+                    expiry_time,
                     source);
             }
         } else if (result.error.has_value()) {

@@ -57,13 +57,14 @@ public:
         const std::vector<std::array<uint8_t, 32>>& hashes);
 
     /// Callback invoked after a blob is successfully ingested during sync.
-    /// Parameters: namespace_id, blob_hash, seq_num, blob_data_size, is_tombstone, source.
+    /// Parameters: namespace_id, blob_hash, seq_num, blob_data_size, is_tombstone, expiry_time, source.
     using OnBlobIngested = std::function<void(
         const std::array<uint8_t, 32>& namespace_id,
         const std::array<uint8_t, 32>& blob_hash,
         uint64_t seq_num,
         uint32_t blob_data_size,
         bool is_tombstone,
+        uint64_t expiry_time,
         std::shared_ptr<net::Connection> source)>;
 
     /// Set the callback for successful sync blob ingests (pub/sub notifications).
