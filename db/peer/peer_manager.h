@@ -189,6 +189,20 @@ public:
     /// For testing only -- allows capturing notification events.
     void set_on_notification(NotificationCallback cb) { on_notification_ = std::move(cb); }
 
+    // Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
+    /// BlobNotify (type 59) to all TCP peers + Notification (type 21) to subscribed clients.
+    /// Called after every successful ingest (Data, Delete, or sync).
+    /// Also handles event-driven expiry timer rearm (MAINT-03).
+    /// @param source Connection that originated the blob (nullptr for client writes via relay/UDS).
+    void on_blob_ingested(
+        const std::array<uint8_t, 32>& namespace_id,
+        const std::array<uint8_t, 32>& blob_hash,
+        uint64_t seq_num,
+        uint32_t blob_size,
+        bool is_tombstone,
+        uint64_t expiry_time,
+        net::Connection::Ptr source);
+
 private:
     // Server callbacks
     void on_peer_connected(net::Connection::Ptr conn);
@@ -262,19 +276,6 @@ private:
 
     // Storage compaction (periodic timer)
     asio::awaitable<void> compaction_loop();
-
-    // Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
-    /// BlobNotify (type 59) to all TCP peers + Notification (type 21) to subscribed clients.
-    /// Called after every successful ingest (Data, Delete, or sync).
-    /// @param source Connection that originated the blob (nullptr for client writes via relay/UDS).
-    void on_blob_ingested(
-        const std::array<uint8_t, 32>& namespace_id,
-        const std::array<uint8_t, 32>& blob_hash,
-        uint64_t seq_num,
-        uint32_t blob_size,
-        bool is_tombstone,
-        uint64_t expiry_time,
-        net::Connection::Ptr source);
 
     // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
     /// Handle incoming BlobNotify: dedup check, send BlobFetch if needed.
