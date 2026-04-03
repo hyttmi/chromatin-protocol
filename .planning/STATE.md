@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: "Completed 81-01-PLAN.md (Storage::get_earliest_expiry)"
-last_updated: "2026-04-03T14:15:14.126Z"
+stopped_at: Completed 81-02-PLAN.md
+last_updated: "2026-04-03T15:47:04.261Z"
 last_activity: 2026-04-03
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
   percent: 29
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Phase: 81 (3 of 7 in v2.0.0) -- Event-Driven Expiry
-Plan: 1 of 2 in current phase
-Status: Executing
+Plan: 2 of 2 in current phase
+Status: Ready to execute
 Last activity: 2026-04-03
 
 Progress: [███░░░░░░░] 29%
@@ -46,6 +46,8 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
 - [Phase 81]: Storage::get_earliest_expiry() uses read-only MDBX cursor for O(1) min-expiry query
+- [Phase 81]: on_blob_ingested moved to public API for test access and expiry rearm visibility
+- [Phase 81]: expiry_scan_interval_seconds deprecated but kept for config file compat
 
 ### Pending Todos
 
@@ -64,7 +66,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-03T14:15:14.123Z
+Last session: 2026-04-03T15:47:04.258Z
 Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Completed 81-01-PLAN.md (Storage::get_earliest_expiry)
+Stopped at: Completed 81-02-PLAN.md
 Resume file: None

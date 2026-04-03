@@ -171,7 +171,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 
 - [x] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter (completed 2026-04-02)
 - [x] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop (completed 2026-04-03)
-- [ ] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan
+- [x] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan (completed 2026-04-03)
 - [ ] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup
 - [ ] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection
 - [ ] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration
@@ -220,7 +220,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
-- [ ] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
+- [x] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
 
 ### Phase 82: Reconcile-on-Connect & Safety Net
 **Goal**: Peers catch up on missed blobs via full reconciliation on connect, with a long-interval safety net and graceful cursor lifecycle
@@ -275,7 +275,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 |-------|----------------|--------|-----------|
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
 | 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
-| 81. Event-Driven Expiry | 1/2 | In Progress|  |
+| 81. Event-Driven Expiry | 2/2 | Complete   | 2026-04-03 |
 | 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |

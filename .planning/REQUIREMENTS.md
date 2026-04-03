@@ -21,8 +21,8 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 ### Maintenance
 
 - [x] **MAINT-01**: Expiry uses a next-expiry timer that fires at exactly the earliest blob's expiry time (O(1) via MDBX cursor)
-- [ ] **MAINT-02**: After processing an expired blob, timer rearms to the next earliest expiry (chain processing)
-- [ ] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
+- [x] **MAINT-02**: After processing an expired blob, timer rearms to the next earliest expiry (chain processing)
+- [x] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
 - [ ] **MAINT-04**: Peer cursors are compacted immediately when a peer disconnects (with 5-minute grace period for transient disconnects)
 - [ ] **MAINT-05**: Full reconciliation runs on peer connect/reconnect (catch-up path)
 - [ ] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
@@ -94,8 +94,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PUSH-07 | Phase 79 | Complete |
 | PUSH-08 | Phase 79 | Complete |
 | MAINT-01 | Phase 81 | Complete |
-| MAINT-02 | Phase 81 | Pending |
-| MAINT-03 | Phase 81 | Pending |
+| MAINT-02 | Phase 81 | Complete |
+| MAINT-03 | Phase 81 | Complete |
 | MAINT-04 | Phase 82 | Pending |
 | MAINT-05 | Phase 82 | Pending |
 | MAINT-06 | Phase 82 | Pending |
