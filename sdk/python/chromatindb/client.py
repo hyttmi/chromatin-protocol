@@ -10,6 +10,7 @@ All transport internals are private per D-03.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from types import TracebackType
 from typing import TYPE_CHECKING
@@ -51,6 +52,13 @@ from chromatindb._codec import (
 )
 from chromatindb._envelope import envelope_decrypt, envelope_encrypt
 from chromatindb._handshake import perform_handshake
+from chromatindb._reconnect import (
+    ConnectionState,
+    OnDisconnect,
+    OnReconnect,
+    backoff_delay,
+    invoke_callback,
+)
 from chromatindb._transport import Transport
 from chromatindb.crypto import build_signing_input
 from chromatindb.exceptions import (
@@ -79,6 +87,9 @@ from chromatindb.types import (
 )
 from chromatindb.wire import TransportMsgType
 
+log = logging.getLogger(__name__)
+
+
 class ChromatinClient:
     """Async client for chromatindb relay.
 
@@ -88,6 +99,19 @@ class ChromatinClient:
     def __init__(self, transport: Transport) -> None:
         self._transport = transport
         self._subscriptions: set[bytes] = set()
+        # Reconnect state (overridden by connect() classmethod)
+        self._host: str = ""
+        self._port: int = 0
+        self._identity: Identity | None = None
+        self._timeout: float = 10.0
+        self._auto_reconnect: bool = False
+        self._on_disconnect: OnDisconnect | None = None
+        self._on_reconnect: OnReconnect | None = None
+        self._state = ConnectionState.CONNECTED
+        self._reconnect_task: asyncio.Task | None = None
+        self._connected_event = asyncio.Event()
+        self._connected_event.set()  # Already connected
+        self._monitor_task: asyncio.Task | None = None
 
     @classmethod
     def connect(
@@ -97,6 +121,9 @@ class ChromatinClient:
         identity: Identity,
         *,
         timeout: float = 10.0,
+        auto_reconnect: bool = True,
+        on_disconnect: OnDisconnect | None = None,
+        on_reconnect: OnReconnect | None = None,
     ) -> ChromatinClient:
         """Create a connection context manager.
 
@@ -105,6 +132,10 @@ class ChromatinClient:
             port: Relay port.
             identity: Client ML-DSA-87 identity.
             timeout: Handshake timeout in seconds (per D-07, default 10s).
+            auto_reconnect: If True, transparently reconnect on connection loss.
+            on_disconnect: Callback invoked when connection is lost.
+            on_reconnect: Callback invoked after successful reconnect,
+                receives (attempt_count, downtime_seconds).
 
         Returns:
             Async context manager that yields ChromatinClient.
@@ -120,9 +151,18 @@ class ChromatinClient:
         client._timeout = timeout
         client._transport = None  # type: ignore[assignment]
         client._subscriptions: set[bytes] = set()
+        client._auto_reconnect = auto_reconnect
+        client._on_disconnect = on_disconnect
+        client._on_reconnect = on_reconnect
+        client._state = ConnectionState.DISCONNECTED
+        client._reconnect_task = None
+        client._connected_event = asyncio.Event()
+        client._monitor_task = None
         return client
 
     async def __aenter__(self) -> ChromatinClient:
+        # Initial connection failure raises immediately (no auto-reconnect
+        # until first successful connect, per Research Pitfall 5).
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(
@@ -166,6 +206,13 @@ class ChromatinClient:
             recv_counter,
         )
         self._transport.start()
+        self._state = ConnectionState.CONNECTED
+        self._connected_event.set()
+        # Start connection monitor if auto_reconnect enabled
+        if self._auto_reconnect:
+            self._monitor_task = asyncio.get_event_loop().create_task(
+                self._connection_monitor()
+            )
         return self
 
     async def __aexit__(
@@ -174,6 +221,25 @@ class ChromatinClient:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        self._state = ConnectionState.CLOSING
+        self._connected_event.clear()
+        # Cancel reconnect task if running
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
+        # Cancel monitor task
+        if self._monitor_task is not None:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+        # Existing cleanup
         if self._transport is not None:
             # D-06: auto-cleanup subscriptions on disconnect
             if self._subscriptions:
@@ -185,12 +251,172 @@ class ChromatinClient:
                 except Exception:
                     pass  # Best-effort on disconnect
                 self._subscriptions.clear()
-            await self._transport.send_goodbye()
+            try:
+                await self._transport.send_goodbye()
+            except Exception:
+                pass
             await self._transport.stop()
 
     async def ping(self) -> None:
         """Send Ping and wait for Pong. Raises ConnectionError if disconnected."""
         await self._transport.send_ping()
+
+    # ------------------------------------------------------------------
+    # Connection state and reconnect
+    # ------------------------------------------------------------------
+
+    @property
+    def connection_state(self) -> ConnectionState:
+        """Current connection state."""
+        return self._state
+
+    async def wait_connected(self, timeout: float | None = None) -> bool:
+        """Wait until connected. Returns True if connected, False on timeout.
+
+        Args:
+            timeout: Maximum seconds to wait. None = wait indefinitely.
+
+        Returns:
+            True if now connected, False if timed out or closing.
+        """
+        if self._state == ConnectionState.CONNECTED:
+            return True
+        if self._state == ConnectionState.CLOSING:
+            return False
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def _connection_monitor(self) -> None:
+        """Watch transport state; trigger reconnect on connection loss."""
+        try:
+            while self._state != ConnectionState.CLOSING:
+                await asyncio.sleep(0.5)
+                if (
+                    self._transport is not None
+                    and self._transport.closed
+                    and self._state == ConnectionState.CONNECTED
+                ):
+                    self._on_connection_lost()
+        except asyncio.CancelledError:
+            return
+
+    def _on_connection_lost(self) -> None:
+        """Handle detected connection loss."""
+        if self._state == ConnectionState.CLOSING:
+            return
+        self._state = ConnectionState.DISCONNECTED
+        self._connected_event.clear()
+        log.info("connection lost, entering reconnect mode")
+        # Fire on_disconnect callback (before reconnect starts)
+        if self._on_disconnect is not None:
+            asyncio.get_event_loop().create_task(
+                invoke_callback(self._on_disconnect)
+            )
+        # Spawn reconnect loop
+        if self._auto_reconnect and self._reconnect_task is None:
+            self._reconnect_task = asyncio.get_event_loop().create_task(
+                self._reconnect_loop()
+            )
+
+    async def _reconnect_loop(self) -> None:
+        """Background reconnect with jittered exponential backoff."""
+        attempt = 0
+        disconnect_time = time.monotonic()
+        try:
+            while self._state == ConnectionState.DISCONNECTED:
+                attempt += 1
+                delay = backoff_delay(attempt, base=1.0, cap=30.0)
+                log.debug("reconnect attempt %d in %.2fs", attempt, delay)
+                await asyncio.sleep(delay)
+
+                if self._state == ConnectionState.CLOSING:
+                    return
+
+                self._state = ConnectionState.CONNECTING
+                try:
+                    await self._do_connect()
+                    self._state = ConnectionState.CONNECTED
+                    self._connected_event.set()
+                    log.info(
+                        "reconnected after %d attempts (%.1fs downtime)",
+                        attempt,
+                        time.monotonic() - disconnect_time,
+                    )
+
+                    await self._restore_subscriptions()
+                    await invoke_callback(
+                        self._on_reconnect,
+                        attempt,
+                        time.monotonic() - disconnect_time,
+                    )
+
+                    # Restart connection monitor
+                    if self._monitor_task is not None:
+                        self._monitor_task.cancel()
+                        try:
+                            await self._monitor_task
+                        except asyncio.CancelledError:
+                            pass
+                    self._monitor_task = asyncio.get_event_loop().create_task(
+                        self._connection_monitor()
+                    )
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.debug("reconnect attempt %d failed: %s", attempt, exc)
+                    self._state = ConnectionState.DISCONNECTED
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._reconnect_task = None
+
+    async def _do_connect(self) -> None:
+        """Establish new TCP connection, perform PQ handshake, create Transport."""
+        # Teardown old transport
+        if self._transport is not None:
+            try:
+                await self._transport.stop()
+            except Exception:
+                pass
+            self._transport = None
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(
+                self._host, self._port, limit=4 * 1024 * 1024
+            ),
+            timeout=self._timeout,
+        )
+        sock = writer.transport.get_extra_info("socket")
+        if sock is not None:
+            import socket
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        result = await asyncio.wait_for(
+            perform_handshake(reader, writer, self._identity),
+            timeout=self._timeout,
+        )
+        send_key, recv_key, send_counter, recv_counter, _ = result
+
+        self._transport = Transport(
+            reader, writer, send_key, recv_key, send_counter, recv_counter
+        )
+        self._transport.start()
+
+    async def _restore_subscriptions(self) -> None:
+        """Re-subscribe to all namespaces tracked in _subscriptions."""
+        for ns in list(self._subscriptions):
+            try:
+                payload = encode_subscribe([ns])
+                await self._transport.send_message(
+                    TransportMsgType.Subscribe, payload
+                )
+                log.debug("re-subscribed to %s", ns.hex())
+            except Exception:
+                log.warning("failed to re-subscribe to %s", ns.hex())
 
     # ------------------------------------------------------------------
     # Private helper
@@ -726,6 +952,7 @@ class ChromatinClient:
 
         Yields Notification for all subscribed namespaces in a single
         merged stream. Each notification carries its namespace.
+        Survives reconnections when auto_reconnect is enabled.
 
         Usage:
             async for notif in conn.notifications():
@@ -734,13 +961,22 @@ class ChromatinClient:
         Yields:
             Notification objects.
         """
-        while not self._transport.closed:
+        while self._state != ConnectionState.CLOSING:
+            if self._transport is None or self._transport.closed:
+                if not self._auto_reconnect:
+                    return
+                # Wait for reconnect
+                await asyncio.sleep(0.5)
+                continue
             try:
                 msg_type, payload, _ = await asyncio.wait_for(
                     self._transport.notifications.get(),
                     timeout=1.0,
                 )
             except asyncio.TimeoutError:
+                continue
+            except Exception:
+                # Transport died mid-read
                 continue
             if msg_type == TransportMsgType.Notification:
                 yield decode_notification(payload)
