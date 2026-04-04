@@ -243,7 +243,9 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Every connected TCP peer receives a Ping message every 30 seconds from the node
   2. A peer that fails to respond to 2 consecutive keepalive cycles (60 seconds of silence) is disconnected by the node
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 83-01-PLAN.md -- Connection last_recv_time_ + PeerManager keepalive_loop + replace inactivity_check_loop
 
 ### Phase 84: SDK Auto-Reconnect
 **Goal**: The Python SDK transparently recovers from connection loss, restoring subscriptions and notifying the application
@@ -280,6 +282,6 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
-| 83. Bidirectional Keepalive | 0/TBD | Not started | - |
+| 83. Bidirectional Keepalive | 0/1 | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
