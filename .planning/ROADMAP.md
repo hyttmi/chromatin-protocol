@@ -256,7 +256,10 @@ Plans:
   2. After successful reconnect, all previously active pub/sub subscriptions are automatically re-subscribed
   3. The application receives a reconnection event/callback that it can use for catch-up logic (e.g., re-query missed data)
   4. Calling client.close() does not trigger auto-reconnect (intentional disconnect is distinguished from connection loss)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 84-01-PLAN.md -- ConnectionState enum + backoff + ChromatinClient reconnect refactor
+- [ ] 84-02-PLAN.md -- Comprehensive reconnect unit tests
 
 ### Phase 85: Documentation Refresh
 **Goal**: All documentation accurately describes the v2.0.0 event-driven sync model, new wire types, and SDK reconnect behavior
@@ -283,5 +286,5 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
 | 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
-| 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
+| 84. SDK Auto-Reconnect | 0/2 | Not started | - |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
