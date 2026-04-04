@@ -877,12 +877,28 @@ TEST_CASE("validate_config: max_peers=0 throws", "[config][validation]") {
     }
 }
 
-TEST_CASE("validate_config: sync_interval_seconds=0 throws", "[config][validation]") {
+TEST_CASE("validate_config: safety_net_interval_seconds below minimum throws", "[config][validation]") {
     Config cfg;
-    cfg.sync_interval_seconds = 0;
-    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
-    try { validate_config(cfg); } catch (const std::runtime_error& e) {
-        REQUIRE_THAT(e.what(), ContainsSubstring("sync_interval_seconds"));
+
+    SECTION("zero throws") {
+        cfg.safety_net_interval_seconds = 0;
+        REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+        try { validate_config(cfg); } catch (const std::runtime_error& e) {
+            REQUIRE_THAT(e.what(), ContainsSubstring("safety_net_interval_seconds"));
+        }
+    }
+
+    SECTION("59 throws") {
+        cfg.safety_net_interval_seconds = 59;
+        REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+        try { validate_config(cfg); } catch (const std::runtime_error& e) {
+            REQUIRE_THAT(e.what(), ContainsSubstring("safety_net_interval_seconds"));
+        }
+    }
+
+    SECTION("60 passes") {
+        cfg.safety_net_interval_seconds = 60;
+        REQUIRE_NOTHROW(validate_config(cfg));
     }
 }
 
@@ -989,13 +1005,13 @@ TEST_CASE("validate_config: bind_address port=70000 throws", "[config][validatio
 TEST_CASE("validate_config: multiple errors accumulates all", "[config][validation]") {
     Config cfg;
     cfg.max_peers = 0;
-    cfg.sync_interval_seconds = 0;
+    cfg.safety_net_interval_seconds = 0;
     cfg.log_level = "verbose";
     REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
     try { validate_config(cfg); } catch (const std::runtime_error& e) {
         std::string msg = e.what();
         REQUIRE_THAT(msg, ContainsSubstring("max_peers"));
-        REQUIRE_THAT(msg, ContainsSubstring("sync_interval_seconds"));
+        REQUIRE_THAT(msg, ContainsSubstring("safety_net_interval_seconds"));
         REQUIRE_THAT(msg, ContainsSubstring("log_level"));
     }
 }

@@ -68,7 +68,7 @@ using chromatindb::sync::SyncStats;
 TEST_CASE("Config Phase 5 defaults", "[sync][config]") {
     Config cfg;
     REQUIRE(cfg.max_peers == 32);
-    REQUIRE(cfg.sync_interval_seconds == 60);
+    REQUIRE(cfg.safety_net_interval_seconds == 600);
 }
 
 TEST_CASE("Config Phase 5 custom values from JSON", "[sync][config]") {
@@ -79,12 +79,12 @@ TEST_CASE("Config Phase 5 custom values from JSON", "[sync][config]") {
     fs::create_directories(tmp.path);
     {
         std::ofstream f(config_file);
-        f << R"({"max_peers": 64, "sync_interval_seconds": 30})";
+        f << R"({"max_peers": 64, "safety_net_interval_seconds": 300})";
     }
 
     auto cfg = chromatindb::config::load_config(config_file);
     REQUIRE(cfg.max_peers == 64);
-    REQUIRE(cfg.sync_interval_seconds == 30);
+    REQUIRE(cfg.safety_net_interval_seconds == 300);
 }
 
 // ============================================================================
