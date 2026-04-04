@@ -25,8 +25,8 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 - [x] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
 - [ ] **MAINT-04**: Peer cursors are compacted immediately when a peer disconnects (with 5-minute grace period for transient disconnects)
 - [ ] **MAINT-05**: Full reconciliation runs on peer connect/reconnect (catch-up path)
-- [ ] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
-- [ ] **MAINT-07**: sync_interval_seconds config field repurposed to safety_net_interval_seconds with 600s default
+- [x] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
+- [x] **MAINT-07**: sync_interval_seconds config field repurposed to safety_net_interval_seconds with 600s default
 
 ### Connections
 
@@ -98,8 +98,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MAINT-03 | Phase 81 | Complete |
 | MAINT-04 | Phase 82 | Pending |
 | MAINT-05 | Phase 82 | Pending |
-| MAINT-06 | Phase 82 | Pending |
-| MAINT-07 | Phase 82 | Pending |
+| MAINT-06 | Phase 82 | Complete |
+| MAINT-07 | Phase 82 | Complete |
 | CONN-01 | Phase 83 | Pending |
 | CONN-02 | Phase 83 | Pending |
 | CONN-03 | Phase 84 | Pending |

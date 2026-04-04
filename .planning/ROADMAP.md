@@ -233,7 +233,7 @@ Plans:
   4. After the 5-minute grace period, disconnected peer cursors are compacted (freed)
 **Plans**: 2 plans
 Plans:
-- [ ] 82-01-PLAN.md -- Config rename (sync_interval_seconds -> safety_net_interval_seconds) + safety-net timer adaptation
+- [x] 82-01-PLAN.md -- Config rename (sync_interval_seconds -> safety_net_interval_seconds) + safety-net timer adaptation
 - [ ] 82-02-PLAN.md -- Cursor grace period + reconnect logic + compaction awareness
 
 ### Phase 83: Bidirectional Keepalive
@@ -279,7 +279,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
 | 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
-| 82. Reconcile-on-Connect & Safety Net | 0/2 | Not started | - |
+| 82. Reconcile-on-Connect & Safety Net | 1/2 | In Progress|  |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
