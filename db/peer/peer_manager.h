@@ -90,6 +90,13 @@ struct ArrayHash32 {
     }
 };
 
+/// Tracks when a peer disconnected for cursor grace period (Phase 82 MAINT-04).
+/// Cursors persist in MDBX -- we only need the disconnect timestamp to decide
+/// whether to reuse them (within 5 min) or discard them (after 5 min).
+struct DisconnectedPeerState {
+    uint64_t disconnect_time;  // steady_clock milliseconds since epoch
+};
+
 /// Manages peer connections, sync scheduling, and connection policies.
 ///
 /// Wraps Server and adds:
@@ -351,6 +358,12 @@ private:
     // Maps blob_hash -> connection that we sent the BlobFetch to.
     // Cleaned on: successful ingest (by hash), peer disconnect (by connection).
     std::unordered_map<std::array<uint8_t, 32>, net::Connection::Ptr, ArrayHash32> pending_fetches_;
+    // Phase 82: Track disconnected peers for cursor grace period (MAINT-04)
+    // Map: SHA3-256(peer_pubkey) -> disconnect timestamp
+    // Cursors live in MDBX; this map only tracks WHEN they disconnected.
+    std::unordered_map<std::array<uint8_t, 32>, DisconnectedPeerState, ArrayHash32>
+        disconnected_peers_;
+    static constexpr uint64_t CURSOR_GRACE_PERIOD_MS = 5 * 60 * 1000;  // 5 minutes
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;
 };

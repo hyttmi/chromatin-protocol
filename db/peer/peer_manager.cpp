@@ -453,6 +453,25 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
         }
     }
 
+    // Phase 82 MAINT-04/MAINT-05: Check cursor grace period for reconnecting peers (D-01, D-02)
+    {
+        auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+        auto it = disconnected_peers_.find(peer_hash);
+        if (it != disconnected_peers_.end()) {
+            auto now_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            if (now_ms - it->second.disconnect_time <= CURSOR_GRACE_PERIOD_MS) {
+                spdlog::info("peer {} reconnected within grace period, cursors preserved",
+                             ns_hex);
+            } else {
+                spdlog::info("peer {} reconnected after grace period, cursors expired",
+                             ns_hex);
+            }
+            disconnected_peers_.erase(it);
+        }
+    }
+
     // Only the initiator (outbound) side triggers sync on connect.
     // The responder (inbound) side waits for SyncRequest from the peer.
     // This avoids both sides sending SyncRequest simultaneously.
@@ -479,6 +498,17 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
         } else {
             ++it;
         }
+    }
+
+    // Phase 82 MAINT-04: Record disconnect time for cursor grace period (D-01)
+    // Actual cursors persist in MDBX -- we just track when the peer left
+    // so on_peer_connected can decide: reuse cursors (< 5 min) or discard.
+    {
+        auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
+        auto now_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        disconnected_peers_[peer_hash] = DisconnectedPeerState{now_ms};
     }
 
     // Remove from peers
@@ -2642,6 +2672,27 @@ asio::awaitable<void> PeerManager::sync_timer_loop() {
         if (ec || stopping_) co_return;
 
         co_await sync_all_peers();
+
+        // Phase 82 D-02: Clean stale disconnected peer entries during safety-net cycle.
+        // Also delete their MDBX cursors so they are freed within one safety-net interval
+        // (~600s) rather than waiting for cursor_compaction_loop (6h). This ensures SC4
+        // ("after 5-minute grace period, cursors are compacted") is met promptly.
+        // Note: safety-net interval (600s) naturally exceeds sync_cooldown (30s) per D-04,
+        // so cooldown bypass is inherently satisfied -- no special bypass logic needed.
+        {
+            auto now_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            for (auto it = disconnected_peers_.begin(); it != disconnected_peers_.end(); ) {
+                if (now_ms - it->second.disconnect_time > CURSOR_GRACE_PERIOD_MS) {
+                    // Delete MDBX cursors for this permanently-gone peer
+                    storage_.delete_peer_cursors(it->first);
+                    it = disconnected_peers_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
     }
 }
 
@@ -3660,6 +3711,17 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
             if (peer.connection && !peer.connection->peer_pubkey().empty()) {
                 auto hash = crypto::sha3_256(peer.connection->peer_pubkey());
                 connected.push_back(hash);
+            }
+        }
+        // Phase 82: Also preserve cursors for recently-disconnected peers (grace period)
+        {
+            auto now_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            for (const auto& [hash, state] : disconnected_peers_) {
+                if (now_ms - state.disconnect_time <= CURSOR_GRACE_PERIOD_MS) {
+                    connected.push_back(hash);
+                }
             }
         }
         auto removed = storage_.cleanup_stale_cursors(connected);
