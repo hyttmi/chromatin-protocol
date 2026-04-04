@@ -262,10 +262,9 @@ void PeerManager::start() {
         asio::co_spawn(ioc_, compaction_loop(), asio::detached);
     }
 
-    // Inactivity sweep: only spawn when enabled (non-zero timeout)
-    if (config_.inactivity_timeout_seconds > 0) {
-        asio::co_spawn(ioc_, inactivity_check_loop(), asio::detached);
-    }
+    // Keepalive: unconditionally send Ping to all TCP peers every 30s,
+    // disconnect peers silent for 60s (Phase 83 CONN-01, CONN-02)
+    asio::co_spawn(ioc_, keepalive_loop(), asio::detached);
 }
 
 void PeerManager::cancel_all_timers() {
@@ -276,7 +275,7 @@ void PeerManager::cancel_all_timers() {
     if (metrics_timer_) metrics_timer_->cancel();
     if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
     if (compaction_timer_) compaction_timer_->cancel();
-    if (inactivity_timer_) inactivity_timer_->cancel();
+    if (keepalive_timer_) keepalive_timer_->cancel();
 }
 
 void PeerManager::stop() {
@@ -3767,33 +3766,51 @@ asio::awaitable<void> PeerManager::compaction_loop() {
     }
 }
 
-asio::awaitable<void> PeerManager::inactivity_check_loop() {
+asio::awaitable<void> PeerManager::keepalive_loop() {
+    static constexpr auto KEEPALIVE_INTERVAL = std::chrono::seconds(30);
+    static constexpr auto KEEPALIVE_TIMEOUT  = std::chrono::seconds(60);
+
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
-        inactivity_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(30));
+        keepalive_timer_ = &timer;
+        timer.expires_after(KEEPALIVE_INTERVAL);
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
-        inactivity_timer_ = nullptr;
+        keepalive_timer_ = nullptr;
         if (ec || stopping_) co_return;
 
-        auto now_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        uint64_t timeout_ms = static_cast<uint64_t>(config_.inactivity_timeout_seconds) * 1000;
+        auto now = std::chrono::steady_clock::now();
 
-        std::vector<net::Connection::Ptr> to_close;
+        // Snapshot connections -- peers_ may change across co_await points
+        std::vector<net::Connection::Ptr> tcp_peers;
         for (const auto& peer : peers_) {
-            if (peer.last_message_time > 0 &&
-                (now_ms - peer.last_message_time) > timeout_ms) {
-                spdlog::warn("inactivity timeout: disconnecting {} ({}s idle)",
-                             peer.address,
-                             (now_ms - peer.last_message_time) / 1000);
-                to_close.push_back(peer.connection);
+            if (!peer.connection->is_uds()) {
+                tcp_peers.push_back(peer.connection);
+            }
+        }
+
+        // Phase 1: Check for dead peers (before sending new Pings)
+        std::vector<net::Connection::Ptr> to_close;
+        for (const auto& conn : tcp_peers) {
+            auto silence = now - conn->last_recv_time();
+            if (silence > KEEPALIVE_TIMEOUT) {
+                auto secs = std::chrono::duration_cast<std::chrono::seconds>(silence).count();
+                spdlog::warn("keepalive: disconnecting {} ({}s silent)",
+                             conn->remote_address(), secs);
+                to_close.push_back(conn);
             }
         }
         for (auto& conn : to_close) {
             conn->close();
+        }
+
+        // Phase 2: Send Ping to remaining live TCP peers
+        for (const auto& conn : tcp_peers) {
+            if (std::find(to_close.begin(), to_close.end(), conn) != to_close.end()) {
+                continue;  // Already closed
+            }
+            std::span<const uint8_t> empty{};
+            co_await conn->send_message(wire::TransportMsgType_Ping, empty);
         }
     }
 }

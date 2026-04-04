@@ -230,6 +230,7 @@ if(BUILD_TESTING)
     tests/net/test_uds.cpp
     tests/peer/test_peer_manager.cpp
     tests/peer/test_event_expiry.cpp
+    tests/peer/test_keepalive.cpp
     tests/storage/test_storage.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp

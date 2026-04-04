@@ -272,8 +272,8 @@ private:
     // Cursor compaction (prune cursors for disconnected peers)
     asio::awaitable<void> cursor_compaction_loop();
 
-    // Inactivity detection (disconnect dead peers)
-    asio::awaitable<void> inactivity_check_loop();
+    // Keepalive: send Ping to TCP peers, disconnect silent ones (Phase 83)
+    asio::awaitable<void> keepalive_loop();
 
     // Helpers
     uint64_t compute_uptime_seconds() const;
@@ -337,7 +337,7 @@ private:
     asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
     asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
-    asio::steady_timer* inactivity_timer_ = nullptr;         // Timer-cancel pattern for inactivity sweep
+    asio::steady_timer* keepalive_timer_ = nullptr;           // Timer-cancel pattern for keepalive loop
     asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)

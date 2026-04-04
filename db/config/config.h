@@ -42,7 +42,7 @@ struct Config {
     uint32_t log_max_size_mb = 10;                   // Max size per log file in MiB before rotation
     uint32_t log_max_files = 3;                      // Max number of rotated log files
     std::string log_format = "text";                 // Log format: "text" or "json"
-    uint32_t inactivity_timeout_seconds = 120;       // 0 = disabled, minimum 30 when enabled
+    uint32_t inactivity_timeout_seconds = 120;       // Deprecated (v2.0.0): ignored, keepalive replaces inactivity detection. Kept for config file compatibility.
     uint32_t expiry_scan_interval_seconds = 60;     // Deprecated (v2.0.0): ignored, expiry is event-driven. Kept for config file compatibility.
     uint32_t compaction_interval_hours = 6;         // Compaction interval in hours (0 = disabled, minimum 1 when enabled)
     std::string uds_path;                           // Unix domain socket path (empty = disabled)
