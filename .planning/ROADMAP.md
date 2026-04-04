@@ -286,5 +286,5 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
 | 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
-| 84. SDK Auto-Reconnect | 2/2 | Complete   | 2026-04-04 |
+| 84. SDK Auto-Reconnect | 2/2 | Complete    | 2026-04-04 |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
