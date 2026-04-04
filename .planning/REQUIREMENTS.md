@@ -30,8 +30,8 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 
 ### Connections
 
-- [ ] **CONN-01**: Node sends Ping to all TCP peers every 30 seconds (bidirectional keepalive)
-- [ ] **CONN-02**: Peer that doesn't respond within 2 missed keepalive cycles is disconnected
+- [x] **CONN-01**: Node sends Ping to all TCP peers every 30 seconds (bidirectional keepalive)
+- [x] **CONN-02**: Peer that doesn't respond within 2 missed keepalive cycles is disconnected
 - [ ] **CONN-03**: SDK ChromatinClient auto-reconnects on connection loss with jittered exponential backoff (1s-30s)
 - [ ] **CONN-04**: SDK restores pub/sub subscriptions after successful reconnect
 - [ ] **CONN-05**: SDK exposes a reconnection event/callback for application-level catch-up
@@ -100,8 +100,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MAINT-05 | Phase 82 | Complete |
 | MAINT-06 | Phase 82 | Complete |
 | MAINT-07 | Phase 82 | Complete |
-| CONN-01 | Phase 83 | Pending |
-| CONN-02 | Phase 83 | Pending |
+| CONN-01 | Phase 83 | Complete |
+| CONN-02 | Phase 83 | Complete |
 | CONN-03 | Phase 84 | Pending |
 | CONN-04 | Phase 84 | Pending |
 | CONN-05 | Phase 84 | Pending |

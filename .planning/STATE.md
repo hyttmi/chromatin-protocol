@@ -8,10 +8,10 @@ last_updated: "2026-04-04T15:28:19.884Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 9
-  completed_plans: 9
-  percent: 0
+  completed_plans: 10
+  percent: 71
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 82 — reconcile-on-connect-safety-net
+**Current focus:** Phase 83 -- bidirectional-keepalive
 
 ## Current Position
 
-Phase: 83
-Plan: Not started
-Status: Executing Phase 82
+Phase: 83 (5 of 7 in v2.0.0) -- bidirectional-keepalive
+Plan: 1 of 1 complete
+Status: Phase 83 complete
 Last activity: 2026-04-04
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [#######░░░] 71%
 
 ## Accumulated Context
 
@@ -45,6 +45,8 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Event-driven expiry (Phase 81) independent of push sync -- parallelizable
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
+- Phase 83: keepalive_loop unconditionally spawned; inactivity_timeout_seconds deprecated but kept for config parse compat
+- Phase 83: last_recv_time_ on Connection (not PeerInfo) -- transport-level concern, updated on every decoded message
 
 ### Pending Todos
 
@@ -63,7 +65,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-04T15:28:19.868Z
-Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Phase 83 context gathered
-Resume file: .planning/phases/83-bidirectional-keepalive/83-CONTEXT.md
+Last session: 2026-04-04
+Last activity: 2026-04-04 -- Phase 83 bidirectional-keepalive complete (1 plan)
+Stopped at: Completed 83-01-PLAN.md
+Resume file: None
