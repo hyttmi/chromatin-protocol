@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
-status: ready_to_plan
-stopped_at: Roadmap created, ready to plan Phase 79
-last_updated: "2026-04-02"
-last_activity: 2026-04-02
+status: executing
+stopped_at: Completed 84-01-PLAN.md
+last_updated: "2026-04-04T17:14:13.828Z"
+last_activity: 2026-04-04
 progress:
   total_phases: 7
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  completed_phases: 1
+  total_plans: 1
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 79 -- Send Queue & Push Notifications
+**Current focus:** Phase 84 — sdk-auto-reconnect
 
 ## Current Position
 
-Phase: 79 (1 of 7 in v2.0.0) -- Send Queue & Push Notifications
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-04-02 -- Roadmap created for v2.0.0 (7 phases, 28 requirements)
+Phase: 84 (sdk-auto-reconnect) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-04-04
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -45,6 +45,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Event-driven expiry (Phase 81) independent of push sync -- parallelizable
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
+- [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
 
 ### Pending Todos
 
@@ -63,7 +64,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02
+Last session: 2026-04-04T17:14:13.825Z
 Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Roadmap created, ready to plan Phase 79
+Stopped at: Completed 84-01-PLAN.md
 Resume file: None

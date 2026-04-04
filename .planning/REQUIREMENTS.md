@@ -9,39 +9,39 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 
 ### Push Sync
 
-- [ ] **PUSH-01**: Node notifies all connected peers immediately when a new blob is ingested (from client write or peer sync)
-- [ ] **PUSH-02**: Notification contains namespace, blob hash, sequence number, size, and tombstone flag (77-byte payload)
-- [ ] **PUSH-03**: Notifications are suppressed during active reconciliation to prevent notification storms
-- [ ] **PUSH-04**: Per-connection send queue serializes all outbound messages to prevent AEAD nonce desync
-- [ ] **PUSH-05**: Peer receiving a BlobNotify can fetch the specific blob via targeted BlobFetch request (skip full reconciliation)
-- [ ] **PUSH-06**: BlobFetch is handled inline in the message loop (no sync session handshake required)
-- [ ] **PUSH-07**: Node does not send BlobNotify back to the peer that originated the blob (source exclusion)
-- [ ] **PUSH-08**: Push notifications are delivered to currently-connected peers only; disconnected peers recover via reconcile-on-connect
+- [x] **PUSH-01**: Node notifies all connected peers immediately when a new blob is ingested (from client write or peer sync)
+- [x] **PUSH-02**: Notification contains namespace, blob hash, sequence number, size, and tombstone flag (77-byte payload)
+- [x] **PUSH-03**: Notifications are suppressed during active reconciliation to prevent notification storms
+- [x] **PUSH-04**: Per-connection send queue serializes all outbound messages to prevent AEAD nonce desync
+- [x] **PUSH-05**: Peer receiving a BlobNotify can fetch the specific blob via targeted BlobFetch request (skip full reconciliation)
+- [x] **PUSH-06**: BlobFetch is handled inline in the message loop (no sync session handshake required)
+- [x] **PUSH-07**: Node does not send BlobNotify back to the peer that originated the blob (source exclusion)
+- [x] **PUSH-08**: Push notifications are delivered to currently-connected peers only; disconnected peers recover via reconcile-on-connect
 
 ### Maintenance
 
-- [ ] **MAINT-01**: Expiry uses a next-expiry timer that fires at exactly the earliest blob's expiry time (O(1) via MDBX cursor)
-- [ ] **MAINT-02**: After processing an expired blob, timer rearms to the next earliest expiry (chain processing)
-- [ ] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
-- [ ] **MAINT-04**: Peer cursors are compacted immediately when a peer disconnects (with 5-minute grace period for transient disconnects)
-- [ ] **MAINT-05**: Full reconciliation runs on peer connect/reconnect (catch-up path)
-- [ ] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
-- [ ] **MAINT-07**: sync_interval_seconds config field repurposed to safety_net_interval_seconds with 600s default
+- [x] **MAINT-01**: Expiry uses a next-expiry timer that fires at exactly the earliest blob's expiry time (O(1) via MDBX cursor)
+- [x] **MAINT-02**: After processing an expired blob, timer rearms to the next earliest expiry (chain processing)
+- [x] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
+- [x] **MAINT-04**: Peer cursors are compacted immediately when a peer disconnects (with 5-minute grace period for transient disconnects)
+- [x] **MAINT-05**: Full reconciliation runs on peer connect/reconnect (catch-up path)
+- [x] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
+- [x] **MAINT-07**: sync_interval_seconds config field repurposed to safety_net_interval_seconds with 600s default
 
 ### Connections
 
-- [ ] **CONN-01**: Node sends Ping to all TCP peers every 30 seconds (bidirectional keepalive)
-- [ ] **CONN-02**: Peer that doesn't respond within 2 missed keepalive cycles is disconnected
-- [ ] **CONN-03**: SDK ChromatinClient auto-reconnects on connection loss with jittered exponential backoff (1s-30s)
-- [ ] **CONN-04**: SDK restores pub/sub subscriptions after successful reconnect
-- [ ] **CONN-05**: SDK exposes a reconnection event/callback for application-level catch-up
+- [x] **CONN-01**: Node sends Ping to all TCP peers every 30 seconds (bidirectional keepalive)
+- [x] **CONN-02**: Peer that doesn't respond within 2 missed keepalive cycles is disconnected
+- [x] **CONN-03**: SDK ChromatinClient auto-reconnects on connection loss with jittered exponential backoff (1s-30s)
+- [x] **CONN-04**: SDK restores pub/sub subscriptions after successful reconnect
+- [x] **CONN-05**: SDK exposes a reconnection event/callback for application-level catch-up
 
 ### Wire Protocol
 
-- [ ] **WIRE-01**: New message type BlobNotify (type 59) — peer-internal push notification
-- [ ] **WIRE-02**: New message type BlobFetch (type 60) — targeted blob request by hash
-- [ ] **WIRE-03**: New message type BlobFetchResponse (type 61) — response with blob data or not-found
-- [ ] **WIRE-04**: Relay message filter updated to block types 59-61 (peer-internal only)
+- [x] **WIRE-01**: New message type BlobNotify (type 59) — peer-internal push notification
+- [x] **WIRE-02**: New message type BlobFetch (type 60) — targeted blob request by hash
+- [x] **WIRE-03**: New message type BlobFetchResponse (type 61) — response with blob data or not-found
+- [x] **WIRE-04**: Relay message filter updated to block types 59-61 (peer-internal only)
 
 ### Documentation
 
@@ -85,30 +85,30 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PUSH-01 | Phase 79 | Pending |
-| PUSH-02 | Phase 79 | Pending |
-| PUSH-03 | Phase 79 | Pending |
-| PUSH-04 | Phase 79 | Pending |
-| PUSH-05 | Phase 80 | Pending |
-| PUSH-06 | Phase 80 | Pending |
-| PUSH-07 | Phase 79 | Pending |
-| PUSH-08 | Phase 79 | Pending |
-| MAINT-01 | Phase 81 | Pending |
-| MAINT-02 | Phase 81 | Pending |
-| MAINT-03 | Phase 81 | Pending |
-| MAINT-04 | Phase 82 | Pending |
-| MAINT-05 | Phase 82 | Pending |
-| MAINT-06 | Phase 82 | Pending |
-| MAINT-07 | Phase 82 | Pending |
-| CONN-01 | Phase 83 | Pending |
-| CONN-02 | Phase 83 | Pending |
-| CONN-03 | Phase 84 | Pending |
-| CONN-04 | Phase 84 | Pending |
-| CONN-05 | Phase 84 | Pending |
-| WIRE-01 | Phase 79 | Pending |
-| WIRE-02 | Phase 80 | Pending |
-| WIRE-03 | Phase 80 | Pending |
-| WIRE-04 | Phase 79 | Pending |
+| PUSH-01 | Phase 79 | Complete |
+| PUSH-02 | Phase 79 | Complete |
+| PUSH-03 | Phase 79 | Complete |
+| PUSH-04 | Phase 79 | Complete |
+| PUSH-05 | Phase 80 | Complete |
+| PUSH-06 | Phase 80 | Complete |
+| PUSH-07 | Phase 79 | Complete |
+| PUSH-08 | Phase 79 | Complete |
+| MAINT-01 | Phase 81 | Complete |
+| MAINT-02 | Phase 81 | Complete |
+| MAINT-03 | Phase 81 | Complete |
+| MAINT-04 | Phase 82 | Complete |
+| MAINT-05 | Phase 82 | Complete |
+| MAINT-06 | Phase 82 | Complete |
+| MAINT-07 | Phase 82 | Complete |
+| CONN-01 | Phase 83 | Complete |
+| CONN-02 | Phase 83 | Complete |
+| CONN-03 | Phase 84 | Complete |
+| CONN-04 | Phase 84 | Complete |
+| CONN-05 | Phase 84 | Complete |
+| WIRE-01 | Phase 79 | Complete |
+| WIRE-02 | Phase 80 | Complete |
+| WIRE-03 | Phase 80 | Complete |
+| WIRE-04 | Phase 79 | Complete |
 | DOC-01 | Phase 85 | Pending |
 | DOC-02 | Phase 85 | Pending |
 | DOC-03 | Phase 85 | Pending |

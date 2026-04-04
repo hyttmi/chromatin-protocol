@@ -169,12 +169,12 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 
 **Milestone Goal:** Replace timer-paced sync with push-based notifications and targeted fetch, achieving sub-second cross-node propagation. Overhaul maintenance from periodic scanning to event-driven processing. Add SDK connection resilience.
 
-- [ ] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter
-- [ ] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop
-- [ ] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan
-- [ ] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup
-- [ ] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection
-- [ ] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration
+- [x] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter (completed 2026-04-02)
+- [x] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop (completed 2026-04-03)
+- [x] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan (completed 2026-04-03)
+- [x] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup (completed 2026-04-04)
+- [x] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection (completed 2026-04-04)
+- [x] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration (completed 2026-04-04)
 - [ ] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0
 
 ## Phase Details
@@ -189,7 +189,11 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   3. During active reconciliation between two peers, neither peer receives BlobNotify messages for blobs ingested via sync (storm suppression)
   4. Two coroutines sending messages on the same connection simultaneously never produce AEAD nonce desync (send queue serialization)
   5. The relay rejects BlobNotify (type 59) from client connections (peer-internal only)
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 79-01-PLAN.md -- Wire type BlobNotify=59 + relay filter
+- [x] 79-02-PLAN.md -- Per-connection send queue with drain coroutine
+- [x] 79-03-PLAN.md -- Unified engine callback + PeerManager BlobNotify fan-out
 
 ### Phase 80: Targeted Blob Fetch
 **Goal**: Peers can fetch a specific blob by hash after receiving a push notification, without triggering full reconciliation
@@ -200,7 +204,10 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   2. BlobFetch is handled inline in the message loop without requiring a sync session handshake
   3. BlobFetchResponse for a non-existent hash returns a not-found status (no error, no disconnect)
   4. A peer that already has the notified blob does not send a BlobFetch (local dedup check)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [x] 80-01-PLAN.md -- Wire types BlobFetch=60 + BlobFetchResponse=61 + relay filter
+- [x] 80-02-PLAN.md -- BlobNotify receive handler + BlobFetch/BlobFetchResponse handlers + dedup + tests
 
 ### Phase 81: Event-Driven Expiry
 **Goal**: Expired blobs are purged at exactly the right time instead of waiting for a periodic scan
@@ -210,7 +217,10 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   1. After the last blob with a given expiry time is ingested, the expiry timer fires at that exact second (not up to 60s later)
   2. Processing one expired blob automatically rearms the timer to the next earliest expiry (chain processing without gaps)
   3. Ingesting a blob with a TTL shorter than the current timer target causes the timer to rearm earlier
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [x] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
+- [x] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
 
 ### Phase 82: Reconcile-on-Connect & Safety Net
 **Goal**: Peers catch up on missed blobs via full reconciliation on connect, with a long-interval safety net and graceful cursor lifecycle
@@ -221,7 +231,10 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   2. A safety-net reconciliation runs every 600 seconds (configurable via safety_net_interval_seconds) as a correctness backstop
   3. When a peer disconnects, its cursors are preserved for 5 minutes; if it reconnects within the grace period, cursors are reused (no full reconciliation needed)
   4. After the 5-minute grace period, disconnected peer cursors are compacted (freed)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [x] 82-01-PLAN.md -- Config rename (sync_interval_seconds -> safety_net_interval_seconds) + safety-net timer adaptation
+- [x] 82-02-PLAN.md -- Cursor grace period + reconnect logic + compaction awareness
 
 ### Phase 83: Bidirectional Keepalive
 **Goal**: Dead TCP connections are detected within 60 seconds via application-level heartbeat
@@ -230,7 +243,9 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 **Success Criteria** (what must be TRUE):
   1. Every connected TCP peer receives a Ping message every 30 seconds from the node
   2. A peer that fails to respond to 2 consecutive keepalive cycles (60 seconds of silence) is disconnected by the node
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [x] 83-01-PLAN.md -- Connection last_recv_time_ + PeerManager keepalive_loop + replace inactivity_check_loop
 
 ### Phase 84: SDK Auto-Reconnect
 **Goal**: The Python SDK transparently recovers from connection loss, restoring subscriptions and notifying the application
@@ -241,7 +256,10 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
   2. After successful reconnect, all previously active pub/sub subscriptions are automatically re-subscribed
   3. The application receives a reconnection event/callback that it can use for catch-up logic (e.g., re-query missed data)
   4. Calling client.close() does not trigger auto-reconnect (intentional disconnect is distinguished from connection loss)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [x] 84-01-PLAN.md -- ConnectionState enum + backoff + ChromatinClient reconnect refactor
+- [ ] 84-02-PLAN.md -- Comprehensive reconnect unit tests
 
 ### Phase 85: Documentation Refresh
 **Goal**: All documentation accurately describes the v2.0.0 event-driven sync model, new wire types, and SDK reconnect behavior
@@ -263,10 +281,10 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 79. Send Queue & Push Notifications | 0/TBD | Not started | - |
-| 80. Targeted Blob Fetch | 0/TBD | Not started | - |
-| 81. Event-Driven Expiry | 0/TBD | Not started | - |
-| 82. Reconcile-on-Connect & Safety Net | 0/TBD | Not started | - |
-| 83. Bidirectional Keepalive | 0/TBD | Not started | - |
-| 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
+| 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
+| 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
+| 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
+| 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
+| 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
+| 84. SDK Auto-Reconnect | 1/1 | Complete   | 2026-04-04 |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
