@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: executing
-stopped_at: Phase 84 context gathered
-last_updated: "2026-04-04T16:46:48.464Z"
+stopped_at: Completed 84-01-PLAN.md
+last_updated: "2026-04-04T17:14:13.828Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 83 — bidirectional-keepalive
+**Current focus:** Phase 84 — sdk-auto-reconnect
 
 ## Current Position
 
-Phase: 84
-Plan: Not started
-Status: Executing Phase 83
+Phase: 84 (sdk-auto-reconnect) — EXECUTING
+Plan: 2 of 2
+Status: Executing plan 84-02
 Last activity: 2026-04-04
 
 Progress: [░░░░░░░░░░] 0%
@@ -45,6 +45,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Event-driven expiry (Phase 81) independent of push sync -- parallelizable
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
+- [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
 
 ### Pending Todos
 
@@ -63,7 +64,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-04T16:46:48.461Z
-Last activity: 2026-04-02 -- Roadmap created for v2.0.0
-Stopped at: Phase 84 context gathered
-Resume file: .planning/phases/84-sdk-auto-reconnect/84-CONTEXT.md
+Last session: 2026-04-04T17:14:13.825Z
+Last activity: 2026-04-04 -- Executing Phase 84
+Stopped at: Completed 84-01-PLAN.md
+Resume file: None

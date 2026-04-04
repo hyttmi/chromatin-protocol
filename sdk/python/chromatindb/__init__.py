@@ -15,6 +15,7 @@ from chromatindb._directory import (
 )
 from chromatindb._envelope import envelope_decrypt, envelope_encrypt, envelope_parse
 from chromatindb._hkdf import hkdf_derive, hkdf_expand, hkdf_extract
+from chromatindb._reconnect import ConnectionState
 from chromatindb.client import ChromatinClient
 from chromatindb.types import (
     BatchReadResult,
@@ -80,6 +81,7 @@ __all__ = [
     "BlobRef",
     "ChromatinClient",
     "ChromatinError",
+    "ConnectionState",
     "ConnectionError",
     "CryptoError",
     "DecodeError",
