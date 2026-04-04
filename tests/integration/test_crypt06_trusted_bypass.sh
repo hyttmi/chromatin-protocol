@@ -145,7 +145,7 @@ cat > "$TEMP_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "trusted_peers": ["172.28.0.3"],
   "allowed_peer_keys": ["$NODE2_NS"]
 }
@@ -185,7 +185,7 @@ cat > "$IMPOSTOR_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.28.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$IMPOSTOR_CONFIG"

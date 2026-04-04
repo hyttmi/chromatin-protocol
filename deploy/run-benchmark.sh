@@ -278,7 +278,7 @@ generate_trusted_configs() {
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "info",
-  "sync_interval_seconds": 10,
+  "safety_net_interval_seconds": 10,
   "trusted_peers": ["$ip2", "$ip3"]
 }
 TJEOF
@@ -288,7 +288,7 @@ TJEOF
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["node1:4200"],
   "log_level": "info",
-  "sync_interval_seconds": 10,
+  "safety_net_interval_seconds": 10,
   "trusted_peers": ["$ip1", "$ip3"]
 }
 TJEOF
@@ -298,7 +298,7 @@ TJEOF
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["node2:4200"],
   "log_level": "info",
-  "sync_interval_seconds": 10,
+  "safety_net_interval_seconds": 10,
   "trusted_peers": ["$ip1", "$ip2"]
 }
 TJEOF
@@ -575,7 +575,7 @@ ${res}
         local s1hop s2hop s_interval s1_mult s2_mult
         s1hop=$(jq -r '.sync_1hop_ms' "$sync_file")
         s2hop=$(jq -r '.sync_2hop_ms' "$sync_file")
-        s_interval=$(jq -r '.sync_interval_seconds' "$sync_file")
+        s_interval=$(jq -r '.safety_net_interval_seconds' "$sync_file")
         s1_mult=$(jq -n -r --argjson ms "$s1hop" --argjson iv "$s_interval" '$ms / ($iv * 1000) | . * 10 | round / 10')
         s2_mult=$(jq -n -r --argjson ms "$s2hop" --argjson iv "$s_interval" '$ms / ($iv * 1000) | . * 10 | round / 10')
 
@@ -694,7 +694,7 @@ ${res}
         local ts_s1hop ts_s2hop ts_s_interval
         ts_s1hop=$(jq -r '.sync_1hop_ms' "$ts_sync_file")
         ts_s2hop=$(jq -r '.sync_2hop_ms' "$ts_sync_file")
-        ts_s_interval=$(jq -r '.sync_interval_seconds' "$ts_sync_file")
+        ts_s_interval=$(jq -r '.safety_net_interval_seconds' "$ts_sync_file")
 
         local ts_sync_resources
         ts_sync_resources=$(format_resource_table "tombstone-sync")
@@ -749,7 +749,7 @@ ${gc_resources}"
         rc_preload=$(jq -r '.preload_blobs' "$reconcile_file")
         rc_delta=$(jq -r '.delta_blobs' "$reconcile_file")
         rc_delta_ms=$(jq -r '.delta_sync_ms' "$reconcile_file")
-        rc_interval=$(jq -r '.sync_interval_seconds' "$reconcile_file")
+        rc_interval=$(jq -r '.safety_net_interval_seconds' "$reconcile_file")
         rc_mult=$(jq -n -r --argjson ms "$rc_delta_ms" --argjson iv "$rc_interval" '$ms / ($iv * 1000) | . * 10 | round / 10')
 
         local rc_preload_ms
@@ -1104,7 +1104,7 @@ EOF
                 blob_count: $blob_count,
                 rate: $rate,
                 drain_timeout: 10,
-                sync_interval_seconds: 10
+                safety_net_interval_seconds: 10
             },
             baseline: {
                 available: $has_baseline_val,
@@ -1176,7 +1176,7 @@ run_scenario_sync() {
     # Measures sync latency (PERF-02) and multi-hop propagation (PERF-03)
     # in a single scenario run.
     #
-    # NOTE: Sync latency includes the sync_interval_seconds (10s) scheduling
+    # NOTE: Sync latency includes the safety_net_interval_seconds (10s) scheduling
     # delay. This is expected real-world behavior -- sync is timer-driven,
     # not event-driven. A blob written at t=0 may not sync until t=10.
     # Multi-hop (2-hop) latency includes two sync intervals (~20s).
@@ -1230,7 +1230,7 @@ run_scenario_sync() {
             blob_count: ($blobs | tonumber),
             sync_1hop_ms: ($sync_1hop | tonumber),
             sync_2hop_ms: ($sync_2hop | tonumber),
-            sync_interval_seconds: 10,
+            safety_net_interval_seconds: 10,
             loadgen: $loadgen
         }')
 
@@ -1543,7 +1543,7 @@ run_scenario_tombstone_sync() {
             blob_count: $blob_count,
             sync_1hop_ms: $sync_1hop,
             sync_2hop_ms: $sync_2hop,
-            sync_interval_seconds: 10
+            safety_net_interval_seconds: 10
         }')
 
     echo "$result" > "$RESULTS_DIR/scenario-tombstone-sync.json"
@@ -1736,7 +1736,7 @@ run_scenario_reconciliation_scaling() {
             delta_blobs: $delta_blobs,
             preload_convergence_ms: $preload_convergence_ms,
             delta_sync_ms: $delta_sync_ms,
-            sync_interval_seconds: 2
+            safety_net_interval_seconds: 2
         }')
 
     echo "$result" > "$RESULTS_DIR/scenario-reconcile-scaling.json"

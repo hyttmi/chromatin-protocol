@@ -88,7 +88,7 @@ cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999,
   "inactivity_timeout_seconds": 0
 }
@@ -101,7 +101,7 @@ cat > "$TEMP_NODE2_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.39.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999,
   "inactivity_timeout_seconds": 0
 }
@@ -114,7 +114,7 @@ cat > "$TEMP_NODE3_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.39.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999,
   "inactivity_timeout_seconds": 0
 }

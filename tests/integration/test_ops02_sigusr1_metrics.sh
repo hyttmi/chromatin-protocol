@@ -64,7 +64,7 @@ cat > "$TEMP_NODE1_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999
 }
 EOCFG

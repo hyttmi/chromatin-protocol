@@ -99,7 +99,7 @@ cat > "$TMP_CONFIG" <<EOJSON
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "allowed_peer_keys": ["$ALLOWED_NS"]
 }
 EOJSON
@@ -133,7 +133,7 @@ cat > "$MITM_CONFIG" <<EOJSON
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.28.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOJSON
 chmod 644 "$MITM_CONFIG"

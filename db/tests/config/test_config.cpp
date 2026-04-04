@@ -888,16 +888,16 @@ TEST_CASE("validate_config: safety_net_interval_seconds below minimum throws", "
         }
     }
 
-    SECTION("59 throws") {
-        cfg.safety_net_interval_seconds = 59;
+    SECTION("2 throws") {
+        cfg.safety_net_interval_seconds = 2;
         REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
         try { validate_config(cfg); } catch (const std::runtime_error& e) {
             REQUIRE_THAT(e.what(), ContainsSubstring("safety_net_interval_seconds"));
         }
     }
 
-    SECTION("60 passes") {
-        cfg.safety_net_interval_seconds = 60;
+    SECTION("3 passes (minimum)") {
+        cfg.safety_net_interval_seconds = 3;
         REQUIRE_NOTHROW(validate_config(cfg));
     }
 }

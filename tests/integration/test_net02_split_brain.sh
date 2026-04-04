@@ -74,7 +74,7 @@ make_config() {
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": $bootstrap,
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999,
   "inactivity_timeout_seconds": 0
 }

@@ -91,7 +91,7 @@ start_e2e04_node() {
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": $bootstrap_json,
   "log_level": "debug",
-  "sync_interval_seconds": 5,
+  "safety_net_interval_seconds": 5,
   "full_resync_interval": 9999,
   "inactivity_timeout_seconds": 0
 }

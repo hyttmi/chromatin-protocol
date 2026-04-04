@@ -124,7 +124,7 @@ Create a JSON config file and pass it with `--config`:
   "allowed_peer_keys": [],
   "trusted_peers": [],
   "max_peers": 32,
-  "sync_interval_seconds": 60,
+  "safety_net_interval_seconds": 600,
   "log_level": "info",
   "max_storage_bytes": 0,
   "rate_limit_bytes_per_sec": 0,
@@ -156,7 +156,7 @@ Create a JSON config file and pass it with `--config`:
 - **allowed_peer_keys** -- namespace hashes (hex) of peers allowed to connect via TCP for sync; empty means any peer that completes PQ handshake can sync
 - **trusted_peers** -- IP addresses (no ports) whose connections use a lightweight handshake without ML-KEM-1024 key exchange; localhost (127.0.0.1, ::1) is always trusted implicitly (default: `[]`)
 - **max_peers** -- maximum number of simultaneous peer connections (default: `32`)
-- **sync_interval_seconds** -- interval between periodic sync rounds in seconds (default: `60`)
+- **safety_net_interval_seconds** -- interval between safety-net reconciliation rounds in seconds; correctness backstop (default: `600`, minimum: `60`)
 - **log_level** -- log verbosity (default: `info`)
 - **max_storage_bytes** -- global storage capacity limit in bytes; the node rejects new blobs when exceeded and sends a StorageFull signal to peers (default: `0` = unlimited)
 - **rate_limit_bytes_per_sec** -- per-connection write rate limit for Data and Delete messages in bytes per second; peers exceeding the limit are disconnected immediately (default: `0` = disabled)

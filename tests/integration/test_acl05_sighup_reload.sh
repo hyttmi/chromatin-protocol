@@ -92,7 +92,7 @@ cat > "$TEMP_NODE2_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$TEMP_NODE2_CONFIG"
@@ -103,7 +103,7 @@ cat > "$TEMP_NODE3_CONFIG" <<EOCFG
 {
   "bind_address": "0.0.0.0:4200",
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$TEMP_NODE3_CONFIG"
@@ -163,7 +163,7 @@ cat > "$TEMP_NODE1_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "allowed_peer_keys": ["$NODE2_NS"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$TEMP_NODE1_CONFIG"
@@ -187,7 +187,7 @@ cat > "$TEMP_NODE2_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.29.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$TEMP_NODE2_CONFIG"
@@ -211,7 +211,7 @@ cat > "$TEMP_NODE3_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "bootstrap_peers": ["172.29.0.2:4200"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 chmod 644 "$TEMP_NODE3_CONFIG"
@@ -272,7 +272,7 @@ cat > "$TEMP_NODE1_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "allowed_peer_keys": ["$NODE2_NS", "$NODE3_NS"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 
@@ -327,7 +327,7 @@ cat > "$TEMP_NODE1_CONFIG" <<EOCFG
   "bind_address": "0.0.0.0:4200",
   "allowed_peer_keys": ["$NODE2_NS"],
   "log_level": "debug",
-  "sync_interval_seconds": 5
+  "safety_net_interval_seconds": 5
 }
 EOCFG
 

@@ -242,8 +242,8 @@ void validate_config(const Config& cfg) {
         errors.push_back("max_peers must be >= 1 (got " +
                           std::to_string(cfg.max_peers) + ")");
     }
-    if (cfg.safety_net_interval_seconds < 60) {
-        errors.push_back("safety_net_interval_seconds must be >= 60 (got " +
+    if (cfg.safety_net_interval_seconds < 3) {
+        errors.push_back("safety_net_interval_seconds must be >= 3 (got " +
                           std::to_string(cfg.safety_net_interval_seconds) + ")");
     }
     if (cfg.max_storage_bytes != 0 && cfg.max_storage_bytes < 1048576) {
