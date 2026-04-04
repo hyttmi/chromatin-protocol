@@ -174,7 +174,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 - [x] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan (completed 2026-04-03)
 - [x] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup (completed 2026-04-04)
 - [x] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection (completed 2026-04-04)
-- [ ] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration
+- [x] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration (completed 2026-04-04)
 - [ ] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0
 
 ## Phase Details
@@ -259,7 +259,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 84-01-PLAN.md -- ConnectionState enum + backoff + ChromatinClient reconnect refactor
-- [ ] 84-02-PLAN.md -- Comprehensive reconnect unit tests
+- [x] 84-02-PLAN.md -- Comprehensive reconnect unit tests
 
 ### Phase 85: Documentation Refresh
 **Goal**: All documentation accurately describes the v2.0.0 event-driven sync model, new wire types, and SDK reconnect behavior
@@ -286,5 +286,5 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
 | 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
-| 84. SDK Auto-Reconnect | 1/2 | In Progress | - |
+| 84. SDK Auto-Reconnect | 2/2 | Complete   | 2026-04-04 |
 | 85. Documentation Refresh | 0/TBD | Not started | - |

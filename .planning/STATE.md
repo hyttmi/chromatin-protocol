@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
-status: executing
-stopped_at: Completed 84-01-PLAN.md
-last_updated: "2026-04-04T17:14:13.828Z"
+status: verifying
+stopped_at: Completed 84-02-PLAN.md
+last_updated: "2026-04-04T17:25:26.582Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 
 Phase: 84 (sdk-auto-reconnect) — EXECUTING
 Plan: 2 of 2
-Status: Executing plan 84-02
+Status: Phase complete — ready for verification
 Last activity: 2026-04-04
 
 Progress: [░░░░░░░░░░] 0%
@@ -46,6 +46,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
 - [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
+- [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
 
 ### Pending Todos
 
@@ -64,7 +65,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-04T17:14:13.825Z
+Last session: 2026-04-04T17:25:26.579Z
 Last activity: 2026-04-04 -- Executing Phase 84
-Stopped at: Completed 84-01-PLAN.md
+Stopped at: Completed 84-02-PLAN.md
 Resume file: None
