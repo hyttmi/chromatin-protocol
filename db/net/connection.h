@@ -14,6 +14,7 @@
 #include <asio/experimental/awaitable_operators.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -108,6 +109,9 @@ public:
     /// Whether this connection was received as goodbye (graceful peer shutdown).
     bool received_goodbye() const { return received_goodbye_; }
 
+    /// Timestamp of last received message (for keepalive liveness check).
+    std::chrono::steady_clock::time_point last_recv_time() const { return last_recv_time_; }
+
     /// Remote peer address string (set at construction time).
     const std::string& remote_address() const { return remote_addr_; }
 
@@ -161,6 +165,7 @@ private:
     bool closed_ = false;
     bool received_goodbye_ = false;
     bool closing_ = false;  // Set after Goodbye enqueued, rejects new sends
+    std::chrono::steady_clock::time_point last_recv_time_{std::chrono::steady_clock::now()};
 
     // Send queue (Phase 79 PUSH-04)
     struct PendingMessage {

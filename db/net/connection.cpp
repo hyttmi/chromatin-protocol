@@ -758,6 +758,9 @@ asio::awaitable<void> Connection::message_loop() {
             continue;
         }
 
+        // Update last-recv time for keepalive (any decoded message resets silence)
+        last_recv_time_ = std::chrono::steady_clock::now();
+
         switch (decoded->type) {
             case wire::TransportMsgType_Ping: {
                 // Reply with Pong -- through send queue for AEAD nonce ordering
