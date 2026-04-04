@@ -171,14 +171,14 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     // Node 2 config -- bootstrap to node 1 (port set after pm1.start())
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
 
     // Create identities
@@ -240,13 +240,13 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
 
     auto id1 = NodeIdentity::load_or_generate(tmp1.path);
@@ -305,21 +305,21 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
     Config cfg_a;
     cfg_a.bind_address = "127.0.0.1:0";
     cfg_a.data_dir = tmp1.path.string();
-    cfg_a.sync_interval_seconds = 1;
+    cfg_a.safety_net_interval_seconds = 1;
     cfg_a.max_peers = 32;
 
     // Node B config -- bootstraps to A (port set after pm_a.start())
     Config cfg_b;
     cfg_b.bind_address = "127.0.0.1:0";
     cfg_b.data_dir = tmp2.path.string();
-    cfg_b.sync_interval_seconds = 1;
+    cfg_b.safety_net_interval_seconds = 1;
     cfg_b.max_peers = 32;
 
     // Node C config -- bootstraps to B only (port set after pm_b.start())
     Config cfg_c;
     cfg_c.bind_address = "127.0.0.1:0";
     cfg_c.data_dir = tmp3.path.string();
-    cfg_c.sync_interval_seconds = 1;
+    cfg_c.safety_net_interval_seconds = 1;
     cfg_c.max_peers = 32;
 
     // Create identities

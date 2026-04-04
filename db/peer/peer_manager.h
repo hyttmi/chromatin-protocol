@@ -338,6 +338,7 @@ private:
     uint64_t cursor_stale_seconds_ = 3600;        // Force full resync after gap (Phase 34)
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
+    uint32_t safety_net_interval_seconds_ = 600;  // SIGHUP-reloadable (Phase 82)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
     uint32_t expiry_scan_interval_seconds_ = 60;  // Deprecated (v2.0.0): ignored, expiry is event-driven. Kept for config file compatibility.
     uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise

@@ -88,6 +88,7 @@ PeerManager::PeerManager(const config::Config& config,
     // Initialize sync rate limit parameters from config
     sync_cooldown_seconds_ = config.sync_cooldown_seconds;
     max_sync_sessions_ = config.max_sync_sessions;
+    safety_net_interval_seconds_ = config.safety_net_interval_seconds;
 
     // Initialize expiry scan interval from config
     expiry_scan_interval_seconds_ = config.expiry_scan_interval_seconds;
@@ -2634,7 +2635,7 @@ asio::awaitable<void> PeerManager::sync_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
         sync_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(config_.sync_interval_seconds));
+        timer.expires_after(std::chrono::seconds(safety_net_interval_seconds_));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
         sync_timer_ = nullptr;
@@ -2760,6 +2761,10 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: sync_cooldown=disabled max_sync_sessions={}",
                      max_sync_sessions_);
     }
+
+    // Reload safety-net interval (Phase 82)
+    safety_net_interval_seconds_ = new_cfg.safety_net_interval_seconds;
+    spdlog::info("config reload: safety_net_interval={}s", safety_net_interval_seconds_);
 
     // Reload sync_namespaces
     try {

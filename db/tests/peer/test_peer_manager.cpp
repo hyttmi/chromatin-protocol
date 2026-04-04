@@ -169,7 +169,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
     cfg1.allowed_peer_keys = {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
 
@@ -177,7 +177,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -233,7 +233,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
     cfg1.allowed_peer_keys = {id2_ns_hex};
 
@@ -243,7 +243,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.allowed_peer_keys = {id1_ns_hex};
 
@@ -310,13 +310,13 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
 
     auto cfg1 = chromatindb::config::load_config(config_path);
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.allowed_peer_keys = {id1_ns_hex};
 
@@ -468,14 +468,14 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     Config cfg_a;
     cfg_a.bind_address = "127.0.0.1:0";
     cfg_a.data_dir = tmp1.path.string();
-    cfg_a.sync_interval_seconds = 1;
+    cfg_a.safety_net_interval_seconds = 1;
     cfg_a.max_peers = 32;
     cfg_a.allowed_peer_keys = {ns_b, ns_c};
 
     Config cfg_b;
     cfg_b.bind_address = "127.0.0.1:0";
     cfg_b.data_dir = tmp2.path.string();
-    cfg_b.sync_interval_seconds = 1;
+    cfg_b.safety_net_interval_seconds = 1;
     cfg_b.max_peers = 32;
     cfg_b.allowed_peer_keys = {ns_a, ns_c};
 
@@ -484,7 +484,7 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     Config cfg_c;
     cfg_c.bind_address = "127.0.0.1:0";
     cfg_c.data_dir = tmp3.path.string();
-    cfg_c.sync_interval_seconds = 1;
+    cfg_c.safety_net_interval_seconds = 1;
     cfg_c.max_peers = 32;
     cfg_c.allowed_peer_keys = {ns_a, ns_b};
 
@@ -671,13 +671,13 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;  // Long interval -- we don't want sync to interfere
+    cfg1.safety_net_interval_seconds = 60;  // Long interval -- we don't want sync to interfere
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -761,13 +761,13 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -841,13 +841,13 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -918,14 +918,14 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 3;
+    cfg2.safety_net_interval_seconds = 3;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
@@ -1003,7 +1003,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     Config cfg;
     cfg.bind_address = "127.0.0.1:0";
     cfg.data_dir = tmp.path.string();
-    cfg.sync_interval_seconds = 60;
+    cfg.safety_net_interval_seconds = 60;
     cfg.max_peers = 32;
 
     Storage store(tmp.path.string());
@@ -1085,14 +1085,14 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 3;
+    cfg2.safety_net_interval_seconds = 3;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
@@ -1174,14 +1174,14 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         Config cfg1;
         cfg1.bind_address = "127.0.0.1:0";
         cfg1.data_dir = tmp1.path.string();
-        cfg1.sync_interval_seconds = 1;
+        cfg1.safety_net_interval_seconds = 1;
         cfg1.max_peers = 32;
 
         // Node2 is effectively full: max_storage_bytes = 1 byte
         Config cfg2;
         cfg2.bind_address = "127.0.0.1:0";
         cfg2.data_dir = tmp2.path.string();
-        cfg2.sync_interval_seconds = 1;
+        cfg2.safety_net_interval_seconds = 1;
         cfg2.max_peers = 32;
         cfg2.max_storage_bytes = 1;  // Effectively full (mdbx file > 1 byte)
 
@@ -1240,13 +1240,13 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         Config cfg1;
         cfg1.bind_address = "127.0.0.1:0";
         cfg1.data_dir = tmp1.path.string();
-        cfg1.sync_interval_seconds = 1;
+        cfg1.safety_net_interval_seconds = 1;
         cfg1.max_peers = 32;
 
         Config cfg2;
         cfg2.bind_address = "127.0.0.1:0";
         cfg2.data_dir = tmp2.path.string();
-        cfg2.sync_interval_seconds = 1;
+        cfg2.safety_net_interval_seconds = 1;
         cfg2.max_peers = 32;
         cfg2.max_storage_bytes = 1;
 
@@ -1306,13 +1306,13 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 2;
+    cfg2.safety_net_interval_seconds = 2;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -1409,7 +1409,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.rate_limit_bytes_per_sec = 1048576;   // 1 MB/s -- generous
     cfg1.rate_limit_burst = 10485760;           // 10 MB burst
@@ -1418,7 +1418,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 2;
+    cfg2.safety_net_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.rate_limit_bytes_per_sec = 1048576;
     cfg2.rate_limit_burst = 10485760;
@@ -1487,7 +1487,7 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
 
     auto cfg1 = chromatindb::config::load_config(config_path);
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -1532,7 +1532,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;  // No sync interference
+    cfg1.safety_net_interval_seconds = 60;  // No sync interference
     cfg1.max_peers = 32;
     cfg1.rate_limit_bytes_per_sec = 100;  // Very low: 100 B/s
     cfg1.rate_limit_burst = 100;          // Very low burst: 100 bytes
@@ -1622,7 +1622,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;  // Node1 does not initiate sync
+    cfg1.safety_net_interval_seconds = 60;  // Node1 does not initiate sync
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 10;  // 10-second cooldown on inbound SyncRequest
     cfg1.allowed_peer_keys = {id2_ns_hex};  // Closed mode: skip PEX
@@ -1630,7 +1630,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;   // Node2 syncs every 1s (hits cooldown)
+    cfg2.safety_net_interval_seconds = 1;   // Node2 syncs every 1s (hits cooldown)
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;   // No cooldown on node2
     cfg2.allowed_peer_keys = {id1_ns_hex};  // Closed mode: skip PEX
@@ -1685,7 +1685,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;   // Node1 does not initiate sync
+    cfg1.safety_net_interval_seconds = 60;   // Node1 does not initiate sync
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;    // Disabled -- no cooldown
     cfg1.allowed_peer_keys = {id2_ns_hex};  // Closed mode: skip PEX
@@ -1693,7 +1693,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;    // Node2 syncs every 1s
+    cfg2.safety_net_interval_seconds = 1;    // Node2 syncs every 1s
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
     cfg2.allowed_peer_keys = {id1_ns_hex};  // Closed mode: skip PEX
@@ -1731,7 +1731,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
 
 TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimit][sync]") {
     // RATE-03: When a peer is already syncing, a second SyncRequest is rejected.
-    // Both nodes have sync_interval_seconds=1 and sync_cooldown_seconds=0 so they both
+    // Both nodes have safety_net_interval_seconds=1 and sync_cooldown_seconds=0 so they both
     // try to initiate rapidly. With enough data, syncs take long enough that collisions occur.
     TempDir tmp1, tmp2;
 
@@ -1741,14 +1741,14 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;    // Both nodes initiate sync every 1s
+    cfg1.safety_net_interval_seconds = 1;    // Both nodes initiate sync every 1s
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;    // No cooldown -- only session limit applies
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
 
@@ -1805,7 +1805,7 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.rate_limit_bytes_per_sec = 100;  // Very tight: 100 B/s
     cfg1.rate_limit_burst = 100;          // Very tight burst
@@ -1814,7 +1814,7 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 2;
+    cfg2.safety_net_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.rate_limit_bytes_per_sec = 100;
     cfg2.rate_limit_burst = 100;
@@ -1880,14 +1880,14 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 2;
+    cfg2.safety_net_interval_seconds = 2;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;  // Disable cooldown for rapid re-sync
     cfg2.sync_namespaces = {id1_ns_hex};  // Only replicate id1's namespace
@@ -1968,7 +1968,7 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
 
     auto cfg1 = chromatindb::config::load_config(config_path);
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -2034,14 +2034,14 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 1;
+    cfg1.safety_net_interval_seconds = 1;
     cfg1.max_peers = 32;
 
     // Node2 has a count quota of 0 (unlimited) but byte quota very small
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 1;
+    cfg2.safety_net_interval_seconds = 1;
     cfg2.max_peers = 32;
     cfg2.namespace_quota_bytes = 0;
     cfg2.namespace_quota_count = 1;  // Allow only 1 blob per namespace
@@ -2103,7 +2103,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -2196,14 +2196,14 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
     cfg1.inactivity_timeout_seconds = 120;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
     cfg2.inactivity_timeout_seconds = 120;
 
@@ -2245,7 +2245,7 @@ TEST_CASE("Inactivity timeout disabled when config is 0", "[peer][inactivity]") 
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
     cfg1.inactivity_timeout_seconds = 0;  // Disabled
 
@@ -3788,13 +3788,13 @@ TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -3863,14 +3863,14 @@ TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnoti
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 2;
+    cfg1.safety_net_interval_seconds = 2;
     cfg1.max_peers = 32;
     cfg1.sync_cooldown_seconds = 0;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 3;
+    cfg2.safety_net_interval_seconds = 3;
     cfg2.max_peers = 32;
     cfg2.sync_cooldown_seconds = 0;
 
@@ -3954,19 +3954,19 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
     Config cfg1;
     cfg1.bind_address = "127.0.0.1:0";
     cfg1.data_dir = tmp1.path.string();
-    cfg1.sync_interval_seconds = 60;
+    cfg1.safety_net_interval_seconds = 60;
     cfg1.max_peers = 32;
 
     Config cfg2;
     cfg2.bind_address = "127.0.0.1:0";
     cfg2.data_dir = tmp2.path.string();
-    cfg2.sync_interval_seconds = 60;
+    cfg2.safety_net_interval_seconds = 60;
     cfg2.max_peers = 32;
 
     Config cfg3;
     cfg3.bind_address = "127.0.0.1:0";
     cfg3.data_dir = tmp3.path.string();
-    cfg3.sync_interval_seconds = 60;
+    cfg3.safety_net_interval_seconds = 60;
     cfg3.max_peers = 32;
 
     Storage store1(tmp1.path.string());
@@ -4045,7 +4045,7 @@ TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
         Config cfg;
         cfg.bind_address = "127.0.0.1:0";
         cfg.data_dir = dir;
-        cfg.sync_interval_seconds = sync_sec;
+        cfg.safety_net_interval_seconds = sync_sec;
         cfg.sync_cooldown_seconds = 0;  // Disable cooldown for test
         cfg.max_peers = 32;
         return cfg;
@@ -4126,7 +4126,7 @@ TEST_CASE("BlobFetch skipped when blob already exists locally", "[peer][blobfetc
         Config cfg;
         cfg.bind_address = "127.0.0.1:0";
         cfg.data_dir = dir;
-        cfg.sync_interval_seconds = sync_sec;
+        cfg.safety_net_interval_seconds = sync_sec;
         cfg.sync_cooldown_seconds = 0;
         cfg.max_peers = 32;
         return cfg;
@@ -4203,7 +4203,7 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
         Config cfg;
         cfg.bind_address = "127.0.0.1:0";
         cfg.data_dir = dir;
-        cfg.sync_interval_seconds = sync_sec;
+        cfg.safety_net_interval_seconds = sync_sec;
         cfg.sync_cooldown_seconds = 0;
         cfg.max_peers = 32;
         return cfg;
