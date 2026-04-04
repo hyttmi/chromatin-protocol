@@ -172,7 +172,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 - [x] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter (completed 2026-04-02)
 - [x] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop (completed 2026-04-03)
 - [x] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan (completed 2026-04-03)
-- [ ] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup
+- [x] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup (completed 2026-04-04)
 - [ ] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection
 - [ ] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration
 - [ ] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0
@@ -234,7 +234,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 82-01-PLAN.md -- Config rename (sync_interval_seconds -> safety_net_interval_seconds) + safety-net timer adaptation
-- [ ] 82-02-PLAN.md -- Cursor grace period + reconnect logic + compaction awareness
+- [x] 82-02-PLAN.md -- Cursor grace period + reconnect logic + compaction awareness
 
 ### Phase 83: Bidirectional Keepalive
 **Goal**: Dead TCP connections are detected within 60 seconds via application-level heartbeat
@@ -279,7 +279,7 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
 | 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
 | 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
-| 82. Reconcile-on-Connect & Safety Net | 1/2 | In Progress|  |
+| 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete   | 2026-04-04 |
 | 83. Bidirectional Keepalive | 0/TBD | Not started | - |
 | 84. SDK Auto-Reconnect | 0/TBD | Not started | - |
 | 85. Documentation Refresh | 0/TBD | Not started | - |
