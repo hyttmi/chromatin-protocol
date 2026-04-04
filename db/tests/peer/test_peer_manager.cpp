@@ -4258,3 +4258,216 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
     pmC.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
+
+// ============================================================================
+// Phase 82: Safety-net cursor grace period tests (MAINT-04, MAINT-05)
+// ============================================================================
+
+TEST_CASE("sync-on-connect runs for initiator", "[peer-manager][safety-net]") {
+    // MAINT-05: When a peer connects as initiator, full reconciliation runs.
+    // Node2 (initiator) connects to node1 and should pull node1's blob.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.safety_net_interval_seconds = 600;  // Very long -- sync-on-connect only
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.safety_net_interval_seconds = 600;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    // Store a blob in node1 BEFORE node2 connects
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id1, "sync-on-connect-test", 604800, now);
+    auto r = run_async(pool, eng1.ingest(blob));
+    REQUIRE(r.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    pm1.start();
+
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2.start();
+
+    // Wait for sync-on-connect to complete
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Node2 should have node1's blob via sync-on-connect
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+
+    pm1.stop();
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("reconnect within grace period preserves cursors", "[peer-manager][safety-net]") {
+    // MAINT-04: When a peer disconnects and reconnects within 5 minutes,
+    // its MDBX cursors are preserved, enabling cursor-skip optimization.
+    // We verify this by checking cursor_hits metric increases on reconnect sync.
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.safety_net_interval_seconds = 600;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.safety_net_interval_seconds = 600;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    // Store blob in node1
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id1, "grace-period-test", 604800, now);
+    auto r = run_async(pool, eng1.ingest(blob));
+    REQUIRE(r.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    pm1.start();
+
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2.start();
+
+    // Initial sync-on-connect
+    ioc.run_for(std::chrono::seconds(8));
+
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+
+    // Record cursor_hits before disconnect
+    auto hits_before = pm2.metrics().cursor_hits;
+
+    // Disconnect node2 by stopping it, then reconnect
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(2));
+
+    // Reconnect within grace period (immediately)
+    PeerManager pm2b(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2b.start();
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Node2 should still have the blob
+    auto n2_blobs2 = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs2.size() == 1);
+
+    // Cursor hits should have increased (namespace skipped because cursors match)
+    // Note: cursor_hits is on the NEW pm2b instance metrics, starts at 0.
+    // The cursor skip happens because MDBX cursors persisted across disconnect.
+    auto hits_after = pm2b.metrics().cursor_hits;
+    CHECK(hits_after > 0);
+
+    pm1.stop();
+    pm2b.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
+
+TEST_CASE("disconnected peer tracked in grace period", "[peer-manager][safety-net]") {
+    // Verify observable behavior: a peer can disconnect and reconnect
+    // multiple times without issues (grace period tracking works correctly).
+    TempDir tmp1, tmp2;
+
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+    cfg1.safety_net_interval_seconds = 600;
+    cfg1.max_peers = 32;
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+    cfg2.safety_net_interval_seconds = 600;
+    cfg2.max_peers = 32;
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    auto blob = make_signed_blob(id1, "multi-reconnect-test", 604800, now);
+    auto r = run_async(pool, eng1.ingest(blob));
+    REQUIRE(r.accepted);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    pm1.start();
+
+    // First connect
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2a(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2a.start();
+    ioc.run_for(std::chrono::seconds(8));
+
+    auto n2_blobs = eng2.get_blobs_since(id1.namespace_id(), 0);
+    REQUIRE(n2_blobs.size() == 1);
+
+    // First disconnect
+    pm2a.stop();
+    ioc.run_for(std::chrono::seconds(2));
+
+    // Second connect (within grace period)
+    PeerManager pm2b(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2b.start();
+    ioc.run_for(std::chrono::seconds(8));
+
+    // Should still work
+    REQUIRE(pm1.peer_count() >= 1);
+    REQUIRE(pm2b.peer_count() >= 1);
+
+    // Second disconnect
+    pm2b.stop();
+    ioc.run_for(std::chrono::seconds(2));
+
+    // Third connect (still within grace period)
+    PeerManager pm2c(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2c.start();
+    ioc.run_for(std::chrono::seconds(8));
+
+    REQUIRE(pm1.peer_count() >= 1);
+    REQUIRE(pm2c.peer_count() >= 1);
+
+    pm1.stop();
+    pm2c.stop();
+    ioc.run_for(std::chrono::seconds(2));
+}
