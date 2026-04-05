@@ -349,4 +349,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 — Phase 88 complete: relay subscription tracking, notification filtering, UDS auto-reconnect with subscription replay*
+*Last updated: 2026-04-05 — Phase 89 complete: SDK multi-relay failover with ordered relay list, rotation on failure, cycle backoff, 4-arg on_reconnect*
