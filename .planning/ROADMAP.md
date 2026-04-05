@@ -186,7 +186,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 **Milestone Goal:** Add wire-level Brotli compression, namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
 
 - [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
-- [ ] **Phase 87: Wire Compression** - Brotli compress-then-encrypt for node and SDK with decompression bomb protection
+- [ ] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection
 - [ ] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay
 - [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
 - [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
@@ -208,16 +208,20 @@ Plans:
 - [x] 86-02-PLAN.md — max_peers SIGHUP hot reload
 - [ ] 86-03-PLAN.md — Docker integration tests for namespace filtering and max_peers reload
 
-### Phase 87: Wire Compression
-**Goal**: Wire traffic is compressed with Brotli before AEAD encryption, reducing bandwidth for large payloads while protecting against decompression bombs
+### Phase 87: SDK Envelope Compression
+**Goal**: SDK compresses plaintext with Brotli before envelope encryption (suite=0x02) and decompresses after decryption, with decompression bomb protection. No node-side changes.
 **Depends on**: Phase 86
 **Requirements**: COMP-01, COMP-02, COMP-03, COMP-04
 **Success Criteria** (what must be TRUE):
-  1. Node compresses sync and data message payloads with Brotli before AEAD encryption; a flag byte (0x00=uncompressed, 0x01=brotli) prefixes every message so the receiver self-describes the format
-  2. Payloads under 256 bytes and already-encrypted envelope blobs are sent uncompressed (flag 0x00) without attempting compression
-  3. A malicious compressed payload that would decompress beyond MAX_BLOB_DATA_SIZE is rejected before decompression completes (no memory exhaustion)
-  4. The Python SDK compresses outbound and decompresses inbound payloads identically to the C++ node, verified by cross-layer integration test
-**Plans**: TBD
+  1. SDK `encrypt_envelope()` compresses plaintext with Brotli (quality 6) before AEAD encryption when plaintext >= 256 bytes; cipher suite byte 0x02 in the envelope header signals compression
+  2. SDK skips compression for plaintext under 256 bytes or when compressed output >= original size (expansion fallback); these use suite=0x01
+  3. SDK `decrypt_envelope()` enforces a 100 MiB decompressed output cap via streaming decompressor, rejecting decompression bombs before full decompression completes
+  4. SDK handles both suite=0x01 (uncompressed) and suite=0x02 (Brotli) envelopes transparently; PROTOCOL.md documents the new suite
+**Plans:** 2 plans
+
+Plans:
+- [ ] 87-01-PLAN.md — SDK envelope compression implementation + tests
+- [ ] 87-02-PLAN.md — Documentation: ROADMAP, REQUIREMENTS, PROTOCOL.md update
 
 ### Phase 88: Relay Resilience
 **Goal**: The relay survives node restarts transparently and only forwards notifications to clients that subscribed to the relevant namespace
@@ -261,7 +265,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 86. Namespace Filtering & Hot Reload | 2/3 | Complete    | 2026-04-05 |
-| 87. Wire Compression | 0/0 | Not started | - |
+| 87. SDK Envelope Compression | 0/2 | Not started | - |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
 | 90. Observability & Documentation | 0/0 | Not started | - |
