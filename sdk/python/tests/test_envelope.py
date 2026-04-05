@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 import struct
 
+import brotli
 import pytest
 
 from tests.conftest import load_vectors
@@ -14,16 +15,21 @@ from chromatindb.crypto import sha3_256
 from chromatindb.identity import Identity
 from chromatindb._envelope import (
     CIPHER_SUITE_ML_KEM_CHACHA,
+    CIPHER_SUITE_ML_KEM_CHACHA_BROTLI,
     ENVELOPE_MAGIC,
     ENVELOPE_VERSION,
+    MAX_DECOMPRESSED_SIZE,
+    _COMPRESS_THRESHOLD,
     _FIXED_HEADER_SIZE,
     _HKDF_LABEL,
     _STANZA_SIZE,
+    _safe_decompress,
     envelope_decrypt,
     envelope_encrypt,
     envelope_parse,
 )
 from chromatindb.exceptions import (
+    DecompressionError,
     DecryptionError,
     MalformedEnvelopeError,
     NotARecipientError,
@@ -451,19 +457,156 @@ def test_envelope_constants():
 
 
 # ---------------------------------------------------------------------------
-# RED: Suite 0x02 Brotli compression (Phase 87)
+# Suite 0x02: Brotli compression (Phase 87)
 # ---------------------------------------------------------------------------
 
-def test_suite_0x02_constant_red():
-    """CIPHER_SUITE_ML_KEM_CHACHA_BROTLI constant exists and is 0x02."""
-    from chromatindb._envelope import CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+def test_compress_encrypt_roundtrip():
+    """Compress+encrypt 1 KiB repetitive data, decrypt returns original (COMP-01)."""
+    sender = Identity.generate()
+    recipient = Identity.generate()
+    plaintext = b"A" * 1024
+    envelope = envelope_encrypt(plaintext, [recipient], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI  # suite=0x02
+    assert envelope_decrypt(envelope, sender) == plaintext
+    assert envelope_decrypt(envelope, recipient) == plaintext
+
+
+def test_compress_default_on():
+    """Default encrypt (no compress arg) on compressible data uses suite=0x02 (per D-07)."""
+    sender = Identity.generate()
+    plaintext = b"B" * 512
+    envelope = envelope_encrypt(plaintext, [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+
+
+def test_compress_opt_out():
+    """compress=False always produces suite=0x01 regardless of plaintext (per D-07)."""
+    sender = Identity.generate()
+    plaintext = b"C" * 1024
+    envelope = envelope_encrypt(plaintext, [], sender, compress=False)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA
+    assert envelope_decrypt(envelope, sender) == plaintext
+
+
+def test_compress_threshold_below():
+    """Plaintext below 256 bytes uses suite=0x01 (per D-05, COMP-02)."""
+    sender = Identity.generate()
+    plaintext = b"D" * 255
+    envelope = envelope_encrypt(plaintext, [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA
+
+
+def test_compress_threshold_at():
+    """Plaintext exactly 256 bytes of repetitive data uses suite=0x02 (per D-05)."""
+    sender = Identity.generate()
+    plaintext = b"E" * 256
+    envelope = envelope_encrypt(plaintext, [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    assert envelope_decrypt(envelope, sender) == plaintext
+
+
+def test_compress_expansion_fallback():
+    """Random (incompressible) data falls back to suite=0x01 (per D-06, COMP-02)."""
+    sender = Identity.generate()
+    plaintext = secrets.token_bytes(1024)  # Random data won't compress
+    envelope = envelope_encrypt(plaintext, [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA
+    assert envelope_decrypt(envelope, sender) == plaintext
+
+
+def test_compress_empty_plaintext():
+    """Empty plaintext (0 bytes) uses suite=0x01 -- below threshold (per D-05)."""
+    sender = Identity.generate()
+    envelope = envelope_encrypt(b"", [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA
+    assert envelope_decrypt(envelope, sender) == b""
+
+
+def test_decrypt_both_suites():
+    """Both suite=0x01 and suite=0x02 envelopes decrypt to same plaintext (per D-03, COMP-04)."""
+    sender = Identity.generate()
+    plaintext = b"F" * 1024
+
+    env_compressed = envelope_encrypt(plaintext, [], sender, compress=True)
+    env_uncompressed = envelope_encrypt(plaintext, [], sender, compress=False)
+
+    assert env_compressed[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    assert env_uncompressed[5] == CIPHER_SUITE_ML_KEM_CHACHA
+
+    assert envelope_decrypt(env_compressed, sender) == plaintext
+    assert envelope_decrypt(env_uncompressed, sender) == plaintext
+
+
+def test_decompression_bomb_rejected():
+    """Crafted bomb payload raises DecompressionError before full decompression (per D-09, COMP-03)."""
+    # Create a Brotli-compressed payload that decompresses to more than MAX_DECOMPRESSED_SIZE.
+    # Test _safe_decompress directly with a 200 MiB zeros bomb.
+    bomb_plain = b"\x00" * (200 * 1024 * 1024)
+    bomb_compressed = brotli.compress(bomb_plain, quality=1)
+
+    with pytest.raises(DecompressionError, match="exceeds maximum"):
+        _safe_decompress(bomb_compressed, MAX_DECOMPRESSED_SIZE)
+
+
+def test_compress_reduces_size():
+    """Compressed envelope is smaller than uncompressed for compressible data."""
+    sender = Identity.generate()
+    plaintext = b"G" * 10_000
+
+    env_compressed = envelope_encrypt(plaintext, [], sender, compress=True)
+    env_uncompressed = envelope_encrypt(plaintext, [], sender, compress=False)
+
+    assert len(env_compressed) < len(env_uncompressed)
+
+
+def test_compressed_envelope_parse():
+    """envelope_parse on suite=0x02 envelope returns suite=2 (Pitfall 4)."""
+    sender = Identity.generate()
+    plaintext = b"H" * 512
+    envelope = envelope_encrypt(plaintext, [], sender)
+    meta = envelope_parse(envelope)
+    assert meta["suite"] == 2
+    assert meta["version"] == 1
+    assert meta["recipient_count"] == 1
+
+
+def test_suite_0x02_constant():
+    """CIPHER_SUITE_ML_KEM_CHACHA_BROTLI constant is 0x02."""
     assert CIPHER_SUITE_ML_KEM_CHACHA_BROTLI == 0x02
 
 
-def test_compress_encrypt_red():
-    """Compressible data >= 256 bytes produces suite=0x02 envelope."""
-    from chromatindb._envelope import CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+def test_safe_decompress_normal():
+    """_safe_decompress handles normal data correctly."""
+    original = b"I" * 5000
+    compressed = brotli.compress(original, quality=6)
+    result = _safe_decompress(compressed, MAX_DECOMPRESSED_SIZE)
+    assert result == original
+
+
+def test_safe_decompress_empty():
+    """_safe_decompress handles compressed empty data."""
+    compressed = brotli.compress(b"", quality=6)
+    result = _safe_decompress(compressed, MAX_DECOMPRESSED_SIZE)
+    assert result == b""
+
+
+def test_compress_large_roundtrip():
+    """1 MiB repetitive data roundtrips through suite=0x02."""
     sender = Identity.generate()
-    plaintext = b"A" * 1024
+    plaintext = b"J" * (1024 * 1024)
     envelope = envelope_encrypt(plaintext, [], sender)
     assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    assert envelope_decrypt(envelope, sender) == plaintext
+
+
+def test_compress_multi_recipient():
+    """Suite=0x02 envelope with multiple recipients, all can decrypt."""
+    sender = Identity.generate()
+    r1 = Identity.generate()
+    r2 = Identity.generate()
+    plaintext = b"K" * 1024
+    envelope = envelope_encrypt(plaintext, [r1, r2], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    assert envelope_decrypt(envelope, sender) == plaintext
+    assert envelope_decrypt(envelope, r1) == plaintext
+    assert envelope_decrypt(envelope, r2) == plaintext
