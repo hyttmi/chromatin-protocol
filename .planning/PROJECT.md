@@ -346,4 +346,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-04 — Phase 84 complete: SDK auto-reconnect with jittered backoff, subscription restore, app callbacks (v2.0.0)*
+*Last updated: 2026-04-05 — Phase 85 complete: documentation refresh — PROTOCOL.md restructured, README rewritten, SDK docs updated for v2.0.0. All v2.0.0 phases complete.*
