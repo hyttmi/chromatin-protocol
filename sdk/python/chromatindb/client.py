@@ -1,10 +1,16 @@
 """Public ChromatinClient API for chromatindb SDK.
 
-Usage per D-01:
-    async with ChromatinClient.connect(host, port, identity) as conn:
+Usage:
+    async with ChromatinClient.connect([("relay1", 4201)], identity) as conn:
         result = await conn.write_blob(data=b"hello", ttl=3600)
 
-All transport internals are private per D-03.
+Multi-relay failover:
+    async with ChromatinClient.connect(
+        [("relay1", 4201), ("relay2", 4201)], identity
+    ) as conn:
+        await conn.ping()
+
+All transport internals are private.
 """
 
 from __future__ import annotations
@@ -100,8 +106,8 @@ class ChromatinClient:
         self._transport = transport
         self._subscriptions: set[bytes] = set()
         # Reconnect state (overridden by connect() classmethod)
-        self._host: str = ""
-        self._port: int = 0
+        self._relays: list[tuple[str, int]] = []
+        self._relay_index: int = 0
         self._identity: Identity | None = None
         self._timeout: float = 10.0
         self._auto_reconnect: bool = False
@@ -116,8 +122,7 @@ class ChromatinClient:
     @classmethod
     def connect(
         cls,
-        host: str,
-        port: int,
+        relays: list[tuple[str, int]],
         identity: Identity,
         *,
         timeout: float = 10.0,
@@ -128,25 +133,32 @@ class ChromatinClient:
         """Create a connection context manager.
 
         Args:
-            host: Relay hostname or IP.
-            port: Relay port.
+            relays: Ordered list of (host, port) relay addresses (SDK-01).
+                First relay is preferred/primary. List order defines priority.
             identity: Client ML-DSA-87 identity.
-            timeout: Handshake timeout in seconds (per D-07, default 10s).
+            timeout: Per-relay handshake timeout in seconds (default 10s).
             auto_reconnect: If True, transparently reconnect on connection loss.
             on_disconnect: Callback invoked when connection is lost.
             on_reconnect: Callback invoked after successful reconnect,
-                receives (attempt_count, downtime_seconds).
+                receives (cycle_count, downtime_seconds, relay_host, relay_port).
 
         Returns:
             Async context manager that yields ChromatinClient.
 
         Usage:
-            async with ChromatinClient.connect("192.168.1.200", 4201, identity) as conn:
+            async with ChromatinClient.connect(
+                [("relay1.example.com", 4201), ("relay2.example.com", 4201)],
+                identity,
+            ) as conn:
                 await conn.ping()
         """
+        if not relays:
+            raise ValueError(
+                "relays must be a non-empty list of (host, port) tuples"
+            )
         client = cls.__new__(cls)
-        client._host = host
-        client._port = port
+        client._relays = list(relays)
+        client._relay_index = 0
         client._identity = identity
         client._timeout = timeout
         client._transport = None  # type: ignore[assignment]
@@ -161,59 +173,26 @@ class ChromatinClient:
         return client
 
     async def __aenter__(self) -> ChromatinClient:
-        # Initial connection failure raises immediately (no auto-reconnect
-        # until first successful connect, per Research Pitfall 5).
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(
-                    self._host, self._port, limit=4 * 1024 * 1024
-                ),
-                timeout=self._timeout,
-            )
-            # Disable Nagle for low-latency framed protocol
-            sock = writer.transport.get_extra_info("socket")
-            if sock is not None:
-                import socket
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except asyncio.TimeoutError:
-            raise HandshakeError(
-                f"connection timed out after {self._timeout}s"
-            ) from None
-
-        try:
-            result = await asyncio.wait_for(
-                perform_handshake(reader, writer, self._identity),
-                timeout=self._timeout,
-            )
-            send_key, recv_key, send_counter, recv_counter, _ = result
-        except asyncio.TimeoutError:
-            writer.close()
-            await writer.wait_closed()
-            raise HandshakeError(
-                f"handshake timed out after {self._timeout}s"
-            ) from None
-        except Exception:
-            writer.close()
-            await writer.wait_closed()
-            raise
-
-        self._transport = Transport(
-            reader,
-            writer,
-            send_key,
-            recv_key,
-            send_counter,
-            recv_counter,
-        )
-        self._transport.start()
-        self._state = ConnectionState.CONNECTED
-        self._connected_event.set()
-        # Start connection monitor if auto_reconnect enabled
-        if self._auto_reconnect:
-            self._monitor_task = asyncio.get_event_loop().create_task(
-                self._connection_monitor()
-            )
-        return self
+        # Initial connection rotates through relay list (SDK-01).
+        # No backoff on initial connect -- if all relays fail, raise immediately.
+        last_exc: Exception | None = None
+        for i, (host, port) in enumerate(self._relays):
+            self._relay_index = i
+            try:
+                await self._do_connect(host, port)
+                self._state = ConnectionState.CONNECTED
+                self._connected_event.set()
+                if self._auto_reconnect:
+                    self._monitor_task = asyncio.get_event_loop().create_task(
+                        self._connection_monitor()
+                    )
+                return self
+            except (HandshakeError, asyncio.TimeoutError, OSError) as exc:
+                last_exc = exc
+                log.debug("initial connect to %s:%d failed: %s", host, port, exc)
+                continue
+        # All relays failed
+        raise last_exc  # type: ignore[misc]
 
     async def __aexit__(
         self,
@@ -270,6 +249,11 @@ class ChromatinClient:
         """Current connection state."""
         return self._state
 
+    @property
+    def current_relay(self) -> tuple[str, int]:
+        """Currently connected (or last attempted) relay address."""
+        return self._relays[self._relay_index]
+
     async def wait_connected(self, timeout: float | None = None) -> bool:
         """Wait until connected. Returns True if connected, False on timeout.
 
@@ -322,59 +306,70 @@ class ChromatinClient:
             )
 
     async def _reconnect_loop(self) -> None:
-        """Background reconnect with jittered exponential backoff."""
-        attempt = 0
+        """Background reconnect cycling through relay list with backoff between full cycles."""
+        cycle_count = 0
         disconnect_time = time.monotonic()
         try:
             while self._state == ConnectionState.DISCONNECTED:
-                attempt += 1
-                delay = backoff_delay(attempt, base=1.0, cap=30.0)
-                log.debug("reconnect attempt %d in %.2fs", attempt, delay)
-                await asyncio.sleep(delay)
+                cycle_count += 1
+
+                # Backoff between full cycles (D-04), not between individual relays
+                if cycle_count > 1:
+                    delay = backoff_delay(cycle_count - 1, base=1.0, cap=30.0)
+                    log.debug("relay cycle %d, backoff %.2fs", cycle_count, delay)
+                    await asyncio.sleep(delay)
 
                 if self._state == ConnectionState.CLOSING:
                     return
 
-                self._state = ConnectionState.CONNECTING
-                try:
-                    await self._do_connect()
-                    self._state = ConnectionState.CONNECTED
-                    self._connected_event.set()
-                    log.info(
-                        "reconnected after %d attempts (%.1fs downtime)",
-                        attempt,
-                        time.monotonic() - disconnect_time,
-                    )
+                # Try each relay in order (D-03, D-05: no inter-attempt delay)
+                for i, (host, port) in enumerate(self._relays):
+                    if self._state == ConnectionState.CLOSING:
+                        return
 
-                    await self._restore_subscriptions()
-                    await invoke_callback(
-                        self._on_reconnect,
-                        attempt,
-                        time.monotonic() - disconnect_time,
-                    )
-
-                    # Restart connection monitor
-                    if self._monitor_task is not None:
-                        self._monitor_task.cancel()
-                        try:
-                            await self._monitor_task
-                        except asyncio.CancelledError:
-                            pass
-                    self._monitor_task = asyncio.get_event_loop().create_task(
-                        self._connection_monitor()
-                    )
-                    return
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    log.debug("reconnect attempt %d failed: %s", attempt, exc)
-                    self._state = ConnectionState.DISCONNECTED
+                    self._relay_index = i
+                    self._state = ConnectionState.CONNECTING
+                    try:
+                        await self._do_connect(host, port)
+                        self._state = ConnectionState.CONNECTED
+                        self._connected_event.set()
+                        log.info(
+                            "reconnected to %s:%d after %d cycle(s) (%.1fs downtime)",
+                            host, port, cycle_count,
+                            time.monotonic() - disconnect_time,
+                        )
+                        await self._restore_subscriptions()
+                        await invoke_callback(
+                            self._on_reconnect,
+                            cycle_count,
+                            time.monotonic() - disconnect_time,
+                            host,
+                            port,
+                        )
+                        # Restart connection monitor
+                        if self._monitor_task is not None:
+                            self._monitor_task.cancel()
+                            try:
+                                await self._monitor_task
+                            except asyncio.CancelledError:
+                                pass
+                        self._monitor_task = asyncio.get_event_loop().create_task(
+                            self._connection_monitor()
+                        )
+                        return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.debug("relay %s:%d failed: %s", host, port, exc)
+                        if self._state != ConnectionState.CLOSING:
+                            self._state = ConnectionState.DISCONNECTED
+                # Full cycle exhausted, loop back to top for backoff
         except asyncio.CancelledError:
             return
         finally:
             self._reconnect_task = None
 
-    async def _do_connect(self) -> None:
+    async def _do_connect(self, host: str, port: int) -> None:
         """Establish new TCP connection, perform PQ handshake, create Transport."""
         # Teardown old transport
         if self._transport is not None:
@@ -385,9 +380,7 @@ class ChromatinClient:
             self._transport = None
 
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                self._host, self._port, limit=4 * 1024 * 1024
-            ),
+            asyncio.open_connection(host, port, limit=4 * 1024 * 1024),
             timeout=self._timeout,
         )
         sock = writer.transport.get_extra_info("socket")

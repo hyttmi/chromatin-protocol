@@ -29,8 +29,8 @@ class ConnectionState(enum.Enum):
 # ---------------------------------------------------------------------------
 
 OnDisconnect = Callable[[], Awaitable[None] | None]
-OnReconnect = Callable[[int, float], Awaitable[None] | None]
-# on_reconnect receives (attempt_count: int, downtime_seconds: float)
+OnReconnect = Callable[[int, float, str, int], Awaitable[None] | None]
+# on_reconnect receives (cycle_count: int, downtime_seconds: float, relay_host: str, relay_port: int)
 
 
 # ---------------------------------------------------------------------------
