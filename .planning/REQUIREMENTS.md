@@ -27,8 +27,8 @@ Requirements for SDK envelope compression, notification filtering, relay/SDK res
 
 ### SDK Resilience
 
-- [ ] **SDK-01**: SDK connect() accepts a list of relay addresses and rotates to next on connection failure
-- [ ] **SDK-02**: SDK auto-reconnect tries next relay in the list when current relay is unreachable
+- [x] **SDK-01**: SDK connect() accepts a list of relay addresses and rotates to next on connection failure
+- [x] **SDK-02**: SDK auto-reconnect tries next relay in the list when current relay is unreachable
 
 ### Operational
 
@@ -72,8 +72,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | FILT-03 | Phase 88 | Complete |
 | RELAY-01 | Phase 88 | Complete |
 | RELAY-02 | Phase 88 | Complete |
-| SDK-01 | Phase 89 | Pending |
-| SDK-02 | Phase 89 | Pending |
+| SDK-01 | Phase 89 | Complete |
+| SDK-02 | Phase 89 | Complete |
 | OPS-01 | Phase 86 | Complete |
 | OPS-02 | Phase 90 | Pending |
 | OPS-03 | Phase 90 | Pending |

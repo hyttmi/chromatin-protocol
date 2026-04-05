@@ -188,7 +188,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 - [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
 - [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
 - [x] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay (completed 2026-04-05)
-- [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
+- [x] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover (completed 2026-04-05)
 - [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
 
 ## Phase Details
@@ -246,11 +246,11 @@ Plans:
   1. ChromatinClient.connect() accepts a list of (host, port) relay addresses and connects to the first reachable one
   2. When auto-reconnect detects a relay failure, the SDK tries the next relay in the list (cycling through all before retrying); a jittered delay (0-2s) prevents reconnect storms
   3. After exhausting the full relay list without success, the SDK applies circuit-breaker backoff before cycling again (not infinite tight-loop retry)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 89-01-PLAN.md — Core multi-relay implementation + reconnect tests
-- [ ] 89-02-PLAN.md — Remaining call site migration + documentation
+- [x] 89-01-PLAN.md — Core multi-relay implementation + reconnect tests
+- [x] 89-02-PLAN.md — Remaining call site migration + documentation
 
 ### Phase 90: Observability & Documentation
 **Goal**: Operators can scrape node metrics via Prometheus, and all documentation reflects the v2.1.0 feature set
@@ -275,5 +275,5 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
 | 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
 | 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
-| 89. SDK Multi-Relay Failover | 0/2 | In progress | - |
+| 89. SDK Multi-Relay Failover | 2/2 | Complete   | 2026-04-05 |
 | 90. Observability & Documentation | 0/0 | Not started | - |

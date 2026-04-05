@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: verifying
-stopped_at: Completed 89-01-PLAN.md
-last_updated: "2026-04-05T19:47:50.431Z"
+stopped_at: Completed 89-02-PLAN.md
+last_updated: "2026-04-05T19:53:43.000Z"
 last_activity: 2026-04-05
 progress:
   total_phases: 7
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 
 Phase: 85
 Plan: Not started
-Status: Phase complete — ready for verification
+Status: Phase 89 Plan 02 complete
 Last activity: 2026-04-05
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████████] 100%
 
 ## Accumulated Context
 
@@ -50,6 +50,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
 - [Phase 89]: OnReconnect extended to 4-arg (cycle_count, downtime, host, port) for relay info
 - [Phase 89]: _do_connect takes (host, port) params; CLOSING state guard in exception handler
+- [Phase 89-02]: All test/doc connect() calls migrated to relays=[]; Multi-Relay Failover sections in README + getting-started
 
 ### Pending Todos
 
@@ -68,7 +69,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T19:47:50.429Z
-Last activity: 2026-04-05 -- Executing Phase 85
-Stopped at: Completed 89-01-PLAN.md
+Last session: 2026-04-05T19:53:43Z
+Last activity: 2026-04-05 -- Executing Phase 89
+Stopped at: Completed 89-02-PLAN.md
 Resume file: None
