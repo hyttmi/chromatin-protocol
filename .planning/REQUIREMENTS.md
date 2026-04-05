@@ -9,10 +9,10 @@ Requirements for wire compression, notification filtering, relay/SDK resilience,
 
 ### Compression
 
-- [ ] **COMP-01**: Node compresses sync/data message payloads with Brotli before AEAD encryption (flag byte per message)
-- [ ] **COMP-02**: Node skips compression for payloads under 256 bytes or already-encrypted envelope data
-- [ ] **COMP-03**: Node enforces decompressed output cap at MAX_BLOB_DATA_SIZE to prevent decompression bombs
-- [ ] **COMP-04**: SDK compresses outbound and decompresses inbound payloads matching node behavior
+- [x] **COMP-01**: Node compresses sync/data message payloads with Brotli before AEAD encryption (flag byte per message)
+- [x] **COMP-02**: Node skips compression for payloads under 256 bytes or already-encrypted envelope data
+- [x] **COMP-03**: Node enforces decompressed output cap at MAX_BLOB_DATA_SIZE to prevent decompression bombs
+- [x] **COMP-04**: SDK compresses outbound and decompresses inbound payloads matching node behavior
 
 ### Notification Filtering
 
@@ -62,10 +62,10 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Req ID | Phase | Status |
 |--------|-------|--------|
-| COMP-01 | Phase 87 | Pending |
-| COMP-02 | Phase 87 | Pending |
-| COMP-03 | Phase 87 | Pending |
-| COMP-04 | Phase 87 | Pending |
+| COMP-01 | Phase 87 | Complete |
+| COMP-02 | Phase 87 | Complete |
+| COMP-03 | Phase 87 | Complete |
+| COMP-04 | Phase 87 | Complete |
 | FILT-01 | Phase 86 | Complete |
 | FILT-02 | Phase 86 | Complete |
 | FILT-03 | Phase 88 | Pending |

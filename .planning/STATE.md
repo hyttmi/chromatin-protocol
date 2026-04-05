@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
 status: executing
-stopped_at: Phase 87 context gathered
-last_updated: "2026-04-05T14:45:25.536Z"
+stopped_at: Completed 87-01-PLAN.md
+last_updated: "2026-04-05T15:25:45.943Z"
 last_activity: 2026-04-05
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 5
+  completed_plans: 4
   percent: 66
 ---
 
@@ -53,6 +53,7 @@ Progress: [██████░░░░] 66%
 
 *Updated after each plan completion*
 | Phase 86 P02 | 56min | 1 tasks | 2 files |
+| Phase 87 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,7 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - SDK multi-relay: randomized relay order at startup, jittered failover, circuit breaker after full list
 - [Phase 86-02]: max_peers SIGHUP-reloadable via mutable member; excess peers drain naturally (no mass disconnect)
 - [Phase 86-03]: Dynamic namespace discovery for integration tests: start-extract-stop-rewrite-restart pattern
+- [Phase 87]: Brotli quality 6, 256-byte threshold, compress=True default, streaming Decompressor for bomb protection
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T14:45:25.532Z
-Stopped at: Phase 87 context gathered
-Resume file: .planning/phases/87-wire-compression/87-CONTEXT.md
+Last session: 2026-04-05T15:25:45.941Z
+Stopped at: Completed 87-01-PLAN.md
+Resume file: None

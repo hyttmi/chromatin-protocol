@@ -217,10 +217,10 @@ Plans:
   2. SDK skips compression for plaintext under 256 bytes or when compressed output >= original size (expansion fallback); these use suite=0x01
   3. SDK `decrypt_envelope()` enforces a 100 MiB decompressed output cap via streaming decompressor, rejecting decompression bombs before full decompression completes
   4. SDK handles both suite=0x01 (uncompressed) and suite=0x02 (Brotli) envelopes transparently; PROTOCOL.md documents the new suite
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 87-01-PLAN.md — SDK envelope compression implementation + tests
+- [x] 87-01-PLAN.md — SDK envelope compression implementation + tests
 - [ ] 87-02-PLAN.md — Documentation: ROADMAP, REQUIREMENTS, PROTOCOL.md update
 
 ### Phase 88: Relay Resilience
@@ -265,7 +265,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 86. Namespace Filtering & Hot Reload | 2/3 | Complete    | 2026-04-05 |
-| 87. SDK Envelope Compression | 0/2 | Not started | - |
+| 87. SDK Envelope Compression | 1/2 | In Progress|  |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
 | 90. Observability & Documentation | 0/0 | Not started | - |
