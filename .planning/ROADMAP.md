@@ -261,7 +261,11 @@ Plans:
   2. /metrics endpoint reports all existing NodeMetrics counters and gauges (peer count, blob count, storage bytes, sync stats, connection counts) in Prometheus text exposition format
   3. PROTOCOL.md documents the Brotli compression frame format, SyncNamespaceAnnounce wire type, and /metrics endpoint configuration
   4. README.md, SDK README, and getting-started tutorial are updated to cover compression, filtering, multi-relay failover, and observability features
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 90-01-PLAN.md — Prometheus /metrics HTTP endpoint implementation + unit tests
+- [ ] 90-02-PLAN.md — Documentation refresh: PROTOCOL.md, README, SDK README, getting-started
 
 ## Progress
 
@@ -276,4 +280,4 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
 | 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
 | 89. SDK Multi-Relay Failover | 2/2 | Complete    | 2026-04-05 |
-| 90. Observability & Documentation | 0/0 | Not started | - |
+| 90. Observability & Documentation | 0/2 | Not started | - |
