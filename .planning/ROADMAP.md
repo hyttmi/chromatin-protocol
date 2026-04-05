@@ -273,7 +273,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 85-01-PLAN.md -- PROTOCOL.md restructure: push sync wire types, keepalive, Mermaid diagrams
-- [ ] 85-02-PLAN.md -- README.md rewrite + SDK README auto-reconnect API + tutorial Connection Resilience section
+- [x] 85-02-PLAN.md -- README.md rewrite + SDK README auto-reconnect API + tutorial Connection Resilience section
 
 ## Progress
 

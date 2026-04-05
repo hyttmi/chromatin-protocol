@@ -291,6 +291,98 @@ Note: `chromatindb.exceptions.ConnectionError` inherits from `ProtocolError`,
 not from Python's builtin `ConnectionError`. Import it explicitly to avoid
 confusion.
 
+## Connection Resilience
+
+The SDK automatically reconnects when the relay connection drops. Auto-reconnect
+is enabled by default -- no configuration needed for basic resilience.
+
+### Auto-Reconnect with Callbacks
+
+Use `on_disconnect` and `on_reconnect` callbacks to track connection state:
+
+```python
+async def on_disconnect():
+    print("Connection lost! Reconnecting...")
+
+async def on_reconnect(attempt: int, downtime: float):
+    print(f"Reconnected after {attempt} attempts ({downtime:.1f}s downtime)")
+    # Good place to catch up on missed data
+
+async with ChromatinClient.connect(
+    "192.168.1.200", 4201, identity,
+    on_disconnect=on_disconnect,
+    on_reconnect=on_reconnect,
+) as client:
+    # Your application logic here
+    await client.subscribe(identity.namespace)
+    async for notif in client.notifications():
+        print(f"New blob: {notif.blob_hash.hex()}")
+```
+
+The SDK uses jittered exponential backoff (1s base, 30s cap) and retries
+indefinitely until `close()` is called. All active subscriptions are
+automatically re-subscribed after a successful reconnect.
+
+### Connection State
+
+Check the current connection state at any time:
+
+```python
+from chromatindb import ConnectionState
+
+print(client.connection_state)
+# ConnectionState.CONNECTED, DISCONNECTED, CONNECTING, or CLOSING
+```
+
+### Waiting for Reconnection
+
+If another part of your application detects the disconnect, use
+`wait_connected()` to block until the connection is restored:
+
+```python
+# Block until reconnected (or timeout)
+connected = await client.wait_connected(timeout=10.0)
+if not connected:
+    print("Still disconnected after 10s")
+```
+
+### Catch-Up Pattern
+
+After reconnecting, your application may have missed notifications. Use
+the `on_reconnect` callback to re-read data:
+
+```python
+async def on_reconnect(attempt: int, downtime: float):
+    # Re-read any data that may have arrived during downtime
+    blobs = await client.list_blobs(identity.namespace, limit=50)
+    for ref in blobs.refs:
+        print(f"Blob: {ref.blob_hash.hex()}")
+
+async with ChromatinClient.connect(
+    "192.168.1.200", 4201, identity,
+    on_reconnect=on_reconnect,
+) as client:
+    await client.subscribe(identity.namespace)
+    async for notif in client.notifications():
+        process(notif)
+```
+
+### Disabling Auto-Reconnect
+
+Pass `auto_reconnect=False` if you want to handle reconnection yourself:
+
+```python
+async with ChromatinClient.connect(
+    "192.168.1.200", 4201, identity,
+    auto_reconnect=False,
+) as client:
+    # Connection loss will raise ConnectionError
+    pass
+```
+
+Note: Calling `close()` never triggers auto-reconnect, regardless of the
+`auto_reconnect` setting. Intentional disconnection is always clean.
+
 ## Next Steps
 
 - See the [API overview](../README.md) for the full list of available methods
@@ -298,5 +390,6 @@ confusion.
 - The SDK uses post-quantum cryptography (ML-DSA-87, ML-KEM-1024) automatically -- no configuration needed
 - Blobs are signed with your identity and verified by the node before storage
 - Encrypt data with `write_encrypted()` for zero-knowledge storage
+- Auto-reconnect handles connection drops transparently -- customize with `on_disconnect` and `on_reconnect` callbacks
 - Set up a directory for user discovery and group management
 - See [PROTOCOL.md](../../db/PROTOCOL.md) for the envelope binary format specification

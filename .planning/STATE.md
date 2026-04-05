@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.0.0
 milestone_name: Event-Driven Architecture
 status: verifying
-stopped_at: Completed 85-01-PLAN.md (PROTOCOL.md restructure)
+stopped_at: Completed all Phase 85 plans
 last_updated: "2026-04-05T05:17:33.085Z"
 last_activity: 2026-04-04
 progress:
@@ -47,7 +47,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - Phases 81, 83, 84 can be built in parallel with phases 80, 82
 - [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
 - [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
-- [Phase 85]: PROTOCOL.md restructured around connection lifecycle per D-05 with push-sync wire formats and keepalive spec
+- [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
 
 ### Pending Todos
 
@@ -67,6 +67,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-05T05:17:33.081Z
-Last activity: 2026-04-04 -- Executing Phase 84
-Stopped at: Completed 85-01-PLAN.md (PROTOCOL.md restructure)
+Last activity: 2026-04-05 -- Executing Phase 85
+Stopped at: Completed all Phase 85 plans
 Resume file: None
