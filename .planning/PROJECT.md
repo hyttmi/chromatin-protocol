@@ -349,4 +349,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 — Milestone v2.1.0 started: compression, filtering, observability*
+*Last updated: 2026-04-05 — Phase 86 complete: namespace filtering, BlobNotify scoping, max_peers SIGHUP reload*
