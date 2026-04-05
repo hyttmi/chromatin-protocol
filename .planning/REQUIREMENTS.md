@@ -16,8 +16,8 @@ Requirements for wire compression, notification filtering, relay/SDK resilience,
 
 ### Notification Filtering
 
-- [ ] **FILT-01**: Peers exchange sync_namespaces after handshake via SyncNamespaceAnnounce message
-- [ ] **FILT-02**: Node only sends BlobNotify to peers whose announced namespaces include the blob's namespace
+- [x] **FILT-01**: Peers exchange sync_namespaces after handshake via SyncNamespaceAnnounce message
+- [x] **FILT-02**: Node only sends BlobNotify to peers whose announced namespaces include the blob's namespace
 - [ ] **FILT-03**: Relay tracks per-client subscription namespaces and only forwards matching Notification messages
 
 ### Relay Resilience
@@ -66,8 +66,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | COMP-02 | Phase 87 | Pending |
 | COMP-03 | Phase 87 | Pending |
 | COMP-04 | Phase 87 | Pending |
-| FILT-01 | Phase 86 | Pending |
-| FILT-02 | Phase 86 | Pending |
+| FILT-01 | Phase 86 | Complete |
+| FILT-02 | Phase 86 | Complete |
 | FILT-03 | Phase 88 | Pending |
 | RELAY-01 | Phase 88 | Pending |
 | RELAY-02 | Phase 88 | Pending |

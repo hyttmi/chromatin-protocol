@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
-status: planning
-stopped_at: Phase 86 context gathered
-last_updated: "2026-04-05T08:29:32.403Z"
-last_activity: 2026-04-05 — Roadmap created for v2.1.0
+status: executing
+stopped_at: Completed 86-01-PLAN.md
+last_updated: "2026-04-05T10:23:41Z"
+last_activity: 2026-04-05
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 8
+  completed_plans: 1
+  percent: 12
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 86 (1 of 5) — Namespace Filtering & Hot Reload
-Plan: —
-Status: Ready to plan
-Last activity: 2026-04-05 — Roadmap created for v2.1.0
+Plan: 1 of 3
+Status: Executing phase 86
+Last activity: 2026-04-05
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 12%
 
 ## Performance Metrics
 
@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 86 | 1 | 71min | 71min |
 
 **Recent Trend:**
 
@@ -63,6 +63,8 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - Breaking protocol changes OK -- only deployed on home KVM, no production users
 - Brotli compression: compress inside TransportCodec::encode, before AEAD, flag byte prefix (0x00/0x01)
 - BlobNotify filter by sync_namespaces (node replication config), NOT subscribed_namespaces (client state)
+- [Phase 86-01]: SyncNamespaceAnnounce dispatched inline (not sync inbox) to avoid re-announce race during active sync
+- [Phase 86-01]: Raw binary payload for announce (existing encode_namespace_list) -- consistent with all 61 other message types
 - Prometheus /metrics: localhost-only default, disabled by default, no crypto material in labels
 - Relay subscription forwarding: stateful per-session tracking with 256-namespace cap, connection-scoped cleanup
 - Relay auto-reconnect: ACTIVE/RECONNECTING/DEAD state machine, new socket per attempt
@@ -79,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T08:29:32.398Z
-Stopped at: Phase 86 context gathered
-Resume file: .planning/phases/86-namespace-filtering-hot-reload/86-CONTEXT.md
+Last session: 2026-04-05T10:23:41Z
+Stopped at: Completed 86-01-PLAN.md
+Resume file: None

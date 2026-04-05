@@ -260,7 +260,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 86. Namespace Filtering & Hot Reload | 0/3 | Planning complete | - |
+| 86. Namespace Filtering & Hot Reload | 1/3 | Executing | - |
 | 87. Wire Compression | 0/0 | Not started | - |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
