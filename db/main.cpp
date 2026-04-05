@@ -145,7 +145,6 @@ int cmd_run(int argc, char* argv[]) {
 
     spdlog::info("max peers: {}", config.max_peers);
     spdlog::info("safety-net interval: {}s", config.safety_net_interval_seconds);
-    spdlog::info("expiry scan interval: {}s", config.expiry_scan_interval_seconds);
     if (config.compaction_interval_hours > 0) {
         spdlog::info("compaction interval: {}h", config.compaction_interval_hours);
     } else {

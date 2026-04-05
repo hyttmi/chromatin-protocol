@@ -90,9 +90,6 @@ PeerManager::PeerManager(const config::Config& config,
     max_sync_sessions_ = config.max_sync_sessions;
     safety_net_interval_seconds_ = config.safety_net_interval_seconds;
 
-    // Initialize expiry scan interval from config
-    expiry_scan_interval_seconds_ = config.expiry_scan_interval_seconds;
-
     // Initialize compaction interval from config
     compaction_interval_hours_ = config.compaction_interval_hours;
 
@@ -2886,12 +2883,6 @@ void PeerManager::reload_config() {
         }
     }
     spdlog::info("config reload: trusted_peers={} addresses", trusted_peers_.size());
-
-    // Reload expiry scan interval
-    expiry_scan_interval_seconds_ = new_cfg.expiry_scan_interval_seconds;
-    spdlog::info("config reload: expiry_scan_interval={}s", expiry_scan_interval_seconds_);
-    // Cancel current expiry timer to restart with new interval
-    if (expiry_timer_) { expiry_timer_->cancel(); }
 
     // Reload compaction interval
     auto old_compaction = compaction_interval_hours_;

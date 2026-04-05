@@ -347,7 +347,6 @@ private:
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t safety_net_interval_seconds_ = 600;  // SIGHUP-reloadable (Phase 82)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
-    uint32_t expiry_scan_interval_seconds_ = 60;  // Deprecated (v2.0.0): ignored, expiry is event-driven. Kept for config file compatibility.
     uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise
     bool expiry_loop_running_ = false;   // Prevents double co_spawn of expiry_scan_loop
     uint32_t compaction_interval_hours_ = 6;      // SIGHUP-reloadable (Phase 55)

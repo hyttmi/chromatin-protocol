@@ -88,9 +88,7 @@ TEST_CASE("keepalive sends Ping and keeps peers alive", "[keepalive]") {
     ioc.run_for(std::chrono::milliseconds(100));
 }
 
-TEST_CASE("keepalive runs regardless of inactivity config", "[keepalive]") {
-    // Verify that keepalive_loop() is spawned regardless of
-    // inactivity_timeout_seconds config value (it's now deprecated).
+TEST_CASE("keepalive runs with default config", "[keepalive]") {
 
     TempDir tmp1, tmp2;
 
@@ -105,7 +103,6 @@ TEST_CASE("keepalive runs regardless of inactivity config", "[keepalive]") {
     cfg1.data_dir = tmp1.path.string();
     cfg1.safety_net_interval_seconds = 600;
     cfg1.max_peers = 32;
-    cfg1.inactivity_timeout_seconds = 0;  // Was "disabled" -- now ignored
     cfg1.allowed_peer_keys = {id2_ns_hex};
 
     Config cfg2;
@@ -113,7 +110,6 @@ TEST_CASE("keepalive runs regardless of inactivity config", "[keepalive]") {
     cfg2.data_dir = tmp2.path.string();
     cfg2.safety_net_interval_seconds = 600;
     cfg2.max_peers = 32;
-    cfg2.inactivity_timeout_seconds = 0;  // Was "disabled" -- now ignored
     cfg2.allowed_peer_keys = {id1_ns_hex};
 
     Storage store1(tmp1.path.string());
@@ -127,7 +123,7 @@ TEST_CASE("keepalive runs regardless of inactivity config", "[keepalive]") {
     AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
 
     PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
-    pm1.start();  // Should not crash despite inactivity_timeout_seconds=0
+    pm1.start();
     cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
     PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
     pm2.start();

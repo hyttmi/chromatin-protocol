@@ -48,8 +48,6 @@ Config load_config(const std::filesystem::path& path) {
         cfg.log_max_size_mb = j.value("log_max_size_mb", cfg.log_max_size_mb);
         cfg.log_max_files = j.value("log_max_files", cfg.log_max_files);
         cfg.log_format = j.value("log_format", cfg.log_format);
-        cfg.inactivity_timeout_seconds = j.value("inactivity_timeout_seconds", cfg.inactivity_timeout_seconds);
-        cfg.expiry_scan_interval_seconds = j.value("expiry_scan_interval_seconds", cfg.expiry_scan_interval_seconds);
         cfg.compaction_interval_hours = j.value("compaction_interval_hours", cfg.compaction_interval_hours);
         cfg.uds_path = j.value("uds_path", cfg.uds_path);
     } catch (const nlohmann::json::type_error& e) {
@@ -67,8 +65,7 @@ Config load_config(const std::filesystem::path& path) {
         "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
-        "log_format", "inactivity_timeout_seconds",
-        "expiry_scan_interval_seconds", "compaction_interval_hours",
+        "log_format", "compaction_interval_hours",
         "uds_path"
     };
     for (const auto& [key, _] : j.items()) {
@@ -289,14 +286,6 @@ void validate_config(const Config& cfg) {
     if (cfg.log_max_files < 1) {
         errors.push_back("log_max_files must be >= 1 (got " +
                           std::to_string(cfg.log_max_files) + ")");
-    }
-    if (cfg.inactivity_timeout_seconds != 0 && cfg.inactivity_timeout_seconds < 30) {
-        errors.push_back("inactivity_timeout_seconds must be 0 (disabled) or >= 30 (got " +
-                          std::to_string(cfg.inactivity_timeout_seconds) + ")");
-    }
-    if (cfg.expiry_scan_interval_seconds < 10) {
-        errors.push_back("expiry_scan_interval_seconds must be >= 10 (got " +
-                          std::to_string(cfg.expiry_scan_interval_seconds) + ")");
     }
     // compaction_interval_hours: 0 = disabled, minimum 1 when enabled
     // (uint32_t guarantees non-zero values are >= 1, but document the intent)
