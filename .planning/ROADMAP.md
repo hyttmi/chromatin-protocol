@@ -175,7 +175,7 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 - [x] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup (completed 2026-04-04)
 - [x] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection (completed 2026-04-04)
 - [x] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration (completed 2026-04-04)
-- [ ] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0
+- [x] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0 (completed 2026-04-05)
 
 ## Phase Details
 
@@ -290,4 +290,4 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
 | 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
 | 84. SDK Auto-Reconnect | 2/2 | Complete    | 2026-04-04 |
-| 85. Documentation Refresh | 1/2 | In Progress|  |
+| 85. Documentation Refresh | 1/2 | Complete    | 2026-04-05 |
