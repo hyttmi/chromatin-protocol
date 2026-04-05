@@ -6,9 +6,12 @@
 #include <asio.hpp>
 #include <asio/local/stream_protocol.hpp>
 
+#include <array>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 namespace chromatindb::relay::core {
 
@@ -19,6 +22,18 @@ class RelaySession : public std::enable_shared_from_this<RelaySession> {
 public:
     using Ptr = std::shared_ptr<RelaySession>;
     using CloseCallback = std::function<void(RelaySession::Ptr)>;
+
+    /// Custom hash for 32-byte namespace IDs (already SHA3-256, uniformly distributed).
+    struct NamespaceHash {
+        size_t operator()(const std::array<uint8_t, 32>& ns) const {
+            size_t h;
+            std::memcpy(&h, ns.data(), sizeof(h));
+            return h;
+        }
+    };
+    using NamespaceSet = std::unordered_set<std::array<uint8_t, 32>, NamespaceHash>;
+
+    static constexpr size_t MAX_SUBSCRIPTIONS = 256;
 
     /// Create a relay session for an authenticated client connection.
     /// client_conn must already be post-handshake (authenticated).
@@ -77,6 +92,7 @@ private:
     asio::io_context& ioc_;
     std::string client_pk_hex_;
     bool stopped_ = false;
+    NamespaceSet subscribed_namespaces_;
 
     CloseCallback close_cb_;
 };

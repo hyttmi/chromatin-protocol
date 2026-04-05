@@ -1,6 +1,7 @@
 #include "relay/core/relay_session.h"
 #include "relay/core/message_filter.h"
 #include "db/crypto/hash.h"
+#include "db/peer/peer_manager.h"
 #include "db/util/hex.h"
 
 #include <spdlog/spdlog.h>
@@ -110,6 +111,29 @@ void RelaySession::handle_client_message(
         return;
     }
 
+    // Per D-09/FILT-03: Intercept Subscribe/Unsubscribe to track subscriptions locally
+    if (type == chromatindb::wire::TransportMsgType_Subscribe) {
+        auto namespaces = chromatindb::peer::PeerManager::decode_namespace_list(payload);
+        for (const auto& ns : namespaces) {
+            if (subscribed_namespaces_.size() >= MAX_SUBSCRIPTIONS) {
+                spdlog::warn("client {} exceeded subscription cap ({}), rejecting",
+                             client_pk_hex_, MAX_SUBSCRIPTIONS);
+                break;  // Per D-08: reject beyond cap
+            }
+            subscribed_namespaces_.insert(ns);
+        }
+        spdlog::debug("client {} subscribed: {} new, {} total",
+                      client_pk_hex_, namespaces.size(), subscribed_namespaces_.size());
+    }
+    if (type == chromatindb::wire::TransportMsgType_Unsubscribe) {
+        auto namespaces = chromatindb::peer::PeerManager::decode_namespace_list(payload);
+        for (const auto& ns : namespaces) {
+            subscribed_namespaces_.erase(ns);
+        }
+        spdlog::debug("client {} unsubscribed: {} removed, {} remaining",
+                      client_pk_hex_, namespaces.size(), subscribed_namespaces_.size());
+    }
+
     // Forward allowed message to node
     auto self = shared_from_this();
     auto t = type;
@@ -126,7 +150,17 @@ void RelaySession::handle_node_message(
     std::vector<uint8_t> payload,
     uint32_t request_id) {
 
-    // No filtering on node->client direction -- node only sends client-understood types
+    // Per D-10/FILT-03: Filter Notification by client subscription set
+    if (type == chromatindb::wire::TransportMsgType_Notification) {
+        if (payload.size() < 32) return;  // Malformed notification, drop
+        std::array<uint8_t, 32> ns_id{};
+        std::memcpy(ns_id.data(), payload.data(), 32);
+        if (subscribed_namespaces_.find(ns_id) == subscribed_namespaces_.end()) {
+            return;  // Not subscribed to this namespace, drop silently
+        }
+    }
+
+    // Forward to client
     auto self = shared_from_this();
     auto t = type;
     auto p = std::move(payload);
