@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
-status: planning
-stopped_at: Phase 86 context gathered
-last_updated: "2026-04-05T08:29:32.403Z"
-last_activity: 2026-04-05 — Roadmap created for v2.1.0
+status: executing
+stopped_at: Completed 86-02-PLAN.md
+last_updated: "2026-04-05T10:09:50.256Z"
+last_activity: 2026-04-05 — Completed 86-02 (max_peers SIGHUP hot reload)
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 3
+  completed_plans: 1
+  percent: 33
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 86 (1 of 5) — Namespace Filtering & Hot Reload
-Plan: —
-Status: Ready to plan
-Last activity: 2026-04-05 — Roadmap created for v2.1.0
+Plan: 2 of 3
+Status: Executing
+Last activity: 2026-04-05 — Completed 86-02 (max_peers SIGHUP hot reload)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [###░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 86 P02 | 56min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,7 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - Relay subscription forwarding: stateful per-session tracking with 256-namespace cap, connection-scoped cleanup
 - Relay auto-reconnect: ACTIVE/RECONNECTING/DEAD state machine, new socket per attempt
 - SDK multi-relay: randomized relay order at startup, jittered failover, circuit breaker after full list
+- [Phase 86-02]: max_peers SIGHUP-reloadable via mutable member; excess peers drain naturally (no mass disconnect)
 
 ### Pending Todos
 
@@ -79,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T08:29:32.398Z
-Stopped at: Phase 86 context gathered
-Resume file: .planning/phases/86-namespace-filtering-hot-reload/86-CONTEXT.md
+Last session: 2026-04-05T10:08:18Z
+Stopped at: Completed 86-02-PLAN.md
+Resume file: .planning/phases/86-namespace-filtering-hot-reload/86-02-SUMMARY.md

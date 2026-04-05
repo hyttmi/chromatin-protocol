@@ -32,7 +32,7 @@ Requirements for wire compression, notification filtering, relay/SDK resilience,
 
 ### Operational
 
-- [ ] **OPS-01**: max_peers is reloadable via SIGHUP without node restart
+- [x] **OPS-01**: max_peers is reloadable via SIGHUP without node restart
 - [ ] **OPS-02**: Node exposes Prometheus-compatible HTTP /metrics endpoint (localhost-only default, opt-in via config)
 - [ ] **OPS-03**: /metrics endpoint exposes all existing metrics (peers, blobs, sync, storage, connections)
 
@@ -73,7 +73,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | RELAY-02 | Phase 88 | Pending |
 | SDK-01 | Phase 89 | Pending |
 | SDK-02 | Phase 89 | Pending |
-| OPS-01 | Phase 86 | Pending |
+| OPS-01 | Phase 86 | Complete |
 | OPS-02 | Phase 90 | Pending |
 | OPS-03 | Phase 90 | Pending |
 | DOC-01 | Phase 90 | Pending |
