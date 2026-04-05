@@ -1,215 +1,297 @@
-# Feature Research: Event-Driven Sync for Distributed Blob Stores
+# Feature Research
 
-**Domain:** Push-based replication and event-driven maintenance in distributed blob stores
-**Researched:** 2026-04-02
-**Confidence:** HIGH (patterns well-established across CouchDB, Syncthing, Cassandra, IPFS, Redis)
+**Domain:** Decentralized PQ-secure database node -- compression, filtering, observability, resilience (v2.1.0)
+**Researched:** 2026-04-04
+**Confidence:** HIGH
 
 ## Feature Landscape
 
 ### Table Stakes (Users Expect These)
 
-Features that any push-based sync system must have. Without these, the event-driven architecture is incomplete or fragile.
+Features that any production-grade distributed database should have at this maturity level.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Push notification on blob ingest | Core value prop of event-driven sync. CouchDB continuous changes feed, Syncthing Index Update, IPFS Bitswap wantlist fulfillment -- all notify peers immediately on new data. Without this, "event-driven" is marketing. | MEDIUM | New wire type: BlobNotify (namespace:32 + blob_hash:32 + seq_num:8 + blob_size:4 + is_tombstone:1). Sent to all connected peers on ingest. Reuse existing Notification payload format (already 77 bytes, identical structure). Peer-to-peer analog of client-facing Notification type 21. |
-| Targeted blob fetch from notification | Peer receives BlobNotify, fetches that specific blob without full reconciliation. IPFS Bitswap: wantlist -> block response. CouchDB: changes feed -> doc fetch. This is the "O(1) fetch" that replaces "O(diff) reconciliation" for real-time updates. | MEDIUM | New wire types: BlobFetchRequest (namespace:32 + blob_hash:32) and BlobFetchResponse (reuse single-blob-transfer format). Leverage existing SyncProtocol::get_blobs_by_hashes() for lookup. Must handle "blob not found" (peer may have expired/deleted it). |
-| Reconcile-on-connect (initial sync) | Every distributed system reconciles state on connection establishment. Syncthing sends full Index on connect. Cassandra uses anti-entropy on node join. CouchDB replicates from last_seq. Without this, peers that reconnect after downtime have stale data until the next periodic sync (10-15 min is too long). | LOW | Already built: run_sync_with_peer() fires on_peer_connected -> on_ready. Just need to keep this behavior as the PRIMARY catchup mechanism. No new code, but must be explicitly preserved in the new architecture. |
-| Safety-net periodic reconciliation | All production systems keep a fallback anti-entropy mechanism. Cassandra: nodetool repair. CouchDB: periodic replication check. Syncthing: periodic full index rescan. The push path can lose messages (TCP buffer full, transient disconnect, race conditions). A 10-15 min background reconciliation catches anything missed. | LOW | Reuse existing sync_timer_loop() but increase interval from 60s to 600-900s. This becomes a monitoring signal, not the primary sync path. Log when safety-net finds discrepancies (indicates push path bugs). |
-| Application-level keepalive (Ping/Pong heartbeat) | RabbitMQ, gRPC, WebSocket protocols all use application-level heartbeats because TCP keepalive defaults are too slow (2 hours on Linux). Dead connection detection in <30s requires app-level pings. Bidirectional: both sides send, both sides monitor. | MEDIUM | New bidirectional heartbeat. Currently the C++ node only does receiver-side inactivity timeout (120s, no pings sent). Must add: node sends periodic Ping (e.g., every 15s), expects Pong within timeout. Existing Ping/Pong wire types (5/6) already exist. Must be careful about AEAD nonce interaction -- existing decision "receiver-side inactivity (not Ping sender)" was to avoid nonce desync, but with sequential send_counter_ serialization this is safe. |
-| SDK auto-reconnect with exponential backoff | PubNub, websockets library, gRPC -- all production SDKs auto-reconnect transparently. Without this, every connection drop requires manual application-level retry. Users expect `async with` to "just work" across transient failures. | HIGH | Requires reworking ChromatinClient from single-use context manager to persistent connection with reconnect loop. Jittered exponential backoff (1s min, 30s max). Must re-establish PQ handshake on each reconnect (new AEAD session). Restore subscriptions after reconnect. Highest complexity feature because it touches transport, handshake, and client layers. |
-| SDK subscription restoration on reconnect | WebSocket best practices, PubNub SDK, RingCentral -- all restore subscriptions automatically after reconnect. Without this, any reconnect silently drops pub/sub subscriptions and the application misses notifications with no error. | MEDIUM | Track `_subscriptions` set (already done in client.py). After successful reconnect + handshake, re-send Subscribe messages for all tracked namespaces. Must happen before returning control to caller. Gap between disconnect and reconnect means missed notifications -- document this limitation. |
+| Prometheus /metrics endpoint | Standard observability for any server daemon. Operators expect to scrape metrics without log parsing. Every serious service exposes /metrics. | MEDIUM | Already have SIGUSR1 dump + periodic log line with all the right counters. The data exists -- just need an HTTP endpoint exposing it in Prometheus text format. |
+| Hot config reload for max_peers | Already SIGHUP-reload ACL keys, rate limits, quotas, sync interval, log level, trusted peers, compaction interval. max_peers is the one missing piece -- operators expect all config to be reloadable. | LOW | Single line: read new_cfg.max_peers, store to member. Existing connections unaffected (only new accepts check limit). |
+| Relay auto-reconnect to node | Current relay tears down client immediately when UDS to node drops (relay_session.cpp:151). Node restart = all SDK clients disconnected. Expected: relay retries UDS, buffers or pauses until node returns. | MEDIUM | Relay currently creates one UDS connection per client session. Auto-reconnect needs a persistent relay-to-node connection model OR per-session reconnect with backoff. |
 
 ### Differentiators (Competitive Advantage)
 
-Features that go beyond table stakes. Not required for correctness, but provide measurable quality-of-life or performance benefits.
+Features that go beyond expectations and provide real value for the use case.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Event-driven expiry (next-expiry timer) | Replace periodic full-table scan with targeted timer set to the soonest expiring blob. Redis uses lazy expiry + periodic sampling. CouchDB doesn't expire at all. Most systems scan periodically. A next-expiry timer is more CPU-efficient: sleep until the next expiry, process it, set timer to the next one. Especially valuable when most blobs are permanent (TTL=0). | MEDIUM | Requires Storage to expose get_next_expiry_timestamp(). On blob store: if new blob's expiry < current timer target, reset timer. On expiry event: process expired blob, query next expiry, set new timer. Edge case: bulk inserts may thrash the timer -- use a small coalescing window (100ms). Falls back to periodic scan if no TTL blobs exist. |
-| Disconnect-triggered cursor cleanup | Replace 6-hour cursor compaction timer with immediate cleanup on peer disconnect. Currently cursors for disconnected peers accumulate for up to 6 hours. Immediate cleanup reduces memory waste and database entries. | LOW | Hook into on_peer_disconnected(). Call storage_.delete_cursors_for_peer(peer_pubkey_hash). Simple, no timer needed. The 6h timer was a YAGNI compromise when event-driven cleanup wasn't available -- now it is. |
-| Connection-scoped push state | Track which blobs each peer has been notified about. Prevents redundant notifications and enables smart push decisions. Syncthing tracks per-peer index state. IPFS Bitswap tracks per-peer wantlists. | HIGH | Not recommended for v2.0.0. The existing reconciliation protocol handles de-duplication on connect. Push notifications are cheap (77 bytes). Duplicate fetch requests are detected by content-addressing. The complexity of per-peer bloom filters or notification bitmaps is not justified yet. |
-| Notification coalescing / batching | Batch multiple BlobNotify messages into a single frame when multiple blobs arrive in rapid succession. Reduces frame overhead and AEAD encryption operations. gRPC supports message batching. Syncthing batches Index Update messages. | LOW | Simple coalescing: collect notifications for 10-50ms, send as batch. Wire format: [count:4][notification:77]*N. Low complexity, measurable throughput improvement during bulk ingest. Defer to v2.1 if not needed for correctness. |
+| Wire-level Brotli compression | Reduces bandwidth for blob transfer between nodes and from relay to SDK. Especially valuable for the 2592-byte ML-DSA-87 pubkey + ~4627-byte signature overhead that exists on every blob. FlatBuffer metadata and PQ crypto fields are highly compressible. | MEDIUM | Compress TransportMessage plaintext before AEAD encryption, decompress after decryption. Frame-level, not blob-level. Must negotiate capability during handshake (version/flag). CRITICAL CAVEAT: envelope-encrypted blob data (ciphertext) is incompressible -- compression only helps with plaintext blob data, protocol overhead (pubkey, signature, FlatBuffer framing), and metadata messages. |
+| Namespace-scoped BlobNotify filtering | Currently on_blob_ingested() sends BlobNotify to ALL TCP peers regardless of interest. With 100 namespaces and 10 peers, that is 1000 notifications for every ingest. Filtering at sender reduces this to only peers that care about the namespace. | LOW | Peers already track subscribed_namespaces for client Notification (type 21). Extend the same concept to BlobNotify for peers: let peers declare which namespaces they sync, skip BlobNotify for non-matching namespaces. sync_namespaces config already exists. |
+| Multi-relay SDK failover | SDK currently connects to exactly one host:port. If that relay is down, the SDK is dead. Accepting a list of relays with ordered failover makes the SDK resilient to single-relay failure. | MEDIUM | Extend connect() to accept list of (host, port) tuples. Try in order. On reconnect, rotate through the list. Must handle: which relay to try first on reconnect (last-known-good vs round-robin), timeout per attempt, total timeout across all attempts. |
+| Relay subscription forwarding | Relay currently forwards ALL node-to-client messages blindly (relay_session.cpp:129 "No filtering on node->client direction"). The node sends Notifications for all subscribed namespaces on the UDS connection. With namespace-aware relay filtering, the relay only forwards notifications matching the client's actual subscriptions. | MEDIUM | Relay needs to intercept Subscribe/Unsubscribe from client, track per-session subscription set, and filter Notification messages from node. Reduces unnecessary traffic when relay serves many clients with different namespace interests. |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
-Features that seem good but create problems in this specific context.
+Features that seem good but would cause problems in this system.
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Guaranteed delivery / message queue for push | "What if a peer misses a notification?" | Adding delivery guarantees (ACKs, retry queues, sequence tracking per peer) turns a simple push into a complex message broker. Cassandra's hinted handoff requires per-target hint storage, replay logic, and garbage collection. Redis Pub/Sub explicitly chose fire-and-forget because reliable delivery adds enormous complexity. The safety-net reconciliation catches any missed pushes within 10-15 minutes. | Fire-and-forget push + reconcile-on-connect + safety-net periodic reconciliation. Three-layer defense is simpler and more robust than guaranteed delivery. |
-| Gossip protocol for propagation | "Use epidemic gossip to spread updates to all nodes" | Gossip is for large clusters (100+ nodes) where direct notification to all peers is impractical. chromatindb has max_peers=32, fully meshed. Direct notification to all connected peers is O(peers) and already more efficient than gossip's O(log N * fanout) rounds. Gossip adds message amplification, probabilistic delivery, and convergence delays. | Direct push to all connected peers. With max_peers=32, this is at most 32 sends per blob ingest -- trivial. |
-| Causal ordering / vector clocks for push notifications | "Ensure notifications arrive in causal order" | Notifications are advisory ("go fetch this"). Ordering doesn't matter because the fetch is idempotent and content-addressed. If blob B depends on blob A, the application layer handles ordering, not the sync layer. Vector clocks add per-message metadata overhead and require merge logic. | Unordered notifications + content-addressed fetch. Application builds ordering from blob timestamps/seq_nums if needed. |
-| Push-based delete propagation (eager tombstone push) | "Push tombstones immediately like blob notifications" | Tombstones ARE blobs in chromatindb (signed, stored, replicated). They already flow through the same push notification path. No special handling needed. Trying to add a separate "delete propagation" mechanism creates a parallel channel that can diverge. | Tombstones use the exact same BlobNotify path. is_tombstone flag in the notification lets peers handle them appropriately. |
-| SDK transparent retry for write operations | "Retry writes automatically on reconnect" | Writes are NOT idempotent in user intent (same data produces same hash, but user may not want double-writes of different data). Auto-retrying a write after reconnect risks: (1) writing stale data if the application state changed, (2) masking failures the application should handle. Reads are safe to retry; writes are not. | Retry reads and queries transparently. Surface write failures to the application. Let the caller decide whether to retry a write. |
-| Full-state push (send blob data in notification) | "Include blob data in the notification to avoid a round-trip" | Blob data can be up to 100 MiB. Pushing full blobs would overwhelm peers with unwanted data (they may not care about all namespaces). CouchDB changes feed sends metadata, not document content. IPFS Bitswap sends block only when wantlisted. The pull model (notify metadata, fetch on demand) is universally preferred for large objects. | Push metadata-only notification (77 bytes). Peer decides whether to fetch based on namespace interest. |
+| Per-blob compression (compress before signing) | "Compress data field to save storage and bandwidth" | Breaks the signing model. Canonical signing input is SHA3-256(namespace \|\| data \|\| ttl \|\| timestamp). Compressing data before signing means decompression required before verification. Also breaks content-addressing -- blob_hash would be over compressed data, not original. Cross-SDK decompression compatibility nightmare. | Wire-level frame compression: compress the entire FlatBuffer payload at transport layer, transparent to storage and signing. |
+| zstd instead of Brotli | "zstd is faster for large binary data" | PROJECT.md explicitly specifies Brotli. While zstd has better speed for large blobs, Brotli has better ratio for the structured/repetitive data that dominates chromatindb wire traffic (FlatBuffer metadata, 2592-byte pubkeys, protocol messages). For encrypted blob data, NEITHER algorithm helps -- ciphertext is incompressible. The compressible portion is protocol overhead where Brotli excels. | Use Brotli at low compression levels (1-4) for speed comparable to zstd while keeping better ratio on structured data. |
+| Full-duplex relay UDS multiplexing | "Single UDS connection from relay to node serving all clients" | Breaks per-client session isolation. Current model: each client gets its own UDS connection to node, so subscriptions, rate limits, and ACL checks are per-client. Multiplexing would require the relay to manage client identity multiplexing, subscription routing, and rate limit attribution -- essentially reimplementing the node's session management. | Keep per-client UDS sessions. For relay auto-reconnect, reconnect the individual session's UDS socket. |
+| Push metrics to Grafana/external | "Push metrics to monitoring instead of pull" | Prometheus pull model is standard. Push adds a dependency (pushgateway or direct Grafana push), complicates configuration, and the daemon shouldn't need to know about monitoring infrastructure. | Expose /metrics HTTP endpoint. Let Prometheus scrape. Standard pattern. |
+| Compression negotiation per-message | "Negotiate compression per message type -- only compress large payloads" | Per-message negotiation adds complexity to every send/receive path. Tiny messages (Ping, Pong, Subscribe) don't benefit from compression but the overhead of checking is negligible. | Compress ALL frames above a minimum size threshold (e.g., 128 bytes). Small frames pass through uncompressed. Single flag in frame header. |
 
 ## Feature Dependencies
 
 ```
-[Push Notification on Ingest]
-    |
-    +--enables--> [Targeted Blob Fetch]
-    |                 |
-    |                 +--requires--> new BlobFetchRequest/Response wire types
-    |
-    +--enhances--> [Safety-Net Reconciliation]
-    |                 (push handles real-time, reconciliation catches gaps)
-    |
-    +--independent--> [Reconcile-on-Connect]
-                      (already exists, preserved as-is)
+[Brotli wire compression]
+    requires: handshake negotiation (capability flag)
+    requires: Python SDK brotli support (pip: brotli)
 
-[Application-Level Keepalive]
-    |
-    +--enables--> [SDK Auto-Reconnect]
-    |                 |
-    |                 +--requires--> dead connection detection
-    |                 +--requires--> [SDK Subscription Restoration]
-    |
-    +--enhances--> existing receiver-side inactivity timeout
-                   (replace 120s passive detection with 15-30s active detection)
+[Namespace-scoped BlobNotify]
+    requires: peer namespace interest declaration (new message type or config exchange)
+    enhances: [Relay subscription forwarding] (relay can also filter BlobNotify if exposed)
 
-[Event-Driven Expiry]
-    |
-    +--requires--> Storage::get_next_expiry_timestamp()
-    +--independent--> all sync features (orthogonal concern)
+[Multi-relay SDK failover]
+    requires: existing SDK auto-reconnect (Phase 84 -- DONE)
+    enhances: [Relay auto-reconnect to node] (failover gives SDK path around relay failure)
 
-[Disconnect-Triggered Cursor Cleanup]
-    |
-    +--requires--> on_peer_disconnected hook (already exists)
-    +--replaces--> cursor_compaction_loop (6h timer)
+[Relay subscription forwarding]
+    requires: relay intercepts Subscribe/Unsubscribe messages (currently forwards blindly)
+    enhances: [Namespace-scoped BlobNotify] (end-to-end filtering from node to SDK)
+
+[Relay auto-reconnect to node]
+    independent -- no feature dependencies
+    enhances: SDK stability (fewer disconnects propagating to clients)
+
+[Hot config reload for max_peers]
+    independent -- trivial addition to existing reload_config()
+
+[Prometheus /metrics endpoint]
+    independent -- uses existing metrics_ struct data
+    requires: embedded HTTP server (lightweight, listen on separate port)
 ```
 
 ### Dependency Notes
 
-- **Push Notification requires no new dependencies:** Reuses existing Notification payload format and on_blob_ingested callback infrastructure. The SyncProtocol already has set_on_blob_ingested() which fires for sync-received blobs. Direct ingests (client writes) also need to trigger push.
-- **Targeted Blob Fetch requires Push Notification:** Without notifications, there's nothing to trigger a targeted fetch. The notification carries the (namespace, blob_hash) needed for the fetch request.
-- **SDK Auto-Reconnect requires Keepalive:** Without bidirectional heartbeat, dead connections are detected by the 120s inactivity timeout (receiver-side only). Keepalive pings bring detection down to ~15-30s, enabling faster reconnect.
-- **SDK Subscription Restoration requires Auto-Reconnect:** Subscriptions are connection-scoped in the C++ node. A new connection = empty subscription set. Must re-subscribe after reconnect.
-- **Event-Driven Expiry is independent:** Can be implemented in any phase, has no dependency on sync features. However, implementing it alongside the other event-driven changes is logical for consistency.
-- **Disconnect-Triggered Cursor Cleanup is independent:** Simple hook, no dependency on push notification. Can replace the 6h timer in any phase.
+- **Brotli requires handshake negotiation:** Both sides must agree to use compression. A capability flag in TrustedHello/PQRequired exchange or a new CompressedFrame message type is needed. Older peers that don't understand compression must still work (graceful fallback to uncompressed).
+- **Multi-relay failover builds on auto-reconnect:** Phase 84 (SDK auto-reconnect) provides the backoff/retry machinery. Multi-relay extends the "where to reconnect" from single endpoint to ordered list.
+- **Relay subscription forwarding enables end-to-end filtering:** Without relay filtering, namespace-scoped BlobNotify at the node only helps peer-to-peer traffic. The relay still forwards all Notifications to all clients. With relay filtering, the full path is optimized.
+- **Prometheus endpoint is fully independent:** No protocol changes, no peer interaction. Just a lightweight HTTP listener exposing existing counters.
+
+## Feature Details
+
+### 1. Brotli Wire Compression
+
+**What it does:** Compresses the FlatBuffer plaintext payload before AEAD encryption. Decompresses after AEAD decryption. Operates at the frame level -- transparent to all message types.
+
+**Expected behavior:**
+- Negotiated during handshake via capability flag (e.g., `supports_compression: bool` in hello exchange)
+- Only active if BOTH sides support it
+- Frame header includes a 1-byte compression flag: 0x00 = uncompressed, 0x01 = Brotli
+- Minimum frame size threshold (e.g., 128 bytes) -- small frames skip compression
+- Brotli quality level 1-4 (fast compression, decent ratio)
+- Decompression side must enforce max decompressed size (prevent decompression bombs)
+
+**What compresses well (HIGH confidence):**
+- ML-DSA-87 public key (2592 bytes, highly structured binary) -- ~60-70% reduction expected
+- ML-DSA-87 signature (~4627 bytes) -- moderate reduction (~20-30%)
+- FlatBuffer framing overhead -- good reduction
+- Protocol messages (NamespaceList, ReconcileRanges, PeerListResponse) -- excellent reduction
+- Plaintext blob data (if not envelope-encrypted) -- good reduction
+
+**What does NOT compress (<1% reduction, HIGH confidence):**
+- Envelope-encrypted ciphertext (ChaCha20-Poly1305 output is high-entropy)
+- KEM ciphertexts in envelope headers (1568 bytes each, random)
+- AEAD tags
+
+**Net benefit assessment:** For a typical blob with envelope encryption, the compressible portion is pubkey (2592B) + signature (~4627B) + FlatBuffer overhead (~100B) = ~7.3 KB overhead per blob. At 50% compression of this overhead, savings are ~3.6 KB per blob. For small blobs (<10 KB data), this is significant. For large blobs (1 MiB+), the encrypted data dominates and compression provides negligible benefit. Protocol/sync messages compress very well (60-80%).
+
+**New dependency:** google/brotli (C++, CMake, MIT license). Python: `brotli` pip package.
+
+### 2. Namespace-Scoped BlobNotify Filtering
+
+**What it does:** When a blob is ingested, the node only sends BlobNotify to peers that have declared interest in that namespace, rather than broadcasting to all TCP peers.
+
+**Expected behavior:**
+- Peers declare interest via existing `sync_namespaces` config (already parsed, stored in sync_namespaces_ set)
+- During connection setup or via a new InterestDeclaration message, peers exchange their namespace interest lists
+- Empty interest list = "interested in everything" (backward compatible default)
+- on_blob_ingested() checks peer's interest set before sending BlobNotify
+- Subscribed clients (Notification type 21) continue to work exactly as before -- this only affects BlobNotify (type 59) to TCP peers
+
+**Complexity:** LOW. The sync_namespaces concept already exists. The main work is:
+1. Exchange interest declarations between peers during/after handshake
+2. Store per-peer interest set (already have subscribed_namespaces for clients)
+3. Filter in on_blob_ingested() BlobNotify loop
+
+### 3. Multi-Relay SDK Failover
+
+**What it does:** SDK connect() accepts a list of relay endpoints instead of a single (host, port). Tries them in order for initial connection and rotates through them on reconnect.
+
+**Expected behavior:**
+- `ChromatinClient.connect(relays=[(host1, port1), (host2, port2)], identity=...)` new signature
+- Backward compatible: single (host, port) still works
+- Initial connect: try relays in order, fail after all exhausted
+- On disconnect + auto-reconnect: start with last-known-good relay, then rotate
+- Per-relay connect timeout (e.g., 5s) with total timeout across all relays
+- `on_disconnect` callback fires once regardless of how many relays are tried
+- `on_reconnect` callback fires when ANY relay reconnects successfully
+- Track which relay is currently connected (expose via property for logging)
+
+**Complexity:** MEDIUM. The reconnect machinery exists (Phase 84). Changes needed:
+1. New connect() overload accepting relay list
+2. Reconnect loop iterates relay list instead of single endpoint
+3. State tracking for current relay index
+
+### 4. Relay Subscription Forwarding
+
+**What it does:** Relay tracks which namespaces each client has subscribed to, and only forwards Notification messages (type 21) from the node that match the client's subscriptions.
+
+**Expected behavior:**
+- Relay intercepts Subscribe (type 19) and Unsubscribe (type 20) messages from client
+- Still forwards them to node (node needs to know for its own subscription tracking)
+- Relay maintains per-session `std::set<namespace_hash>` of subscribed namespaces
+- On Notification (type 21) from node, relay checks if namespace matches client's subscriptions
+- Non-matching notifications are dropped at the relay (not forwarded to client)
+- Empty subscription set = forward nothing (client hasn't subscribed to anything yet)
+
+**Complexity:** MEDIUM. The relay currently has zero state about message semantics. This adds:
+1. Subscription state tracking per RelaySession
+2. Notification payload parsing (read first 32 bytes = namespace_id)
+3. Filter check before forwarding node->client messages
+
+### 5. Relay Auto-Reconnect to Node
+
+**What it does:** When the UDS connection from relay to node drops (node restart, crash), relay automatically retries instead of tearing down all client sessions.
+
+**Expected behavior:**
+- Current behavior: node UDS loss -> immediate client disconnect (relay_session.cpp:151)
+- New behavior: node UDS loss -> relay pauses client session, retries UDS connection with backoff
+- Backoff: jittered exponential (1s, 2s, 4s, 8s, cap at 30s) -- same pattern as SDK reconnect
+- During reconnect: client messages are rejected with a temporary error or queued (TBD)
+- On successful UDS reconnect: TrustedHello handshake, replay client subscriptions to node
+- Max reconnect attempts before giving up (e.g., 10 attempts = ~2 minutes)
+- If reconnect fails permanently, tear down client session as today
+
+**Complexity:** MEDIUM-HIGH. Significant relay architecture change:
+1. RelaySession needs UDS reconnect loop (currently UDS connect is fire-once in start())
+2. Client message handling during UDS downtime (queue? reject? pause TCP reads?)
+3. Re-establishment of node-side state (subscriptions) after reconnect
+4. Lifecycle management -- avoid race between reconnect and client disconnect
+
+### 6. Hot Config Reload for max_peers
+
+**What it does:** Makes max_peers SIGHUP-reloadable like all other config parameters.
+
+**Expected behavior:**
+- SIGHUP re-reads config file, updates max_peers
+- If new max_peers < current connection count: do NOT disconnect existing peers (disruptive)
+- Instead: refuse new connections until count drops below new limit naturally
+- Log the change: "config reload: max_peers=N (currently M connected)"
+- allowed_client_keys and allowed_peer_keys are already SIGHUP-reloadable (confirmed in reload_config())
+
+**Complexity:** LOW. One line to add to reload_config():
+```cpp
+config_.max_peers = new_cfg.max_peers;  // (or max_peers_ member)
+spdlog::info("config reload: max_peers={}", config_.max_peers);
+```
+The accept loop already checks `peers_.size() < config_.max_peers` on every new connection.
+
+### 7. Prometheus-Compatible HTTP /metrics Endpoint
+
+**What it does:** Exposes existing metrics via HTTP GET /metrics in Prometheus text exposition format.
+
+**Expected behavior:**
+- Separate HTTP port (e.g., 9100 or configurable `metrics_port`)
+- GET /metrics returns text/plain with Prometheus text format
+- No authentication on metrics endpoint (standard practice -- bind to localhost or internal network)
+- Metrics exposed (from existing metrics_ struct + storage queries):
+  - `chromatindb_peers_connected` (gauge)
+  - `chromatindb_peers_connected_total` (counter)
+  - `chromatindb_peers_disconnected_total` (counter)
+  - `chromatindb_blobs_total` (gauge -- blob count)
+  - `chromatindb_storage_bytes` (gauge)
+  - `chromatindb_syncs_total` (counter)
+  - `chromatindb_ingests_total` (counter)
+  - `chromatindb_rejections_total` (counter)
+  - `chromatindb_rate_limited_total` (counter)
+  - `chromatindb_cursor_hits_total` (counter)
+  - `chromatindb_cursor_misses_total` (counter)
+  - `chromatindb_full_resyncs_total` (counter)
+  - `chromatindb_quota_rejections_total` (counter)
+  - `chromatindb_sync_rejections_total` (counter)
+  - `chromatindb_uptime_seconds` (gauge)
+  - `chromatindb_namespaces_total` (gauge)
+- Labels: `{node="pubkey_hash_hex"}`
+
+**Implementation approach:** The Prometheus text format is trivial -- plain text with `metric_name{labels} value` per line. No need for prometheus-cpp library (which brings civetweb, curl, zlib dependencies). Use standalone Asio to serve a minimal HTTP listener on the metrics port. ~150 lines of code. The data already exists in dump_metrics()/log_metrics_line() -- just format as Prometheus text instead of spdlog.
+
+**Complexity:** MEDIUM. Not because the format is hard, but because adding an HTTP listener to a standalone Asio application requires careful lifecycle management (separate acceptor, separate port, graceful shutdown).
 
 ## MVP Definition
 
-### Launch With (v2.0.0)
+### Launch With (v2.1.0)
 
-The minimum set to replace timer-paced sync with event-driven sync and achieve sub-second cross-node propagation.
+All seven features are targeted for this milestone. Ordered by implementation dependency and value:
 
-- [x] Push notification on blob ingest -- the core value prop
-- [x] Targeted blob fetch from notification -- completes the push->fetch loop
-- [x] Reconcile-on-connect preserved -- catchup after downtime
-- [x] Safety-net periodic reconciliation (10-15 min) -- correctness backstop
-- [x] Application-level bidirectional keepalive -- dead connection detection
-- [x] SDK auto-reconnect with exponential backoff -- transparent recovery
-- [x] SDK subscription restoration on reconnect -- pub/sub continuity
-- [x] Event-driven expiry (next-expiry timer) -- replace periodic scan
-- [x] Disconnect-triggered cursor cleanup -- replace 6h timer
-- [x] Documentation refresh -- PROTOCOL.md, README, SDK docs
+- [x] Hot config reload for max_peers -- trivial, unblocks nothing, just do it (P1, LOW effort)
+- [x] Prometheus /metrics endpoint -- independent, high operator value (P1, MEDIUM effort)
+- [x] Namespace-scoped BlobNotify filtering -- low complexity, reduces peer traffic (P1, LOW effort)
+- [x] Relay subscription forwarding -- completes the filtering story end-to-end (P1, MEDIUM effort)
+- [x] Relay auto-reconnect to node -- resilience foundation for relay layer (P1, MEDIUM-HIGH effort)
+- [x] Multi-relay SDK failover -- resilience foundation for SDK layer (P2, MEDIUM effort)
+- [x] Brotli wire compression -- new dependency, protocol change, most complex (P2, MEDIUM effort)
 
-### Add After Validation (v2.x)
+### Add After Validation (post v2.1.0)
 
-Features to add once the core event-driven sync is proven in the KVM test swarm.
+- [ ] Compression statistics in /metrics -- track bytes saved, compression ratios per message type
+- [ ] Relay /metrics endpoint -- expose relay-specific metrics (sessions, forwarded/dropped messages)
+- [ ] Dynamic compression level based on payload size -- lower quality for large blobs, higher for small
 
-- [ ] Notification coalescing/batching -- if bulk ingest performance is an issue
-- [ ] Per-peer notification deduplication -- if notification volume becomes a problem
-- [ ] Configurable heartbeat interval -- YAGNI until operator requests it
+### Future Consideration (v2.2.0+)
 
-### Future Consideration (v3+)
-
-Features to defer until the system needs to scale beyond current architecture.
-
-- [ ] Gossip-based propagation -- only if peer count grows beyond direct notification limits
-- [ ] Guaranteed delivery with hint storage -- only if safety-net reconciliation proves insufficient
-- [ ] Vector clocks / causal ordering -- only if application layer needs it
+- [ ] Selective namespace sync (only replicate declared namespaces) -- builds on BlobNotify filtering
+- [ ] Relay connection pooling to node (pre-opened UDS connections for faster client onboarding)
+- [ ] SDK health check API exposing current relay, connection state, and metrics
 
 ## Feature Prioritization Matrix
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Push notification on ingest | HIGH | MEDIUM | P1 |
-| Targeted blob fetch | HIGH | MEDIUM | P1 |
-| Reconcile-on-connect (preserve) | HIGH | LOW | P1 |
-| Safety-net reconciliation (reconfig) | HIGH | LOW | P1 |
-| Bidirectional keepalive | HIGH | MEDIUM | P1 |
-| Event-driven expiry | MEDIUM | MEDIUM | P1 |
-| Disconnect-triggered cursor cleanup | MEDIUM | LOW | P1 |
-| SDK auto-reconnect | HIGH | HIGH | P1 |
-| SDK subscription restoration | MEDIUM | MEDIUM | P1 |
-| Documentation refresh | HIGH | MEDIUM | P1 |
-| Notification coalescing | LOW | LOW | P3 |
+| Hot config reload (max_peers) | MEDIUM | LOW | P1 |
+| Prometheus /metrics endpoint | HIGH | MEDIUM | P1 |
+| Namespace-scoped BlobNotify filtering | MEDIUM | LOW | P1 |
+| Relay subscription forwarding | MEDIUM | MEDIUM | P1 |
+| Relay auto-reconnect to node | HIGH | MEDIUM-HIGH | P1 |
+| Multi-relay SDK failover | HIGH | MEDIUM | P2 |
+| Brotli wire compression | MEDIUM | MEDIUM | P2 |
 
 **Priority key:**
-- P1: Must have for v2.0.0 launch (all features in this milestone are P1 per PROJECT.md)
-- P2: Should have, add when possible
-- P3: Nice to have, future consideration
+- P1: Must have for launch -- observability, filtering, resilience
+- P2: Should have -- compression and SDK failover are valuable but not blocking
 
 ## Competitor Feature Analysis
 
-| Feature | CouchDB | Syncthing | Cassandra | IPFS Bitswap | chromatindb v2.0.0 |
-|---------|---------|-----------|-----------|--------------|---------------------|
-| Push notification | Continuous changes feed (HTTP long-poll) | Index Update message (BEP) | Write-to-all-replicas (direct) | Wantlist fulfillment | BlobNotify to all connected peers |
-| Fetch mechanism | GET /db/doc_id | Block Request/Response | Read from coordinator | Block request by CID | BlobFetchRequest/Response |
-| Initial sync | Replicate from last_seq | Full Index on connect | Anti-entropy with Merkle trees | Bitswap session wantlist | XOR-fingerprint reconciliation (existing) |
-| Anti-entropy | Continuous replication monitors | Periodic full rescan | nodetool repair + read repair | None (wantlist is ongoing) | Safety-net reconciliation (10-15 min) |
-| Keepalive | HTTP/TCP level | BEP Ping message | Gossip heartbeat (1s) | libp2p connection manager | Bidirectional Ping/Pong (15-30s) |
-| Dead connection detection | HTTP timeout | BEP timeout | Gossip failure detector (phi) | libp2p identify | Keepalive timeout + inactivity timeout |
-| Expiry handling | No built-in expiry | No expiry (file sync) | TTL per column, lazy + compaction | Pin/unpin + GC | Next-expiry timer (event-driven) |
-| Client reconnect | HTTP retry (stateless) | Automatic reconnect (BEP) | Driver-level reconnect | libp2p reconnect | SDK auto-reconnect with jittered backoff |
-| Subscription restore | N/A (HTTP polling) | N/A (always syncs all folders) | N/A | N/A | Re-subscribe tracked namespaces on reconnect |
-
-### Key Takeaways from Competitor Analysis
-
-1. **CouchDB's changes feed** is the closest analog to chromatindb's push notification. The key lesson: changes feed sends metadata (doc_id, rev, seq), not full documents. chromatindb should do the same: send notification metadata, let the peer fetch.
-
-2. **Syncthing's Index Update** is a batch notification mechanism. After the initial full Index, only changed files are sent as Index Updates. chromatindb's per-blob BlobNotify is finer-grained but the principle is the same.
-
-3. **Cassandra's hinted handoff** is heavyweight for chromatindb's scale. With max 32 peers and direct connectivity, fire-and-forget push + reconciliation is simpler and sufficient.
-
-4. **IPFS Bitswap's wantlist** is demand-driven (pull), not push. chromatindb's push model is better for its use case (replicate everything to all peers) because peers don't need to express interest -- they just receive.
-
-5. **All systems keep a fallback anti-entropy mechanism.** No system trusts push alone. chromatindb's safety-net reconciliation follows this universal pattern.
-
-## Implementation Notes for Roadmap
-
-### C++ Node Changes (Estimated)
-
-1. **New wire types** (2): BlobFetchRequest (type 59?), BlobFetchResponse (type 60?)
-2. **Push notification path**: Hook into BlobEngine::ingest success path (both client writes and sync-received). Call notify_all_peers() instead of just notify_subscribers(). Separate concept: peer-to-peer BlobNotify vs client-facing Notification.
-3. **Bidirectional keepalive**: PeerManager sends periodic Ping, monitors Pong response. Replace passive inactivity_check_loop with active keepalive_loop.
-4. **Safety-net timer**: Change sync_interval_seconds default from 60 to 600-900.
-5. **Event-driven expiry**: Add Storage::get_next_expiry_timestamp(). Rewrite expiry_scan_loop to use targeted timer.
-6. **Cursor cleanup**: Add cursor deletion to on_peer_disconnected. Remove cursor_compaction_loop (or reduce to very infrequent safety check).
-7. **Relay filter update**: Add BlobFetchRequest/Response to allowed types if clients need targeted fetch.
-
-### Python SDK Changes (Estimated)
-
-1. **Auto-reconnect wrapper**: Rework ChromatinClient.connect() to support reconnection. Internal reconnect loop with jittered exponential backoff (1s-30s).
-2. **Subscription restoration**: After reconnect, re-send Subscribe for all tracked namespaces.
-3. **Read/query retry**: Transparently retry read-only operations on ConnectionError. Do NOT retry writes.
-4. **Keepalive integration**: Client must respond to server Ping with Pong (already implemented in _transport.py _send_pong). May also need client-initiated Ping for its own dead connection detection.
-
-### Documentation Changes
-
-1. **PROTOCOL.md**: New BlobNotify and BlobFetchRequest/Response wire formats. Updated sync model description. Keepalive specification.
-2. **README.md**: Updated architecture description reflecting event-driven sync.
-3. **SDK README + tutorial**: Auto-reconnect usage, subscription behavior on reconnect.
+| Feature | etcd | CockroachDB | Consul | chromatindb v2.1.0 Approach |
+|---------|------|-------------|--------|---------------------------|
+| Wire compression | gRPC built-in (gzip) | gRPC built-in | None (HTTP) | Brotli at AEAD frame level |
+| Metrics | Prometheus built-in | Prometheus built-in | Prometheus + StatsD | Prometheus via minimal HTTP endpoint (no library) |
+| Topic/namespace filtering | Watch with key prefix filter | CDC with table filter | Blocking queries with index | BlobNotify namespace filter + relay subscription forwarding |
+| Multi-endpoint failover | Client library supports endpoint list | Built into connection string | Agent-based (local agent always available) | SDK relay list with ordered failover |
+| Hot config reload | Most config via etcdctl | SET CLUSTER SETTING | HCL reload via SIGHUP | SIGHUP reload (adding max_peers) |
+| Proxy reconnect | gRPC handles transparently | pgwire handles | Agent is always local | Relay UDS auto-reconnect with backoff |
 
 ## Sources
 
-- [CouchDB Replication Protocol](https://docs.couchdb.org/en/stable/replication/protocol.html) -- changes feed, continuous replication
-- [CouchDB Changes API](https://docs.couchdb.org/en/stable/api/database/changes.html) -- since parameter, longpoll/continuous feed types
-- [Syncthing BEP v1 Protocol](https://docs.syncthing.net/specs/bep-v1.html) -- Index/Index Update messages, ClusterConfig, Request/Response
-- [IPFS Bitswap Protocol](https://specs.ipfs.tech/bitswap-protocol/) -- wantlist, HAVE/DONT_HAVE, block exchange
-- [Cassandra Hinted Handoff](https://cassandra.apache.org/doc/4.0/cassandra/operating/hints.html) -- hint storage, segment replay
-- [Cassandra Gossip Protocol](https://docs.datastax.com/en/cassandra-oss/3.x/cassandra/architecture/archGossipAbout.html) -- failure detection, state propagation
-- [Redis Keyspace Notifications](https://redis.io/docs/latest/develop/pubsub/keyspace-notifications/) -- event-driven expiry, fire-and-forget pub/sub
-- [RabbitMQ Heartbeats](https://www.rabbitmq.com/docs/heartbeats) -- TCP keepalive vs application-level heartbeat comparison
-- [gRPC Connection Backoff Protocol](https://grpc.github.io/grpc/core/md_doc_connection-backoff.html) -- jittered exponential backoff spec
-- [gRPC Keepalive](https://grpc.io/docs/guides/keepalive/) -- HTTP/2 PING-based keepalive, dead connection detection
-- [WebSocket Reconnection Guide](https://websocket.org/guides/reconnection/) -- state sync, subscription restoration
-- [PubNub Asyncio Reconnection Policies](https://www.pubnub.com/docs/sdks/asyncio/reconnection-policies) -- Python SDK auto-reconnect patterns
-- [Anti-Entropy in Distributed Systems](https://systemdesignschool.io/blog/anti-entropy) -- push/pull/push-pull reconciliation patterns
+- [google/brotli GitHub](https://github.com/google/brotli) -- MIT license, CMake build system, C API
+- [RFC 7932 -- Brotli Compressed Data Format](https://datatracker.ietf.org/doc/rfc7932/) -- specification
+- [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) -- text format spec
+- [prometheus-cpp](https://github.com/jupp0r/prometheus-cpp) -- evaluated, rejected (too many deps: civetweb, curl, zlib)
+- [ZSTD vs Brotli vs GZip Comparison](https://speedvitals.com/blog/zstd-vs-brotli-vs-gzip/) -- compression benchmarks
+- [Comparing Compression Algorithms for Moving Big Data](https://manishrjain.com/compression-algo-moving-data) -- binary data compression analysis
+- [Redis Pub/Sub docs](https://redis.io/docs/latest/develop/pubsub/) -- namespace/channel filtering patterns
+- [Redis client geographic failover](https://redis.io/docs/latest/develop/clients/failover/) -- multi-endpoint failover pattern with circuit breaker
+- Codebase analysis: db/peer/peer_manager.cpp (reload_config, on_blob_ingested, dump_metrics), relay/core/relay_session.cpp, sdk/python/chromatindb/client.py, db/PROTOCOL.md
 
 ---
-*Feature research for: event-driven sync in distributed blob stores*
-*Researched: 2026-04-02*
+*Feature research for: chromatindb v2.1.0 Compression, Filtering & Observability*
+*Researched: 2026-04-04*

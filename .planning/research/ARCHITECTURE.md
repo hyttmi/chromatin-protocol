@@ -1,688 +1,520 @@
-# Architecture Patterns
+# Architecture Research: v2.1.0 Integration Points
 
-**Domain:** Event-driven sync integration for chromatindb v2.0.0
-**Researched:** 2026-04-02
-**Overall confidence:** HIGH (analysis based on direct codebase inspection, not external sources)
+**Domain:** Compression, filtering, observability, and resilience features for chromatindb
+**Researched:** 2026-04-04
+**Confidence:** HIGH
 
-## Recommended Architecture
-
-Replace timer-paced sync with push-based notifications and targeted fetch. The existing single-threaded Asio event loop, PeerManager, Connection, and Storage are preserved. Changes are surgical: new message types, new notification paths, modified timer loops, one new Storage API, and SDK reconnect logic.
-
-### Architecture Overview
+## System Overview: Current Architecture
 
 ```
-CLIENT WRITE                PEER SYNC (existing reconciliation)
-     |                              |
-     v                              v
-  engine_.ingest()            sync_proto_.ingest_blobs()
-     |                              |
-     v                              v
-  [WriteAck to client]        [SyncComplete to peer]
-     |                              |
-     +------> notify_all_peers() <--+  (NEW: replaces notify_subscribers scope)
-                    |
-          +---------+---------+
-          |                   |
-     [BlobNotify to     [BlobNotify to
-      peer A]             peer B]
-          |                   |
-          v                   v
-     on_peer_message     on_peer_message
-     (BlobNotify)        (BlobNotify)
-          |                   |
-          v                   v
-     targeted_fetch()    targeted_fetch()
-     (BlobFetch for      (BlobFetch for
-      single hash)        single hash)
+                    SDK Clients (Python)
+                         |
+                    TCP + PQ AEAD
+                         |
+              +----------v-----------+
+              |     Relay (C++)      |  TCP:4201
+              |  message_filter.h    |  per-client RelaySession
+              |  blocklist approach  |  UDS conn per session
+              +----------+-----------+
+                         |
+                    UDS (TrustedHello)
+                         |
+              +----------v-----------+
+              |  chromatindb Node    |  TCP:4200
+              |  PeerManager         |  single io_context thread
+              |  BlobEngine          |  thread_pool for crypto
+              |  Storage (libmdbx)   |
+              +----------+-----------+
+                         |
+                    TCP + PQ AEAD
+                         |
+                  Other Peer Nodes
 ```
 
-### Key Architectural Principle
+### Component Responsibilities (Existing)
 
-**Push notifications reuse the existing pub/sub fan-out pattern.** The current `notify_subscribers()` only notifies peers with explicit subscriptions. Push sync extends this: after ingest, notify ALL connected peers (not just subscribers). This is a broadening of scope, not a new mechanism. The existing `encode_notification()` wire format already contains all the metadata a peer needs to decide whether to fetch.
+| Component | Responsibility | Integration Surface |
+|-----------|----------------|---------------------|
+| PeerManager | Peer lifecycle, sync, message dispatch, BlobNotify fan-out, SIGHUP reload, metrics | Main coordination point for most new features |
+| Connection | AEAD transport, send queue, handshake, keepalive | Compression hooks into send_message/recv |
+| RelaySession | Bidirectional message forwarding, per-client UDS | Subscription forwarding, UDS reconnect |
+| message_filter | Blocklist of peer-internal types | No changes needed (blocklist approach) |
+| Storage | libmdbx blob store, cursors, namespaces | Metrics data source |
+| BlobEngine | Signature verification, dedup, ingest pipeline | Compression at ingest boundary |
+| Config/RelayConfig | JSON config, validation, SIGHUP reload | Hot reload expansion |
 
-## Component Boundaries
+## v2.1.0 Feature Integration Map
 
-### New Components
+### Feature 1: Brotli Blob Compression
 
-| Component | File | Responsibility | Communicates With |
-|-----------|------|---------------|-------------------|
-| `BlobNotify` message type | `transport.fbs` | Push notification to peers on ingest | PeerManager (sender), Connection (wire) |
-| `BlobFetch` message type | `transport.fbs` | Targeted single-blob fetch request | PeerManager (handler), SyncProtocol (data) |
-| `BlobFetchResponse` message type | `transport.fbs` | Single-blob response to BlobFetch | PeerManager (encoder), Connection (wire) |
-| `next_expiry_time()` Storage API | `storage.h/.cpp` | Peek at earliest expiry key from MDBX | PeerManager (timer scheduling) |
-| SDK auto-reconnect | `client.py` | Transparent reconnection on connection loss | Transport, Handshake |
-| Connection keepalive | `peer_manager.cpp` | Bidirectional ping/pong heartbeat | Connection (send), PeerManager (dead detect) |
+**What changes:** Wire-level compression for blob payloads on Data, BlobTransfer, BlobFetchResponse, and ReadResponse messages.
 
-### Modified Components
-
-| Component | File | What Changes | Why |
-|-----------|------|-------------|-----|
-| `PeerManager::notify_all_peers()` | `peer_manager.cpp` | New method: fan-out BlobNotify to ALL connected peers | Push sync |
-| `PeerManager::on_peer_message()` | `peer_manager.cpp` | Handle BlobNotify + BlobFetch message types | Receive push notifications, serve targeted fetches |
-| `PeerManager::on_peer_connected()` | `peer_manager.cpp` | Trigger full reconciliation on connect (instead of sync timer) | Reconcile-on-connect |
-| `PeerManager::sync_timer_loop()` | `peer_manager.cpp` | Change interval from 60s to 600-900s (safety net only) | No longer primary sync mechanism |
-| `PeerManager::expiry_scan_loop()` | `peer_manager.cpp` | Replace periodic scan with next-expiry timer scheduling | Event-driven expiry |
-| `PeerManager::cursor_compaction_loop()` | `peer_manager.cpp` | Replace 6h timer with disconnect-triggered compaction | Immediate cleanup |
-| `PeerManager::on_peer_disconnected()` | `peer_manager.cpp` | Add cursor compaction call | Disconnect-triggered cleanup |
-| `Storage::run_expiry_scan()` | `storage.cpp` | Keep as-is (batch scan still used by next-expiry approach) | No change needed |
-| `transport.fbs` | `db/schemas/` | Add BlobNotify=59, BlobFetch=60, BlobFetchResponse=61 | Wire protocol |
-| `message_filter.cpp` | `relay/core/` | Block BlobNotify, BlobFetch, BlobFetchResponse (peer-internal) | Relay security |
-| SDK `Transport._reader_loop()` | `_transport.py` | Detect connection loss, signal reconnect | Auto-reconnect |
-| SDK `ChromatinClient` | `client.py` | Add reconnect loop, re-subscribe on reconnect | Transparent recovery |
-
-### Unchanged Components
-
-| Component | Why Unchanged |
-|-----------|--------------|
-| `Connection` class | Message loop already dispatches arbitrary types; no structural change |
-| `SyncProtocol` class | Reconciliation algorithm unchanged; still used on-connect and safety-net |
-| `Storage::store_blob()` | Already creates expiry index entries; no schema change needed |
-| `BlobEngine` | Ingest pipeline unchanged; notification happens in PeerManager after ingest |
-| `Reconciliation` | XOR-fingerprint algorithm unchanged; just invoked at different times |
-| `Handshake` | No protocol changes to connection establishment |
-| `Relay session forwarding` | Blocklist approach means new peer-internal types auto-blocked if added to blocklist |
-
-## Data Flow: Push-Based Sync
-
-### Flow 1: Client writes a blob (happy path)
+**Integration points:**
 
 ```
-1. Client sends Data message via relay
-2. Relay forwards to node via UDS
-3. PeerManager::on_peer_message(Data) spawns coroutine:
-   a. engine_.ingest(blob) -> co_await (thread pool offload)
-   b. co_await asio::post(ioc_) -> back on IO thread
-   c. conn->send_message(WriteAck) -> ack to client
-   d. notify_all_peers(namespace_id, blob_hash, seq_num, size, is_tombstone)
-      -> for each peer in peers_:
-         -> co_spawn: conn->send_message(BlobNotify, encoded_notification)
+                  Sender                              Receiver
+                    |                                    |
+  blob data ----> compress(brotli) ----> AEAD encrypt ----> AEAD decrypt ----> decompress(brotli) ----> blob data
+                    |                                    |
+            payload = [flag:1][compressed_data]    check flag byte, decompress if set
 ```
 
-### Flow 2: Peer receives push notification
+| Component | Change Type | What |
+|-----------|-------------|------|
+| db/CMakeLists.txt | NEW dependency | FetchContent google/brotli v1.2.0, link brotlienc-static + brotlidec-static |
+| db/util/compression.h/.cpp | NEW files | `compress(span<uint8_t>) -> vector<uint8_t>` and `decompress(span<uint8_t>, size_t max) -> vector<uint8_t>`. One-shot BrotliEncoderCompress/BrotliDecoderDecompress. Quality 4 (fast, good ratio). |
+| PeerManager::on_peer_message | MODIFY | Decompress payload for Data, BlobTransfer, BlobFetchResponse before engine dispatch |
+| PeerManager (send paths) | MODIFY | Compress payload in Data, BlobTransfer, BlobFetchResponse send coroutines |
+| PeerManager (client paths) | MODIFY | Compress ReadResponse payload before sending; decompress Data from clients |
+| SDK: chromatindb/_codec.py | MODIFY | Compress blob payload in encode_blob_payload, decompress in decode_read_response |
+| SDK: pyproject.toml | MODIFY | Add `brotli` pip dependency |
+
+**Wire format decision:** Prefix compressed payloads with a 1-byte flag: `0x00` = uncompressed, `0x01` = brotli. This allows receivers to handle both compressed and uncompressed data during any transition period and makes the format self-describing. The flag byte is part of the plaintext payload, inside AEAD encryption.
+
+**Where NOT to compress:**
+- BlobNotify (77 bytes, tiny, fixed-format)
+- BlobFetch (64 bytes, just hashes)
+- Control messages (Ping, Pong, Subscribe, etc.)
+- Sync reconciliation (ReconcileInit/Ranges/Items -- hash data, incompressible)
+
+**Compression threshold:** Only compress payloads larger than 256 bytes. Below that, brotli overhead exceeds savings.
+
+**Architecture pattern:** Compression operates at the PeerManager dispatch layer (after AEAD decrypt, before engine ingest; after engine read, before AEAD encrypt). NOT at the Connection/framing layer -- that would compress all messages including incompressible ones and break the blocklist filter which inspects plaintext type bytes.
+
+### Feature 2: Prometheus /metrics HTTP Endpoint
+
+**What changes:** New HTTP listener on a configurable port serving Prometheus text exposition format.
+
+**Integration points:**
 
 ```
-1. PeerManager::on_peer_message(BlobNotify):
-   a. Decode notification: namespace_id, blob_hash, seq_num, size, is_tombstone
-   b. Check: storage_.has_blob(namespace_id, blob_hash)?
-      - YES: already have it, ignore
-      - NO: fetch it
-   c. Send BlobFetch request: [namespace_id:32][blob_hash:32]
-   d. Wait for BlobFetchResponse (reuse sync message queue or inline response)
-   e. engine_.ingest(blob) -> validate + store
-   f. On success: notify_all_peers() -> cascade to other peers
+  Prometheus scraper ----> HTTP GET /metrics ----> metrics_server
+                                                        |
+                                                  reads NodeMetrics
+                                                  reads Storage stats
+                                                  reads PeerManager state
 ```
 
-### Flow 3: Reconciliation on connect
+| Component | Change Type | What |
+|-----------|-------------|------|
+| db/net/metrics_server.h/.cpp | NEW files | Standalone Asio TCP acceptor, HTTP/1.1 GET /metrics handler, renders Prometheus text format |
+| db/config/config.h | MODIFY | Add `metrics_port` field (uint16_t, 0=disabled, default 0) |
+| db/config/config.cpp | MODIFY | Parse and validate metrics_port |
+| PeerManager | MODIFY | Construct MetricsServer, pass reference to NodeMetrics + Storage + peer_count + uptime |
+| db/CMakeLists.txt | MODIFY | Add metrics_server.cpp to library sources |
+
+**No new dependencies.** The Prometheus text exposition format is trivially simple -- it is plain text with `# HELP`, `# TYPE`, and `metric_name value` lines. Asio already provides TCP acceptor. A minimal HTTP handler (parse `GET /metrics`, respond with `200 OK` + `Content-Type: text/plain; version=0.0.4`) is ~100 LOC. No need for prometheus-cpp or prometheus-cpp-lite libraries -- they bring HTTP servers of their own and unnecessary abstraction for what is a read-only data dump.
+
+**Metrics to expose (mapping from NodeMetrics):**
 
 ```
-1. PeerManager::on_peer_connected() (initiator side):
-   a. co_spawn: run_sync_with_peer(conn)  [EXISTING - no change]
-2. Full reconciliation runs as today (Phase A/B/C with XOR fingerprints)
-3. After reconciliation: PEX exchange [EXISTING - no change]
+chromatindb_ingests_total              counter   metrics_.ingests
+chromatindb_rejections_total           counter   metrics_.rejections
+chromatindb_syncs_total                counter   metrics_.syncs
+chromatindb_rate_limited_total         counter   metrics_.rate_limited
+chromatindb_peers_connected_total      counter   metrics_.peers_connected_total
+chromatindb_peers_disconnected_total   counter   metrics_.peers_disconnected_total
+chromatindb_cursor_hits_total          counter   metrics_.cursor_hits
+chromatindb_cursor_misses_total        counter   metrics_.cursor_misses
+chromatindb_full_resyncs_total         counter   metrics_.full_resyncs
+chromatindb_quota_rejections_total     counter   metrics_.quota_rejections
+chromatindb_sync_rejections_total      counter   metrics_.sync_rejections
+chromatindb_peers_current              gauge     peers_.size()
+chromatindb_storage_bytes              gauge     storage_.used_data_bytes()
+chromatindb_namespaces_current         gauge     storage_.list_namespaces().size()
+chromatindb_uptime_seconds             gauge     compute_uptime_seconds()
 ```
 
-### Flow 4: Event-driven expiry
+**Thread safety:** MetricsServer runs its own coroutine on the same io_context (single-threaded, no races). It reads NodeMetrics and Storage directly -- same thread model as metrics_timer_loop.
 
-```
-1. On startup / after each expiry scan / after blob ingest:
-   a. Call storage_.next_expiry_time() -> peek expiry_map first key
-   b. If has_expiry: schedule timer for (expiry_time - now)
-   c. If no_expiry: no timer (wait for next ingest to re-check)
-2. Timer fires:
-   a. Call storage_.run_expiry_scan() -> purge all expired blobs
-   b. Re-schedule: call next_expiry_time() again, set new timer
-```
+**Architecture pattern:** Separate acceptor on a different port. No authentication (Prometheus endpoints are conventionally unauthenticated; access control via firewall/bind address). Simple request-response, no keep-alive needed.
 
-### Flow 5: SDK auto-reconnect
+### Feature 3: Namespace-Scoped BlobNotify Filtering
 
-```
-1. Transport._reader_loop() catches connection error:
-   a. Sets _closed = True
-   b. Cancels all pending futures with ConnectionError
-   c. Signals reconnect event
-2. ChromatinClient reconnect loop:
-   a. Wait jittered backoff (1s, 2s, 4s, ... up to 60s)
-   b. TCP connect + PQ handshake
-   c. Create new Transport, start reader
-   d. Re-subscribe to previously tracked namespaces
-   e. Resume normal operation
-```
+**What changes:** BlobNotify is only sent to peers that replicate the relevant namespace, instead of broadcasting to all TCP peers.
 
-### Flow 6: Connection keepalive
+**Integration points:**
 
-```
-1. PeerManager sends Ping to all peers periodically (30s interval)
-2. Connection::message_loop() handles Pong (already exists for client path)
-3. Receiver-side inactivity timeout (EXISTING) catches dead peers
-4. SDK responds to Ping with Pong (already exists in Transport._reader_loop())
-```
+| Component | Change Type | What |
+|-----------|-------------|------|
+| PeerManager::on_blob_ingested | MODIFY | Check peer's sync_namespaces before sending BlobNotify |
+| PeerInfo | MODIFY | Add `std::set<std::array<uint8_t, 32>> peer_sync_namespaces` tracked per-connection |
+| PeerManager::on_peer_connected | MODIFY | Exchange sync_namespaces during initial handshake/setup |
 
-## New Message Types
-
-### BlobNotify (type = 59)
-
-Push notification sent to ALL connected peers when a blob is successfully ingested (stored, not duplicate).
-
-**Wire format:** Identical to existing Notification (type 21) payload:
-```
-[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
-```
-Total: 77 bytes.
-
-**Rationale for separate type vs reusing Notification:** Notification (type 21) is subscription-gated and client-facing. BlobNotify (type 59) is peer-internal and unconditional. Separate types allow:
-- Relay to block BlobNotify (peer-internal) while allowing Notification (client-facing)
-- Peers to handle them differently (BlobNotify triggers fetch; Notification is informational)
-- No behavioral change to existing pub/sub subscription semantics
-
-### BlobFetch (type = 60)
-
-Targeted single-blob fetch request. Sent by a peer that received a BlobNotify for a blob it doesn't have.
-
-**Wire format:**
-```
-[namespace_id:32][blob_hash:32]
-```
-Total: 64 bytes.
-
-**Differences from existing BlobRequest (type 12):**
-- BlobRequest is sync-protocol-only, gated by syncing state, and carries multiple hashes
-- BlobFetch is standalone, requires no active sync session, and fetches exactly one blob
-- BlobFetch is handled inline (no sync session needed), making it fast
-
-### BlobFetchResponse (type = 61)
-
-Response to BlobFetch. Contains the full FlatBuffer-encoded blob, or empty if not found.
-
-**Wire format:**
-```
-[found:1][blob_flatbuffer:N]  (if found=1)
-[found:1]                     (if found=0, total 1 byte)
-```
-
-**Why not reuse BlobTransfer (type 13):** BlobTransfer uses count-prefixed multi-blob encoding with length prefixes. BlobFetchResponse is simpler -- always exactly one blob (or not found). Different encoding avoids confusing sync state.
-
-## Patterns to Follow
-
-### Pattern 1: Timer-Cancel for Event-Driven Expiry
-
-**What:** Replace the fixed-interval `expiry_scan_loop()` with a next-expiry-targeted timer.
-
-**When:** Any time the next expiry time changes (blob ingest, expiry scan completion).
-
-**Current code (to replace):**
+**Current behavior (Phase 79):**
 ```cpp
-// Current: fixed interval, scans everything
-asio::awaitable<void> PeerManager::expiry_scan_loop() {
-    while (!stopping_) {
-        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
-        co_await timer.async_wait(...);
-        storage_.run_expiry_scan();
-    }
+for (auto& peer : peers_) {
+    if (peer.connection == source) continue;
+    if (peer.connection->is_uds()) continue;
+    // Send BlobNotify to ALL TCP peers
+    co_spawn(send BlobNotify...);
 }
 ```
 
-**New code (sketch):**
+**New behavior:**
 ```cpp
-asio::awaitable<void> PeerManager::expiry_scan_loop() {
-    while (!stopping_) {
-        auto next = storage_.next_expiry_time();
-        if (!next.has_value()) {
-            // No blobs with TTL -- wait for wake signal
-            timer.expires_at(asio::steady_timer::time_point::max());
-        } else {
-            auto now = static_cast<uint64_t>(std::time(nullptr));
-            auto delay = std::chrono::seconds(
-                next.value() > now ? next.value() - now : 0);
-            timer.expires_after(delay);
-        }
-        co_await timer.async_wait(...);
-        if (stopping_) co_return;
-        storage_.run_expiry_scan();
-        // Loop re-peeks next_expiry_time on next iteration
-    }
+for (auto& peer : peers_) {
+    if (peer.connection == source) continue;
+    if (peer.connection->is_uds()) continue;
+    // Skip if peer has restricted namespaces and this ns is not in them
+    if (!peer.peer_sync_namespaces.empty() &&
+        !peer.peer_sync_namespaces.count(namespace_id)) continue;
+    co_spawn(send BlobNotify...);
 }
 ```
 
-**Wake mechanism:** After `engine_.ingest()` stores a blob with TTL > 0, cancel the expiry timer (`expiry_timer_->cancel()`) to force re-evaluation. This reuses the existing timer-cancel pattern already used for SIGHUP and shutdown.
+**How to learn peer's sync_namespaces:** The existing sync protocol already knows about `sync_namespaces_` on the local node. The simplest approach: after handshake, each node sends its `sync_namespaces` set (or empty = all) to the peer. This could be a new lightweight message type, or piggyback on the existing NodeInfoResponse exchange. A dedicated message (e.g., `SyncNamespaceAnnounce = 62`) is cleaner -- it is a one-shot announcement after connect.
 
-### Pattern 2: Notification Fan-Out (Broadened Scope)
+**Fallback:** If a peer never sends namespace announcement, treat as "all namespaces" (backward compatible).
 
-**What:** Extend the existing `notify_subscribers()` pattern to notify ALL peers.
+### Feature 4: Relay Subscription Forwarding
 
-**Current:** `notify_subscribers()` iterates `peers_` and sends only to those with matching `subscribed_namespaces`.
+**What changes:** Relay intercepts Subscribe/Unsubscribe from clients, tracks subscriptions per-session, and filters node-to-client Notification messages so only subscribed-namespace notifications reach each client.
 
-**New:** `notify_all_peers()` iterates `peers_` and sends BlobNotify to ALL peers (no subscription check). This is the same pattern but with the filter removed.
+**Integration points:**
 
-```cpp
-void PeerManager::notify_all_peers(
-    const std::array<uint8_t, 32>& namespace_id,
-    const std::array<uint8_t, 32>& blob_hash,
-    uint64_t seq_num,
-    uint32_t blob_size,
-    bool is_tombstone,
-    net::Connection::Ptr source = nullptr) {
-    auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
-    for (auto& peer : peers_) {
-        if (peer.connection == source) continue;  // Don't notify source
-        if (peer.connection->is_uds()) continue;  // Skip client connections
-        auto conn = peer.connection;
-        auto payload_copy = payload;
-        asio::co_spawn(ioc_, [conn, payload_copy = std::move(payload_copy)]() -> asio::awaitable<void> {
-            co_await conn->send_message(
-                wire::TransportMsgType_BlobNotify,
-                std::span<const uint8_t>(payload_copy));
-        }, asio::detached);
-    }
-    // Also fire existing subscriber notifications for client-facing pub/sub
-    notify_subscribers(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
-}
+```
+  Client ---Subscribe(ns)--> Relay ---Subscribe(ns)--> Node
+                               |
+                          tracks ns in session
+                               |
+  Client <--Notification(ns)-- Relay <--Notification(ns)-- Node
+                               |
+                          checks: is ns in session's subscriptions?
+                          YES: forward to client
+                          NO: drop silently
 ```
 
-**Critical:** Must skip UDS connections. Push sync is peer-to-peer; clients use pub/sub subscriptions. Also must still call `notify_subscribers()` for backward-compatible client notifications.
+| Component | Change Type | What |
+|-----------|-------------|------|
+| RelaySession | MODIFY | Add `std::set<std::array<uint8_t, 32>> subscribed_namespaces_` member |
+| RelaySession::handle_client_message | MODIFY | Intercept Subscribe/Unsubscribe, update local set, still forward to node |
+| RelaySession::handle_node_message | MODIFY | Filter Notification by checking namespace against subscribed set |
 
-### Pattern 3: Inline BlobFetch Handling (No Sync Session)
+**Current behavior:** Relay blindly forwards all node-to-client messages including Notification. The node already filters by subscription -- so this is redundant filtering. But the value is: if the relay manages multiple client sessions over a single UDS connection (future optimization), or if the node sends notifications for namespaces that a stale subscription state still has, the relay provides defense-in-depth.
 
-**What:** Handle BlobFetch in the message dispatch without requiring a sync session.
+**Notification payload parsing:** Notifications use the same 77-byte format as BlobNotify: `[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]`. The relay extracts the first 32 bytes as namespace_id for the filter check.
 
-**Current model:** BlobRequest (type 12) is only processed within an active sync session (routed through `route_sync_message()` to `handle_sync_as_responder()`).
+**Subscribe payload parsing:** `[uint16_be count][ns_id:32][ns_id:32]...` -- relay decodes the namespace list using the same format PeerManager uses.
 
-**New model:** BlobFetch is handled inline in `on_peer_message()`, like ReadRequest or ExistsRequest. No sync session needed. This is the key performance win -- no SyncRequest/SyncAccept handshake, just request/respond.
+### Feature 5: Relay Auto-Reconnect to Node
 
-```cpp
-if (type == wire::TransportMsgType_BlobFetch) {
-    asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
-        if (payload.size() != 64) { record_strike(conn, "bad BlobFetch"); co_return; }
-        std::array<uint8_t, 32> ns, hash;
-        std::memcpy(ns.data(), payload.data(), 32);
-        std::memcpy(hash.data(), payload.data() + 32, 32);
-        auto blob = engine_.get_blob(ns, hash);
-        co_await asio::post(ioc_, asio::use_awaitable);
-        if (blob.has_value()) {
-            auto encoded = wire::encode_blob(blob.value());
-            std::vector<uint8_t> response(1 + encoded.size());
-            response[0] = 1; // found
-            std::memcpy(response.data() + 1, encoded.data(), encoded.size());
-            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse, response, request_id);
-        } else {
-            uint8_t not_found = 0;
-            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse, {&not_found, 1}, request_id);
-        }
-    }, asio::detached);
-    return;
-}
+**What changes:** When the UDS connection to the chromatindb node drops, the relay periodically attempts to reconnect instead of permanently killing client sessions.
+
+**Integration points:**
+
+```
+  Relay (running)
+       |
+  UDS connection to node drops
+       |
+  handle_node_close fires
+       |
+  Instead of: teardown("node disconnected")
+  Now:        enter reconnect loop
+              - pause message forwarding (queue or reject)
+              - retry UDS connect every 2s with exponential backoff (cap 30s)
+              - on success: resume forwarding, re-send client's subscriptions
+              - on max retries exceeded: teardown session
 ```
 
-**Dispatch model:** coroutine-offload-transfer (same as Data/Delete handlers). `engine_.get_blob()` reads from MDBX. Must post back to IO thread before send_message (AEAD nonce safety).
+| Component | Change Type | What |
+|-----------|-------------|------|
+| RelaySession | MODIFY | Add UDS reconnect coroutine, state machine (active/reconnecting/dead) |
+| RelaySession::handle_node_close | MODIFY | Spawn reconnect loop instead of immediate teardown |
+| RelaySession | MODIFY | Buffer or reject client messages during reconnect window |
 
-### Pattern 4: Disconnect-Triggered Cursor Compaction
+**Critical detail:** After UDS reconnect, the node sees a fresh TrustedHello connection. Client subscriptions must be re-sent to the node because the previous UDS connection's subscription state is gone (subscriptions are connection-scoped per project decision).
 
-**What:** Move cursor cleanup from periodic timer to disconnect event.
-
-**Current:** 6-hour timer, scans all cursor peers, prunes disconnected ones.
-
-**New:** On `on_peer_disconnected()`, immediately clean up cursors for the disconnecting peer.
-
-```cpp
-void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
-    // Existing: remove from peers_, log, metrics
-    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
-    // ... existing peer removal logic ...
-
-    // Immediate cursor cleanup for disconnected peer
-    auto removed = storage_.delete_peer_cursors(peer_hash);
-    if (removed > 0) {
-        spdlog::debug("cursor cleanup: removed {} entries for disconnected peer", removed);
-    }
-}
+**State machine:**
+```
+ACTIVE --> (UDS drop) --> RECONNECTING --> (UDS success + re-subscribe) --> ACTIVE
+                              |
+                         (max retries) --> DEAD --> teardown
 ```
 
-**Remove:** The `cursor_compaction_loop()` coroutine and `cursor_compaction_timer_` member. No longer needed.
+**Client-facing behavior during reconnect:** Client messages that arrive during RECONNECTING are rejected with a log warning and dropped (not queued -- unbounded queuing is dangerous). The client's auto-reconnect will handle any lost requests. This is simpler and safer than buffering.
 
-### Pattern 5: SDK Reconnect with State Preservation
+### Feature 6: Multi-Relay SDK Failover
 
-**What:** Auto-reconnect in ChromatinClient that preserves subscription state.
+**What changes:** SDK `connect()` accepts a list of relay endpoints and tries them in order, failing over to the next on connection/handshake failure.
 
-**Design:**
+**Integration points:**
 
+| Component | Change Type | What |
+|-----------|-------------|------|
+| ChromatinClient.connect() | MODIFY | Accept `relays: list[tuple[str, int]]` in addition to single host/port |
+| ChromatinClient.__aenter__ | MODIFY | Try each relay endpoint in order; first successful handshake wins |
+| ChromatinClient._connection_monitor | MODIFY | On disconnect, try next relay in rotation before backoff |
+
+**API design:**
 ```python
-class ChromatinClient:
-    def __init__(self, ...):
-        self._subscriptions: set[bytes] = set()  # EXISTING
-        self._auto_reconnect = True               # NEW
-        self._reconnect_task: asyncio.Task | None = None  # NEW
-        self._max_reconnect_delay = 60.0           # NEW
-        self._intentional_close = False            # NEW
+# Single relay (backward compatible)
+async with ChromatinClient.connect("192.168.1.200", 4201, identity) as c:
+    ...
 
-    async def _reconnect_loop(self):
-        delay = 1.0
-        while self._auto_reconnect and not self._intentional_close:
-            jitter = random.uniform(0, delay * 0.1)
-            await asyncio.sleep(delay + jitter)
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self._host, self._port, ...),
-                    timeout=self._timeout)
-                result = await asyncio.wait_for(
-                    perform_handshake(reader, writer, self._identity),
-                    timeout=self._timeout)
-                self._transport = Transport(reader, writer, *result[:4])
-                self._transport.start()
-                if self._subscriptions:
-                    payload = encode_subscribe(list(self._subscriptions))
-                    await self._transport.send_message(TransportMsgType.Subscribe, payload)
-                return  # Success
-            except Exception:
-                delay = min(delay * 2, self._max_reconnect_delay)
+# Multi-relay failover
+async with ChromatinClient.connect(
+    relays=[("192.168.1.200", 4201), ("192.168.1.201", 4201)],
+    identity=identity,
+) as c:
+    ...
 ```
 
-**Key decisions:**
-- Subscriptions tracked as `set[bytes]` (already exists) -- re-issued on reconnect
-- Pending requests at disconnect time get ConnectionError (existing behavior in `_cancel_all_pending`)
-- New requests during reconnect raise ConnectionError (existing `_closed` check)
-- Intentional close (`__aexit__` / `goodbye()`) sets `_intentional_close = True` to stop reconnect loop
+**Failover strategy:**
+1. On initial connect: try relays in order, first success wins.
+2. On disconnect with auto_reconnect: try current relay first (likely transient), then rotate to next.
+3. Track last-successful relay index for reconnect preference.
+4. All relays exhausted: apply backoff_delay before cycling again.
 
-### Pattern 6: Server-Initiated Keepalive (Ping From Node)
+**No new files needed.** This is a change to client.py and _reconnect.py only.
 
-**What:** Node sends Ping to all connected peers periodically.
+### Feature 7: Hot Config Reload Expansion
 
-**Current:** Inactivity timeout is receiver-side only (check `last_message_time`). No active keepalive from the node. Client SDK can `send_ping()` but the node never initiates Ping to peers.
+**What changes:** Expand SIGHUP reload to include `max_peers`, `allowed_client_keys`, and `allowed_peer_keys` (the latter two are already reloaded; max_peers is new).
 
-**Concern:** Adding node-initiated Ping introduces bidirectional keepalive messages. The project memory states "Receiver-side inactivity (not Ping sender) avoids AEAD nonce desync from bidirectional keepalive messages." This was the v0.9.0 design decision.
+**Integration points:**
 
-**Resolution:** The nonce desync issue was about concurrent writes on a single connection (two coroutines writing Ping + sync data simultaneously). In the current architecture, all send_message calls happen on the IO thread (via `co_await asio::post(ioc_)`). The co_spawn-on-ioc model serializes writes. The original concern was valid when sends could happen from multiple threads -- that is no longer the case. Each co_spawn'd coroutine yields at co_await, allowing other coroutines to run, but never concurrently on the same connection. The send_counter_ is accessed only from the IO thread, so there is no race.
+| Component | Change Type | What |
+|-----------|-------------|------|
+| PeerManager::reload_config | MODIFY | Read and apply max_peers from new config |
+| PeerManager | MODIFY | If max_peers decreased and current peers exceed new limit, disconnect excess (LRU or random) |
 
-**Implementation:** Add a `keepalive_loop()` coroutine in PeerManager:
+**Current SIGHUP-reloadable fields:**
+- allowed_client_keys, allowed_peer_keys (ACL)
+- rate_limit_bytes_per_sec, rate_limit_burst
+- sync_cooldown_seconds, max_sync_sessions
+- safety_net_interval_seconds
+- sync_namespaces
+- full_resync_interval, cursor_stale_seconds
+
+**New SIGHUP-reloadable field:**
+- max_peers: Update the value used by `should_accept_connection()`. If current peer count exceeds new max_peers, do not force-disconnect existing peers -- only reject new connections. Forcibly disconnecting peers is disruptive and unnecessary; natural churn will bring the count down.
+
+**Architecture note:** `max_peers` is currently read from `config_.max_peers` in `should_accept_connection()`. Since `config_` is a const reference, reload requires either: (a) storing max_peers as a mutable member (like `rate_limit_bytes_per_sec_`), or (b) making config non-const. Option (a) is consistent with how all other reloadable fields work.
+
+## Data Flow Changes
+
+### Compression Data Flow (New)
+
+```
+Ingest Path (peer Data message):
+  recv_encrypted() -> decode TransportMessage -> payload[0] check compression flag
+      -> if 0x01: BrotliDecoderDecompress(payload[1:])
+      -> BlobEngine::ingest(decompressed_data)
+
+Send Path (BlobTransfer during sync):
+  Storage::get_blob() -> raw data
+      -> if data.size() > 256: BrotliEncoderCompress(quality=4)
+      -> payload = [0x01] + compressed
+      -> encode TransportMessage -> send_encrypted()
+
+Client Read Path:
+  Storage::get_blob() -> raw data
+      -> compress -> send ReadResponse with flag
+  SDK:
+      -> recv -> check flag -> decompress -> return to caller
+```
+
+### Metrics HTTP Data Flow (New)
+
+```
+Prometheus GET /metrics (port 9100)
+  -> MetricsServer accept + read HTTP request
+  -> format_metrics():
+       read NodeMetrics (same thread, no lock)
+       read Storage::used_data_bytes()
+       read Storage::list_namespaces().size()
+       read peers_.size()
+       read compute_uptime_seconds()
+  -> HTTP 200 OK text/plain
+  -> close connection
+```
+
+### Relay Notification Filtering Flow (Modified)
+
+```
+Before (current):
+  Node -> Notification(ns=X) -> UDS -> RelaySession -> forward to client
+
+After:
+  Node -> Notification(ns=X) -> UDS -> RelaySession
+    -> check: X in subscribed_namespaces_?
+    -> YES: forward to client
+    -> NO: drop
+```
+
+## Recommended Build Order
+
+Features have the following dependency graph:
+
+```
+  (1) Brotli Compression     (independent)
+  (2) Namespace BlobNotify    (independent)
+  (3) Relay Subscription Fwd  (independent, but pairs well with #2)
+  (4) Relay Auto-Reconnect    (independent)
+  (5) Multi-Relay Failover    (independent, SDK-only)
+  (6) Hot Config Reload       (independent, small)
+  (7) Prometheus /metrics     (independent, reads existing NodeMetrics)
+```
+
+No hard dependencies between features. Recommended build order based on complexity and risk:
+
+1. **Hot Config Reload (max_peers)** -- Smallest change (~20 LOC). Establishes the pattern for this milestone. Low risk.
+
+2. **Namespace-Scoped BlobNotify** -- Moderate change to PeerManager::on_blob_ingested. Needs a new wire message type (SyncNamespaceAnnounce = 62) or piggyback mechanism. Core protocol change, build early.
+
+3. **Brotli Compression** -- New dependency, new utility files, touches multiple send/receive paths. Significant surface area but mechanically straightforward. Build after BlobNotify so the notification path is clean.
+
+4. **Relay Subscription Forwarding** -- Relay-side change. Pairs naturally with namespace-scoped BlobNotify since both are about namespace filtering. Moderate complexity.
+
+5. **Relay Auto-Reconnect** -- Relay state machine change. Moderate complexity, needs careful lifecycle management. Independent but benefits from relay subscription forwarding being done (re-subscribe on reconnect needs the subscription tracking).
+
+6. **Multi-Relay SDK Failover** -- SDK-only change. No C++ changes. Can be done in parallel with C++ work but logically comes after relay auto-reconnect (both are resilience features, test together).
+
+7. **Prometheus /metrics** -- New HTTP acceptor. Independent, can slot anywhere. Last because it is observability -- useful for monitoring the features built above.
+
+## Architectural Patterns
+
+### Pattern 1: Compression Flag Byte
+
+**What:** Prefix compressed payloads with a flag byte to make format self-describing.
+**When to use:** Any message type that carries variable-size data worth compressing.
+**Trade-offs:** 1 byte overhead per message (negligible). Enables mixed compressed/uncompressed traffic. Avoids protocol version negotiation.
 
 ```cpp
-asio::awaitable<void> PeerManager::keepalive_loop() {
-    while (!stopping_) {
-        asio::steady_timer timer(ioc_);
-        keepalive_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(30));
-        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-        keepalive_timer_ = nullptr;
-        if (ec || stopping_) co_return;
-        for (auto& peer : peers_) {
-            if (peer.connection->is_uds()) continue;
-            auto conn = peer.connection;
-            asio::co_spawn(ioc_, [conn]() -> asio::awaitable<void> {
-                std::span<const uint8_t> empty{};
-                co_await conn->send_message(wire::TransportMsgType_Ping, empty);
-            }, asio::detached);
-        }
+// Compress
+std::vector<uint8_t> compress_payload(std::span<const uint8_t> data) {
+    if (data.size() <= 256) {
+        std::vector<uint8_t> out(1 + data.size());
+        out[0] = 0x00;  // uncompressed
+        std::memcpy(out.data() + 1, data.data(), data.size());
+        return out;
     }
+    auto compressed = brotli_compress(data, /*quality=*/4);
+    compressed.insert(compressed.begin(), 0x01);  // brotli flag
+    return compressed;
+}
+
+// Decompress
+std::vector<uint8_t> decompress_payload(std::span<const uint8_t> data, size_t max_size) {
+    if (data.empty()) throw std::runtime_error("empty payload");
+    if (data[0] == 0x00) return {data.begin() + 1, data.end()};
+    if (data[0] == 0x01) return brotli_decompress(data.subspan(1), max_size);
+    throw std::runtime_error("unknown compression flag");
 }
 ```
 
-**Effect:** With node sending Ping every 30s, the receiver-side inactivity timeout (default 120s) on the REMOTE node will detect dead connections within 120s instead of waiting for sync timer or PEX. This gives faster dead peer detection without changing the existing inactivity mechanism.
+### Pattern 2: Hand-Rolled Prometheus Text Format
 
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Fetch Loop on BlobNotify
-
-**What:** Receiving a BlobNotify and immediately sending BlobFetch without checking local storage.
-
-**Why bad:** Leads to redundant fetches. If three peers all notify us about the same blob, we'd fetch it three times. Only the first succeeds; the other two are wasted bandwidth.
-
-**Instead:** Always check `storage_.has_blob()` before sending BlobFetch. This is an O(1) MDBX key lookup (no data read) -- the exact same `has_blob()` used by ExistsRequest.
-
-### Anti-Pattern 2: Cascading BlobNotify Storm
-
-**What:** When a fetched blob is ingested, calling `notify_all_peers()` which notifies the peer we just fetched from.
-
-**Why bad:** The source peer already has the blob. Sending BlobNotify back to it creates a pointless round-trip (they'll check has_blob() and ignore, but it wastes bandwidth).
-
-**Instead:** In `notify_all_peers()`, accept an optional source connection pointer and skip it in the fan-out loop.
-
-### Anti-Pattern 3: Expiry Timer Precision Obsession
-
-**What:** Trying to fire expiry exactly at the millisecond a blob expires.
-
-**Why bad:** Over-engineering. The expiry_map is already keyed by [expiry_ts_be:8][hash:32], so the first key is the earliest expiry. But blobs with the same second-resolution timestamp would all fire together anyway.
-
-**Instead:** Round to the nearest second (which is what we already have -- timestamps are seconds). Fire the timer, run a batch scan that catches everything expired up to `now`. Simple, efficient, correct.
-
-### Anti-Pattern 4: Reconnect Without Backoff
-
-**What:** SDK reconnecting immediately and repeatedly on connection loss.
-
-**Why bad:** If the relay is down, tight reconnect loops waste CPU, battery, and can trigger rate limiting when the relay comes back up.
-
-**Instead:** Jittered exponential backoff (1s base, 2x growth, 60s cap, 10% jitter). This matches the existing C++ node reconnect design (auto-reconnect with jittered exponential backoff, 1s-60s, validated in v0.9.0).
-
-### Anti-Pattern 5: Holding MDBX Write Transaction During Network IO
-
-**What:** Opening an MDBX write transaction, then co_await-ing a network send before committing.
-
-**Why bad:** MDBX write transactions block all other writes. If the network send blocks (slow peer), all blob storage is stalled.
-
-**Instead:** Complete the MDBX transaction first, THEN do network IO. This is already the pattern used everywhere (ingest -> post to IO thread -> send), but must be maintained for the new BlobFetch handler.
-
-### Anti-Pattern 6: BlobNotify During Active Sync
-
-**What:** Processing BlobNotify messages from a peer while a reconciliation session with that peer is in progress.
-
-**Why bad:** Could lead to duplicate fetches (reconciliation discovers the same blob the push notification told us about). Wastes bandwidth and creates confusing log output.
-
-**Instead:** When `peer->syncing == true`, silently drop BlobNotify from that peer. Reconciliation will handle catch-up. This is the same pattern used for SyncRequest (silently dropped when peer is syncing, to avoid AEAD nonce desync).
-
-## MDBX Schema Changes for Event-Driven Expiry
-
-### No Schema Changes Required
-
-The existing expiry sub-database already has the perfect structure for event-driven expiry:
-
-```
-expiry_map key:   [expiry_ts_be:8][blob_hash:32]  (40 bytes)
-expiry_map value: [namespace_id:32]                 (32 bytes)
-```
-
-Keys are sorted by `expiry_ts_be` (big-endian) then `blob_hash`. This means:
-- **Cursor to first = earliest expiry.** `cursor.to_first()` gives the blob that expires soonest. This is O(1) -- MDBX B-tree lookup.
-- **No secondary index needed.** The expiry_map IS the index, already sorted by time.
-- **Batch scan works unchanged.** `run_expiry_scan()` walks from first until `expiry_ts > now`.
-
-### New Storage API: next_expiry_time()
+**What:** Generate Prometheus exposition text directly without a library.
+**When to use:** Small, fixed metric set. Read-only scrape endpoint.
+**Trade-offs:** No histogram/summary support (not needed). Zero dependencies. Full control over format.
 
 ```cpp
-/// Peek at the earliest expiry timestamp in the expiry index.
-/// O(1) B-tree lookup (cursor to first key, read first 8 bytes).
-/// @return Expiry timestamp in seconds, or nullopt if no blobs have TTL.
-std::optional<uint64_t> Storage::next_expiry_time();
-```
-
-Implementation:
-
-```cpp
-std::optional<uint64_t> Storage::next_expiry_time() {
-    try {
-        auto txn = impl_->env.start_read();
-        auto cursor = txn.open_cursor(impl_->expiry_map);
-        auto first = cursor.to_first(false);
-        if (!first.done) return std::nullopt;  // Empty expiry map
-        auto key = cursor.current(false).key;
-        if (key.length() < 8) return std::nullopt;
-        return decode_be_u64(static_cast<const uint8_t*>(key.data()));
-    } catch (const std::exception&) {
-        return std::nullopt;
-    }
+std::string format_metrics(const NodeMetrics& m, uint64_t peers,
+                           uint64_t storage_bytes, uint64_t uptime) {
+    std::string out;
+    out += "# HELP chromatindb_ingests_total Total successful blob ingestions\n";
+    out += "# TYPE chromatindb_ingests_total counter\n";
+    out += "chromatindb_ingests_total " + std::to_string(m.ingests) + "\n";
+    // ... repeat for each metric
+    return out;
 }
 ```
 
-This is the only Storage change. No new sub-databases, no schema migration, no index rebuild.
+### Pattern 3: Relay State Machine for UDS Reconnect
 
-## Notification Trigger Points
+**What:** Three-state machine (ACTIVE / RECONNECTING / DEAD) for relay-to-node UDS lifecycle.
+**When to use:** Any component that needs reconnect with graceful degradation.
+**Trade-offs:** Client messages dropped during RECONNECTING (acceptable -- SDK has auto-reconnect). Simpler than buffering.
 
-Blob ingestion can happen through three existing paths plus one new path. All must trigger `notify_all_peers()`:
+## Anti-Patterns
 
-| Path | Current Notification | New Notification |
-|------|---------------------|------------------|
-| Client Data (via relay) | `notify_subscribers()` in Data handler (line ~1653) | Replace with `notify_all_peers()` which also calls `notify_subscribers()` |
-| Client Delete (via relay) | `notify_subscribers()` in Delete handler (line ~693) | Replace with `notify_all_peers()` which also calls `notify_subscribers()` |
-| Sync ingest (peer-to-peer) | `on_blob_ingested_` callback -> `notify_subscribers()` (line ~161) | Replace with `notify_all_peers()` with source exclusion |
-| BlobFetch response ingest | N/A (new path) | `notify_all_peers()` after ingest, with source exclusion |
+### Anti-Pattern 1: Compressing at the AEAD Layer
 
-The `on_blob_ingested_` callback in SyncProtocol (set up at PeerManager constructor, line 159-162) already fires `notify_subscribers()`. Changing this to call `notify_all_peers(source_conn)` ensures sync-received blobs propagate via push to other peers, excluding the peer we received them from.
+**What people do:** Add compression inside Connection::send_encrypted / recv_encrypted.
+**Why it is wrong:** (a) Compresses ALL messages including incompressible ones (hashes, fixed-format control). (b) Relay message_filter inspects plaintext type bytes -- compression before type extraction breaks filtering. (c) Compressing encrypted data is useless; compression must happen on plaintext.
+**Do this instead:** Compress at PeerManager dispatch level, only for data-carrying message types, before the transport envelope wraps them.
 
-## FlatBuffer Schema Changes
+### Anti-Pattern 2: Using a Full Prometheus Client Library
 
-Add three new message types to `db/schemas/transport.fbs`:
+**What people do:** Pull in prometheus-cpp or prometheus-cpp-lite for metrics exposition.
+**Why it is wrong:** These libraries bring their own HTTP servers (civetweb, etc.) and thread models. chromatindb already has Asio for networking. Adding a second HTTP stack creates dep conflicts and a second thread model.
+**Do this instead:** Hand-roll the Prometheus text format (trivial for counters and gauges) and serve it via an Asio TCP acceptor. ~100 LOC for the HTTP handler.
 
-```flatbuffers
-// Phase 79: Push-based sync
-BlobNotify = 59,
-BlobFetch = 60,
-BlobFetchResponse = 61,
-```
+### Anti-Pattern 3: Buffering Client Messages During Relay Reconnect
 
-These are peer-internal types. The relay message filter must block all three (add to the switch block in `message_filter.cpp`).
+**What people do:** Queue client messages while UDS is down and replay on reconnect.
+**Why it is wrong:** Unbounded memory growth if node is down for extended period. Message ordering guarantees become complex. Write acknowledgments are delayed, confusing clients.
+**Do this instead:** Drop messages during RECONNECTING. SDK auto-reconnect handles retries. Simpler, safer, bounded memory.
 
-The relay's `default: return true;` pattern means all other new types pass through, but these three MUST be explicitly blocked since they carry peer-internal sync data.
+### Anti-Pattern 4: Per-Blob Brotli Quality Negotiation
 
-## Safety Net Reconciliation
+**What people do:** Negotiate compression quality/algorithm during handshake.
+**Why it is wrong:** Over-engineering. Single deployment, no backward compatibility needed. Quality 4 is a good balance for all payloads.
+**Do this instead:** Fixed quality, flag byte in payload. If compression algorithm needs to change later, allocate a new flag value (0x02, etc.).
 
-The existing `sync_timer_loop()` becomes a safety net. Changes:
-- **Interval:** from `sync_interval_seconds` (default 60s) to a longer interval (600-900s configurable)
-- **Purpose:** from "primary sync mechanism" to "monitoring signal + catch-up for missed pushes"
-- **Behavior:** unchanged (full reconciliation via XOR-fingerprint algorithm)
+## Integration Boundaries
 
-Consider: add a new config field `safety_net_interval_seconds` (default 600) and deprecate using `sync_interval_seconds` for this purpose. Or just increase the default and document it.
+### Internal Boundaries
 
-## Suggested Build Order
+| Boundary | Communication | Changes in v2.1.0 |
+|----------|---------------|-------------------|
+| PeerManager <-> Connection | send_message(type, payload, req_id) | No change -- compression happens BEFORE send_message |
+| PeerManager <-> BlobEngine | ingest(blob_data) | No change -- decompression happens BEFORE ingest |
+| PeerManager <-> Storage | get_blob, has_blob, list_namespaces | No change -- metrics server reads these |
+| PeerManager <-> MetricsServer | MetricsServer reads NodeMetrics& | NEW boundary -- read-only reference |
+| RelaySession <-> Connection | message callbacks | Subscription tracking added in relay |
+| RelaySession <-> Node UDS | Connection lifecycle | Reconnect loop replaces teardown |
+| SDK Client <-> Relay | TCP + PQ AEAD | Compression flag in payload; multi-relay endpoint list |
 
-Dependencies flow downward. Each phase depends on those above it.
+### New Files Summary
 
-### Phase 1: Push Notification Infrastructure (Foundation)
+| File | Layer | Purpose |
+|------|-------|---------|
+| db/util/compression.h | Node | Brotli compress/decompress wrappers |
+| db/util/compression.cpp | Node | Implementation |
+| db/net/metrics_server.h | Node | Prometheus HTTP endpoint |
+| db/net/metrics_server.cpp | Node | Implementation |
 
-**Scope:**
-1. Add BlobNotify/BlobFetch/BlobFetchResponse to transport.fbs, regenerate flatc headers
-2. Add `notify_all_peers()` method to PeerManager (with source exclusion and UDS skip)
-3. Wire notify_all_peers() into all three existing ingest paths (client Data, client Delete, sync ingest callback)
-4. Update relay message filter to block three new types
-5. Update NodeInfoResponse supported_types
+### Modified Files Summary
 
-**Why first:** Everything else depends on the new message types existing. This phase is purely additive -- no existing behavior changes. Push notifications go out, but no peer acts on them yet.
+| File | Layer | Changes |
+|------|-------|---------|
+| db/CMakeLists.txt | Node | Add brotli FetchContent, compression.cpp, metrics_server.cpp |
+| db/config/config.h | Node | Add metrics_port |
+| db/config/config.cpp | Node | Parse/validate metrics_port |
+| db/peer/peer_manager.h | Node | Add MetricsServer member, peer_sync_namespaces in PeerInfo, max_peers_ mutable |
+| db/peer/peer_manager.cpp | Node | Compression in send/recv paths, namespace BlobNotify filter, max_peers reload, metrics server setup |
+| db/schemas/transport.fbs | Node | Add SyncNamespaceAnnounce = 62 |
+| relay/core/relay_session.h | Relay | Add subscribed_namespaces_, reconnect state |
+| relay/core/relay_session.cpp | Relay | Subscription interception, notification filtering, UDS reconnect loop |
+| sdk/python/chromatindb/client.py | SDK | Multi-relay connect, compression flag handling |
+| sdk/python/chromatindb/_codec.py | SDK | Compress/decompress in encode/decode helpers |
+| sdk/python/chromatindb/_reconnect.py | SDK | Relay rotation in reconnect logic |
+| sdk/python/pyproject.toml | SDK | Add brotli dependency |
 
-**Test strategy:** Verify BlobNotify is sent to all peers after client write. Verify relay blocks new types. Verify existing pub/sub notifications still work.
+## Scaling Considerations
 
-### Phase 2: Targeted Blob Fetch (Complete the Push Loop)
+| Concern | Current (3 nodes) | At 50 nodes | At 500 nodes |
+|---------|-------------------|-------------|--------------|
+| BlobNotify fan-out | 2 sends per ingest | 49 sends (namespace filter helps) | Unsustainable without gossip/tree |
+| Metrics scrape | N/A | 50 endpoints, fine for Prometheus | Fine, Prometheus handles 1000+ |
+| Compression CPU | Negligible | quality=4 is fast, ~100 MB/s | Thread pool offload if needed |
+| Relay reconnect | 1 relay | Each relay independent | Each relay independent |
 
-**Scope:**
-1. BlobFetch handler in on_peer_message() (inline coroutine, no sync session)
-2. BlobFetchResponse handler in on_peer_message() (decode, ingest, cascade)
-3. BlobNotify handler: check has_blob(), send BlobFetch if missing, receive response, ingest
-4. Dedup guard: skip BlobNotify from syncing peers
-5. Dedup guard: has_blob() check before fetch
-
-**Why second:** Depends on Phase 1 message types. This completes the push sync loop: notify -> check -> fetch -> ingest -> cascade.
-
-**Test strategy:** Two-node: write blob on A, verify B receives via push (not timer sync). Three-node: write on A, verify B gets it via push, C gets it via cascade from B.
-
-### Phase 3: Event-Driven Expiry
-
-**Scope:**
-1. Add `Storage::next_expiry_time()` method
-2. Rewrite `expiry_scan_loop()` to use next-expiry timer instead of fixed interval
-3. Add expiry timer wake on blob ingest (cancel timer when new blob has TTL)
-4. Deprecate or repurpose `expiry_scan_interval_seconds` config
-
-**Why third:** Independent of push sync. No dependencies on Phase 1 or 2. Can technically be built in parallel.
-
-**Test strategy:** Ingest blob with TTL=5. Verify expiry fires within 1-2s of expiry time (not on 60s scan). Ingest blob with TTL=0 (permanent). Verify no timer scheduled when no TTL blobs exist.
-
-### Phase 4: Reconcile-on-Connect + Safety Net
-
-**Scope:**
-1. Verify on_peer_connected() already triggers reconciliation for initiator (it does)
-2. Change sync_timer_loop() interval to configurable safety-net value (default 600s)
-3. Add config field for safety net interval
-4. Disconnect-triggered cursor compaction (add to on_peer_disconnected())
-5. Remove cursor_compaction_loop() and cursor_compaction_timer_ member
-
-**Why fourth:** Depends on push sync working (Phase 2). Once push sync handles ongoing propagation, the sync timer becomes redundant for normal operation.
-
-**Test strategy:** Connect two nodes, verify reconciliation runs immediately. Disconnect, write on A, reconnect, verify B catches up. Verify cursor cleaned on disconnect. Verify safety-net reconciliation fires after 600s.
-
-### Phase 5: Connection Keepalive
-
-**Scope:**
-1. Add `keepalive_loop()` coroutine to PeerManager
-2. Add `keepalive_timer_` member, wire into cancel_all_timers() and stop()
-3. Send Ping to all TCP peers every 30s
-4. Verify existing inactivity detection catches dead peers faster with keepalive traffic
-
-**Why fifth:** Independent of push sync but enhances reliability. The existing receiver-side inactivity timeout already exists; keepalive just ensures regular traffic flow.
-
-**Test strategy:** Kill node A's network interface. Verify node B detects dead connection within 120s (inactivity timeout). Measure detection time with vs without keepalive.
-
-### Phase 6: SDK Auto-Reconnect
-
-**Scope:**
-1. Add reconnect loop to ChromatinClient (jittered exponential backoff)
-2. Track subscriptions for re-subscribe on reconnect (set already exists)
-3. Handle connection loss signal from Transport to Client
-4. Distinguish intentional close from connection loss
-5. Test with relay restart scenario
-
-**Why sixth:** Depends on nothing on the C++ side. Building it last means the server-side architecture is stable and tested.
-
-**Test strategy:** Connect SDK client. Kill relay. Verify auto-reconnect with backoff. Verify subscriptions restored after reconnect. Verify pending requests fail with ConnectionError.
-
-### Phase 7: Documentation Refresh
-
-**Scope:**
-1. PROTOCOL.md: new message types (BlobNotify, BlobFetch, BlobFetchResponse), updated sync model description
-2. README.md: updated architecture description, new sync behavior
-3. SDK README: auto-reconnect API
-4. SDK getting-started tutorial: reconnect handling
-
-**Why last:** Documents the final state after all behavior is implemented and tested.
-
-## Phase Dependency Graph
-
-```
-Phase 1 (Push Infra) -----> Phase 2 (Blob Fetch) -----> Phase 4 (Reconcile + Safety Net)
-
-Phase 3 (Event Expiry)  [independent, can parallel with 1-2]
-
-Phase 5 (Keepalive)      [independent, can parallel with 3-4]
-
-Phase 6 (SDK Reconnect)  [independent, can parallel with 3-5]
-
-Phase 7 (Docs)           [depends on all above]
-```
-
-**Parallelizable groups:**
-- Group A: Phase 1, Phase 3 (no dependency between them)
-- Group B: Phase 2 (needs Phase 1), Phase 5 (independent)
-- Group C: Phase 4 (needs Phase 2), Phase 6 (independent)
-- Group D: Phase 7 (needs all)
-
-## Scalability Considerations
-
-| Concern | At 3 nodes (current KVM) | At 10 nodes | At 100 nodes |
-|---------|--------------------------|-------------|--------------|
-| BlobNotify fan-out | 2 messages per ingest | 9 messages | 99 messages -- acceptable for small blobs |
-| BlobFetch after notify | At most 2 fetches | At most 9 | 99 concurrent fetches of same blob from source |
-| has_blob() dedup check | Trivial | Trivial | 99 MDBX reads -- still O(1) each |
-| Notification bandwidth | 77 bytes x 2 = 154B overhead | 77 x 9 = 693B | 77 x 99 = 7.6 KB per ingest |
-| Expiry timer precision | Exact (O(1) MDBX peek) | Exact | Exact |
-| Cursor storage on disconnect | ~2 peers x N ns | ~10 peers | Delete large cursor sets on disconnect |
-
-**At 100 nodes (future concern, not current):** The fan-out of 99 BlobFetch requests to a single source node could be a bottleneck for large blobs. Mitigation options for the future: fetch from any peer that has it (gossip-style), or batch-acknowledge multiple BlobNotify before fetching. Not needed for the 3-node KVM deployment.
+Namespace-scoped BlobNotify is the first step toward scaling fan-out. At 500+ nodes, a gossip protocol or relay tree would be needed -- but that is far beyond current scope.
 
 ## Sources
 
-All analysis based on direct codebase inspection:
-- `db/peer/peer_manager.h` / `.cpp` -- PeerManager, sync, expiry, notification, cursor compaction
-- `db/storage/storage.h` / `.cpp` -- MDBX schema (7 sub-databases), expiry_map key format, run_expiry_scan()
-- `db/engine/engine.h` / `.cpp` -- ingest pipeline, get_blob()
-- `db/sync/sync_protocol.h` / `.cpp` -- reconciliation, on_blob_ingested callback
-- `db/sync/reconciliation.h` / `.cpp` -- XOR-fingerprint algorithm
-- `db/net/connection.h` / `.cpp` -- message loop, send_message, Connection::Ptr
-- `db/wire/codec.h` -- blob encoding/decoding, tombstone/delegation utilities
-- `db/schemas/transport.fbs` -- current 58 message types (None through TimeRangeResponse)
-- `db/config/config.h` -- timer configuration, all SIGHUP-reloadable fields
-- `relay/core/message_filter.h` / `.cpp` -- blocklist approach, 21 blocked types
-- `sdk/python/chromatindb/_transport.py` -- background reader loop, notification queue, send_lock
-- `sdk/python/chromatindb/client.py` -- ChromatinClient lifecycle, subscription tracking, connect()
+- [google/brotli](https://github.com/google/brotli) -- v1.2.0, CMake support, MIT license
+- [brotli PyPI](https://pypi.org/project/brotli/) -- Python bindings for SDK
+- [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) -- text format spec
+- [prometheus-cpp](https://github.com/jupp0r/prometheus-cpp) -- evaluated and rejected (brings own HTTP server)
+- [prometheus-cpp-lite](https://github.com/biaks/prometheus-cpp-lite) -- evaluated and rejected (unnecessary for counter/gauge only)
+- Existing codebase: peer_manager.h/cpp, connection.h/cpp, relay_session.h/cpp, config.h/cpp
+
+---
+*Architecture research for: v2.1.0 Compression, Filtering & Observability*
+*Researched: 2026-04-04*

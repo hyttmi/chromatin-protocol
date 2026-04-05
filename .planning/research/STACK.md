@@ -1,442 +1,357 @@
-# Stack Research: v2.0.0 Event-Driven Architecture
+# Stack Research: v2.1.0 Compression, Filtering & Observability
 
-**Project:** chromatindb -- push-based sync, event-driven expiry, SDK auto-reconnect, bidirectional keepalive
-**Researched:** 2026-04-02
+**Project:** chromatindb -- Brotli wire compression, Prometheus metrics endpoint, namespace-scoped notifications, relay improvements, multi-relay SDK failover, hot config reload expansion
+**Researched:** 2026-04-04
 **Confidence:** HIGH
 
 ## Scope
 
-This research covers ONLY what the v2.0.0 milestone adds or changes in the existing stack. The validated stack (Standalone Asio 1.38.0, libmdbx, FlatBuffers, Python SDK with asyncio/PyNaCl/liboqs-python) is shipped and NOT re-researched. Focus: Asio patterns for push notifications and event-driven timers, libmdbx ordered key lookups for next-expiry, asyncio reconnect patterns for the SDK, and bidirectional keepalive on both C++ and Python sides.
+This research covers ONLY the new dependencies and patterns required for v2.1.0. The validated stack (C++20, CMake/FetchContent, Standalone Asio 1.38.0, liboqs 0.15.0, libsodium, libmdbx v0.13.11, FlatBuffers 25.2.10, spdlog 1.15.1, nlohmann/json 3.11.3, xxHash, Catch2, Python SDK with asyncio/PyNaCl/liboqs-python/flatbuffers) is shipped and NOT re-researched.
 
-## Verdict: Zero New Dependencies
+## Verdict: One New C++ Dependency, One New Python Dependency
 
-**No new C++ or Python packages are needed.** Every capability required for v2.0.0 is already available in the existing stack.
+| Capability | New Dependency? | What | Why |
+|------------|-----------------|------|-----|
+| Brotli wire compression (C++ node/relay) | YES | google/brotli v1.2.0 | Only production-grade Brotli C library; CMake-native, FetchContent-compatible |
+| Brotli wire compression (Python SDK) | YES | `brotli~=1.2.0` pip package | Google's official Python bindings; 3.3M weekly downloads |
+| Prometheus /metrics HTTP endpoint | NO | Hand-rolled with Asio | Text format is trivial (~50 lines); avoids threading conflict with Asio io_context |
+| Namespace-scoped BlobNotify | NO | Existing wire protocol extension | Filter logic in existing `on_blob_ingested()` |
+| Relay subscription forwarding | NO | Existing relay session extension | Filter in `handle_node_message()` |
+| Relay auto-reconnect to node | NO | Existing Asio timer patterns | Same jittered backoff pattern as peer reconnect (Phase 42) |
+| Multi-relay SDK failover | NO | Python asyncio stdlib | Round-robin with fallback in `connect()` |
+| Hot config reload expansion | NO | Existing SIGHUP handler | Add fields to existing reload path |
 
-| Capability | Provider | Already Available? | Notes |
-|------------|----------|--------------------|-------|
-| Push notification to peers after ingest | `asio::io_context` single-thread dispatch | YES | `notify_subscribers()` already fans out; extend to peer-level notifications |
-| New wire message types (BlobNotify, BlobFetch) | FlatBuffers `transport.fbs` enum extension | YES | Add 2-4 new enum values to `TransportMsgType` |
-| Event-driven expiry timer (next-deadline) | `asio::steady_timer` with `expires_after()` reschedule | YES | Replace fixed-interval scan loop with dynamic deadline |
-| Next-expiry-time query from storage | libmdbx `cursor.to_first()` on `expiry_map` | YES | Keys are `[expiry_ts_be:8][hash:32]` -- first key IS the earliest expiry |
-| Disconnect-triggered cursor cleanup | `on_peer_disconnected()` callback | YES | Already exists; replace 6h timer with immediate action |
-| SDK auto-reconnect with backoff | Python `asyncio.sleep()` + exponential backoff | YES | Stdlib only; no new pip deps |
-| SDK transparent request retry | Python `asyncio` exception handling + re-dispatch | YES | Wrap `_request_with_timeout` with retry logic |
-| Bidirectional keepalive (C++ node) | `asio::steady_timer` periodic Ping sender | YES | Timer-cancel pattern already used for 8+ coroutines |
-| Bidirectional keepalive (Python SDK) | `asyncio.Task` periodic Ping sender | YES | Transport already has `send_ping()` and `_send_pong()` |
-| Safety-net reconciliation (background) | `asio::steady_timer` with long interval | YES | Same pattern as existing `sync_timer_loop()` |
+---
 
-## C++ Node: Asio Patterns for New Features
+## New Dependency: google/brotli v1.2.0
 
-### 1. Push-Based Peer Sync Notifications
+### Why Brotli (Not zstd)
 
-**Pattern:** Extend existing `notify_subscribers()` fan-out to all connected peers (not just pub/sub subscribers).
+The project spec calls for Brotli. This is a reasonable choice for chromatindb's wire compression despite zstd being faster at equivalent ratios, because:
 
-The current architecture already has the exact mechanism needed:
-1. Blob ingested via `engine_.ingest()` -> WriteAck sent
-2. `notify_subscribers()` already fires for pub/sub subscribers after ingest
-3. For push sync: add a parallel `notify_peers()` call that sends a new `BlobNotify` message to ALL connected peers (not just subscribers)
+1. **Blob data is pre-encryption user content** (documents, JSON, images). Brotli's built-in 120 KiB static dictionary gives 15-20% better compression on text/web content than zstd at comparable speed settings.
+2. **At quality level 1** (what we'd use for real-time wire compression), Brotli achieves ~91 MB/s throughput -- more than sufficient for the existing wire protocol where the bottleneck is ML-DSA-87 verification (~2ms per blob), not compression.
+3. **Single-blob-at-a-time sync** means only one blob is in flight per connection. Even at 100 MiB max blob size, Brotli-1 compresses in ~1.1 seconds -- acceptable since the verify step takes longer.
+4. **Wire compression happens before AEAD encryption** (compress-then-encrypt). Once data enters the AEAD frame, it's random bytes that won't compress. So compression quality on the raw blob payload matters more than raw throughput.
 
-**Why this works with existing Asio patterns:**
-- `PeerManager` runs on single `io_context` thread -- no locking needed
-- `peers_` deque already iterated in `notify_subscribers()`
-- `co_spawn(ioc_, ...)` with `asio::detached` for async send per peer (proven pattern in `notify_subscribers`)
-- Notification is fire-and-forget -- no response expected, no request_id
+**Important caveat:** Encrypted blobs (envelope-encrypted via KEM-then-Wrap) are already random bytes before wire transmission. Compression will NOT help these. The implementation must detect incompressible data and skip compression (Brotli returns output >= input for random data, which is the signal to send uncompressed).
 
-**New wire types needed:**
-```
-BlobNotify = 59,     // Peer -> Peer: "I have this blob"
-BlobFetchRequest = 60,   // Peer -> Peer: "Send me this blob"
-BlobFetchResponse = 61   // Peer -> Peer: "Here is the blob"
-```
+### C++ Integration
 
-`BlobNotify` payload: `[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]`
--- identical to existing `Notification` payload format (77 bytes). Reuse `encode_notification()`.
-
-`BlobFetchRequest` payload: `[namespace_id:32][blob_hash:32]` (64 bytes)
-
-`BlobFetchResponse` payload: FlatBuffer-encoded blob (same as `BlobTransfer` in sync). Or a 1-byte "not found" status.
-
-**Why NOT use `asio::experimental::channel`:**
-Although Asio 1.38.0 ships `experimental::channel<>` and `experimental::concurrent_channel<>`, they are unnecessary here because:
-1. The codebase runs on a single `io_context` thread -- no producer/consumer coordination needed
-2. The existing `co_spawn` + detached fire-and-forget pattern is proven in 78 phases
-3. Channels add complexity (buffer sizing, backpressure semantics) for zero benefit
-4. The `experimental::` namespace signals instability -- the API may change
-
-**Use `asio::experimental::channel` only if** a future milestone introduces multi-io_context architecture (currently: YAGNI).
-
-### 2. Event-Driven Expiry Timer
-
-**Pattern:** Replace fixed-interval `expiry_scan_loop()` with a dynamic deadline timer that fires at exactly the next expiry time.
-
-**Current implementation (to be replaced):**
-```cpp
-// Polls every expiry_scan_interval_seconds_ (default 60s)
-asio::awaitable<void> PeerManager::expiry_scan_loop() {
-    while (!stopping_) {
-        timer.expires_after(std::chrono::seconds(expiry_scan_interval_seconds_));
-        co_await timer.async_wait(...);
-        storage_.run_expiry_scan();
-    }
-}
+```cmake
+# -- google/brotli v1.2.0 (wire compression)
+set(BROTLI_BUNDLED_MODE ON CACHE BOOL "" FORCE)
+set(BROTLI_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(BROTLI_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(brotli
+  GIT_REPOSITORY https://github.com/google/brotli.git
+  GIT_TAG        v1.2.0
+  GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(brotli)
 ```
 
-**New implementation pattern:**
-```cpp
-asio::awaitable<void> PeerManager::expiry_timer_loop() {
-    while (!stopping_) {
-        auto next = storage_.get_next_expiry_time();  // NEW Storage API
-        if (!next.has_value()) {
-            // No blobs with TTL -- sleep for a long interval, reschedule on ingest
-            timer.expires_after(std::chrono::hours(1));
-        } else {
-            auto now = storage::system_clock_seconds();
-            auto delay = (*next > now) ? (*next - now) : 0;
-            timer.expires_after(std::chrono::seconds(delay));
-        }
-        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
-        if (ec || stopping_) co_return;
-        storage_.run_expiry_scan();  // Purge all expired blobs
-        // Loop re-reads next expiry time
-    }
-}
+**CMake targets (when used as subdirectory):**
+- `brotlienc` -- encoder library (compression)
+- `brotlidec` -- decoder library (decompression)
+- `brotlicommon` -- common functionality (both depend on this)
+
+**Link against:**
+```cmake
+target_link_libraries(chromatindb_lib PUBLIC brotlienc brotlidec brotlicommon)
 ```
 
-**Reschedule trigger:** After every `store_blob()` with TTL > 0, check if the new blob's expiry is earlier than the current timer deadline. If yes, cancel the timer to force re-evaluation:
-```cpp
-if (expiry_timer_ && new_expiry < current_expiry_deadline_) {
-    expiry_timer_->cancel();  // Wakes coroutine, re-reads next expiry
-}
+Note: When `BROTLI_BUNDLED_MODE` is ON (auto-detected when added via `add_subdirectory()`), Brotli skips install targets -- exactly what FetchContent needs.
+
+**API surface (C, not C++):**
+```c
+#include <brotli/encode.h>   // BrotliEncoderCompress()
+#include <brotli/decode.h>   // BrotliDecoderDecompress()
 ```
 
-**New Storage API needed:**
-```cpp
-/// Return the earliest expiry timestamp, or nullopt if no blobs have TTL.
-/// O(1): reads first key from expiry_map B-tree cursor.
-std::optional<uint64_t> get_next_expiry_time();
+Single-call compress/decompress functions. No streaming needed for our use case (we have the full blob in memory already).
+
+### Python Integration
+
+Add to `pyproject.toml` dependencies:
+```toml
+dependencies = [
+    "liboqs-python~=0.14.0",
+    "pynacl~=1.5.0",
+    "flatbuffers~=25.12",
+    "brotli~=1.2.0",
+]
 ```
 
-This is trivially implemented using `cursor.to_first()` on `expiry_map` -- the first key's first 8 bytes (big-endian) are the earliest expiry timestamp. The expiry_map is already keyed as `[expiry_ts_be:8][hash:32]`, so B-tree ordering gives us the earliest expiry for free. This is a read-only operation in a read transaction -- zero overhead.
-
-**Why `steady_timer` and not `system_timer`:**
-The existing codebase exclusively uses `asio::steady_timer` (monotonic clock). Expiry times are stored as wall-clock seconds, but the timer only needs to know "how many seconds until expiry" (relative delay), not an absolute deadline. `expires_after(seconds(delay))` works correctly with `steady_timer`.
-
-### 3. Disconnect-Triggered Cursor Cleanup
-
-**Pattern:** Move cursor compaction from 6-hour timer to immediate action in `on_peer_disconnected()`.
-
-**Current implementation:**
-```cpp
-asio::awaitable<void> PeerManager::cursor_compaction_loop() {
-    while (!stopping_) {
-        timer.expires_after(std::chrono::hours(6));
-        co_await timer.async_wait(...);
-        // Prune cursors for disconnected peers
-    }
-}
-```
-
-**New implementation:** Delete `cursor_compaction_loop()` entirely. In `on_peer_disconnected()`:
-```cpp
-void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
-    // ... existing cleanup ...
-    // Compact cursors for this peer immediately
-    auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
-    storage_.delete_peer_cursors(peer_hash);
-}
-```
-
-`delete_peer_cursors()` already exists in `Storage` and is O(n) in number of namespaces for that peer -- typically small. No Asio pattern change needed; just call it synchronously from the existing callback.
-
-### 4. Bidirectional Keepalive (C++ Node Side)
-
-**Pattern:** Add a periodic Ping sender coroutine alongside the existing receiver-side inactivity timeout.
-
-**Current state:** Node has receiver-side inactivity detection only (disconnect if no message received for N seconds). There is NO active Ping sending from the node.
-
-**New addition:**
-```cpp
-asio::awaitable<void> PeerManager::keepalive_loop() {
-    while (!stopping_) {
-        timer.expires_after(std::chrono::seconds(keepalive_interval_seconds_));
-        co_await timer.async_wait(...);
-        // Send Ping to all connected peers
-        for (auto& peer : peers_) {
-            co_spawn(ioc_, send_keepalive_ping(peer.connection), asio::detached);
-        }
-    }
-}
-```
-
-**Keepalive interval:** Should be less than `inactivity_timeout_seconds / 2` to ensure the remote side sees traffic before its timeout fires. With default `inactivity_timeout_seconds = 120`, a 30-second keepalive interval is appropriate. This matches the existing 30-second inactivity check sweep interval.
-
-**Wire protocol:** Uses existing `Ping`/`Pong` messages (types 5/6). No new message types needed.
-
-**Interaction with existing inactivity check:**
-- `inactivity_check_loop()` remains as-is -- it detects dead peers that don't respond to Pings
-- `keepalive_loop()` ensures both sides see traffic, enabling faster dead-connection detection
-- `last_message_time` is already updated at top of `on_peer_message()` for ALL message types including Pong
-
-### 5. Reconcile-On-Connect
-
-**Pattern:** Trigger full reconciliation when a peer connects, instead of waiting for the next sync timer tick.
-
-In `on_peer_connected()`, after ACL check:
-```cpp
-asio::co_spawn(ioc_, run_sync_with_peer(conn), asio::detached);
-```
-
-This already happens implicitly in the current architecture (sync timer fires periodically), but making it explicit on connect reduces initial sync delay from 0-60s to immediate.
-
-### 6. Safety-Net Reconciliation
-
-**Pattern:** Keep a low-frequency background reconciliation timer (10-15 minutes) as a monitoring safety net.
-
-```cpp
-// Replace current sync_timer_loop() 60s interval with 600-900s
-timer.expires_after(std::chrono::seconds(safety_net_reconciliation_seconds_));
-```
-
-This is the existing `sync_timer_loop()` with a longer interval. The `sync_interval_seconds` config field already supports this -- just change the default from 60 to 600.
-
-## Python SDK: Auto-Reconnect and Keepalive
-
-### 7. SDK Auto-Reconnect with Transparent Retry
-
-**Pattern:** Wrap `ChromatinClient` connection lifecycle with automatic reconnection on connection loss. No new pip dependencies.
-
-**Architecture decision: Reconnect inside `ChromatinClient`, NOT in `Transport`.**
-
-Reconnection requires re-establishing the TCP connection and re-performing the PQ handshake (new AEAD keys, new nonce counters). This means creating a new `Transport` instance entirely -- the old one is dead. Therefore, reconnect logic belongs in `ChromatinClient` which owns the connection parameters.
-
-**Implementation pattern:**
+**Python API:**
 ```python
-class ChromatinClient:
-    def __init__(self, transport: Transport) -> None:
-        self._transport = transport
-        self._subscriptions: set[bytes] = set()
-        # Reconnect state
-        self._reconnect_enabled = False
-        self._max_reconnect_attempts = 0  # 0 = unlimited
-        self._reconnect_delay = 1.0  # Starting backoff (seconds)
-        self._max_reconnect_delay = 60.0  # Cap
-        self._reconnecting = False
-
-    async def _reconnect(self) -> None:
-        """Re-establish connection with exponential backoff + jitter."""
-        delay = self._reconnect_delay
-        attempts = 0
-        while True:
-            attempts += 1
-            if self._max_reconnect_attempts > 0 and attempts > self._max_reconnect_attempts:
-                raise ChromatinConnectionError("max reconnect attempts exceeded")
-            try:
-                await self._connect()  # TCP + handshake
-                await self._restore_subscriptions()  # Re-subscribe
-                return
-            except Exception:
-                jitter = random.uniform(0, delay * 0.25)
-                await asyncio.sleep(delay + jitter)
-                delay = min(delay * 2, self._max_reconnect_delay)
+import brotli
+compressed = brotli.compress(data, quality=1)  # quality 1 for speed
+decompressed = brotli.decompress(compressed)
 ```
 
-**Transparent retry for requests:**
-```python
-async def _request_with_retry(self, msg_type: int, payload: bytes) -> tuple[int, bytes]:
-    """Send request, reconnect on failure, retry once."""
-    try:
-        return await self._request_with_timeout(msg_type, payload)
-    except ChromatinConnectionError:
-        if not self._reconnect_enabled:
-            raise
-        await self._reconnect()
-        return await self._request_with_timeout(msg_type, payload)
-```
+### Version Justification
 
-**Key decisions:**
-- **One retry after reconnect, not infinite retries.** If the retry also fails, raise to caller. Prevents silent infinite loops.
-- **Re-subscribe after reconnect.** `self._subscriptions` tracks active subscriptions; replay them on the new connection. This is why subscriptions are connection-scoped.
-- **Jitter: 0-25% of delay.** Matches the AWS Full Jitter algorithm. Prevents thundering herd if multiple SDK clients reconnect simultaneously.
-- **No new pip deps.** `random` and `asyncio.sleep` are stdlib.
+| Version | Released | Why This Version |
+|---------|----------|-----------------|
+| v1.2.0 | 2024-10-27 | Latest stable release. Includes static initialization to reduce binary size. Security fix for decoder. Previous v1.1.0 was Aug 2024. |
 
-**`connect()` factory change:**
-```python
-@classmethod
-def connect(
-    cls,
-    host: str,
-    port: int,
-    identity: Identity,
-    *,
-    timeout: float = 10.0,
-    auto_reconnect: bool = False,
-    max_reconnect_attempts: int = 0,
-    reconnect_delay: float = 1.0,
-    max_reconnect_delay: float = 60.0,
-) -> ChromatinClient:
-```
+### Compression Parameters
 
-### 8. SDK Bidirectional Keepalive
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Quality | 1 | Real-time wire compression; ~91 MB/s throughput, acceptable ratio |
+| Window size | 22 (default) | 4 MiB window; sufficient for blobs up to 100 MiB |
+| Mode | BROTLI_MODE_GENERIC | Blob data is arbitrary content, not specifically text or font |
 
-**Pattern:** Background `asyncio.Task` that sends periodic Ping to keep the connection alive and detect dead servers.
+---
 
-```python
-async def _keepalive_loop(self) -> None:
-    """Periodic Ping sender for dead connection detection."""
-    while not self._transport.closed:
-        await asyncio.sleep(self._keepalive_interval)
-        try:
-            await asyncio.wait_for(self._transport.send_ping(), timeout=10.0)
-        except (ChromatinConnectionError, asyncio.TimeoutError):
-            if self._reconnect_enabled:
-                await self._reconnect()
-            else:
-                break
-```
+## No New Dependency: Prometheus /metrics Endpoint
 
-**Transport already handles Pong response** -- the `_reader_loop` resolves the pending ping future when Pong arrives. No changes to `Transport` needed.
+### Why NOT prometheus-cpp or prometheus-cpp-lite
 
-**Default interval:** 30 seconds, matching the C++ node's keepalive/inactivity check interval.
+Three options were evaluated:
 
-## Storage Layer: New API for Event-Driven Expiry
+| Library | Version | Deps | HTTP Server | Problem |
+|---------|---------|------|-------------|---------|
+| prometheus-cpp (jupp0r) | v1.3.0 | zlib, libcurl, civetweb | civetweb (threads) | Heavy deps; civetweb threads conflict with single-threaded Asio io_context model |
+| prometheus-cpp-lite (biaks) | v2.0 | None (header-only) | ip-sockets-cpp-lite (blocking sockets) | Blocking socket server runs on separate thread; conflicts with Asio event loop |
+| Hand-rolled on Asio | N/A | None | Asio TCP acceptor | Perfect fit: runs on same io_context, zero new deps, ~100 lines |
 
-### `get_next_expiry_time()` Implementation
+**Decision: Hand-roll the /metrics endpoint using Asio.**
+
+Rationale:
+1. **chromatindb already has NodeMetrics struct** with 12 counters (ingests, rejections, syncs, rate_limited, peers_connected_total, peers_disconnected_total, cursor_hits, cursor_misses, full_resyncs, quota_rejections, sync_rejections). Plus Storage provides blob_count, used_bytes, namespace_count.
+2. **Prometheus text format is trivial.** It's `metric_name value\n` with optional `# HELP` and `# TYPE` lines. No complex serialization.
+3. **HTTP GET /metrics is trivial.** Parse one line of HTTP, respond with fixed headers + body. No need for a full HTTP framework.
+4. **Threading model matters.** Both prometheus-cpp and prometheus-cpp-lite run their own socket/thread for the HTTP server. chromatindb runs everything on a single io_context thread (with thread_pool for crypto offload only). Introducing a second networking thread creates potential data races reading NodeMetrics.
+5. **Minimal deps is a project constraint.** Adding civetweb + zlib + libcurl for 12 counters is absurd.
+
+### Implementation Pattern
 
 ```cpp
-std::optional<uint64_t> Storage::get_next_expiry_time() {
-    try {
-        auto txn = impl_->env.start_read();
-        auto cursor = txn.open_cursor(impl_->expiry_map);
-        auto first = cursor.to_first(false);
-        if (!first.done) return std::nullopt;  // No entries
-        auto key = cursor.current(false).key;
-        if (key.length() < 8) return std::nullopt;
-        return decode_be_u64(static_cast<const uint8_t*>(key.data()));
-    } catch (const std::exception& e) {
-        spdlog::error("get_next_expiry_time error: {}", e.what());
-        return std::nullopt;
+// Minimal HTTP /metrics responder on Asio
+class MetricsServer {
+    asio::ip::tcp::acceptor acceptor_;
+    // ...
+    asio::awaitable<void> handle_request(asio::ip::tcp::socket socket) {
+        // Read enough for "GET /metrics" (no need to parse full HTTP)
+        // Write: "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\r\n"
+        // Write: format_metrics()  -- reads NodeMetrics + Storage stats
     }
-}
+};
 ```
 
-**Why this is O(1):** libmdbx stores keys in sorted B-tree order. `cursor.to_first()` navigates to the leftmost leaf -- a single tree traversal, O(log n) in B-tree depth but effectively O(1) for practical database sizes (libmdbx B-tree depth is typically 2-4 levels for millions of entries). The expiry_map key prefix is `[expiry_ts_be:8]` in big-endian, so the smallest timestamp is always the first key.
+The metrics format:
+```
+# HELP chromatindb_ingests_total Total successful blob ingestions
+# TYPE chromatindb_ingests_total counter
+chromatindb_ingests_total 42
+# HELP chromatindb_peers_connected Current connected peers
+# TYPE chromatindb_peers_connected gauge
+chromatindb_peers_connected 3
+```
 
-**No index changes needed.** The existing `expiry_map` with `[expiry_ts_be:8][hash:32]` key format already provides sorted-by-timestamp ordering. This is the same B-tree the existing `run_expiry_scan()` iterates -- we are just reading the first entry without scanning.
+Config addition: `metrics_bind_address` (e.g., `"127.0.0.1:9100"`). Empty = disabled (default).
 
-## Wire Protocol Changes
+---
 
-### New Message Types
+## No New Dependency: Namespace-Scoped BlobNotify
 
-| Type | Value | Direction | Purpose |
-|------|-------|-----------|---------|
-| `BlobNotify` | 59 | Peer -> Peer | Push notification: "I have blob X" |
-| `BlobFetchRequest` | 60 | Peer -> Peer | "Send me blob X" |
-| `BlobFetchResponse` | 61 | Peer -> Peer | Blob data or not-found |
+This is pure logic change in existing code. Currently `on_blob_ingested()` sends BlobNotify (type 59) to ALL TCP peers. The change is to check if the receiving peer has any subscription filter, and only send BlobNotify for namespaces the peer cares about.
 
-**Total after v2.0.0:** 61 message types (up from 58 in v1.5.0).
+**Existing infrastructure used:**
+- `PeerInfo::subscribed_namespaces` (already exists, used for type 21 Notification filtering)
+- `on_blob_ingested()` already iterates `peers_` and checks subscription state for Notification dispatch
 
-**BlobNotify payload format:** Identical to existing `Notification` (type 21) payload:
-`[namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]` (77 bytes)
+No new protocol types needed. BlobNotify already contains the namespace hash in its 77-byte payload.
 
-Re-using the same format means `encode_notification()` and `decode_notification()` work for both pub/sub (client) notifications and peer sync notifications with zero code duplication.
+---
 
-**BlobFetchRequest payload format:**
-`[namespace_id:32][blob_hash:32]` (64 bytes)
+## No New Dependency: Relay Subscription Forwarding
 
-Same format as `ReadRequest` payload but routed peer-to-peer instead of client-to-node.
+The relay currently forwards ALL node-to-client messages unfiltered (the node only sends client-safe types). For subscription-aware filtering, the relay session tracks which namespaces each client subscribed to, and only forwards BlobNotify/Notification for matching namespaces.
 
-**BlobFetchResponse payload format:**
-- Success: `[status:1=0x00][flatbuffer_encoded_blob:N]`
-- Not found: `[status:1=0x01]`
+**Existing infrastructure used:**
+- `RelaySession::handle_client_message()` already inspects message types (for the blocklist filter)
+- Subscribe/Unsubscribe messages (types 19/20) pass through the relay -- the relay can observe them in transit to build its own filter table
 
-The status byte distinguishes "here is the blob" from "I don't have it" without needing separate message types.
+No new dependencies. Pure relay session logic.
 
-### Relay Filter Update
+---
 
-The relay message filter (blocklist) must be updated:
-- `BlobNotify` (59): BLOCK -- peer-internal, not client-facing
-- `BlobFetchRequest` (60): BLOCK -- peer-internal
-- `BlobFetchResponse` (61): BLOCK -- peer-internal
+## No New Dependency: Relay Auto-Reconnect to Node
 
-These are peer-to-peer sync primitives and must not pass through the relay to clients. The relay's blocklist approach (block known peer types, allow everything else) means these MUST be explicitly added to the block list.
+When the relay's UDS connection to the local chromatindb node drops, the relay currently disconnects all client sessions (per D-04). The improvement: relay should attempt UDS reconnection with exponential backoff, and only disconnect clients if reconnection fails after a timeout.
 
-## Configuration Changes
+**Existing infrastructure used:**
+- `asio::steady_timer` with jittered exponential backoff -- exact same pattern as peer reconnect (Phase 42, db/peer/peer_manager.cpp)
+- `asio::local::stream_protocol::socket` for UDS connection
 
-### New Config Fields
+This is relay-only code. No new dependencies.
 
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `keepalive_interval_seconds` | `uint32_t` | 30 | Ping interval for bidirectional keepalive |
-| `safety_net_reconciliation_seconds` | `uint32_t` | 600 | Background full-reconciliation interval (replaces sync_interval_seconds for pull-based sync) |
+---
 
-### Modified Config Fields
+## No New Dependency: Multi-Relay SDK Failover
 
-| Field | Old Default | New Default | Reason |
-|-------|-------------|-------------|--------|
-| `sync_interval_seconds` | 60 | Repurposed or removed | Replaced by push notifications + safety-net timer |
-| `expiry_scan_interval_seconds` | 60 | Removed | Replaced by event-driven next-expiry timer |
+The Python SDK's `connect()` currently takes a single `(host, port)`. The change: accept a list of relay addresses, try them in order, fall back to next on connection failure, and rotate on reconnect.
 
-### Removed Timer Loops
+**Existing infrastructure used:**
+- `asyncio` stdlib: `asyncio.open_connection()` with timeout, exception handling for `ConnectionRefusedError`/`TimeoutError`
+- `_reconnect.py` already has backoff logic (Phase 84)
 
-| Timer | Current | Replacement |
-|-------|---------|-------------|
-| `cursor_compaction_loop()` | 6-hour periodic | Immediate on `on_peer_disconnected()` |
-| `expiry_scan_loop()` | 60s periodic scan | `expiry_timer_loop()` with dynamic deadline |
-| `sync_timer_loop()` | 60s periodic sync | Safety-net at 600s; primary sync is push-based |
+No new pip dependencies. Pure Python asyncio logic.
 
-### New Timer Loops
+---
 
-| Timer | Interval | Purpose |
-|-------|----------|---------|
-| `keepalive_loop()` | 30s | Send Ping to all peers |
-| `expiry_timer_loop()` | Dynamic (next expiry time) | Fire at exact expiry deadline |
-| `safety_net_reconciliation_loop()` | 600s | Full reconciliation as monitoring signal |
+## No New Dependency: Hot Config Reload Expansion
+
+Currently SIGHUP reloads: `allowed_client_keys`, `allowed_peer_keys`, `sync_namespaces`, `expiry_scan_interval_seconds`, `safety_net_interval_seconds`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_cooldown_seconds`, `compaction_interval_hours`.
+
+New fields to add to hot-reload:
+- `max_peers` -- requires checking if current peer count exceeds new limit (soft enforcement: don't disconnect, just refuse new connections)
+- `metrics_bind_address` -- restart metrics server if changed (or start/stop)
+
+**Existing infrastructure used:**
+- `sighup_handler()` coroutine in `PeerManager` already re-reads and re-applies config
+- `config::load_config()` already parses all fields
+
+No new dependencies. Extending existing SIGHUP handler.
+
+---
+
+## Recommended Stack (Complete for v2.1.0)
+
+### New Dependencies
+
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| google/brotli | v1.2.0 | Wire-level blob compression before AEAD encryption | Only production Brotli C library; CMake-native; 91 MB/s at quality 1; 15-20% better ratio than zstd on text content |
+| brotli (PyPI) | ~=1.2.0 | SDK-side wire compression matching C++ implementation | Google's official Python bindings; 3.3M weekly downloads; matches C++ brotli v1.2.0 |
+
+### Existing Stack (No Changes)
+
+| Technology | Version | Used For (v2.1.0) |
+|------------|---------|-------------------|
+| Standalone Asio | 1.38.0 | Prometheus HTTP listener, relay UDS reconnect timer, metrics server coroutine |
+| spdlog | 1.15.1 | Structured logging of compression stats, metrics requests |
+| nlohmann/json | 3.11.3 | New config fields (metrics_bind_address) |
+| FlatBuffers | 25.2.10 | Wire format for compressed payload framing |
+| libmdbx | v0.13.11 | Storage stats for /metrics endpoint |
+| Catch2 | v3.7.1 | Unit tests for compression, metrics formatting, relay reconnect |
+| Python asyncio | stdlib | Multi-relay failover, reconnect logic |
+
+---
 
 ## Alternatives Considered
 
-| Recommended | Alternative | Why Not |
-|-------------|-------------|---------|
-| Fire-and-forget `co_spawn` for peer notifications | `asio::experimental::channel<>` | Single io_context thread -- no producer/consumer needed; channel is experimental and adds complexity for zero benefit |
-| `steady_timer` with dynamic `expires_after()` for expiry | Dedicated expiry watcher thread | Single-threaded Asio model is proven; adding threads would require mutex on storage access |
-| Reconnect in `ChromatinClient` (owns connection params) | Reconnect in `Transport` (lower level) | Transport is stateless after handshake; reconnection requires new TCP + new PQ handshake = new Transport |
-| Reuse `Notification` payload format for `BlobNotify` | New dedicated format | Identical fields; zero code duplication in encoder/decoder |
-| Immediate cursor cleanup on disconnect | Keep 6-hour timer with shorter interval | Timers waste CPU when the exact event (disconnect) is already observable |
-| 30s keepalive with 120s inactivity timeout | Configurable keepalive with auto-derived timeout | KISS -- 30s/120s is well-proven in production systems (SSH default is 15s/45s) |
-| `BlobFetchResponse` with status byte | Separate `BlobFetchNotFound` message type | One message type with status byte is simpler than two types; matches `WriteAck` pattern |
-| stdlib `random` for jitter | `secrets` module | Jitter is not a security-critical random value; `random` is faster and clearer |
+| Category | Recommended | Alternative | Why Not Alternative |
+|----------|-------------|-------------|---------------------|
+| C++ compression | Brotli v1.2.0 | zstd v1.5.7 (facebook/zstd) | zstd is 2-7x faster at equivalent ratios, but Brotli's static dictionary gives better ratio on text/JSON content common in blob payloads. Project spec calls for Brotli. If profiling shows Brotli is a bottleneck, zstd is a drop-in alternative. |
+| C++ compression | Brotli v1.2.0 | lz4 v1.10.0 | lz4 at 660 MB/s is overkill for single-blob-at-a-time sync where ML-DSA verify is the bottleneck. Poor compression ratio (~10%) not worth the complexity. |
+| Prometheus metrics | Hand-rolled Asio | prometheus-cpp v1.3.0 | Drags in civetweb + zlib + libcurl. Thread-based HTTP server conflicts with single-thread Asio model. Massive overkill for 15-20 metrics. |
+| Prometheus metrics | Hand-rolled Asio | prometheus-cpp-lite v2.0 | Header-only is nice, but uses blocking sockets (ip-sockets-cpp-lite). Would need dedicated thread. Still overkill for trivial text format. |
+| Python compression | brotli (PyPI) | brotlicffi | CFFI-based alternative. Unnecessary indirection when brotli (C extension) is the official Google package and faster. |
+| SDK multi-relay | asyncio stdlib | External retry library (tenacity) | YAGNI. Simple round-robin with backoff is <50 lines. Adding a dependency for retry logic violates minimal-deps philosophy. |
 
-## What NOT to Use
+---
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| `asio::experimental::channel<>` | Still experimental in Asio 1.38.0; API may change; unnecessary for single-threaded dispatch | Direct `co_spawn` per-peer fan-out |
-| `asio::system_timer` / `asio::deadline_timer` | Wall-clock timers affected by NTP/manual adjustments; codebase exclusively uses `steady_timer` | `asio::steady_timer` with `expires_after()` relative delay |
-| Python `tenacity` or `backoff` libraries | New pip dependency for something achievable in ~20 lines of stdlib | Stdlib `asyncio.sleep` + `random.uniform` |
-| Dedicated watcher thread for expiry | Breaks single-threaded invariant; requires mutex on storage | `steady_timer` reschedule in io_context thread |
-| `asyncio.Queue` for reconnect signaling | Over-engineering; reconnect is triggered by exception in request path | Direct `try/except` in `_request_with_retry` |
-| WebSocket keepalive frames | Not applicable -- custom binary protocol over TCP | Existing `Ping`/`Pong` message types (5/6) |
+## What NOT to Add
+
+| Avoid | Why | What to Do Instead |
+|-------|-----|-------------------|
+| prometheus-cpp (jupp0r) | civetweb threads + zlib + libcurl deps | Hand-roll ~100-line Asio HTTP responder |
+| prometheus-cpp-lite (biaks) | Blocking sockets conflict with Asio | Hand-roll on Asio |
+| zlib/gzip for compression | Inferior ratio to Brotli on text content; no static dictionary | Use Brotli |
+| Any HTTP framework (cpp-httplib, Beast) | Massive overkill for single-endpoint GET /metrics | Minimal Asio TCP acceptor |
+| tenacity (Python retry lib) | Overkill for simple round-robin failover | asyncio stdlib with for-loop |
+| OpenSSL | Project constraint: no OpenSSL | Stick with libsodium + liboqs |
+
+---
+
+## Wire Protocol Compression Design (Stack Implications)
+
+Compression integrates at the **transport framing layer**, between blob serialization and AEAD encryption:
+
+```
+Application blob data
+    |
+    v
+[Brotli compress (quality=1)]  <-- NEW: before AEAD
+    |
+    v
+[AEAD encrypt frame]           <-- existing ChaCha20-Poly1305
+    |
+    v
+[TCP send]
+```
+
+**Critical constraint:** Compression MUST happen before encryption. Encrypted data (random bytes) does not compress. This means the compression flag must be in the **unencrypted frame header** so the receiver knows to decompress after decryption.
+
+**Frame header change needed:** One bit or byte in the existing 4-byte length prefix or transport envelope to signal "this payload is Brotli-compressed." Options:
+1. High bit of length field (current max frame = 110 MiB = ~115M, well under 2^31)
+2. New envelope byte after length prefix
+3. Compression negotiation in handshake (capability flag in TrustedHello/PQRequired)
+
+Recommendation: **High bit of the 4-byte frame length.** Zero-cost on the wire, backward-compatible (old nodes would interpret as >2 GiB frame and disconnect -- acceptable since pre-production, no backward compat needed).
+
+---
+
+## Installation
+
+### C++ (CMakeLists.txt addition)
+
+```cmake
+# -- google/brotli v1.2.0 (wire compression)
+set(BROTLI_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(brotli
+  GIT_REPOSITORY https://github.com/google/brotli.git
+  GIT_TAG        v1.2.0
+  GIT_SHALLOW    TRUE
+)
+```
+
+Add `brotli` to `FetchContent_MakeAvailable(...)` call. Link `brotlienc brotlidec brotlicommon` to `chromatindb_lib`.
+
+### Python SDK (pyproject.toml change)
+
+```toml
+dependencies = [
+    "liboqs-python~=0.14.0",
+    "pynacl~=1.5.0",
+    "flatbuffers~=25.12",
+    "brotli~=1.2.0",
+]
+```
+
+---
 
 ## Version Compatibility
 
-| Component | Current Version | Required Changes | Compatibility Notes |
-|-----------|-----------------|------------------|---------------------|
-| Standalone Asio | 1.38.0 | None | All features used (steady_timer, co_spawn, use_awaitable) are stable, non-experimental |
-| libmdbx | latest via FetchContent | None | cursor.to_first() on sorted map is core API since inception |
-| FlatBuffers | latest via FetchContent | Add 3 enum values to transport.fbs | Backward-incompatible wire change; acceptable per project constraints |
-| liboqs-python | ~=0.14.0 | None | Not involved in v2.0.0 changes |
-| PyNaCl | ~=1.5.0 | None | Not involved in v2.0.0 changes |
-| flatbuffers (Python) | ~=25.12 | Regenerate transport_generated.py | Auto-generated from transport.fbs |
-| Python | >=3.10 | None | asyncio, random, secrets all in stdlib |
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| brotli v1.2.0 (C) | CMake >= 3.20 | Requires C99 compiler; GCC/Clang fully supported |
+| brotli v1.2.0 (C) | FetchContent | BROTLI_BUNDLED_MODE auto-detected when added via add_subdirectory() |
+| brotli ~=1.2.0 (Python) | Python >= 3.10 | Pre-built wheels for CPython 3.10-3.14 on Linux/macOS/Windows |
+| brotli ~=1.2.0 (Python) | existing PyNaCl ~=1.5.0 | No interaction -- compression and crypto are independent layers |
+| Asio 1.38.0 | Metrics HTTP server | Standard tcp::acceptor + coroutine; no special Asio version requirements |
+
+---
 
 ## Sources
 
-- Standalone Asio [1.38.0 documentation](https://think-async.com/Asio/asio-1.38.0/doc/) -- steady_timer, co_spawn, use_awaitable (verified in project's FetchContent build)
-- Asio experimental::channel [1.30.2 reference](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/experimental__concurrent_channel.html) -- evaluated and rejected for this use case
-- Asio [steady_timer reference](https://think-async.com/Asio/asio-1.36.0/doc/asio/reference/steady_timer.html) -- expires_after, cancel, expires_at behavior verified
-- libmdbx [GitHub repository](https://github.com/erthink/libmdbx) -- cursor.to_first() B-tree traversal confirmed
-- AWS [Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) -- Full Jitter algorithm referenced for SDK reconnect
-- Existing codebase: `db/peer/peer_manager.h` (timer-cancel pattern, notify_subscribers), `db/storage/storage.cpp` (expiry_map key format), `sdk/python/chromatindb/_transport.py` (Ping/Pong handling), `sdk/python/chromatindb/client.py` (subscription tracking, connect pattern)
+- [google/brotli GitHub](https://github.com/google/brotli) -- v1.2.0 release (Oct 2024), CMake target names, BUNDLED_MODE behavior
+- [google/brotli CMakeLists.txt](https://github.com/google/brotli/blob/master/CMakeLists.txt) -- target names: brotlienc, brotlidec, brotlicommon; BUILD_SHARED_LIBS control
+- [brotli PyPI](https://pypi.org/project/brotli/) -- v1.2.0, 3.3M weekly downloads, CPython 3.10-3.14 wheels
+- [Cloudflare Brotli benchmarks](https://blog.cloudflare.com/results-experimenting-brotli/) -- Brotli-1: 91.3 MB/s, Brotli-4: 51 MB/s, comparison with zlib (MEDIUM confidence -- 2017 data but algorithmic characteristics unchanged)
+- [Compression algorithm comparison](https://manishrjain.com/compression-algo-moving-data) -- zstd vs Brotli vs lz4 throughput and ratio tradeoffs
+- [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) -- text/plain; version=0.0.4, line-oriented format spec
+- [prometheus-cpp GitHub](https://github.com/jupp0r/prometheus-cpp) -- v1.3.0, requires civetweb+zlib+libcurl (HIGH confidence)
+- [prometheus-cpp-lite GitHub](https://github.com/biaks/prometheus-cpp-lite) -- v2.0 (Mar 2026), header-only, blocking sockets (HIGH confidence)
+- [facebook/zstd releases](https://github.com/facebook/zstd/releases) -- v1.5.7 (Feb 2025), evaluated as alternative
 
 ---
-*Stack research for: v2.0.0 Event-Driven Architecture*
-*Researched: 2026-04-02*
+*Stack research for: chromatindb v2.1.0 Compression, Filtering & Observability*
+*Researched: 2026-04-04*
