@@ -44,7 +44,7 @@ from chromatindb import ChromatinClient, Identity
 async def main():
     identity = Identity.generate()
 
-    async with ChromatinClient.connect("192.168.1.200", 4201, identity) as client:
+    async with ChromatinClient.connect([("192.168.1.200", 4201)], identity) as client:
         await client.ping()
         print("Connected!")
 
@@ -56,7 +56,7 @@ The context manager sends a Goodbye message and closes the connection on exit.
 ## Write and Read a Blob
 
 ```python
-async with ChromatinClient.connect("192.168.1.200", 4201, identity) as client:
+async with ChromatinClient.connect([("192.168.1.200", 4201)], identity) as client:
     # Write a blob with 1-hour TTL (in seconds)
     result = await client.write_blob(b"Hello, chromatindb!", ttl=3600)
     print(f"Written: hash={result.blob_hash.hex()}, seq={result.seq_num}")
@@ -166,7 +166,7 @@ before leaving your machine -- the node stores ciphertext only
 ML-KEM-1024 encryption keypairs alongside ML-DSA-87 signing keys.
 
 ```python
-async with ChromatinClient.connect("192.168.1.200", 4201, identity) as client:
+async with ChromatinClient.connect([("192.168.1.200", 4201)], identity) as client:
     # Encrypt to self only (no recipients = self-only)
     result = await client.write_encrypted(b"My secret data", ttl=3600)
     print(f"Encrypted blob: {result.blob_hash.hex()}")
@@ -210,7 +210,7 @@ from chromatindb import Directory
 # Admin creates a directory (backed by the admin's namespace)
 admin = Identity.generate()
 
-async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+async with ChromatinClient.connect([("192.168.1.200", 4201)], admin) as client:
     directory = Directory(client, admin)
 
     # Delegate write access to a user so they can register
@@ -229,7 +229,7 @@ to prevent key substitution attacks.
 
 ```python
 # User connects and registers in the directory
-async with ChromatinClient.connect("192.168.1.200", 4201, user_identity) as client:
+async with ChromatinClient.connect([("192.168.1.200", 4201)], user_identity) as client:
     user_dir = Directory(client, user_identity, directory_namespace=admin.namespace)
 
     await user_dir.register("alice")
@@ -248,7 +248,7 @@ call.
 
 ```python
 # Admin creates a group (needs admin client connection)
-async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+async with ChromatinClient.connect([("192.168.1.200", 4201)], admin) as client:
     admin_dir = Directory(client, admin)
     await admin_dir.create_group("engineering", members=[user_identity])
 
@@ -281,7 +281,7 @@ from chromatindb.exceptions import (
 )
 
 try:
-    async with ChromatinClient.connect("bad-host", 4201, identity) as client:
+    async with ChromatinClient.connect([("bad-host", 4201)], identity) as client:
         pass
 except HandshakeError as e:
     print(f"Connection failed: {e}")
@@ -304,12 +304,12 @@ Use `on_disconnect` and `on_reconnect` callbacks to track connection state:
 async def on_disconnect():
     print("Connection lost! Reconnecting...")
 
-async def on_reconnect(attempt: int, downtime: float):
-    print(f"Reconnected after {attempt} attempts ({downtime:.1f}s downtime)")
+async def on_reconnect(cycle_count: int, downtime: float, host: str, port: int):
+    print(f"Reconnected to {host}:{port} after {cycle_count} cycle(s) ({downtime:.1f}s)")
     # Good place to catch up on missed data
 
 async with ChromatinClient.connect(
-    "192.168.1.200", 4201, identity,
+    [("192.168.1.200", 4201)], identity,
     on_disconnect=on_disconnect,
     on_reconnect=on_reconnect,
 ) as client:
@@ -352,14 +352,14 @@ After reconnecting, your application may have missed notifications. Use
 the `on_reconnect` callback to re-read data:
 
 ```python
-async def on_reconnect(attempt: int, downtime: float):
+async def on_reconnect(cycle_count: int, downtime: float, host: str, port: int):
     # Re-read any data that may have arrived during downtime
     blobs = await client.list_blobs(identity.namespace, limit=50)
     for ref in blobs.refs:
         print(f"Blob: {ref.blob_hash.hex()}")
 
 async with ChromatinClient.connect(
-    "192.168.1.200", 4201, identity,
+    [("192.168.1.200", 4201)], identity,
     on_reconnect=on_reconnect,
 ) as client:
     await client.subscribe(identity.namespace)
@@ -373,7 +373,7 @@ Pass `auto_reconnect=False` if you want to handle reconnection yourself:
 
 ```python
 async with ChromatinClient.connect(
-    "192.168.1.200", 4201, identity,
+    [("192.168.1.200", 4201)], identity,
     auto_reconnect=False,
 ) as client:
     # Connection loss will raise ConnectionError
@@ -382,6 +382,47 @@ async with ChromatinClient.connect(
 
 Note: Calling `close()` never triggers auto-reconnect, regardless of the
 `auto_reconnect` setting. Intentional disconnection is always clean.
+
+### Multi-Relay Failover
+
+Pass multiple relay addresses for automatic failover. The SDK tries each
+relay in list order on initial connect. If the current relay goes down
+during operation, auto-reconnect cycles through all relays with jittered
+backoff between full cycles.
+
+```python
+async with ChromatinClient.connect(
+    [("relay1.example.com", 4201), ("relay2.example.com", 4201)],
+    identity,
+) as client:
+    await client.ping()
+
+    # Check which relay you're connected to
+    host, port = client.current_relay
+    print(f"Connected to {host}:{port}")
+```
+
+The extended `on_reconnect` callback includes relay info so your application
+can detect relay switches:
+
+```python
+async def on_reconnect(cycle_count: int, downtime: float, host: str, port: int):
+    print(f"Reconnected to {host}:{port} after {cycle_count} cycle(s)")
+
+async with ChromatinClient.connect(
+    [("relay1.example.com", 4201), ("relay2.example.com", 4201)],
+    identity,
+    on_reconnect=on_reconnect,
+) as client:
+    async for notif in client.notifications():
+        process(notif)
+```
+
+Reconnect rotation behavior:
+- Each relay is tried once per cycle with no delay between individual attempts
+- After exhausting all relays in a cycle, jittered exponential backoff applies (1s base, 30s cap)
+- The cycle counter tracks full passes through the relay list, not individual attempts
+- No relay health memory -- each cycle starts from the first relay in the list
 
 ## Next Steps
 

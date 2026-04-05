@@ -24,7 +24,7 @@ from chromatindb import ChromatinClient, Identity
 identity = Identity.generate()
 
 async def main():
-    async with ChromatinClient.connect("relay-host", 4201, identity) as client:
+    async with ChromatinClient.connect([("relay-host", 4201)], identity) as client:
         # Plaintext write/read
         result = await client.write_blob(b"Hello, chromatindb!", ttl=3600)
         blob = await client.read_blob(identity.namespace, result.blob_hash)
@@ -115,8 +115,9 @@ asyncio.run(main())
 |----------------|-------------|------|
 | `auto_reconnect` | Enable auto-reconnect on connection loss | `bool` (default: `True`) |
 | `on_disconnect` | Callback when connection is lost | `() -> None \| Awaitable[None]` |
-| `on_reconnect` | Callback after successful reconnect | `(attempt: int, downtime: float) -> None \| Awaitable[None]` |
+| `on_reconnect` | Callback after successful reconnect | `(cycle_count: int, downtime: float, host: str, port: int) -> None \| Awaitable[None]` |
 | `connection_state` | Current connection state | `ConnectionState` (property) |
+| `current_relay` | Currently connected relay address | `tuple[str, int]` (property) |
 | `wait_connected(timeout=None)` | Wait until connected (after reconnect) | `async -> bool` |
 
 **ConnectionState enum:**
@@ -130,9 +131,11 @@ asyncio.run(main())
 
 **Reconnect behavior:**
 
-- Jittered exponential backoff: 1s base, 30s cap (AWS Full Jitter)
+- Cycles through all relays in list order on connection failure
+- Jittered exponential backoff between full relay cycles: 1s base, 30s cap (AWS Full Jitter)
+- No delay between individual relay attempts within a cycle
 - Subscriptions automatically re-subscribed after reconnect
-- Initial connection failure raises immediately (auto_reconnect applies only after first successful connect)
+- Initial connection rotates through all relays before raising (no auto-reconnect until first success)
 - `close()` suppresses reconnection (intentional disconnect)
 - Pending operations fail with `ConnectionError` during reconnect
 
@@ -142,17 +145,34 @@ asyncio.run(main())
 async def on_disconnect():
     print("Connection lost, reconnecting...")
 
-async def on_reconnect(attempt: int, downtime: float):
-    print(f"Reconnected after {attempt} attempts ({downtime:.1f}s)")
+async def on_reconnect(cycle_count: int, downtime: float, host: str, port: int):
+    print(f"Reconnected to {host}:{port} after {cycle_count} cycle(s) ({downtime:.1f}s)")
 
 async with ChromatinClient.connect(
-    "relay-host", 4201, identity,
+    [("relay-host", 4201)], identity,
     auto_reconnect=True,
     on_disconnect=on_disconnect,
     on_reconnect=on_reconnect,
 ) as client:
     print(client.connection_state)  # ConnectionState.CONNECTED
+    print(client.current_relay)     # ("relay-host", 4201)
     connected = await client.wait_connected(timeout=10.0)
+```
+
+### Multi-Relay Failover
+
+Pass multiple relays for automatic failover. The SDK tries each relay in list
+order. If the current relay goes down during operation, auto-reconnect cycles
+through all relays with jittered backoff between full cycles.
+
+```python
+# Connect with failover relays (tries each in order)
+async with ChromatinClient.connect(
+    [("relay1.example.com", 4201), ("relay2.example.com", 4201)],
+    identity,
+) as conn:
+    await conn.ping()
+    print(f"Connected to {conn.current_relay}")
 ```
 
 ## Tutorial
