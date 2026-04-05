@@ -61,23 +61,7 @@ asio::awaitable<bool> RelaySession::start() {
 
     // 4. Set node on_ready: wire message forwarding only after TrustedHello completes
     node_conn_->on_ready([self](chromatindb::net::Connection::Ptr /*conn*/) {
-        // Now it's safe to forward messages in both directions
-        self->client_conn_->on_message(
-            [self](chromatindb::net::Connection::Ptr conn,
-                   chromatindb::wire::TransportMsgType type,
-                   std::vector<uint8_t> payload,
-                   uint32_t request_id) {
-                self->handle_client_message(conn, type, std::move(payload), request_id);
-            });
-
-        self->node_conn_->on_message(
-            [self](chromatindb::net::Connection::Ptr conn,
-                   chromatindb::wire::TransportMsgType type,
-                   std::vector<uint8_t> payload,
-                   uint32_t request_id) {
-                self->handle_node_message(conn, type, std::move(payload), request_id);
-            });
-
+        self->wire_node_handlers();
         spdlog::info("session active: client {} from {}",
                      self->client_pk_hex_, self->client_conn_->remote_address());
     });
@@ -134,6 +118,12 @@ void RelaySession::handle_client_message(
                       client_pk_hex_, namespaces.size(), subscribed_namespaces_.size());
     }
 
+    // Per D-04: Drop client->node messages silently during RECONNECTING/DEAD
+    // Per D-14: Also drop during replay_pending_ (replay in progress)
+    if (state_ != SessionState::ACTIVE || replay_pending_) {
+        return;
+    }
+
     // Forward allowed message to node
     auto self = shared_from_this();
     auto t = type;
@@ -181,14 +171,26 @@ void RelaySession::handle_client_close(
 
 void RelaySession::handle_node_close(
     chromatindb::net::Connection::Ptr /*conn*/, bool /*graceful*/) {
-    // Per D-04: disconnect client immediately on node UDS loss
-    spdlog::info("node UDS connection lost for client {}", client_pk_hex_);
-    teardown("node disconnected");
+    if (state_ == SessionState::DEAD || stopped_) return;
+    // Per D-02: Don't re-enter reconnect if already reconnecting
+    if (state_ == SessionState::RECONNECTING) return;
+
+    spdlog::info("node UDS connection lost for client {}, entering RECONNECTING",
+                 client_pk_hex_);
+    state_ = SessionState::RECONNECTING;
+    node_conn_.reset();  // Per D-02: release old connection, new socket per attempt
+
+    // Spawn reconnection coroutine
+    auto self = shared_from_this();
+    asio::co_spawn(ioc_, [self]() -> asio::awaitable<void> {
+        co_await self->reconnect_loop();
+    }, asio::detached);
 }
 
 void RelaySession::teardown(const std::string& reason) {
     if (stopped_) return;
     stopped_ = true;
+    state_ = SessionState::DEAD;
 
     spdlog::info("session teardown: {} (client {})", reason, client_pk_hex_);
 
@@ -200,6 +202,116 @@ void RelaySession::teardown(const std::string& reason) {
     if (close_cb_) {
         close_cb_(shared_from_this());
     }
+}
+
+asio::awaitable<void> RelaySession::reconnect_loop() {
+    auto self = shared_from_this();
+
+    for (reconnect_attempts_ = 0; reconnect_attempts_ < MAX_RECONNECT_ATTEMPTS;
+         ++reconnect_attempts_) {
+        // Jittered backoff delay
+        auto delay = jittered_backoff(reconnect_attempts_);
+        asio::steady_timer timer(ioc_);
+        timer.expires_after(delay);
+        auto [ec] = co_await timer.async_wait(chromatindb::net::use_nothrow);
+        if (stopped_) co_return;  // Shutdown during wait
+
+        spdlog::debug("client {}: reconnect attempt {}/{} after {}ms",
+                      client_pk_hex_, reconnect_attempts_ + 1,
+                      MAX_RECONNECT_ATTEMPTS, delay.count());
+
+        // Per D-02: new UDS socket per attempt
+        asio::local::stream_protocol::socket uds_socket(ioc_);
+        auto [connect_ec] = co_await uds_socket.async_connect(
+            asio::local::stream_protocol::endpoint(uds_path_),
+            chromatindb::net::use_nothrow);
+
+        if (connect_ec) {
+            spdlog::debug("client {}: reconnect attempt {} failed: {}",
+                          client_pk_hex_, reconnect_attempts_ + 1,
+                          connect_ec.message());
+            continue;  // Try again with next backoff
+        }
+
+        // UDS connected -- create new Connection (per D-02: new socket, new AEAD state)
+        node_conn_ = chromatindb::net::Connection::create_uds_outbound(
+            std::move(uds_socket), identity_);
+
+        // Wire up on_ready for subscription replay (per D-12)
+        replay_pending_ = true;
+        node_conn_->on_ready([self](chromatindb::net::Connection::Ptr /*conn*/) {
+            // Per D-12/D-13: Replay all subscriptions as a single batch
+            if (!self->subscribed_namespaces_.empty()) {
+                std::vector<std::array<uint8_t, 32>> ns_list(
+                    self->subscribed_namespaces_.begin(),
+                    self->subscribed_namespaces_.end());
+                auto payload = chromatindb::peer::PeerManager::encode_namespace_list(ns_list);
+                asio::co_spawn(self->ioc_,
+                    [self, payload = std::move(payload)]() -> asio::awaitable<void> {
+                        co_await self->node_conn_->send_message(
+                            chromatindb::wire::TransportMsgType_Subscribe, payload);
+                        // Per D-07: successful reconnect resets counter, returns to ACTIVE
+                        self->replay_pending_ = false;
+                        self->state_ = SessionState::ACTIVE;
+                        self->reconnect_attempts_ = 0;
+                        spdlog::info("client {}: replayed {} subscriptions after UDS reconnect",
+                                     self->client_pk_hex_,
+                                     self->subscribed_namespaces_.size());
+                    }, asio::detached);
+            } else {
+                // No subscriptions to replay -- go straight to ACTIVE
+                self->replay_pending_ = false;
+                self->state_ = SessionState::ACTIVE;
+                self->reconnect_attempts_ = 0;
+                spdlog::info("client {}: UDS reconnected (no subscriptions to replay)",
+                             self->client_pk_hex_);
+            }
+
+            // Re-wire message forwarding (same pattern as initial start())
+            self->wire_node_handlers();
+        });
+
+        // Wire on_close to re-enter reconnect if node drops again (Pitfall 2 protection)
+        node_conn_->on_close([self](chromatindb::net::Connection::Ptr conn, bool graceful) {
+            self->handle_node_close(conn, graceful);
+        });
+
+        // Spawn node connection run (TrustedHello + message loop)
+        asio::co_spawn(self->ioc_, self->node_conn_->run(), asio::detached);
+
+        co_return;  // on_ready will handle ACTIVE transition
+    }
+
+    // Per D-06: exhausted max attempts -> DEAD -> disconnect client TCP
+    spdlog::warn("client {}: UDS reconnection failed after {} attempts, entering DEAD",
+                 client_pk_hex_, MAX_RECONNECT_ATTEMPTS);
+    state_ = SessionState::DEAD;
+    teardown("reconnection failed after max attempts");
+}
+
+std::chrono::milliseconds RelaySession::jittered_backoff(uint32_t attempt) {
+    auto exp = std::min(BACKOFF_CAP_MS,
+                        BACKOFF_BASE_MS * (1u << std::min(attempt, 14u)));
+    std::uniform_int_distribution<uint32_t> dist(0, exp);
+    return std::chrono::milliseconds(dist(rng_));
+}
+
+void RelaySession::wire_node_handlers() {
+    auto self = shared_from_this();
+    client_conn_->on_message(
+        [self](chromatindb::net::Connection::Ptr conn,
+               chromatindb::wire::TransportMsgType type,
+               std::vector<uint8_t> payload,
+               uint32_t request_id) {
+            self->handle_client_message(conn, type, std::move(payload), request_id);
+        });
+    node_conn_->on_message(
+        [self](chromatindb::net::Connection::Ptr conn,
+               chromatindb::wire::TransportMsgType type,
+               std::vector<uint8_t> payload,
+               uint32_t request_id) {
+            self->handle_node_message(conn, type, std::move(payload), request_id);
+        });
 }
 
 } // namespace chromatindb::relay::core
