@@ -222,6 +222,8 @@ When a blob is ingested -- whether from a client write or from peer sync -- the 
 
 **Sync suppression:** During active reconciliation between two peers (Phase A/B/C in progress), BlobNotify messages for blobs ingested via that sync session are suppressed. This prevents notification storms during bulk catch-up.
 
+**Namespace filtering:** BlobNotify is only sent to peers whose announced namespace set (via SyncNamespaceAnnounce, type 62) includes the blob's namespace. Peers with an empty announced set (replicate-all) receive all notifications. This filtering is evaluated per-peer on every ingest event.
+
 **Client notifications:** UDS clients and relay-connected SDK clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
 
 **BlobNotify (type 59) -- 77-byte payload:**
@@ -275,6 +277,29 @@ BlobFetch is handled inline in the message loop -- no sync session handshake is 
 | Not found | `[0x01]` |
 
 **Note:** The status byte convention for BlobFetchResponse differs from ReadResponse (type 32). ReadResponse uses `0x01` for found and `0x00` for not-found. BlobFetchResponse uses `0x00` for found and `0x01` for not-found.
+
+### SyncNamespaceAnnounce (Type 62)
+
+After the PQ handshake completes, both peers exchange SyncNamespaceAnnounce messages declaring which namespaces they replicate. This scopes all subsequent push notifications and reconciliation to the intersection of both peers' namespace sets.
+
+**Direction:** Peer <-> Peer (bidirectional, sent by both sides after handshake)
+
+**Wire format:**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 2 | count (uint16 BE) | Number of namespace IDs (0 = replicate all) |
+| 2 | N * 32 | namespace_ids | 32-byte namespace hashes |
+
+**Semantics:**
+
+- **Empty set (count=0):** Peer replicates all namespaces. All BlobNotify messages are forwarded; reconciliation covers all namespaces.
+- **Non-empty set:** Peer only replicates the listed namespaces. BlobNotify for namespaces not in the set is suppressed. Reconciliation (Phase A/B/C) is scoped to the intersection of both peers' announced sets.
+- **Inline dispatch:** SyncNamespaceAnnounce is processed immediately (not queued to the sync inbox). The announced set is stored per-peer and takes effect for the next BlobNotify or sync round.
+- **SIGHUP re-announce:** When the operator reloads `sync_namespaces` via SIGHUP, the node re-sends SyncNamespaceAnnounce to all connected TCP peers with the updated set.
+- **Relay blocking:** The relay blocks type 62 from clients. SyncNamespaceAnnounce is a peer-internal protocol message.
+
+**Example:** A node configured with `sync_namespaces: ["a1b2..."]` sends `[0x00, 0x01, <32 bytes of a1b2...>]` after handshake. A node with empty `sync_namespaces` sends `[0x00, 0x00]` (replicate all).
 
 ### Full Reconciliation
 
@@ -704,6 +729,7 @@ All message types defined in the `TransportMsgType` enum:
 | 59 | BlobNotify | Push notification: namespace + hash + seq_num + size + tombstone (77 bytes, peer-internal) |
 | 60 | BlobFetch | Targeted blob fetch: namespace + hash (64 bytes, peer-internal) |
 | 61 | BlobFetchResponse | Targeted blob fetch response: status + optional blob (peer-internal) |
+| 62 | SyncNamespaceAnnounce | Namespace replication scope announcement: count + namespace IDs (peer-internal, blocked by relay) |
 
 ## Query Extensions
 
@@ -975,7 +1001,7 @@ An envelope is a self-contained binary blob stored as the data payload of a stan
 |--------|------|-------|----------|-------------|
 | 0 | 4 | magic | `CENV` (0x43454E56) | Envelope format identifier |
 | 4 | 1 | version | uint8 | Format version (0x01) |
-| 5 | 1 | suite | uint8 | Cipher suite: 0x01 = ML-KEM-1024 + ChaCha20-Poly1305, 0x02 = ML-KEM-1024 + ChaCha20-Poly1305 + Brotli |
+| 5 | 1 | suite | uint8 | Cipher suite (0x01 = ML-KEM-1024 + ChaCha20-Poly1305) |
 | 6 | 2 | recipient_count | big-endian uint16 | Number of recipient stanzas (1-256) |
 | 8 | 12 | data_nonce | raw bytes | Random nonce for data AEAD encryption |
 
@@ -1042,7 +1068,7 @@ The session fingerprint shown in the handshake diagram (`chromatin-session-fp-v1
 
 To decrypt an envelope:
 
-1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01 or 0x02
+1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01
 2. Compute `SHA3-256(own_kem_public_key)` to get own pk_hash
 3. Binary search the sorted stanzas for a matching pk_hash
 4. If not found, reject with NotARecipientError
@@ -1051,33 +1077,71 @@ To decrypt an envelope:
 7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
 8. Decrypt data ciphertext with DEK and `data_nonce` from header, using the full header (fixed header + all recipient stanzas) as associated data
 
-### Compression (Suite 0x02)
+## Prometheus Metrics Endpoint
 
-Suite `0x02` (ML-KEM-1024 + ChaCha20-Poly1305 + Brotli) adds Brotli compression before AEAD encryption. The compression is an SDK-only concern -- the node stores and replicates envelopes opaquely and is unaware of the suite byte.
+The node optionally exposes a Prometheus-compatible HTTP endpoint for automated monitoring. This is NOT a general-purpose HTTP server -- it responds only to `GET /metrics` with Prometheus text exposition format 0.0.4.
 
-**Encryption flow (suite 0x02):**
+### Configuration
 
-1. If plaintext size >= 256 bytes, compress with Brotli (quality 6)
-2. If compressed output < original size, use the compressed data and write suite=0x02 into the header
-3. If compressed output >= original size (expansion), fall back to suite=0x01 with the original plaintext
-4. If plaintext < 256 bytes, always use suite=0x01 (skip compression)
-5. The `compress` parameter defaults to true; callers can opt out with `compress=False`
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `metrics_bind` | string | `""` (disabled) | HTTP bind address for /metrics endpoint. Format: `host:port`. Example: `"127.0.0.1:9090"`. |
 
-The suite byte is written into the envelope header BEFORE AEAD associated data computation. This is critical: the full header (including suite byte) is used as AD for both DEK wrapping and data encryption.
+When `metrics_bind` is empty (default), no HTTP listener starts. The endpoint is opt-in.
 
-**Decryption flow (suite 0x02):**
+**SIGHUP reloadable:** Changing `metrics_bind` via SIGHUP starts, stops, or restarts the listener dynamically.
 
-1. Parse the suite byte at offset 5
-2. If suite=0x01: decrypt normally (no decompression)
-3. If suite=0x02: decrypt AEAD, then decompress the plaintext with Brotli
-4. Decompression uses a streaming `Decompressor` with output size cap at 100 MiB (`MAX_BLOB_DATA_SIZE`). If decompressed output exceeds this limit, decryption fails with `DecompressionError` before full allocation.
+### Exposed Metrics
 
-**Cipher suite registry:**
+All metrics use the `chromatindb_` prefix. No labels (flat namespace).
 
-| Suite | Name | Description |
-|-------|------|-------------|
-| 0x01 | ML-KEM-ChaCha | ML-KEM-1024 encap + HKDF-SHA256 KEK + ChaCha20-Poly1305 (uncompressed) |
-| 0x02 | ML-KEM-ChaCha-Brotli | Same as 0x01, but plaintext is Brotli-compressed before encryption |
-| 0x03-0xFF | Reserved | Future cipher suites |
+**Counters (monotonic since startup):**
 
-**Backward compatibility:** An SDK that only knows suite=0x01 will reject suite=0x02 envelopes with `MalformedEnvelopeError`. Newer SDKs handle both transparently. This is by design -- the suite byte enables forward-compatible format evolution.
+| Metric | Description |
+|--------|-------------|
+| `chromatindb_ingests_total` | Successful blob ingestions |
+| `chromatindb_rejections_total` | Failed blob ingestions (validation errors) |
+| `chromatindb_syncs_total` | Completed sync rounds |
+| `chromatindb_rate_limited_total` | Rate limit disconnections |
+| `chromatindb_peers_connected_total` | Total peer connections since startup |
+| `chromatindb_peers_disconnected_total` | Total peer disconnections since startup |
+| `chromatindb_cursor_hits_total` | Namespaces skipped via cursor match |
+| `chromatindb_cursor_misses_total` | Namespaces requiring full hash diff |
+| `chromatindb_full_resyncs_total` | Full resync rounds triggered |
+| `chromatindb_quota_rejections_total` | Namespace quota exceeded rejections |
+| `chromatindb_sync_rejections_total` | Sync rate limit rejections |
+
+**Gauges (current state):**
+
+| Metric | Description |
+|--------|-------------|
+| `chromatindb_peers_connected` | Current number of connected peers |
+| `chromatindb_blobs_stored` | Total blobs across all namespaces |
+| `chromatindb_storage_bytes` | Current storage usage in bytes |
+| `chromatindb_namespaces` | Number of active namespaces |
+| `chromatindb_uptime_seconds` | Node uptime in seconds |
+
+### HTTP Response Format
+
+**`GET /metrics` -- 200 OK:**
+```
+Content-Type: text/plain; version=0.0.4; charset=utf-8
+```
+
+Each metric includes `# HELP` and `# TYPE` annotations per the Prometheus text exposition format.
+
+**Any other request -- 404 Not Found:**
+```
+Content-Length: 0
+Connection: close
+```
+
+### Prometheus Scrape Configuration
+
+```yaml
+scrape_configs:
+  - job_name: 'chromatindb'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+    scrape_interval: 15s
+```

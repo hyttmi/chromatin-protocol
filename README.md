@@ -6,16 +6,16 @@ A decentralized, post-quantum secure database node. Stores cryptographically sig
 
 Three-layer system:
 
-- **Node** (`chromatindb`): Standalone C++20 daemon. Stores cryptographically signed blobs in namespaces. Every blob is verified via ML-DSA-87 signature before storage. Encrypted at rest with ChaCha20-Poly1305.
-- **Relay**: PQ-authenticated message filter and UDS forwarder. Bridges client connections to the node over Unix domain sockets.
-- **SDK**: Client libraries for application integration. Python SDK available (`pip install chromatindb`).
+- **Node** (`chromatindb`): Standalone C++20 daemon. Stores cryptographically signed blobs in namespaces. Every blob is verified via ML-DSA-87 signature before storage. Encrypted at rest with ChaCha20-Poly1305. Prometheus /metrics endpoint for operational monitoring.
+- **Relay**: PQ-authenticated message filter and UDS forwarder. Bridges client connections to the node over Unix domain sockets. Auto-reconnects to node on UDS failure with subscription replay.
+- **SDK**: Client libraries for application integration. Python SDK available (`pip install chromatindb`). Supports multi-relay failover and transparent Brotli compression.
 
 ### Sync Model
 
 Push-based event-driven sync (no polling timers):
 
 1. Client writes blob to Node B
-2. Node B sends BlobNotify to all connected peers
+2. Node B sends BlobNotify to peers whose announced namespaces include the blob's namespace
 3. Peer checks local storage; if missing, sends BlobFetch
 4. Node B responds with BlobFetchResponse containing the blob
 5. Safety-net reconciliation runs every 600s as a correctness backstop
@@ -40,6 +40,28 @@ sequenceDiagram
 ### Keepalive
 
 Bidirectional heartbeat -- Ping every 30s to all TCP peers, disconnect after 60s silence. Dead connection detection within one minute.
+
+### Observability
+
+Optional Prometheus-compatible HTTP `/metrics` endpoint. Exposes node health metrics (peer count, blob count, storage bytes, sync stats, uptime) in Prometheus text exposition format.
+
+Enable in config:
+```json
+{
+  "metrics_bind": "127.0.0.1:9090"
+}
+```
+
+Prometheus scrape configuration:
+```yaml
+scrape_configs:
+  - job_name: 'chromatindb'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+    scrape_interval: 15s
+```
+
+Disabled by default (empty `metrics_bind`). Localhost-only when enabled. SIGHUP-reloadable. See [PROTOCOL.md](db/PROTOCOL.md) for the full metric list.
 
 ### Crypto Stack
 

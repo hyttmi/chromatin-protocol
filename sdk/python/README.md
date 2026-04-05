@@ -83,6 +83,13 @@ asyncio.run(main())
 | `read_encrypted(namespace, blob_hash)` | Fetch and decrypt an encrypted blob | `bytes \| None` |
 | `write_to_group(data, group_name, directory, ttl)` | Encrypt for all group members and write | `WriteResult` |
 
+**Compression:**
+
+Encrypted blobs are automatically compressed with Brotli before AEAD encryption when plaintext is >= 256 bytes (envelope suite 0x02). This is transparent -- `write_encrypted()` compresses by default, `read_encrypted()` decompresses automatically. Compression reduces storage and bandwidth for text-heavy payloads. Pass `compress=False` to `encrypt_envelope()` to disable.
+
+- Suite 0x01: uncompressed (plaintext < 256 bytes, or compression disabled)
+- Suite 0x02: Brotli-compressed before encryption (quality 6, 100 MiB decompression cap)
+
 **Directory & Groups:**
 
 | Method | Description | Returns |

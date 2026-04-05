@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.1.0
-milestone_name: Compression, Filtering & Observability
-status: executing
-stopped_at: Completed 90-01 (metrics endpoint)
-last_updated: "2026-04-05T20:42:51Z"
-last_activity: 2026-04-05 -- Completed Phase 90 Plan 01
+milestone: v2.0.0
+milestone_name: Event-Driven Architecture
+status: verifying
+stopped_at: Completed 90-02-PLAN.md
+last_updated: "2026-04-05T20:23:57.770Z"
+last_activity: 2026-04-05
 progress:
-  total_phases: 5
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 10
-  percent: 100
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 14
+  completed_plans: 14
+  percent: 0
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 90 — observability-documentation
+**Current focus:** Phase 84 — sdk-auto-reconnect
 
 ## Current Position
 
-Phase: 90 (observability-documentation) — EXECUTING
-Plan: 2 of 2
-Status: Completed plan 01, plan 02 next
-Last activity: 2026-04-05 -- Completed Phase 90 Plan 01
+Phase: 85
+Plan: Not started
+Status: Phase complete — ready for verification
+Last activity: 2026-04-05
 
-Progress: [█████████░] 90%
+Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 
@@ -48,7 +48,6 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
 - [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
 - [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
-- [Phase 90-01]: Prometheus /metrics HTTP endpoint with 16 metrics, SIGHUP-reloadable metrics_bind, zero new dependencies
 
 ### Pending Todos
 
@@ -67,7 +66,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T20:42:51Z
-Last activity: 2026-04-05 -- Completed Phase 90 Plan 01
-Stopped at: Completed 90-01 (metrics endpoint)
-Resume file: .planning/phases/90-observability-documentation/90-01-SUMMARY.md
+Last session: 2026-04-05T20:23:57.767Z
+Last activity: 2026-04-05 -- Executing Phase 85
+Stopped at: Completed 90-02-PLAN.md
+Resume file: None
