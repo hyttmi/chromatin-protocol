@@ -448,3 +448,22 @@ def test_envelope_constants():
     assert CIPHER_SUITE_ML_KEM_CHACHA == 0x01
     assert _STANZA_SIZE == 1648
     assert _FIXED_HEADER_SIZE == 20
+
+
+# ---------------------------------------------------------------------------
+# RED: Suite 0x02 Brotli compression (Phase 87)
+# ---------------------------------------------------------------------------
+
+def test_suite_0x02_constant_red():
+    """CIPHER_SUITE_ML_KEM_CHACHA_BROTLI constant exists and is 0x02."""
+    from chromatindb._envelope import CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    assert CIPHER_SUITE_ML_KEM_CHACHA_BROTLI == 0x02
+
+
+def test_compress_encrypt_red():
+    """Compressible data >= 256 bytes produces suite=0x02 envelope."""
+    from chromatindb._envelope import CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+    sender = Identity.generate()
+    plaintext = b"A" * 1024
+    envelope = envelope_encrypt(plaintext, [], sender)
+    assert envelope[5] == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
