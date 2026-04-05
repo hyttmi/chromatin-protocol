@@ -1,124 +1,90 @@
-# Requirements: chromatindb v2.0.0 Event-Driven Architecture
+# Requirements: chromatindb v2.1.0 Compression, Filtering & Observability
 
-**Defined:** 2026-04-02
+**Defined:** 2026-04-05
 **Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## v2.0.0 Requirements
+## v2.1.0 Requirements
 
-Requirements for event-driven sync, maintenance overhaul, connection resilience, and documentation refresh. Each maps to roadmap phases.
+Requirements for SDK envelope compression, notification filtering, relay/SDK resilience, operational improvements, and documentation refresh. Each maps to roadmap phases.
 
-### Push Sync
+### Compression
 
-- [x] **PUSH-01**: Node notifies all connected peers immediately when a new blob is ingested (from client write or peer sync)
-- [x] **PUSH-02**: Notification contains namespace, blob hash, sequence number, size, and tombstone flag (77-byte payload)
-- [x] **PUSH-03**: Notifications are suppressed during active reconciliation to prevent notification storms
-- [x] **PUSH-04**: Per-connection send queue serializes all outbound messages to prevent AEAD nonce desync
-- [x] **PUSH-05**: Peer receiving a BlobNotify can fetch the specific blob via targeted BlobFetch request (skip full reconciliation)
-- [x] **PUSH-06**: BlobFetch is handled inline in the message loop (no sync session handshake required)
-- [x] **PUSH-07**: Node does not send BlobNotify back to the peer that originated the blob (source exclusion)
-- [x] **PUSH-08**: Push notifications are delivered to currently-connected peers only; disconnected peers recover via reconcile-on-connect
+- [ ] **COMP-01**: SDK compresses plaintext in `encrypt_envelope()` with Brotli (quality 6) before AEAD encryption; cipher suite byte 0x02 signals compression
+- [ ] **COMP-02**: SDK skips compression for plaintext under 256 bytes; falls back to suite=0x01 if compressed output >= original size
+- [ ] **COMP-03**: SDK enforces 100 MiB decompressed output cap in `decrypt_envelope()` via streaming decompressor to prevent decompression bombs
+- [ ] **COMP-04**: SDK `decrypt_envelope()` handles both suite=0x01 and suite=0x02 transparently; PROTOCOL.md documents suite=0x02
 
-### Maintenance
+### Notification Filtering
 
-- [x] **MAINT-01**: Expiry uses a next-expiry timer that fires at exactly the earliest blob's expiry time (O(1) via MDBX cursor)
-- [x] **MAINT-02**: After processing an expired blob, timer rearms to the next earliest expiry (chain processing)
-- [x] **MAINT-03**: Expiry timer rearms when a blob with an earlier expiry is ingested
-- [x] **MAINT-04**: Peer cursors are compacted immediately when a peer disconnects (with 5-minute grace period for transient disconnects)
-- [x] **MAINT-05**: Full reconciliation runs on peer connect/reconnect (catch-up path)
-- [x] **MAINT-06**: Safety-net reconciliation runs at a long interval (default 600s) as a monitoring signal
-- [x] **MAINT-07**: sync_interval_seconds config field repurposed to safety_net_interval_seconds with 600s default
+- [x] **FILT-01**: Peers exchange sync_namespaces after handshake via SyncNamespaceAnnounce message
+- [x] **FILT-02**: Node only sends BlobNotify to peers whose announced namespaces include the blob's namespace
+- [x] **FILT-03**: Relay tracks per-client subscription namespaces and only forwards matching Notification messages
 
-### Connections
+### Relay Resilience
 
-- [x] **CONN-01**: Node sends Ping to all TCP peers every 30 seconds (bidirectional keepalive)
-- [x] **CONN-02**: Peer that doesn't respond within 2 missed keepalive cycles is disconnected
-- [x] **CONN-03**: SDK ChromatinClient auto-reconnects on connection loss with jittered exponential backoff (1s-30s)
-- [x] **CONN-04**: SDK restores pub/sub subscriptions after successful reconnect
-- [x] **CONN-05**: SDK exposes a reconnection event/callback for application-level catch-up
+- [x] **RELAY-01**: Relay auto-reconnects to node UDS with jittered backoff when connection is lost
+- [x] **RELAY-02**: Relay replays client subscriptions to node after successful UDS reconnect
 
-### Wire Protocol
+### SDK Resilience
 
-- [x] **WIRE-01**: New message type BlobNotify (type 59) — peer-internal push notification
-- [x] **WIRE-02**: New message type BlobFetch (type 60) — targeted blob request by hash
-- [x] **WIRE-03**: New message type BlobFetchResponse (type 61) — response with blob data or not-found
-- [x] **WIRE-04**: Relay message filter updated to block types 59-61 (peer-internal only)
+- [ ] **SDK-01**: SDK connect() accepts a list of relay addresses and rotates to next on connection failure
+- [ ] **SDK-02**: SDK auto-reconnect tries next relay in the list when current relay is unreachable
+
+### Operational
+
+- [x] **OPS-01**: max_peers is reloadable via SIGHUP without node restart
+- [ ] **OPS-02**: Node exposes Prometheus-compatible HTTP /metrics endpoint (localhost-only default, opt-in via config)
+- [ ] **OPS-03**: /metrics endpoint exposes all existing metrics (peers, blobs, sync, storage, connections)
 
 ### Documentation
 
-- [x] **DOC-01**: PROTOCOL.md updated with push sync protocol, new message types, keepalive spec
-- [x] **DOC-02**: README.md updated with v2.0.0 sync model description
-- [x] **DOC-03**: SDK README updated with auto-reconnect API and behavior
-- [x] **DOC-04**: Getting-started tutorial updated for new connection lifecycle
+- [ ] **DOC-01**: PROTOCOL.md updated with compression frame format, SyncNamespaceAnnounce, and /metrics
+- [ ] **DOC-02**: README.md updated with compression, filtering, and observability features
+- [ ] **DOC-03**: SDK README updated with multi-relay failover API and Brotli support
+- [ ] **DOC-04**: Getting-started tutorial updated with metrics and relay resilience
 
 ## Future Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
 
-### Batched Notifications
-
-- **BATCH-01**: Node can batch multiple BlobNotify messages into a single wire frame for high-ingest scenarios
-
-### Gossip Protocol
-
-- **GOSSIP-01**: At 50+ peers, switch from direct notification to gossip-based propagation to reduce fan-out
-
-### Notification Gap Detection
-
-- **GAP-01**: SDK can detect and recover from notification gaps during reconnect using last_seen_seq
+- Brotli quality level tunable via config (currently hardcoded)
+- Compression negotiation in handshake (capability bit)
+- Relay connection pooling to multiple nodes
+- /metrics authentication (API key or mTLS)
 
 ## Out of Scope
 
-Explicitly excluded. Documented to prevent scope creep.
-
-| Feature | Reason |
-|---------|--------|
-| Gossip-based sync propagation | Direct notification is O(32) at max_peers=32; gossip solves 100+ node problem we don't have |
-| Guaranteed delivery for push notifications | TCP + AEAD already guarantees delivery or connection death; adding app-level ack is redundant |
-| Backward-compatible sync protocol | Only deployed on home KVM; no production users to break |
-| Conflict resolution / CRDT | Blob store is append-only with content-addressed dedup; no conflicts possible |
-| Partial blob sync / delta encoding | Blobs are opaque signed units; partial sync would break signature verification |
-| New dependencies (message queues, etc.) | Existing Asio + libmdbx + FlatBuffers are sufficient for everything |
+- Node-side wire compression (node-to-node traffic is encrypted envelope data, incompressible by design)
+- Compression of AEAD-encrypted envelope blobs (ciphertext is incompressible by design)
+- prometheus-cpp library (conflicts with single-threaded Asio model)
+- allowed_client_keys / allowed_peer_keys hot reload (already implemented)
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| PUSH-01 | Phase 79 | Complete |
-| PUSH-02 | Phase 79 | Complete |
-| PUSH-03 | Phase 79 | Complete |
-| PUSH-04 | Phase 79 | Complete |
-| PUSH-05 | Phase 80 | Complete |
-| PUSH-06 | Phase 80 | Complete |
-| PUSH-07 | Phase 79 | Complete |
-| PUSH-08 | Phase 79 | Complete |
-| MAINT-01 | Phase 81 | Complete |
-| MAINT-02 | Phase 81 | Complete |
-| MAINT-03 | Phase 81 | Complete |
-| MAINT-04 | Phase 82 | Complete |
-| MAINT-05 | Phase 82 | Complete |
-| MAINT-06 | Phase 82 | Complete |
-| MAINT-07 | Phase 82 | Complete |
-| CONN-01 | Phase 83 | Complete |
-| CONN-02 | Phase 83 | Complete |
-| CONN-03 | Phase 84 | Complete |
-| CONN-04 | Phase 84 | Complete |
-| CONN-05 | Phase 84 | Complete |
-| WIRE-01 | Phase 79 | Complete |
-| WIRE-02 | Phase 80 | Complete |
-| WIRE-03 | Phase 80 | Complete |
-| WIRE-04 | Phase 79 | Complete |
-| DOC-01 | Phase 85 | Complete |
-| DOC-02 | Phase 85 | Complete |
-| DOC-03 | Phase 85 | Complete |
-| DOC-04 | Phase 85 | Complete |
+| Req ID | Phase | Status |
+|--------|-------|--------|
+| COMP-01 | Phase 87 | Complete |
+| COMP-02 | Phase 87 | Complete |
+| COMP-03 | Phase 87 | Complete |
+| COMP-04 | Phase 87 | Complete |
+| FILT-01 | Phase 86 | Complete |
+| FILT-02 | Phase 86 | Complete |
+| FILT-03 | Phase 88 | Complete |
+| RELAY-01 | Phase 88 | Complete |
+| RELAY-02 | Phase 88 | Complete |
+| SDK-01 | Phase 89 | Pending |
+| SDK-02 | Phase 89 | Pending |
+| OPS-01 | Phase 86 | Complete |
+| OPS-02 | Phase 90 | Pending |
+| OPS-03 | Phase 90 | Pending |
+| DOC-01 | Phase 90 | Pending |
+| DOC-02 | Phase 90 | Pending |
+| DOC-03 | Phase 90 | Pending |
+| DOC-04 | Phase 90 | Pending |
 
 **Coverage:**
-- v2.0.0 requirements: 28 total
-- Mapped to phases: 28/28
+- v2.1.0 requirements: 18 total
+- Mapped to phases: 18/18
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 after roadmap creation*

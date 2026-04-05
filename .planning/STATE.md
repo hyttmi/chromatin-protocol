@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 84 — sdk-auto-reconnect
+**Current focus:** Phase 88 — relay-resilience
 
 ## Current Position
 
-Phase: 85
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 88
+Plan: 02 of 2
+Status: Plan 02 complete
 Last activity: 2026-04-05
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████████░] 100%
 
 ## Accumulated Context
 
@@ -48,6 +48,7 @@ Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
 - [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
 - [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
 - [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
+- [Phase 88-02]: Three-state relay session lifecycle (ACTIVE/RECONNECTING/DEAD), jittered backoff UDS reconnection, subscription replay after reconnect
 
 ### Pending Todos
 
@@ -66,7 +67,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T05:17:33.081Z
-Last activity: 2026-04-05 -- Executing Phase 85
-Stopped at: Completed all Phase 85 plans
+Last session: 2026-04-05T16:32:35Z
+Last activity: 2026-04-05 -- Executing Phase 88
+Stopped at: Completed 88-02-PLAN.md
 Resume file: None

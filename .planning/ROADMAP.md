@@ -19,7 +19,8 @@
 - ✅ **v1.5.0 Documentation & Distribution** — Phases 68-69 (shipped 2026-03-28)
 - ✅ **v1.6.0 Python SDK** — Phases 70-74 (shipped 2026-03-31)
 - ✅ **v1.7.0 Client-Side Encryption** — Phases 75-78 (shipped 2026-04-02)
-- **v2.0.0 Event-Driven Architecture** — Phases 79-85 (in progress)
+- ✅ **v2.0.0 Event-Driven Architecture** — Phases 79-85 (shipped 2026-04-05)
+- **v2.1.0 Compression, Filtering & Observability** — Phases 86-90 (in progress)
 
 ## Phases
 
@@ -165,129 +166,110 @@ Full details: [milestones/v1.7.0-ROADMAP.md](milestones/v1.7.0-ROADMAP.md)
 
 </details>
 
-### v2.0.0 Event-Driven Architecture (Phases 79-85)
+<details>
+<summary>v2.0.0 Event-Driven Architecture (Phases 79-85) — SHIPPED 2026-04-05</summary>
 
-**Milestone Goal:** Replace timer-paced sync with push-based notifications and targeted fetch, achieving sub-second cross-node propagation. Overhaul maintenance from periodic scanning to event-driven processing. Add SDK connection resilience.
+- [x] Phase 79: Send Queue & Push Notifications (3/3 plans) — completed 2026-04-02
+- [x] Phase 80: Targeted Blob Fetch (2/2 plans) — completed 2026-04-03
+- [x] Phase 81: Event-Driven Expiry (2/2 plans) — completed 2026-04-03
+- [x] Phase 82: Reconcile-on-Connect & Safety Net (2/2 plans) — completed 2026-04-04
+- [x] Phase 83: Bidirectional Keepalive (1/1 plan) — completed 2026-04-04
+- [x] Phase 84: SDK Auto-Reconnect (2/2 plans) — completed 2026-04-04
+- [x] Phase 85: Documentation Refresh (2/2 plans) — completed 2026-04-05
 
-- [x] **Phase 79: Send Queue & Push Notifications** - Per-connection send queue + BlobNotify fan-out with suppression and relay filter (completed 2026-04-02)
-- [x] **Phase 80: Targeted Blob Fetch** - BlobFetch/BlobFetchResponse completing the push-then-pull loop (completed 2026-04-03)
-- [x] **Phase 81: Event-Driven Expiry** - Next-expiry timer replacing periodic full-table scan (completed 2026-04-03)
-- [x] **Phase 82: Reconcile-on-Connect & Safety Net** - Formalized catch-up path, safety-net timer, disconnect-triggered cursor cleanup (completed 2026-04-04)
-- [x] **Phase 83: Bidirectional Keepalive** - Ping/Pong heartbeat for dead connection detection (completed 2026-04-04)
-- [x] **Phase 84: SDK Auto-Reconnect** - Jittered exponential backoff with subscription restoration (completed 2026-04-04)
-- [x] **Phase 85: Documentation Refresh** - PROTOCOL.md, README.md, SDK docs updated for v2.0.0 (completed 2026-04-05)
+Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
+
+</details>
+
+### v2.1.0 Compression, Filtering & Observability (Phases 86-90)
+
+**Milestone Goal:** Add SDK envelope compression (Brotli compress-before-encrypt), namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
+
+- [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
+- [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
+- [ ] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay
+- [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
+- [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
 
 ## Phase Details
 
-### Phase 79: Send Queue & Push Notifications
-**Goal**: Peers are notified immediately when any blob is ingested, with AEAD nonce safety guaranteed by a per-connection send queue
-**Depends on**: Phase 78
-**Requirements**: PUSH-01, PUSH-02, PUSH-03, PUSH-04, PUSH-07, PUSH-08, WIRE-01, WIRE-04
+### Phase 86: Namespace Filtering & Hot Reload
+**Goal**: Peers only receive BlobNotify for namespaces they replicate, and operators can adjust max_peers without restart
+**Depends on**: Phase 85
+**Requirements**: FILT-01, FILT-02, OPS-01
 **Success Criteria** (what must be TRUE):
-  1. When a client writes a blob to node A, all peers connected to node A receive a BlobNotify within the same event loop tick (no timer delay)
-  2. Notifications are never sent to the peer that originated the blob (source exclusion verified by test)
-  3. During active reconciliation between two peers, neither peer receives BlobNotify messages for blobs ingested via sync (storm suppression)
-  4. Two coroutines sending messages on the same connection simultaneously never produce AEAD nonce desync (send queue serialization)
-  5. The relay rejects BlobNotify (type 59) from client connections (peer-internal only)
-**Plans**: 3 plans
-Plans:
-- [x] 79-01-PLAN.md -- Wire type BlobNotify=59 + relay filter
-- [x] 79-02-PLAN.md -- Per-connection send queue with drain coroutine
-- [x] 79-03-PLAN.md -- Unified engine callback + PeerManager BlobNotify fan-out
+  1. After handshake, two connected peers exchange SyncNamespaceAnnounce messages declaring which namespaces they replicate
+  2. When a blob is ingested, BlobNotify is sent only to peers whose announced namespace set includes the blob's namespace (peers with empty announcement receive all notifications)
+  3. Operator changes max_peers in config and sends SIGHUP; the new limit takes effect without restart (excess peers are not mass-disconnected; new connections are refused until count drops below the new limit)
+**Plans:** 3/3 plans complete
 
-### Phase 80: Targeted Blob Fetch
-**Goal**: Peers can fetch a specific blob by hash after receiving a push notification, without triggering full reconciliation
-**Depends on**: Phase 79
-**Requirements**: PUSH-05, PUSH-06, WIRE-02, WIRE-03
-**Success Criteria** (what must be TRUE):
-  1. A peer receiving a BlobNotify for a blob it does not have can send a BlobFetch and receive the blob data in a BlobFetchResponse
-  2. BlobFetch is handled inline in the message loop without requiring a sync session handshake
-  3. BlobFetchResponse for a non-existent hash returns a not-found status (no error, no disconnect)
-  4. A peer that already has the notified blob does not send a BlobFetch (local dedup check)
-**Plans**: 2 plans
 Plans:
-- [x] 80-01-PLAN.md -- Wire types BlobFetch=60 + BlobFetchResponse=61 + relay filter
-- [x] 80-02-PLAN.md -- BlobNotify receive handler + BlobFetch/BlobFetchResponse handlers + dedup + tests
+- [ ] 86-01-PLAN.md — SyncNamespaceAnnounce protocol, BlobNotify filtering, reconciliation scoping
+- [x] 86-02-PLAN.md — max_peers SIGHUP hot reload
+- [ ] 86-03-PLAN.md — Docker integration tests for namespace filtering and max_peers reload
 
-### Phase 81: Event-Driven Expiry
-**Goal**: Expired blobs are purged at exactly the right time instead of waiting for a periodic scan
-**Depends on**: Phase 78 (independent of push sync phases)
-**Requirements**: MAINT-01, MAINT-02, MAINT-03
+### Phase 87: SDK Envelope Compression
+**Goal**: SDK compresses plaintext with Brotli before envelope encryption (suite=0x02) and decompresses after decryption, with decompression bomb protection. No node-side changes.
+**Depends on**: Phase 86
+**Requirements**: COMP-01, COMP-02, COMP-03, COMP-04
 **Success Criteria** (what must be TRUE):
-  1. After the last blob with a given expiry time is ingested, the expiry timer fires at that exact second (not up to 60s later)
-  2. Processing one expired blob automatically rearms the timer to the next earliest expiry (chain processing without gaps)
-  3. Ingesting a blob with a TTL shorter than the current timer target causes the timer to rearm earlier
-**Plans**: 2 plans
-Plans:
-- [x] 81-01-PLAN.md -- Storage get_earliest_expiry() method + unit tests
-- [x] 81-02-PLAN.md -- Event-driven expiry_scan_loop + callback signature update + ingest rearm
+  1. SDK `encrypt_envelope()` compresses plaintext with Brotli (quality 6) before AEAD encryption when plaintext >= 256 bytes; cipher suite byte 0x02 in the envelope header signals compression
+  2. SDK skips compression for plaintext under 256 bytes or when compressed output >= original size (expansion fallback); these use suite=0x01
+  3. SDK `decrypt_envelope()` enforces a 100 MiB decompressed output cap via streaming decompressor, rejecting decompression bombs before full decompression completes
+  4. SDK handles both suite=0x01 (uncompressed) and suite=0x02 (Brotli) envelopes transparently; PROTOCOL.md documents the new suite
+**Plans:** 2/2 plans complete
 
-### Phase 82: Reconcile-on-Connect & Safety Net
-**Goal**: Peers catch up on missed blobs via full reconciliation on connect, with a long-interval safety net and graceful cursor lifecycle
-**Depends on**: Phase 80
-**Requirements**: MAINT-04, MAINT-05, MAINT-06, MAINT-07
-**Success Criteria** (what must be TRUE):
-  1. When a peer connects (or reconnects after downtime), full XOR-fingerprint reconciliation runs automatically before any push notifications are sent
-  2. A safety-net reconciliation runs every 600 seconds (configurable via safety_net_interval_seconds) as a correctness backstop
-  3. When a peer disconnects, its cursors are preserved for 5 minutes; if it reconnects within the grace period, cursors are reused (no full reconciliation needed)
-  4. After the 5-minute grace period, disconnected peer cursors are compacted (freed)
-**Plans**: 2 plans
 Plans:
-- [x] 82-01-PLAN.md -- Config rename (sync_interval_seconds -> safety_net_interval_seconds) + safety-net timer adaptation
-- [x] 82-02-PLAN.md -- Cursor grace period + reconnect logic + compaction awareness
+- [x] 87-01-PLAN.md — SDK envelope compression implementation + tests
+- [x] 87-02-PLAN.md — Documentation: ROADMAP, REQUIREMENTS, PROTOCOL.md update
 
-### Phase 83: Bidirectional Keepalive
-**Goal**: Dead TCP connections are detected within 60 seconds via application-level heartbeat
-**Depends on**: Phase 79 (requires send queue for safe concurrent Ping sends)
-**Requirements**: CONN-01, CONN-02
+### Phase 88: Relay Resilience
+**Goal**: The relay survives node restarts transparently and only forwards notifications to clients that subscribed to the relevant namespace
+**Depends on**: Phase 86
+**Requirements**: FILT-03, RELAY-01, RELAY-02
 **Success Criteria** (what must be TRUE):
-  1. Every connected TCP peer receives a Ping message every 30 seconds from the node
-  2. A peer that fails to respond to 2 consecutive keepalive cycles (60 seconds of silence) is disconnected by the node
-**Plans**: 1 plan
-Plans:
-- [x] 83-01-PLAN.md -- Connection last_recv_time_ + PeerManager keepalive_loop + replace inactivity_check_loop
+  1. Relay tracks per-client subscription namespaces (intercepting Subscribe/Unsubscribe in transit) and only forwards Notification messages whose namespace matches at least one client subscription
+  2. When the node UDS connection drops, the relay automatically reconnects with jittered exponential backoff; client TCP sessions remain open during reconnection attempts
+  3. After successful UDS reconnect, the relay replays all active client subscriptions to the node so clients resume receiving notifications without re-subscribing
+  4. A client that disconnects has its subscription state cleaned up immediately (no stale state accumulation)
+**Plans:** 2/2 plans executed
 
-### Phase 84: SDK Auto-Reconnect
-**Goal**: The Python SDK transparently recovers from connection loss, restoring subscriptions and notifying the application
-**Depends on**: Phase 78 (SDK-only work, independent of C++ phases)
-**Requirements**: CONN-03, CONN-04, CONN-05
-**Success Criteria** (what must be TRUE):
-  1. When the relay connection drops, ChromatinClient automatically attempts reconnection with jittered exponential backoff (1s base, 30s cap)
-  2. After successful reconnect, all previously active pub/sub subscriptions are automatically re-subscribed
-  3. The application receives a reconnection event/callback that it can use for catch-up logic (e.g., re-query missed data)
-  4. Calling client.close() does not trigger auto-reconnect (intentional disconnect is distinguished from connection loss)
-**Plans**: 2 plans
 Plans:
-- [x] 84-01-PLAN.md -- ConnectionState enum + backoff + ChromatinClient reconnect refactor
-- [x] 84-02-PLAN.md -- Comprehensive reconnect unit tests
+- [x] 88-01-PLAN.md — Subscription tracking, notification filtering, unit tests
+- [x] 88-02-PLAN.md — Three-state lifecycle, UDS auto-reconnect, subscription replay
 
-### Phase 85: Documentation Refresh
-**Goal**: All documentation accurately describes the v2.0.0 event-driven sync model, new wire types, and SDK reconnect behavior
-**Depends on**: Phases 79-84
-**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04
+### Phase 89: SDK Multi-Relay Failover
+**Goal**: SDK clients can connect to multiple relays and automatically rotate to the next one when the current relay is unreachable
+**Depends on**: Phase 88
+**Requirements**: SDK-01, SDK-02
 **Success Criteria** (what must be TRUE):
-  1. PROTOCOL.md contains byte-level wire format for BlobNotify, BlobFetch, and BlobFetchResponse, plus keepalive timing spec and push notification ordering semantics
-  2. README.md describes the event-driven sync model (push + targeted fetch + safety-net reconciliation) replacing the timer-paced description
-  3. SDK README documents auto-reconnect API (backoff parameters, reconnection event, subscription restoration behavior)
-  4. Getting-started tutorial covers the new connection lifecycle (auto-reconnect, reconnection events, catch-up patterns)
-**Plans**: 2 plans
-Plans:
-- [x] 85-01-PLAN.md -- PROTOCOL.md restructure: push sync wire types, keepalive, Mermaid diagrams
-- [x] 85-02-PLAN.md -- README.md rewrite + SDK README auto-reconnect API + tutorial Connection Resilience section
+  1. ChromatinClient.connect() accepts a list of (host, port) relay addresses and connects to the first reachable one
+  2. When auto-reconnect detects a relay failure, the SDK tries the next relay in the list (cycling through all before retrying); a jittered delay (0-2s) prevents reconnect storms
+  3. After exhausting the full relay list without success, the SDK applies circuit-breaker backoff before cycling again (not infinite tight-loop retry)
+**Plans**: TBD
+
+### Phase 90: Observability & Documentation
+**Goal**: Operators can scrape node metrics via Prometheus, and all documentation reflects the v2.1.0 feature set
+**Depends on**: Phases 86-89
+**Requirements**: OPS-02, OPS-03, DOC-01, DOC-02, DOC-03, DOC-04
+**Success Criteria** (what must be TRUE):
+  1. Node exposes a Prometheus-compatible HTTP /metrics endpoint on a configurable bind address (default: disabled; when enabled, localhost-only by default)
+  2. /metrics endpoint reports all existing NodeMetrics counters and gauges (peer count, blob count, storage bytes, sync stats, connection counts) in Prometheus text exposition format
+  3. PROTOCOL.md documents the Brotli compression frame format, SyncNamespaceAnnounce wire type, and /metrics endpoint configuration
+  4. README.md, SDK README, and getting-started tutorial are updated to cover compression, filtering, multi-relay failover, and observability features
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases 79-80 are sequential (push loop). Phases 81, 83, 84 are independent of each other (can parallel with 80/82). Phase 82 depends on 80. Phase 85 depends on all.
+Phases 86 first (protocol change settles message type). Phase 87 depends on 86 (send paths stable). Phase 88 depends on 86 (namespace filtering in relay). Phase 89 depends on 88 (test together). Phase 90 last (documents everything).
 
-Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
+Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 79. Send Queue & Push Notifications | 3/3 | Complete    | 2026-04-02 |
-| 80. Targeted Blob Fetch | 2/2 | Complete    | 2026-04-03 |
-| 81. Event-Driven Expiry | 2/2 | Complete    | 2026-04-03 |
-| 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
-| 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
-| 84. SDK Auto-Reconnect | 2/2 | Complete    | 2026-04-04 |
-| 85. Documentation Refresh | 1/2 | Complete    | 2026-04-05 |
+| 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
+| 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
+| 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
+| 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
+| 90. Observability & Documentation | 0/0 | Not started | - |
