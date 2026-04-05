@@ -1321,3 +1321,82 @@ TEST_CASE("validate_config rejects too-long uds_path", "[config][uds]") {
         REQUIRE_THAT(e.what(), ContainsSubstring("too long"));
     }
 }
+
+// =============================================================================
+// Phase 90: metrics_bind config tests (OPS-02)
+// =============================================================================
+
+using Catch::Matchers::ContainsSubstring;
+
+TEST_CASE("metrics_bind defaults to empty", "[config][metrics]") {
+    Config cfg;
+    REQUIRE(cfg.metrics_bind.empty());
+}
+
+TEST_CASE("load_config parses metrics_bind from JSON", "[config][metrics]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_metrics_bind.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"metrics_bind": "127.0.0.1:9090"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.metrics_bind == "127.0.0.1:9090");
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("load_config: missing metrics_bind uses default empty", "[config][metrics]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_metrics_bind_missing.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:4200"})";
+    }
+
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.metrics_bind.empty());
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("validate_config: metrics_bind empty passes", "[config][metrics]") {
+    Config cfg;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: metrics_bind valid host:port passes", "[config][metrics]") {
+    Config cfg;
+    cfg.metrics_bind = "127.0.0.1:9090";
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("validate_config: metrics_bind missing colon throws", "[config][metrics]") {
+    Config cfg;
+    cfg.metrics_bind = "localhost9090";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: metrics_bind port=0 throws", "[config][metrics]") {
+    Config cfg;
+    cfg.metrics_bind = "127.0.0.1:0";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("validate_config: metrics_bind port=70000 throws", "[config][metrics]") {
+    Config cfg;
+    cfg.metrics_bind = "127.0.0.1:70000";
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("metrics_bind is a known config key", "[config][metrics]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_metrics_known.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"metrics_bind": "127.0.0.1:9090"})";
+    }
+
+    // Should not produce "unknown config key" warning -- verified by no throw
+    REQUIRE_NOTHROW(load_config(tmp));
+
+    std::filesystem::remove(tmp);
+}

@@ -44,6 +44,7 @@ struct Config {
     std::string log_format = "text";                 // Log format: "text" or "json"
     uint32_t compaction_interval_hours = 6;         // Compaction interval in hours (0 = disabled, minimum 1 when enabled)
     std::string uds_path;                           // Unix domain socket path (empty = disabled)
+    std::string metrics_bind;                       // Prometheus /metrics HTTP endpoint (empty = disabled, "host:port" = enabled)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 
