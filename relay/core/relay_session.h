@@ -7,9 +7,11 @@
 #include <asio/local/stream_protocol.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <unordered_set>
 
@@ -23,6 +25,9 @@ public:
     using Ptr = std::shared_ptr<RelaySession>;
     using CloseCallback = std::function<void(RelaySession::Ptr)>;
 
+    /// Three-state lifecycle: ACTIVE (forwarding), RECONNECTING (backoff loop), DEAD (give up).
+    enum class SessionState { ACTIVE, RECONNECTING, DEAD };
+
     /// Custom hash for 32-byte namespace IDs (already SHA3-256, uniformly distributed).
     struct NamespaceHash {
         size_t operator()(const std::array<uint8_t, 32>& ns) const {
@@ -34,6 +39,9 @@ public:
     using NamespaceSet = std::unordered_set<std::array<uint8_t, 32>, NamespaceHash>;
 
     static constexpr size_t MAX_SUBSCRIPTIONS = 256;
+    static constexpr uint32_t MAX_RECONNECT_ATTEMPTS = 10;
+    static constexpr uint32_t BACKOFF_BASE_MS = 1000;
+    static constexpr uint32_t BACKOFF_CAP_MS = 30000;
 
     /// Create a relay session for an authenticated client connection.
     /// client_conn must already be post-handshake (authenticated).
@@ -57,6 +65,13 @@ public:
 
     /// Client's remote address (for logging per D-06).
     const std::string& client_address() const;
+
+    /// Current session state.
+    SessionState state() const { return state_; }
+
+    /// Calculate jittered exponential backoff delay (per D-03).
+    /// Full jitter: uniform random in [0, min(cap, base * 2^attempt)].
+    std::chrono::milliseconds jittered_backoff(uint32_t attempt);
 
 private:
     RelaySession(chromatindb::net::Connection::Ptr client_conn,
@@ -85,6 +100,12 @@ private:
     /// Shared teardown logic.
     void teardown(const std::string& reason);
 
+    /// Coroutine: attempt UDS reconnection with backoff (per D-01, D-02).
+    asio::awaitable<void> reconnect_loop();
+
+    /// Wire message handlers on the (re)connected node connection.
+    void wire_node_handlers();
+
     chromatindb::net::Connection::Ptr client_conn_;
     chromatindb::net::Connection::Ptr node_conn_;
     std::string uds_path_;
@@ -93,6 +114,10 @@ private:
     std::string client_pk_hex_;
     bool stopped_ = false;
     NamespaceSet subscribed_namespaces_;
+    SessionState state_ = SessionState::ACTIVE;
+    uint32_t reconnect_attempts_ = 0;
+    bool replay_pending_ = false;
+    std::mt19937 rng_{std::random_device{}()};
 
     CloseCallback close_cb_;
 };

@@ -22,8 +22,8 @@ Requirements for SDK envelope compression, notification filtering, relay/SDK res
 
 ### Relay Resilience
 
-- [ ] **RELAY-01**: Relay auto-reconnects to node UDS with jittered backoff when connection is lost
-- [ ] **RELAY-02**: Relay replays client subscriptions to node after successful UDS reconnect
+- [x] **RELAY-01**: Relay auto-reconnects to node UDS with jittered backoff when connection is lost
+- [x] **RELAY-02**: Relay replays client subscriptions to node after successful UDS reconnect
 
 ### SDK Resilience
 
@@ -70,8 +70,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | FILT-01 | Phase 86 | Complete |
 | FILT-02 | Phase 86 | Complete |
 | FILT-03 | Phase 88 | Complete |
-| RELAY-01 | Phase 88 | Pending |
-| RELAY-02 | Phase 88 | Pending |
+| RELAY-01 | Phase 88 | Complete |
+| RELAY-02 | Phase 88 | Complete |
 | SDK-01 | Phase 89 | Pending |
 | SDK-02 | Phase 89 | Pending |
 | OPS-01 | Phase 86 | Complete |
