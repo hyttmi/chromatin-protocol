@@ -185,7 +185,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 
 **Milestone Goal:** Add wire-level Brotli compression, namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
 
-- [ ] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload
+- [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
 - [ ] **Phase 87: Wire Compression** - Brotli compress-then-encrypt for node and SDK with decompression bomb protection
 - [ ] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay
 - [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
@@ -201,7 +201,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
   1. After handshake, two connected peers exchange SyncNamespaceAnnounce messages declaring which namespaces they replicate
   2. When a blob is ingested, BlobNotify is sent only to peers whose announced namespace set includes the blob's namespace (peers with empty announcement receive all notifications)
   3. Operator changes max_peers in config and sends SIGHUP; the new limit takes effect without restart (excess peers are not mass-disconnected; new connections are refused until count drops below the new limit)
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 86-01-PLAN.md — SyncNamespaceAnnounce protocol, BlobNotify filtering, reconciliation scoping
@@ -260,7 +260,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 86. Namespace Filtering & Hot Reload | 2/3 | Executing | - |
+| 86. Namespace Filtering & Hot Reload | 2/3 | Complete    | 2026-04-05 |
 | 87. Wire Compression | 0/0 | Not started | - |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
