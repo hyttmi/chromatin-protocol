@@ -189,7 +189,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 - [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
 - [x] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay (completed 2026-04-05)
 - [x] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover (completed 2026-04-05)
-- [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
+- [x] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh (completed 2026-04-05)
 
 ## Phase Details
 
@@ -261,7 +261,7 @@ Plans:
   2. /metrics endpoint reports all existing NodeMetrics counters and gauges (peer count, blob count, storage bytes, sync stats, connection counts) in Prometheus text exposition format
   3. PROTOCOL.md documents the Brotli compression frame format, SyncNamespaceAnnounce wire type, and /metrics endpoint configuration
   4. README.md, SDK README, and getting-started tutorial are updated to cover compression, filtering, multi-relay failover, and observability features
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 90-01-PLAN.md — Prometheus /metrics HTTP endpoint implementation + unit tests
@@ -280,4 +280,4 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
 | 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
 | 89. SDK Multi-Relay Failover | 2/2 | Complete    | 2026-04-05 |
-| 90. Observability & Documentation | 0/2 | Not started | - |
+| 90. Observability & Documentation | 0/2 | Complete    | 2026-04-05 |
