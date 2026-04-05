@@ -53,7 +53,7 @@ TEST_CASE("is_client_allowed permits client operation types", "[message_filter]"
 }
 
 TEST_CASE("is_client_allowed blocks peer operation types", "[message_filter]") {
-    // 17 peer-only types (14 original + BlobNotify + BlobFetch + BlobFetchResponse)
+    // 18 peer-only types (17 original + SyncNamespaceAnnounce)
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncRequest));
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncAccept));
     CHECK_FALSE(is_client_allowed(TransportMsgType_SyncComplete));
@@ -73,6 +73,8 @@ TEST_CASE("is_client_allowed blocks peer operation types", "[message_filter]") {
     // Targeted blob fetch (peer-internal)
     CHECK_FALSE(is_client_allowed(TransportMsgType_BlobFetch));
     CHECK_FALSE(is_client_allowed(TransportMsgType_BlobFetchResponse));
+    // Namespace announce (peer-internal, Phase 86)
+    CHECK_FALSE(is_client_allowed(TransportMsgType_SyncNamespaceAnnounce));
 }
 
 TEST_CASE("is_client_allowed blocks handshake and internal types", "[message_filter]") {

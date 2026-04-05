@@ -78,7 +78,9 @@ enum TransportMsgType : byte {
     BlobNotify = 59,
     // Phase 80: Targeted blob fetch
     BlobFetch = 60,
-    BlobFetchResponse = 61
+    BlobFetchResponse = 61,
+    // Phase 86: Namespace filtering
+    SyncNamespaceAnnounce = 62
 }
 
 table TransportMessage {

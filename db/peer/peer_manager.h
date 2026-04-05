@@ -63,6 +63,11 @@ struct PeerInfo {
     uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
     uint64_t last_sync_initiated = 0;  // steady_clock ms since epoch (0 = never synced as responder)
     uint64_t last_message_time = 0;   // steady_clock ms since epoch (0 = not yet set)
+    // Phase 86: Peer's declared replication scope (empty = replicate all, per D-07)
+    std::set<std::array<uint8_t, 32>> announced_namespaces;
+    // Phase 86: Announce handshake coordination (timer-cancel pattern)
+    bool announce_received = false;
+    asio::steady_timer* announce_notify = nullptr;
 };
 
 /// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
@@ -214,6 +219,9 @@ private:
     // Server callbacks
     void on_peer_connected(net::Connection::Ptr conn);
     void on_peer_disconnected(net::Connection::Ptr conn);
+
+    // Phase 86: Announce exchange + optional sync-on-connect
+    asio::awaitable<void> announce_and_sync(net::Connection::Ptr conn);
     bool should_accept_connection();
 
     // Message routing

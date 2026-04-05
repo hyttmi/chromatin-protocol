@@ -38,6 +38,8 @@ bool is_client_allowed(TransportMsgType type) {
         // Targeted blob fetch (peer-internal)
         case TransportMsgType_BlobFetch:
         case TransportMsgType_BlobFetchResponse:
+        // Namespace announce (peer-internal, Phase 86)
+        case TransportMsgType_SyncNamespaceAnnounce:
             return false;
         // All other types (client operations, queries, pub/sub, keepalive)
         // pass through — new message types work without relay changes.

@@ -14,7 +14,8 @@ namespace chromatindb::relay::core {
 ///          ReconcileRanges, ReconcileItems), PEX (PeerListRequest, PeerListResponse),
 ///          internal signals (StorageFull, QuotaExceeded),
 ///          push notifications (BlobNotify),
-///          targeted blob fetch (BlobFetch, BlobFetchResponse).
+///          targeted blob fetch (BlobFetch, BlobFetchResponse),
+///          namespace announce (SyncNamespaceAnnounce).
 bool is_client_allowed(chromatindb::wire::TransportMsgType type);
 
 /// Human-readable name for a message type (for logging blocked types per D-07).
