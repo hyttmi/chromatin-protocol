@@ -109,6 +109,52 @@ asyncio.run(main())
 |--------|-------------|---------|
 | `ping()` | Verify connection is alive | `None` |
 
+### Connection Resilience
+
+| Method/Property | Description | Type |
+|----------------|-------------|------|
+| `auto_reconnect` | Enable auto-reconnect on connection loss | `bool` (default: `True`) |
+| `on_disconnect` | Callback when connection is lost | `() -> None \| Awaitable[None]` |
+| `on_reconnect` | Callback after successful reconnect | `(attempt: int, downtime: float) -> None \| Awaitable[None]` |
+| `connection_state` | Current connection state | `ConnectionState` (property) |
+| `wait_connected(timeout=None)` | Wait until connected (after reconnect) | `async -> bool` |
+
+**ConnectionState enum:**
+
+| State | Description |
+|-------|-------------|
+| `DISCONNECTED` | Not connected (initial or after connection loss) |
+| `CONNECTING` | Reconnection attempt in progress |
+| `CONNECTED` | Active connection established |
+| `CLOSING` | Shutdown initiated via `close()` |
+
+**Reconnect behavior:**
+
+- Jittered exponential backoff: 1s base, 30s cap (AWS Full Jitter)
+- Subscriptions automatically re-subscribed after reconnect
+- Initial connection failure raises immediately (auto_reconnect applies only after first successful connect)
+- `close()` suppresses reconnection (intentional disconnect)
+- Pending operations fail with `ConnectionError` during reconnect
+
+**Example:**
+
+```python
+async def on_disconnect():
+    print("Connection lost, reconnecting...")
+
+async def on_reconnect(attempt: int, downtime: float):
+    print(f"Reconnected after {attempt} attempts ({downtime:.1f}s)")
+
+async with ChromatinClient.connect(
+    "relay-host", 4201, identity,
+    auto_reconnect=True,
+    on_disconnect=on_disconnect,
+    on_reconnect=on_reconnect,
+) as client:
+    print(client.connection_state)  # ConnectionState.CONNECTED
+    connected = await client.wait_connected(timeout=10.0)
+```
+
 ## Tutorial
 
 See [Getting Started Tutorial](docs/getting-started.md) for a complete walkthrough
