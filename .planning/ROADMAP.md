@@ -186,7 +186,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 **Milestone Goal:** Add SDK envelope compression (Brotli compress-before-encrypt), namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
 
 - [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
-- [ ] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection
+- [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
 - [ ] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay
 - [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
 - [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
@@ -217,7 +217,7 @@ Plans:
   2. SDK skips compression for plaintext under 256 bytes or when compressed output >= original size (expansion fallback); these use suite=0x01
   3. SDK `decrypt_envelope()` enforces a 100 MiB decompressed output cap via streaming decompressor, rejecting decompression bombs before full decompression completes
   4. SDK handles both suite=0x01 (uncompressed) and suite=0x02 (Brotli) envelopes transparently; PROTOCOL.md documents the new suite
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 87-01-PLAN.md — SDK envelope compression implementation + tests
@@ -265,7 +265,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
-| 87. SDK Envelope Compression | 1/2 | In Progress|  |
+| 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
 | 90. Observability & Documentation | 0/0 | Not started | - |
