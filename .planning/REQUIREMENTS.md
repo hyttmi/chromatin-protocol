@@ -62,28 +62,28 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Req ID | Phase | Status |
 |--------|-------|--------|
-| COMP-01 | TBD | Pending |
-| COMP-02 | TBD | Pending |
-| COMP-03 | TBD | Pending |
-| COMP-04 | TBD | Pending |
-| FILT-01 | TBD | Pending |
-| FILT-02 | TBD | Pending |
-| FILT-03 | TBD | Pending |
-| RELAY-01 | TBD | Pending |
-| RELAY-02 | TBD | Pending |
-| SDK-01 | TBD | Pending |
-| SDK-02 | TBD | Pending |
-| OPS-01 | TBD | Pending |
-| OPS-02 | TBD | Pending |
-| OPS-03 | TBD | Pending |
-| DOC-01 | TBD | Pending |
-| DOC-02 | TBD | Pending |
-| DOC-03 | TBD | Pending |
-| DOC-04 | TBD | Pending |
+| COMP-01 | Phase 87 | Pending |
+| COMP-02 | Phase 87 | Pending |
+| COMP-03 | Phase 87 | Pending |
+| COMP-04 | Phase 87 | Pending |
+| FILT-01 | Phase 86 | Pending |
+| FILT-02 | Phase 86 | Pending |
+| FILT-03 | Phase 88 | Pending |
+| RELAY-01 | Phase 88 | Pending |
+| RELAY-02 | Phase 88 | Pending |
+| SDK-01 | Phase 89 | Pending |
+| SDK-02 | Phase 89 | Pending |
+| OPS-01 | Phase 86 | Pending |
+| OPS-02 | Phase 90 | Pending |
+| OPS-03 | Phase 90 | Pending |
+| DOC-01 | Phase 90 | Pending |
+| DOC-02 | Phase 90 | Pending |
+| DOC-03 | Phase 90 | Pending |
+| DOC-04 | Phase 90 | Pending |
 
 **Coverage:**
 - v2.1.0 requirements: 18 total
-- Mapped to phases: 0/18
-- Unmapped: 18
+- Mapped to phases: 18/18
+- Unmapped: 0
 
 ---

@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
 status: planning
-stopped_at: Milestone v2.1.0 started
-last_updated: "2026-04-05T09:50:00.000Z"
+stopped_at: Roadmap created, ready to plan Phase 86
+last_updated: "2026-04-05T10:00:00.000Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,36 +18,53 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-02)
+See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Milestone v2.1.0 — defining requirements
+**Current focus:** v2.1.0 Phase 86 — Namespace Filtering & Hot Reload
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 86 (1 of 5) — Namespace Filtering & Hot Reload
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-05 — Milestone v2.1.0 started
+Status: Ready to plan
+Last activity: 2026-04-05 — Roadmap created for v2.1.0
 
 Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: —
+- Trend: —
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
+Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 
 - Breaking protocol changes OK -- only deployed on home KVM, no production users
-- Send queue (PUSH-04) is Phase 79 -- prerequisite for all concurrent send paths
-- Notification suppression during sync co-located with push infrastructure (Phase 79)
-- Event-driven expiry (Phase 81) independent of push sync -- parallelizable
-- Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
-- Phases 81, 83, 84 can be built in parallel with phases 80, 82
-- [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
-- [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
-- [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
+- Brotli compression: compress inside TransportCodec::encode, before AEAD, flag byte prefix (0x00/0x01)
+- BlobNotify filter by sync_namespaces (node replication config), NOT subscribed_namespaces (client state)
+- Prometheus /metrics: localhost-only default, disabled by default, no crypto material in labels
+- Relay subscription forwarding: stateful per-session tracking with 256-namespace cap, connection-scoped cleanup
+- Relay auto-reconnect: ACTIVE/RECONNECTING/DEAD state machine, new socket per attempt
+- SDK multi-relay: randomized relay order at startup, jittered failover, circuit breaker after full list
 
 ### Pending Todos
 
@@ -55,18 +72,11 @@ None.
 
 ### Blockers/Concerns
 
-- Phase 79 (Send Queue): Most impactful structural change to C++ Connection class in 78 phases. Research-phase recommended.
-- Phase 84 (SDK Auto-Reconnect): Reconnection touches transport, handshake, client layers. Research-phase recommended.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260402-a2o | Split allowed_keys into allowed_client_keys and allowed_peer_keys | 2026-04-02 | 681f92b | [260402-a2o-split-allowed-keys-into-allowed-client-k](./quick/260402-a2o-split-allowed-keys-into-allowed-client-k/) |
+- Phase 87 (Brotli): Verify FetchContent integration builds cleanly before writing compression code. Decompression bomb mitigation must be designed first.
+- Phase 88 (Relay auto-reconnect): Three-state lifecycle with concurrent client sessions — race conditions between reconnect and client disconnect coroutines.
 
 ## Session Continuity
 
-Last session: 2026-04-05T05:17:33.081Z
-Last activity: 2026-04-05 -- Executing Phase 85
-Stopped at: Completed all Phase 85 plans
+Last session: 2026-04-05
+Stopped at: Roadmap created for v2.1.0 (5 phases, 18 requirements mapped)
 Resume file: None
