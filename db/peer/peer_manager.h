@@ -346,6 +346,7 @@ private:
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t safety_net_interval_seconds_ = 600;  // SIGHUP-reloadable (Phase 82)
+    uint32_t max_peers_ = 32;                     // SIGHUP-reloadable (Phase 86)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
     uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise
     bool expiry_loop_running_ = false;   // Prevents double co_spawn of expiry_scan_loop

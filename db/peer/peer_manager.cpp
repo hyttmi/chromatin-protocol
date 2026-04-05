@@ -89,6 +89,7 @@ PeerManager::PeerManager(const config::Config& config,
     sync_cooldown_seconds_ = config.sync_cooldown_seconds;
     max_sync_sessions_ = config.max_sync_sessions;
     safety_net_interval_seconds_ = config.safety_net_interval_seconds;
+    max_peers_ = config.max_peers;
 
     // Initialize compaction interval from config
     compaction_interval_hours_ = config.compaction_interval_hours;
@@ -305,7 +306,7 @@ size_t PeerManager::bootstrap_peer_count() const {
 // =============================================================================
 
 bool PeerManager::should_accept_connection() {
-    return peers_.size() < config_.max_peers;
+    return peers_.size() < max_peers_;
 }
 
 void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
@@ -2813,6 +2814,16 @@ void PeerManager::reload_config() {
     safety_net_interval_seconds_ = new_cfg.safety_net_interval_seconds;
     spdlog::info("config reload: safety_net_interval={}s", safety_net_interval_seconds_);
 
+    // Reload max_peers (Phase 86, OPS-01)
+    max_peers_ = new_cfg.max_peers;
+    if (peers_.size() > max_peers_) {
+        spdlog::warn("config reload: max_peers={} but {} peers connected "
+                     "(excess will drain naturally, new connections refused)",
+                     max_peers_, peers_.size());
+    } else {
+        spdlog::info("config reload: max_peers={}", max_peers_);
+    }
+
     // Reload sync_namespaces
     try {
         config::validate_allowed_keys(new_cfg.sync_namespaces);
@@ -3350,7 +3361,7 @@ void PeerManager::handle_peer_list_response(net::Connection::Ptr conn,
         // Skip if it's our own address
         if (addr == config_.bind_address) continue;
         // Skip if we're at max peers
-        if (peers_.size() >= config_.max_peers) break;
+        if (peers_.size() >= max_peers_) break;
         // Skip if we've connected enough this round
         if (connected >= MAX_DISCOVERED_PER_ROUND) break;
 
