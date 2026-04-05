@@ -8,6 +8,7 @@ Hierarchy matches C++ error conditions:
   |   +-- DecryptionError
   |   +-- NotARecipientError
   |   +-- MalformedEnvelopeError
+  |   +-- DecompressionError
   |   +-- KeyDerivationError
   +-- IdentityError
   |   +-- KeyFileError
@@ -43,6 +44,10 @@ class NotARecipientError(CryptoError):
 
 class MalformedEnvelopeError(CryptoError):
     """Envelope has invalid magic, version, or is truncated."""
+
+
+class DecompressionError(CryptoError):
+    """Decompressed data exceeds maximum allowed size."""
 
 
 class KeyDerivationError(CryptoError):

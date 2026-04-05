@@ -15,11 +15,13 @@ import secrets
 import struct
 from typing import TYPE_CHECKING
 
+import brotli
 import oqs
 
 from chromatindb.crypto import AEAD_TAG_SIZE, aead_decrypt, aead_encrypt, sha3_256
 from chromatindb._hkdf import hkdf_derive
 from chromatindb.exceptions import (
+    DecompressionError,
     DecryptionError,
     MalformedEnvelopeError,
     NotARecipientError,
@@ -41,11 +43,49 @@ _MAX_RECIPIENTS = 256                         # per D-04
 _HKDF_LABEL = b"chromatindb-envelope-kek-v1"  # per D-06/D-11
 _ZERO_NONCE = b"\x00" * 12                    # per D-09
 
+# Brotli compression constants (Phase 87)
+CIPHER_SUITE_ML_KEM_CHACHA_BROTLI = 0x02   # ML-KEM-1024 + ChaCha20-Poly1305 + Brotli (per D-02)
+_COMPRESS_THRESHOLD = 256                    # Skip compression below this size (per D-05)
+_BROTLI_QUALITY = 6                          # Brotli quality level (per D-04)
+MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024    # 100 MiB, matches MAX_BLOB_DATA_SIZE (per D-09)
+
+
+def _safe_decompress(compressed: bytes, max_size: int) -> bytes:
+    """Decompress Brotli data with output size cap.
+
+    Uses streaming Decompressor to avoid allocating full output
+    before checking size. Raises DecompressionError if output
+    exceeds max_size.
+    """
+    dec = brotli.Decompressor()
+    chunks: list[bytes] = []
+    total = 0
+
+    result = dec.process(compressed)
+    total += len(result)
+    if total > max_size:
+        raise DecompressionError(
+            f"Decompressed size {total} exceeds maximum {max_size}"
+        )
+    chunks.append(result)
+
+    while not dec.is_finished():
+        result = dec.process(b"")
+        total += len(result)
+        if total > max_size:
+            raise DecompressionError(
+                f"Decompressed size {total} exceeds maximum {max_size}"
+            )
+        chunks.append(result)
+
+    return b"".join(chunks)
+
 
 def envelope_encrypt(
     plaintext: bytes,
     recipients: list[Identity],
     sender: Identity,
+    compress: bool = True,
 ) -> bytes:
     """Encrypt data for multiple PQ recipients using KEM-then-Wrap.
 
@@ -100,12 +140,22 @@ def envelope_encrypt(
     # Sort by pk_hash for O(log N) binary search during decrypt (per D-07)
     encap_results.sort(key=lambda t: t[0])
 
+    # Determine compression and suite (per D-01, D-02, D-05, D-06, D-07)
+    actual_suite = CIPHER_SUITE_ML_KEM_CHACHA
+    data_to_encrypt = plaintext
+
+    if compress and len(plaintext) >= _COMPRESS_THRESHOLD:
+        compressed = brotli.compress(plaintext, quality=_BROTLI_QUALITY)
+        if len(compressed) < len(plaintext):
+            data_to_encrypt = compressed
+            actual_suite = CIPHER_SUITE_ML_KEM_CHACHA_BROTLI
+
     # Build partial header and wrap AD (per D-10)
     recipient_count = len(encap_results)
     partial_header = bytearray()
     partial_header.extend(ENVELOPE_MAGIC)
     partial_header.extend(struct.pack("B", ENVELOPE_VERSION))
-    partial_header.extend(struct.pack("B", CIPHER_SUITE_ML_KEM_CHACHA))
+    partial_header.extend(struct.pack("B", actual_suite))
     partial_header.extend(struct.pack(">H", recipient_count))
     partial_header.extend(data_nonce)
 
@@ -134,7 +184,7 @@ def envelope_encrypt(
     full_header = bytes(full_header)
 
     # Encrypt data with full header as AD (per D-04, ENV-01)
-    ciphertext = aead_encrypt(plaintext, ad=full_header, nonce=data_nonce, key=dek)
+    ciphertext = aead_encrypt(data_to_encrypt, ad=full_header, nonce=data_nonce, key=dek)
 
     return full_header + ciphertext
 
@@ -176,7 +226,7 @@ def envelope_decrypt(data: bytes, identity: Identity) -> bytes:
         raise MalformedEnvelopeError(f"Unsupported envelope version: {version}")
 
     suite = data[5]
-    if suite != CIPHER_SUITE_ML_KEM_CHACHA:
+    if suite not in (CIPHER_SUITE_ML_KEM_CHACHA, CIPHER_SUITE_ML_KEM_CHACHA_BROTLI):
         raise MalformedEnvelopeError(f"Unsupported cipher suite: {suite}")
 
     recipient_count = struct.unpack(">H", data[6:8])[0]
@@ -238,6 +288,11 @@ def envelope_decrypt(data: bytes, identity: Identity) -> bytes:
     plaintext = aead_decrypt(ciphertext, ad=full_header, nonce=data_nonce, key=dek)
     if plaintext is None:
         raise DecryptionError("Data decryption failed -- authentication error")
+
+    # Decompress if suite=0x02 (per D-03, D-09)
+    if suite == CIPHER_SUITE_ML_KEM_CHACHA_BROTLI:
+        plaintext = _safe_decompress(plaintext, MAX_DECOMPRESSED_SIZE)
+
     return plaintext
 
 
@@ -271,7 +326,7 @@ def envelope_parse(data: bytes) -> dict[str, int]:
         raise MalformedEnvelopeError(f"Unsupported envelope version: {version}")
 
     suite = data[5]
-    if suite != CIPHER_SUITE_ML_KEM_CHACHA:
+    if suite not in (CIPHER_SUITE_ML_KEM_CHACHA, CIPHER_SUITE_ML_KEM_CHACHA_BROTLI):
         raise MalformedEnvelopeError(f"Unsupported cipher suite: {suite}")
 
     recipient_count = struct.unpack(">H", data[6:8])[0]
