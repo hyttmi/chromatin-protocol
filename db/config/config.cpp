@@ -50,6 +50,7 @@ Config load_config(const std::filesystem::path& path) {
         cfg.log_format = j.value("log_format", cfg.log_format);
         cfg.compaction_interval_hours = j.value("compaction_interval_hours", cfg.compaction_interval_hours);
         cfg.uds_path = j.value("uds_path", cfg.uds_path);
+        cfg.metrics_bind = j.value("metrics_bind", cfg.metrics_bind);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -66,7 +67,7 @@ Config load_config(const std::filesystem::path& path) {
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
         "log_format", "compaction_interval_hours",
-        "uds_path"
+        "uds_path", "metrics_bind"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -299,6 +300,27 @@ void validate_config(const Config& cfg) {
         if (cfg.uds_path.size() > 107) {
             errors.push_back("uds_path too long (max 107 chars, got " +
                               std::to_string(cfg.uds_path.size()) + ")");
+        }
+    }
+
+    // metrics_bind validation: if non-empty, must be host:port with valid port
+    if (!cfg.metrics_bind.empty()) {
+        auto colon = cfg.metrics_bind.rfind(':');
+        if (colon == std::string::npos) {
+            errors.push_back("metrics_bind must be host:port format (got '" +
+                              cfg.metrics_bind + "')");
+        } else {
+            auto port_str = cfg.metrics_bind.substr(colon + 1);
+            try {
+                unsigned long port = std::stoul(port_str);
+                if (port < 1 || port > 65535) {
+                    errors.push_back("metrics_bind port must be 1-65535 (got " +
+                                      std::to_string(port) + ")");
+                }
+            } catch (...) {
+                errors.push_back("metrics_bind port is not a valid number (got '" +
+                                  port_str + "')");
+            }
         }
     }
 

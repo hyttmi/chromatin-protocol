@@ -180,6 +180,9 @@ public:
     /// Public for testing; called internally by SIGHUP handler.
     void reload_config();
 
+    /// Format current metrics as Prometheus text exposition format (public for testing).
+    std::string prometheus_metrics_text();
+
     /// Check if an IP address is trusted (localhost or in trusted_peers).
     /// Passed to Connection as trust-check function.
     bool is_trusted_address(const asio::ip::address& addr) const;
@@ -275,6 +278,13 @@ private:
     // Keepalive: send Ping to TCP peers, disconnect silent ones (Phase 83)
     asio::awaitable<void> keepalive_loop();
 
+    // Prometheus /metrics HTTP endpoint (Phase 90)
+    asio::awaitable<void> metrics_accept_loop();
+    asio::awaitable<void> metrics_handle_connection(asio::ip::tcp::socket socket);
+    std::string format_prometheus_metrics();
+    void start_metrics_listener();
+    void stop_metrics_listener();
+
     // Helpers
     uint64_t compute_uptime_seconds() const;
 
@@ -339,6 +349,8 @@ private:
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
     asio::steady_timer* keepalive_timer_ = nullptr;           // Timer-cancel pattern for keepalive loop
     asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
+    std::unique_ptr<asio::ip::tcp::acceptor> metrics_acceptor_;  // Prometheus /metrics HTTP acceptor
+    std::string metrics_bind_;                                    // SIGHUP-reloadable (Phase 90)
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
