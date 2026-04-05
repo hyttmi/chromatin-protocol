@@ -349,4 +349,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 — Phase 86 complete: namespace filtering, BlobNotify scoping, max_peers SIGHUP reload*
+*Last updated: 2026-04-05 — Phase 87 complete: SDK envelope compression (Brotli suite=0x02), decompression bomb protection, PROTOCOL.md cipher suite registry*
