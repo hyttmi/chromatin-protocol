@@ -187,7 +187,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 
 - [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
 - [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
-- [ ] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay
+- [x] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay (completed 2026-04-05)
 - [ ] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover
 - [ ] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh
 
@@ -232,7 +232,7 @@ Plans:
   2. When the node UDS connection drops, the relay automatically reconnects with jittered exponential backoff; client TCP sessions remain open during reconnection attempts
   3. After successful UDS reconnect, the relay replays all active client subscriptions to the node so clients resume receiving notifications without re-subscribing
   4. A client that disconnects has its subscription state cleaned up immediately (no stale state accumulation)
-**Plans:** 2/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 88-01-PLAN.md — Subscription tracking, notification filtering, unit tests
