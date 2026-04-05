@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
 status: executing
-stopped_at: Completed 86-01-PLAN.md
+stopped_at: Completed 86-02-PLAN.md
 last_updated: "2026-04-05T10:23:41Z"
-last_activity: 2026-04-05
+last_activity: 2026-04-05 — Completed 86-01 + 86-02 (Wave 1)
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 8
-  completed_plans: 1
-  percent: 12
+  total_plans: 3
+  completed_plans: 2
+  percent: 66
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 86 (1 of 5) — Namespace Filtering & Hot Reload
-Plan: 1 of 3
+Plan: 2 of 3
 Status: Executing phase 86
-Last activity: 2026-04-05
+Last activity: 2026-04-05 — Completed Wave 1 (86-01 + 86-02)
 
-Progress: [█░░░░░░░░░] 12%
+Progress: [██████░░░░] 66%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [█░░░░░░░░░] 12%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 86 P02 | 56min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,7 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - Relay subscription forwarding: stateful per-session tracking with 256-namespace cap, connection-scoped cleanup
 - Relay auto-reconnect: ACTIVE/RECONNECTING/DEAD state machine, new socket per attempt
 - SDK multi-relay: randomized relay order at startup, jittered failover, circuit breaker after full list
+- [Phase 86-02]: max_peers SIGHUP-reloadable via mutable member; excess peers drain naturally (no mass disconnect)
 
 ### Pending Todos
 
@@ -82,5 +84,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-05T10:23:41Z
-Stopped at: Completed 86-01-PLAN.md
+Stopped at: Completed Wave 1 (86-01 + 86-02)
 Resume file: None
