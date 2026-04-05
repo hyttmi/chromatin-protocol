@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
-status: executing
-stopped_at: Completed 86-02-PLAN.md
-last_updated: "2026-04-05T10:23:41Z"
-last_activity: 2026-04-05 — Completed 86-01 + 86-02 (Wave 1)
+status: verifying
+stopped_at: Completed 86-03-PLAN.md
+last_updated: "2026-04-05T10:42:28Z"
+last_activity: 2026-04-05 — Completed all 3 plans (Wave 1 + Wave 2)
 progress:
   total_phases: 5
   completed_phases: 0
@@ -71,6 +71,7 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - Relay auto-reconnect: ACTIVE/RECONNECTING/DEAD state machine, new socket per attempt
 - SDK multi-relay: randomized relay order at startup, jittered failover, circuit breaker after full list
 - [Phase 86-02]: max_peers SIGHUP-reloadable via mutable member; excess peers drain naturally (no mass disconnect)
+- [Phase 86-03]: Dynamic namespace discovery for integration tests: start-extract-stop-rewrite-restart pattern
 
 ### Pending Todos
 
@@ -83,6 +84,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T10:23:41Z
-Stopped at: Completed Wave 1 (86-01 + 86-02)
+Last session: 2026-04-05T10:42:28Z
+Stopped at: Completed all Phase 86 plans (86-01, 86-02, 86-03)
 Resume file: None

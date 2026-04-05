@@ -1,0 +1,6 @@
+{
+  "bind_address": "0.0.0.0:4200",
+  "sync_namespaces": [],
+  "log_level": "debug",
+  "safety_net_interval_seconds": 600
+}
