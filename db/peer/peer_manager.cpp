@@ -468,17 +468,12 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
         }
     }
 
-    // Only the initiator (outbound) side triggers sync on connect.
-    // The responder (inbound) side waits for SyncRequest from the peer.
-    // This avoids both sides sending SyncRequest simultaneously.
-    //
-    // PEX exchange happens inline after sync completes (within the same coroutine)
-    // to avoid concurrent sends that would desync AEAD nonces.
-    if (conn->is_initiator()) {
-        asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-            co_await run_sync_with_peer(conn);
-        }, asio::detached);
-    }
+    // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync (D-01).
+    // Only the initiator triggers sync-on-connect after the announce exchange.
+    // The responder waits for SyncRequest from the peer.
+    asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
+        co_await announce_and_sync(conn);
+    }, asio::detached);
 }
 
 void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
@@ -515,6 +510,44 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
                        }),
         peers_.end());
     ++metrics_.peers_disconnected_total;
+}
+
+// =============================================================================
+// Namespace announce exchange (Phase 86: FILT-01)
+// =============================================================================
+
+asio::awaitable<void> PeerManager::announce_and_sync(net::Connection::Ptr conn) {
+    auto* peer = find_peer(conn);
+    if (!peer) co_return;
+
+    // Send our sync_namespaces (using existing encode_namespace_list)
+    auto ns_list = std::vector<std::array<uint8_t, 32>>(
+        sync_namespaces_.begin(), sync_namespaces_.end());
+    auto payload = encode_namespace_list(ns_list);
+    if (!co_await conn->send_message(
+            wire::TransportMsgType_SyncNamespaceAnnounce, payload)) {
+        co_return;
+    }
+
+    // Wait for peer's announce (timeout 5s) using timer-cancel pattern
+    if (!peer->announce_received) {
+        asio::steady_timer timer(ioc_);
+        peer->announce_notify = &timer;
+        timer.expires_after(std::chrono::seconds(5));
+        auto [ec] = co_await timer.async_wait(
+            asio::as_tuple(asio::use_awaitable));
+        peer->announce_notify = nullptr;
+        if (!peer->announce_received) {
+            spdlog::warn("peer {} did not send SyncNamespaceAnnounce within 5s, treating as replicate-all",
+                         peer_display_name(conn));
+            // D-07: Treat timeout as "replicate everything" (empty set)
+        }
+    }
+
+    // Initiator triggers sync after announce exchange (per D-01)
+    if (conn->is_initiator()) {
+        co_await run_sync_with_peer(conn);
+    }
 }
 
 // =============================================================================
@@ -699,6 +732,25 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
             spdlog::debug("Peer {} unsubscribed from {} namespaces (total: {})",
                          peer_display_name(conn), namespaces.size(),
                          peer->subscribed_namespaces.size());
+        }
+        return;
+    }
+
+    // Phase 86: Namespace announce (inline dispatch, not sync inbox -- Pitfall 4)
+    if (type == wire::TransportMsgType_SyncNamespaceAnnounce) {
+        auto* peer = find_peer(conn);
+        if (peer) {
+            auto namespaces = decode_namespace_list(payload);
+            peer->announced_namespaces.clear();
+            for (const auto& ns : namespaces) {
+                peer->announced_namespaces.insert(ns);
+            }
+            peer->announce_received = true;
+            if (peer->announce_notify) peer->announce_notify->cancel();
+            spdlog::info("peer {} announced {} sync namespaces",
+                         peer_display_name(conn),
+                         peer->announced_namespaces.empty() ? std::string("all") :
+                         std::to_string(peer->announced_namespaces.size()));
         }
         return;
     }
@@ -1858,6 +1910,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
             return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
         });
     }
+    // Phase 86: Also filter by remote peer's announced namespaces (D-04, D-05)
+    {
+        auto* p = find_peer(conn);
+        if (p && !p->announced_namespaces.empty()) {
+            std::erase_if(our_namespaces, [&p](const storage::NamespaceInfo& ns) {
+                return p->announced_namespaces.count(ns.namespace_id) == 0;
+            });
+        }
+    }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     if (!co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload)) {
         peer->syncing = false;
@@ -1951,6 +2012,14 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         if (!sync_namespaces_.empty() &&
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
             continue;
+        }
+        // Phase 86: Remote peer namespace filter (D-04, D-05)
+        {
+            auto* p = find_peer(conn);
+            if (p && !p->announced_namespaces.empty() &&
+                p->announced_namespaces.count(ns) == 0) {
+                continue;
+            }
         }
 
         bool cursor_hit = cursor_skip_namespaces.count(ns) > 0;
@@ -2261,6 +2330,15 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
         });
     }
+    // Phase 86: Also filter by remote peer's announced namespaces (D-04, D-05)
+    {
+        auto* p = find_peer(conn);
+        if (p && !p->announced_namespaces.empty()) {
+            std::erase_if(our_namespaces, [&p](const storage::NamespaceInfo& ns) {
+                return p->announced_namespaces.count(ns.namespace_id) == 0;
+            });
+        }
+    }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
 
@@ -2360,6 +2438,17 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             }
 
             std::array<uint8_t, 32> ns = init->namespace_id;
+
+            // Phase 86: Remote peer namespace filter (D-04, D-05)
+            // Safety check: skip if the initiator asks about a namespace we know
+            // they don't replicate (shouldn't happen with proper initiator filtering).
+            {
+                auto* p = find_peer(conn);
+                if (p && !p->announced_namespaces.empty() &&
+                    p->announced_namespaces.count(ns) == 0) {
+                    continue;
+                }
+            }
 
             bool cursor_hit = cursor_skip_namespaces.count(ns) > 0;
             if (cursor_hit) {
@@ -2830,6 +2919,26 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: sync_namespaces={} namespaces", sync_namespaces_.size());
     }
 
+    // Phase 86: Re-announce sync_namespaces to all connected peers (D-02)
+    // This is a passive filter update only -- no re-sync triggered (D-03)
+    {
+        auto ns_list = std::vector<std::array<uint8_t, 32>>(
+            sync_namespaces_.begin(), sync_namespaces_.end());
+        auto announce_payload = encode_namespace_list(ns_list);
+        for (auto& peer : peers_) {
+            if (peer.connection->is_uds()) continue;
+            auto conn = peer.connection;
+            auto payload_copy = announce_payload;
+            asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
+                co_await conn->send_message(wire::TransportMsgType_SyncNamespaceAnnounce,
+                                             std::span<const uint8_t>(p));
+            }, asio::detached);
+        }
+        spdlog::info("config reload: re-announced sync_namespaces to {} TCP peers",
+                     std::count_if(peers_.begin(), peers_.end(),
+                                   [](const PeerInfo& p) { return !p.connection->is_uds(); }));
+    }
+
     // Reload cursor config and reset round counters (force full resync on next round)
     full_resync_interval_ = new_cfg.full_resync_interval;
     cursor_stale_seconds_ = new_cfg.cursor_stale_seconds;
@@ -3049,6 +3158,11 @@ void PeerManager::on_blob_ingested(
     for (auto& peer : peers_) {
         if (peer.connection == source) continue;  // Source exclusion (D-06, D-09)
         if (peer.connection->is_uds()) continue;  // UDS = client, not peer
+
+        // Phase 86: Namespace filtering (D-05, D-07)
+        // Empty announced set = replicate all (no filter applied)
+        if (!peer.announced_namespaces.empty() &&
+            peer.announced_namespaces.count(namespace_id) == 0) continue;
 
         auto conn = peer.connection;
         auto payload_copy = payload;
