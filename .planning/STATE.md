@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0.0
-milestone_name: Event-Driven Architecture
-status: verifying
-stopped_at: Completed all Phase 85 plans
-last_updated: "2026-04-05T05:23:38.584Z"
+milestone: v2.1.0
+milestone_name: Compression, Filtering & Observability
+status: planning
+stopped_at: Milestone v2.1.0 started
+last_updated: "2026-04-05T09:50:00.000Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-02)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 84 — sdk-auto-reconnect
+**Current focus:** Milestone v2.1.0 — defining requirements
 
 ## Current Position
 
-Phase: 85
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-04-05
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-05 — Milestone v2.1.0 started
 
 Progress: [░░░░░░░░░░] 0%
 
