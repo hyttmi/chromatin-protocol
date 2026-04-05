@@ -270,7 +270,10 @@ Plans:
   2. README.md describes the event-driven sync model (push + targeted fetch + safety-net reconciliation) replacing the timer-paced description
   3. SDK README documents auto-reconnect API (backoff parameters, reconnection event, subscription restoration behavior)
   4. Getting-started tutorial covers the new connection lifecycle (auto-reconnect, reconnection events, catch-up patterns)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 85-01-PLAN.md -- PROTOCOL.md restructure: push sync wire types, keepalive, Mermaid diagrams
+- [ ] 85-02-PLAN.md -- README.md rewrite + SDK README auto-reconnect API + tutorial Connection Resilience section
 
 ## Progress
 
@@ -287,4 +290,4 @@ Dependency graph: 79 -> 80 -> 82; 79 -> 83; 78 -> 81; 78 -> 84; all -> 85
 | 82. Reconcile-on-Connect & Safety Net | 2/2 | Complete    | 2026-04-04 |
 | 83. Bidirectional Keepalive | 1/1 | Complete    | 2026-04-04 |
 | 84. SDK Auto-Reconnect | 2/2 | Complete    | 2026-04-04 |
-| 85. Documentation Refresh | 0/TBD | Not started | - |
+| 85. Documentation Refresh | 0/2 | Not started | - |
