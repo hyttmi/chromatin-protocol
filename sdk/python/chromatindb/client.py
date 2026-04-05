@@ -361,7 +361,8 @@ class ChromatinClient:
                         raise
                     except Exception as exc:
                         log.debug("relay %s:%d failed: %s", host, port, exc)
-                        self._state = ConnectionState.DISCONNECTED
+                        if self._state != ConnectionState.CLOSING:
+                            self._state = ConnectionState.DISCONNECTED
                 # Full cycle exhausted, loop back to top for backoff
         except asyncio.CancelledError:
             return
