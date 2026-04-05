@@ -18,7 +18,7 @@ Requirements for SDK envelope compression, notification filtering, relay/SDK res
 
 - [x] **FILT-01**: Peers exchange sync_namespaces after handshake via SyncNamespaceAnnounce message
 - [x] **FILT-02**: Node only sends BlobNotify to peers whose announced namespaces include the blob's namespace
-- [ ] **FILT-03**: Relay tracks per-client subscription namespaces and only forwards matching Notification messages
+- [x] **FILT-03**: Relay tracks per-client subscription namespaces and only forwards matching Notification messages
 
 ### Relay Resilience
 
@@ -69,7 +69,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | COMP-04 | Phase 87 | Complete |
 | FILT-01 | Phase 86 | Complete |
 | FILT-02 | Phase 86 | Complete |
-| FILT-03 | Phase 88 | Pending |
+| FILT-03 | Phase 88 | Complete |
 | RELAY-01 | Phase 88 | Pending |
 | RELAY-02 | Phase 88 | Pending |
 | SDK-01 | Phase 89 | Pending |

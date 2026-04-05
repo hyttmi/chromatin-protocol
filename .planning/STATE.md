@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 88
-Plan: Not started
-Status: Executing Phase 87
+Plan: 1 of 2 complete
+Status: Executing Phase 88
 Last activity: 2026-04-05
 
 Progress: [██████░░░░] 66%
@@ -55,6 +55,7 @@ Progress: [██████░░░░] 66%
 | Phase 86 P02 | 56min | 1 tasks | 2 files |
 | Phase 87 P01 | 5min | 2 tasks | 4 files |
 | Phase 87 P02 | 3min | 2 tasks | 3 files |
+| Phase 88 P01 | 37min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - [Phase 87]: Milestone goal description updated from wire-level to SDK envelope compression
 - [Phase 87]: Cipher suite registry added to PROTOCOL.md as canonical reference for all suites (0x01, 0x02, reserved)
 - [Phase 87]: Node-side wire compression explicitly documented as Out of Scope in REQUIREMENTS.md
+- [Phase 88-01]: PeerManager::decode_namespace_list called directly from relay (no shared header extraction) -- wire format must stay in sync
+- [Phase 88-01]: NamespaceHash/NamespaceSet/MAX_SUBSCRIPTIONS public on RelaySession for testability and Plan 02 reuse
 
 ### Pending Todos
 
@@ -90,6 +93,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T15:38:15.838Z
-Stopped at: Phase 88 context gathered
-Resume file: .planning/phases/88-relay-resilience/88-CONTEXT.md
+Last session: 2026-04-05T16:30:22Z
+Stopped at: Completed 88-01-PLAN.md
+Resume file: None

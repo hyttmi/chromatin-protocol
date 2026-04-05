@@ -232,10 +232,10 @@ Plans:
   2. When the node UDS connection drops, the relay automatically reconnects with jittered exponential backoff; client TCP sessions remain open during reconnection attempts
   3. After successful UDS reconnect, the relay replays all active client subscriptions to the node so clients resume receiving notifications without re-subscribing
   4. A client that disconnects has its subscription state cleaned up immediately (no stale state accumulation)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 88-01-PLAN.md — Subscription tracking, notification filtering, unit tests
+- [x] 88-01-PLAN.md — Subscription tracking, notification filtering, unit tests
 - [ ] 88-02-PLAN.md — Three-state lifecycle, UDS auto-reconnect, subscription replay
 
 ### Phase 89: SDK Multi-Relay Failover
@@ -270,6 +270,6 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 |-------|----------------|--------|-----------|
 | 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
 | 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
-| 88. Relay Resilience | 0/2 | Not started | - |
+| 88. Relay Resilience | 1/2 | In Progress|  |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
 | 90. Observability & Documentation | 0/0 | Not started | - |
