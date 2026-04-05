@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
 status: executing
-stopped_at: Completed 87-01-PLAN.md
+stopped_at: Completed 87-01-PLAN.md and 87-02-PLAN.md
 last_updated: "2026-04-05T15:25:45.943Z"
 last_activity: 2026-04-05
 progress:
@@ -54,6 +54,7 @@ Progress: [██████░░░░] 66%
 *Updated after each plan completion*
 | Phase 86 P02 | 56min | 1 tasks | 2 files |
 | Phase 87 P01 | 5min | 2 tasks | 4 files |
+| Phase 87 P02 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Previous milestone decisions archived to milestones/v2.0.0-ROADMAP.md.
 - [Phase 86-02]: max_peers SIGHUP-reloadable via mutable member; excess peers drain naturally (no mass disconnect)
 - [Phase 86-03]: Dynamic namespace discovery for integration tests: start-extract-stop-rewrite-restart pattern
 - [Phase 87]: Brotli quality 6, 256-byte threshold, compress=True default, streaming Decompressor for bomb protection
+- [Phase 87]: Milestone goal description updated from wire-level to SDK envelope compression
+- [Phase 87]: Cipher suite registry added to PROTOCOL.md as canonical reference for all suites (0x01, 0x02, reserved)
+- [Phase 87]: Node-side wire compression explicitly documented as Out of Scope in REQUIREMENTS.md
 
 ### Pending Todos
 
@@ -87,5 +91,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-05T15:25:45.941Z
-Stopped at: Completed 87-01-PLAN.md
+Stopped at: Completed 87-01-PLAN.md and 87-02-PLAN.md
 Resume file: None
