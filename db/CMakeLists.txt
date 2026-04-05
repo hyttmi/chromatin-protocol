@@ -231,6 +231,7 @@ if(BUILD_TESTING)
     tests/peer/test_peer_manager.cpp
     tests/peer/test_event_expiry.cpp
     tests/peer/test_keepalive.cpp
+    tests/peer/test_namespace_announce.cpp
     tests/storage/test_storage.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
