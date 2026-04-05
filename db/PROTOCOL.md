@@ -42,7 +42,7 @@ The `request_id` field enables request pipelining. Clients assign a unique `requ
 2. **Node-echoed** -- the node copies the `request_id` from the request into the corresponding response (or error signal such as StorageFull or QuotaExceeded).
 3. **Per-connection scope** -- `request_id` values are meaningful only within a single connection. Different connections may reuse the same values independently.
 
-Server-initiated messages (Notification) always carry `request_id = 0`.
+Server-initiated messages (Notification, BlobNotify) always carry `request_id = 0`.
 
 The node may process requests concurrently and responses may arrive in a different order than requests were sent. Clients must use `request_id` to correlate responses, not assume ordering.
 
@@ -143,6 +143,27 @@ All subsequent messages are AEAD-encrypted `TransportMessage` frames using the e
 
 If the node has `allowed_peer_keys` configured (for TCP connections) or `allowed_client_keys` (for UDS connections), it checks the peer's signing public key namespace (`SHA3-256(peer_pubkey)`) against the appropriate access control list immediately after the handshake. Unauthorized connections are silently disconnected.
 
+### Keepalive
+
+Both peers MUST send a Ping (type 5, empty payload) every 30 seconds. Any received message -- not just Pong -- resets the peer's silence timer. If no message is received from a peer for 60 seconds (two missed keepalive cycles), the node closes the TCP connection immediately without sending a Goodbye message.
+
+The keepalive mechanism uses `steady_clock` (monotonic) to avoid issues with system clock adjustments. It applies to TCP peers only; UDS connections are excluded from keepalive monitoring.
+
+Pong (type 6, empty payload) is sent in response to Ping. It serves as an explicit liveness acknowledgment, but any application-level traffic (sync, data, PEX) equally satisfies the silence timer.
+
+```mermaid
+sequenceDiagram
+    participant NodeA
+    participant NodeB
+
+    loop Every 30 seconds
+        NodeA->>NodeB: Ping (type 5)
+        NodeB->>NodeA: Pong (type 6)
+    end
+    Note over NodeA,NodeB: If no message received for 60s
+    NodeA--xNodeB: TCP close (no Goodbye)
+```
+
 ## Storing a Blob
 
 ### Blob Schema
@@ -189,11 +210,77 @@ To store a blob on a node:
 
 The node validates the signature, checks for duplicates, verifies the namespace matches the public key, and stores the blob. If the node is at capacity, it sends a StorageFull message instead of accepting the blob.
 
-## Retrieving Blobs (Sync Protocol)
+## Sync Protocol
 
-Sync is a three-phase protocol that efficiently transfers blobs between two connected peers. Either side can initiate a sync round.
+Nodes replicate blobs using a push-then-fetch model. When a blob is ingested, the node immediately pushes a lightweight notification to all connected peers. Peers that do not already have the blob fetch it directly. A periodic full reconciliation runs as a safety net to catch anything missed by the push path.
 
-### Phase A: Namespace Exchange
+### Push Notifications
+
+When a blob is ingested -- whether from a client write or from peer sync -- the node sends a BlobNotify (type 59) message to all connected TCP peers. This is the primary replication trigger: peers learn about new blobs within the same event loop tick as ingestion, with no timer delay.
+
+**Source exclusion:** The peer that originated the blob (the connection it arrived on) does NOT receive the BlobNotify. This prevents echo loops in multi-node topologies.
+
+**Sync suppression:** During active reconciliation between two peers (Phase A/B/C in progress), BlobNotify messages for blobs ingested via that sync session are suppressed. This prevents notification storms during bulk catch-up.
+
+**Client notifications:** UDS clients and relay-connected SDK clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
+
+**BlobNotify (type 59) -- 77-byte payload:**
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| namespace_id | 0 | 32 | raw bytes | Blob's namespace |
+| blob_hash | 32 | 32 | raw bytes | SHA3-256 of the encoded blob |
+| seq_num | 64 | 8 | big-endian uint64 | Sequence number in namespace |
+| blob_size | 72 | 4 | big-endian uint32 | Raw data size in bytes |
+| is_tombstone | 76 | 1 | uint8 | 0x00 = data, 0x01 = tombstone |
+
+The BlobNotify payload is identical in layout to Notification (type 21). The difference is routing: BlobNotify goes to TCP peers, Notification goes to subscribed clients.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant NodeB
+    participant NodeA
+
+    Client->>NodeB: Data (write blob)
+    NodeB->>NodeB: ingest() + on_blob_ingested
+    NodeB->>NodeA: BlobNotify (type 59)
+    NodeB->>Client: Notification (type 21, if subscribed)
+    NodeA->>NodeA: has_blob()? No
+    NodeA->>NodeB: BlobFetch (type 60)
+    NodeB->>NodeA: BlobFetchResponse (type 61)
+    NodeA->>NodeA: ingest()
+```
+
+### Targeted Blob Fetch
+
+A peer receiving a BlobNotify checks whether it already has the blob via a local key-only lookup. If the blob is not found locally, and no fetch is already pending for that hash, the peer sends a BlobFetch (type 60) request. The originating node responds with a BlobFetchResponse (type 61) containing either the full blob or a not-found status.
+
+BlobFetch is handled inline in the message loop -- no sync session handshake is required. This makes targeted fetch lightweight compared to full reconciliation.
+
+**Pending fetch dedup:** Only one BlobFetch per blob hash is in-flight at a time per connection. If a second BlobNotify arrives for the same hash while a fetch is pending, the duplicate is silently dropped. Pending fetch entries are cleaned up on disconnect.
+
+**BlobFetch (type 60) -- 64-byte payload:**
+
+| Field | Offset | Size | Encoding | Description |
+|-------|--------|------|----------|-------------|
+| namespace_id | 0 | 32 | raw bytes | Target namespace |
+| blob_hash | 32 | 32 | raw bytes | Hash of the blob to fetch |
+
+**BlobFetchResponse (type 61) -- variable-length payload:**
+
+| Case | Format |
+|------|--------|
+| Found | `[0x00][flatbuffer_encoded_blob]` |
+| Not found | `[0x01]` |
+
+**Note:** The status byte convention for BlobFetchResponse differs from ReadResponse (type 32). ReadResponse uses `0x01` for found and `0x00` for not-found. BlobFetchResponse uses `0x00` for found and `0x01` for not-found.
+
+### Full Reconciliation
+
+Full reconciliation is a three-phase protocol that efficiently transfers blobs between two connected peers. Either side can initiate a sync round.
+
+#### Phase A: Namespace Exchange
 
 ```
 Initiator                              Responder
@@ -214,7 +301,7 @@ Wire format: [count: 4 bytes BE uint32]
 
 Each entry is 40 bytes (32-byte namespace ID + 8-byte sequence number). Both sides use the sequence numbers to determine which namespaces need syncing: if the peer has a higher sequence number for a namespace, that namespace has new blobs.
 
-### Phase B: Set Reconciliation
+#### Phase B: Set Reconciliation
 
 For each namespace that needs syncing, the initiator drives a multi-round range-based set reconciliation protocol. Both sides sort their blob hashes lexicographically and exchange XOR fingerprints over ranges, recursively splitting mismatched ranges until differences are isolated.
 
@@ -263,7 +350,7 @@ ReconcileItems (type 28):
 
 After all namespaces are reconciled, the initiator sends `SyncComplete (14)` to signal the end of Phase B. The reconciliation produces a bidirectional diff: both sides now know which hashes they are missing and can request them in Phase C.
 
-### Phase C: Blob Transfer
+#### Phase C: Blob Transfer
 
 The requesting side sends `BlobRequest` messages, each containing up to 64 blob hashes to fetch:
 
@@ -286,6 +373,16 @@ BlobTransfer wire format: [count: 4 bytes BE uint32]
 Each blob is a FlatBuffers-encoded `Blob` (as described in the blob schema above). The receiving side validates each blob (signature, namespace, expiry) before storing it.
 
 Inline peer exchange (PEX) follows immediately after sync completes.
+
+### Reconcile-on-Connect
+
+When a peer connects (or reconnects after downtime), the initiating side triggers a full reconciliation (Phase A/B/C) automatically. This ensures the new peer catches up on all blobs missed during disconnection. Push notifications via BlobNotify begin flowing after the initial sync completes.
+
+### Safety-Net Reconciliation
+
+A full reconciliation runs periodically at a configurable long interval as a correctness backstop. This catches any blobs missed by the push-then-fetch path due to transient errors, message drops, or edge cases in notification suppression.
+
+The interval is controlled by `safety_net_interval_seconds` (default 600 seconds, minimum 3 seconds). The value is reloadable via SIGHUP without restarting the node.
 
 ## Additional Interactions
 
@@ -415,18 +512,6 @@ Blobs rejected for timestamp validation return `IngestError::timestamp_rejected`
 ### Rate Limiting
 
 In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (17) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
-
-### Inactivity Detection
-
-The node monitors all connected peers for message activity. If no messages are received from a peer within the configurable `inactivity_timeout_seconds` deadline, the peer is considered dead and disconnected.
-
-This is receiver-side detection only. The node does NOT send Ping messages at the application level to probe peers. Existing message traffic (sync, data, PEX, keepalive) serves as the liveness signal.
-
-When the timeout fires, the node closes the connection without sending a Goodbye message (a dead peer cannot process it). If the dead peer was an outbound connection, the auto-reconnect mechanism will attempt to re-establish the connection.
-
-The inactivity sweep runs every 30 seconds, checking all connected peers against the deadline. The check uses a monotonic clock (`steady_clock`) to avoid issues with system clock adjustments.
-
-Configuration: `inactivity_timeout_seconds` defaults to 120. Set to 0 to disable. Minimum value when enabled is 30 seconds.
 
 ## Client Protocol
 
@@ -616,10 +701,13 @@ All message types defined in the `TransportMsgType` enum:
 | 56 | PeerInfoResponse | Client peer info: trust-gated response (8 bytes untrusted, variable trusted) |
 | 57 | TimeRangeRequest | Client time-range query: namespace + start + end + limit (52 bytes) |
 | 58 | TimeRangeResponse | Client time-range result: truncated + entries with hash/seq/timestamp (5 + N*48 bytes) |
+| 59 | BlobNotify | Push notification: namespace + hash + seq_num + size + tombstone (77 bytes, peer-internal) |
+| 60 | BlobFetch | Targeted blob fetch: namespace + hash (64 bytes, peer-internal) |
+| 61 | BlobFetchResponse | Targeted blob fetch response: status + optional blob (peer-internal) |
 
-## v1.4.0 Query Extensions
+## Query Extensions
 
-These 10 request/response pairs (types 41-58) were added in v1.4.0. All use the coroutine-IO dispatch model, echo `request_id`, and are allowed through the relay message filter.
+These 10 request/response pairs (types 41-58) use the coroutine-IO dispatch model, echo `request_id`, and are allowed through the relay message filter.
 
 ### NamespaceListRequest (Type 41) / NamespaceListResponse (Type 42)
 
