@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1.0
 milestone_name: Compression, Filtering & Observability
 status: executing
-stopped_at: Completed all Phase 86 plans (86-01, 86-02, 86-03)
-last_updated: "2026-04-05T10:55:41.513Z"
+stopped_at: Phase 87 context gathered
+last_updated: "2026-04-05T14:45:25.536Z"
 last_activity: 2026-04-05
 progress:
   total_phases: 5
@@ -84,6 +84,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-05T10:42:28Z
-Stopped at: Completed all Phase 86 plans (86-01, 86-02, 86-03)
-Resume file: None
+Last session: 2026-04-05T14:45:25.532Z
+Stopped at: Phase 87 context gathered
+Resume file: .planning/phases/87-wire-compression/87-CONTEXT.md
