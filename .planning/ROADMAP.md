@@ -275,5 +275,5 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 | 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
 | 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
 | 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
-| 89. SDK Multi-Relay Failover | 2/2 | Complete   | 2026-04-05 |
+| 89. SDK Multi-Relay Failover | 2/2 | Complete    | 2026-04-05 |
 | 90. Observability & Documentation | 0/0 | Not started | - |
