@@ -975,7 +975,7 @@ An envelope is a self-contained binary blob stored as the data payload of a stan
 |--------|------|-------|----------|-------------|
 | 0 | 4 | magic | `CENV` (0x43454E56) | Envelope format identifier |
 | 4 | 1 | version | uint8 | Format version (0x01) |
-| 5 | 1 | suite | uint8 | Cipher suite (0x01 = ML-KEM-1024 + ChaCha20-Poly1305) |
+| 5 | 1 | suite | uint8 | Cipher suite: 0x01 = ML-KEM-1024 + ChaCha20-Poly1305, 0x02 = ML-KEM-1024 + ChaCha20-Poly1305 + Brotli |
 | 6 | 2 | recipient_count | big-endian uint16 | Number of recipient stanzas (1-256) |
 | 8 | 12 | data_nonce | raw bytes | Random nonce for data AEAD encryption |
 
@@ -1042,7 +1042,7 @@ The session fingerprint shown in the handshake diagram (`chromatin-session-fp-v1
 
 To decrypt an envelope:
 
-1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01
+1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01 or 0x02
 2. Compute `SHA3-256(own_kem_public_key)` to get own pk_hash
 3. Binary search the sorted stanzas for a matching pk_hash
 4. If not found, reject with NotARecipientError
@@ -1050,3 +1050,34 @@ To decrypt an envelope:
 6. Derive KEK: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes
 7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
 8. Decrypt data ciphertext with DEK and `data_nonce` from header, using the full header (fixed header + all recipient stanzas) as associated data
+
+### Compression (Suite 0x02)
+
+Suite `0x02` (ML-KEM-1024 + ChaCha20-Poly1305 + Brotli) adds Brotli compression before AEAD encryption. The compression is an SDK-only concern -- the node stores and replicates envelopes opaquely and is unaware of the suite byte.
+
+**Encryption flow (suite 0x02):**
+
+1. If plaintext size >= 256 bytes, compress with Brotli (quality 6)
+2. If compressed output < original size, use the compressed data and write suite=0x02 into the header
+3. If compressed output >= original size (expansion), fall back to suite=0x01 with the original plaintext
+4. If plaintext < 256 bytes, always use suite=0x01 (skip compression)
+5. The `compress` parameter defaults to true; callers can opt out with `compress=False`
+
+The suite byte is written into the envelope header BEFORE AEAD associated data computation. This is critical: the full header (including suite byte) is used as AD for both DEK wrapping and data encryption.
+
+**Decryption flow (suite 0x02):**
+
+1. Parse the suite byte at offset 5
+2. If suite=0x01: decrypt normally (no decompression)
+3. If suite=0x02: decrypt AEAD, then decompress the plaintext with Brotli
+4. Decompression uses a streaming `Decompressor` with output size cap at 100 MiB (`MAX_BLOB_DATA_SIZE`). If decompressed output exceeds this limit, decryption fails with `DecompressionError` before full allocation.
+
+**Cipher suite registry:**
+
+| Suite | Name | Description |
+|-------|------|-------------|
+| 0x01 | ML-KEM-ChaCha | ML-KEM-1024 encap + HKDF-SHA256 KEK + ChaCha20-Poly1305 (uncompressed) |
+| 0x02 | ML-KEM-ChaCha-Brotli | Same as 0x01, but plaintext is Brotli-compressed before encryption |
+| 0x03-0xFF | Reserved | Future cipher suites |
+
+**Backward compatibility:** An SDK that only knows suite=0x01 will reject suite=0x02 envelopes with `MalformedEnvelopeError`. Newer SDKs handle both transparently. This is by design -- the suite byte enables forward-compatible format evolution.
