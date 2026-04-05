@@ -65,7 +65,7 @@ pytestmark = [
 async def test_handshake_connect_disconnect() -> None:
     """PQ handshake + Goodbye (XPORT-02, XPORT-03, XPORT-07)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         assert not conn._transport.closed
     # After context manager exit, transport should be closed
 
@@ -73,7 +73,7 @@ async def test_handshake_connect_disconnect() -> None:
 async def test_ping_pong() -> None:
     """Send Ping, receive Pong over AEAD-encrypted channel (XPORT-04, XPORT-05)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         await conn.ping()  # Should not raise
         await conn.ping()  # Second ping to verify nonce counters advance correctly
         await conn.ping()  # Third for good measure
@@ -82,11 +82,11 @@ async def test_ping_pong() -> None:
 async def test_multiple_connections() -> None:
     """Two sequential connections work with different identities."""
     id1 = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, id1) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], id1) as conn:
         await conn.ping()
 
     id2 = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, id2) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], id2) as conn:
         await conn.ping()
 
 
@@ -96,7 +96,7 @@ async def test_handshake_timeout() -> None:
     # Use a non-routable IP to guarantee timeout (not the relay)
     with pytest.raises((HandshakeError, OSError)):
         async with ChromatinClient.connect(
-            "192.0.2.1", 4433, identity, timeout=0.5
+            [("192.0.2.1", 4433)], identity, timeout=0.5
         ) as conn:
             pass
 
@@ -109,7 +109,7 @@ async def test_handshake_timeout() -> None:
 async def test_write_blob() -> None:
     """Write a blob and verify WriteResult fields (DATA-01)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         result = await conn.write_blob(data=b"hello integration", ttl=3600)
         assert isinstance(result, WriteResult)
         assert len(result.blob_hash) == 32
@@ -122,7 +122,7 @@ async def test_write_blob_duplicate() -> None:
     non-deterministic, so each write generates a unique FlatBuffer and thus a unique
     blob_hash. Both writes succeed with duplicate=False (DATA-01)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         r1 = await conn.write_blob(data=b"dup test", ttl=3600)
         r2 = await conn.write_blob(data=b"dup test", ttl=3600)
         # Non-deterministic ML-DSA-87 signatures mean different blob_hash each time
@@ -134,7 +134,7 @@ async def test_write_blob_duplicate() -> None:
 async def test_read_blob_found() -> None:
     """Read back a written blob, payload matches (DATA-02)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         original_data = b"read me back"
         wr = await conn.write_blob(data=original_data, ttl=3600)
 
@@ -150,7 +150,7 @@ async def test_read_blob_found() -> None:
 async def test_read_blob_not_found() -> None:
     """Reading non-existent blob returns None (DATA-02, D-14)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         fake_hash = b"\x00" * 32
         result = await conn.read_blob(identity.namespace, fake_hash)
         assert result is None
@@ -159,7 +159,7 @@ async def test_read_blob_not_found() -> None:
 async def test_delete_blob() -> None:
     """Delete a blob via tombstone, then read returns None (DATA-03)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         wr = await conn.write_blob(data=b"delete me", ttl=3600)
 
         dr = await conn.delete_blob(wr.blob_hash)
@@ -176,7 +176,7 @@ async def test_delete_blob() -> None:
 async def test_list_blobs() -> None:
     """List blobs in namespace after writing (DATA-04)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         wr = await conn.write_blob(data=b"list me", ttl=3600)
 
         page = await conn.list_blobs(identity.namespace)
@@ -193,7 +193,7 @@ async def test_list_blobs() -> None:
 async def test_list_blobs_pagination() -> None:
     """List with limit and cursor-based pagination (DATA-04, D-06)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         # Write 3 blobs
         for i in range(3):
             await conn.write_blob(data=f"page test {i}".encode(), ttl=3600)
@@ -216,7 +216,7 @@ async def test_list_blobs_pagination() -> None:
 async def test_exists_true_and_false() -> None:
     """Exists returns True for written blob, False for random hash (DATA-05)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         wr = await conn.write_blob(data=b"exists test", ttl=3600)
 
         assert await conn.exists(identity.namespace, wr.blob_hash) is True
@@ -228,7 +228,7 @@ async def test_exists_true_and_false() -> None:
 async def test_full_blob_lifecycle() -> None:
     """Complete lifecycle: write, read, exists, list, delete, verify gone."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         # Write
         wr = await conn.write_blob(data=b"lifecycle test", ttl=7200)
         assert not wr.duplicate
@@ -262,7 +262,7 @@ async def test_full_blob_lifecycle() -> None:
 async def test_metadata_query() -> None:
     """Query blob metadata without payload (QUERY-01)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         original_data = b"metadata test payload"
         wr = await conn.write_blob(data=original_data, ttl=3600)
 
@@ -285,7 +285,7 @@ async def test_metadata_query() -> None:
 async def test_batch_exists() -> None:
     """Batch-check blob existence (QUERY-02)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         wr1 = await conn.write_blob(data=b"batch exists 1", ttl=3600)
         wr2 = await conn.write_blob(data=b"batch exists 2", ttl=3600)
         fake_hash = b"\xcd" * 32
@@ -302,7 +302,7 @@ async def test_batch_exists() -> None:
 async def test_batch_read() -> None:
     """Batch-read multiple blobs (QUERY-03)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         data1 = b"batch read blob one"
         data2 = b"batch read blob two"
         wr1 = await conn.write_blob(data=data1, ttl=3600)
@@ -323,7 +323,7 @@ async def test_batch_read() -> None:
 async def test_time_range() -> None:
     """Query blobs by time range (QUERY-04)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         now = int(time.time())
         wr = await conn.write_blob(data=b"time range test", ttl=3600)
 
@@ -343,7 +343,7 @@ async def test_time_range() -> None:
 async def test_namespace_list() -> None:
     """List namespaces with at least one blob (QUERY-05)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         # Ensure at least one blob in this namespace
         await conn.write_blob(data=b"namespace list test", ttl=3600)
 
@@ -367,7 +367,7 @@ async def test_namespace_list() -> None:
 async def test_namespace_stats() -> None:
     """Query per-namespace statistics (QUERY-06)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         await conn.write_blob(data=b"namespace stats test", ttl=3600)
 
         result = await conn.namespace_stats(identity.namespace)
@@ -386,7 +386,7 @@ async def test_namespace_stats() -> None:
 async def test_storage_status() -> None:
     """Query node storage status (QUERY-07)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         result = await conn.storage_status()
         assert isinstance(result, StorageStatus)
         assert result.total_blobs >= 0
@@ -398,7 +398,7 @@ async def test_storage_status() -> None:
 async def test_node_info() -> None:
     """Query node info and capabilities (QUERY-08)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         result = await conn.node_info()
         assert isinstance(result, NodeInfo)
         assert isinstance(result.version, str)
@@ -413,7 +413,7 @@ async def test_node_info() -> None:
 async def test_peer_info() -> None:
     """Query peer info (QUERY-09, trust-gated)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         result = await conn.peer_info()
         assert isinstance(result, PeerInfo)
         assert result.peer_count >= 0
@@ -424,7 +424,7 @@ async def test_peer_info() -> None:
 async def test_delegation_list() -> None:
     """List delegations for a namespace (QUERY-10)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         result = await conn.delegation_list(identity.namespace)
         assert isinstance(result, DelegationList)
         assert isinstance(result.entries, list)
@@ -439,7 +439,7 @@ async def test_delegation_list() -> None:
 async def test_subscribe_and_notification() -> None:
     """Subscribe, write, receive notification, unsubscribe (PUBSUB-01/02/03)."""
     identity = Identity.generate()
-    async with ChromatinClient.connect(RELAY_HOST, RELAY_PORT, identity) as conn:
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], identity) as conn:
         ns = identity.namespace
 
         # Subscribe

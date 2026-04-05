@@ -339,7 +339,7 @@ class TestChromatinClient:
     async def test_connect_returns_context_manager(self) -> None:
         """ChromatinClient.connect() returns an async context manager."""
         identity = Identity.generate()
-        client = ChromatinClient.connect("127.0.0.1", 9999, identity)
+        client = ChromatinClient.connect([("127.0.0.1", 9999)], identity)
         # Should have __aenter__ and __aexit__
         assert hasattr(client, "__aenter__")
         assert hasattr(client, "__aexit__")
