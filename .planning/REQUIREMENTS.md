@@ -45,7 +45,7 @@ Requirements for event-driven sync, maintenance overhaul, connection resilience,
 
 ### Documentation
 
-- [ ] **DOC-01**: PROTOCOL.md updated with push sync protocol, new message types, keepalive spec
+- [x] **DOC-01**: PROTOCOL.md updated with push sync protocol, new message types, keepalive spec
 - [ ] **DOC-02**: README.md updated with v2.0.0 sync model description
 - [ ] **DOC-03**: SDK README updated with auto-reconnect API and behavior
 - [ ] **DOC-04**: Getting-started tutorial updated for new connection lifecycle
@@ -109,7 +109,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WIRE-02 | Phase 80 | Complete |
 | WIRE-03 | Phase 80 | Complete |
 | WIRE-04 | Phase 79 | Complete |
-| DOC-01 | Phase 85 | Pending |
+| DOC-01 | Phase 85 | Complete |
 | DOC-02 | Phase 85 | Pending |
 | DOC-03 | Phase 85 | Pending |
 | DOC-04 | Phase 85 | Pending |
