@@ -383,6 +383,35 @@ async with ChromatinClient.connect(
 Note: Calling `close()` never triggers auto-reconnect, regardless of the
 `auto_reconnect` setting. Intentional disconnection is always clean.
 
+## Monitoring with Prometheus
+
+For operators running chromatindb nodes, the built-in Prometheus endpoint
+exposes health metrics for automated monitoring.
+
+Enable it in your node's config.json:
+
+```json
+{
+  "metrics_bind": "127.0.0.1:9090"
+}
+```
+
+Then configure Prometheus to scrape it:
+
+```yaml
+scrape_configs:
+  - job_name: 'chromatindb'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+```
+
+Available metrics include peer count, blob count, storage bytes, sync
+rounds, ingestion counters, and uptime. See
+[PROTOCOL.md](../../db/PROTOCOL.md) for the full list.
+
+The endpoint is disabled by default (empty `metrics_bind`) and listens on
+localhost only when enabled. Reload with SIGHUP to toggle without restart.
+
 ## Next Steps
 
 - See the [API overview](../README.md) for the full list of available methods
@@ -390,6 +419,7 @@ Note: Calling `close()` never triggers auto-reconnect, regardless of the
 - The SDK uses post-quantum cryptography (ML-DSA-87, ML-KEM-1024) automatically -- no configuration needed
 - Blobs are signed with your identity and verified by the node before storage
 - Encrypt data with `write_encrypted()` for zero-knowledge storage
+- Encrypted blobs are automatically Brotli-compressed before encryption for payloads >= 256 bytes (transparent, enabled by default)
 - Auto-reconnect handles connection drops transparently -- customize with `on_disconnect` and `on_reconnect` callbacks
 - Set up a directory for user discovery and group management
 - See [PROTOCOL.md](../../db/PROTOCOL.md) for the envelope binary format specification
