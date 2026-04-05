@@ -5,14 +5,14 @@
 
 ## v2.1.0 Requirements
 
-Requirements for wire compression, notification filtering, relay/SDK resilience, operational improvements, and documentation refresh. Each maps to roadmap phases.
+Requirements for SDK envelope compression, notification filtering, relay/SDK resilience, operational improvements, and documentation refresh. Each maps to roadmap phases.
 
 ### Compression
 
-- [ ] **COMP-01**: Node compresses sync/data message payloads with Brotli before AEAD encryption (flag byte per message)
-- [ ] **COMP-02**: Node skips compression for payloads under 256 bytes or already-encrypted envelope data
-- [ ] **COMP-03**: Node enforces decompressed output cap at MAX_BLOB_DATA_SIZE to prevent decompression bombs
-- [ ] **COMP-04**: SDK compresses outbound and decompresses inbound payloads matching node behavior
+- [ ] **COMP-01**: SDK compresses plaintext in `encrypt_envelope()` with Brotli (quality 6) before AEAD encryption; cipher suite byte 0x02 signals compression
+- [ ] **COMP-02**: SDK skips compression for plaintext under 256 bytes; falls back to suite=0x01 if compressed output >= original size
+- [ ] **COMP-03**: SDK enforces 100 MiB decompressed output cap in `decrypt_envelope()` via streaming decompressor to prevent decompression bombs
+- [ ] **COMP-04**: SDK `decrypt_envelope()` handles both suite=0x01 and suite=0x02 transparently; PROTOCOL.md documents suite=0x02
 
 ### Notification Filtering
 
@@ -54,6 +54,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ## Out of Scope
 
+- Node-side wire compression (node-to-node traffic is encrypted envelope data, incompressible by design)
 - Compression of AEAD-encrypted envelope blobs (ciphertext is incompressible by design)
 - prometheus-cpp library (conflicts with single-threaded Asio model)
 - allowed_client_keys / allowed_peer_keys hot reload (already implemented)

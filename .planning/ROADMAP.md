@@ -183,7 +183,7 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 
 ### v2.1.0 Compression, Filtering & Observability (Phases 86-90)
 
-**Milestone Goal:** Add wire-level Brotli compression, namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
+**Milestone Goal:** Add SDK envelope compression (Brotli compress-before-encrypt), namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
 
 - [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
 - [ ] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection
@@ -264,7 +264,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 86. Namespace Filtering & Hot Reload | 2/3 | Complete    | 2026-04-05 |
+| 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
 | 87. SDK Envelope Compression | 0/2 | Not started | - |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
