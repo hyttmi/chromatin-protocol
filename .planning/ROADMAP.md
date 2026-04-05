@@ -201,7 +201,12 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
   1. After handshake, two connected peers exchange SyncNamespaceAnnounce messages declaring which namespaces they replicate
   2. When a blob is ingested, BlobNotify is sent only to peers whose announced namespace set includes the blob's namespace (peers with empty announcement receive all notifications)
   3. Operator changes max_peers in config and sends SIGHUP; the new limit takes effect without restart (excess peers are not mass-disconnected; new connections are refused until count drops below the new limit)
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 86-01-PLAN.md — SyncNamespaceAnnounce protocol, BlobNotify filtering, reconciliation scoping
+- [ ] 86-02-PLAN.md — max_peers SIGHUP hot reload
+- [ ] 86-03-PLAN.md — Docker integration tests for namespace filtering and max_peers reload
 
 ### Phase 87: Wire Compression
 **Goal**: Wire traffic is compressed with Brotli before AEAD encryption, reducing bandwidth for large payloads while protecting against decompression bombs
@@ -255,7 +260,7 @@ Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 86. Namespace Filtering & Hot Reload | 0/0 | Not started | - |
+| 86. Namespace Filtering & Hot Reload | 0/3 | Planning complete | - |
 | 87. Wire Compression | 0/0 | Not started | - |
 | 88. Relay Resilience | 0/0 | Not started | - |
 | 89. SDK Multi-Relay Failover | 0/0 | Not started | - |
