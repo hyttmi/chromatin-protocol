@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 from chromatindb._codec import decode_notification
 from chromatindb.crypto import sha3_256
-from chromatindb.exceptions import DirectoryError, ProtocolError
+from chromatindb.exceptions import DelegationNotFoundError, DirectoryError, ProtocolError
 from chromatindb.identity import (
     Identity,
     KEM_PUBLIC_KEY_SIZE,
@@ -31,7 +31,7 @@ from chromatindb.wire import TransportMsgType
 
 if TYPE_CHECKING:
     from chromatindb.client import ChromatinClient
-    from chromatindb.types import WriteResult
+    from chromatindb.types import DelegationEntry, DeleteResult, WriteResult
 
 # UserEntry magic bytes and version (D-07)
 USERENTRY_MAGIC: bytes = b"UENT"
@@ -346,6 +346,62 @@ class Directory:
             raise DirectoryError("only admin can delegate")
         delegation_data = make_delegation_data(delegate_identity.public_key)
         return await self._client.write_blob(delegation_data, ttl=0)
+
+    async def revoke_delegation(self, delegate_identity: Identity) -> DeleteResult:
+        """Revoke a delegate's write access by tombstoning their delegation blob.
+
+        Per D-01, D-02: computes pk_hash from delegate_identity.public_key,
+        looks up delegation_blob_hash via delegation_list(), tombstones via
+        delete_blob().
+
+        Args:
+            delegate_identity: Identity of the delegate to revoke.
+
+        Returns:
+            DeleteResult from the tombstone write.
+
+        Raises:
+            DirectoryError: If not in admin mode.
+            DelegationNotFoundError: If no active delegation exists for delegate.
+            ProtocolError: If the node rejects the tombstone (per D-05).
+            ConnectionError: If the connection is lost (per D-05).
+        """
+        if not self._is_admin:
+            raise DirectoryError("only admin can revoke delegations")
+        pk_hash = sha3_256(delegate_identity.public_key)
+        delegation_result = await self._client.delegation_list(
+            self._directory_namespace
+        )
+        for entry in delegation_result.entries:
+            if entry.delegate_pk_hash == pk_hash:
+                return await self._client.delete_blob(
+                    entry.delegation_blob_hash
+                )
+        raise DelegationNotFoundError(
+            "no active delegation found for delegate"
+        )
+
+    async def list_delegates(self) -> list[DelegationEntry]:
+        """List active delegates in the directory namespace.
+
+        Per D-03: wraps client.delegation_list(self._directory_namespace),
+        returns list of DelegationEntry.
+
+        Returns:
+            List of DelegationEntry objects with delegate_pk_hash and
+            delegation_blob_hash fields.
+
+        Raises:
+            DirectoryError: If not in admin mode.
+            ProtocolError: If the node rejects the request (per D-05).
+            ConnectionError: If the connection is lost (per D-05).
+        """
+        if not self._is_admin:
+            raise DirectoryError("only admin can list delegates")
+        result = await self._client.delegation_list(
+            self._directory_namespace
+        )
+        return result.entries
 
     async def register(self, display_name: str) -> bytes:
         """Self-register in the directory by writing a UserEntry blob.

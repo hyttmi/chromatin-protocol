@@ -88,3 +88,7 @@ class ConnectionError(ProtocolError):
 
 class DirectoryError(ChromatinError):
     """Directory operation failed."""
+
+
+class DelegationNotFoundError(DirectoryError):
+    """No active delegation found for the specified delegate."""
