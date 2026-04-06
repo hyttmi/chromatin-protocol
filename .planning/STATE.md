@@ -4,13 +4,13 @@ milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
 stopped_at: Completed 91-01-PLAN.md
-last_updated: "2026-04-06T07:53:58Z"
-last_activity: 2026-04-06 -- Phase 91 plan 01 complete
+last_updated: "2026-04-06T14:50:22.780Z"
+last_activity: 2026-04-06
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
   percent: 50
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 
 ## Current Position
 
-Phase: 91 (sdk-delegation-revocation) — EXECUTING
-Plan: 2 of 2
+Phase: 92
+Plan: Not started
 Status: Executing Phase 91
-Last activity: 2026-04-06 -- Phase 91 plan 01 complete
+Last activity: 2026-04-06
 
 Progress: [█████░░░░░] 50%
 
