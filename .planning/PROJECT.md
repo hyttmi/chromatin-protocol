@@ -10,24 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v2.1.0 Compression, Filtering & Observability
+## Previous Milestone: v2.1.0 Compression, Filtering & Observability (SHIPPED 2026-04-05)
 
-**Goal:** Add wire-level compression, smarter notification filtering, SDK resilience, expanded hot-reload, and production observability to the database, relay, and SDK layers.
-
-**Target features:**
-- Brotli blob compression on the wire (sync + ingest)
-- Namespace-scoped BlobNotify filtering at sender
-- Multi-relay failover in SDK connect()
-- Relay-side subscription forwarding (namespace-aware notification filtering)
-- Relay auto-reconnect to node (periodic UDS reconnect if connection lost)
-- Hot config reload for max_peers, allowed_client_keys, allowed_peer_keys
-- Prometheus-compatible HTTP /metrics endpoint
-- Documentation refresh for all new features
-
-**Constraints:**
-- Breaking protocol changes are fine — only deployed on home KVM, no production users
-- Pre-production: no backward compatibility needed
-
+**Delivered:** Namespace-scoped BlobNotify filtering (SyncNamespaceAnnounce type 62), Brotli envelope compression (suite 0x02) in SDK, relay subscription tracking + UDS auto-reconnect, SDK multi-relay failover, SIGHUP-reloadable max_peers, Prometheus /metrics HTTP endpoint, full docs refresh. 5 phases, 11 plans, 18 requirements — all complete.
 ## Previous Milestone: v2.0.0 Event-Driven Architecture (SHIPPED 2026-04-05)
 
 **Delivered:** Push-based sync with BlobNotify/BlobFetch, event-driven expiry, reconcile-on-connect with safety-net, bidirectional keepalive, SDK auto-reconnect, full documentation refresh. 7 phases, 14 plans, 28 requirements — all complete.
@@ -202,9 +187,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v1.7.0 with ~29,600 LOC C++20 + Python SDK (4,418 LOC, 656 tests) under sdk/python/. 567 unit tests (C++), 49 Docker integration test scripts.
-Built across 35 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d).
-17 milestones, 78 phases, 159 plans, 296 requirements total.
+Shipped v2.1.0 with ~31,000 LOC C++20 + Python SDK (~4,600 LOC, 540 tests) under sdk/python/. 615 unit tests (C++), 49 Docker integration test scripts.
+Built across 36 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d).
+19 milestones, 90 phases, 188 plans, 296 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
@@ -349,4 +334,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 — Phase 90 complete: Prometheus /metrics endpoint, PROTOCOL.md + README + SDK docs refreshed for v2.1.0*
+*Last updated: 2026-04-06 after v2.1.0 milestone*

@@ -1,5 +1,25 @@
 # Milestones
 
+## v2.1.0 Compression, Filtering & Observability (Shipped: 2026-04-06)
+
+**Phases completed:** 5 phases, 11 plans, 22 tasks
+
+**Key accomplishments:**
+
+- SyncNamespaceAnnounce (type 62) protocol: peers exchange replication scope after handshake, BlobNotify and reconciliation filtered by namespace intersection, SIGHUP triggers re-announce
+- max_peers becomes SIGHUP-reloadable via mutable member, with graceful over-limit drain and warning log
+- Two Docker E2E tests: namespace-filtered BlobNotify with 3-node topology proving blobs do not replicate to non-subscribing peers, and max_peers SIGHUP hot reload proving D-12 no-mass-disconnect guarantee
+- Brotli compression in SDK envelope encryption with suite=0x02, 256-byte threshold, expansion fallback, and 100 MiB decompression bomb protection
+- Rewrite Phase 87 docs from wire compression to SDK envelope compression: ROADMAP.md scope pivot, COMP-01..04 SDK-only requirements, PROTOCOL.md suite=0x02 cipher suite registry
+- Per-client namespace subscription tracking with 256-cap enforcement and Notification filtering by subscription match in relay handle_node_message
+- Three-state relay session lifecycle with jittered backoff UDS reconnection and subscription replay after reconnect
+- Multi-relay failover in Python SDK: connect() accepts relay list, __aenter__ rotates on failure, _reconnect_loop cycles through relays with backoff between full cycles
+- Migrated 26 connect() call sites across test and doc files to multi-relay signature, added Multi-Relay Failover documentation sections with current_relay and 4-arg on_reconnect examples
+- HTTP /metrics endpoint exposing 16 Prometheus metrics (11 counters + 5 gauges) with SIGHUP-reloadable bind address, zero new dependencies
+- PROTOCOL.md updated with SyncNamespaceAnnounce type 62 wire format, BlobNotify namespace filtering, and Prometheus /metrics operational section; README/SDK docs refreshed with v2.1.0 features (observability, compression, multi-relay, auto-reconnect)
+
+---
+
 ## v1.7.0 Client-Side Encryption (Shipped: 2026-04-02)
 
 **Phases completed:** 4 phases, 8 plans, 15 tasks

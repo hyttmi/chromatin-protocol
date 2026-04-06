@@ -20,7 +20,7 @@
 - ✅ **v1.6.0 Python SDK** — Phases 70-74 (shipped 2026-03-31)
 - ✅ **v1.7.0 Client-Side Encryption** — Phases 75-78 (shipped 2026-04-02)
 - ✅ **v2.0.0 Event-Driven Architecture** — Phases 79-85 (shipped 2026-04-05)
-- **v2.1.0 Compression, Filtering & Observability** — Phases 86-90 (in progress)
+- ✅ **v2.1.0 Compression, Filtering & Observability** — Phases 86-90 (shipped 2026-04-05)
 
 ## Phases
 
@@ -181,103 +181,15 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 
 </details>
 
-### v2.1.0 Compression, Filtering & Observability (Phases 86-90)
+<details>
+<summary>v2.1.0 Compression, Filtering & Observability (Phases 86-90) — SHIPPED 2026-04-05</summary>
 
-**Milestone Goal:** Add SDK envelope compression (Brotli compress-before-encrypt), namespace-scoped notification filtering, relay and SDK resilience, Prometheus observability, and documentation refresh across all three layers.
+- [x] Phase 86: Namespace Filtering & Hot Reload (3/3 plans) — completed 2026-04-05
+- [x] Phase 87: SDK Envelope Compression (2/2 plans) — completed 2026-04-05
+- [x] Phase 88: Relay Resilience (2/2 plans) — completed 2026-04-05
+- [x] Phase 89: SDK Multi-Relay Failover (2/2 plans) — completed 2026-04-05
+- [x] Phase 90: Observability & Documentation (2/2 plans) — completed 2026-04-05
 
-- [x] **Phase 86: Namespace Filtering & Hot Reload** - SyncNamespaceAnnounce protocol, BlobNotify filtering, SIGHUP max_peers reload (completed 2026-04-05)
-- [x] **Phase 87: SDK Envelope Compression** - Brotli compress-before-encrypt in SDK envelope layer with decompression bomb protection (completed 2026-04-05)
-- [x] **Phase 88: Relay Resilience** - Relay subscription forwarding, UDS auto-reconnect with subscription replay (completed 2026-04-05)
-- [x] **Phase 89: SDK Multi-Relay Failover** - Ordered relay list, rotation on failure, jittered failover (completed 2026-04-05)
-- [x] **Phase 90: Observability & Documentation** - Prometheus /metrics endpoint, PROTOCOL.md, README, SDK docs refresh (completed 2026-04-05)
+Full details: [milestones/v2.1.0-ROADMAP.md](milestones/v2.1.0-ROADMAP.md)
 
-## Phase Details
-
-### Phase 86: Namespace Filtering & Hot Reload
-**Goal**: Peers only receive BlobNotify for namespaces they replicate, and operators can adjust max_peers without restart
-**Depends on**: Phase 85
-**Requirements**: FILT-01, FILT-02, OPS-01
-**Success Criteria** (what must be TRUE):
-  1. After handshake, two connected peers exchange SyncNamespaceAnnounce messages declaring which namespaces they replicate
-  2. When a blob is ingested, BlobNotify is sent only to peers whose announced namespace set includes the blob's namespace (peers with empty announcement receive all notifications)
-  3. Operator changes max_peers in config and sends SIGHUP; the new limit takes effect without restart (excess peers are not mass-disconnected; new connections are refused until count drops below the new limit)
-**Plans:** 3/3 plans complete
-
-Plans:
-- [ ] 86-01-PLAN.md — SyncNamespaceAnnounce protocol, BlobNotify filtering, reconciliation scoping
-- [x] 86-02-PLAN.md — max_peers SIGHUP hot reload
-- [ ] 86-03-PLAN.md — Docker integration tests for namespace filtering and max_peers reload
-
-### Phase 87: SDK Envelope Compression
-**Goal**: SDK compresses plaintext with Brotli before envelope encryption (suite=0x02) and decompresses after decryption, with decompression bomb protection. No node-side changes.
-**Depends on**: Phase 86
-**Requirements**: COMP-01, COMP-02, COMP-03, COMP-04
-**Success Criteria** (what must be TRUE):
-  1. SDK `encrypt_envelope()` compresses plaintext with Brotli (quality 6) before AEAD encryption when plaintext >= 256 bytes; cipher suite byte 0x02 in the envelope header signals compression
-  2. SDK skips compression for plaintext under 256 bytes or when compressed output >= original size (expansion fallback); these use suite=0x01
-  3. SDK `decrypt_envelope()` enforces a 100 MiB decompressed output cap via streaming decompressor, rejecting decompression bombs before full decompression completes
-  4. SDK handles both suite=0x01 (uncompressed) and suite=0x02 (Brotli) envelopes transparently; PROTOCOL.md documents the new suite
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 87-01-PLAN.md — SDK envelope compression implementation + tests
-- [x] 87-02-PLAN.md — Documentation: ROADMAP, REQUIREMENTS, PROTOCOL.md update
-
-### Phase 88: Relay Resilience
-**Goal**: The relay survives node restarts transparently and only forwards notifications to clients that subscribed to the relevant namespace
-**Depends on**: Phase 86
-**Requirements**: FILT-03, RELAY-01, RELAY-02
-**Success Criteria** (what must be TRUE):
-  1. Relay tracks per-client subscription namespaces (intercepting Subscribe/Unsubscribe in transit) and only forwards Notification messages whose namespace matches at least one client subscription
-  2. When the node UDS connection drops, the relay automatically reconnects with jittered exponential backoff; client TCP sessions remain open during reconnection attempts
-  3. After successful UDS reconnect, the relay replays all active client subscriptions to the node so clients resume receiving notifications without re-subscribing
-  4. A client that disconnects has its subscription state cleaned up immediately (no stale state accumulation)
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 88-01-PLAN.md — Subscription tracking, notification filtering, unit tests
-- [x] 88-02-PLAN.md — Three-state lifecycle, UDS auto-reconnect, subscription replay
-
-### Phase 89: SDK Multi-Relay Failover
-**Goal**: SDK clients can connect to multiple relays and automatically rotate to the next one when the current relay is unreachable
-**Depends on**: Phase 88
-**Requirements**: SDK-01, SDK-02
-**Success Criteria** (what must be TRUE):
-  1. ChromatinClient.connect() accepts a list of (host, port) relay addresses and connects to the first reachable one
-  2. When auto-reconnect detects a relay failure, the SDK tries the next relay in the list (cycling through all before retrying); a jittered delay (0-2s) prevents reconnect storms
-  3. After exhausting the full relay list without success, the SDK applies circuit-breaker backoff before cycling again (not infinite tight-loop retry)
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 89-01-PLAN.md — Core multi-relay implementation + reconnect tests
-- [x] 89-02-PLAN.md — Remaining call site migration + documentation
-
-### Phase 90: Observability & Documentation
-**Goal**: Operators can scrape node metrics via Prometheus, and all documentation reflects the v2.1.0 feature set
-**Depends on**: Phases 86-89
-**Requirements**: OPS-02, OPS-03, DOC-01, DOC-02, DOC-03, DOC-04
-**Success Criteria** (what must be TRUE):
-  1. Node exposes a Prometheus-compatible HTTP /metrics endpoint on a configurable bind address (default: disabled; when enabled, localhost-only by default)
-  2. /metrics endpoint reports all existing NodeMetrics counters and gauges (peer count, blob count, storage bytes, sync stats, connection counts) in Prometheus text exposition format
-  3. PROTOCOL.md documents the Brotli compression frame format, SyncNamespaceAnnounce wire type, and /metrics endpoint configuration
-  4. README.md, SDK README, and getting-started tutorial are updated to cover compression, filtering, multi-relay failover, and observability features
-**Plans:** 2/2 plans complete
-
-Plans:
-- [ ] 90-01-PLAN.md — Prometheus /metrics HTTP endpoint implementation + unit tests
-- [ ] 90-02-PLAN.md — Documentation refresh: PROTOCOL.md, README, SDK README, getting-started
-
-## Progress
-
-**Execution Order:**
-Phases 86 first (protocol change settles message type). Phase 87 depends on 86 (send paths stable). Phase 88 depends on 86 (namespace filtering in relay). Phase 89 depends on 88 (test together). Phase 90 last (documents everything).
-
-Dependency graph: 86 -> 87; 86 -> 88 -> 89; 86-89 -> 90
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 86. Namespace Filtering & Hot Reload | 3/3 | Complete    | 2026-04-05 |
-| 87. SDK Envelope Compression | 1/2 | Complete    | 2026-04-05 |
-| 88. Relay Resilience | 2/2 | Complete    | 2026-04-05 |
-| 89. SDK Multi-Relay Failover | 2/2 | Complete    | 2026-04-05 |
-| 90. Observability & Documentation | 0/2 | Complete    | 2026-04-05 |
+</details>
