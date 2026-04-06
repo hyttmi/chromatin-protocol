@@ -22,10 +22,12 @@ key-files:
   created: []
   modified:
     - sdk/python/tests/test_integration.py
+    - sdk/python/chromatindb/client.py
 
 key-decisions:
-  - "Test uses pytest.raises(ProtocolError) for revoked delegate write rejection -- exact exception type to be confirmed against live swarm"
+  - "write_blob needs namespace kwarg for delegated writes -- delegates must target owner's namespace"
   - "5-second sleep for tombstone propagation across LAN swarm (conservative for BlobNotify sub-second delivery)"
+  - "Node connection dedup must skip UDS sessions -- relay opens separate UDS per client with same identity"
 
 patterns-established:
   - "Delegation revocation integration test pattern: owner creates Directory, delegates, revokes, verifies rejection"
@@ -33,7 +35,7 @@ patterns-established:
 requirements-completed: [REV-02]
 
 # Metrics
-duration: 2min
+duration: ~90min (including relay bug diagnosis and fix)
 completed: 2026-04-06
 ---
 
@@ -43,54 +45,67 @@ completed: 2026-04-06
 
 ## Performance
 
-- **Duration:** 2 min
+- **Duration:** ~90 min (including relay multi-client bug diagnosis and fix)
 - **Started:** 2026-04-06T07:59:16Z
-- **Completed:** 2026-04-06T08:01:16Z (Task 1 only; Task 2 checkpoint pending)
-- **Tasks:** 1/2 (checkpoint pending for Task 2: human verification)
-- **Files modified:** 1
+- **Completed:** 2026-04-06
+- **Tasks:** 2/2
+- **Files modified:** 3
 
 ## Accomplishments
-- Integration test `test_delegation_revocation_propagation()` added to `sdk/python/tests/test_integration.py`
+- Integration test `test_delegation_revocation_propagation()` passes against live KVM swarm
 - Test exercises full delegate-write-revoke-reject lifecycle with Directory, DeleteResult, and ProtocolError assertions
 - All 548 unit tests pass with no regressions
-- Test file syntax verified and pytest collects 25 integration tests (24 existing + 1 new)
+- 24/25 integration tests pass (1 pre-existing `test_namespace_list` pagination issue)
+
+## Bugs Found and Fixed During Verification
+
+### 1. write_blob missing namespace kwarg (SDK)
+- `write_blob` always wrote to `self._identity.namespace`, making delegated writes impossible
+- Fix: added `*, namespace: bytes | None = None` parameter
+- Commit: `dc8f0c6`
+
+### 2. Node connection dedup kills relay multi-client sessions (C++ node)
+- Relay opens separate UDS connection per client session, all sharing the relay's identity
+- Node's duplicate-connection logic closed earlier sessions when new clients connected
+- Any request on connection A timed out once connection B was open on the same relay
+- Fix: skip dedup for UDS connections (`if (!conn->is_uds())`)
+- Commit: `429cccc`
 
 ## Task Commits
 
-Each task was committed atomically:
+1. **Task 1: Integration test for delegation revocation propagation** - `bdbd9d8`
+2. **Task 2: Verify integration test against live KVM swarm** - Verified, 24/25 integration tests pass
 
-1. **Task 1: Integration test for delegation revocation propagation** - `bdbd9d8` (test)
-2. **Task 2: Verify integration test against live KVM swarm** - CHECKPOINT PENDING (human-verify)
+## Bug fix commits (found during verification)
+3. **write_blob namespace kwarg** - `dc8f0c6`
+4. **UDS connection dedup skip** - `429cccc`
 
 ## Files Created/Modified
-- `sdk/python/tests/test_integration.py` - Added imports (Directory, ProtocolError) and test_delegation_revocation_propagation() function
-
-## Decisions Made
-- Used `pytest.raises(ProtocolError)` for the revoked delegate write rejection assertion; exact exception type to be confirmed at runtime against live swarm (Open Question 1 from RESEARCH.md)
-- 5-second asyncio.sleep for tombstone propagation wait -- conservative for LAN swarm
+- `sdk/python/tests/test_integration.py` - Added test_delegation_revocation_propagation()
+- `sdk/python/chromatindb/client.py` - Added namespace kwarg to write_blob
+- `db/peer/peer_manager.cpp` - Skip connection dedup for UDS sessions
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+- write_blob required namespace kwarg (not anticipated in plan)
+- Node UDS connection dedup bug required C++ fix (not anticipated -- zero C++ changes was the phase goal, but this was a pre-existing bug surfaced by testing)
 
 ## Known Stubs
 
-None - test fully wired to SDK APIs.
-
-## Issues Encountered
 None.
 
-## User Setup Required
-KVM swarm (192.168.1.200:4201 relay, .200/.201/.202 nodes) must be running for Task 2 verification.
+## Issues Encountered
+- .200 relay UDS link intermittently broken (operational, not code -- needs SIGHUP to reconnect)
 
-## Next Phase Readiness
-- Task 1 complete; awaiting human verification of integration test against live KVM swarm (Task 2)
-- After checkpoint approval, plan is complete and phase 91 can proceed to verification
+## Self-Check: PASSED
 
-## Self-Check: PENDING
-
-Task 2 checkpoint not yet resolved. Self-check will complete after human verification.
+All verification criteria met:
+- [x] Integration test exercises full delegation lifecycle
+- [x] Revoked delegate write rejected with ProtocolError
+- [x] list_delegates confirms delegate absent after revocation
+- [x] Existing integration tests unaffected (24/25 pass, 1 pre-existing)
+- [x] All 548 unit tests pass
 
 ---
 *Phase: 91-sdk-delegation-revocation*
-*Completed: 2026-04-06 (partial -- checkpoint pending)*
+*Completed: 2026-04-06*
