@@ -624,6 +624,46 @@
 
 ---
 
+## Milestone: v2.1.0 — Compression, Filtering & Observability
+
+**Shipped:** 2026-04-05
+**Phases:** 5 | **Plans:** 11 | **Sessions:** ~2
+
+### What Was Built
+- SyncNamespaceAnnounce (type 62) protocol with BlobNotify filtering by namespace intersection
+- Brotli envelope compression (suite 0x02) in Python SDK with decompression bomb protection
+- Relay subscription tracking with notification filtering + UDS auto-reconnect with subscription replay
+- SDK multi-relay failover with relay rotation and cycle backoff
+- Prometheus /metrics HTTP endpoint (16 metrics, SIGHUP reloadable, zero new deps)
+- Full documentation refresh: PROTOCOL.md, README, SDK README, getting-started tutorial
+
+### What Worked
+- Auto-advance pipeline executed phases 89+90 in a single session (discuss -> plan -> execute -> verify chained seamlessly)
+- Parallel plan execution within waves saved significant time — both plans in wave 1 of phase 90 ran simultaneously
+- Research agents consistently identified the right integration points in the codebase before planning
+- Zero gap closure phases needed — all 5 phase verifications passed first time
+- All 18 requirements covered without scope adjustments
+
+### What Was Inefficient
+- Full C++ test suite hangs when run from main repo due to networking tests needing real connections — targeted test tags work fine
+- REQUIREMENTS.md traceability table not auto-updated by phase completion for Phase 90 — manual fix needed before archival
+
+### Patterns Established
+- Minimal HTTP on shared io_context: proven pattern for adding lightweight HTTP endpoints without new threads or deps
+- SIGHUP lifecycle for acceptors: start/stop/restart metrics listener on config change
+
+### Key Lessons
+- Event-driven + observability makes a natural milestone boundary — ship the push infrastructure first, then instrument it
+- SDK API changes (connect signature) need a dedicated migration plan for all call sites across tests and docs
+- Auto-advance across discuss -> plan -> execute works well for well-scoped phases with clear requirements
+
+### Cost Observations
+- Model mix: 100% quality profile (opus for executor agents, sonnet for verification)
+- Sessions: ~2
+- Notable: 5 phases in <1 day — smallest per-phase cost in project history due to well-established patterns
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -647,6 +687,8 @@
 | v1.5.0 | ~1 | 2 | Docs-only — dist/ kit, full doc refresh, PROTOCOL.md source verification |
 | v1.6.0 | ~4 | 5 | First SDK — Python client with PQ crypto, 366 tests, cross-language test vectors |
 | v1.7.0 | ~3 | 4 | Client-side encryption — envelope crypto, directory, groups, encrypted helpers, zero new deps |
+| v2.0.0 | ~3 | 7 | Event-driven sync — BlobNotify/BlobFetch, event-driven expiry, reconcile-on-connect, keepalive, SDK auto-reconnect |
+| v2.1.0 | ~2 | 5 | Compression, filtering, observability — namespace filtering, Brotli compression, relay resilience, multi-relay failover, Prometheus metrics |
 
 ### Cumulative Quality
 
@@ -669,6 +711,8 @@
 | v1.5.0 | 567 | ~29,600 | ~110 | 12/12 |
 | v1.6.0 | 933 | ~29,600 C++ + SDK | ~130 | 30/30 |
 | v1.7.0 | 1,223 | ~29,600 C++ + 4,418 SDK | ~140 | 26/26 |
+| v2.0.0 | 1,140+ | ~30,600 C++ + ~4,500 SDK | ~145 | 28/28 |
+| v2.1.0 | 1,155+ | ~31,000 C++ + ~4,600 SDK | ~150 | 18/18 |
 
 ### Top Lessons (Verified Across Milestones)
 
