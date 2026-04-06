@@ -437,12 +437,16 @@ class ChromatinClient:
     # Data operations
     # ------------------------------------------------------------------
 
-    async def write_blob(self, data: bytes, ttl: int) -> WriteResult:
+    async def write_blob(
+        self, data: bytes, ttl: int, *, namespace: bytes | None = None
+    ) -> WriteResult:
         """Write a signed blob to the connected node.
 
         Args:
             data: Blob payload bytes.
             ttl: Time-to-live in seconds (required, per D-02).
+            namespace: Target namespace (32 bytes). Defaults to own namespace.
+                Pass another identity's namespace for delegated writes.
 
         Returns:
             WriteResult with server-assigned blob_hash and seq_num.
@@ -453,7 +457,7 @@ class ChromatinClient:
             ConnectionError: If request times out (per D-16).
         """
         timestamp = int(time.time())
-        namespace = self._identity.namespace
+        namespace = namespace if namespace is not None else self._identity.namespace
         pubkey = self._identity.public_key
 
         signing_digest = build_signing_input(namespace, data, ttl, timestamp)

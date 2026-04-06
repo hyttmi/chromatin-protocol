@@ -493,11 +493,13 @@ async def test_delegation_revocation_propagation() -> None:
         # Step 1: Delegate write access
         await directory.delegate(delegate)
 
-        # Step 2: Delegate writes successfully
+        # Step 2: Delegate writes to owner's namespace (succeeds with delegation)
         async with ChromatinClient.connect(
             [(RELAY_HOST, RELAY_PORT)], delegate
         ) as del_conn:
-            wr = await del_conn.write_blob(b"pre-revocation-data", ttl=300)
+            wr = await del_conn.write_blob(
+                b"pre-revocation-data", ttl=300, namespace=owner.namespace
+            )
             assert len(wr.blob_hash) == 32
 
         # Step 3: Owner revokes delegate
@@ -508,12 +510,14 @@ async def test_delegation_revocation_propagation() -> None:
         # Step 4: Wait for tombstone propagation across swarm
         await asyncio.sleep(5)
 
-        # Step 5: Delegate write should be rejected
+        # Step 5: Delegate write to owner's namespace should be rejected
         async with ChromatinClient.connect(
             [(RELAY_HOST, RELAY_PORT)], delegate
         ) as del_conn2:
             with pytest.raises(ProtocolError):
-                await del_conn2.write_blob(b"post-revocation-data", ttl=300)
+                await del_conn2.write_blob(
+                    b"post-revocation-data", ttl=300, namespace=owner.namespace
+                )
 
         # Step 6: Delegate should not appear in list
         delegates = await directory.list_delegates()
