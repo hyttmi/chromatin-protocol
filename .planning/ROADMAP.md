@@ -214,11 +214,11 @@ Full details: [milestones/v2.1.0-ROADMAP.md](milestones/v2.1.0-ROADMAP.md)
   1. SDK user can call `revoke_delegate()` on a delegate identity and that delegate's subsequent writes are rejected by the node with an error
   2. SDK user can call `list_delegates()` and see only active delegates (revoked delegates absent from the list)
   3. After tombstone propagation via sync, a second node also rejects writes from the revoked delegate
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 91-01: TBD
-- [ ] 91-02: TBD
+- [ ] 91-01-PLAN.md — Core implementation: DelegationNotFoundError, revoke_delegation(), list_delegates() + unit tests
+- [ ] 91-02-PLAN.md — Integration test: delegation revocation propagation against KVM swarm
 
 ### Phase 92: KEM Key Versioning
 **Goal**: Users can rotate their ML-KEM encryption keypair so a compromised key cannot decrypt future data, while old data remains readable with old keys
