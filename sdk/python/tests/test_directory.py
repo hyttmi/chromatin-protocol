@@ -27,9 +27,9 @@ from chromatindb._directory import (
     verify_user_entry,
 )
 from chromatindb.crypto import sha3_256
-from chromatindb.exceptions import ChromatinError, DirectoryError, ProtocolError
+from chromatindb.exceptions import ChromatinError, DelegationNotFoundError, DirectoryError, ProtocolError
 from chromatindb.identity import Identity, KEM_PUBLIC_KEY_SIZE, PUBLIC_KEY_SIZE
-from chromatindb.types import BlobRef, ListPage, ReadResult, WriteResult
+from chromatindb.types import BlobRef, DelegationEntry, DelegationList, DeleteResult, ListPage, ReadResult, WriteResult
 from chromatindb.wire import TransportMsgType
 
 
@@ -241,6 +241,8 @@ def make_mock_client(identity: Identity) -> MagicMock:
     client.read_blob = AsyncMock()
     client.list_blobs = AsyncMock()
     client.subscribe = AsyncMock()
+    client.delegation_list = AsyncMock()
+    client.delete_blob = AsyncMock()
     client._transport = MagicMock()
     client._transport.notifications = asyncio.Queue(maxsize=1000)
     client._transport.closed = False
@@ -1260,3 +1262,137 @@ class TestDirectoryGroups:
         d.refresh()
         assert len(d._groups) == 0
         assert d._cache is None
+
+
+# ---------------------------------------------------------------------------
+# Revoke delegation
+# ---------------------------------------------------------------------------
+
+
+class TestRevokeDelegation:
+    """Tests for Directory.revoke_delegation() (REV-01, D-01, D-02, D-04, D-05)."""
+
+    async def test_revoke_success(self, identity: Identity) -> None:
+        """Admin revokes existing delegate; delegation_list queried, delete_blob called with blob_hash."""
+        delegate = Identity.generate()
+        pk_hash = sha3_256(delegate.public_key)
+        blob_hash = b"\xdd" * 32
+
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(
+            entries=[DelegationEntry(
+                delegate_pk_hash=pk_hash,
+                delegation_blob_hash=blob_hash,
+            )]
+        )
+        dr = DeleteResult(tombstone_hash=b"\xee" * 32, seq_num=5, duplicate=False)
+        client.delete_blob.return_value = dr
+
+        d = Directory(client, identity)
+        result = await d.revoke_delegation(delegate)
+
+        assert result is dr
+        client.delegation_list.assert_called_once_with(identity.namespace)
+        client.delete_blob.assert_called_once_with(blob_hash)
+
+    async def test_revoke_non_admin_raises(self, identity: Identity) -> None:
+        """Non-admin revoke_delegation raises DirectoryError."""
+        client = make_mock_client(identity)
+        d = Directory(client, identity, directory_namespace=b"\xaa" * 32)
+        with pytest.raises(DirectoryError, match="admin"):
+            await d.revoke_delegation(Identity.generate())
+
+    async def test_revoke_not_found(self, identity: Identity) -> None:
+        """Revoking delegate not in delegation_list raises DelegationNotFoundError."""
+        delegate = Identity.generate()
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(entries=[])
+
+        d = Directory(client, identity)
+        with pytest.raises(DelegationNotFoundError, match="no active delegation"):
+            await d.revoke_delegation(delegate)
+
+    async def test_revoke_multiple_delegates_finds_correct(self, identity: Identity) -> None:
+        """With multiple delegations, revoke finds the correct one by pk_hash."""
+        target = Identity.generate()
+        target_pk_hash = sha3_256(target.public_key)
+        target_blob_hash = b"\xcc" * 32
+
+        other1 = Identity.generate()
+        other2 = Identity.generate()
+
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(
+            entries=[
+                DelegationEntry(delegate_pk_hash=sha3_256(other1.public_key), delegation_blob_hash=b"\xaa" * 32),
+                DelegationEntry(delegate_pk_hash=target_pk_hash, delegation_blob_hash=target_blob_hash),
+                DelegationEntry(delegate_pk_hash=sha3_256(other2.public_key), delegation_blob_hash=b"\xbb" * 32),
+            ]
+        )
+        dr = DeleteResult(tombstone_hash=b"\xee" * 32, seq_num=10, duplicate=False)
+        client.delete_blob.return_value = dr
+
+        d = Directory(client, identity)
+        result = await d.revoke_delegation(target)
+
+        assert result is dr
+        client.delete_blob.assert_called_once_with(target_blob_hash)
+
+    async def test_revoke_propagates_delete_error(self, identity: Identity) -> None:
+        """ProtocolError from delete_blob propagates unchanged (per D-05)."""
+        delegate = Identity.generate()
+        pk_hash = sha3_256(delegate.public_key)
+
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(
+            entries=[DelegationEntry(
+                delegate_pk_hash=pk_hash,
+                delegation_blob_hash=b"\xdd" * 32,
+            )]
+        )
+        client.delete_blob.side_effect = ProtocolError("node rejected tombstone")
+
+        d = Directory(client, identity)
+        with pytest.raises(ProtocolError, match="node rejected tombstone"):
+            await d.revoke_delegation(delegate)
+
+
+# ---------------------------------------------------------------------------
+# List delegates
+# ---------------------------------------------------------------------------
+
+
+class TestListDelegates:
+    """Tests for Directory.list_delegates() (REV-01, D-03)."""
+
+    async def test_list_delegates_success(self, identity: Identity) -> None:
+        """Admin lists delegates; returns DelegationEntry list."""
+        entries = [
+            DelegationEntry(delegate_pk_hash=b"\xaa" * 32, delegation_blob_hash=b"\xbb" * 32),
+            DelegationEntry(delegate_pk_hash=b"\xcc" * 32, delegation_blob_hash=b"\xdd" * 32),
+        ]
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(entries=entries)
+
+        d = Directory(client, identity)
+        result = await d.list_delegates()
+
+        assert result == entries
+        client.delegation_list.assert_called_once_with(identity.namespace)
+
+    async def test_list_delegates_non_admin_raises(self, identity: Identity) -> None:
+        """Non-admin list_delegates raises DirectoryError."""
+        client = make_mock_client(identity)
+        d = Directory(client, identity, directory_namespace=b"\xaa" * 32)
+        with pytest.raises(DirectoryError, match="admin"):
+            await d.list_delegates()
+
+    async def test_list_delegates_empty(self, identity: Identity) -> None:
+        """Empty delegation list returns empty list."""
+        client = make_mock_client(identity)
+        client.delegation_list.return_value = DelegationList(entries=[])
+
+        d = Directory(client, identity)
+        result = await d.list_delegates()
+
+        assert result == []
