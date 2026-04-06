@@ -382,7 +382,9 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     // Connection dedup: check if we already have a connection from this peer namespace.
     // When two nodes are mutual bootstrap peers, both initiate connections simultaneously.
     // We use a deterministic tie-break so both sides independently close the same connection.
-    {
+    // Skip dedup for UDS connections: the relay opens a separate UDS session per client,
+    // all sharing the relay's identity. Deduping would close earlier clients' pipes.
+    if (!conn->is_uds()) {
         for (auto it = peers_.begin(); it != peers_.end(); ++it) {
             auto existing_ns = crypto::sha3_256(it->connection->peer_pubkey());
             if (existing_ns == peer_ns) {
@@ -430,7 +432,7 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
                 break;
             }
         }
-    }
+    }  // !conn->is_uds()
 
     spdlog::info("Connected to peer {}@{}", ns_hex, info.address);
 
