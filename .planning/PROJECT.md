@@ -10,6 +10,21 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v2.1.1 Revocation & Key Lifecycle
+
+**Goal:** Close the access control story — owners can revoke write access and rotate encryption keys so revoked identities can't read new data.
+
+**Target features:**
+- ACL revocation via signed revocation blobs (node-enforced)
+- Key versioning in SDK envelope encryption (per-namespace key_v{N})
+- Group membership revocation (remove member, rotate group key)
+- Documentation update (PROTOCOL.md, SDK docs)
+
+**Constraints:**
+- Old data stays readable with old keys (no re-encryption)
+- No new dependencies
+- Pre-production: no backward compat needed
+
 ## Previous Milestone: v2.1.0 Compression, Filtering & Observability (SHIPPED 2026-04-05)
 
 **Delivered:** Namespace-scoped BlobNotify filtering (SyncNamespaceAnnounce type 62), Brotli envelope compression (suite 0x02) in SDK, relay subscription tracking + UDS auto-reconnect, SDK multi-relay failover, SIGHUP-reloadable max_peers, Prometheus /metrics HTTP endpoint, full docs refresh. 5 phases, 11 plans, 18 requirements — all complete.
@@ -334,4 +349,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-06 after v2.1.0 milestone*
+*Last updated: 2026-04-06 — Milestone v2.1.1 started*
