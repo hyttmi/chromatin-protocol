@@ -19,7 +19,8 @@ import time
 import pytest
 
 from chromatindb import ChromatinClient
-from chromatindb.exceptions import HandshakeError
+from chromatindb._directory import Directory
+from chromatindb.exceptions import HandshakeError, ProtocolError
 from chromatindb.identity import Identity
 from chromatindb.types import (
     BatchReadResult,
@@ -464,3 +465,58 @@ async def test_subscribe_and_notification() -> None:
         # Unsubscribe
         await conn.unsubscribe(ns)
         assert ns not in conn.subscriptions
+
+
+# ------------------------------------------------------------------
+# Delegation revocation integration tests (Phase 91, Plan 02)
+# ------------------------------------------------------------------
+
+
+async def test_delegation_revocation_propagation() -> None:
+    """REV-01 + REV-02: delegate, write, revoke, verify rejection.
+
+    Full lifecycle:
+    1. Owner generates identity, connects, creates Directory
+    2. Owner delegates write access to delegate identity
+    3. Delegate connects, writes a blob to owner's namespace (succeeds)
+    4. Owner calls revoke_delegation(delegate)
+    5. Wait for tombstone propagation (5s for LAN swarm)
+    6. Delegate reconnects and attempts write (should be rejected with ProtocolError)
+    7. Owner calls list_delegates() and delegate is absent
+    """
+    owner = Identity.generate()
+    delegate = Identity.generate()
+
+    async with ChromatinClient.connect([(RELAY_HOST, RELAY_PORT)], owner) as owner_conn:
+        directory = Directory(owner_conn, owner)
+
+        # Step 1: Delegate write access
+        await directory.delegate(delegate)
+
+        # Step 2: Delegate writes successfully
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], delegate
+        ) as del_conn:
+            wr = await del_conn.write_blob(b"pre-revocation-data", ttl=300)
+            assert len(wr.blob_hash) == 32
+
+        # Step 3: Owner revokes delegate
+        result = await directory.revoke_delegation(delegate)
+        assert isinstance(result, DeleteResult)
+        assert len(result.tombstone_hash) == 32
+
+        # Step 4: Wait for tombstone propagation across swarm
+        await asyncio.sleep(5)
+
+        # Step 5: Delegate write should be rejected
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], delegate
+        ) as del_conn2:
+            with pytest.raises(ProtocolError):
+                await del_conn2.write_blob(b"post-revocation-data", ttl=300)
+
+        # Step 6: Delegate should not appear in list
+        delegates = await directory.list_delegates()
+        delegate_pk_hashes = [e.delegate_pk_hash for e in delegates]
+        from chromatindb.crypto import sha3_256
+        assert sha3_256(delegate.public_key) not in delegate_pk_hashes
