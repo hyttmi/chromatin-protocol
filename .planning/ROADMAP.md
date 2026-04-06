@@ -21,6 +21,7 @@
 - ✅ **v1.7.0 Client-Side Encryption** — Phases 75-78 (shipped 2026-04-02)
 - ✅ **v2.0.0 Event-Driven Architecture** — Phases 79-85 (shipped 2026-04-05)
 - ✅ **v2.1.0 Compression, Filtering & Observability** — Phases 86-90 (shipped 2026-04-05)
+- [ ] **v2.1.1 Revocation & Key Lifecycle** — Phases 91-94 (in progress)
 
 ## Phases
 
@@ -193,3 +194,86 @@ Full details: [milestones/v2.0.0-ROADMAP.md](milestones/v2.0.0-ROADMAP.md)
 Full details: [milestones/v2.1.0-ROADMAP.md](milestones/v2.1.0-ROADMAP.md)
 
 </details>
+
+### v2.1.1 Revocation & Key Lifecycle (In Progress)
+
+**Milestone Goal:** Close the access control story -- owners can revoke write access, rotate encryption keys, and manage group membership so revoked identities cannot read new data. All work is SDK-only Python changes: zero C++ node modifications, zero new wire types, zero new dependencies.
+
+- [ ] **Phase 91: SDK Delegation Revocation** - Owners can revoke delegate write access and verify enforcement via the Python SDK
+- [ ] **Phase 92: KEM Key Versioning** - Owners can rotate encryption keys; senders auto-use latest key; recipients decrypt old and new data
+- [ ] **Phase 93: Group Membership Revocation** - Admins can remove group members; future group writes exclude removed members
+- [ ] **Phase 94: Protocol & SDK Documentation** - PROTOCOL.md and SDK docs fully document revocation, key rotation, and group membership lifecycle
+
+## Phase Details
+
+### Phase 91: SDK Delegation Revocation
+**Goal**: Owners can revoke a delegate's write access through the SDK and the node enforces it immediately
+**Depends on**: Nothing (first phase -- uses existing node tombstone mechanism proven in Docker integration tests)
+**Requirements**: REV-01, REV-02
+**Success Criteria** (what must be TRUE):
+  1. SDK user can call `revoke_delegate()` on a delegate identity and that delegate's subsequent writes are rejected by the node with an error
+  2. SDK user can call `list_delegates()` and see only active delegates (revoked delegates absent from the list)
+  3. After tombstone propagation via sync, a second node also rejects writes from the revoked delegate
+**Plans**: TBD
+
+Plans:
+- [ ] 91-01: TBD
+- [ ] 91-02: TBD
+
+### Phase 92: KEM Key Versioning
+**Goal**: Users can rotate their ML-KEM encryption keypair so a compromised key cannot decrypt future data, while old data remains readable with old keys
+**Depends on**: Phase 91
+**Requirements**: KEY-01, KEY-02, KEY-03
+**Success Criteria** (what must be TRUE):
+  1. User can call `Identity.rotate_kem()` and the new KEM public key is published to the directory; other users resolve the latest key via `resolve_recipient()`
+  2. After rotation, `write_encrypted()` from any sender uses the recipient's latest KEM public key (verified by stanza `kem_pk_hash` matching the new key)
+  3. After rotation, `read_encrypted()` successfully decrypts data encrypted under both the old and new KEM keys via key ring fallback
+  4. Identity save/load round-trips the full key ring -- all historical KEM keypairs are preserved across process restarts
+  5. UserEntry v2 in the directory includes `key_version` field; pre-rotation UserEntry v1 entries are handled as implied key_version=0
+**Plans**: TBD
+
+Plans:
+- [ ] 92-01: TBD
+- [ ] 92-02: TBD
+- [ ] 92-03: TBD
+
+### Phase 93: Group Membership Revocation
+**Goal**: Group admins can remove members so future group writes exclude removed members from recipient stanzas
+**Depends on**: Phase 92 (uses key rotation patterns established in Phase 92)
+**Requirements**: GRP-01, GRP-02
+**Success Criteria** (what must be TRUE):
+  1. Admin can call `remove_member()` and the removed member is absent from the group's member list
+  2. After removal, `write_to_group()` encrypts only to remaining members -- the removed member cannot decrypt new group data
+  3. `write_to_group()` forces a directory cache refresh before encryption to ensure recently removed members are excluded
+**Plans**: TBD
+
+Plans:
+- [ ] 93-01: TBD
+- [ ] 93-02: TBD
+
+### Phase 94: Protocol & SDK Documentation
+**Goal**: PROTOCOL.md and SDK documentation fully describe revocation, key rotation, and group membership lifecycle as actually shipped
+**Depends on**: Phase 93
+**Requirements**: DOC-01, DOC-02
+**Success Criteria** (what must be TRUE):
+  1. PROTOCOL.md documents the revocation mechanism: tombstone-based delegation revocation workflow with explicit propagation window bounds (near-instant for connected peers, up to safety-net interval for disconnected)
+  2. PROTOCOL.md documents UserEntry v2 binary format with `key_version` field, the envelope header key versioning extension, and key ring fallback decryption logic
+  3. PROTOCOL.md documents group membership revocation: member removal, forward exclusion from ciphertexts, explicit note that old data remains readable by removed members
+  4. SDK getting-started tutorial includes working examples for delegation revocation, KEM key rotation, and group membership management
+**Plans**: TBD
+
+Plans:
+- [ ] 94-01: TBD
+- [ ] 94-02: TBD
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 91 -> 92 -> 93 -> 94
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 91. SDK Delegation Revocation | 0/2 | Not started | - |
+| 92. KEM Key Versioning | 0/3 | Not started | - |
+| 93. Group Membership Revocation | 0/2 | Not started | - |
+| 94. Protocol & SDK Documentation | 0/2 | Not started | - |

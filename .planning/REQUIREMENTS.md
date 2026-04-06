@@ -38,17 +38,17 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REV-01 | TBD | Pending |
-| REV-02 | TBD | Pending |
-| KEY-01 | TBD | Pending |
-| KEY-02 | TBD | Pending |
-| KEY-03 | TBD | Pending |
-| GRP-01 | TBD | Pending |
-| GRP-02 | TBD | Pending |
-| DOC-01 | TBD | Pending |
-| DOC-02 | TBD | Pending |
+| REV-01 | Phase 91 | Pending |
+| REV-02 | Phase 91 | Pending |
+| KEY-01 | Phase 92 | Pending |
+| KEY-02 | Phase 92 | Pending |
+| KEY-03 | Phase 92 | Pending |
+| GRP-01 | Phase 93 | Pending |
+| GRP-02 | Phase 93 | Pending |
+| DOC-01 | Phase 94 | Pending |
+| DOC-02 | Phase 94 | Pending |
 
 **Coverage:**
 - v2.1.1 requirements: 9 total
-- Mapped to phases: 0/9 (pending roadmap)
-- Unmapped: 9
+- Mapped to phases: 9/9 (100%)
+- Unmapped: 0
