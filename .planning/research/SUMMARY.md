@@ -1,195 +1,173 @@
 # Project Research Summary
 
-**Project:** chromatindb v2.1.0 — Compression, Filtering & Observability
-**Domain:** Decentralized PQ-secure database node — wire compression, namespace filtering, Prometheus metrics, relay resilience, SDK failover
-**Researched:** 2026-04-04
+**Project:** chromatindb v2.1.1 — Revocation & Key Lifecycle
+**Domain:** ACL revocation, envelope key versioning, group membership revocation in decentralized PQ-encrypted eventually-consistent blob storage
+**Researched:** 2026-04-06
 **Confidence:** HIGH
 
 ## Executive Summary
 
-chromatindb v2.1.0 adds production-readiness features to an already-shipped, battle-tested system. The architecture is fully established (single io_context thread, per-connection send queues, PQ AEAD transport, relay forwarder), so this milestone is about layering new features onto known boundaries rather than designing from scratch. Research consistently finds that most v2.1.0 features require no new dependencies: namespace filtering, relay reconnect, SDK failover, hot-reload expansion, and Prometheus metrics all extend existing code paths. The single exception is Brotli wire compression, which adds google/brotli v1.2.0 (C++) and the `brotli` pip package (Python SDK).
+This milestone adds access lifecycle management to chromatindb: revoking delegate write access, rotating KEM keypairs for envelope encryption, and excluding removed group members from future ciphertexts. The headline finding across all four research areas is that the existing primitives already implement 90% of the required machinery. The node-layer delegation revocation mechanism (tombstone delegation blob -> `delegation_map` entry erased -> subsequent writes rejected) is fully implemented, tested, and proven in Docker integration tests. The per-blob envelope encryption model (no shared group key, per-recipient KEM wrapping) was specifically chosen in v1.7.0 to avoid the key rotation complexity that plagues group messaging protocols. The milestone is purely additive SDK work with no new wire types, no C++ node changes, and no new dependencies.
 
-The recommended approach is to build features in dependency order, starting with small independent changes (max_peers reload, namespace BlobNotify filtering) before the architecturally significant ones (relay auto-reconnect state machine, Brotli compression pipeline). Brotli requires careful integration at the PeerManager dispatch layer — compression must happen inside TransportCodec::encode, before AEAD, with a flag byte prefix for self-describing frames. The Prometheus /metrics endpoint is straightforward but must default to localhost-only binding to avoid exposing node metadata publicly.
+The recommended approach is a four-phase SDK-only build: delegation revocation helper first (smallest scope, highest immediate value), then KEM key versioning with envelope format extension (technically deepest, independent of phase 1), then group membership revocation (straightforward once key versioning patterns are established), and protocol documentation last. The critical design boundary is that old data deliberately remains readable by old keyholders — this is both a project constraint and the universal industry pattern (AWS KMS, GCP KMS, Signal, MLS all follow it). Every feature decision should reinforce this boundary, not accidentally work around it.
 
-The dominant risks are: (1) decompression bombs — Brotli has no built-in output limit and CVE-2025-6176 demonstrates this is real; (2) AEAD nonce desync — if compression is inserted at the wrong layer in the send pipeline, conditionally skipped messages would desync the stream permanently; (3) thundering-herd failover — naive multi-relay or max_peers reload causes simultaneous reconnect storms. All three are preventable with correct design decisions made upfront. The relay auto-reconnect state machine (ACTIVE / RECONNECTING / DEAD) is the most architecturally involved change of the milestone.
+The primary risk is scope creep: key versioning has a well-documented "pull thread" problem where each design decision creates new questions toward a full KMS. The research defines a hard scope boundary: `key_version` is an integer in the envelope header and an array of KEM keypairs in the identity file. Nothing more. A secondary risk is misunderstanding the propagation window for revocation — tombstone replication is eventually consistent (sub-second for connected peers, up to safety-net interval for disconnected ones), not atomic. This must be documented, not engineered away.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack is stable. Only one new C++ dependency (google/brotli v1.2.0) and one new Python dependency (`brotli~=1.2.0`) are added. All other features are implemented on existing infrastructure: Asio handles the Prometheus HTTP acceptor; the existing SIGHUP handler absorbs max_peers reload; the existing asyncio retry machinery absorbs multi-relay failover. Prometheus library alternatives (prometheus-cpp, prometheus-cpp-lite) were evaluated and rejected — both bring their own threading HTTP servers that conflict with chromatindb's single-thread Asio model.
+No dependency changes required. The existing stack (liboqs ML-DSA-87 + ML-KEM-1024, libsodium ChaCha20-Poly1305 + HKDF-SHA256, libmdbx) is sufficient for all three feature areas. ACL revocation uses ML-DSA-87 signing of tombstone blobs (already implemented). KEM key versioning uses ML-KEM-1024 keygen (already in `identity.py`) with existing HKDF label `chromatindb-envelope-kek-v1` (unchanged — the KEM shared secret is unique per encapsulation, not per label). Group membership revocation requires zero crypto changes because per-blob DEK wrapping with per-recipient KEM stanzas already handles "exclude this member from future encryptions" naturally.
 
-**Core technologies (new in v2.1.0):**
-- google/brotli v1.2.0: wire compression before AEAD encrypt — CMake-native, FetchContent-compatible, MIT license, ~91 MB/s at quality 1, 15-20% better ratio than zstd on structured/text content
-- brotli~=1.2.0 (PyPI): SDK-side wire compression matching C++ implementation — official Google Python bindings, 3.3M weekly downloads
+The "no new dependencies" constraint is not a limitation — it is a confirmation that the original stack was well-chosen. All crypto operations needed for revocation and key lifecycle are direct reuse of primitives already validated in production.
 
-**Existing stack serving new features (no changes needed):**
-- Standalone Asio 1.38.0: Prometheus HTTP acceptor (same io_context thread, no new threads)
-- nlohmann/json 3.11.3: new config fields (metrics_bind_address, max_peers)
-- FlatBuffers 25.2.10: new SyncNamespaceAnnounce message type (= 62)
-- Python asyncio stdlib: multi-relay failover rotation in _reconnect.py
+**Core technologies (unchanged):**
+- liboqs ML-DSA-87: signing revocation tombstones and cross-signing rotated KEM pubkeys — same operations as delegation creation
+- liboqs ML-KEM-1024: keypair generation on rotation + encapsulation to latest key per recipient — `generate_keypair()` already exists
+- libsodium ChaCha20-Poly1305: AEAD for envelope DEK wrapping — KEK is unique per encapsulation regardless of key version
+- libsodium HKDF-SHA256: key derivation — label `chromatindb-envelope-kek-v1` stays the same; do NOT create a `chromatindb-envelope-kek-v2` label
+- libmdbx: `delegation_map` already tracks active delegations; tombstones already erase entries on receipt
+
+**What NOT to use:** No shared group symmetric keys, no re-encryption on revocation, no new cipher suites for key versions, no ENVELOPE_VERSION bump for key lifecycle changes (version byte is for format changes, not key generations), no OpenSSL, no external KMS.
 
 ### Expected Features
 
+The feature set divides into six items that close the revocation story (P1) and three enhancements for post-validation (P2/P3).
+
 **Must have (table stakes):**
-- Prometheus /metrics endpoint — operators expect a scrape endpoint on any production server daemon; data already exists in NodeMetrics struct, just needs HTTP exposition
-- Hot config reload for max_peers — all other config is SIGHUP-reloadable; max_peers is the remaining gap; operators expect full config reloadability
-- Relay auto-reconnect to node — current behavior (node restart = all SDK clients disconnect) is unacceptable for production; relay must survive node restarts transparently
+- SDK delegation revocation helper — `Directory.revoke_delegation(delegate_identity)` locates the delegation blob hash via DelegationListRequest (already on wire, types 51/52) and tombstones it. Node enforcement already works; this is a missing API surface.
+- Admin KEM key rotation — `Identity.rotate_kem()` generates new ML-KEM-1024 keypair, retains old keypair in a key ring, then publishes a new UserEntry v2 blob to the directory. Without rotation, a compromised KEM secret key enables decryption of all future data addressed to that identity.
+- Envelope key versioning (UserEntry v2 + envelope header extension) — `key_version` field in UserEntry blob and in the envelope plaintext header as AEAD additional data. Enables O(1) KEM key selection on decrypt. Old envelopes remain decryptable via key ring lookup by `kem_pk_hash`.
+- Group membership revocation — `remove_member()` already excludes revoked member from future `write_to_group()` calls. Needs: GroupEntry v2 format with `version_counter` for epoch tracking, and a cache freshness check before encryption after removal.
+- Old data readable with old keys — `envelope_decrypt()` falls back to key ring when current KEM key does not match stanza `kem_pk_hash`. Identity retains all historical KEM keypairs indexed by `SHA3-256(kem_pk)`.
+- PROTOCOL.md update — UserEntry v2 format, envelope header extension, revocation semantics, propagation window bounds.
 
 **Should have (differentiators):**
-- Brotli wire compression — significant savings on structured protocol overhead (PQ pubkeys 2592B, signatures ~4627B, FlatBuffer framing); compress-then-encrypt requires careful PeerManager dispatch-layer integration
-- Namespace-scoped BlobNotify filtering — prevents O(peers x namespaces) notification fan-out; must filter by sync_namespaces (node replication config), NOT subscribed_namespaces (client subscription state)
-- Multi-relay SDK failover — single relay is a single point of failure; ordered relay list with last-known-good preference and jittered rotation completes the resilience story
-- Relay subscription forwarding — end-to-end filtering; relay intercepts Subscribe/Unsubscribe in transit, filters Notification (type 21) before forwarding; stateful but bounded (256 namespaces/client cap)
+- Atomic revoke-and-rotate — single `Directory.revoke_member(group_name, member)` call that tombstones delegation, removes from group, and rotates admin KEM key atomically. Prevents the window between revocation and key rotation.
+- Revocation propagation notification — already works via existing pub/sub on directory namespace; needs documentation only (zero new code).
+- Key history chain — directory cache stores list of `(key_version, kem_pubkey)` per user; walk history to resolve any past epoch's KEM pubkey for old envelope decryption.
 
-**Defer (post v2.1.0):**
-- Compression statistics in /metrics (bytes saved, per-type ratios)
-- Relay /metrics endpoint (relay-specific session and forwarding metrics)
-- Dynamic compression level by payload size
-- Selective namespace sync (only replicate declared namespaces — extension of BlobNotify filtering)
-- SDK health check API exposing current relay, connection state, and metrics
+**Defer (v2+):**
+- Periodic automatic key rotation (timer-based, compliance use case only; no value without an active revocation event)
+- Re-encryption utility for old data under new keys (expensive, violates constraint, only needed for extreme compliance scenarios)
+- Cross-SDK key versioning (Python SDK is the only SDK today)
+- Permanent ban semantics via revocation list blob (prevents re-delegation; tombstone-based revocation allows re-delegation by design)
 
 ### Architecture Approach
 
-All seven features integrate at well-defined boundaries in the existing three-layer architecture (SDK -> Relay -> Node -> Peers). Compression hooks into PeerManager's send/receive dispatch paths — NOT inside Connection where it would break the relay's blocklist filter and the AEAD nonce contract. The Prometheus server is a new acceptor on a separate port running on the same io_context. The relay gains state (subscription tracking, UDS reconnect state machine) but remains a forwarder in character. No component is redesigned; all are extended.
+All components are SDK-only Python changes to four existing modules. The C++ node requires zero modifications: tombstone-based delegation revocation is already implemented and tested (`test_acl04_revocation.sh`), and the node stores opaque signed blobs without interpreting envelope encryption or group membership. The four architectural components are: (1) `Directory.revoke_delegation()` using existing DelegationList + delete_blob primitives, (2) `Identity` key ring with multi-version KEM storage and `rotate_kem()` method, (3) envelope header extended with `key_version: uint32 BE` as authenticated plaintext in AEAD additional data, and (4) `GroupEntry` v2 format adding `version_counter: uint32 BE` for membership epoch tracking. No new MDBX sub-databases, no new wire message types, no new files required.
 
-**Modified components:**
-1. PeerManager (db/peer/peer_manager.cpp) — compression in send/recv paths, BlobNotify namespace filter, max_peers reload, metrics server construction
-2. RelaySession (relay/core/relay_session.cpp) — subscription interception + forwarding filter, UDS reconnect state machine (ACTIVE/RECONNECTING/DEAD)
-3. ChromatinClient (sdk/python/chromatindb/client.py + _reconnect.py) — multi-relay connect() overload, relay rotation on reconnect
-
-**New files:**
-1. db/util/compression.h/.cpp — Brotli compress/decompress wrappers with flag byte prefix, output size cap, fallback-to-uncompressed for incompressible data
-2. db/net/metrics_server.h/.cpp — Asio TCP acceptor, HTTP GET /metrics, Prometheus text format, reads NodeMetrics + Storage on same io_context thread
+**Major components:**
+1. `_directory.py` — add `revoke_delegation()`, `list_delegates()`, UserEntry v2 encode/decode, GroupEntry v2 encode/decode with version_counter, atomic `revoke_member()` orchestration
+2. `identity.py` — add `rotate_kem()`, key ring persistence (`_kem_ring: dict[bytes, KeyEncapsulation]` indexed by pk_hash), updated `save()`/`load()` for multi-keypair storage
+3. `_envelope.py` — extend header with `key_version: uint32 BE` as AEAD additional data, add key ring fallback in `envelope_decrypt()` on `NotARecipientError`
+4. `client.py` — add `revoke_delegation()` convenience wrapper, expose atomic `revoke_member()` method
 
 ### Critical Pitfalls
 
-1. **Decompression bomb (Brotli output unbounded)** — BrotliDecoderDecompress has no built-in output limit; a 6 KB compressed payload can decompress to gigabytes. Must enforce output cap (MAX_BLOB_DATA_SIZE + overhead) before decompression completes. Fuzz-test with adversarial inputs. CVE-2025-6176 is a real instance of this attack.
+1. **key_version in encrypted payload instead of header** — if `key_version` is placed inside the AEAD ciphertext, readers must trial-decrypt with every key version (O(versions) KEM decap attempts; unusable beyond 5 rotations). Put `key_version` in the plaintext header as AEAD additional data for O(1) key selection. Design the extended envelope header format before writing any rotation logic.
 
-2. **AEAD nonce desync from wrong compression layer placement** — if compression is inserted after TransportCodec::encode but before send_encrypted, a conditional skip (incompressible data) consumes a nonce without sending, permanently desyncing the AEAD stream. Compression must live inside TransportCodec::encode so data is ready-to-encrypt before it enters the send queue. Flag byte (0x00=uncompressed, 0x01=brotli) ensures incompressible data falls back cleanly without any nonce interaction.
+2. **Key rotation without re-registration** — generating a new KEM keypair locally without publishing a new UserEntry blob causes all other senders to encrypt with the stale old pubkey. The rotating user cannot decrypt. Make `rotate_kem()` atomic with directory re-registration — a single SDK call with no way to do one without the other.
 
-3. **Namespace BlobNotify filter uses the wrong set (subscribed_namespaces vs sync_namespaces)** — BlobNotify to peers must filter by peer's sync_namespaces (node replication config); using subscribed_namespaces (client subscription state) silently breaks peer-to-peer replication. Safety-net sync would catch missing blobs but only every 10 minutes, effectively regressing to timer-based sync.
+3. **Key rotation discards old KEM secret key** — after rotation, all data encrypted under the old key becomes permanently unreadable (catastrophic data loss). `Identity.rotate_kem()` must move the old KEM keypair to `_kem_ring`, never delete it. Identity save/load must persist the full ring.
 
-4. **Metrics endpoint bound to 0.0.0.0** — exposes peer count, storage size, and sync statistics as reconnaissance data. Default must be 127.0.0.1 (or disabled). No pubkey hashes or namespace hashes in metric labels. Operator must explicitly opt in for external binding.
+4. **Revocation propagation window misrepresented as instant** — tombstone replication is eventually consistent. Connected peers receive tombstones in near-real-time via BlobNotify. Disconnected peers may not receive them until the safety-net interval (default 600s). Document the propagation bounds explicitly in PROTOCOL.md. Do not add tests with fixed sleep durations. Do not add a consensus protocol.
 
-5. **Multi-relay and max_peers thundering-herd reconnects** — naive simultaneous disconnect of N peers causes correlated reconnect storms. For max_peers: graceful drain (refuse new connections, do not mass-disconnect). For multi-relay: randomize relay list order per client on startup, apply jitter (0-2s) before failover, circuit-break after full list exhausted.
+5. **Tombstone TTL ever made non-zero** — the existing ingest pipeline correctly blocks delegation blobs whose tombstone arrived first (step 3.5 tombstone check before store). If delegation tombstones ever expire, a delayed delegation blob arriving after expiry repopulates `delegation_map` with a revoked delegate. Delegation revocation tombstones must remain TTL=0 (permanent). Add a code comment at the tombstone check site noting this is load-bearing for revocation correctness.
+
+6. **Scope creep into KMS** — key versioning naturally pulls toward key registries, distribution protocols, and key escrow. Define the scope boundary in the phase plan before coding: "key_version is an integer in the envelope header and an array of KEM keypairs in the identity file. Nothing more." Mark key escrow, proxy re-encryption, and automatic re-encryption as explicitly out of scope.
+
+7. **Group read-modify-write race** — concurrent admin sessions can produce lost-update conflicts on group membership blobs (latest-timestamp-wins). Accept the single-admin assumption for MVP, document it, and add a warning log when a group write timestamp is very close to the existing group's timestamp.
 
 ## Implications for Roadmap
 
-Seven features, grouped by architectural affinity and dependency order:
+Based on the dependency graph in FEATURES.md and the build order in ARCHITECTURE.md, the natural phase structure is four phases with clear dependencies.
 
-### Phase A: Hot Config Reload (max_peers)
+### Phase 1: SDK Delegation Revocation
 
-**Rationale:** Smallest change (~20 LOC). Completes the SIGHUP reload story and establishes the milestone pattern. Zero risk, zero new dependencies.
-**Delivers:** max_peers SIGHUP-reloadable; graceful drain when limit decreased (no mass-disconnect, no thundering herd)
-**Addresses:** Table stakes — operators expect full config reloadability
-**Avoids:** Thundering-herd pitfall — graceful drain strategy, not mass disconnect
+**Rationale:** Smallest scope, zero new format changes, uses only existing wire types (DelegationListRequest/Response types 51/52, delete_blob). Unblocks the admin revocation workflow with no architectural risk. Node enforcement is already proven and tested.
+**Delivers:** `Directory.revoke_delegation()`, `Directory.list_delegates()`, revoke-then-re-delegate test coverage, PROTOCOL.md propagation window documentation.
+**Addresses:** SDK delegation revocation helper (P1 must-have), revocation confirmation.
+**Avoids:** Pitfall 7 (use existing tombstone mechanism, not a new revocation blob type), Pitfall 1 (document propagation window, do not add consensus), Pitfall 10 (document re-delegation semantics and add explicit test).
 
-### Phase B: Namespace-Scoped BlobNotify Filtering
+### Phase 2: KEM Key Versioning
 
-**Rationale:** Core protocol change (new SyncNamespaceAnnounce message type, suggested = 62). Build early so subsequent phases have a clean notification path to build on. Low complexity, high traffic-reduction value.
-**Delivers:** BlobNotify sent only to peers that replicate the relevant namespace; new wire message type for peer interest declaration after handshake; backward-compatible default (empty interest list = all namespaces)
-**Uses:** Existing FlatBuffers transport schema (one new enum value), existing sync_namespaces config
-**Avoids:** Critical pitfall — filter by sync_namespaces, NOT subscribed_namespaces
+**Rationale:** Most complex component but independent of Phase 1. Must precede Group Membership Revocation — Phase 3 depends on key rotation concepts being validated. The envelope header format decision (where key_version lives and as what type) is the highest-risk design decision in the milestone and must be locked before any rotation logic is written.
+**Delivers:** UserEntry v2 format with `key_version: uint16 BE`, envelope header extended with `key_version: uint32 BE` as AEAD additional data, `Identity.rotate_kem()` with key ring, `Identity.save()`/`load()` with full ring persistence, modified `envelope_decrypt()` with key ring fallback on `NotARecipientError`, Directory cache handling UserEntry v2 (backward compat with v1 implied key_version=0).
+**Uses:** Existing ML-KEM-1024 keygen, existing envelope stanza format (header extended, stanzas unchanged — `kem_pk_hash` already uniquely identifies the key used).
+**Avoids:** Pitfall 5 (key_version in header as AEAD AD, not in payload), Pitfall 6 (atomic rotate + re-register in single SDK call), Pitfall 3 (old key retention mandatory), Pitfall 8 (KMS scope creep — define hard boundary before coding).
 
-### Phase C: Brotli Wire Compression
+### Phase 3: Group Membership Revocation
 
-**Rationale:** New dependency + protocol change touching multiple send/receive paths. Build after BlobNotify phase so the notification path is clean and message type 62 is settled. Most complex C++ change of the milestone.
-**Delivers:** Compress-then-encrypt for Data, BlobTransfer, BlobFetchResponse, ReadResponse messages; self-describing flag byte; incompressible fallback (compressed >= original -> send uncompressed with 0x00 flag); decompression bomb protection; Python SDK brotli support
-**Uses:** google/brotli v1.2.0 (NEW C++ dep), brotli~=1.2.0 (NEW Python dep); PeerManager dispatch layer (NOT Connection layer)
-**Avoids:** AEAD nonce desync (compression inside encode, not between encode and encrypt); decompression bomb (output size cap enforced before decompression); Brotli FetchContent conflicts (verify CMake integration as first step)
+**Rationale:** Straightforward once key versioning semantics from Phase 2 are established. GroupEntry v2 format mirrors the UserEntry v2 pattern. The actual member exclusion mechanism already works — `write_to_group()` resolves current members at call time and the per-blob DEK model means "removing a member from the group blob" is sufficient for forward exclusion.
+**Delivers:** GroupEntry v2 format with `version_counter: uint32 BE`, `remove_member()` and `add_member()` incrementing version_counter, atomic `Directory.revoke_member(group_name, member)` orchestration (tombstone delegation + remove from group + rotate admin KEM key in one call), cache freshness check (`directory.refresh()`) before `write_to_group()` after removal, documentation that old data remains readable by removed members.
+**Avoids:** Pitfall 4 (read-modify-write race — single-admin assumption documented, warning log on close-timestamp writes), Pitfall 3 (no re-encryption — document boundary clearly with correct SDK method naming: `remove_member()` not `revoke_access()`), Pitfall 9 (no group key rotation protocol — per-blob encryption model already handles it, `version_counter` is an epoch label only).
 
-### Phase D: Relay Subscription Forwarding
+### Phase 4: Documentation and Protocol Update
 
-**Rationale:** Pairs with namespace BlobNotify (both are namespace filtering, completing Phase B). Relay gains per-session subscription state; requires careful state cleanup and per-client cap to avoid memory accumulation.
-**Delivers:** Relay intercepts Subscribe/Unsubscribe in transit, tracks per-session subscription set (hard cap: 256 namespaces/client), filters Notification (type 21) before forwarding to client; connection-scoped cleanup on session teardown
-**Avoids:** Subscription state accumulation pitfall — hard per-client limit, connection-scoped cleanup
-
-### Phase E: Relay Auto-Reconnect to Node
-
-**Rationale:** Most architecturally involved relay change. Benefits from relay subscription forwarding being complete (re-subscribe after UDS reconnect needs the subscription tracking state from Phase D).
-**Delivers:** RelaySession three-state machine (ACTIVE/RECONNECTING/DEAD); jittered exponential backoff (1s-60s); subscription replay on reconnect; client messages rejected (not queued) during RECONNECTING; new socket per reconnect attempt
-**Avoids:** UDS-specific reconnect pitfalls — new socket per attempt (POSIX requirement), backoff mandatory even on fast-fail, socket file existence check before connect, log rate bounded
-
-### Phase F: Multi-Relay SDK Failover
-
-**Rationale:** SDK-only change. Logically pairs with relay auto-reconnect (both are resilience features; test together end-to-end). Builds on Phase 84 auto-reconnect machinery.
-**Delivers:** connect() overload accepting relay list; last-known-good relay preference on reconnect; jittered failover delay (0-2s); circuit break after full list exhausted; backward compatible with single (host, port); randomized relay order per client at startup for load distribution
-**Avoids:** Retry storm pitfall — randomize relay order, jitter failover, circuit break before cycling again
-
-### Phase G: Prometheus /metrics HTTP Endpoint
-
-**Rationale:** Pure observability; independent of all other features. Slot last so it can monitor the features built above. New Asio acceptor on separate port, same io_context thread.
-**Delivers:** Configurable metrics_bind_address (default empty = disabled); 15+ counters/gauges in Prometheus text exposition format; no new library dependency; localhost-only default
-**Avoids:** Attack surface pitfall — localhost default, no crypto material in labels, disabled-by-default config
+**Rationale:** Always last — documents what was actually built, not what was planned. Ensures PROTOCOL.md reflects the exact wire format changes shipped in Phases 2 and 3, including UserEntry v2, envelope header extension, GroupEntry v2, revocation workflow, and propagation window bounds.
+**Delivers:** PROTOCOL.md updates for all format changes, key rotation guide, group revocation guide, delegation management guide, inline code comments at tombstone check site explaining load-bearing nature.
 
 ### Phase Ordering Rationale
 
-- Phase A first: zero risk, lowest surface area, establishes milestone cadence
-- Phase B second: core protocol change (new message type) must settle before compression touches same send paths in Phase C
-- Phase C third: new dependency — verify CMake FetchContent integration first; multiple send/receive paths touched; requires Phase B message type to be stable
-- Phase D fourth: relay state introduction; pairs conceptually with Phase B filtering; sets up subscription state needed by Phase E
-- Phase E fifth: most complex relay change; needs Phase D subscription tracking for post-reconnect subscription replay
-- Phase F sixth: SDK-only, can run in parallel with late C++ phases; test together with Phase E for end-to-end resilience verification
-- Phase G last: pure observability; independent, slots anywhere; most useful when monitoring the features built above
+- Phase 1 first: zero dependencies, delivers immediate admin value, tombstone mechanism is proven — this phase is purely SDK surface addition.
+- Phase 2 second: the envelope header format decision is the highest-risk design choice. Getting it right in Phase 2 does not affect Phase 1. If Phase 2 reveals unexpected complexity, Phases 3 and 4 can adjust.
+- Phase 3 third: depends on Phase 2's key versioning concepts being validated. Group revocation composes from Phase 1 primitives (delegation tombstone) and Phase 2 patterns (key rotation).
+- Phase 4 last: PROTOCOL.md documents shipped behavior, not intended behavior.
 
 ### Research Flags
 
-Phases needing closer attention during planning:
+Phases with well-documented patterns (skip research-phase):
+- **Phase 1:** Zero uncertainty. Tombstone-based revocation is tested in production. DelegationList wire type exists. SDK method is pure plumbing against proven primitives.
+- **Phase 3:** Straightforward once Phase 2 is validated. GroupEntry format change mirrors UserEntry v2 pattern. No novel design decisions.
+- **Phase 4:** Documentation work. No research needed.
 
-- **Phase C (Brotli compression):** Compression integration point in the send pipeline requires exact placement decision (inside TransportCodec::encode, not Connection). Decompression bomb mitigation must be the first thing designed. Verify FetchContent integration builds cleanly alongside all existing deps before writing any compression code.
-- **Phase E (Relay auto-reconnect):** Three-state lifecycle with concurrent client session management. Lifecycle ordering (race between reconnect coroutine and client disconnect coroutine) needs careful design. Explicit test scenarios required: node stop, node restart, stale UDS socket file.
-
-Phases with standard patterns (skip deep research):
-
-- **Phase A (max_peers reload):** ~20 LOC change to existing SIGHUP handler. Pattern established in 10+ existing config fields.
-- **Phase B (BlobNotify filtering):** Single filter check in existing on_blob_ingested() loop. New message type follows existing FlatBuffers schema patterns.
-- **Phase D (relay subscription forwarding):** Relay session state pattern mirrors PeerInfo.subscribed_namespaces already in the node. Notification payload parsing is 32 bytes from the front of the existing 77-byte format.
-- **Phase F (SDK multi-relay):** Extends existing reconnect loop (_reconnect.py). Adds relay list iteration over existing single-endpoint retry.
-- **Phase G (Prometheus /metrics):** Prometheus text format is trivially documented. Hand-rolled Asio HTTP acceptor follows existing acceptor patterns in the codebase.
+Phases needing planning-time validation:
+- **Phase 2:** The envelope header format change requires three explicit decisions at plan time before coding: (a) `key_version` field width in envelope header (uint16 matching UserEntry v2 vs uint32 for future-proofing), (b) whether to bump envelope `version` byte from 0x01 to 0x02 (PITFALLS.md recommends bumping since pre-MVP), and (c) how `envelope_decrypt()` handles v1 envelopes post-change (imply key_version=0 for v1). These are design questions for the phase plan, not external research questions.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | New deps (brotli) verified against CMake docs, PyPI, and FetchContent conventions. Prometheus library alternatives evaluated with source analysis. All other features confirmed zero-new-dep. |
-| Features | HIGH | All features derived from codebase analysis of existing code paths (peer_manager.cpp, relay_session.cpp, client.py). No speculative features. |
-| Architecture | HIGH | Integration points are specific to known components with line-level references. Build order verified against dependency graph. Anti-patterns (compression at AEAD layer, prometheus-cpp) explicitly identified. |
-| Pitfalls | HIGH | Pitfalls include CVE references (CVE-2025-6176 decompression bomb), CRIME/BREACH class attacks (compression oracle), and codebase-verified gotchas (AEAD nonce contract, UDS POSIX semantics). All have concrete prevention strategies. |
+| Stack | HIGH | All findings verified against source code. No external research needed. Existing primitives cover 100% of requirements. |
+| Features | HIGH | Feature boundaries verified against industry patterns (AWS KMS, GCP KMS, Signal, MLS RFC 9420). Anti-features list is concrete and grounded in PROJECT.md constraints. |
+| Architecture | HIGH | Based on full codebase analysis of engine.cpp, storage.cpp, _envelope.py, _directory.py. Data flow diagrams verified against actual code paths. Component boundary table matches source file structure. |
+| Pitfalls | HIGH | All pitfalls grounded in specific code locations or documented distributed systems failure modes. Recovery strategies are concrete. Tombstone ordering race analysis verified by re-reading ingest pipeline code. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Brotli FetchContent compatibility with existing deps:** Must be verified at the start of Phase C (add to CMakeLists.txt and build before writing any compression code). Minor risk: Brotli's CMake predates modern FetchContent conventions. Set BROTLI_BUNDLED_MODE=ON, BROTLI_DISABLE_TESTS=ON.
-- **SyncNamespaceAnnounce message type number:** Message type 62 suggested by architecture research, but must confirm no conflict with existing protocol types before finalizing transport.fbs. Verify against current chromatindb message type registry before Phase B.
-- **Relay subscription forwarding stateless alternative:** PITFALLS.md notes that keeping the relay stateless (let node handle all subscription filtering, relay just passes Subscribe/Unsubscribe and Notification unchanged) avoids the state accumulation pitfall entirely. This tradeoff should be explicitly evaluated during Phase D planning before committing to stateful relay.
+- **Envelope version byte decision:** Research recommends bumping envelope version to 0x02 when adding `key_version` to the header (pre-MVP, no backward compat needed). However, the v1 envelope format has been shipping since v1.7.0 and is used in KVM integration tests and tutorial examples. Validate during Phase 2 planning whether to bump the version byte or handle key_version as a conditional field behind the version byte.
+
+- **Identity file format for key ring:** The current `Identity.save()` writes individual files per keypair type (e.g., `.signing`, `.kem`). Persisting a key ring of multiple KEM keypairs needs a format decision (multiple numbered files vs. JSON manifest vs. binary bundle). Not a blocker but must be decided at the start of Phase 2 planning before implementation begins.
+
+- **version_counter vs. key rotation distinction:** ARCHITECTURE.md adds `version_counter` to GroupEntry v2 for epoch tracking, but PITFALLS.md explicitly states that "group key rotation" is meaningless in chromatindb's per-blob model. Ensure Phase 3 does not conflate `version_counter` (a cosmetic epoch label for application use) with "key rotation" (which only applies to individual KEM keypairs). Document this distinction explicitly in Phase 3 plan.
 
 ## Sources
 
-### Primary (HIGH confidence)
-- google/brotli GitHub (v1.2.0) — CMake target names, BUNDLED_MODE behavior, C API surface
-- brotli PyPI (v1.2.0) — Python bindings, CPython 3.10-3.14 wheel availability
-- Prometheus exposition format specification — text/plain version=0.0.4 format
-- prometheus-cpp and prometheus-cpp-lite source — evaluated and rejected (threading model conflicts with Asio)
-- CVE-2025-6176 — Brotli decompression bomb exploit
-- CRIME/BREACH — compression oracle class of attacks (HTTPS/TLS context, analyzed for applicability)
+### Primary (HIGH confidence — source code verified)
+- `db/engine/engine.cpp` — ingest pipeline, tombstone check at step 3.5, delegation check at step 2
+- `db/storage/storage.cpp` — `has_valid_delegation()`, `delete_blob_data()`, delegation_map CRUD
+- `sdk/python/chromatindb/_envelope.py` — envelope format, KEM-then-Wrap, stanza binary search by `kem_pk_hash`
+- `sdk/python/chromatindb/_directory.py` — UserEntry/GroupEntry encode/decode, Directory cache, group read-modify-write
+- `sdk/python/chromatindb/identity.py` — single KEM keypair per Identity, signing key handling
+- `db/PROTOCOL.md` — delegation spec, envelope binary format, HKDF label registry
+- `db/tests/engine/test_engine.cpp` lines 1090-1250 — delegation revocation tests, tombstone ordering
 
-### Secondary (MEDIUM confidence)
-- Cloudflare Brotli benchmarks (2017) — throughput at quality levels 1-9; algorithmic characteristics unchanged since publication
-- Compression algorithm comparisons (zstd vs Brotli vs lz4) — ratio and speed tradeoffs
-- Prometheus security model documentation — recommended binding and label practices
-- Azure retry storm anti-pattern documentation — thundering herd prevention patterns
-- Tailscale relay memory leak #17801, Envoy proxy memory leak #20187 — subscription state accumulation analogies
+### Secondary (HIGH confidence — authoritative external sources)
+- [MLS Protocol RFC 9420](https://datatracker.ietf.org/doc/rfc9420/) — group key rotation patterns, epoch semantics
+- [MLS Architecture RFC 9750](https://www.rfc-editor.org/rfc/rfc9750.html) — member removal forward secrecy model
+- [Google Cloud KMS Envelope Encryption](https://cloud.google.com/kms/docs/envelope-encryption) — key version management, old-version retention pattern
+- [AWS KMS Key Rotation Best Practices](https://docs.aws.amazon.com/prescriptive-guidance/latest/aws-kms-best-practices/data-protection-key-rotation.html) — rotate-not-re-encrypt universal pattern
+- [Signal Double Ratchet specification](https://signal.org/docs/specifications/doubleratchet/) — revocation induces ratchet for future messages only
 
-### Codebase Analysis (HIGH confidence — direct inspection)
-- db/peer/peer_manager.cpp — on_blob_ingested, dump_metrics, reload_config, BlobNotify fan-out loop
-- relay/core/relay_session.cpp — handle_node_close (teardown path), handle_client_message (blocklist filter)
-- relay/core/message_filter.h — blocklist approach
-- db/net/connection.h — send queue, AEAD nonce counters, write_frame
-- sdk/python/chromatindb/client.py and _reconnect.py — connect() signature, backoff machinery
-- db/config/config.h — current config structure and existing SIGHUP-reloadable fields
+### Tertiary (MEDIUM confidence — research and community)
+- Protocol Labs Research #8 — decentralized access control CRDT concurrent update interpretation
+- Hoop.dev access revocation blog — stale-permission window privilege escalation
+- NuCypher KMS paper — key lifecycle management is a major subsystem (scope creep warning)
+- Sahai, Seyalioglu, Waters (Crypto 2012) — revocation of past ciphertexts requires ciphertext-update, confirming old-data-readable constraint is fundamental
 
 ---
-*Research completed: 2026-04-04*
+*Research completed: 2026-04-06*
 *Ready for roadmap: yes*

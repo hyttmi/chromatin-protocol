@@ -1,297 +1,219 @@
-# Feature Research
+# Feature Research: Revocation & Key Lifecycle
 
-**Domain:** Decentralized PQ-secure database node -- compression, filtering, observability, resilience (v2.1.0)
-**Researched:** 2026-04-04
-**Confidence:** HIGH
+**Domain:** ACL revocation, encryption key versioning, group membership revocation in encrypted decentralized storage
+**Researched:** 2026-04-06
+**Confidence:** HIGH (existing primitives well-understood, patterns well-established in industry)
+
+## Context: What Already Exists
+
+Before mapping features, the existing primitives that this milestone builds on:
+
+| Primitive | Status | Where |
+|-----------|--------|-------|
+| Delegation blobs (signed, namespace-scoped) | SHIPPED v3.0 | `db/wire/codec.h`, `db/engine/engine.cpp` |
+| Tombstones (owner-only, replicated) | SHIPPED v3.0 | `db/wire/codec.h`, `db/storage/storage.cpp` |
+| Delegation index (O(1) lookup via `delegation_map`) | SHIPPED v3.0 | `db/storage/storage.cpp:911` |
+| Delegation revocation via tombstone | SHIPPED v3.0 | `storage.cpp:876-886` -- tombstoning delegation blob erases `delegation_map` entry |
+| Envelope encryption (ML-KEM-1024 + ChaCha20-Poly1305) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_envelope.py` |
+| Directory (UserEntry, pubkey discovery, delegation) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_directory.py` |
+| Groups (named member lists as blobs, latest-timestamp-wins) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_directory.py` |
+| `write_encrypted` / `read_encrypted` / `write_to_group` | SHIPPED v1.7.0 | `sdk/python/chromatindb/client.py` |
+| `has_valid_delegation()` check on ingest hot path | SHIPPED v3.0 | `db/engine/engine.cpp:169` |
+| SIGHUP reload of `allowed_keys` + disconnect revoked peers | SHIPPED v2.0 | `db/peer/peer_manager.cpp:2884` |
+
+**Key insight:** Delegation revocation at the node layer already works. Tombstoning a delegation blob removes the `delegation_map` entry, and subsequent writes from the revoked delegate are rejected. What is missing is: (1) SDK-level awareness of revocation, (2) encryption key versioning so revoked members cannot decrypt new data, and (3) group membership revocation that ties these two together.
 
 ## Feature Landscape
 
 ### Table Stakes (Users Expect These)
 
-Features that any production-grade distributed database should have at this maturity level.
+Features that anyone building revocation into an encrypted storage system would expect.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Prometheus /metrics endpoint | Standard observability for any server daemon. Operators expect to scrape metrics without log parsing. Every serious service exposes /metrics. | MEDIUM | Already have SIGUSR1 dump + periodic log line with all the right counters. The data exists -- just need an HTTP endpoint exposing it in Prometheus text format. |
-| Hot config reload for max_peers | Already SIGHUP-reload ACL keys, rate limits, quotas, sync interval, log level, trusted peers, compaction interval. max_peers is the one missing piece -- operators expect all config to be reloadable. | LOW | Single line: read new_cfg.max_peers, store to member. Existing connections unaffected (only new accepts check limit). |
-| Relay auto-reconnect to node | Current relay tears down client immediately when UDS to node drops (relay_session.cpp:151). Node restart = all SDK clients disconnected. Expected: relay retries UDS, buffers or pauses until node returns. | MEDIUM | Relay currently creates one UDS connection per client session. Auto-reconnect needs a persistent relay-to-node connection model OR per-session reconnect with backoff. |
+| **SDK delegation revocation helper** | Node already enforces revocation via tombstone, but SDK has no `revoke_delegate()` method. Admin must manually construct tombstone data and call `write_blob`. Incomplete API surface. | LOW | Admin calls `directory.revoke_delegate(identity)`. Constructs tombstone targeting the delegation blob hash. Requires knowing the delegation blob hash -- either from cache or from `DelegationList` query. |
+| **Revocation confirmation** | After revoking, admin needs to verify the revocation took effect (delegation erased from index). Without confirmation, there is no way to distinguish "revocation in flight" from "revocation failed". | LOW | `has_valid_delegation` already exists in storage. SDK needs a way to check -- either via `DelegationList` query (already exists in v1.4.0) or a new `DelegationExists` query. Reusing `DelegationList` is sufficient. |
+| **Encryption key versioning (key epochs)** | After revoking a member, new data must be encrypted with a key the revoked member does not possess. Without key epochs, the revoked member can still decrypt any new data encrypted to the same group. This is the core security property of revocation. | MEDIUM | Per-namespace key versioning. New epoch = new KEM keypair published to directory. Old epochs remain readable with old keys. AWS KMS, Azure Key Vault, and all serious envelope encryption systems use this pattern. |
+| **Group membership revocation with key rotation** | Removing a member from a group list (already possible via `Directory.remove_member`) is insufficient without rotating the group encryption context. The removed member still holds the old group members' KEM pubkeys and can decrypt any envelope addressed to them. Must tie member removal to key epoch bump. | MEDIUM | Signal clears all Sender Keys on member removal. MLS re-derives epoch secrets. For chromatindb's per-blob envelope model: remove member from group, bump admin KEM epoch, re-publish directory entry. New `write_to_group` uses new epoch keys. |
+| **Old data remains readable** | PROJECT.md constraint: "Old data stays readable with old keys (no re-encryption)." Every key versioning system (AWS KMS, GCP KMS, Azure) retains old key versions for decryption. Re-encrypting all existing data is prohibitively expensive in a decentralized system. | LOW | `read_encrypted` must try current key first, then fall back to previous versions. Envelope format already includes `kem_pk_hash` per recipient -- identity with old KEM keypair can still decrypt old envelopes. |
+| **Admin KEM key rotation** | Admin must be able to rotate their own KEM keypair (publish new UserEntry with new KEM pubkey). This is the mechanism that makes key versioning work -- after rotation, new envelopes use the new KEM key. | LOW | Write new UserEntry to directory with new KEM keypair. Old UserEntry still exists (immutable blobs). Directory cache uses latest-timestamp-wins (already implemented for groups). Need same pattern for UserEntry. |
 
 ### Differentiators (Competitive Advantage)
 
-Features that go beyond expectations and provide real value for the use case.
+Features that go beyond table stakes and would distinguish chromatindb from simpler encrypted storage systems.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Wire-level Brotli compression | Reduces bandwidth for blob transfer between nodes and from relay to SDK. Especially valuable for the 2592-byte ML-DSA-87 pubkey + ~4627-byte signature overhead that exists on every blob. FlatBuffer metadata and PQ crypto fields are highly compressible. | MEDIUM | Compress TransportMessage plaintext before AEAD encryption, decompress after decryption. Frame-level, not blob-level. Must negotiate capability during handshake (version/flag). CRITICAL CAVEAT: envelope-encrypted blob data (ciphertext) is incompressible -- compression only helps with plaintext blob data, protocol overhead (pubkey, signature, FlatBuffer framing), and metadata messages. |
-| Namespace-scoped BlobNotify filtering | Currently on_blob_ingested() sends BlobNotify to ALL TCP peers regardless of interest. With 100 namespaces and 10 peers, that is 1000 notifications for every ingest. Filtering at sender reduces this to only peers that care about the namespace. | LOW | Peers already track subscribed_namespaces for client Notification (type 21). Extend the same concept to BlobNotify for peers: let peers declare which namespaces they sync, skip BlobNotify for non-matching namespaces. sync_namespaces config already exists. |
-| Multi-relay SDK failover | SDK currently connects to exactly one host:port. If that relay is down, the SDK is dead. Accepting a list of relays with ordered failover makes the SDK resilient to single-relay failure. | MEDIUM | Extend connect() to accept list of (host, port) tuples. Try in order. On reconnect, rotate through the list. Must handle: which relay to try first on reconnect (last-known-good vs round-robin), timeout per attempt, total timeout across all attempts. |
-| Relay subscription forwarding | Relay currently forwards ALL node-to-client messages blindly (relay_session.cpp:129 "No filtering on node->client direction"). The node sends Notifications for all subscribed namespaces on the UDS connection. With namespace-aware relay filtering, the relay only forwards notifications matching the client's actual subscriptions. | MEDIUM | Relay needs to intercept Subscribe/Unsubscribe from client, track per-session subscription set, and filter Notification messages from node. Reduces unnecessary traffic when relay serves many clients with different namespace interests. |
+| **Atomic revoke-and-rotate** | Single admin operation that: (1) tombstones delegation, (2) removes member from group, (3) rotates admin KEM key, (4) re-publishes group. Prevents the window where revocation happened but key has not rotated. | MEDIUM | SDK-level orchestration method. `directory.revoke_member(group_name, member)` does all four steps. No new wire types needed. |
+| **Revocation propagation notification** | Subscribers to the directory namespace get notified when a revocation happens, allowing connected clients to refresh their directory cache and pick up new KEM keys immediately. | LOW | Already works via existing Subscribe/Notification for directory namespace. `_check_invalidation()` already drains notifications and sets `_dirty`. Zero new code -- just documentation that this is the expected pattern. |
+| **Key history chain** | Directory entries form a discoverable history: UserEntry v1, v2, v3... all in the same namespace. `read_encrypted` can walk the chain to find the right decryption key for any epoch. | MEDIUM | Content-addressed dedup means each UserEntry version is a unique blob (different KEM keypair = different data = different hash). Need an index or convention for walking history. Could use a `key_version` field in UserEntry or rely on timestamp ordering. |
+| **Delegation audit trail** | Tombstoned delegation blobs still exist as tombstones. An admin can list all past delegations (active and revoked) for compliance. | LOW | Tombstones are permanent (TTL=0). The delegation blob hash is in the tombstone data. `DelegationList` shows active; tombstone scan shows revoked. SDK helper for audit view. |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
-Features that seem good but would cause problems in this system.
-
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Per-blob compression (compress before signing) | "Compress data field to save storage and bandwidth" | Breaks the signing model. Canonical signing input is SHA3-256(namespace \|\| data \|\| ttl \|\| timestamp). Compressing data before signing means decompression required before verification. Also breaks content-addressing -- blob_hash would be over compressed data, not original. Cross-SDK decompression compatibility nightmare. | Wire-level frame compression: compress the entire FlatBuffer payload at transport layer, transparent to storage and signing. |
-| zstd instead of Brotli | "zstd is faster for large binary data" | PROJECT.md explicitly specifies Brotli. While zstd has better speed for large blobs, Brotli has better ratio for the structured/repetitive data that dominates chromatindb wire traffic (FlatBuffer metadata, 2592-byte pubkeys, protocol messages). For encrypted blob data, NEITHER algorithm helps -- ciphertext is incompressible. The compressible portion is protocol overhead where Brotli excels. | Use Brotli at low compression levels (1-4) for speed comparable to zstd while keeping better ratio on structured data. |
-| Full-duplex relay UDS multiplexing | "Single UDS connection from relay to node serving all clients" | Breaks per-client session isolation. Current model: each client gets its own UDS connection to node, so subscriptions, rate limits, and ACL checks are per-client. Multiplexing would require the relay to manage client identity multiplexing, subscription routing, and rate limit attribution -- essentially reimplementing the node's session management. | Keep per-client UDS sessions. For relay auto-reconnect, reconnect the individual session's UDS socket. |
-| Push metrics to Grafana/external | "Push metrics to monitoring instead of pull" | Prometheus pull model is standard. Push adds a dependency (pushgateway or direct Grafana push), complicates configuration, and the daemon shouldn't need to know about monitoring infrastructure. | Expose /metrics HTTP endpoint. Let Prometheus scrape. Standard pattern. |
-| Compression negotiation per-message | "Negotiate compression per message type -- only compress large payloads" | Per-message negotiation adds complexity to every send/receive path. Tiny messages (Ping, Pong, Subscribe) don't benefit from compression but the overhead of checking is negligible. | Compress ALL frames above a minimum size threshold (e.g., 128 bytes). Small frames pass through uncompressed. Single flag in frame header. |
+| **Re-encryption of existing data on revocation** | "Revoked member can still read old data" -- sounds like a security gap. | Catastrophically expensive in a decentralized replicated system. Every blob encrypted to the group must be fetched, decrypted, re-encrypted with new key, and re-published. Violates PROJECT.md constraint. Creates huge write amplification. AWS/GCP/Azure all avoid this -- they keep old key versions. | Accept that old data is readable with old keys. This is the universal industry pattern. Document it clearly. Focus security guarantee on: "revoked members cannot read NEW data." |
+| **Distributed revocation consensus** | "All nodes must agree on revocation before it takes effect." | chromatindb is eventually consistent by design. Requiring consensus would need a new protocol layer (Raft/PBFT), violating YAGNI and the "intentionally dumb database" principle. | Revocation propagates via normal blob replication (tombstone sync). Eventually consistent. Acceptable latency for revocation -- measured in seconds, not minutes. |
+| **Automatic key rotation on timer** | "Rotate keys every N days automatically." | Adds timer complexity, requires background key management, and the rotation itself has no value without a revocation event. Rotating keys without revoking anyone is security theater in this context. | Rotate keys explicitly when a revocation happens. If compliance demands periodic rotation, add as a future SDK convenience -- but it is not table stakes. |
+| **Proxy re-encryption** | Academic papers propose allowing a proxy to transform ciphertexts from one key to another without seeing plaintext. | Requires new cryptographic primitives (PRE schemes), no PQ-secure PRE scheme is standardized or in liboqs, and violates "no new dependencies." Adds massive complexity for marginal benefit when envelope encryption already solves the problem. | Per-blob envelope encryption with key versioning. New data uses new keys. Old data stays under old keys. |
+| **Revocation CRL/OCSP-style checking** | "Check if a key is revoked before every decrypt." | Adds network dependency to every `read_encrypted` call. Breaks offline decryption. Adds latency. chromatindb blobs are self-verifiable -- the envelope either decrypts or it does not. | If the recipient has the KEM secret key, they can decrypt. Revocation prevents future writes and future encryption-to-group, not past decryption. This is the correct security model. |
+| **Node-enforced encryption** | "Nodes should refuse to store unencrypted blobs." | Violates "intentionally dumb database" principle. Nodes cannot inspect encrypted content. Some namespaces may intentionally store plaintext (public data). | Encryption is an SDK-layer concern. Nodes store signed blobs. Period. |
 
 ## Feature Dependencies
 
 ```
-[Brotli wire compression]
-    requires: handshake negotiation (capability flag)
-    requires: Python SDK brotli support (pip: brotli)
+[SDK delegation revocation helper]
+    |
+    +--requires--> [DelegationList query] (ALREADY EXISTS v1.4.0 Phase 66)
+    |
+    +--requires--> [Tombstone construction] (ALREADY EXISTS v3.0)
 
-[Namespace-scoped BlobNotify]
-    requires: peer namespace interest declaration (new message type or config exchange)
-    enhances: [Relay subscription forwarding] (relay can also filter BlobNotify if exposed)
+[Encryption key versioning]
+    |
+    +--requires--> [Admin KEM key rotation]
+    |                  |
+    |                  +--requires--> [UserEntry with versioning support]
+    |                  |
+    |                  +--requires--> [Directory latest-entry-wins for UserEntry] (partial -- exists for groups)
+    |
+    +--requires--> [Multi-version KEM key storage in Identity/Directory]
+    |
+    +--enhances--> [read_encrypted fallback to old keys]
 
-[Multi-relay SDK failover]
-    requires: existing SDK auto-reconnect (Phase 84 -- DONE)
-    enhances: [Relay auto-reconnect to node] (failover gives SDK path around relay failure)
+[Group membership revocation with key rotation]
+    |
+    +--requires--> [SDK delegation revocation helper]
+    |
+    +--requires--> [Encryption key versioning]
+    |
+    +--requires--> [Directory.remove_member] (ALREADY EXISTS v1.7.0)
+    |
+    +--enhances--> [Atomic revoke-and-rotate]
 
-[Relay subscription forwarding]
-    requires: relay intercepts Subscribe/Unsubscribe messages (currently forwards blindly)
-    enhances: [Namespace-scoped BlobNotify] (end-to-end filtering from node to SDK)
+[Atomic revoke-and-rotate]
+    |
+    +--requires--> [SDK delegation revocation helper]
+    +--requires--> [Encryption key versioning]
+    +--requires--> [Group membership revocation]
 
-[Relay auto-reconnect to node]
-    independent -- no feature dependencies
-    enhances: SDK stability (fewer disconnects propagating to clients)
-
-[Hot config reload for max_peers]
-    independent -- trivial addition to existing reload_config()
-
-[Prometheus /metrics endpoint]
-    independent -- uses existing metrics_ struct data
-    requires: embedded HTTP server (lightweight, listen on separate port)
+[Key history chain]
+    |
+    +--requires--> [Encryption key versioning]
+    +--enhances--> [read_encrypted fallback to old keys]
 ```
 
 ### Dependency Notes
 
-- **Brotli requires handshake negotiation:** Both sides must agree to use compression. A capability flag in TrustedHello/PQRequired exchange or a new CompressedFrame message type is needed. Older peers that don't understand compression must still work (graceful fallback to uncompressed).
-- **Multi-relay failover builds on auto-reconnect:** Phase 84 (SDK auto-reconnect) provides the backoff/retry machinery. Multi-relay extends the "where to reconnect" from single endpoint to ordered list.
-- **Relay subscription forwarding enables end-to-end filtering:** Without relay filtering, namespace-scoped BlobNotify at the node only helps peer-to-peer traffic. The relay still forwards all Notifications to all clients. With relay filtering, the full path is optimized.
-- **Prometheus endpoint is fully independent:** No protocol changes, no peer interaction. Just a lightweight HTTP listener exposing existing counters.
-
-## Feature Details
-
-### 1. Brotli Wire Compression
-
-**What it does:** Compresses the FlatBuffer plaintext payload before AEAD encryption. Decompresses after AEAD decryption. Operates at the frame level -- transparent to all message types.
-
-**Expected behavior:**
-- Negotiated during handshake via capability flag (e.g., `supports_compression: bool` in hello exchange)
-- Only active if BOTH sides support it
-- Frame header includes a 1-byte compression flag: 0x00 = uncompressed, 0x01 = Brotli
-- Minimum frame size threshold (e.g., 128 bytes) -- small frames skip compression
-- Brotli quality level 1-4 (fast compression, decent ratio)
-- Decompression side must enforce max decompressed size (prevent decompression bombs)
-
-**What compresses well (HIGH confidence):**
-- ML-DSA-87 public key (2592 bytes, highly structured binary) -- ~60-70% reduction expected
-- ML-DSA-87 signature (~4627 bytes) -- moderate reduction (~20-30%)
-- FlatBuffer framing overhead -- good reduction
-- Protocol messages (NamespaceList, ReconcileRanges, PeerListResponse) -- excellent reduction
-- Plaintext blob data (if not envelope-encrypted) -- good reduction
-
-**What does NOT compress (<1% reduction, HIGH confidence):**
-- Envelope-encrypted ciphertext (ChaCha20-Poly1305 output is high-entropy)
-- KEM ciphertexts in envelope headers (1568 bytes each, random)
-- AEAD tags
-
-**Net benefit assessment:** For a typical blob with envelope encryption, the compressible portion is pubkey (2592B) + signature (~4627B) + FlatBuffer overhead (~100B) = ~7.3 KB overhead per blob. At 50% compression of this overhead, savings are ~3.6 KB per blob. For small blobs (<10 KB data), this is significant. For large blobs (1 MiB+), the encrypted data dominates and compression provides negligible benefit. Protocol/sync messages compress very well (60-80%).
-
-**New dependency:** google/brotli (C++, CMake, MIT license). Python: `brotli` pip package.
-
-### 2. Namespace-Scoped BlobNotify Filtering
-
-**What it does:** When a blob is ingested, the node only sends BlobNotify to peers that have declared interest in that namespace, rather than broadcasting to all TCP peers.
-
-**Expected behavior:**
-- Peers declare interest via existing `sync_namespaces` config (already parsed, stored in sync_namespaces_ set)
-- During connection setup or via a new InterestDeclaration message, peers exchange their namespace interest lists
-- Empty interest list = "interested in everything" (backward compatible default)
-- on_blob_ingested() checks peer's interest set before sending BlobNotify
-- Subscribed clients (Notification type 21) continue to work exactly as before -- this only affects BlobNotify (type 59) to TCP peers
-
-**Complexity:** LOW. The sync_namespaces concept already exists. The main work is:
-1. Exchange interest declarations between peers during/after handshake
-2. Store per-peer interest set (already have subscribed_namespaces for clients)
-3. Filter in on_blob_ingested() BlobNotify loop
-
-### 3. Multi-Relay SDK Failover
-
-**What it does:** SDK connect() accepts a list of relay endpoints instead of a single (host, port). Tries them in order for initial connection and rotates through them on reconnect.
-
-**Expected behavior:**
-- `ChromatinClient.connect(relays=[(host1, port1), (host2, port2)], identity=...)` new signature
-- Backward compatible: single (host, port) still works
-- Initial connect: try relays in order, fail after all exhausted
-- On disconnect + auto-reconnect: start with last-known-good relay, then rotate
-- Per-relay connect timeout (e.g., 5s) with total timeout across all relays
-- `on_disconnect` callback fires once regardless of how many relays are tried
-- `on_reconnect` callback fires when ANY relay reconnects successfully
-- Track which relay is currently connected (expose via property for logging)
-
-**Complexity:** MEDIUM. The reconnect machinery exists (Phase 84). Changes needed:
-1. New connect() overload accepting relay list
-2. Reconnect loop iterates relay list instead of single endpoint
-3. State tracking for current relay index
-
-### 4. Relay Subscription Forwarding
-
-**What it does:** Relay tracks which namespaces each client has subscribed to, and only forwards Notification messages (type 21) from the node that match the client's subscriptions.
-
-**Expected behavior:**
-- Relay intercepts Subscribe (type 19) and Unsubscribe (type 20) messages from client
-- Still forwards them to node (node needs to know for its own subscription tracking)
-- Relay maintains per-session `std::set<namespace_hash>` of subscribed namespaces
-- On Notification (type 21) from node, relay checks if namespace matches client's subscriptions
-- Non-matching notifications are dropped at the relay (not forwarded to client)
-- Empty subscription set = forward nothing (client hasn't subscribed to anything yet)
-
-**Complexity:** MEDIUM. The relay currently has zero state about message semantics. This adds:
-1. Subscription state tracking per RelaySession
-2. Notification payload parsing (read first 32 bytes = namespace_id)
-3. Filter check before forwarding node->client messages
-
-### 5. Relay Auto-Reconnect to Node
-
-**What it does:** When the UDS connection from relay to node drops (node restart, crash), relay automatically retries instead of tearing down all client sessions.
-
-**Expected behavior:**
-- Current behavior: node UDS loss -> immediate client disconnect (relay_session.cpp:151)
-- New behavior: node UDS loss -> relay pauses client session, retries UDS connection with backoff
-- Backoff: jittered exponential (1s, 2s, 4s, 8s, cap at 30s) -- same pattern as SDK reconnect
-- During reconnect: client messages are rejected with a temporary error or queued (TBD)
-- On successful UDS reconnect: TrustedHello handshake, replay client subscriptions to node
-- Max reconnect attempts before giving up (e.g., 10 attempts = ~2 minutes)
-- If reconnect fails permanently, tear down client session as today
-
-**Complexity:** MEDIUM-HIGH. Significant relay architecture change:
-1. RelaySession needs UDS reconnect loop (currently UDS connect is fire-once in start())
-2. Client message handling during UDS downtime (queue? reject? pause TCP reads?)
-3. Re-establishment of node-side state (subscriptions) after reconnect
-4. Lifecycle management -- avoid race between reconnect and client disconnect
-
-### 6. Hot Config Reload for max_peers
-
-**What it does:** Makes max_peers SIGHUP-reloadable like all other config parameters.
-
-**Expected behavior:**
-- SIGHUP re-reads config file, updates max_peers
-- If new max_peers < current connection count: do NOT disconnect existing peers (disruptive)
-- Instead: refuse new connections until count drops below new limit naturally
-- Log the change: "config reload: max_peers=N (currently M connected)"
-- allowed_client_keys and allowed_peer_keys are already SIGHUP-reloadable (confirmed in reload_config())
-
-**Complexity:** LOW. One line to add to reload_config():
-```cpp
-config_.max_peers = new_cfg.max_peers;  // (or max_peers_ member)
-spdlog::info("config reload: max_peers={}", config_.max_peers);
-```
-The accept loop already checks `peers_.size() < config_.max_peers` on every new connection.
-
-### 7. Prometheus-Compatible HTTP /metrics Endpoint
-
-**What it does:** Exposes existing metrics via HTTP GET /metrics in Prometheus text exposition format.
-
-**Expected behavior:**
-- Separate HTTP port (e.g., 9100 or configurable `metrics_port`)
-- GET /metrics returns text/plain with Prometheus text format
-- No authentication on metrics endpoint (standard practice -- bind to localhost or internal network)
-- Metrics exposed (from existing metrics_ struct + storage queries):
-  - `chromatindb_peers_connected` (gauge)
-  - `chromatindb_peers_connected_total` (counter)
-  - `chromatindb_peers_disconnected_total` (counter)
-  - `chromatindb_blobs_total` (gauge -- blob count)
-  - `chromatindb_storage_bytes` (gauge)
-  - `chromatindb_syncs_total` (counter)
-  - `chromatindb_ingests_total` (counter)
-  - `chromatindb_rejections_total` (counter)
-  - `chromatindb_rate_limited_total` (counter)
-  - `chromatindb_cursor_hits_total` (counter)
-  - `chromatindb_cursor_misses_total` (counter)
-  - `chromatindb_full_resyncs_total` (counter)
-  - `chromatindb_quota_rejections_total` (counter)
-  - `chromatindb_sync_rejections_total` (counter)
-  - `chromatindb_uptime_seconds` (gauge)
-  - `chromatindb_namespaces_total` (gauge)
-- Labels: `{node="pubkey_hash_hex"}`
-
-**Implementation approach:** The Prometheus text format is trivial -- plain text with `metric_name{labels} value` per line. No need for prometheus-cpp library (which brings civetweb, curl, zlib dependencies). Use standalone Asio to serve a minimal HTTP listener on the metrics port. ~150 lines of code. The data already exists in dump_metrics()/log_metrics_line() -- just format as Prometheus text instead of spdlog.
-
-**Complexity:** MEDIUM. Not because the format is hard, but because adding an HTTP listener to a standalone Asio application requires careful lifecycle management (separate acceptor, separate port, graceful shutdown).
+- **Key versioning requires admin KEM rotation:** Without the ability to publish a new KEM keypair, there is no "new epoch" to encrypt to.
+- **Group revocation requires key versioning:** Removing a member from the group blob is pointless without also rotating the encryption key -- the removed member still has the old keys.
+- **Atomic revoke-and-rotate requires all three:** It is the composition of delegation revocation + group member removal + key rotation into one SDK call.
+- **Key history chain enhances read_encrypted:** Without history, old data encrypted to old KEM keys becomes unreadable when the directory cache only has the latest UserEntry.
 
 ## MVP Definition
 
-### Launch With (v2.1.0)
+### Launch With (v2.1.1)
 
-All seven features are targeted for this milestone. Ordered by implementation dependency and value:
+Minimum set to close the revocation story.
 
-- [x] Hot config reload for max_peers -- trivial, unblocks nothing, just do it (P1, LOW effort)
-- [x] Prometheus /metrics endpoint -- independent, high operator value (P1, MEDIUM effort)
-- [x] Namespace-scoped BlobNotify filtering -- low complexity, reduces peer traffic (P1, LOW effort)
-- [x] Relay subscription forwarding -- completes the filtering story end-to-end (P1, MEDIUM effort)
-- [x] Relay auto-reconnect to node -- resilience foundation for relay layer (P1, MEDIUM-HIGH effort)
-- [x] Multi-relay SDK failover -- resilience foundation for SDK layer (P2, MEDIUM effort)
-- [x] Brotli wire compression -- new dependency, protocol change, most complex (P2, MEDIUM effort)
+- [ ] **SDK delegation revocation helper** -- `directory.revoke_delegate(identity)` that finds delegation blob hash and tombstones it. LOW complexity, HIGH value.
+- [ ] **Admin KEM key rotation** -- `identity.rotate_kem()` generates new KEM keypair; `directory.register()` with new identity publishes updated UserEntry. Need UserEntry latest-timestamp-wins in directory cache (already done for groups).
+- [ ] **Encryption key versioning** -- Add `key_version` field to UserEntry format (USERENTRY_VERSION bump to 0x02). Directory tracks key history per user. `write_encrypted` uses latest KEM key. `read_encrypted` tries all known KEM keys for recipient identity.
+- [ ] **Group membership revocation + key rotation** -- `directory.revoke_member(group_name, member)` that removes member from group, tombstones their delegation, and rotates admin KEM key in one call.
+- [ ] **Documentation** -- PROTOCOL.md update for UserEntry v2 format, key versioning semantics, revocation flow.
 
-### Add After Validation (post v2.1.0)
+### Add After Validation (v2.1.x)
 
-- [ ] Compression statistics in /metrics -- track bytes saved, compression ratios per message type
-- [ ] Relay /metrics endpoint -- expose relay-specific metrics (sessions, forwarded/dropped messages)
-- [ ] Dynamic compression level based on payload size -- lower quality for large blobs, higher for small
+Features to add once core revocation is working.
 
-### Future Consideration (v2.2.0+)
+- [ ] **Delegation audit trail** -- SDK helper to list active + revoked delegations with timestamps. Trigger: compliance use case feedback.
+- [ ] **Key rotation audit log** -- Track all KEM key rotations per namespace with timestamps. Trigger: enterprise audit requirements.
+- [ ] **Revocation event callbacks** -- SDK `on_revocation` callback when directory cache detects a delegation tombstone. Trigger: real-time notification use case.
 
-- [ ] Selective namespace sync (only replicate declared namespaces) -- builds on BlobNotify filtering
-- [ ] Relay connection pooling to node (pre-opened UDS connections for faster client onboarding)
-- [ ] SDK health check API exposing current relay, connection state, and metrics
+### Future Consideration (v3+)
+
+Features to defer until product-market fit is established.
+
+- [ ] **Periodic automatic key rotation** -- Timer-based rotation for compliance. Why defer: no value without active revocation; adds complexity.
+- [ ] **Re-encryption utility** -- Batch re-encrypt old data under new keys. Why defer: expensive, violates constraints, only needed for extreme compliance scenarios.
+- [ ] **Cross-SDK key versioning** -- C/C++/Rust/JS SDKs all support key epochs. Why defer: Python SDK only currently exists.
 
 ## Feature Prioritization Matrix
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Hot config reload (max_peers) | MEDIUM | LOW | P1 |
-| Prometheus /metrics endpoint | HIGH | MEDIUM | P1 |
-| Namespace-scoped BlobNotify filtering | MEDIUM | LOW | P1 |
-| Relay subscription forwarding | MEDIUM | MEDIUM | P1 |
-| Relay auto-reconnect to node | HIGH | MEDIUM-HIGH | P1 |
-| Multi-relay SDK failover | HIGH | MEDIUM | P2 |
-| Brotli wire compression | MEDIUM | MEDIUM | P2 |
+| SDK delegation revocation helper | HIGH | LOW | P1 |
+| Admin KEM key rotation | HIGH | LOW | P1 |
+| Encryption key versioning (UserEntry v2) | HIGH | MEDIUM | P1 |
+| Group membership revocation + key rotation | HIGH | MEDIUM | P1 |
+| Old data readable with old keys | HIGH | LOW | P1 |
+| Documentation (PROTOCOL.md, SDK docs) | HIGH | LOW | P1 |
+| Atomic revoke-and-rotate | MEDIUM | MEDIUM | P2 |
+| Revocation propagation notification | MEDIUM | LOW (already works) | P2 |
+| Key history chain | MEDIUM | MEDIUM | P2 |
+| Delegation audit trail | LOW | LOW | P3 |
+| Revocation event callbacks | LOW | MEDIUM | P3 |
 
 **Priority key:**
-- P1: Must have for launch -- observability, filtering, resilience
-- P2: Should have -- compression and SDK failover are valuable but not blocking
+- P1: Must have for this milestone (closes the revocation story)
+- P2: Should have, makes the feature production-quality
+- P3: Nice to have, future consideration
 
-## Competitor Feature Analysis
+## Competitor/Prior Art Analysis
 
-| Feature | etcd | CockroachDB | Consul | chromatindb v2.1.0 Approach |
-|---------|------|-------------|--------|---------------------------|
-| Wire compression | gRPC built-in (gzip) | gRPC built-in | None (HTTP) | Brotli at AEAD frame level |
-| Metrics | Prometheus built-in | Prometheus built-in | Prometheus + StatsD | Prometheus via minimal HTTP endpoint (no library) |
-| Topic/namespace filtering | Watch with key prefix filter | CDC with table filter | Blocking queries with index | BlobNotify namespace filter + relay subscription forwarding |
-| Multi-endpoint failover | Client library supports endpoint list | Built into connection string | Agent-based (local agent always available) | SDK relay list with ordered failover |
-| Hot config reload | Most config via etcdctl | SET CLUSTER SETTING | HCL reload via SIGHUP | SIGHUP reload (adding max_peers) |
-| Proxy reconnect | gRPC handles transparently | pgwire handles | Agent is always local | Relay UDS auto-reconnect with backoff |
+| Feature | Signal/WhatsApp | MLS (RFC 9420) | AWS KMS | chromatindb Approach |
+|---------|-----------------|----------------|---------|---------------------|
+| Member removal | Clear all Sender Keys, re-derive | Commit removes member, new epoch_secret | IAM policy revocation | Tombstone delegation blob, remove from group blob |
+| Key rotation on removal | All members re-derive sender keys | New tree secret, re-derive | Create new key version (automatic) | Rotate admin KEM keypair, re-publish UserEntry |
+| Old data access | Members keep old message keys | Old epoch keys retained | Old key versions kept for decrypt | Old UserEntry blobs remain, old KEM keys in directory history |
+| Re-encryption | Never | Never (old epochs frozen) | Manual (download + re-upload) | Never (constraint) |
+| Forward secrecy | Double Ratchet (per-message) | TreeKEM (per-epoch) | N/A (KEK versioning) | Per-blob random DEK (already achieved) -- revocation adds per-epoch KEM keys |
+| Revocation latency | Instant (online members) | Next Commit (async) | Instant (IAM) | Eventually consistent (blob replication, seconds) |
+
+### Key Takeaway from Prior Art
+
+Every production system (Signal, MLS, AWS, GCP, Azure) follows the same pattern:
+1. **Remove access** (revoke key/membership)
+2. **Rotate encryption key** (new epoch/version)
+3. **Keep old keys for decryption** (never re-encrypt)
+
+chromatindb's existing primitives (tombstone delegation, group blobs, envelope encryption) map cleanly onto this pattern. The missing piece is the SDK orchestration that ties them together and the key versioning metadata in the directory.
+
+## Implementation Sketch: Key Versioning
+
+The core technical question is how to implement key epochs in the existing system without new wire types or C++ node changes.
+
+**Approach: Directory-only key versioning (SDK layer)**
+
+1. **UserEntry v2 format:** Add `key_version: uint32 BE` field after display_name. Backward-compatible: v1 entries have implicit key_version=0.
+
+2. **Identity.rotate_kem():** Generate new ML-KEM-1024 keypair. Increment key_version. Sign new KEM pubkey with same signing key. Old KEM secret key retained in identity for decryption.
+
+3. **Directory tracks history:** Cache stores list of `(key_version, kem_pubkey)` per user, not just latest. Latest used for encryption. All versions tried for decryption.
+
+4. **write_encrypted:** Uses latest KEM pubkey from directory for each recipient. No change to envelope format -- the `kem_pk_hash` in each stanza identifies which key version was used.
+
+5. **read_encrypted:** Current flow tries to decrypt with current KEM key. If `NotARecipientError`, try older KEM keys from directory history. The `kem_pk_hash` binary search in `envelope_decrypt` means only the matching key version is tried.
+
+6. **No node changes required.** Nodes store signed blobs. They do not interpret UserEntry format. Key versioning is entirely SDK-layer.
+
+**Why this works:** The envelope format already uses `kem_pk_hash` (SHA3-256 of KEM pubkey) to identify recipients. When the admin rotates KEM key, their new `kem_pk_hash` is different. Old envelopes have the old hash. `envelope_decrypt` does binary search on `kem_pk_hash` -- it will find the match only if the identity has the right KEM key version loaded. By keeping all KEM key versions in the identity, decryption of any epoch works.
 
 ## Sources
 
-- [google/brotli GitHub](https://github.com/google/brotli) -- MIT license, CMake build system, C API
-- [RFC 7932 -- Brotli Compressed Data Format](https://datatracker.ietf.org/doc/rfc7932/) -- specification
-- [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) -- text format spec
-- [prometheus-cpp](https://github.com/jupp0r/prometheus-cpp) -- evaluated, rejected (too many deps: civetweb, curl, zlib)
-- [ZSTD vs Brotli vs GZip Comparison](https://speedvitals.com/blog/zstd-vs-brotli-vs-gzip/) -- compression benchmarks
-- [Comparing Compression Algorithms for Moving Big Data](https://manishrjain.com/compression-algo-moving-data) -- binary data compression analysis
-- [Redis Pub/Sub docs](https://redis.io/docs/latest/develop/pubsub/) -- namespace/channel filtering patterns
-- [Redis client geographic failover](https://redis.io/docs/latest/develop/clients/failover/) -- multi-endpoint failover pattern with circuit breaker
-- Codebase analysis: db/peer/peer_manager.cpp (reload_config, on_blob_ingested, dump_metrics), relay/core/relay_session.cpp, sdk/python/chromatindb/client.py, db/PROTOCOL.md
+- [Envelope encryption - Google Cloud KMS](https://cloud.google.com/kms/docs/envelope-encryption)
+- [Key rotation for AWS KMS - AWS Prescriptive Guidance](https://docs.aws.amazon.com/prescriptive-guidance/latest/aws-kms-best-practices/data-protection-key-rotation.html)
+- [Encryption Key Rotation Best Practices - Kiteworks](https://www.kiteworks.com/regulatory-compliance/encryption-key-rotation-strategies/)
+- [Secure Key-Updating for Lazy Revocation - Backes, Cachin, Oprea (ePrint 2005/334)](https://eprint.iacr.org/2005/334.pdf)
+- [MLS Protocol - RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)
+- [MLS Architecture - RFC 9750](https://datatracker.ietf.org/doc/rfc9750/)
+- [Signal Double Ratchet specification](https://signal.org/docs/specifications/doubleratchet/)
+- [WhatsUpp with Sender Keys? - ePrint 2023/1385](https://eprint.iacr.org/2023/1385.pdf)
+- [Enhancing Security through Certificates, Envelope Encryption and Key Rotation - DEV Community](https://dev.to/0xog_pg/enhancing-security-through-certificates-envelope-encryption-and-key-rotation-602)
+- [Key rotation in AWS and GCP KMS - Medium](https://medium.com/@madhurajayashanka/key-rotation-in-aws-and-gcp-kms-what-really-happens-to-your-encrypted-data-7d2a12b07303)
+- [Revisiting Updatable Encryption - ePrint 2021/268](https://eprint.iacr.org/2021/268)
+- [Data encryption - HashiCorp Boundary](https://developer.hashicorp.com/boundary/docs/secure/encryption/data-encryption)
 
 ---
-*Feature research for: chromatindb v2.1.0 Compression, Filtering & Observability*
-*Researched: 2026-04-04*
+*Feature research for: Revocation & Key Lifecycle (chromatindb v2.1.1)*
+*Researched: 2026-04-06*
