@@ -19,7 +19,9 @@
 - ✅ **v1.5.0 Documentation & Distribution** — Phases 68-69 (shipped 2026-03-28)
 - ✅ **v1.6.0 Python SDK** — Phases 70-74 (shipped 2026-03-31)
 - ✅ **v1.7.0 Client-Side Encryption** — Phases 75-78 (shipped 2026-04-02)
-- **v2.0.0 Event-Driven Architecture** — Phases 79-85 (in progress)
+- ✅ **v2.0.0 Event-Driven Architecture** — Phases 79-85 (shipped 2026-04-05)
+- ✅ **v2.1.0 Compression, Filtering & Observability** — Phases 86-90 (shipped 2026-04-05)
+- **v2.1.1 Revocation & Key Lifecycle** — Phases 91-94 (in progress)
 
 ## Phases
 

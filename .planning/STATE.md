@@ -1,53 +1,71 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0.0
-milestone_name: Event-Driven Architecture
-status: verifying
-stopped_at: Completed all Phase 85 plans
-last_updated: "2026-04-05T05:23:38.584Z"
-last_activity: 2026-04-05
+milestone: v2.1.1
+milestone_name: Revocation & Key Lifecycle
+status: executing
+stopped_at: Completed 91-01-PLAN.md
+last_updated: "2026-04-06T07:53:58Z"
+last_activity: 2026-04-06 -- Phase 91 plan 01 complete
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 14
-  completed_plans: 14
-  percent: 0
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-02)
+See: .planning/PROJECT.md (updated 2026-04-06)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 84 — sdk-auto-reconnect
+**Current focus:** Phase 91 — sdk-delegation-revocation
 
 ## Current Position
 
-Phase: 85
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-04-05
+Phase: 91 (sdk-delegation-revocation) — EXECUTING
+Plan: 2 of 2
+Status: Executing Phase 91
+Last activity: 2026-04-06 -- Phase 91 plan 01 complete
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████░░░░░] 50%
+
+## Performance Metrics
+
+**Velocity:**
+
+- Total plans completed: 1
+- Average duration: 2min
+- Total execution time: 0.03 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 91 | 1/2 | 2min | 2min |
+
+**Recent Trend:**
+
+- Last 5 plans: 2min
+- Trend: starting
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v1.7.0-ROADMAP.md.
+Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
 
-- Breaking protocol changes OK -- only deployed on home KVM, no production users
-- Send queue (PUSH-04) is Phase 79 -- prerequisite for all concurrent send paths
-- Notification suppression during sync co-located with push infrastructure (Phase 79)
-- Event-driven expiry (Phase 81) independent of push sync -- parallelizable
-- Reconcile-on-connect (Phase 82) depends on push loop completing (Phase 80)
-- Phases 81, 83, 84 can be built in parallel with phases 80, 82
-- [Phase 84-sdk-auto-reconnect]: Connection monitor polls transport.closed every 0.5s; on_disconnect fires before reconnect loop; old notification queue abandoned on reconnect
-- [Phase 84]: Mock _do_connect via patch for reconnect testing isolation
-- [Phase 85]: PROTOCOL.md restructured around connection lifecycle; README rewrite with architecture section; SDK docs + tutorial updated with auto-reconnect
+- All work is SDK-only Python (zero C++ node changes, zero new wire types)
+- Old data stays readable with old keys (no re-encryption on rotation)
+- Pre-production: no backward compat needed
+- Tombstone-based delegation revocation already proven in node (Docker test_acl04_revocation.sh)
+- [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
+- [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
 
 ### Pending Todos
 
@@ -55,18 +73,11 @@ None.
 
 ### Blockers/Concerns
 
-- Phase 79 (Send Queue): Most impactful structural change to C++ Connection class in 78 phases. Research-phase recommended.
-- Phase 84 (SDK Auto-Reconnect): Reconnection touches transport, handshake, client layers. Research-phase recommended.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260402-a2o | Split allowed_keys into allowed_client_keys and allowed_peer_keys | 2026-04-02 | 681f92b | [260402-a2o-split-allowed-keys-into-allowed-client-k](./quick/260402-a2o-split-allowed-keys-into-allowed-client-k/) |
+- Phase 92 (KEM Key Versioning): Envelope header format decision needed at plan time -- key_version field width, envelope version byte bump, and v1 backward handling. Research flagged this as the highest-risk design choice.
+- Phase 92: Identity file format for key ring persistence needs decision before implementation (multiple files vs JSON manifest vs binary bundle).
 
 ## Session Continuity
 
-Last session: 2026-04-05T05:17:33.081Z
-Last activity: 2026-04-05 -- Executing Phase 85
-Stopped at: Completed all Phase 85 plans
-Resume file: None
+Last session: 2026-04-06T07:53:58Z
+Stopped at: Completed 91-01-PLAN.md
+Resume file: .planning/phases/91-sdk-delegation-revocation/91-01-SUMMARY.md
