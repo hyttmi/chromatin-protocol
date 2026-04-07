@@ -201,7 +201,7 @@ Full details: [milestones/v2.1.0-ROADMAP.md](milestones/v2.1.0-ROADMAP.md)
 
 - [x] **Phase 91: SDK Delegation Revocation** - Owners can revoke delegate write access and verify enforcement via the Python SDK (completed 2026-04-06)
 - [x] **Phase 92: KEM Key Versioning** - Owners can rotate encryption keys; senders auto-use latest key; recipients decrypt old and new data (completed 2026-04-07)
-- [ ] **Phase 93: Group Membership Revocation** - Admins can remove group members; future group writes exclude removed members
+- [x] **Phase 93: Group Membership Revocation** - Admins can remove group members; future group writes exclude removed members (completed 2026-04-07)
 - [ ] **Phase 94: Protocol & SDK Documentation** - PROTOCOL.md and SDK docs fully document revocation, key rotation, and group membership lifecycle
 
 ## Phase Details
@@ -249,7 +249,7 @@ Plans:
 
 Plans:
 - [x] 93-01-PLAN.md — Core change: add directory.refresh() to write_to_group() + unit tests for refresh ordering and member exclusion
-- [ ] 93-02-PLAN.md — KVM integration test: group membership revocation lifecycle against live swarm
+- [x] 93-02-PLAN.md — KVM integration test: group membership revocation lifecycle against live swarm
 
 ### Phase 94: Protocol & SDK Documentation
 **Goal**: PROTOCOL.md and SDK documentation fully describe revocation, key rotation, and group membership lifecycle as actually shipped
@@ -275,5 +275,5 @@ Phases execute in numeric order: 91 -> 92 -> 93 -> 94
 |-------|----------------|--------|-----------|
 | 91. SDK Delegation Revocation | 0/2 | Complete    | 2026-04-06 |
 | 92. KEM Key Versioning | 2/3 | Complete    | 2026-04-07 |
-| 93. Group Membership Revocation | 1/2 | In Progress|  |
+| 93. Group Membership Revocation | 2/2 | Complete   | 2026-04-07 |
 | 94. Protocol & SDK Documentation | 0/2 | Not started | - |
