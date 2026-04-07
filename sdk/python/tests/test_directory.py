@@ -42,14 +42,15 @@ class TestUserEntryCodec:
     """Tests for encode_user_entry and decode_user_entry."""
 
     def test_encode_decode_roundtrip(self, identity: Identity) -> None:
-        """Encode then decode: signing_pk, kem_pk, display_name match."""
+        """Encode then decode: signing_pk, kem_pk, display_name, key_version match."""
         encoded = encode_user_entry(identity, "alice")
         result = decode_user_entry(encoded)
         assert result is not None
-        signing_pk, kem_pk, display_name, kem_sig = result
+        signing_pk, kem_pk, display_name, key_version, kem_sig = result
         assert signing_pk == identity.public_key
         assert kem_pk == identity.kem_public_key
         assert display_name == "alice"
+        assert key_version == 0
         assert len(kem_sig) > 0
 
     def test_encode_validates_no_kem(self, identity: Identity) -> None:
@@ -72,13 +73,13 @@ class TestUserEntryCodec:
             encode_user_entry(identity, "x" * 257)
 
     def test_encode_magic_and_version(self, identity: Identity) -> None:
-        """First 5 bytes are b'UENT' + 0x01."""
+        """First 5 bytes are b'UENT' + 0x02."""
         encoded = encode_user_entry(identity, "alice")
         assert encoded[:4] == b"UENT"
-        assert encoded[4] == 0x01
+        assert encoded[4] == 0x02
 
     def test_encode_field_offsets(self, identity: Identity) -> None:
-        """signing_pk at [5:2597], kem_pk at [2597:4165], name_len at [4165:4167]."""
+        """signing_pk at [5:2597], kem_pk at [2597:4165], name_len at [4165:4167], key_version after name."""
         encoded = encode_user_entry(identity, "alice")
         assert encoded[5 : 5 + PUBLIC_KEY_SIZE] == identity.public_key
         assert (
@@ -89,6 +90,10 @@ class TestUserEntryCodec:
             ">H", encoded[4165:4167]
         )[0]
         assert name_len == len("alice".encode("utf-8"))
+        # key_version:4 BE at offset 4167 + name_len
+        kv_offset = 4167 + name_len
+        key_version = struct.unpack(">I", encoded[kv_offset : kv_offset + 4])[0]
+        assert key_version == 0
 
     def test_decode_wrong_magic(self) -> None:
         """Wrong magic returns None."""
@@ -101,8 +106,8 @@ class TestUserEntryCodec:
         assert decode_user_entry(data) is None
 
     def test_decode_wrong_version(self) -> None:
-        """Wrong version returns None."""
-        data = b"UENT\x02" + b"\x00" * (USERENTRY_MIN_SIZE - 5)
+        """Wrong version (0x03) returns None."""
+        data = b"UENT\x03" + b"\x00" * (USERENTRY_MIN_SIZE - 5)
         assert decode_user_entry(data) is None
 
     def test_decode_name_extends_past_data(self) -> None:
@@ -132,8 +137,9 @@ class TestUserEntryCodec:
         encoded = encode_user_entry(identity, "")
         result = decode_user_entry(encoded)
         assert result is not None
-        _, _, display_name, _ = result
+        _, _, display_name, key_version, _ = result
         assert display_name == ""
+        assert key_version == 0
 
     def test_encode_unicode_display_name(self, identity: Identity) -> None:
         """Multi-byte UTF-8 name roundtrips correctly."""
@@ -141,7 +147,7 @@ class TestUserEntryCodec:
         encoded = encode_user_entry(identity, name)
         result = decode_user_entry(encoded)
         assert result is not None
-        _, _, display_name, _ = result
+        _, _, display_name, _, _ = result
         assert display_name == name
 
     def test_verify_valid_kem_sig(self, identity: Identity) -> None:
@@ -149,18 +155,241 @@ class TestUserEntryCodec:
         encoded = encode_user_entry(identity, "alice")
         result = decode_user_entry(encoded)
         assert result is not None
-        signing_pk, kem_pk, _, kem_sig = result
-        assert verify_user_entry(signing_pk, kem_pk, kem_sig) is True
+        signing_pk, kem_pk, _, key_version, kem_sig = result
+        assert verify_user_entry(signing_pk, kem_pk, key_version, kem_sig) is True
 
     def test_verify_tampered_kem_pk(self, identity: Identity) -> None:
         """verify_user_entry returns False when kem_pk is tampered."""
         encoded = encode_user_entry(identity, "alice")
         result = decode_user_entry(encoded)
         assert result is not None
-        signing_pk, kem_pk, _, kem_sig = result
+        signing_pk, kem_pk, _, key_version, kem_sig = result
         # Flip first byte of kem_pk
         tampered = bytes([kem_pk[0] ^ 0xFF]) + kem_pk[1:]
-        assert verify_user_entry(signing_pk, tampered, kem_sig) is False
+        assert verify_user_entry(signing_pk, tampered, key_version, kem_sig) is False
+
+    def test_encode_key_version_zero_fresh(self, identity: Identity) -> None:
+        """Fresh identity encodes key_version=0."""
+        encoded = encode_user_entry(identity, "alice")
+        result = decode_user_entry(encoded)
+        assert result is not None
+        _, _, _, key_version, _ = result
+        assert key_version == 0
+        assert identity.key_version == 0
+
+    def test_encode_key_version_after_rotation(
+        self, identity: Identity, tmp_dir: Path
+    ) -> None:
+        """After rotate_kem, encode uses new key_version (1)."""
+        key_path = tmp_dir / "test.key"
+        identity.save(key_path)
+        identity.rotate_kem(key_path)
+        assert identity.key_version == 1
+        encoded = encode_user_entry(identity, "alice")
+        result = decode_user_entry(encoded)
+        assert result is not None
+        _, _, _, key_version, _ = result
+        assert key_version == 1
+
+    def test_decode_extracts_key_version(self, identity: Identity) -> None:
+        """Decode returns correct key_version field."""
+        encoded = encode_user_entry(identity, "test")
+        result = decode_user_entry(encoded)
+        assert result is not None
+        assert len(result) == 5
+        _, _, _, key_version, _ = result
+        assert isinstance(key_version, int)
+        assert key_version == 0
+
+    def test_verify_includes_key_version_in_signed_data(
+        self, identity: Identity
+    ) -> None:
+        """verify_user_entry with correct key_version returns True; wrong key_version returns False."""
+        encoded = encode_user_entry(identity, "alice")
+        result = decode_user_entry(encoded)
+        assert result is not None
+        signing_pk, kem_pk, _, key_version, kem_sig = result
+        # Correct key_version
+        assert verify_user_entry(signing_pk, kem_pk, key_version, kem_sig) is True
+        # Wrong key_version
+        assert verify_user_entry(signing_pk, kem_pk, key_version + 1, kem_sig) is False
+
+    def test_decode_old_version_0x01_returns_none(self) -> None:
+        """Data with version=0x01 returns None per D-04."""
+        data = b"UENT\x01" + b"\x00" * (USERENTRY_MIN_SIZE - 5)
+        assert decode_user_entry(data) is None
+
+
+# ---------------------------------------------------------------------------
+# DirectoryEntry key_version
+# ---------------------------------------------------------------------------
+
+
+class TestDirectoryEntryKeyVersion:
+    """Tests for DirectoryEntry key_version field."""
+
+    def test_directory_entry_has_key_version(self, identity: Identity) -> None:
+        """DirectoryEntry(identity, name, hash, key_version=0) works."""
+        pub_identity = Identity.from_public_keys(
+            identity.public_key, identity.kem_public_key
+        )
+        entry = DirectoryEntry(
+            identity=pub_identity,
+            display_name="alice",
+            blob_hash=b"\xaa" * 32,
+            key_version=0,
+        )
+        assert entry.key_version == 0
+
+    def test_directory_entry_key_version_default(
+        self, identity: Identity
+    ) -> None:
+        """DirectoryEntry without key_version defaults to 0."""
+        pub_identity = Identity.from_public_keys(
+            identity.public_key, identity.kem_public_key
+        )
+        entry = DirectoryEntry(
+            identity=pub_identity,
+            display_name="alice",
+            blob_hash=b"\xaa" * 32,
+        )
+        assert entry.key_version == 0
+
+
+# ---------------------------------------------------------------------------
+# _populate_cache highest-version-wins
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateCacheKeyVersion:
+    """Tests for _populate_cache highest-version-wins logic."""
+
+    async def test_populate_cache_highest_key_version_wins(
+        self, identity: Identity
+    ) -> None:
+        """Two UserEntry blobs for same signing key: cache keeps highest key_version."""
+        user = Identity.generate()
+        client = make_mock_client(identity)
+
+        # We need two encoded UserEntry blobs for the same user but with
+        # different key_versions. We'll create the v0 entry, then rotate
+        # and create the v1 entry.
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            key_path = Path(td) / "user.key"
+            user.save(key_path)
+
+            # v0 entry
+            entry_v0 = encode_user_entry(user, "alice")
+
+            # rotate to v1
+            user.rotate_kem(key_path)
+            assert user.key_version == 1
+            entry_v1 = encode_user_entry(user, "alice")
+
+        # Set up mock to return both entries (v0 first, v1 second)
+        client.list_blobs.return_value = ListPage(
+            blobs=[
+                BlobRef(blob_hash=b"\x01" * 32, seq_num=1),
+                BlobRef(blob_hash=b"\x02" * 32, seq_num=2),
+            ],
+            cursor=None,
+        )
+        client.read_blob.side_effect = [
+            ReadResult(data=entry_v0, ttl=0, timestamp=1000, signature=b"\x00" * 100),
+            ReadResult(data=entry_v1, ttl=0, timestamp=2000, signature=b"\x00" * 100),
+        ]
+
+        d = Directory(client, identity)
+        await d._populate_cache()
+
+        # Cache should have the v1 entry, not v0
+        assert len(d._cache) == 1
+        entry = list(d._cache.values())[0]
+        assert entry.key_version == 1
+        assert entry.blob_hash == b"\x02" * 32
+        # by_name should point to v1
+        assert d._by_name["alice"].key_version == 1
+
+    async def test_populate_cache_lower_version_after_higher_is_ignored(
+        self, identity: Identity
+    ) -> None:
+        """If higher-version entry is seen first, lower-version entry is ignored."""
+        user = Identity.generate()
+        client = make_mock_client(identity)
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            key_path = Path(td) / "user.key"
+            user.save(key_path)
+            entry_v0 = encode_user_entry(user, "alice")
+            user.rotate_kem(key_path)
+            entry_v1 = encode_user_entry(user, "alice")
+
+        # v1 first, then v0
+        client.list_blobs.return_value = ListPage(
+            blobs=[
+                BlobRef(blob_hash=b"\x02" * 32, seq_num=2),
+                BlobRef(blob_hash=b"\x01" * 32, seq_num=1),
+            ],
+            cursor=None,
+        )
+        client.read_blob.side_effect = [
+            ReadResult(data=entry_v1, ttl=0, timestamp=2000, signature=b"\x00" * 100),
+            ReadResult(data=entry_v0, ttl=0, timestamp=1000, signature=b"\x00" * 100),
+        ]
+
+        d = Directory(client, identity)
+        await d._populate_cache()
+
+        assert len(d._cache) == 1
+        entry = list(d._cache.values())[0]
+        assert entry.key_version == 1
+
+
+# ---------------------------------------------------------------------------
+# resolve_recipient
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRecipient:
+    """Tests for Directory.resolve_recipient()."""
+
+    async def test_resolve_recipient_returns_identity(
+        self, identity: Identity
+    ) -> None:
+        """resolve_recipient returns Identity with latest KEM public key."""
+        user = Identity.generate()
+        client = make_mock_client(identity)
+
+        client.list_blobs.return_value = ListPage(
+            blobs=[BlobRef(blob_hash=b"\x01" * 32, seq_num=1)], cursor=None
+        )
+        client.read_blob.return_value = make_user_entry_read_result(
+            user, "alice"
+        )
+
+        d = Directory(client, identity)
+        result = await d.resolve_recipient("alice")
+
+        assert result is not None
+        assert result.has_kem is True
+        assert result.kem_public_key == user.kem_public_key
+
+    async def test_resolve_recipient_not_found_returns_none(
+        self, identity: Identity
+    ) -> None:
+        """resolve_recipient for unknown name returns None."""
+        client = make_mock_client(identity)
+        client.list_blobs.return_value = ListPage(blobs=[], cursor=None)
+
+        d = Directory(client, identity)
+        result = await d.resolve_recipient("unknown")
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +704,7 @@ class TestListUsers:
         entry_data = encode_user_entry(user, "alice")
         parsed = decode_user_entry(entry_data)
         assert parsed is not None
-        signing_pk, kem_pk, name, kem_sig = parsed
+        signing_pk, kem_pk, name, key_version, kem_sig = parsed
         # Flip a byte in kem_pk so kem_sig won't verify
         tampered_kem_pk = bytes([kem_pk[0] ^ 0xFF]) + kem_pk[1:]
         # Rebuild the blob with tampered kem_pk
@@ -487,6 +716,7 @@ class TestListUsers:
             + tampered_kem_pk
             + struct.pack(">H", len(name_bytes))
             + name_bytes
+            + struct.pack(">I", key_version)
             + kem_sig
         )
         client.read_blob.return_value = ReadResult(
