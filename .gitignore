@@ -1,4 +1,5 @@
 build/
+build-*/
 db/version.h
 deploy/results/
 deploy/configs/*-trusted.json
