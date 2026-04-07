@@ -1,6 +1,7 @@
 #include "db/wire/codec.h"
 #include "db/wire/blob_generated.h"
 #include "db/crypto/hash.h"
+#include "db/util/endian.h"
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/sha3.h>
 #include <cstring>
