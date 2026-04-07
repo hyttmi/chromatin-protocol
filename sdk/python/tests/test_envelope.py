@@ -610,3 +610,100 @@ def test_compress_multi_recipient():
     assert envelope_decrypt(envelope, sender) == plaintext
     assert envelope_decrypt(envelope, r1) == plaintext
     assert envelope_decrypt(envelope, r2) == plaintext
+
+
+# ---------------------------------------------------------------------------
+# Key ring decrypt after rotation (Phase 92, KEY-03)
+# ---------------------------------------------------------------------------
+
+def test_decrypt_with_rotated_key_old_envelope(tmp_dir):
+    """Encrypt under original key, rotate, decrypt with rotated identity (old key in ring)."""
+    identity = Identity.generate()
+    key_path = tmp_dir / "id.key"
+    identity.save(key_path)
+
+    plaintext = b"encrypted before rotation"
+    envelope = envelope_encrypt(plaintext, [], identity)
+
+    # Rotate -- old key stays in ring
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 1
+
+    # Decrypt with rotated identity -- ring includes old key
+    assert envelope_decrypt(envelope, identity) == plaintext
+
+
+def test_decrypt_with_rotated_key_new_envelope(tmp_dir):
+    """Rotate identity, encrypt with new key, decrypt with rotated identity."""
+    identity = Identity.generate()
+    key_path = tmp_dir / "id.key"
+    identity.save(key_path)
+
+    # Rotate to get a new KEM public key
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 1
+
+    # Encrypt using the new key (identity's kem_public_key is now the new one)
+    plaintext = b"encrypted after rotation"
+    envelope = envelope_encrypt(plaintext, [], identity)
+
+    # Decrypt with the same rotated identity
+    assert envelope_decrypt(envelope, identity) == plaintext
+
+
+def test_decrypt_after_two_rotations_all_versions(tmp_dir):
+    """Encrypt under v0, v1, v2 -- all three decrypt with v2 identity."""
+    identity = Identity.generate()
+    key_path = tmp_dir / "id.key"
+    identity.save(key_path)
+
+    # Encrypt under version 0
+    plaintext_v0 = b"version zero data"
+    env_v0 = envelope_encrypt(plaintext_v0, [], identity)
+
+    # Rotate to v1, encrypt
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 1
+    plaintext_v1 = b"version one data"
+    env_v1 = envelope_encrypt(plaintext_v1, [], identity)
+
+    # Rotate to v2, encrypt
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 2
+    plaintext_v2 = b"version two data"
+    env_v2 = envelope_encrypt(plaintext_v2, [], identity)
+
+    # All three decrypt with the v2 identity (ring has v0, v1, v2)
+    assert envelope_decrypt(env_v0, identity) == plaintext_v0
+    assert envelope_decrypt(env_v1, identity) == plaintext_v1
+    assert envelope_decrypt(env_v2, identity) == plaintext_v2
+
+
+def test_decrypt_non_recipient_after_rotation(tmp_dir):
+    """Identity B (rotated) cannot decrypt data encrypted for identity A."""
+    alice = Identity.generate()
+    bob = Identity.generate()
+    key_path = tmp_dir / "bob.key"
+    bob.save(key_path)
+
+    plaintext = b"alice only"
+    envelope = envelope_encrypt(plaintext, [], alice)
+
+    # Bob rotates -- still not a recipient
+    bob.rotate_kem(key_path)
+    with pytest.raises(NotARecipientError, match="not in envelope recipient list"):
+        envelope_decrypt(envelope, bob)
+
+
+def test_decrypt_public_only_identity_raises():
+    """Public-only identity (from_public_keys) raises NotARecipientError."""
+    sender = Identity.generate()
+    plaintext = b"cannot decrypt with public only"
+    envelope = envelope_encrypt(plaintext, [], sender)
+
+    # Create public-only identity (has KEM pubkey but no secret)
+    pub_only = Identity.from_public_keys(sender.public_key, sender.kem_public_key)
+    assert pub_only.has_kem  # has_kem is True (ring is non-empty)
+
+    with pytest.raises(NotARecipientError, match="no KEM secret key"):
+        envelope_decrypt(envelope, pub_only)
