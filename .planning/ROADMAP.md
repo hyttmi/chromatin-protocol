@@ -260,11 +260,11 @@ Plans:
   2. PROTOCOL.md documents UserEntry v2 binary format with `key_version` field, the envelope header key versioning extension, and key ring fallback decryption logic
   3. PROTOCOL.md documents group membership revocation: member removal, forward exclusion from ciphertexts, explicit note that old data remains readable by removed members
   4. SDK getting-started tutorial includes working examples for delegation revocation, KEM key rotation, and group membership management
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 94-01: TBD
-- [ ] 94-02: TBD
+- [ ] 94-01-PLAN.md — PROTOCOL.md: delegation revocation, UserEntry v2 format, key ring decrypt, group membership revocation
+- [ ] 94-02-PLAN.md — SDK getting-started: delegation revocation, KEM key rotation, group membership management tutorials
 
 ## Progress
 
