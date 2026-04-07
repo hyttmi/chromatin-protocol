@@ -1,5 +1,22 @@
 # Milestones
 
+## v2.1.1 Revocation & Key Lifecycle (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 9 plans, 11 tasks
+
+**Key accomplishments:**
+
+- Directory.revoke_delegation() and list_delegates() with admin guards, pk_hash lookup, and DelegationNotFoundError exception
+- Integration test for delegation revocation propagation lifecycle against live 3-node KVM swarm
+- ML-KEM-1024 key ring with rotate_kem(), numbered file persistence, lazy pre-rotation migration, and pk_hash ring map for envelope decrypt
+- UserEntry v2 with key_version:4 BE, version-bound kem_sig, highest-version cache, and resolve_recipient() for discovering latest KEM pubkeys
+- envelope_decrypt uses Identity key ring map for multi-key decryption after KEM rotation -- old and new keys both work
+- Added directory.refresh() to write_to_group() ensuring removed members are excluded from encryption recipients, with 5 TDD unit tests
+- Delegation revocation workflow, UserEntry v2 binary format with key versioning, GroupEntry format, group membership revocation, and key ring fallback decryption documented in PROTOCOL.md
+- Three tutorial sections added to getting-started.md: delegation revocation with revoke_delegation/list_delegates, KEM key rotation with rotate_kem/register, and group membership management with create/add/remove member and write_to_group
+
+---
+
 ## v2.1.0 Compression, Filtering & Observability (Shipped: 2026-04-06)
 
 **Phases completed:** 5 phases, 11 plans, 22 tasks

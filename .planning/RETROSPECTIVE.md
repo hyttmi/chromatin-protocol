@@ -664,6 +664,48 @@
 
 ---
 
+## Milestone: v2.1.1 — Revocation & Key Lifecycle
+
+**Shipped:** 2026-04-07
+**Phases:** 4 | **Plans:** 9
+
+### What Was Built
+- SDK delegation revocation (revoke_delegation, list_delegates with admin guards)
+- ML-KEM key rotation (rotate_kem, key ring with numbered file persistence, lazy migration)
+- UserEntry v2 with key_version field, version-bound kem_sig, highest-version-wins cache
+- Envelope key ring fallback (multi-key decryption after rotation)
+- Group membership revocation (write_to_group refresh, member exclusion from envelope recipients)
+- PROTOCOL.md + SDK getting-started tutorial fully documenting all v2.1.1 features
+- Bonus: PeerInfo* use-after-free fix (unique_ptr + find_peer re-lookup after co_await)
+
+### What Worked
+- Integration testing against KVM swarm caught two latent directory bugs (register() namespace, group timestamp resolution) that unit tests missed
+- TDD approach in Phase 93 — writing failing tests first exposed the exact behavior gap before implementation
+- Parallel worktree execution for independent plans (94-01 + 94-02) saved time with zero merge conflicts on actual content
+- Plan checker caught D-01 violation (new top-level PROTOCOL.md section) before execution — saved a rework cycle
+
+### What Was Inefficient
+- Worktree merges required manual conflict resolution on planning files (STATE.md, ROADMAP.md, REQUIREMENTS.md) every time — boilerplate overhead
+- Agent duplicated the directory.refresh() change in Phase 93 worktree (already done by 93-01 in another worktree) — expected with isolation but wastes tokens
+
+### Patterns Established
+- Integration tests on live infrastructure (KVM swarm) as the definitive correctness proof for SDK features
+- Code audit findings tracked in memory for future milestone planning
+- PeerInfo heap-stable pattern (unique_ptr + re-lookup) as the standard for coroutine-safe peer access
+
+### Key Lessons
+- Same-second timestamp ties in distributed data need >= not > (monotonic sequence breaks ties)
+- Cross-namespace writes (register in another's directory) require explicit namespace= parameter — implicit "own namespace" is wrong
+- ASAN can't detect use-after-free on inline deque elements (memory isn't freed), but catches it immediately with heap-allocated unique_ptr
+- Documentation phases benefit from skipping research — the source code IS the research
+
+### Cost Observations
+- Model mix: 100% quality profile (opus executors, sonnet verifiers/checkers)
+- Sessions: ~2
+- Notable: 4 phases + 1 audit bugfix in a single day. Integration test debugging was the main time sink (KVM swarm max_peers issue, two latent bugs)
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution

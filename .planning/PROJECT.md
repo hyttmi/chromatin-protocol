@@ -10,20 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v2.1.1 Revocation & Key Lifecycle
+## Previous Milestone: v2.1.1 Revocation & Key Lifecycle (SHIPPED 2026-04-07)
 
-**Goal:** Close the access control story — owners can revoke write access and rotate encryption keys so revoked identities can't read new data.
-
-**Target features:**
-- ACL revocation via signed revocation blobs (node-enforced)
-- Key versioning in SDK envelope encryption (per-namespace key_v{N})
-- Group membership revocation (remove member, rotate group key)
-- Documentation update (PROTOCOL.md, SDK docs)
-
-**Constraints:**
-- Old data stays readable with old keys (no re-encryption)
-- No new dependencies
-- Pre-production: no backward compat needed
+**Delivered:** SDK delegation revocation (revoke_delegation, list_delegates), ML-KEM key rotation (rotate_kem, key ring, UserEntry v2), group membership revocation (write_to_group refresh, member exclusion), PROTOCOL.md + getting-started tutorial updated. 4 phases, 9 plans, 9 requirements — all complete. Bonus: PeerInfo use-after-free fix (audit finding #6).
 
 ## Previous Milestone: v2.1.0 Compression, Filtering & Observability (SHIPPED 2026-04-05)
 
@@ -352,4 +341,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — Phase 94 complete (protocol & SDK documentation) — v2.1.1 all phases done*
+*Last updated: 2026-04-07 — v2.1.1 shipped (Revocation & Key Lifecycle)*
