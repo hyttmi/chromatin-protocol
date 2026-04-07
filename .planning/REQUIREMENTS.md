@@ -13,8 +13,8 @@
 
 ## Group Membership
 
-- [ ] **GRP-01**: Owner can remove a member from a group; future `write_to_group()` excludes removed member from recipient stanzas
-- [ ] **GRP-02**: Group write forces directory cache refresh to ensure removed member's exclusion is reflected
+- [x] **GRP-01**: Owner can remove a member from a group; future `write_to_group()` excludes removed member from recipient stanzas
+- [x] **GRP-02**: Group write forces directory cache refresh to ensure removed member's exclusion is reflected
 
 ## Documentation
 
@@ -43,8 +43,8 @@
 | KEY-01 | Phase 92 | Complete |
 | KEY-02 | Phase 92 | Pending |
 | KEY-03 | Phase 92 | Complete |
-| GRP-01 | Phase 93 | Pending |
-| GRP-02 | Phase 93 | Pending |
+| GRP-01 | Phase 93 | Complete |
+| GRP-02 | Phase 93 | Complete |
 | DOC-01 | Phase 94 | Pending |
 | DOC-02 | Phase 94 | Pending |
 

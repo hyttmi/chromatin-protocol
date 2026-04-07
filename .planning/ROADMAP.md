@@ -248,7 +248,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 93-01-PLAN.md — Core change: add directory.refresh() to write_to_group() + unit tests for refresh ordering and member exclusion
+- [x] 93-01-PLAN.md — Core change: add directory.refresh() to write_to_group() + unit tests for refresh ordering and member exclusion
 - [ ] 93-02-PLAN.md — KVM integration test: group membership revocation lifecycle against live swarm
 
 ### Phase 94: Protocol & SDK Documentation
@@ -275,5 +275,5 @@ Phases execute in numeric order: 91 -> 92 -> 93 -> 94
 |-------|----------------|--------|-----------|
 | 91. SDK Delegation Revocation | 0/2 | Complete    | 2026-04-06 |
 | 92. KEM Key Versioning | 2/3 | Complete    | 2026-04-07 |
-| 93. Group Membership Revocation | 0/2 | Not started | - |
+| 93. Group Membership Revocation | 1/2 | In Progress|  |
 | 94. Protocol & SDK Documentation | 0/2 | Not started | - |
