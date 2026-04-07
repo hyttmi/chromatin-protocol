@@ -245,11 +245,11 @@ Plans:
   1. Admin can call `remove_member()` and the removed member is absent from the group's member list
   2. After removal, `write_to_group()` encrypts only to remaining members -- the removed member cannot decrypt new group data
   3. `write_to_group()` forces a directory cache refresh before encryption to ensure recently removed members are excluded
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 93-01: TBD
-- [ ] 93-02: TBD
+- [ ] 93-01-PLAN.md — Core change: add directory.refresh() to write_to_group() + unit tests for refresh ordering and member exclusion
+- [ ] 93-02-PLAN.md — KVM integration test: group membership revocation lifecycle against live swarm
 
 ### Phase 94: Protocol & SDK Documentation
 **Goal**: PROTOCOL.md and SDK documentation fully describe revocation, key rotation, and group membership lifecycle as actually shipped
