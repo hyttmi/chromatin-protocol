@@ -243,7 +243,7 @@ private:
 
     // Sync message queue
     void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
-    asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout);
+    asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(const net::Connection::Ptr& conn, std::chrono::seconds timeout);
 
     // Periodic peer list flush
     asio::awaitable<void> peer_flush_timer_loop();
@@ -343,7 +343,7 @@ private:
     asio::signal_set sigusr1_signal_;
     std::filesystem::path config_path_;
 
-    std::deque<PeerInfo> peers_;
+    std::deque<std::unique_ptr<PeerInfo>> peers_;
     std::set<std::string> bootstrap_addresses_;
     std::set<std::string> known_addresses_;      // All addresses we know about
     std::set<std::string> trusted_peers_;         // IP strings for transport trust

@@ -305,7 +305,7 @@ size_t PeerManager::peer_count() const {
 size_t PeerManager::bootstrap_peer_count() const {
     size_t count = 0;
     for (const auto& p : peers_) {
-        if (p.is_bootstrap) ++count;
+        if (p->is_bootstrap) ++count;
     }
     return count;
 }
@@ -386,7 +386,7 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     // all sharing the relay's identity. Deduping would close earlier clients' pipes.
     if (!conn->is_uds()) {
         for (auto it = peers_.begin(); it != peers_.end(); ++it) {
-            auto existing_ns = crypto::sha3_256(it->connection->peer_pubkey());
+            auto existing_ns = crypto::sha3_256((*it)->connection->peer_pubkey());
             if (existing_ns == peer_ns) {
                 // Deterministic tie-break: the node with the lower namespace_id keeps
                 // its initiated (outbound) connection. Since both sides see the same
@@ -412,11 +412,11 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
                     // to dampen reconnect-dedup cycles without permanently losing
                     // connectivity (stop_reconnect would prevent recovery if the
                     // kept connection later fails).
-                    auto closed_addr = it->connection->connect_address();
+                    auto closed_addr = (*it)->connection->connect_address();
                     if (!closed_addr.empty()) {
                         server_.delay_reconnect(closed_addr);
                     }
-                    it->connection->close();
+                    (*it)->connection->close();
                     peers_.erase(it);
                 } else {
                     spdlog::info("duplicate connection from peer {}: closing new, keeping existing",
@@ -442,8 +442,8 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
         on_peer_message(c, type, std::move(payload), request_id);
     });
 
-    peers_.push_back(info);
-    peers_.back().sync_inbox.clear();
+    peers_.push_back(std::make_unique<PeerInfo>(std::move(info)));
+    peers_.back()->sync_inbox.clear();
     ++metrics_.peers_connected_total;
 
     // Track this peer's address
@@ -517,8 +517,8 @@ void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
     // Remove from peers
     peers_.erase(
         std::remove_if(peers_.begin(), peers_.end(),
-                       [&conn](const PeerInfo& p) {
-                           return p.connection == conn;
+                       [&conn](const std::unique_ptr<PeerInfo>& p) {
+                           return p->connection == conn;
                        }),
         peers_.end());
     ++metrics_.peers_disconnected_total;
@@ -541,6 +541,10 @@ asio::awaitable<void> PeerManager::announce_and_sync(net::Connection::Ptr conn) 
         co_return;
     }
 
+    // Re-lookup after co_await — peer may have disconnected
+    peer = find_peer(conn);
+    if (!peer) co_return;
+
     // Wait for peer's announce (timeout 5s) using timer-cancel pattern
     if (!peer->announce_received) {
         asio::steady_timer timer(ioc_);
@@ -548,6 +552,9 @@ asio::awaitable<void> PeerManager::announce_and_sync(net::Connection::Ptr conn) 
         timer.expires_after(std::chrono::seconds(5));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
+        // Re-lookup after co_await — peer may have disconnected
+        peer = find_peer(conn);
+        if (!peer) co_return;
         peer->announce_notify = nullptr;
         if (!peer->announce_received) {
             spdlog::warn("peer {} did not send SyncNamespaceAnnounce within 5s, treating as replicate-all",
@@ -1603,7 +1610,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 // Pre-compute response size
                 size_t resp_size = 8;  // peer_count + bootstrap_count
                 for (const auto& peer : peers_) {
-                    resp_size += 2 + peer.address.size() + 1 + 1 + 1 + 8;
+                    resp_size += 2 + peer->address.size() + 1 + 1 + 1 + 8;
                 }
 
                 std::vector<uint8_t> response(resp_size);
@@ -1616,18 +1623,18 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                 for (const auto& peer : peers_) {
                     // address length (2 bytes big-endian)
-                    uint16_t addr_len = static_cast<uint16_t>(peer.address.size());
+                    uint16_t addr_len = static_cast<uint16_t>(peer->address.size());
                     response[off++] = static_cast<uint8_t>(addr_len >> 8);
                     response[off++] = static_cast<uint8_t>(addr_len & 0xFF);
                     // address bytes
-                    std::memcpy(response.data() + off, peer.address.data(), addr_len);
+                    std::memcpy(response.data() + off, peer->address.data(), addr_len);
                     off += addr_len;
                     // flags
-                    response[off++] = peer.is_bootstrap ? 0x01 : 0x00;
-                    response[off++] = peer.syncing ? 0x01 : 0x00;
-                    response[off++] = peer.peer_is_full ? 0x01 : 0x00;
+                    response[off++] = peer->is_bootstrap ? 0x01 : 0x00;
+                    response[off++] = peer->syncing ? 0x01 : 0x00;
+                    response[off++] = peer->peer_is_full ? 0x01 : 0x00;
                     // connected_duration_ms (8 bytes big-endian)
-                    uint64_t duration_ms = (peer.last_message_time > 0) ? (now_ms - peer.last_message_time) : 0;
+                    uint64_t duration_ms = (peer->last_message_time > 0) ? (now_ms - peer->last_message_time) : 0;
                     for (int i = 7; i >= 0; --i)
                         response[off++] = static_cast<uint8_t>(duration_ms >> (i * 8));
                 }
@@ -1842,12 +1849,15 @@ void PeerManager::route_sync_message(PeerInfo* peer, wire::TransportMsgType type
 }
 
 asio::awaitable<std::optional<SyncMessage>>
-PeerManager::recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout) {
+PeerManager::recv_sync_msg(const net::Connection::Ptr& conn, std::chrono::seconds timeout) {
     // Ensure we're on the io_context thread before accessing sync_inbox.
     // After co_await offload() (crypto thread pool), the coroutine may be
     // running on the pool thread. The timer co_await below will transfer us
     // back, but the fast path (inbox non-empty) must also be on the right thread.
     co_await asio::post(ioc_, asio::use_awaitable);
+
+    auto* peer = find_peer(conn);
+    if (!peer) co_return std::nullopt;
 
     if (!peer->sync_inbox.empty()) {
         auto msg = std::move(peer->sync_inbox.front());
@@ -1858,6 +1868,11 @@ PeerManager::recv_sync_msg(PeerInfo* peer, std::chrono::seconds timeout) {
     peer->sync_notify = &timer;
     timer.expires_after(timeout);
     auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+
+    // Re-lookup after co_await — peer may have disconnected during wait
+    peer = find_peer(conn);
+    if (!peer) co_return std::nullopt;
+
     peer->sync_notify = nullptr;
     if (peer->sync_inbox.empty()) {
         co_return std::nullopt;  // Timeout
@@ -1897,12 +1912,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     // Send SyncRequest
     std::span<const uint8_t> empty{};
     if (!co_await conn->send_message(wire::TransportMsgType_SyncRequest, empty)) {
-        peer->syncing = false;
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
         co_return;
     }
 
     // Wait for SyncAccept (or SyncRejected)
-    auto accept_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+    auto accept_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
+    peer = find_peer(conn);
+    if (!peer) co_return;
     if (!accept_msg || accept_msg->type != wire::TransportMsgType_SyncAccept) {
         if (accept_msg && accept_msg->type == wire::TransportMsgType_SyncRejected) {
             uint8_t reason = accept_msg->payload.empty() ? 0 : accept_msg->payload[0];
@@ -1933,12 +1951,15 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
     }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
     if (!co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload)) {
-        peer->syncing = false;
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
         co_return;
     }
 
     // Phase A (continued): Receive peer's NamespaceList
-    auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+    auto ns_msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+    peer = find_peer(conn);
+    if (!peer) co_return;
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
         spdlog::warn("sync with {}: expected NamespaceList", conn->remote_address());
         peer->syncing = false;
@@ -2056,16 +2077,21 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
         auto init_payload = sync::encode_reconcile_init(init);
         if (!co_await conn->send_message(wire::TransportMsgType_ReconcileInit, init_payload)) {
-            peer->syncing = false;
+            peer = find_peer(conn);
+            if (peer) peer->syncing = false;
             co_return;
         }
+        peer = find_peer(conn);
+        if (!peer) co_return;
 
         // Multi-round reconciliation loop
         // Collect all items the peer reveals via ItemList ranges
         std::vector<sync::Hash32> peer_items;
 
         for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
-            auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+            auto msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+            peer = find_peer(conn);
+            if (!peer) co_return;
             if (!msg) {
                 spdlog::warn("sync with {}: timeout during reconciliation for ns={}",
                              conn->remote_address(), to_hex(ns, 8));
@@ -2119,7 +2145,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                     auto items_payload = sync::encode_reconcile_items(ns, our_range_items);
                     if (!co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
                                                      items_payload)) {
-                        peer->syncing = false;
+                        peer = find_peer(conn);
+                        if (peer) peer->syncing = false;
                         co_return;
                     }
                     break;
@@ -2133,7 +2160,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 auto resp_payload = sync::encode_reconcile_ranges(ns, result.response_ranges);
                 if (!co_await conn->send_message(wire::TransportMsgType_ReconcileRanges,
                                                  resp_payload)) {
-                    peer->syncing = false;
+                    peer = find_peer(conn);
+                    if (peer) peer->syncing = false;
                     co_return;
                 }
             } else if (msg->type == wire::TransportMsgType_ReconcileItems) {
@@ -2176,9 +2204,12 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
     // Signal end of Phase B: all namespaces reconciled
     if (!co_await conn->send_message(wire::TransportMsgType_SyncComplete, empty)) {
-        peer->syncing = false;
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
         co_return;
     }
+    peer = find_peer(conn);
+    if (!peer) co_return;
 
     // Phase C: Exchange blobs one at a time using existing BlobRequest/BlobTransfer
     spdlog::debug("sync initiator {}: Phase C start, missing {} namespaces",
@@ -2195,14 +2226,19 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
             auto req_payload = sync::SyncProtocol::encode_blob_request(ns, batch);
             if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
-                peer->syncing = false;
+                peer = find_peer(conn);
+                if (peer) peer->syncing = false;
                 co_return;
             }
+            peer = find_peer(conn);
+            if (!peer) co_return;
 
             uint32_t expected = static_cast<uint32_t>(batch.size());
             uint32_t received = 0;
             while (received < expected) {
-                auto msg = co_await recv_sync_msg(peer, BLOB_TRANSFER_TIMEOUT);
+                auto msg = co_await recv_sync_msg(conn, BLOB_TRANSFER_TIMEOUT);
+                peer = find_peer(conn);
+                if (!peer) co_return;
                 if (!msg) {
                     spdlog::warn("sync: timeout waiting for blob transfer from {}",
                                  conn->remote_address());
@@ -2214,6 +2250,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
+                    peer = find_peer(conn);
+                    if (!peer) co_return;
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
@@ -2232,6 +2270,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
                             co_await conn->send_message(
                                 wire::TransportMsgType_BlobTransfer, bt_payload);
+                            peer = find_peer(conn);
+                            if (!peer) co_return;
                             total_stats.blobs_sent++;
                         }
                     }
@@ -2242,7 +2282,9 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
 
     // Handle remaining BlobRequests from peer (they may still need our blobs)
     while (true) {
-        auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
+        auto msg = co_await recv_sync_msg(conn, std::chrono::seconds(2));
+        peer = find_peer(conn);
+        if (!peer) co_return;
         if (!msg) break;
         if (msg->type == wire::TransportMsgType_BlobRequest) {
             if (peer->peer_is_full) {
@@ -2258,6 +2300,8 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
                     co_await conn->send_message(
                         wire::TransportMsgType_BlobTransfer, bt_payload);
+                    peer = find_peer(conn);
+                    if (!peer) co_return;
                     total_stats.blobs_sent++;
                 }
             }
@@ -2308,19 +2352,21 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         std::span<const uint8_t> empty{};
         if (!co_await conn->send_message(wire::TransportMsgType_PeerListRequest, empty)) {
             spdlog::debug("PEX: failed to send PeerListRequest to {}", conn->remote_address());
-            peer->syncing = false;
+            peer = find_peer(conn);
+            if (peer) peer->syncing = false;
             co_return;
         }
 
         // Wait for PeerListResponse (with timeout)
-        auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+        auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListResponse) {
             handle_peer_list_response(conn, std::move(pex_msg->payload));
         }
     }
 
     ++metrics_.syncs;
-    peer->syncing = false;
+    peer = find_peer(conn);
+    if (peer) peer->syncing = false;
 }
 
 asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr conn) {
@@ -2334,6 +2380,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     // Send SyncAccept
     std::span<const uint8_t> empty{};
     co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty);
+    peer = find_peer(conn);
+    if (!peer) co_return;
 
     // Phase A: Send our NamespaceList (filtered by sync_namespaces)
     auto our_namespaces = engine_.list_namespaces();
@@ -2355,7 +2403,9 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
 
     // Phase A (continued): Receive peer's NamespaceList
-    auto ns_msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+    auto ns_msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+    peer = find_peer(conn);
+    if (!peer) co_return;
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
         spdlog::warn("sync responder {}: expected NamespaceList", conn->remote_address());
         peer->syncing = false;
@@ -2433,7 +2483,9 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
             co_return;  // Initiator will timeout after 30s
         }
 
-        auto msg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+        auto msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+        peer = find_peer(conn);
+        if (!peer) co_return;
         if (!msg) {
             spdlog::warn("sync responder {}: timeout during Phase B", conn->remote_address());
             peer->syncing = false;
@@ -2498,14 +2550,20 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 // Fingerprint+count matched -- send empty ranges to signal done
                 auto done_payload = sync::encode_reconcile_ranges(ns, {});
                 co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, done_payload);
+                peer = find_peer(conn);
+                if (!peer) co_return;
             } else {
                 // Send our response ranges
                 auto resp_payload = sync::encode_reconcile_ranges(ns, result.response_ranges);
                 co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, resp_payload);
+                peer = find_peer(conn);
+                if (!peer) co_return;
 
                 // Multi-round loop within this namespace
                 for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
-                    auto rmsg = co_await recv_sync_msg(peer, SYNC_TIMEOUT);
+                    auto rmsg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+                    peer = find_peer(conn);
+                    if (!peer) co_return;
                     if (!rmsg) {
                         spdlog::warn("sync responder {}: timeout during reconciliation for ns={}",
                                      conn->remote_address(), to_hex(ns, 8));
@@ -2557,6 +2615,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                                                                               our_range_items);
                             co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
                                                         items_payload);
+                            peer = find_peer(conn);
+                            if (!peer) co_return;
                             break;
                         }
 
@@ -2566,6 +2626,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
                         auto rp = sync::encode_reconcile_ranges(ns, rresult.response_ranges);
                         co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, rp);
+                        peer = find_peer(conn);
+                        if (!peer) co_return;
                     } else if (rmsg->type == wire::TransportMsgType_ReconcileItems) {
                         // ReconcileItems = initiator's final item exchange for this namespace
                         auto decoded = sync::decode_reconcile_items(rmsg->payload);
@@ -2619,11 +2681,15 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
             auto req_payload = sync::SyncProtocol::encode_blob_request(ns, batch);
             co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
+            peer = find_peer(conn);
+            if (!peer) co_return;
 
             uint32_t expected = static_cast<uint32_t>(batch.size());
             uint32_t received = 0;
             while (received < expected) {
-                auto msg = co_await recv_sync_msg(peer, BLOB_TRANSFER_TIMEOUT);
+                auto msg = co_await recv_sync_msg(conn, BLOB_TRANSFER_TIMEOUT);
+                peer = find_peer(conn);
+                if (!peer) co_return;
                 if (!msg) {
                     spdlog::warn("sync responder: timeout waiting for blob transfer from {}",
                                  conn->remote_address());
@@ -2633,6 +2699,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
                     auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
+                    peer = find_peer(conn);
+                    if (!peer) co_return;
                     total_stats.blobs_received += s.blobs_received;
                     total_stats.storage_full_count += s.storage_full_count;
                     total_stats.quota_exceeded_count += s.quota_exceeded_count;
@@ -2651,6 +2719,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
                             co_await conn->send_message(
                                 wire::TransportMsgType_BlobTransfer, bt_payload);
+                            peer = find_peer(conn);
+                            if (!peer) co_return;
                             total_stats.blobs_sent++;
                         }
                     }
@@ -2662,7 +2732,9 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     // Handle remaining BlobRequests from peer
     spdlog::debug("sync responder {}: entering remaining BlobRequests handler", conn->remote_address());
     while (true) {
-        auto msg = co_await recv_sync_msg(peer, std::chrono::seconds(2));
+        auto msg = co_await recv_sync_msg(conn, std::chrono::seconds(2));
+        peer = find_peer(conn);
+        if (!peer) co_return;
         if (!msg) {
             spdlog::debug("sync responder {}: remaining handler timeout, done", conn->remote_address());
             break;
@@ -2683,6 +2755,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
                     co_await conn->send_message(
                         wire::TransportMsgType_BlobTransfer, bt_payload);
+                    peer = find_peer(conn);
+                    if (!peer) co_return;
                     total_stats.blobs_sent++;
                 }
             }
@@ -2729,7 +2803,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     // PEX exchange: wait for PeerListRequest from initiator, then respond (inline, no concurrent send)
     // Skip in closed mode -- don't share peer addresses
     if (!acl_.is_peer_closed_mode()) {
-        auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+        auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
             auto addresses = build_peer_list_response(conn->remote_address());
             auto payload = encode_peer_list(addresses);
@@ -2740,7 +2814,8 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     }
 
     ++metrics_.syncs;
-    peer->syncing = false;
+    peer = find_peer(conn);
+    if (peer) peer->syncing = false;
 }
 
 asio::awaitable<void> PeerManager::sync_all_peers() {
@@ -2748,7 +2823,7 @@ asio::awaitable<void> PeerManager::sync_all_peers() {
     // (peers_ may be modified during co_await when new peers connect/disconnect)
     std::vector<net::Connection::Ptr> connections;
     for (const auto& peer : peers_) {
-        connections.push_back(peer.connection);
+        connections.push_back(peer->connection);
     }
     for (const auto& conn : connections) {
         auto* peer = find_peer(conn);
@@ -2948,8 +3023,8 @@ void PeerManager::reload_config() {
             sync_namespaces_.begin(), sync_namespaces_.end());
         auto announce_payload = encode_namespace_list(ns_list);
         for (auto& peer : peers_) {
-            if (peer.connection->is_uds()) continue;
-            auto conn = peer.connection;
+            if (peer->connection->is_uds()) continue;
+            auto conn = peer->connection;
             auto payload_copy = announce_payload;
             asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
                 co_await conn->send_message(wire::TransportMsgType_SyncNamespaceAnnounce,
@@ -2958,7 +3033,7 @@ void PeerManager::reload_config() {
         }
         spdlog::info("config reload: re-announced sync_namespaces to {} TCP peers",
                      std::count_if(peers_.begin(), peers_.end(),
-                                   [](const PeerInfo& p) { return !p.connection->is_uds(); }));
+                                   [](const std::unique_ptr<PeerInfo>& p) { return !p->connection->is_uds(); }));
     }
 
     // Reload cursor config and reset round counters (force full resync on next round)
@@ -3050,12 +3125,12 @@ void PeerManager::disconnect_unauthorized_peers() {
     std::vector<net::Connection::Ptr> to_disconnect;
 
     for (const auto& peer : peers_) {
-        auto peer_ns = crypto::sha3_256(peer.connection->peer_pubkey());
-        bool peer_allowed = peer.connection->is_uds()
+        auto peer_ns = crypto::sha3_256(peer->connection->peer_pubkey());
+        bool peer_allowed = peer->connection->is_uds()
             ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
             : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
         if (!peer_allowed) {
-            to_disconnect.push_back(peer.connection);
+            to_disconnect.push_back(peer->connection);
         }
     }
 
@@ -3192,15 +3267,15 @@ void PeerManager::on_blob_ingested(
 
     // BlobNotify (type 59) to all TCP peers except source (PUSH-01, PUSH-07, PUSH-08)
     for (auto& peer : peers_) {
-        if (peer.connection == source) continue;  // Source exclusion (D-06, D-09)
-        if (peer.connection->is_uds()) continue;  // UDS = client, not peer
+        if (peer->connection == source) continue;  // Source exclusion (D-06, D-09)
+        if (peer->connection->is_uds()) continue;  // UDS = client, not peer
 
         // Phase 86: Namespace filtering (D-05, D-07)
         // Empty announced set = replicate all (no filter applied)
-        if (!peer.announced_namespaces.empty() &&
-            peer.announced_namespaces.count(namespace_id) == 0) continue;
+        if (!peer->announced_namespaces.empty() &&
+            peer->announced_namespaces.count(namespace_id) == 0) continue;
 
-        auto conn = peer.connection;
+        auto conn = peer->connection;
         auto payload_copy = payload;
         asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
             co_await conn->send_message(wire::TransportMsgType_BlobNotify,
@@ -3210,8 +3285,8 @@ void PeerManager::on_blob_ingested(
 
     // Notification (type 21) to subscribed clients -- existing pub/sub behavior
     for (auto& peer : peers_) {
-        if (peer.subscribed_namespaces.count(namespace_id)) {
-            auto conn = peer.connection;
+        if (peer->subscribed_namespaces.count(namespace_id)) {
+            auto conn = peer->connection;
             auto payload_copy = payload;
             asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
                 co_await conn->send_message(wire::TransportMsgType_Notification,
@@ -3428,27 +3503,29 @@ asio::awaitable<void> PeerManager::run_pex_with_peer(net::Connection::Ptr conn) 
     std::span<const uint8_t> empty{};
     if (!co_await conn->send_message(wire::TransportMsgType_PeerListRequest, empty)) {
         spdlog::debug("PEX: failed to send PeerListRequest to {}", conn->remote_address());
-        peer->syncing = false;
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
         co_return;
     }
 
     // Wait for PeerListResponse
-    auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+    auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
     if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListResponse) {
         handle_peer_list_response(conn, std::move(pex_msg->payload));
     }
 
-    peer->syncing = false;
+    peer = find_peer(conn);
+    if (peer) peer->syncing = false;
 }
 
 std::vector<std::string> PeerManager::build_peer_list_response(const std::string& exclude_address) {
     std::vector<std::string> candidates;
 
     for (const auto& peer : peers_) {
-        if (!peer.connection->is_authenticated()) continue;
-        if (peer.address == exclude_address) continue;
-        if (peer.address == config_.bind_address) continue;
-        candidates.push_back(peer.address);
+        if (!peer->connection->is_authenticated()) continue;
+        if (peer->address == exclude_address) continue;
+        if (peer->address == config_.bind_address) continue;
+        candidates.push_back(peer->address);
     }
 
     // Shuffle for random subset
@@ -3475,7 +3552,9 @@ asio::awaitable<void> PeerManager::handle_pex_as_responder(net::Connection::Ptr 
     // NOTE: do NOT clear sync_inbox -- PeerListRequest is already queued in it
 
     // Read PeerListRequest from inbox (already pushed by on_peer_message)
-    auto pex_msg = co_await recv_sync_msg(peer, std::chrono::seconds(5));
+    auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
+    peer = find_peer(conn);
+    if (!peer) co_return;
     if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
         auto addresses = build_peer_list_response(conn->remote_address());
         auto payload = encode_peer_list(addresses);
@@ -3484,7 +3563,8 @@ asio::awaitable<void> PeerManager::handle_pex_as_responder(net::Connection::Ptr 
                                      std::span<const uint8_t>(payload));
     }
 
-    peer->syncing = false;
+    peer = find_peer(conn);
+    if (peer) peer->syncing = false;
 }
 
 void PeerManager::handle_peer_list_response(net::Connection::Ptr conn,
@@ -3537,7 +3617,7 @@ asio::awaitable<void> PeerManager::request_peers_from_all() {
     // (peers_ may be modified during co_await when new peers connect/disconnect)
     std::vector<net::Connection::Ptr> connections;
     for (const auto& peer : peers_) {
-        connections.push_back(peer.connection);
+        connections.push_back(peer->connection);
     }
     for (const auto& conn : connections) {
         auto* peer = find_peer(conn);
@@ -3695,7 +3775,7 @@ void PeerManager::update_persisted_peer(const std::string& address, bool success
 
 PeerInfo* PeerManager::find_peer(const net::Connection::Ptr& conn) {
     for (auto& p : peers_) {
-        if (p.connection == conn) return &p;
+        if (p->connection == conn) return p.get();
     }
     return nullptr;
 }
@@ -3744,8 +3824,8 @@ void PeerManager::dump_metrics() {
     // Per-peer breakdown
     spdlog::info("  peers: {}", peers_.size());
     for (const auto& peer : peers_) {
-        auto ns_hex = to_hex(peer.connection->peer_pubkey(), 4);
-        spdlog::info("    {} (ns:{}...)", peer.address, ns_hex);
+        auto ns_hex = to_hex(peer->connection->peer_pubkey(), 4);
+        spdlog::info("    {} (ns:{}...)", peer->address, ns_hex);
     }
 
     // UDS connection count
@@ -4070,8 +4150,8 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
         // Build set of currently-connected peer pubkey hashes
         std::vector<std::array<uint8_t, 32>> connected;
         for (const auto& peer : peers_) {
-            if (peer.connection && !peer.connection->peer_pubkey().empty()) {
-                auto hash = crypto::sha3_256(peer.connection->peer_pubkey());
+            if (peer->connection && !peer->connection->peer_pubkey().empty()) {
+                auto hash = crypto::sha3_256(peer->connection->peer_pubkey());
                 connected.push_back(hash);
             }
         }
@@ -4147,8 +4227,8 @@ asio::awaitable<void> PeerManager::keepalive_loop() {
         // Snapshot connections -- peers_ may change across co_await points
         std::vector<net::Connection::Ptr> tcp_peers;
         for (const auto& peer : peers_) {
-            if (!peer.connection->is_uds()) {
-                tcp_peers.push_back(peer.connection);
+            if (!peer->connection->is_uds()) {
+                tcp_peers.push_back(peer->connection);
             }
         }
 
