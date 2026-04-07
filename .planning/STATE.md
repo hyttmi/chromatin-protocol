@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Completed 94-01-PLAN.md
-last_updated: "2026-04-07T09:02:12.297Z"
+stopped_at: Completed 94-02-PLAN.md
+last_updated: "2026-04-07T09:01:32.641Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 9
   completed_plans: 8
-  percent: 50
+  percent: 90
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 ## Current Position
 
 Phase: 94
-Plan: Not started
-Status: Executing Phase 93
+Plan: 2 of 2
+Status: Executing Phase 94
 Last activity: 2026-04-07
 
-Progress: [█████░░░░░] 50%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -53,7 +53,7 @@ Progress: [█████░░░░░] 50%
 
 *Updated after each plan completion*
 | Phase 92 P03 | 2min | 1 tasks | 2 files |
-| Phase 94 P01 | 2min | 2 tasks | 1 files |
+| Phase 94 P02 | 1min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -69,7 +69,7 @@ Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
 - [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
 - [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
 - [Phase 92]: envelope_decrypt uses _build_kem_ring_map() for O(N) stanza scan with O(1) ring lookup — replaces single-key bisect
-- [Phase 94]: All v2.1.1 documentation extends existing PROTOCOL.md sections per D-01 (no new ## top-level sections)
+- [Phase 94]: Tutorial style matches existing getting-started.md: short snippets, ## headers, minimal prose
 
 ### Pending Todos
 
@@ -82,6 +82,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T09:02:12.295Z
-Stopped at: Completed 94-01-PLAN.md
+Last session: 2026-04-07T09:01:32.638Z
+Stopped at: Completed 94-02-PLAN.md
 Resume file: None

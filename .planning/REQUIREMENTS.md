@@ -18,8 +18,8 @@
 
 ## Documentation
 
-- [x] **DOC-01**: PROTOCOL.md documents revocation mechanism, key versioning format (UserEntry v2), and group membership revocation behavior
-- [ ] **DOC-02**: SDK docs and getting-started tutorial updated with revocation, key rotation, and group membership management examples
+- [ ] **DOC-01**: PROTOCOL.md documents revocation mechanism, key versioning format (UserEntry v2), and group membership revocation behavior
+- [x] **DOC-02**: SDK docs and getting-started tutorial updated with revocation, key rotation, and group membership management examples
 
 ## Future Requirements
 
@@ -45,8 +45,8 @@
 | KEY-03 | Phase 92 | Complete |
 | GRP-01 | Phase 93 | Complete |
 | GRP-02 | Phase 93 | Complete |
-| DOC-01 | Phase 94 | Complete |
-| DOC-02 | Phase 94 | Pending |
+| DOC-01 | Phase 94 | Pending |
+| DOC-02 | Phase 94 | Complete |
 
 **Coverage:**
 - v2.1.1 requirements: 9 total

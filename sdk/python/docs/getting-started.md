@@ -412,6 +412,105 @@ rounds, ingestion counters, and uptime. See
 The endpoint is disabled by default (empty `metrics_bind`) and listens on
 localhost only when enabled. Reload with SIGHUP to toggle without restart.
 
+## Delegation Revocation
+
+Namespace owners can revoke a delegate's write access. Revocation tombstones
+the delegation blob -- the node immediately rejects subsequent writes from the
+revoked delegate.
+
+```python
+from chromatindb import ChromatinClient, Identity, Directory
+from chromatindb.exceptions import DelegationNotFoundError
+
+admin = Identity.load("admin.key")
+delegate = Identity.load("delegate.key")
+
+async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+    directory = Directory(client, admin)
+
+    # Revoke a delegate's write access
+    result = await directory.revoke_delegation(delegate)
+    print(f"Revoked: tombstone={result.tombstone_hash.hex()}")
+
+    # List remaining active delegates
+    delegates = await directory.list_delegates()
+    for d in delegates:
+        print(f"Active delegate: {d.delegate_pk_hash.hex()}")
+```
+
+After revocation, the tombstone propagates to other nodes via sync. Connected
+peers see the revocation near-instantly (via BlobNotify). Disconnected peers
+see it on their next sync round (up to the safety-net interval, default 600s).
+
+`revoke_delegation()` raises `DelegationNotFoundError` if no active delegation
+exists for the given identity.
+
+## KEM Key Rotation
+
+Rotate your ML-KEM-1024 encryption keypair so that a compromised key cannot
+decrypt future data. Old keys are retained in a key ring for decrypting
+historical data.
+
+```python
+from chromatindb import ChromatinClient, Identity, Directory
+
+identity = Identity.load("my_identity.key")
+
+# Rotate KEM keypair (offline operation, no network needed)
+identity.rotate_kem("my_identity.key")
+print(f"New key version: {identity.key_version}")
+
+# Publish the new key to the directory
+async with ChromatinClient.connect("192.168.1.200", 4201, identity) as client:
+    directory = Directory(client, identity, directory_namespace=admin_ns)
+    await directory.register("alice")
+```
+
+After rotation:
+- **Senders** who call `resolve_recipient("alice")` get the latest KEM public
+  key and encrypt to it automatically.
+- **Decryption** checks all keys in the ring -- data encrypted under old or
+  new keys decrypts transparently via `read_encrypted()`.
+- **Key files** are saved as numbered files (`my_identity.kem.0`,
+  `my_identity.kem.1`, etc.) alongside the canonical `.kem` file.
+
+Old keys are never deleted. Discarding a historical key permanently prevents
+decryption of any data encrypted under that key.
+
+## Group Membership Management
+
+Directory admins can add and remove group members. After removal, new
+encrypted group writes exclude the removed member.
+
+```python
+admin = Identity.load("admin.key")
+
+async with ChromatinClient.connect("192.168.1.200", 4201, admin) as client:
+    directory = Directory(client, admin)
+
+    # Create a group with initial members
+    await directory.create_group("engineering", members=[alice, bob, carol])
+
+    # Add a member later
+    await directory.add_member("engineering", dave)
+
+    # Remove a member
+    await directory.remove_member("engineering", bob)
+
+    # New group writes exclude removed member
+    result = await client.write_to_group(
+        b"Team update", "engineering", directory, ttl=3600
+    )
+```
+
+After `remove_member()`:
+- `write_to_group()` forces a directory cache refresh before resolving
+  membership, ensuring the removed member is excluded from encryption.
+- The removed member gets `NotARecipientError` when trying to decrypt new
+  group data.
+- Old data remains readable -- removal is forward-only. The removed member
+  can still decrypt any data encrypted before their removal.
+
 ## Next Steps
 
 - See the [API overview](../README.md) for the full list of available methods
@@ -422,4 +521,7 @@ localhost only when enabled. Reload with SIGHUP to toggle without restart.
 - Encrypted blobs are automatically Brotli-compressed before encryption for payloads >= 256 bytes (transparent, enabled by default)
 - Auto-reconnect handles connection drops transparently -- customize with `on_disconnect` and `on_reconnect` callbacks
 - Set up a directory for user discovery and group management
+- Revoke delegate access with `directory.revoke_delegation()` -- tombstone-based, propagates via sync
+- Rotate encryption keys with `identity.rotate_kem()` -- old data stays readable
+- Manage group membership with `directory.add_member()` and `directory.remove_member()`
 - See [PROTOCOL.md](../../db/PROTOCOL.md) for the envelope binary format specification

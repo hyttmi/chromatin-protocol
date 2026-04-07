@@ -263,8 +263,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [x] 94-01-PLAN.md — PROTOCOL.md: delegation revocation, UserEntry v2 format, key ring decrypt, group membership revocation
-- [ ] 94-02-PLAN.md — SDK getting-started: delegation revocation, KEM key rotation, group membership management tutorials
+- [ ] 94-01-PLAN.md — PROTOCOL.md: delegation revocation, UserEntry v2 format, key ring decrypt, group membership revocation
+- [x] 94-02-PLAN.md — SDK getting-started: delegation revocation, KEM key rotation, group membership management tutorials
 
 ## Progress
 
