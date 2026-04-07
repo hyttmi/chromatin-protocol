@@ -20,7 +20,8 @@ import pytest
 
 from chromatindb import ChromatinClient
 from chromatindb._directory import Directory
-from chromatindb.exceptions import HandshakeError, ProtocolError
+from chromatindb._envelope import envelope_decrypt
+from chromatindb.exceptions import HandshakeError, NotARecipientError, ProtocolError
 from chromatindb.identity import Identity
 from chromatindb.types import (
     BatchReadResult,
@@ -524,3 +525,115 @@ async def test_delegation_revocation_propagation() -> None:
         delegate_pk_hashes = [e.delegate_pk_hash for e in delegates]
         from chromatindb.crypto import sha3_256
         assert sha3_256(delegate.public_key) not in delegate_pk_hashes
+
+
+# ------------------------------------------------------------------
+# Group membership revocation integration tests (Phase 93, Plan 02)
+# ------------------------------------------------------------------
+
+
+async def test_group_membership_revocation() -> None:
+    """GRP-01 + GRP-02: admin removes member, future group writes exclude them.
+
+    Full lifecycle:
+    1. Admin creates group with admin + member_a + member_b
+    2. Admin writes encrypted data to group -- all 3 can decrypt
+    3. Admin removes member_b from group
+    4. Wait for propagation (5s for LAN swarm)
+    5. Admin writes encrypted data to group again -- only admin + member_a can decrypt
+    6. member_b cannot decrypt new data (NotARecipientError)
+    7. member_b CAN still decrypt old data (forward exclusion only, per D-04)
+    """
+    admin = Identity.generate()
+    member_a = Identity.generate()
+    member_b = Identity.generate()  # will be removed
+
+    async with ChromatinClient.connect(
+        [(RELAY_HOST, RELAY_PORT)], admin
+    ) as admin_conn:
+        directory = Directory(admin_conn, admin)
+
+        # Delegate write access so members can self-register in admin's namespace
+        await directory.delegate(member_a)
+        await directory.delegate(member_b)
+
+        # Admin registers itself in directory
+        await directory.register("admin")
+
+        # member_a self-registers via delegated access
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], member_a
+        ) as ma_conn:
+            dir_a = Directory(
+                ma_conn, member_a, directory_namespace=admin.namespace
+            )
+            await dir_a.register("member_a")
+
+        # member_b self-registers via delegated access
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], member_b
+        ) as mb_conn:
+            dir_b = Directory(
+                mb_conn, member_b, directory_namespace=admin.namespace
+            )
+            await dir_b.register("member_b")
+
+        # Step 1: Create group with all 3 members
+        await directory.create_group("team", [admin, member_a, member_b])
+
+        # Step 2: Write encrypted data to group -- all members should decrypt
+        wr1 = await admin_conn.write_to_group(
+            b"before-removal", "team", directory, 300
+        )
+        assert len(wr1.blob_hash) == 32
+
+        # Verify all 3 can decrypt the pre-removal message
+        for member in [admin, member_a, member_b]:
+            async with ChromatinClient.connect(
+                [(RELAY_HOST, RELAY_PORT)], member
+            ) as conn:
+                result = await conn.read_blob(admin.namespace, wr1.blob_hash)
+                assert result is not None
+                plaintext = envelope_decrypt(result.data, member)
+                assert plaintext == b"before-removal"
+
+        # Step 3: Admin removes member_b
+        remove_result = await directory.remove_member("team", member_b)
+        assert len(remove_result.blob_hash) == 32
+
+        # Step 4: Wait for propagation across swarm
+        await asyncio.sleep(5)
+
+        # Step 5: Write new encrypted data to group (refresh ensures exclusion)
+        wr2 = await admin_conn.write_to_group(
+            b"after-removal", "team", directory, 300
+        )
+        assert len(wr2.blob_hash) == 32
+
+        # Step 6: Remaining members can decrypt new message
+        for member in [admin, member_a]:
+            async with ChromatinClient.connect(
+                [(RELAY_HOST, RELAY_PORT)], member
+            ) as conn:
+                result = await conn.read_blob(admin.namespace, wr2.blob_hash)
+                assert result is not None
+                plaintext = envelope_decrypt(result.data, member)
+                assert plaintext == b"after-removal"
+
+        # Step 7: Removed member CANNOT decrypt new message
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], member_b
+        ) as mb_conn:
+            result = await mb_conn.read_blob(admin.namespace, wr2.blob_hash)
+            assert result is not None
+            with pytest.raises(NotARecipientError):
+                envelope_decrypt(result.data, member_b)
+
+        # Step 8: Removed member CAN still decrypt old message (D-04)
+        async with ChromatinClient.connect(
+            [(RELAY_HOST, RELAY_PORT)], member_b
+        ) as mb_conn:
+            result = await mb_conn.read_blob(admin.namespace, wr1.blob_hash)
+            assert result is not None
+            plaintext = envelope_decrypt(result.data, member_b)
+            assert plaintext == b"before-removal"

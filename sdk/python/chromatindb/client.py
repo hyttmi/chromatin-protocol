@@ -1037,6 +1037,8 @@ class ChromatinClient:
     ) -> WriteResult:
         """Encrypt data for all group members and write as a blob.
 
+        Forces a directory refresh before resolving membership to ensure
+        removed members are excluded from recipients (GRP-02).
         Resolves group membership at call time via directory cache (GRP-04).
         Silently skips members whose UserEntry is not in the directory.
 
@@ -1053,6 +1055,7 @@ class ChromatinClient:
             DirectoryError: If group not found in directory.
             ValueError: If any resolved member lacks KEM pubkey.
         """
+        directory.refresh()  # GRP-02: ensure stale cache is cleared
         group = await directory.get_group(group_name)
         if group is None:
             raise DirectoryError(f"Group not found: {group_name}")
