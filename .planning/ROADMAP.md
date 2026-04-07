@@ -230,12 +230,12 @@ Plans:
   3. After rotation, `read_encrypted()` successfully decrypts data encrypted under both the old and new KEM keys via key ring fallback
   4. Identity save/load round-trips the full key ring -- all historical KEM keypairs are preserved across process restarts
   5. UserEntry v2 in the directory includes `key_version` field; pre-rotation UserEntry v1 entries are handled as implied key_version=0
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 92-01: TBD
-- [ ] 92-02: TBD
-- [ ] 92-03: TBD
+- [ ] 92-01-PLAN.md — Identity key ring: rotate_kem(), numbered file persistence, lazy migration, _build_kem_ring_map()
+- [ ] 92-02-PLAN.md — UserEntry v2 format with key_version, resolve_recipient(), highest-version cache
+- [ ] 92-03-PLAN.md — Envelope decrypt key ring fallback via _build_kem_ring_map()
 
 ### Phase 93: Group Membership Revocation
 **Goal**: Group admins can remove members so future group writes exclude removed members from recipient stanzas
