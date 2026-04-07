@@ -1,6 +1,7 @@
 #include "db/net/handshake.h"
 
 #include "db/crypto/signing.h"
+#include "db/net/auth_helpers.h"
 #include "db/wire/transport_generated.h"
 
 #include <cstring>
@@ -105,49 +106,6 @@ SessionKeys derive_lightweight_session_keys(
     }
 
     return keys;
-}
-
-// =============================================================================
-// Helper: encode auth payload = [pubkey_size (4B LE)][pubkey][signature]
-// =============================================================================
-
-static std::vector<uint8_t> encode_auth_payload(
-    std::span<const uint8_t> signing_pubkey,
-    std::span<const uint8_t> signature) {
-
-    std::vector<uint8_t> payload;
-    // 4-byte LE pubkey size
-    uint32_t pk_size = static_cast<uint32_t>(signing_pubkey.size());
-    payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
-    // Pubkey
-    payload.insert(payload.end(), signing_pubkey.begin(), signing_pubkey.end());
-    // Signature
-    payload.insert(payload.end(), signature.begin(), signature.end());
-    return payload;
-}
-
-struct AuthPayload {
-    std::vector<uint8_t> pubkey;
-    std::vector<uint8_t> signature;
-};
-
-static std::optional<AuthPayload> decode_auth_payload(std::span<const uint8_t> data) {
-    if (data.size() < 4) return std::nullopt;
-
-    uint32_t pk_size = static_cast<uint32_t>(data[0]) |
-                       (static_cast<uint32_t>(data[1]) << 8) |
-                       (static_cast<uint32_t>(data[2]) << 16) |
-                       (static_cast<uint32_t>(data[3]) << 24);
-
-    if (data.size() < 4 + pk_size) return std::nullopt;
-
-    AuthPayload result;
-    result.pubkey.assign(data.begin() + 4, data.begin() + 4 + pk_size);
-    result.signature.assign(data.begin() + 4 + pk_size, data.end());
-    return result;
 }
 
 // =============================================================================
