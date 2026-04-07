@@ -2,6 +2,8 @@
 #include "db/logging/logging.h"
 #include "db/peer/sync_reject.h"
 #include "db/sync/reconciliation.h"
+#include "db/util/blob_helpers.h"
+#include "db/util/endian.h"
 #include "db/util/hex.h"
 #include "db/version.h"
 
@@ -810,10 +812,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     auto ack = result.ack.value();
                     std::vector<uint8_t> ack_payload(41);
                     std::memcpy(ack_payload.data(), ack.blob_hash.data(), 32);
-                    for (int i = 7; i >= 0; --i) {
-                        ack_payload[32 + (7 - i)] = static_cast<uint8_t>(
-                            ack.seq_num >> (i * 8));
-                    }
+                    chromatindb::util::store_u64_be(ack_payload.data() + 32, ack.seq_num);
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
                                                  std::span<const uint8_t>(ack_payload), request_id);
@@ -869,10 +868,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "ReadRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::array<uint8_t, 32> hash{};
-                std::memcpy(ns.data(), payload.data(), 32);
-                std::memcpy(hash.data(), payload.data() + 32, 32);
+                auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
                 auto blob = engine_.get_blob(ns, hash);
                 if (blob.has_value()) {
@@ -902,14 +898,9 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "ListRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
-                uint64_t since_seq = 0;
-                for (int i = 0; i < 8; ++i)
-                    since_seq = (since_seq << 8) | payload[32 + i];
-                uint32_t limit = 0;
-                for (int i = 0; i < 4; ++i)
-                    limit = (limit << 8) | payload[40 + i];
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
+                uint64_t since_seq = chromatindb::util::read_u64_be(payload.data() + 32);
+                uint32_t limit = chromatindb::util::read_u32_be(payload.data() + 40);
 
                 constexpr uint32_t MAX_LIST_LIMIT = 100;
                 if (limit == 0 || limit > MAX_LIST_LIMIT)
@@ -924,17 +915,12 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 uint32_t count = static_cast<uint32_t>(refs.size());
                 std::vector<uint8_t> response(4 + count * 40 + 1);
                 // count (big-endian 4 bytes)
-                response[0] = static_cast<uint8_t>(count >> 24);
-                response[1] = static_cast<uint8_t>(count >> 16);
-                response[2] = static_cast<uint8_t>(count >> 8);
-                response[3] = static_cast<uint8_t>(count);
+                chromatindb::util::store_u32_be(response.data(), count);
                 // hash+seq pairs
                 for (uint32_t i = 0; i < count; ++i) {
                     size_t off = 4 + i * 40;
                     std::memcpy(response.data() + off, refs[i].blob_hash.data(), 32);
-                    uint64_t seq = refs[i].seq_num;
-                    for (int b = 7; b >= 0; --b)
-                        response[off + 32 + (7 - b)] = static_cast<uint8_t>(seq >> (b * 8));
+                    chromatindb::util::store_u64_be(response.data() + off + 32, refs[i].seq_num);
                 }
                 // has_more flag
                 response[4 + count * 40] = has_more ? 1 : 0;
@@ -956,20 +942,16 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "StatsRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
                 auto quota = storage_.get_namespace_quota(ns);
                 auto [byte_limit, count_limit] = engine_.effective_quota(ns);
 
                 // Response: [blob_count_be:8][total_bytes_be:8][quota_bytes_be:8] = 24 bytes
                 std::vector<uint8_t> response(24);
-                for (int i = 7; i >= 0; --i)
-                    response[7 - i] = static_cast<uint8_t>(quota.blob_count >> (i * 8));
-                for (int i = 7; i >= 0; --i)
-                    response[8 + 7 - i] = static_cast<uint8_t>(quota.total_bytes >> (i * 8));
-                for (int i = 7; i >= 0; --i)
-                    response[16 + 7 - i] = static_cast<uint8_t>(byte_limit >> (i * 8));
+                chromatindb::util::store_u64_be(response.data(), quota.blob_count);
+                chromatindb::util::store_u64_be(response.data() + 8, quota.total_bytes);
+                chromatindb::util::store_u64_be(response.data() + 16, byte_limit);
 
                 co_await conn->send_message(wire::TransportMsgType_StatsResponse,
                                              std::span<const uint8_t>(response), request_id);
@@ -988,10 +970,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "ExistsRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::array<uint8_t, 32> hash{};
-                std::memcpy(ns.data(), payload.data(), 32);
-                std::memcpy(hash.data(), payload.data() + 32, 32);
+                auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
                 bool exists = storage_.has_blob(ns, hash);
 
@@ -1061,28 +1040,28 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 off += git_hash.size();
 
                 // Uptime (big-endian uint64)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(uptime >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, uptime);
+                off += 8;
 
                 // Peer count (big-endian uint32)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(peers >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, peers);
+                off += 4;
 
                 // Namespace count (big-endian uint32)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(ns_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, ns_count);
+                off += 4;
 
                 // Total blobs (big-endian uint64)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(total_blobs >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, total_blobs);
+                off += 8;
 
                 // Storage bytes used (big-endian uint64)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(storage_used >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, storage_used);
+                off += 8;
 
                 // Storage bytes max (big-endian uint64, 0=unlimited)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(storage_max >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, storage_max);
+                off += 8;
 
                 // Supported types
                 response[off++] = types_count;
@@ -1107,11 +1086,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
 
                 // Parse cursor and limit
-                std::array<uint8_t, 32> after_ns{};
-                std::memcpy(after_ns.data(), payload.data(), 32);
-                uint32_t limit = 0;
-                for (int i = 0; i < 4; ++i)
-                    limit = (limit << 8) | payload[32 + i];
+                auto after_ns = chromatindb::util::extract_namespace(std::span{payload});
+                uint32_t limit = chromatindb::util::read_u32_be(payload.data() + 32);
                 if (limit == 0 || limit > 1000) limit = 100;
 
                 // Get all namespaces and filter/paginate
@@ -1149,8 +1125,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                 // Count (big-endian uint32)
                 uint32_t entry_count = static_cast<uint32_t>(entries.size());
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(entry_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, entry_count);
+                off += 4;
 
                 // has_more flag
                 response[off++] = has_more ? 0x01 : 0x00;
@@ -1159,8 +1135,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 for (const auto& [ns_id, blob_count] : entries) {
                     std::memcpy(response.data() + off, ns_id.data(), 32);
                     off += 32;
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(blob_count >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, blob_count);
+                    off += 8;
                 }
 
                 co_await conn->send_message(wire::TransportMsgType_NamespaceListResponse,
@@ -1191,23 +1167,23 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 size_t off = 0;
 
                 // used_data_bytes (8)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(used_data >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, used_data);
+                off += 8;
                 // max_storage_bytes (8)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(max_storage >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, max_storage);
+                off += 8;
                 // tombstone_count (8)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(tombstones >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, tombstones);
+                off += 8;
                 // namespace_count (4)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(ns_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, ns_count);
+                off += 4;
                 // total_blobs (8)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(total_blobs >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, total_blobs);
+                off += 8;
                 // mmap_bytes (8)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(mmap_bytes >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, mmap_bytes);
+                off += 8;
 
                 co_await conn->send_message(wire::TransportMsgType_StorageStatusResponse,
                                              std::span<const uint8_t>(response), request_id);
@@ -1227,8 +1203,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
 
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
                 // Check if namespace exists
                 auto all_ns = storage_.list_namespaces();
@@ -1252,20 +1227,20 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     auto [quota_bytes_limit, quota_count_limit] = engine_.effective_quota(ns);
 
                     // blob_count (8)
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(quota.blob_count >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, quota.blob_count);
+                    off += 8;
                     // total_bytes (8)
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(quota.total_bytes >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, quota.total_bytes);
+                    off += 8;
                     // delegation_count (8)
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(delegation_count >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, delegation_count);
+                    off += 8;
                     // quota_bytes_limit (8)
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(quota_bytes_limit >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, quota_bytes_limit);
+                    off += 8;
                     // quota_count_limit (8)
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(quota_count_limit >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, quota_count_limit);
+                    off += 8;
                 }
                 // If not found, bytes 1-40 remain zero (already initialized)
 
@@ -1286,10 +1261,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "MetadataRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::array<uint8_t, 32> hash{};
-                std::memcpy(ns.data(), payload.data(), 32);
-                std::memcpy(hash.data(), payload.data() + 32, 32);
+                auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
                 auto blob_opt = storage_.get_blob(ns, hash);
                 if (!blob_opt) {
@@ -1326,20 +1298,20 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 off += 32;
 
                 // timestamp (8, big-endian)
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(blob.timestamp >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, blob.timestamp);
+                off += 8;
 
                 // ttl (4, big-endian)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(blob.ttl >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, blob.ttl);
+                off += 4;
 
                 // size (8, big-endian) -- raw data size per D-03
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(data_size >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, data_size);
+                off += 8;
 
                 // seq_num (8, big-endian) -- per D-02
-                for (int i = 7; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(seq_num >> (i * 8));
+                chromatindb::util::store_u64_be(response.data() + off, seq_num);
+                off += 8;
 
                 // pubkey_len (2, big-endian)
                 response[off++] = static_cast<uint8_t>(pubkey_len >> 8);
@@ -1366,12 +1338,9 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "BatchExistsRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
-                uint32_t count = 0;
-                for (int i = 0; i < 4; ++i)
-                    count = (count << 8) | payload[32 + i];
+                uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
                 if (count == 0 || count > 1024) {
                     record_strike(conn, "BatchExistsRequest invalid count");
@@ -1409,8 +1378,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     record_strike(conn, "DelegationListRequest too short");
                     co_return;
                 }
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
                 auto entries = storage_.list_delegations(ns);
 
@@ -1421,8 +1389,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 size_t off = 0;
 
                 // count (4, big-endian)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(entry_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, entry_count);
+                off += 4;
 
                 // entries
                 for (const auto& entry : entries) {
@@ -1451,13 +1419,10 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
 
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
                 // cap_bytes (4 bytes big-endian)
-                uint32_t cap_bytes = 0;
-                for (int i = 0; i < 4; ++i)
-                    cap_bytes = (cap_bytes << 8) | payload[32 + i];
+                uint32_t cap_bytes = chromatindb::util::read_u32_be(payload.data() + 32);
 
                 // Default/clamp: 0 or >4MiB -> 4MiB
                 static constexpr uint32_t MAX_CAP = 4194304;  // 4 MiB
@@ -1465,9 +1430,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     cap_bytes = MAX_CAP;
 
                 // count (4 bytes big-endian)
-                uint32_t count = 0;
-                for (int i = 0; i < 4; ++i)
-                    count = (count << 8) | payload[36 + i];
+                uint32_t count = chromatindb::util::read_u32_be(payload.data() + 36);
 
                 if (count == 0 || count > 256) {
                     record_strike(conn, "BatchReadRequest invalid count");
@@ -1537,8 +1500,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 response[off++] = truncated;
 
                 // result_count (4 bytes big-endian)
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(result_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, result_count);
+                off += 4;
 
                 for (const auto& e : entries) {
                     response[off++] = e.status;
@@ -1547,8 +1510,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                     if (e.status == 0x01) {
                         uint64_t sz = e.encoded.size();
-                        for (int i = 7; i >= 0; --i)
-                            response[off++] = static_cast<uint8_t>(sz >> (i * 8));
+                        chromatindb::util::store_u64_be(response.data() + off, sz);
+                        off += 8;
                         std::memcpy(response.data() + off, e.encoded.data(), e.encoded.size());
                         off += e.encoded.size();
                     }
@@ -1589,11 +1552,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 if (!trusted) {
                     // D-09 untrusted: [peer_count:4 BE][bootstrap_count:4 BE]
                     std::vector<uint8_t> response(8);
-                    size_t off = 0;
-                    for (int i = 3; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(pc >> (i * 8));
-                    for (int i = 3; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(bc >> (i * 8));
+                    chromatindb::util::store_u32_be(response.data(), pc);
+                    chromatindb::util::store_u32_be(response.data() + 4, bc);
                     co_await conn->send_message(wire::TransportMsgType_PeerInfoResponse,
                                                  std::span<const uint8_t>(response), request_id);
                     co_return;
@@ -1616,10 +1576,10 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(pc >> (i * 8));
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(bc >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, pc);
+                off += 4;
+                chromatindb::util::store_u32_be(response.data() + off, bc);
+                off += 4;
 
                 for (const auto& peer : peers_) {
                     // address length (2 bytes big-endian)
@@ -1635,8 +1595,8 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     response[off++] = peer->peer_is_full ? 0x01 : 0x00;
                     // connected_duration_ms (8 bytes big-endian)
                     uint64_t duration_ms = (peer->last_message_time > 0) ? (now_ms - peer->last_message_time) : 0;
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(duration_ms >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, duration_ms);
+                    off += 8;
                 }
 
                 co_await conn->send_message(wire::TransportMsgType_PeerInfoResponse,
@@ -1658,18 +1618,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
 
-                std::array<uint8_t, 32> ns{};
-                std::memcpy(ns.data(), payload.data(), 32);
+                auto ns = chromatindb::util::extract_namespace(std::span{payload});
 
                 // start_timestamp (8 bytes big-endian, seconds)
-                uint64_t start_ts = 0;
-                for (int i = 0; i < 8; ++i)
-                    start_ts = (start_ts << 8) | payload[32 + i];
+                uint64_t start_ts = chromatindb::util::read_u64_be(payload.data() + 32);
 
                 // end_timestamp (8 bytes big-endian, seconds)
-                uint64_t end_ts = 0;
-                for (int i = 0; i < 8; ++i)
-                    end_ts = (end_ts << 8) | payload[40 + i];
+                uint64_t end_ts = chromatindb::util::read_u64_be(payload.data() + 40);
 
                 // D-17: strike if start > end
                 if (start_ts > end_ts) {
@@ -1678,9 +1633,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
 
                 // limit (4 bytes big-endian)
-                uint32_t limit = 0;
-                for (int i = 0; i < 4; ++i)
-                    limit = (limit << 8) | payload[48 + i];
+                uint32_t limit = chromatindb::util::read_u32_be(payload.data() + 48);
 
                 // D-14: cap at 100, default 100 if 0 or >100
                 static constexpr uint32_t MAX_LIMIT = 100;
@@ -1728,16 +1681,16 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                 response[off++] = truncated;
 
-                for (int i = 3; i >= 0; --i)
-                    response[off++] = static_cast<uint8_t>(result_count >> (i * 8));
+                chromatindb::util::store_u32_be(response.data() + off, result_count);
+                off += 4;
 
                 for (const auto& r : results) {
                     std::memcpy(response.data() + off, r.blob_hash.data(), 32);
                     off += 32;
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(r.seq_num >> (i * 8));
-                    for (int i = 7; i >= 0; --i)
-                        response[off++] = static_cast<uint8_t>(r.timestamp >> (i * 8));
+                    chromatindb::util::store_u64_be(response.data() + off, r.seq_num);
+                    off += 8;
+                    chromatindb::util::store_u64_be(response.data() + off, r.timestamp);
+                    off += 8;
                 }
 
                 co_await conn->send_message(wire::TransportMsgType_TimeRangeResponse,
@@ -1774,10 +1727,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                     auto ack = result.ack.value();
                     std::vector<uint8_t> ack_payload(41);
                     std::memcpy(ack_payload.data(), ack.blob_hash.data(), 32);
-                    for (int i = 7; i >= 0; --i) {
-                        ack_payload[32 + (7 - i)] = static_cast<uint8_t>(
-                            ack.seq_num >> (i * 8));
-                    }
+                    chromatindb::util::store_u64_be(ack_payload.data() + 32, ack.seq_num);
                     ack_payload[40] = (ack.status == engine::IngestStatus::stored) ? 0 : 1;
                     co_await conn->send_message(wire::TransportMsgType_WriteAck,
                                                  std::span<const uint8_t>(ack_payload), request_id);
@@ -2071,7 +2021,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         // Send ReconcileInit for this namespace
         sync::ReconcileInit init;
         init.version = sync::RECONCILE_VERSION;
-        std::memcpy(init.namespace_id.data(), ns.data(), 32);
+        init.namespace_id = ns;
         init.count = static_cast<uint32_t>(our_hashes.size());
         init.fingerprint = our_fp;
 
@@ -3321,9 +3271,7 @@ void PeerManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t>
     auto* peer = find_peer(conn);
     if (!peer) return;
 
-    std::array<uint8_t, 32> ns{}, hash{};
-    std::memcpy(ns.data(), payload.data(), 32);
-    std::memcpy(hash.data(), payload.data() + 32, 32);
+    auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
     // D-07: Suppress during active sync with this peer
     if (peer->syncing) {
@@ -3342,9 +3290,8 @@ void PeerManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t>
     // Using namespace_id+hash because storage_.get_blob() requires compound key
     // (corrected from D-01 hash-only design -- see RESEARCH.md)
     asio::co_spawn(ioc_, [this, conn, ns, hash]() -> asio::awaitable<void> {
-        std::vector<uint8_t> fetch_payload(64);
-        std::memcpy(fetch_payload.data(), ns.data(), 32);
-        std::memcpy(fetch_payload.data() + 32, hash.data(), 32);
+        auto fetch_payload = chromatindb::util::encode_namespace_hash(
+            std::span<const uint8_t, 32>{ns}, std::span<const uint8_t, 32>{hash});
         co_await conn->send_message(wire::TransportMsgType_BlobFetch,
                                      std::span<const uint8_t>(fetch_payload));
     }, asio::detached);
@@ -3356,9 +3303,7 @@ void PeerManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<uint8
 
     // co_spawn on ioc_ for storage lookup + send (same pattern as ReadRequest)
     asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
-        std::array<uint8_t, 32> ns{}, hash{};
-        std::memcpy(ns.data(), payload.data(), 32);
-        std::memcpy(hash.data(), payload.data() + 32, 32);
+        auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
         auto blob = storage_.get_blob(ns, hash);
         if (blob) {
@@ -3439,14 +3384,11 @@ void PeerManager::handle_blob_fetch_response(net::Connection::Ptr conn, std::vec
 
 std::vector<uint8_t> PeerManager::encode_namespace_list(
     const std::vector<std::array<uint8_t, 32>>& namespaces) {
-    std::vector<uint8_t> result(2 + namespaces.size() * 32);
-    auto count = static_cast<uint16_t>(namespaces.size());
-    result[0] = static_cast<uint8_t>(count >> 8);
-    result[1] = static_cast<uint8_t>(count & 0xFF);
-    size_t offset = 2;
+    std::vector<uint8_t> result;
+    result.reserve(2 + namespaces.size() * 32);
+    chromatindb::util::write_u16_be(result, static_cast<uint16_t>(namespaces.size()));
     for (const auto& ns : namespaces) {
-        std::memcpy(result.data() + offset, ns.data(), 32);
-        offset += 32;
+        result.insert(result.end(), ns.begin(), ns.end());
     }
     return result;
 }
@@ -3455,13 +3397,11 @@ std::vector<std::array<uint8_t, 32>> PeerManager::decode_namespace_list(
     std::span<const uint8_t> payload) {
     std::vector<std::array<uint8_t, 32>> result;
     if (payload.size() < 2) return result;
-    uint16_t count = (static_cast<uint16_t>(payload[0]) << 8) |
-                      static_cast<uint16_t>(payload[1]);
+    uint16_t count = chromatindb::util::read_u16_be(payload);
     if (payload.size() != 2 + static_cast<size_t>(count) * 32) return result;
     for (uint16_t i = 0; i < count; ++i) {
-        std::array<uint8_t, 32> ns{};
-        std::memcpy(ns.data(), payload.data() + 2 + i * 32, 32);
-        result.push_back(ns);
+        result.push_back(chromatindb::util::extract_namespace(
+            payload.subspan(2 + static_cast<size_t>(i) * 32)));
     }
     return result;
 }
@@ -3472,21 +3412,7 @@ std::vector<uint8_t> PeerManager::encode_notification(
     uint64_t seq_num,
     uint32_t blob_size,
     bool is_tombstone) {
-    std::vector<uint8_t> result(77);
-    std::memcpy(result.data(), namespace_id.data(), 32);
-    std::memcpy(result.data() + 32, blob_hash.data(), 32);
-    // seq_num big-endian at offset 64
-    for (int i = 7; i >= 0; --i) {
-        result[64 + (7 - i)] = static_cast<uint8_t>(seq_num >> (i * 8));
-    }
-    // blob_size big-endian at offset 72
-    result[72] = static_cast<uint8_t>(blob_size >> 24);
-    result[73] = static_cast<uint8_t>(blob_size >> 16);
-    result[74] = static_cast<uint8_t>(blob_size >> 8);
-    result[75] = static_cast<uint8_t>(blob_size & 0xFF);
-    // is_tombstone at offset 76
-    result[76] = is_tombstone ? 1 : 0;
-    return result;
+    return chromatindb::util::encode_blob_ref(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
 }
 
 // =============================================================================
