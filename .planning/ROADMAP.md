@@ -85,7 +85,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 95. Code Deduplication | 0/3 | Planning complete | - |
+| 95. Code Deduplication | 2/3 | Executing | - |
 | 96. PeerManager Architecture | 0/TBD | Not started | - |
 | 97. Protocol & Crypto Safety | 0/TBD | Not started | - |
 | 98. TTL Enforcement | 0/TBD | Not started | - |
