@@ -38,11 +38,11 @@
 
 ## Code Deduplication
 
-- [ ] **DEDUP-01**: Centralized encoding utility header (write/read_u64_be, write/read_u32_be) replaces all 40+ inline BE encoding loops
+- [x] **DEDUP-01**: Centralized encoding utility header (write/read_u64_be, write/read_u32_be) replaces all 40+ inline BE encoding loops
 - [ ] **DEDUP-02**: connection.cpp uses existing encode_auth_payload/decode_auth_payload from handshake.cpp (removes 4 inline copies)
 - [ ] **DEDUP-03**: Signature verification with thread pool offload extracted to shared method (removes 4 copies)
-- [ ] **DEDUP-04**: Namespace/hash extraction helper replaces 10+ inline memcpy patterns
-- [ ] **DEDUP-05**: Blob reference encoding helper replaces 6+ inline patterns
+- [x] **DEDUP-04**: Namespace/hash extraction helper replaces 10+ inline memcpy patterns
+- [x] **DEDUP-05**: Blob reference encoding helper replaces 6+ inline patterns
 
 ## Architecture
 
@@ -63,11 +63,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEDUP-01 | Phase 95 | Pending |
+| DEDUP-01 | Phase 95 | Complete |
 | DEDUP-02 | Phase 95 | Pending |
 | DEDUP-03 | Phase 95 | Pending |
-| DEDUP-04 | Phase 95 | Pending |
-| DEDUP-05 | Phase 95 | Pending |
+| DEDUP-04 | Phase 95 | Complete |
+| DEDUP-05 | Phase 95 | Complete |
 | ARCH-01 | Phase 96 | Pending |
 | PROTO-01 | Phase 97 | Pending |
 | PROTO-02 | Phase 97 | Pending |

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: Node Hardening
 status: executing
-stopped_at: Completed 95-01-PLAN.md
-last_updated: "2026-04-07T16:15:00Z"
+stopped_at: Completed 95-02-PLAN.md
+last_updated: "2026-04-07T17:50:35Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 24
-  completed_plans: 1
-  percent: 4
+  completed_plans: 2
+  percent: 8
 ---
 
 # Project State
@@ -26,29 +26,29 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 ## Current Position
 
 Phase: 95
-Plan: 1 of N
+Plan: 2 of 3
 Status: Executing Phase 95
 Last activity: 2026-04-07
 
-Progress: [#.........] 4%
+Progress: [#.........] 8%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
-- Average duration: 14min
-- Total execution time: 0.23 hours
+- Total plans completed: 2
+- Average duration: 39min
+- Total execution time: 1.28 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 95 | 1/N | 14min | 14min |
+| 95 | 2/3 | 77min | 39min |
 
 **Recent Trend:**
 
-- Last 5 plans: 14min
+- Last 5 plans: 14min, 63min
 - Trend: starting
 
 *Updated after each plan completion*
@@ -63,6 +63,8 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 95-01]: Span overloads throw std::out_of_range; pointer overloads unchecked (matching existing safety contracts)
 - [Phase 95-01]: store_u32_be/store_u64_be use destination-first argument order (consistent with memcpy convention)
 - [Phase 95-01]: Utility headers: inline-only in db/util/, namespace chromatindb::util, following hex.h pattern
+- [Phase 95-02]: codec.cpp LE patterns in build_signing_input are protocol-defined -- never replace with BE helpers
+- [Phase 95-02]: memcpy at non-standard offsets left as-is when no clean helper fit exists
 
 ### Pending Todos
 
@@ -74,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T16:15:00Z
-Stopped at: Completed 95-01-PLAN.md
-Resume file: .planning/phases/95-code-deduplication/95-01-SUMMARY.md
+Last session: 2026-04-07T17:50:35Z
+Stopped at: Completed 95-02-PLAN.md
+Resume file: .planning/phases/95-code-deduplication/95-02-SUMMARY.md
