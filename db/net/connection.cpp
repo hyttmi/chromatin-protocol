@@ -2,6 +2,9 @@
 
 #include "db/crypto/signing.h"
 #include "db/crypto/thread_pool.h"
+#include "db/crypto/verify_helpers.h"
+#include "db/net/auth_helpers.h"
+#include "db/util/endian.h"
 
 #include <sodium.h>
 #include <spdlog/spdlog.h>
@@ -109,10 +112,7 @@ asio::awaitable<bool> Connection::send_raw(std::span<const uint8_t> data) {
     // Write 4-byte BE length prefix + data
     uint32_t len = static_cast<uint32_t>(data.size());
     std::array<uint8_t, 4> header;
-    header[0] = static_cast<uint8_t>((len >> 24) & 0xFF);
-    header[1] = static_cast<uint8_t>((len >> 16) & 0xFF);
-    header[2] = static_cast<uint8_t>((len >> 8) & 0xFF);
-    header[3] = static_cast<uint8_t>(len & 0xFF);
+    chromatindb::util::store_u32_be(header.data(), len);
 
     auto [ec1, _n1] = co_await asio::async_write(
         socket_, asio::buffer(header), use_nothrow);
@@ -130,10 +130,7 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> Connection::recv_raw() {
         socket_, asio::buffer(header), use_nothrow);
     if (ec1) co_return std::nullopt;
 
-    uint32_t len = (static_cast<uint32_t>(header[0]) << 24) |
-                   (static_cast<uint32_t>(header[1]) << 16) |
-                   (static_cast<uint32_t>(header[2]) << 8) |
-                   static_cast<uint32_t>(header[3]);
+    uint32_t len = chromatindb::util::read_u32_be(header.data());
 
     if (len > MAX_FRAME_SIZE) {
         spdlog::warn("received frame exceeding max size: {}", len);
@@ -335,15 +332,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
 
         // Auth exchange (same as PQ initiator)
         auto sig = identity_.sign(session_keys_.session_fingerprint);
-        std::vector<uint8_t> auth_payload;
-        auto pk = identity_.public_key();
-        uint32_t pk_size = static_cast<uint32_t>(pk.size());
-        auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-        auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-        auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-        auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
-        auth_payload.insert(auth_payload.end(), pk.begin(), pk.end());
-        auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
+        auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
 
         auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
         if (!co_await send_encrypted(auth_msg)) {
@@ -363,29 +352,13 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
             co_return false;
         }
 
-        if (resp_decoded->payload.size() < 4) co_return false;
-        uint32_t rpk_size = static_cast<uint32_t>(resp_decoded->payload[0]) |
-                            (static_cast<uint32_t>(resp_decoded->payload[1]) << 8) |
-                            (static_cast<uint32_t>(resp_decoded->payload[2]) << 16) |
-                            (static_cast<uint32_t>(resp_decoded->payload[3]) << 24);
-        if (resp_decoded->payload.size() < 4 + rpk_size) co_return false;
+        auto auth = chromatindb::net::decode_auth_payload(std::span{resp_decoded->payload});
+        if (!auth) co_return false;
+        auto& resp_pk = auth->pubkey;
+        auto& resp_sig = auth->signature;
 
-        std::vector<uint8_t> resp_pk(resp_decoded->payload.begin() + 4,
-                                      resp_decoded->payload.begin() + 4 + rpk_size);
-        std::vector<uint8_t> resp_sig(resp_decoded->payload.begin() + 4 + rpk_size,
-                                       resp_decoded->payload.end());
-
-        bool valid;
-        if (pool_) {
-            valid = co_await crypto::offload(*pool_,
-                [&]() {
-                    return crypto::Signer::verify(
-                        session_keys_.session_fingerprint, resp_sig, resp_pk);
-                });
-        } else {
-            valid = crypto::Signer::verify(
-                session_keys_.session_fingerprint, resp_sig, resp_pk);
-        }
+        bool valid = co_await chromatindb::crypto::verify_with_offload(
+            pool_, session_keys_.session_fingerprint, resp_sig, resp_pk);
         if (!valid) {
             spdlog::warn("handshake: peer auth signature invalid (fallback)");
             co_return false;
@@ -433,15 +406,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
 
     // Step 3: Send encrypted auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    std::vector<uint8_t> auth_payload;
-    auto pk = identity_.public_key();
-    uint32_t pk_size = static_cast<uint32_t>(pk.size());
-    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
-    auth_payload.insert(auth_payload.end(), pk.begin(), pk.end());
-    auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
+    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
 
     auto msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(msg)) {
@@ -462,29 +427,13 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
         co_return false;
     }
 
-    if (decoded->payload.size() < 4) co_return false;
-    uint32_t rpk_size = static_cast<uint32_t>(decoded->payload[0]) |
-                        (static_cast<uint32_t>(decoded->payload[1]) << 8) |
-                        (static_cast<uint32_t>(decoded->payload[2]) << 16) |
-                        (static_cast<uint32_t>(decoded->payload[3]) << 24);
-    if (decoded->payload.size() < 4 + rpk_size) co_return false;
+    auto auth = chromatindb::net::decode_auth_payload(std::span{decoded->payload});
+    if (!auth) co_return false;
+    auto& resp_pk = auth->pubkey;
+    auto& resp_sig = auth->signature;
 
-    std::vector<uint8_t> resp_pk(decoded->payload.begin() + 4,
-                                  decoded->payload.begin() + 4 + rpk_size);
-    std::vector<uint8_t> resp_sig(decoded->payload.begin() + 4 + rpk_size,
-                                   decoded->payload.end());
-
-    bool valid;
-    if (pool_) {
-        valid = co_await crypto::offload(*pool_,
-            [&]() {
-                return crypto::Signer::verify(
-                    session_keys_.session_fingerprint, resp_sig, resp_pk);
-            });
-    } else {
-        valid = crypto::Signer::verify(
-            session_keys_.session_fingerprint, resp_sig, resp_pk);
-    }
+    bool valid = co_await chromatindb::crypto::verify_with_offload(
+        pool_, session_keys_.session_fingerprint, resp_sig, resp_pk);
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid");
         co_return false;
@@ -595,29 +544,13 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
         co_return false;
     }
 
-    if (decoded->payload.size() < 4) co_return false;
-    uint32_t ipk_size = static_cast<uint32_t>(decoded->payload[0]) |
-                        (static_cast<uint32_t>(decoded->payload[1]) << 8) |
-                        (static_cast<uint32_t>(decoded->payload[2]) << 16) |
-                        (static_cast<uint32_t>(decoded->payload[3]) << 24);
-    if (decoded->payload.size() < 4 + ipk_size) co_return false;
+    auto auth = chromatindb::net::decode_auth_payload(std::span{decoded->payload});
+    if (!auth) co_return false;
+    auto& init_pk = auth->pubkey;
+    auto& init_sig = auth->signature;
 
-    std::vector<uint8_t> init_pk(decoded->payload.begin() + 4,
-                                  decoded->payload.begin() + 4 + ipk_size);
-    std::vector<uint8_t> init_sig(decoded->payload.begin() + 4 + ipk_size,
-                                   decoded->payload.end());
-
-    bool valid;
-    if (pool_) {
-        valid = co_await crypto::offload(*pool_,
-            [&]() {
-                return crypto::Signer::verify(
-                    session_keys_.session_fingerprint, init_sig, init_pk);
-            });
-    } else {
-        valid = crypto::Signer::verify(
-            session_keys_.session_fingerprint, init_sig, init_pk);
-    }
+    bool valid = co_await chromatindb::crypto::verify_with_offload(
+        pool_, session_keys_.session_fingerprint, init_sig, init_pk);
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid (fallback)");
         co_return false;
@@ -627,15 +560,7 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
 
     // Send our auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    std::vector<uint8_t> auth_payload;
-    auto pk = identity_.public_key();
-    uint32_t pk_size = static_cast<uint32_t>(pk.size());
-    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
-    auth_payload.insert(auth_payload.end(), pk.begin(), pk.end());
-    auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
+    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
 
     auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(auth_msg)) {
@@ -685,29 +610,13 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
         co_return false;
     }
 
-    if (decoded->payload.size() < 4) co_return false;
-    uint32_t ipk_size = static_cast<uint32_t>(decoded->payload[0]) |
-                        (static_cast<uint32_t>(decoded->payload[1]) << 8) |
-                        (static_cast<uint32_t>(decoded->payload[2]) << 16) |
-                        (static_cast<uint32_t>(decoded->payload[3]) << 24);
-    if (decoded->payload.size() < 4 + ipk_size) co_return false;
+    auto auth = chromatindb::net::decode_auth_payload(std::span{decoded->payload});
+    if (!auth) co_return false;
+    auto& init_pk = auth->pubkey;
+    auto& init_sig = auth->signature;
 
-    std::vector<uint8_t> init_pk(decoded->payload.begin() + 4,
-                                  decoded->payload.begin() + 4 + ipk_size);
-    std::vector<uint8_t> init_sig(decoded->payload.begin() + 4 + ipk_size,
-                                   decoded->payload.end());
-
-    bool valid;
-    if (pool_) {
-        valid = co_await crypto::offload(*pool_,
-            [&]() {
-                return crypto::Signer::verify(
-                    session_keys_.session_fingerprint, init_sig, init_pk);
-            });
-    } else {
-        valid = crypto::Signer::verify(
-            session_keys_.session_fingerprint, init_sig, init_pk);
-    }
+    bool valid = co_await chromatindb::crypto::verify_with_offload(
+        pool_, session_keys_.session_fingerprint, init_sig, init_pk);
     if (!valid) {
         spdlog::warn("handshake: peer auth signature invalid");
         co_return false;
@@ -717,15 +626,7 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
 
     // Send our auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    std::vector<uint8_t> auth_payload;
-    auto pk = identity_.public_key();
-    uint32_t pk_size = static_cast<uint32_t>(pk.size());
-    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
-    auth_payload.insert(auth_payload.end(), pk.begin(), pk.end());
-    auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
+    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
 
     auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(auth_msg)) {
