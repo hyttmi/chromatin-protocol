@@ -191,6 +191,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 ### Active
 
 - ✓ SDK delegation revocation (revoke_delegation, list_delegates on Directory) — v2.1.1 Phase 91
+- ✓ KEM key versioning (rotate_kem, key ring, UserEntry v2, resolve_recipient, envelope key ring fallback) — v2.1.1 Phase 92
 - [ ] CLI tool for admin operations (quota check, list blobs, etc.)
 - [ ] C/C++/Rust/JS SDKs under sdk/ subdirectories
 
@@ -204,7 +205,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Shipped v2.1.0 with ~31,000 LOC C++20 + Python SDK (~4,600 LOC, 548 tests) under sdk/python/. 615 unit tests (C++), 49 Docker integration test scripts.
 Built across 36 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d).
-19 milestones, 91 phases, 190 plans, 298 requirements total.
+19 milestones, 92 phases, 193 plans, 301 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
