@@ -24,7 +24,12 @@ Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety 
   3. Signature verification with thread pool offload is a single shared method called from all 4+ verification sites
   4. Namespace+hash extraction from message payloads uses a single helper (zero inline 32-byte memcpy patterns remain)
   5. All 615+ existing unit tests pass under ASAN/TSAN/UBSAN with no regressions
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 95-01-PLAN.md -- Create endian.h + blob_helpers.h utilities with tests; replace consumers in sync, storage, framing
+- [ ] 95-02-PLAN.md -- Replace all inline patterns in peer_manager.cpp and codec.cpp
+- [ ] 95-03-PLAN.md -- Create auth_helpers.h + verify_helpers.h; replace auth/verify patterns in connection.cpp; sanitizer gate
 
 ### Phase 96: PeerManager Architecture
 **Goal**: PeerManager is decomposed into focused components with clear responsibilities
@@ -80,7 +85,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 95. Code Deduplication | 0/TBD | Not started | - |
+| 95. Code Deduplication | 0/3 | Planning complete | - |
 | 96. PeerManager Architecture | 0/TBD | Not started | - |
 | 97. Protocol & Crypto Safety | 0/TBD | Not started | - |
 | 98. TTL Enforcement | 0/TBD | Not started | - |
