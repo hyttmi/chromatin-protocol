@@ -4,13 +4,13 @@ milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
 stopped_at: Phase 93 context gathered
-last_updated: "2026-04-07T08:58:12.593Z"
-last_activity: 2026-04-07 -- Phase 94 execution started
+last_updated: "2026-04-07T09:06:02.711Z"
+last_activity: 2026-04-07
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 9
   percent: 50
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 
 ## Current Position
 
-Phase: 94 (protocol-sdk-documentation) — EXECUTING
-Plan: 1 of 2
+Phase: 94
+Plan: Not started
 Status: Executing Phase 94
-Last activity: 2026-04-07 -- Phase 94 execution started
+Last activity: 2026-04-07
 
 Progress: [█████░░░░░] 50%
 
