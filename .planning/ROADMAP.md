@@ -275,5 +275,5 @@ Phases execute in numeric order: 91 -> 92 -> 93 -> 94
 |-------|----------------|--------|-----------|
 | 91. SDK Delegation Revocation | 0/2 | Complete    | 2026-04-06 |
 | 92. KEM Key Versioning | 2/3 | Complete    | 2026-04-07 |
-| 93. Group Membership Revocation | 2/2 | Complete   | 2026-04-07 |
+| 93. Group Membership Revocation | 2/2 | Complete    | 2026-04-07 |
 | 94. Protocol & SDK Documentation | 0/2 | Not started | - |

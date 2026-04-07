@@ -4,13 +4,13 @@ milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
 stopped_at: Phase 93 context gathered
-last_updated: "2026-04-07T03:21:23.233Z"
-last_activity: 2026-04-07 -- Phase 93 execution started
+last_updated: "2026-04-07T06:06:28.487Z"
+last_activity: 2026-04-07
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 5
+  completed_plans: 7
   percent: 50
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 
 ## Current Position
 
-Phase: 93 (group-membership-revocation) — EXECUTING
-Plan: 1 of 2
+Phase: 94
+Plan: Not started
 Status: Executing Phase 93
-Last activity: 2026-04-07 -- Phase 93 execution started
+Last activity: 2026-04-07
 
 Progress: [█████░░░░░] 50%
 
