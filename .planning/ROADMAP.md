@@ -6,7 +6,7 @@ Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety 
 
 ## Phases
 
-- [ ] **Phase 95: Code Deduplication** - Centralize 64+ duplicate encoding/decoding patterns into shared utility headers
+- [x] **Phase 95: Code Deduplication** - Centralize 64+ duplicate encoding/decoding patterns into shared utility headers (completed 2026-04-07)
 - [ ] **Phase 96: PeerManager Architecture** - Split PeerManager god object into focused components
 - [ ] **Phase 97: Protocol & Crypto Safety** - Harden all protocol parsing and cryptographic handshake paths
 - [ ] **Phase 98: TTL Enforcement** - Enforce expiry checks in every query and fetch path
@@ -24,7 +24,7 @@ Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety 
   3. Signature verification with thread pool offload is a single shared method called from all 4+ verification sites
   4. Namespace+hash extraction from message payloads uses a single helper (zero inline 32-byte memcpy patterns remain)
   5. All 615+ existing unit tests pass under ASAN/TSAN/UBSAN with no regressions
-**Plans:** 3/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 95-01-PLAN.md -- Create endian.h + blob_helpers.h utilities with tests; replace consumers in sync, storage, framing
@@ -85,7 +85,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 95. Code Deduplication | 3/3 | Executing | - |
+| 95. Code Deduplication | 3/3 | Complete    | 2026-04-07 |
 | 96. PeerManager Architecture | 0/TBD | Not started | - |
 | 97. Protocol & Crypto Safety | 0/TBD | Not started | - |
 | 98. TTL Enforcement | 0/TBD | Not started | - |
