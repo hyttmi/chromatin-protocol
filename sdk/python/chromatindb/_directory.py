@@ -446,7 +446,9 @@ class Directory:
             )
         entry_data = encode_user_entry(self._identity, display_name)
         try:
-            result = await self._client.write_blob(entry_data, ttl=0)
+            result = await self._client.write_blob(
+                entry_data, ttl=0, namespace=self._directory_namespace
+            )
         except ProtocolError as e:
             raise DirectoryError(f"Registration failed: {e}") from e
         self._dirty = True
@@ -729,7 +731,7 @@ class Directory:
                     )
                     # Latest-timestamp-wins (D-06)
                     existing = groups_by_name.get(group_name)
-                    if existing is None or group_entry.timestamp > existing.timestamp:
+                    if existing is None or group_entry.timestamp >= existing.timestamp:
                         groups_by_name[group_name] = group_entry
                     continue
 
