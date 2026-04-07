@@ -1081,14 +1081,27 @@ The session fingerprint shown in the handshake diagram (`chromatin-session-fp-v1
 
 To decrypt an envelope:
 
-1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01
-2. Compute `SHA3-256(own_kem_public_key)` to get own pk_hash
-3. Binary search the sorted stanzas for a matching pk_hash
-4. If not found, reject with NotARecipientError
-5. Decapsulate `kem_ciphertext` with own KEM secret key to recover the shared secret
+1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01 or 0x02
+2. Build a key ring map: `{SHA3-256(kem_pk): kem_secret_key}` for all KEM keypairs held by the recipient (current key and any retained historical keys from prior rotations)
+3. Scan recipient stanzas sequentially, checking each stanza's `kem_pk_hash` against the key ring map
+4. If no stanza matches any key in the ring, reject with NotARecipientError
+5. Decapsulate `kem_ciphertext` with the matched KEM secret key to recover the shared secret
 6. Derive KEK: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes
 7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
-8. Decrypt data ciphertext with DEK and `data_nonce` from header, using the full header (fixed header + all recipient stanzas) as associated data
+8. If suite is 0x02: decrypt data ciphertext, then Brotli-decompress the plaintext (100 MiB decompression limit)
+   If suite is 0x01: decrypt data ciphertext directly
+   Associated data for the data AEAD is the full header (fixed header + all recipient stanzas)
+
+#### Key Ring Fallback
+
+After KEM key rotation, a recipient holds multiple KEM keypairs (the current key plus all retained historical keys). The key ring map enables decryption of envelopes encrypted under any historical key:
+
+- **Current key:** Envelopes encrypted after the sender discovered the rotation use the latest `kem_pk`. The stanza's `kem_pk_hash` matches the current key in the ring.
+- **Historical keys:** Envelopes encrypted before the sender discovered the rotation (or encrypted before rotation occurred) use an older `kem_pk`. The stanza's `kem_pk_hash` matches a retained historical key in the ring.
+
+The envelope binary format is unchanged -- the `kem_pk_hash` field in each stanza already identifies which key was used. No envelope version bump is required for key ring support.
+
+Implementations must retain all historical KEM secret keys for as long as data encrypted under those keys may need to be decrypted. Discarding a historical key permanently prevents decryption of any envelope whose stanza references that key.
 
 ### Directory: User Entries and Groups
 
