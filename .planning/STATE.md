@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Phase 92 context gathered
-last_updated: "2026-04-07T02:24:13.082Z"
-last_activity: 2026-04-07 -- Phase 92 execution started
+stopped_at: Completed 92-02-PLAN.md
+last_updated: "2026-04-07T02:38:24.208Z"
+last_activity: 2026-04-07
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 4
   percent: 50
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 ## Current Position
 
 Phase: 92 (kem-key-versioning) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 92
-Last activity: 2026-04-07 -- Phase 92 execution started
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-04-07
 
 Progress: [█████░░░░░] 50%
 
@@ -52,6 +52,7 @@ Progress: [█████░░░░░] 50%
 - Trend: starting
 
 *Updated after each plan completion*
+| Phase 92 P02 | 4min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
 - Tombstone-based delegation revocation already proven in node (Docker test_acl04_revocation.sh)
 - [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
 - [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
+- [Phase 92]: USERENTRY_VERSION bumped to 0x02; v1 (0x01) entries rejected outright per D-04/D-11
+- [Phase 92]: kem_sig signs (kem_pk || key_version_be) -- binds version to signature, prevents downgrade
 
 ### Pending Todos
 
@@ -78,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T02:04:17.767Z
-Stopped at: Phase 92 context gathered
-Resume file: .planning/phases/92-kem-key-versioning/92-CONTEXT.md
+Last session: 2026-04-07T02:38:24.205Z
+Stopped at: Completed 92-02-PLAN.md
+Resume file: None
