@@ -435,7 +435,20 @@ Delegation data format: [0xDE 0x1E 0x6A 0x7E][delegate_pubkey: 2592 bytes]
 
 The delegation blob is signed by the namespace owner and sent as a regular `Data (8)` message. Once stored, the delegate can write blobs to the owner's namespace by signing with their own key. The node verifies that a valid delegation blob exists before accepting the delegate's writes.
 
-Revocation is done by tombstoning the delegation blob.
+#### Delegation Revocation
+
+Revocation is done by tombstoning the delegation blob. The workflow:
+
+1. Compute `SHA3-256(delegate_signing_pubkey)` to get the delegate's `pk_hash` (32 bytes)
+2. Call `DelegationList` to enumerate active delegations in the namespace
+3. Find the delegation entry whose `delegate_pk_hash` matches
+4. Tombstone the delegation blob via `Delete` (type 17) using the `delegation_blob_hash`
+
+Once the tombstone is stored, the node removes the delegate from the namespace's `delegation_map` index. Subsequent writes signed by the revoked delegate are rejected immediately.
+
+**Propagation bounds:** For peers connected at the time of revocation, the tombstone propagates via BlobNotify (type 59) -- near-instant delivery (sub-second on LAN). For disconnected peers, propagation occurs on the next sync round: either on reconnect (sync-on-connect) or at the safety-net interval (default 600 seconds). There is no separate revocation protocol -- revocation reuses the existing tombstone + sync mechanism.
+
+After revocation, `DelegationList` for the namespace no longer includes the revoked delegate's entry. The tombstone is permanent (`ttl=0`) and replicates like any other blob.
 
 ### Pub/Sub Notifications
 
@@ -1076,6 +1089,78 @@ To decrypt an envelope:
 6. Derive KEK: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes
 7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
 8. Decrypt data ciphertext with DEK and `data_nonce` from header, using the full header (fixed header + all recipient stanzas) as associated data
+
+### Directory: User Entries and Groups
+
+The SDK implements a directory layer over the blob store for user discovery and group management. The directory uses the admin's namespace for storage. These formats are documented here because envelope encryption depends on them: `envelope_encrypt` resolves recipient KEM public keys from UserEntry blobs, and `write_to_group` resolves group membership from GroupEntry blobs.
+
+#### UserEntry Binary Format (v2)
+
+A UserEntry blob allows users to publish their encryption public key for discovery. The format uses magic `UENT` (0x55454E54):
+
+```
+[magic:4][version:1][signing_pk:2592][kem_pk:1568][name_len:2 BE][name:variable][key_version:4 BE][kem_sig:variable]
+```
+
+| Offset | Size | Field | Encoding | Description |
+|--------|------|-------|----------|-------------|
+| 0 | 4 | magic | `UENT` (0x55454E54) | UserEntry format identifier |
+| 4 | 1 | version | uint8 | Format version (0x02) |
+| 5 | 2592 | signing_pk | raw bytes | ML-DSA-87 public key |
+| 2597 | 1568 | kem_pk | raw bytes | ML-KEM-1024 public key |
+| 4165 | 2 | name_len | big-endian uint16 | Display name byte length (max 256) |
+| 4167 | variable | name | UTF-8 | Display name |
+| 4167+N | 4 | key_version | big-endian uint32 | KEM key version (0 for initial, increments on rotation) |
+| 4171+N | variable | kem_sig | raw bytes | ML-DSA-87 signature of (kem_pk || key_version_be) |
+
+Minimum size: 4172 bytes (4 magic + 1 version + 2592 signing_pk + 1568 kem_pk + 2 name_len + 4 key_version + 1 minimum kem_sig).
+
+The `kem_sig` field signs the concatenation of `kem_pk` (1568 bytes) and `key_version` encoded as 4-byte big-endian. This binds the key version to the signature, preventing version downgrade attacks where an attacker replays an old UserEntry with a lower key_version.
+
+Version 0x01 entries (without `key_version`) are rejected. No backward compatibility is maintained for pre-rotation entries.
+
+##### Key Version Semantics
+
+The `key_version` field tracks KEM key rotation. When a user rotates their ML-KEM-1024 keypair, they publish a new UserEntry with an incremented `key_version`. The directory cache retains only the entry with the highest `key_version` per signing key, ensuring `resolve_recipient()` always returns the latest encryption public key.
+
+Multiple UserEntry blobs for the same signing key may coexist in storage (old versions are not deleted). The cache deduplication uses a highest-version-wins strategy: when populating the cache, if an entry for the same signing key already exists with a `key_version` greater than or equal to the new entry's version, the new entry is skipped.
+
+#### GroupEntry Binary Format
+
+A GroupEntry blob stores a named member list. The format uses magic `GRPE` (0x47525045):
+
+```
+[magic:4][version:1][name_len:2 BE][name:variable][member_count:2 BE][N x member_hash:32]
+```
+
+| Offset | Size | Field | Encoding | Description |
+|--------|------|-------|----------|-------------|
+| 0 | 4 | magic | `GRPE` (0x47525045) | GroupEntry format identifier |
+| 4 | 1 | version | uint8 | Format version (0x01) |
+| 5 | 2 | name_len | big-endian uint16 | Group name byte length |
+| 7 | variable | name | UTF-8 | Group name |
+| 7+N | 2 | member_count | big-endian uint16 | Number of members |
+| 9+N | 32 each | member_hash | raw bytes | SHA3-256(signing_pk) per member |
+
+Minimum size: 9 bytes (4 magic + 1 version + 2 name_len + 2 member_count).
+
+Members are identified by `SHA3-256(signing_public_key)` -- the same 32-byte hash used as namespace IDs.
+
+##### Group Membership Revocation
+
+To remove a member from a group:
+
+1. Read the current GroupEntry blob for the group name
+2. Filter out the member's `SHA3-256(signing_pk)` hash from the member list
+3. Write a new GroupEntry blob with the reduced member list
+
+The old GroupEntry blob remains in storage but the directory cache uses timestamp ordering (newest blob wins for same group name). The `>=` comparison ensures that a removal written in the same second as the original group creation correctly supersedes it.
+
+**Forward exclusion:** After removal, `write_to_group()` forces a directory cache refresh before resolving group membership. This guarantees that the removed member is excluded from the recipient stanza list of new encrypted blobs. The removed member cannot decrypt data encrypted after their removal.
+
+**Old data remains readable:** Removal does not re-encrypt existing data. The removed member retains their KEM secret key and can still decrypt any envelope where their `kem_pk_hash` appears in a recipient stanza. This is by design -- forward exclusion prevents access to new data, not retroactive revocation of old data.
+
+**No re-encryption on removal:** Re-encrypting old data for remaining members would require the admin to read and re-write every historical blob, which is impractical for large datasets and breaks content addressing. The security boundary is: removal prevents future access, not past access.
 
 ## Prometheus Metrics Endpoint
 
