@@ -4,6 +4,8 @@
 
 #include <cstring>
 
+#include "db/util/endian.h"
+
 namespace chromatindb::sync {
 
 SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
@@ -121,50 +123,6 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
 }
 
 // =============================================================================
-// Big-endian encoding helpers
-// =============================================================================
-
-namespace {
-
-void write_u32_be(std::vector<uint8_t>& buf, uint32_t val) {
-    buf.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
-    buf.push_back(static_cast<uint8_t>(val & 0xFF));
-}
-
-void write_u64_be(std::vector<uint8_t>& buf, uint64_t val) {
-    buf.push_back(static_cast<uint8_t>((val >> 56) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 48) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 40) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 32) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
-    buf.push_back(static_cast<uint8_t>(val & 0xFF));
-}
-
-uint32_t read_u32_be(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0]) << 24) |
-           (static_cast<uint32_t>(p[1]) << 16) |
-           (static_cast<uint32_t>(p[2]) << 8) |
-           static_cast<uint32_t>(p[3]);
-}
-
-uint64_t read_u64_be(const uint8_t* p) {
-    return (static_cast<uint64_t>(p[0]) << 56) |
-           (static_cast<uint64_t>(p[1]) << 48) |
-           (static_cast<uint64_t>(p[2]) << 40) |
-           (static_cast<uint64_t>(p[3]) << 32) |
-           (static_cast<uint64_t>(p[4]) << 24) |
-           (static_cast<uint64_t>(p[5]) << 16) |
-           (static_cast<uint64_t>(p[6]) << 8) |
-           static_cast<uint64_t>(p[7]);
-}
-
-} // anonymous namespace
-
-// =============================================================================
 // Message encoding/decoding
 // =============================================================================
 
@@ -174,10 +132,10 @@ std::vector<uint8_t> SyncProtocol::encode_namespace_list(
     std::vector<uint8_t> buf;
     buf.reserve(4 + namespaces.size() * 40);  // 32 + 8 per entry
 
-    write_u32_be(buf, static_cast<uint32_t>(namespaces.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(namespaces.size()));
     for (const auto& ns : namespaces) {
         buf.insert(buf.end(), ns.namespace_id.begin(), ns.namespace_id.end());
-        write_u64_be(buf, ns.latest_seq_num);
+        chromatindb::util::write_u64_be(buf, ns.latest_seq_num);
     }
 
     return buf;
@@ -187,7 +145,7 @@ std::vector<storage::NamespaceInfo> SyncProtocol::decode_namespace_list(
     std::span<const uint8_t> payload) {
     if (payload.size() < 4) return {};
 
-    uint32_t count = read_u32_be(payload.data());
+    uint32_t count = chromatindb::util::read_u32_be(payload.data());
     size_t expected = 4 + count * 40;
     if (payload.size() < expected) return {};
 
@@ -199,7 +157,7 @@ std::vector<storage::NamespaceInfo> SyncProtocol::decode_namespace_list(
         storage::NamespaceInfo info;
         std::memcpy(info.namespace_id.data(), payload.data() + offset, 32);
         offset += 32;
-        info.latest_seq_num = read_u64_be(payload.data() + offset);
+        info.latest_seq_num = chromatindb::util::read_u64_be(payload.data() + offset);
         offset += 8;
         result.push_back(info);
     }
@@ -215,7 +173,7 @@ std::vector<uint8_t> SyncProtocol::encode_blob_request(
     buf.reserve(32 + 4 + hashes.size() * 32);
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
-    write_u32_be(buf, static_cast<uint32_t>(hashes.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(hashes.size()));
     for (const auto& h : hashes) {
         buf.insert(buf.end(), h.begin(), h.end());
     }
@@ -231,7 +189,7 @@ SyncProtocol::decode_blob_request(std::span<const uint8_t> payload) {
     if (payload.size() < 36) return {ns, hashes};  // 32 + 4 minimum
 
     std::memcpy(ns.data(), payload.data(), 32);
-    uint32_t count = read_u32_be(payload.data() + 32);
+    uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
     size_t expected = 36 + count * 32;
     if (payload.size() < expected) return {ns, hashes};
@@ -252,11 +210,11 @@ std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
     const std::vector<wire::BlobData>& blobs) {
     // Format: [count:u32BE][len1:u32BE][blob1_flatbuf]...[lenN:u32BE][blobN_flatbuf]
     std::vector<uint8_t> buf;
-    write_u32_be(buf, static_cast<uint32_t>(blobs.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(blobs.size()));
 
     for (const auto& blob : blobs) {
         auto encoded = wire::encode_blob(blob);
-        write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
+        chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
         buf.insert(buf.end(), encoded.begin(), encoded.end());
     }
 
@@ -268,8 +226,8 @@ std::vector<uint8_t> SyncProtocol::encode_single_blob_transfer(
     auto encoded = wire::encode_blob(blob);
     std::vector<uint8_t> buf;
     buf.reserve(4 + 4 + encoded.size());
-    write_u32_be(buf, 1);  // count = 1
-    write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
+    chromatindb::util::write_u32_be(buf, 1);  // count = 1
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
     buf.insert(buf.end(), encoded.begin(), encoded.end());
     return buf;
 }
@@ -278,14 +236,14 @@ std::vector<wire::BlobData> SyncProtocol::decode_blob_transfer(
     std::span<const uint8_t> payload) {
     if (payload.size() < 4) return {};
 
-    uint32_t count = read_u32_be(payload.data());
+    uint32_t count = chromatindb::util::read_u32_be(payload.data());
     std::vector<wire::BlobData> blobs;
     blobs.reserve(count);
 
     size_t offset = 4;
     for (uint32_t i = 0; i < count; ++i) {
         if (offset + 4 > payload.size()) break;
-        uint32_t len = read_u32_be(payload.data() + offset);
+        uint32_t len = chromatindb::util::read_u32_be(payload.data() + offset);
         offset += 4;
 
         if (offset + len > payload.size()) break;

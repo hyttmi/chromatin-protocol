@@ -3,16 +3,15 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "db/util/endian.h"
+
 namespace chromatindb::net {
 
 std::array<uint8_t, crypto::AEAD::NONCE_SIZE> make_nonce(uint64_t counter) {
     std::array<uint8_t, crypto::AEAD::NONCE_SIZE> nonce{};
     // First 4 bytes are zero (already initialized)
     // Last 8 bytes are big-endian counter
-    for (int i = 7; i >= 0; --i) {
-        nonce[4 + i] = static_cast<uint8_t>(counter & 0xFF);
-        counter >>= 8;
-    }
+    chromatindb::util::store_u64_be(nonce.data() + 4, counter);
     return nonce;
 }
 
@@ -29,10 +28,7 @@ std::vector<uint8_t> write_frame(
 
     // Build frame: [4-byte BE length][ciphertext]
     std::vector<uint8_t> frame(FRAME_HEADER_SIZE + ciphertext.size());
-    frame[0] = static_cast<uint8_t>((ct_len >> 24) & 0xFF);
-    frame[1] = static_cast<uint8_t>((ct_len >> 16) & 0xFF);
-    frame[2] = static_cast<uint8_t>((ct_len >> 8) & 0xFF);
-    frame[3] = static_cast<uint8_t>(ct_len & 0xFF);
+    chromatindb::util::store_u32_be(frame.data(), ct_len);
     std::memcpy(frame.data() + FRAME_HEADER_SIZE, ciphertext.data(), ciphertext.size());
 
     return frame;
@@ -48,10 +44,7 @@ std::optional<FrameResult> read_frame(
     }
 
     // Parse big-endian length prefix
-    uint32_t ct_len = (static_cast<uint32_t>(buffer[0]) << 24) |
-                      (static_cast<uint32_t>(buffer[1]) << 16) |
-                      (static_cast<uint32_t>(buffer[2]) << 8) |
-                      static_cast<uint32_t>(buffer[3]);
+    uint32_t ct_len = chromatindb::util::read_u32_be(buffer.data());
 
     if (ct_len > MAX_FRAME_SIZE) {
         throw std::runtime_error("frame exceeds maximum size");
