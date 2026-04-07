@@ -296,3 +296,249 @@ def test_cpp_vector_verify_wrong_message(vectors: dict):
     pubkey = bytes.fromhex(ml_vec["public_key_hex"])
     signature = bytes.fromhex(ml_vec["signature_hex"])
     assert Identity.verify(b"wrong message", signature, pubkey) is False
+
+
+# ---------------------------------------------------------------------------
+# Key ring basics
+# ---------------------------------------------------------------------------
+
+def test_fresh_identity_key_version_zero():
+    """Identity.generate() has key_version == 0."""
+    identity = Identity.generate()
+    assert identity.key_version == 0
+
+
+def test_fresh_identity_ring_length_one():
+    """Identity.generate() internal ring has 1 entry."""
+    identity = Identity.generate()
+    assert len(identity._kem_ring) == 1
+
+
+def test_kem_public_key_unchanged_after_init():
+    """kem_public_key property returns same value as before rotation."""
+    identity = Identity.generate()
+    pk = identity.kem_public_key
+    assert len(pk) == KEM_PUBLIC_KEY_SIZE
+    # Accessing again returns same bytes
+    assert identity.kem_public_key == pk
+
+
+# ---------------------------------------------------------------------------
+# rotate_kem
+# ---------------------------------------------------------------------------
+
+def test_rotate_kem_increments_version(tmp_dir: Path):
+    """After rotate_kem(), key_version == 1."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    assert identity.key_version == 0
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 1
+
+
+def test_rotate_kem_changes_kem_public_key(tmp_dir: Path):
+    """kem_public_key differs after rotation."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    old_pk = identity.kem_public_key
+    identity.rotate_kem(key_path)
+    assert identity.kem_public_key != old_pk
+    assert len(identity.kem_public_key) == KEM_PUBLIC_KEY_SIZE
+
+
+def test_rotate_kem_retains_old_key_in_ring(tmp_dir: Path):
+    """Ring length == 2 after one rotation; old pk accessible."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    old_pk = identity.kem_public_key
+    identity.rotate_kem(key_path)
+    assert len(identity._kem_ring) == 2
+    assert identity._kem_ring[0][1] == old_pk
+    assert identity._kem_ring[1][1] == identity.kem_public_key
+
+
+def test_rotate_kem_second_rotation(tmp_dir: Path):
+    """After two rotations, key_version == 2, ring length == 3."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    identity.rotate_kem(key_path)
+    identity.rotate_kem(key_path)
+    assert identity.key_version == 2
+    assert len(identity._kem_ring) == 3
+
+
+def test_rotate_kem_verify_only_raises():
+    """rotate_kem on from_public_keys identity raises KeyFileError."""
+    identity = Identity.generate()
+    kem_identity = Identity.from_public_keys(
+        identity.public_key, identity.kem_public_key
+    )
+    with pytest.raises(KeyFileError):
+        kem_identity.rotate_kem("/tmp/fake.key")
+
+
+# ---------------------------------------------------------------------------
+# Numbered file persistence
+# ---------------------------------------------------------------------------
+
+def test_rotate_kem_writes_numbered_files(tmp_dir: Path):
+    """After rotate_kem, numbered files exist with correct sizes."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    identity.rotate_kem(key_path)
+    stem = key_path.stem  # "test"
+    parent = key_path.parent
+    # Version 0 files
+    assert (parent / f"{stem}.kem.0").stat().st_size == KEM_SECRET_KEY_SIZE
+    assert (parent / f"{stem}.kpub.0").stat().st_size == KEM_PUBLIC_KEY_SIZE
+    # Version 1 files
+    assert (parent / f"{stem}.kem.1").stat().st_size == KEM_SECRET_KEY_SIZE
+    assert (parent / f"{stem}.kpub.1").stat().st_size == KEM_PUBLIC_KEY_SIZE
+
+
+def test_rotate_kem_updates_canonical_files(tmp_dir: Path):
+    """After rotation, .kem and .kpub contain new key (not old)."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    old_kpub = key_path.with_suffix(".kpub").read_bytes()
+    identity.rotate_kem(key_path)
+    new_kpub = key_path.with_suffix(".kpub").read_bytes()
+    assert new_kpub != old_kpub
+    assert new_kpub == identity.kem_public_key
+
+
+def test_save_load_roundtrip_after_rotation(tmp_dir: Path):
+    """save + load after rotation preserves full ring, key_version, kem_public_key."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    identity.rotate_kem(key_path)
+    # Save the rotated identity
+    identity.save(key_path)
+    # Load and verify
+    loaded = Identity.load(key_path)
+    assert loaded.key_version == identity.key_version
+    assert loaded.kem_public_key == identity.kem_public_key
+    assert len(loaded._kem_ring) == len(identity._kem_ring)
+    # Verify old key is in the ring
+    assert loaded._kem_ring[0][1] == identity._kem_ring[0][1]
+
+
+# ---------------------------------------------------------------------------
+# Lazy migration (D-03)
+# ---------------------------------------------------------------------------
+
+def test_load_pre_rotation_identity_version_zero(tmp_dir: Path):
+    """Loading identity with only .kem/.kpub (no numbered) gives key_version == 0, ring length == 1."""
+    key_path = tmp_dir / "test.key"
+    Identity.generate_and_save(key_path)
+    # No numbered files exist -- this is a pre-rotation identity
+    loaded = Identity.load(key_path)
+    assert loaded.key_version == 0
+    assert len(loaded._kem_ring) == 1
+
+
+def test_load_pre_rotation_no_numbered_files_created(tmp_dir: Path):
+    """Loading does NOT create numbered files on disk."""
+    key_path = tmp_dir / "test.key"
+    Identity.generate_and_save(key_path)
+    Identity.load(key_path)
+    stem = key_path.stem
+    parent = key_path.parent
+    assert not (parent / f"{stem}.kem.0").exists()
+    assert not (parent / f"{stem}.kpub.0").exists()
+
+
+def test_first_rotation_pre_rotation_identity(tmp_dir: Path):
+    """rotate_kem on pre-rotation identity creates kem.0.* + kem.1.*, updates canonical files."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    # Load it fresh (no numbered files)
+    loaded = Identity.load(key_path)
+    old_pk = loaded.kem_public_key
+    loaded.rotate_kem(key_path)
+    stem = key_path.stem
+    parent = key_path.parent
+    # kem.0 should be copy of original
+    assert (parent / f"{stem}.kem.0").exists()
+    assert (parent / f"{stem}.kpub.0").read_bytes() == old_pk
+    # kem.1 should be new
+    assert (parent / f"{stem}.kem.1").exists()
+    assert (parent / f"{stem}.kpub.1").read_bytes() == loaded.kem_public_key
+    # canonical files updated to new key
+    assert key_path.with_suffix(".kpub").read_bytes() == loaded.kem_public_key
+    assert loaded.key_version == 1
+
+
+# ---------------------------------------------------------------------------
+# _build_kem_ring_map
+# ---------------------------------------------------------------------------
+
+def test_build_kem_ring_map_fresh():
+    """Fresh identity returns dict with 1 entry: {sha3_256(kem_pk): kem_obj}."""
+    identity = Identity.generate()
+    ring_map = identity._build_kem_ring_map()
+    assert len(ring_map) == 1
+    pk_hash = sha3_256(identity.kem_public_key)
+    assert pk_hash in ring_map
+    assert ring_map[pk_hash] is not None
+
+
+def test_build_kem_ring_map_after_rotation(tmp_dir: Path):
+    """After rotation, returns dict with 2 entries (old and new pk hashes)."""
+    key_path = tmp_dir / "test.key"
+    identity = Identity.generate_and_save(key_path)
+    old_pk = identity.kem_public_key
+    identity.rotate_kem(key_path)
+    new_pk = identity.kem_public_key
+    ring_map = identity._build_kem_ring_map()
+    assert len(ring_map) == 2
+    assert sha3_256(old_pk) in ring_map
+    assert sha3_256(new_pk) in ring_map
+
+
+def test_build_kem_ring_map_public_only():
+    """from_public_keys identity returns empty dict (no secret keys)."""
+    identity = Identity.generate()
+    kem_identity = Identity.from_public_keys(
+        identity.public_key, identity.kem_public_key
+    )
+    ring_map = kem_identity._build_kem_ring_map()
+    assert ring_map == {}
+
+
+# ---------------------------------------------------------------------------
+# Backward compat regression
+# ---------------------------------------------------------------------------
+
+def test_existing_generate_unchanged():
+    """Identity.generate() still has can_sign, has_kem, correct key sizes."""
+    identity = Identity.generate()
+    assert identity.can_sign is True
+    assert identity.has_kem is True
+    assert len(identity.public_key) == PUBLIC_KEY_SIZE
+    assert len(identity.kem_public_key) == KEM_PUBLIC_KEY_SIZE
+    assert len(identity.namespace) == 32
+
+
+def test_existing_save_load_unchanged(tmp_dir: Path):
+    """Pre-rotation save + load roundtrip still works identically."""
+    key_path = tmp_dir / "test.key"
+    original = Identity.generate_and_save(key_path)
+    loaded = Identity.load(key_path)
+    assert loaded.public_key == original.public_key
+    assert loaded.namespace == original.namespace
+    assert loaded.kem_public_key == original.kem_public_key
+    assert loaded.has_kem is True
+    assert loaded.can_sign is True
+
+
+def test_existing_from_public_keys_unchanged():
+    """from_public_keys still works, has_kem True, can_sign False."""
+    identity = Identity.generate()
+    kem_identity = Identity.from_public_keys(
+        identity.public_key, identity.kem_public_key
+    )
+    assert kem_identity.has_kem is True
+    assert kem_identity.can_sign is False
+    assert kem_identity.kem_public_key == identity.kem_public_key
+    assert kem_identity.namespace == identity.namespace
