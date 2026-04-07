@@ -7,8 +7,8 @@ Provides the full directory layer:
 - Constants for magic bytes and size validation
 - Directory class for admin/non-admin directory operations with cached lookups
 
-UserEntry binary format (D-06):
-  [magic:4][version:1][signing_pk:2592][kem_pk:1568][name_len:2 BE][name:N][kem_sig:variable]
+UserEntry binary format v2 (D-05, D-06):
+  [magic:4][version:1][signing_pk:2592][kem_pk:1568][name_len:2 BE][name:N][key_version:4 BE][kem_sig:variable]
 """
 
 from __future__ import annotations
@@ -33,15 +33,15 @@ if TYPE_CHECKING:
     from chromatindb.client import ChromatinClient
     from chromatindb.types import DelegationEntry, DeleteResult, WriteResult
 
-# UserEntry magic bytes and version (D-07)
+# UserEntry magic bytes and version (D-04, D-05)
 USERENTRY_MAGIC: bytes = b"UENT"
-USERENTRY_VERSION: int = 0x01
+USERENTRY_VERSION: int = 0x02
 
 # Delegation magic bytes matching C++ db/wire/codec.h (Pitfall 1)
 DELEGATION_MAGIC: bytes = bytes([0xDE, 0x1E, 0x6A, 0x7E])
 
-# Minimum UserEntry size: magic(4) + ver(1) + signing_pk(2592) + kem_pk(1568) + name_len(2) + kem_sig(>=1)
-USERENTRY_MIN_SIZE: int = 4 + 1 + PUBLIC_KEY_SIZE + KEM_PUBLIC_KEY_SIZE + 2 + 1
+# Minimum UserEntry size: magic(4) + ver(1) + signing_pk(2592) + kem_pk(1568) + name_len(2) + key_version(4) + kem_sig(>=1)
+USERENTRY_MIN_SIZE: int = 4 + 1 + PUBLIC_KEY_SIZE + KEM_PUBLIC_KEY_SIZE + 2 + 4 + 1
 
 
 @dataclass(frozen=True)
@@ -52,11 +52,13 @@ class DirectoryEntry:
         identity: Verify + encrypt-capable identity reconstructed from pubkeys.
         display_name: User's display name.
         blob_hash: 32-byte hash of the blob containing this entry.
+        key_version: KEM key version (0 for fresh/pre-rotation identities).
     """
 
     identity: Identity
     display_name: str
     blob_hash: bytes
+    key_version: int = 0
 
 
 # GroupEntry magic bytes and version (D-01, D-02)
@@ -158,10 +160,10 @@ def decode_group_entry(data: bytes) -> tuple[str, list[bytes]] | None:
 
 
 def encode_user_entry(identity: Identity, display_name: str) -> bytes:
-    """Encode a UserEntry blob for directory registration.
+    """Encode a UserEntry v2 blob for directory registration.
 
-    Signs the KEM public key with the identity's signing key (D-08)
-    to prevent MITM key substitution.
+    Signs (kem_pk || key_version_be) with the identity's signing key (D-05)
+    to prevent MITM key substitution and bind the key version.
 
     Args:
         identity: Full identity with signing and KEM keypairs.
@@ -185,31 +187,37 @@ def encode_user_entry(identity: Identity, display_name: str) -> bytes:
             f"Display name too long: {len(name_bytes)} > 256 bytes"
         )
 
-    # Sign KEM pubkey with signing key (D-08: prevents MITM key substitution)
-    kem_sig = identity.sign(identity.kem_public_key)
+    key_version = identity.key_version
+    # Sign (kem_pk || key_version_be) per D-05
+    signed_data = identity.kem_public_key + struct.pack(">I", key_version)
+    kem_sig = identity.sign(signed_data)
 
     return (
         USERENTRY_MAGIC
-        + struct.pack("B", USERENTRY_VERSION)
+        + struct.pack("B", USERENTRY_VERSION)  # 0x02
         + identity.public_key  # 2592 bytes
         + identity.kem_public_key  # 1568 bytes
         + struct.pack(">H", len(name_bytes))
         + name_bytes
+        + struct.pack(">I", key_version)  # 4 bytes big-endian
         + kem_sig  # variable length, up to 4627 bytes (Pitfall 4: no length prefix)
     )
 
 
-def decode_user_entry(data: bytes) -> tuple[bytes, bytes, str, bytes] | None:
-    """Decode a UserEntry blob.
+def decode_user_entry(
+    data: bytes,
+) -> tuple[bytes, bytes, str, int, bytes] | None:
+    """Decode a UserEntry v2 blob.
 
     Returns None for invalid data (wrong magic, too short, version mismatch,
-    truncated fields, empty kem_sig). Per Pitfall 3 and Pitfall 4.
+    truncated fields, empty kem_sig). Per D-04: old v1 (0x01) entries rejected.
 
     Args:
         data: Raw blob bytes.
 
     Returns:
-        (signing_pk, kem_pk, display_name, kem_sig) tuple, or None if invalid.
+        (signing_pk, kem_pk, display_name, key_version, kem_sig) tuple,
+        or None if invalid.
     """
     if len(data) < USERENTRY_MIN_SIZE:
         return None
@@ -234,30 +242,39 @@ def decode_user_entry(data: bytes) -> tuple[bytes, bytes, str, bytes] | None:
     display_name = data[offset : offset + name_len].decode("utf-8")
     offset += name_len
 
+    # key_version: 4 bytes big-endian (D-05)
+    if offset + 4 > len(data):
+        return None
+    key_version = struct.unpack(">I", data[offset : offset + 4])[0]
+    offset += 4
+
     # Remainder is kem_sig (Pitfall 4: no length prefix for kem_sig)
     kem_sig = data[offset:]
     if len(kem_sig) == 0:
         return None
 
-    return signing_pk, kem_pk, display_name, kem_sig
+    return signing_pk, kem_pk, display_name, key_version, kem_sig
 
 
 def verify_user_entry(
-    signing_pk: bytes, kem_pk: bytes, kem_sig: bytes
+    signing_pk: bytes, kem_pk: bytes, key_version: int, kem_sig: bytes
 ) -> bool:
-    """Verify that kem_sig is a valid ML-DSA-87 signature of kem_pk by signing_pk.
+    """Verify that kem_sig is a valid ML-DSA-87 signature of (kem_pk || key_version_be).
 
-    Per D-08 and D-25: the signing key owner signed their own KEM pubkey.
+    Per D-05: the signing key owner signed their KEM pubkey concatenated
+    with the big-endian key version.
 
     Args:
         signing_pk: 2592-byte ML-DSA-87 public key.
-        kem_pk: 1568-byte ML-KEM-1024 public key (the signed message).
+        kem_pk: 1568-byte ML-KEM-1024 public key.
+        key_version: KEM key version (unsigned 32-bit integer).
         kem_sig: ML-DSA-87 signature bytes.
 
     Returns:
         True if signature is valid, False otherwise.
     """
-    return Identity.verify(kem_pk, kem_sig, signing_pk)
+    signed_data = kem_pk + struct.pack(">I", key_version)
+    return Identity.verify(signed_data, kem_sig, signing_pk)
 
 
 def make_delegation_data(delegate_signing_pk: bytes) -> bytes:
@@ -483,6 +500,21 @@ class Directory:
             await self._populate_cache()
         return self._by_pubkey_hash.get(pubkey_hash)
 
+    async def resolve_recipient(self, display_name: str) -> Identity | None:
+        """Resolve a user's latest KEM public key by display name.
+
+        Per D-07: returns the Identity with the highest key_version for the
+        given display name, suitable for use as an encryption recipient.
+
+        Args:
+            display_name: Exact display name to match.
+
+        Returns:
+            Identity with latest KEM pubkey, or None if not found.
+        """
+        entry = await self.get_user(display_name)
+        return entry.identity if entry is not None else None
+
     # -----------------------------------------------------------------
     # Group management (GRP-01 through GRP-04)
     # -----------------------------------------------------------------
@@ -653,23 +685,36 @@ class Directory:
                 # Try UserEntry first
                 parsed = decode_user_entry(result.data)
                 if parsed is not None:
-                    signing_pk, kem_pk, display_name, kem_sig = parsed
-                    if not verify_user_entry(signing_pk, kem_pk, kem_sig):
+                    signing_pk, kem_pk, display_name, key_version, kem_sig = parsed
+                    if not verify_user_entry(signing_pk, kem_pk, key_version, kem_sig):
                         logger.warning(
                             "Skipping UserEntry with invalid kem_sig: %s",
                             blob_ref.blob_hash.hex(),
                         )
                         continue
 
+                    pk_hash = sha3_256(signing_pk)
                     identity = Identity.from_public_keys(signing_pk, kem_pk)
                     entry = DirectoryEntry(
                         identity=identity,
                         display_name=display_name,
                         blob_hash=blob_ref.blob_hash,
+                        key_version=key_version,
                     )
+
+                    # Highest-version-wins per D-07
+                    existing = by_pubkey_hash.get(pk_hash)
+                    if existing is not None and key_version <= existing.key_version:
+                        # Keep the higher-version entry already in cache
+                        continue
+
+                    # Replace: remove old blob_hash from cache if different
+                    if existing is not None:
+                        cache.pop(existing.blob_hash, None)
+
                     cache[blob_ref.blob_hash] = entry
                     by_name[display_name] = entry
-                    by_pubkey_hash[sha3_256(signing_pk)] = entry
+                    by_pubkey_hash[pk_hash] = entry
                     continue
 
                 # Try GroupEntry (D-11)
