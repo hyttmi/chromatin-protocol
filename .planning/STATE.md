@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Completed 92-03-PLAN.md
-last_updated: "2026-04-07T02:42:57.662Z"
+stopped_at: Phase 93 context gathered
+last_updated: "2026-04-07T02:59:53.958Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 4
@@ -80,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T02:35:28.894Z
-Stopped at: Completed 92-03-PLAN.md
-Resume file: None
+Last session: 2026-04-07T02:59:53.955Z
+Stopped at: Phase 93 context gathered
+Resume file: .planning/phases/93-group-membership-revocation/93-CONTEXT.md
