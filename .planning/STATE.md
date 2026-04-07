@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: Node Hardening
-status: defining requirements
+status: roadmap complete
 stopped_at: null
-last_updated: "2026-04-07T12:00:00.000Z"
-last_activity: 2026-04-07 -- Milestone v2.2.0 started
+last_updated: "2026-04-07T14:00:00.000Z"
+last_activity: 2026-04-07 -- Roadmap created for v2.2.0 Node Hardening
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,56 +18,51 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-06)
+See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 94 — protocol-sdk-documentation
+**Current focus:** Phase 95 -- Code Deduplication
 
 ## Current Position
 
-Phase: 94
+Phase: 95 of 99 (Code Deduplication)
 Plan: Not started
-Status: Executing Phase 94
-Last activity: 2026-04-07
+Status: Ready to plan
+Last activity: 2026-04-07 -- Roadmap created
 
-Progress: [█████░░░░░] 50%
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-
-- Total plans completed: 1
-- Average duration: 2min
-- Total execution time: 0.03 hours
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: 0 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 91 | 1/2 | 2min | 2min |
+| - | - | - | - |
 
 **Recent Trend:**
-
-- Last 5 plans: 2min
+- Last 5 plans: -
 - Trend: starting
 
 *Updated after each plan completion*
-| Phase 92 P03 | 2min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
+Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 
-- All work is SDK-only Python (zero C++ node changes, zero new wire types)
-- Old data stays readable with old keys (no re-encryption on rotation)
-- Pre-production: no backward compat needed
-- Tombstone-based delegation revocation already proven in node (Docker test_acl04_revocation.sh)
-- [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
-- [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
-- [Phase 92]: envelope_decrypt uses _build_kem_ring_map() for O(N) stanza scan with O(1) ring lookup — replaces single-key bisect
+- All work is C++ node only (zero SDK changes, zero new wire types)
+- Must remain ASAN/TSAN/UBSAN clean after every phase
+- DEDUP-01 first -- centralized encoding utilities are a dependency for cleaner fixes
+- ARCH-01 early -- PeerManager split enables cleaner work in later phases
+- PROTO before SYNC -- parsing fixes reduce attack surface for sync correctness
 
 ### Pending Todos
 
@@ -75,11 +70,10 @@ None.
 
 ### Blockers/Concerns
 
-- Phase 92 (KEM Key Versioning): Envelope header format decision needed at plan time -- key_version field width, envelope version byte bump, and v1 backward handling. Research flagged this as the highest-risk design choice.
-- Phase 92: Identity file format for key ring persistence needs decision before implementation (multiple files vs JSON manifest vs binary bundle).
+None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T02:59:53.955Z
-Stopped at: Phase 93 context gathered
-Resume file: .planning/phases/93-group-membership-revocation/93-CONTEXT.md
+Last session: 2026-04-07
+Stopped at: Roadmap created for v2.2.0 Node Hardening
+Resume file: None

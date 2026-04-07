@@ -63,32 +63,32 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROTO-01 | TBD | Pending |
-| PROTO-02 | TBD | Pending |
-| PROTO-03 | TBD | Pending |
-| PROTO-04 | TBD | Pending |
-| CRYPTO-01 | TBD | Pending |
-| CRYPTO-02 | TBD | Pending |
-| CRYPTO-03 | TBD | Pending |
-| TTL-01 | TBD | Pending |
-| TTL-02 | TBD | Pending |
-| TTL-03 | TBD | Pending |
-| SYNC-01 | TBD | Pending |
-| SYNC-02 | TBD | Pending |
-| SYNC-03 | TBD | Pending |
-| RES-01 | TBD | Pending |
-| RES-02 | TBD | Pending |
-| RES-03 | TBD | Pending |
-| RES-04 | TBD | Pending |
-| CORO-01 | TBD | Pending |
-| DEDUP-01 | TBD | Pending |
-| DEDUP-02 | TBD | Pending |
-| DEDUP-03 | TBD | Pending |
-| DEDUP-04 | TBD | Pending |
-| DEDUP-05 | TBD | Pending |
-| ARCH-01 | TBD | Pending |
+| DEDUP-01 | Phase 95 | Pending |
+| DEDUP-02 | Phase 95 | Pending |
+| DEDUP-03 | Phase 95 | Pending |
+| DEDUP-04 | Phase 95 | Pending |
+| DEDUP-05 | Phase 95 | Pending |
+| ARCH-01 | Phase 96 | Pending |
+| PROTO-01 | Phase 97 | Pending |
+| PROTO-02 | Phase 97 | Pending |
+| PROTO-03 | Phase 97 | Pending |
+| PROTO-04 | Phase 97 | Pending |
+| CRYPTO-01 | Phase 97 | Pending |
+| CRYPTO-02 | Phase 97 | Pending |
+| CRYPTO-03 | Phase 97 | Pending |
+| TTL-01 | Phase 98 | Pending |
+| TTL-02 | Phase 98 | Pending |
+| TTL-03 | Phase 98 | Pending |
+| SYNC-01 | Phase 99 | Pending |
+| SYNC-02 | Phase 99 | Pending |
+| SYNC-03 | Phase 99 | Pending |
+| RES-01 | Phase 99 | Pending |
+| RES-02 | Phase 99 | Pending |
+| RES-03 | Phase 99 | Pending |
+| RES-04 | Phase 99 | Pending |
+| CORO-01 | Phase 99 | Pending |
 
 **Coverage:**
 - v2.2.0 requirements: 24 total
-- Mapped to phases: 0/24 (0%) — pending roadmap
-- Unmapped: 24
+- Mapped to phases: 24/24 (100%)
+- Unmapped: 0
