@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Completed 91-01-PLAN.md
-last_updated: "2026-04-06T14:50:22.780Z"
+stopped_at: Phase 92 context gathered
+last_updated: "2026-04-07T02:04:17.775Z"
 last_activity: 2026-04-06
 progress:
   total_phases: 4
@@ -78,6 +78,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-06T07:53:58Z
-Stopped at: Completed 91-01-PLAN.md
-Resume file: .planning/phases/91-sdk-delegation-revocation/91-01-SUMMARY.md
+Last session: 2026-04-07T02:04:17.767Z
+Stopped at: Phase 92 context gathered
+Resume file: .planning/phases/92-kem-key-versioning/92-CONTEXT.md
