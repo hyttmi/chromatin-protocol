@@ -10,7 +10,6 @@ Internal module -- import from chromatindb instead.
 
 from __future__ import annotations
 
-import bisect
 import secrets
 import struct
 from typing import TYPE_CHECKING
@@ -192,9 +191,10 @@ def envelope_encrypt(
 def envelope_decrypt(data: bytes, identity: Identity) -> bytes:
     """Decrypt a PQ envelope for the given identity.
 
-    Finds the recipient stanza by KEM public key hash (binary search),
-    decapsulates the KEM ciphertext, derives KEK via HKDF, unwraps DEK,
-    and decrypts the payload.
+    Finds the recipient stanza by matching stanza pk_hashes against the
+    identity's KEM key ring map (supports decryption with any historical
+    KEM key after rotation). Decapsulates the KEM ciphertext, derives
+    KEK via HKDF, unwraps DEK, and decrypts the payload.
 
     Args:
         data: Complete binary envelope.
@@ -247,24 +247,33 @@ def envelope_decrypt(data: bytes, identity: Identity) -> bytes:
         offset = stanza_offset + i * _STANZA_SIZE
         pk_hashes.append(data[offset : offset + _KEM_PK_HASH_SIZE])
 
-    # Find recipient stanza via binary search (per D-07, D-31)
+    # Find recipient stanza via key ring map lookup (per D-08)
     if not identity.has_kem:
         raise NotARecipientError("Identity has no KEM keypair for decryption")
 
-    my_hash = sha3_256(identity.kem_public_key)
-    idx = bisect.bisect_left(pk_hashes, my_hash)
-    if idx >= len(pk_hashes) or pk_hashes[idx] != my_hash:
+    ring_map = identity._build_kem_ring_map()
+    if not ring_map:
+        raise NotARecipientError("Identity has no KEM secret key for decryption")
+
+    # Scan stanza pk_hashes against the ring map
+    matched_idx = None
+    matched_kem = None
+    for i, pk_hash in enumerate(pk_hashes):
+        if pk_hash in ring_map:
+            matched_idx = i
+            matched_kem = ring_map[pk_hash]
+            break
+
+    if matched_idx is None:
         raise NotARecipientError("Identity not in envelope recipient list")
 
-    # Extract stanza fields
-    stanza_base = stanza_offset + idx * _STANZA_SIZE
+    # Extract stanza fields using matched index
+    stanza_base = stanza_offset + matched_idx * _STANZA_SIZE
     kem_ct = data[stanza_base + _KEM_PK_HASH_SIZE : stanza_base + _KEM_PK_HASH_SIZE + _KEM_CT_SIZE]
     wrapped_dek = data[stanza_base + _KEM_PK_HASH_SIZE + _KEM_CT_SIZE : stanza_base + _STANZA_SIZE]
 
-    # KEM decapsulation
-    if identity._kem is None:
-        raise NotARecipientError("Identity has no KEM secret key for decryption")
-    kem_ss = bytes(identity._kem.decap_secret(kem_ct))
+    # Decapsulate with matched key from ring
+    kem_ss = bytes(matched_kem.decap_secret(kem_ct))
 
     # Derive KEK and unwrap DEK (per D-09, D-11)
     kek = hkdf_derive(salt=b"", ikm=kem_ss, info=_HKDF_LABEL, length=32)
