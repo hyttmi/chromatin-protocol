@@ -10,6 +10,27 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v2.2.0 Node Hardening
+
+**Goal:** Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety gaps, duplicate code, and design debt so the database layer is production-grade and never needs revisiting.
+
+**Target features:**
+- Integer overflow fixes in all protocol parsing paths (6 HIGH severity)
+- Nonce counter wraparound protection (connection kill before reuse)
+- TTL enforcement in all query paths and BlobFetch
+- Sync correctness fixes (pending_fetches leak, namespace key, stale Phase B)
+- Peer authentication for lightweight handshake, PQ pubkey binding
+- Subscription limit, bootstrap detection, TOCTOU race closure
+- Centralize 64+ duplicate code instances (BE encoding, auth payload, sig verify)
+- Split PeerManager god object into focused components
+- Input validation hardening (pubkey sizes, FlatBuffer decode, AEAD AD bounds)
+
+**Constraints:**
+- C++ node only — no SDK changes
+- Must remain ASAN/TSAN/UBSAN clean
+- All 615+ existing unit tests must pass after each phase
+- No new dependencies
+
 ## Previous Milestone: v2.1.1 Revocation & Key Lifecycle (SHIPPED 2026-04-07)
 
 **Delivered:** SDK delegation revocation (revoke_delegation, list_delegates), ML-KEM key rotation (rotate_kem, key ring, UserEntry v2), group membership revocation (write_to_group refresh, member exclusion), PROTOCOL.md + getting-started tutorial updated. 4 phases, 9 plans, 9 requirements — all complete. Bonus: PeerInfo use-after-free fix (audit finding #6).
@@ -341,4 +362,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — v2.1.1 shipped (Revocation & Key Lifecycle)*
+*Last updated: 2026-04-07 — Milestone v2.2.0 started (Node Hardening)*

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(chromatindb VERSION 1.8.0 LANGUAGES C CXX)
+project(chromatindb VERSION 2.2.0 LANGUAGES C CXX)
 
 # Git hash for build identification
 execute_process(
