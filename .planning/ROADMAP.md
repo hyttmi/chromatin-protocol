@@ -234,8 +234,8 @@ Plans:
 
 Plans:
 - [x] 92-01-PLAN.md — Identity key ring: rotate_kem(), numbered file persistence, lazy migration, _build_kem_ring_map()
-- [x] 92-02-PLAN.md — UserEntry v2 format with key_version, resolve_recipient(), highest-version cache
-- [ ] 92-03-PLAN.md — Envelope decrypt key ring fallback via _build_kem_ring_map()
+- [ ] 92-02-PLAN.md — UserEntry v2 format with key_version, resolve_recipient(), highest-version cache
+- [x] 92-03-PLAN.md — Envelope decrypt key ring fallback via _build_kem_ring_map()
 
 ### Phase 93: Group Membership Revocation
 **Goal**: Group admins can remove members so future group writes exclude removed members from recipient stanzas

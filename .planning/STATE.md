@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Completed 92-02-PLAN.md
-last_updated: "2026-04-07T02:38:24.208Z"
+stopped_at: Completed 92-03-PLAN.md
+last_updated: "2026-04-07T02:35:28.897Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 4
@@ -52,7 +52,7 @@ Progress: [█████░░░░░] 50%
 - Trend: starting
 
 *Updated after each plan completion*
-| Phase 92 P02 | 4min | 1 tasks | 2 files |
+| Phase 92 P03 | 2min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -67,8 +67,7 @@ Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
 - Tombstone-based delegation revocation already proven in node (Docker test_acl04_revocation.sh)
 - [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
 - [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
-- [Phase 92]: USERENTRY_VERSION bumped to 0x02; v1 (0x01) entries rejected outright per D-04/D-11
-- [Phase 92]: kem_sig signs (kem_pk || key_version_be) -- binds version to signature, prevents downgrade
+- [Phase 92]: envelope_decrypt uses _build_kem_ring_map() for O(N) stanza scan with O(1) ring lookup — replaces single-key bisect
 
 ### Pending Todos
 
@@ -81,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T02:38:24.205Z
-Stopped at: Completed 92-02-PLAN.md
+Last session: 2026-04-07T02:35:28.894Z
+Stopped at: Completed 92-03-PLAN.md
 Resume file: None

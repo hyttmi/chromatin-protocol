@@ -8,8 +8,8 @@
 ## Key Versioning
 
 - [x] **KEY-01**: Owner can rotate KEM keypair via `Identity.rotate_kem()`; old secret keys retained in identity key ring for backward decryption
-- [x] **KEY-02**: Directory tracks key version history; UserEntry v2 includes `key_version` field; `resolve_recipient()` returns latest KEM public key
-- [ ] **KEY-03**: `write_encrypted()` uses recipient's latest KEM public key; `read_encrypted()` falls back to older keys via `pk_hash` matching
+- [ ] **KEY-02**: Directory tracks key version history; UserEntry v2 includes `key_version` field; `resolve_recipient()` returns latest KEM public key
+- [x] **KEY-03**: `write_encrypted()` uses recipient's latest KEM public key; `read_encrypted()` falls back to older keys via `pk_hash` matching
 
 ## Group Membership
 
@@ -41,8 +41,8 @@
 | REV-01 | Phase 91 | Pending |
 | REV-02 | Phase 91 | Pending |
 | KEY-01 | Phase 92 | Complete |
-| KEY-02 | Phase 92 | Complete |
-| KEY-03 | Phase 92 | Pending |
+| KEY-02 | Phase 92 | Pending |
+| KEY-03 | Phase 92 | Complete |
 | GRP-01 | Phase 93 | Pending |
 | GRP-02 | Phase 93 | Pending |
 | DOC-01 | Phase 94 | Pending |
