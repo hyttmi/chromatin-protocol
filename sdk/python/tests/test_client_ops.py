@@ -41,8 +41,11 @@ from chromatindb._codec import (
 )
 from chromatindb.client import ChromatinClient
 from chromatindb.crypto import build_signing_input
+from chromatindb._directory import Directory, DirectoryEntry, GroupEntry
+from chromatindb.crypto import sha3_256
 from chromatindb.exceptions import (
     ConnectionError as ChromatinConnectionError,
+    DirectoryError,
     ProtocolError,
 )
 from chromatindb.identity import Identity
@@ -1692,3 +1695,179 @@ class TestAexitCleanup:
         await client.__aexit__(None, None, None)
 
         assert call_order == ["unsubscribe", "goodbye"]
+
+
+# ---------------------------------------------------------------------------
+# write_to_group — directory refresh ordering and member exclusion (GRP-01/02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestWriteToGroup:
+    """Tests for write_to_group() directory refresh and member exclusion."""
+
+    async def test_write_to_group_calls_refresh_before_get_group(
+        self, client: ChromatinClient
+    ) -> None:
+        """write_to_group() calls directory.refresh() before get_group()."""
+        call_order: list[str] = []
+
+        directory = MagicMock(spec=Directory)
+        directory.refresh = MagicMock(
+            side_effect=lambda: call_order.append("refresh")
+        )
+
+        group = GroupEntry(
+            name="team", members=[], blob_hash=b"\x01" * 32, timestamp=1000
+        )
+
+        async def _get_group(name: str) -> GroupEntry:
+            call_order.append("get_group")
+            return group
+
+        directory.get_group = AsyncMock(side_effect=_get_group)
+        directory.get_user_by_pubkey = AsyncMock(return_value=None)
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\xaa" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"data", "team", directory, 3600)
+
+        assert call_order == ["refresh", "get_group"]
+
+    async def test_write_to_group_excludes_removed_member(
+        self, client: ChromatinClient
+    ) -> None:
+        """After removal, write_to_group encrypts only to remaining members."""
+        alice = Identity.generate()
+        bob = Identity.generate()
+        charlie = Identity.generate()
+
+        alice_hash = sha3_256(alice.public_key)
+        bob_hash = sha3_256(bob.public_key)
+        charlie_hash = sha3_256(charlie.public_key)
+
+        # Group has alice and charlie — bob was removed
+        group = GroupEntry(
+            name="team",
+            members=[alice_hash, charlie_hash],
+            blob_hash=b"\x02" * 32,
+            timestamp=2000,
+        )
+
+        directory = MagicMock(spec=Directory)
+        directory.refresh = MagicMock()
+        directory.get_group = AsyncMock(return_value=group)
+
+        async def _resolve(pk_hash: bytes) -> DirectoryEntry | None:
+            if pk_hash == alice_hash:
+                return DirectoryEntry(
+                    identity=alice,
+                    display_name="Alice",
+                    blob_hash=b"\x03" * 32,
+                )
+            if pk_hash == charlie_hash:
+                return DirectoryEntry(
+                    identity=charlie,
+                    display_name="Charlie",
+                    blob_hash=b"\x04" * 32,
+                )
+            return None
+
+        directory.get_user_by_pubkey = AsyncMock(side_effect=_resolve)
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\xaa" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"secret", "team", directory, 3600)
+
+        recipients = client.write_encrypted.call_args[0][2]
+        assert len(recipients) == 2
+        assert alice in recipients
+        assert charlie in recipients
+        assert bob not in recipients
+
+    async def test_write_to_group_group_not_found(
+        self, client: ChromatinClient
+    ) -> None:
+        """write_to_group raises DirectoryError when group not found."""
+        directory = MagicMock(spec=Directory)
+        directory.refresh = MagicMock()
+        directory.get_group = AsyncMock(return_value=None)
+
+        with pytest.raises(DirectoryError, match="not found"):
+            await client.write_to_group(b"data", "ghost", directory, 3600)
+
+        assert directory.refresh.called
+
+    async def test_write_to_group_empty_group(
+        self, client: ChromatinClient
+    ) -> None:
+        """write_to_group with zero members passes empty recipients."""
+        group = GroupEntry(
+            name="team", members=[], blob_hash=b"\x05" * 32, timestamp=3000
+        )
+
+        directory = MagicMock(spec=Directory)
+        directory.refresh = MagicMock()
+        directory.get_group = AsyncMock(return_value=group)
+        directory.get_user_by_pubkey = AsyncMock(return_value=None)
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\xaa" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"data", "team", directory, 3600)
+
+        recipients = client.write_encrypted.call_args[0][2]
+        assert recipients == []
+
+    async def test_write_to_group_skips_unresolvable(
+        self, client: ChromatinClient
+    ) -> None:
+        """Members not in directory are silently skipped."""
+        alice = Identity.generate()
+        alice_hash = sha3_256(alice.public_key)
+        unknown_hash = b"\xff" * 32
+
+        group = GroupEntry(
+            name="team",
+            members=[alice_hash, unknown_hash],
+            blob_hash=b"\x06" * 32,
+            timestamp=4000,
+        )
+
+        directory = MagicMock(spec=Directory)
+        directory.refresh = MagicMock()
+        directory.get_group = AsyncMock(return_value=group)
+
+        async def _resolve(pk_hash: bytes) -> DirectoryEntry | None:
+            if pk_hash == alice_hash:
+                return DirectoryEntry(
+                    identity=alice,
+                    display_name="Alice",
+                    blob_hash=b"\x07" * 32,
+                )
+            return None
+
+        directory.get_user_by_pubkey = AsyncMock(side_effect=_resolve)
+
+        client.write_encrypted = AsyncMock(
+            return_value=WriteResult(
+                blob_hash=b"\xaa" * 32, seq_num=1, duplicate=False
+            )
+        )
+
+        await client.write_to_group(b"data", "team", directory, 3600)
+
+        recipients = client.write_encrypted.call_args[0][2]
+        assert len(recipients) == 1
+        assert alice in recipients
