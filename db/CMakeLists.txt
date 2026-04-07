@@ -240,6 +240,8 @@ if(BUILD_TESTING)
     tests/relay/test_relay_config.cpp
     tests/relay/test_relay_identity.cpp
     tests/relay/test_message_filter.cpp
+    tests/util/test_endian.cpp
+    tests/util/test_blob_helpers.cpp
   )
 
   target_link_libraries(chromatindb_tests PRIVATE

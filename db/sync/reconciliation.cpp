@@ -4,27 +4,11 @@
 #include <cstring>
 #include <set>
 
+#include "db/util/endian.h"
+
 namespace chromatindb::sync {
 
-// =============================================================================
-// Big-endian encoding helpers (same pattern as sync_protocol.cpp)
-// =============================================================================
-
 namespace {
-
-void write_u32_be(std::vector<uint8_t>& buf, uint32_t val) {
-    buf.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
-    buf.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
-    buf.push_back(static_cast<uint8_t>(val & 0xFF));
-}
-
-uint32_t read_u32_be(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0]) << 24) |
-           (static_cast<uint32_t>(p[1]) << 16) |
-           (static_cast<uint32_t>(p[2]) << 8) |
-           static_cast<uint32_t>(p[3]);
-}
 
 /// Sentinel for minimum hash value (all zeros).
 const Hash32 MIN_HASH{};
@@ -254,7 +238,7 @@ std::vector<uint8_t> encode_reconcile_init(const ReconcileInit& init) {
     buf.reserve(1 + 32 + 4 + 32);  // version + ns + count + fp
     buf.push_back(init.version);
     buf.insert(buf.end(), init.namespace_id.begin(), init.namespace_id.end());
-    write_u32_be(buf, init.count);
+    chromatindb::util::write_u32_be(buf, init.count);
     buf.insert(buf.end(), init.fingerprint.begin(), init.fingerprint.end());
     return buf;
 }
@@ -268,7 +252,7 @@ std::optional<ReconcileInit> decode_reconcile_init(std::span<const uint8_t> payl
     if (init.version != RECONCILE_VERSION) return std::nullopt;
 
     std::memcpy(init.namespace_id.data(), payload.data() + 1, 32);
-    init.count = read_u32_be(payload.data() + 33);
+    init.count = chromatindb::util::read_u32_be(payload.data() + 33);
     std::memcpy(init.fingerprint.data(), payload.data() + 37, 32);
 
     return init;
@@ -286,7 +270,7 @@ std::vector<uint8_t> encode_reconcile_ranges(
     buf.reserve(36 + ranges.size() * 69);
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
-    write_u32_be(buf, static_cast<uint32_t>(ranges.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(ranges.size()));
 
     for (const auto& range : ranges) {
         // upper_bound: 32 bytes
@@ -300,12 +284,12 @@ std::vector<uint8_t> encode_reconcile_ranges(
                 break;
             case RangeMode::Fingerprint:
                 // count: u32BE + fingerprint: 32 bytes
-                write_u32_be(buf, range.count);
+                chromatindb::util::write_u32_be(buf, range.count);
                 buf.insert(buf.end(), range.fingerprint.begin(), range.fingerprint.end());
                 break;
             case RangeMode::ItemList:
                 // count: u32BE + items: count * 32 bytes
-                write_u32_be(buf, range.count);
+                chromatindb::util::write_u32_be(buf, range.count);
                 for (const auto& item : range.items) {
                     buf.insert(buf.end(), item.begin(), item.end());
                 }
@@ -322,7 +306,7 @@ std::optional<DecodedRanges> decode_reconcile_ranges(std::span<const uint8_t> pa
 
     DecodedRanges result;
     std::memcpy(result.namespace_id.data(), payload.data(), 32);
-    uint32_t range_count = read_u32_be(payload.data() + 32);
+    uint32_t range_count = chromatindb::util::read_u32_be(payload.data() + 32);
 
     size_t offset = HEADER_SIZE;
     result.ranges.reserve(range_count);
@@ -342,14 +326,14 @@ std::optional<DecodedRanges> decode_reconcile_ranges(std::span<const uint8_t> pa
                 break;
             case RangeMode::Fingerprint:
                 if (offset + 4 + 32 > payload.size()) return std::nullopt;
-                entry.count = read_u32_be(payload.data() + offset);
+                entry.count = chromatindb::util::read_u32_be(payload.data() + offset);
                 offset += 4;
                 std::memcpy(entry.fingerprint.data(), payload.data() + offset, 32);
                 offset += 32;
                 break;
             case RangeMode::ItemList: {
                 if (offset + 4 > payload.size()) return std::nullopt;
-                entry.count = read_u32_be(payload.data() + offset);
+                entry.count = chromatindb::util::read_u32_be(payload.data() + offset);
                 offset += 4;
                 if (offset + entry.count * 32 > payload.size()) return std::nullopt;
                 entry.items.reserve(entry.count);
@@ -382,7 +366,7 @@ std::vector<uint8_t> encode_reconcile_items(
     buf.reserve(32 + 4 + items.size() * 32);
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
-    write_u32_be(buf, static_cast<uint32_t>(items.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(items.size()));
     for (const auto& item : items) {
         buf.insert(buf.end(), item.begin(), item.end());
     }
@@ -396,7 +380,7 @@ std::optional<DecodedItems> decode_reconcile_items(std::span<const uint8_t> payl
 
     DecodedItems result;
     std::memcpy(result.namespace_id.data(), payload.data(), 32);
-    uint32_t count = read_u32_be(payload.data() + 32);
+    uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
     if (payload.size() < HEADER_SIZE + count * 32) return std::nullopt;
 

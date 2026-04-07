@@ -14,29 +14,12 @@
 #include "db/crypto/aead.h"
 #include "db/crypto/hash.h"
 #include "db/crypto/master_key.h"
+#include "db/util/endian.h"
 #include "db/wire/codec.h"
 
 namespace chromatindb::storage {
 
 namespace fs = std::filesystem;
-
-// =============================================================================
-// Byte helpers
-// =============================================================================
-
-static void encode_be_u64(uint64_t val, uint8_t* out) {
-    for (int i = 7; i >= 0; --i) {
-        out[7 - i] = static_cast<uint8_t>(val >> (i * 8));
-    }
-}
-
-static uint64_t decode_be_u64(const uint8_t* data) {
-    uint64_t val = 0;
-    for (int i = 0; i < 8; ++i) {
-        val = (val << 8) | data[i];
-    }
-    return val;
-}
 
 // =============================================================================
 // Key construction
@@ -54,14 +37,14 @@ static std::array<uint8_t, 40> make_seq_key(
     const uint8_t* ns, uint64_t seq_num) {
     std::array<uint8_t, 40> key;
     std::memcpy(key.data(), ns, 32);
-    encode_be_u64(seq_num, key.data() + 32);
+    chromatindb::util::store_u64_be(key.data() + 32, seq_num);
     return key;
 }
 
 static std::array<uint8_t, 40> make_expiry_key(
     uint64_t expiry_ts, const uint8_t* hash) {
     std::array<uint8_t, 40> key;
-    encode_be_u64(expiry_ts, key.data());
+    chromatindb::util::store_u64_be(key.data(), expiry_ts);
     std::memcpy(key.data() + 8, hash, 32);
     return key;
 }
@@ -77,34 +60,21 @@ static std::array<uint8_t, 64> make_cursor_key(
 // Cursor value: [seq_num_be:8][round_count_be:4][last_sync_ts_be:8] = 20 bytes
 static constexpr size_t CURSOR_VALUE_SIZE = 20;
 
-static void encode_be_u32(uint32_t val, uint8_t* out) {
-    out[0] = static_cast<uint8_t>(val >> 24);
-    out[1] = static_cast<uint8_t>(val >> 16);
-    out[2] = static_cast<uint8_t>(val >> 8);
-    out[3] = static_cast<uint8_t>(val);
-}
-
-static uint32_t decode_be_u32(const uint8_t* data) {
-    return (static_cast<uint32_t>(data[0]) << 24) |
-           (static_cast<uint32_t>(data[1]) << 16) |
-           (static_cast<uint32_t>(data[2]) << 8) |
-           static_cast<uint32_t>(data[3]);
-}
 
 static std::array<uint8_t, CURSOR_VALUE_SIZE> encode_cursor_value(
     const SyncCursor& cursor) {
     std::array<uint8_t, CURSOR_VALUE_SIZE> buf;
-    encode_be_u64(cursor.seq_num, buf.data());
-    encode_be_u32(cursor.round_count, buf.data() + 8);
-    encode_be_u64(cursor.last_sync_timestamp, buf.data() + 12);
+    chromatindb::util::store_u64_be(buf.data(), cursor.seq_num);
+    chromatindb::util::store_u32_be(buf.data() + 8, cursor.round_count);
+    chromatindb::util::store_u64_be(buf.data() + 12, cursor.last_sync_timestamp);
     return buf;
 }
 
 static SyncCursor decode_cursor_value(const uint8_t* data) {
     SyncCursor cursor;
-    cursor.seq_num = decode_be_u64(data);
-    cursor.round_count = decode_be_u32(data + 8);
-    cursor.last_sync_timestamp = decode_be_u64(data + 12);
+    cursor.seq_num = chromatindb::util::read_u64_be(data);
+    cursor.round_count = chromatindb::util::read_u32_be(data + 8);
+    cursor.last_sync_timestamp = chromatindb::util::read_u64_be(data + 12);
     return cursor;
 }
 
@@ -122,15 +92,15 @@ static constexpr size_t QUOTA_VALUE_SIZE = 16;
 static std::array<uint8_t, QUOTA_VALUE_SIZE> encode_quota_value(
     const NamespaceQuota& q) {
     std::array<uint8_t, QUOTA_VALUE_SIZE> buf;
-    encode_be_u64(q.total_bytes, buf.data());
-    encode_be_u64(q.blob_count, buf.data() + 8);
+    chromatindb::util::store_u64_be(buf.data(), q.total_bytes);
+    chromatindb::util::store_u64_be(buf.data() + 8, q.blob_count);
     return buf;
 }
 
 static NamespaceQuota decode_quota_value(const uint8_t* data) {
     NamespaceQuota q;
-    q.total_bytes = decode_be_u64(data);
-    q.blob_count = decode_be_u64(data + 8);
+    q.total_bytes = chromatindb::util::read_u64_be(data);
+    q.blob_count = chromatindb::util::read_u64_be(data + 8);
     return q;
 }
 
@@ -303,7 +273,7 @@ struct Storage::Impl {
             if (key_data.length() == 40 &&
                 std::memcmp(key_data.data(), ns, 32) == 0) {
                 // This IS in our namespace (matched with UINT64_MAX seq)
-                uint64_t current = decode_be_u64(
+                uint64_t current = chromatindb::util::read_u64_be(
                     static_cast<const uint8_t*>(key_data.data()) + 32);
                 return current + 1;
             }
@@ -313,7 +283,7 @@ struct Storage::Impl {
                 auto prev_key = prev.key;
                 if (prev_key.length() == 40 &&
                     std::memcmp(prev_key.data(), ns, 32) == 0) {
-                    uint64_t current = decode_be_u64(
+                    uint64_t current = chromatindb::util::read_u64_be(
                         static_cast<const uint8_t*>(prev_key.data()) + 32);
                     return current + 1;
                 }
@@ -326,7 +296,7 @@ struct Storage::Impl {
                 auto key_data = last.key;
                 if (key_data.length() == 40 &&
                     std::memcmp(key_data.data(), ns, 32) == 0) {
-                    uint64_t current = decode_be_u64(
+                    uint64_t current = chromatindb::util::read_u64_be(
                         static_cast<const uint8_t*>(key_data.data()) + 32);
                     return current + 1;
                 }
@@ -394,7 +364,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                 auto v = cursor.current(false).value;
                 if (v.length() == 32 &&
                     std::memcmp(v.data(), precomputed_hash.data(), 32) == 0) {
-                    existing_seq = decode_be_u64(
+                    existing_seq = chromatindb::util::read_u64_be(
                         static_cast<const uint8_t*>(k.data()) + 32);
                     break;
                 }
@@ -628,7 +598,7 @@ std::vector<BlobRef> Storage::get_blob_refs_since(
             if (std::memcmp(val_data.data(), zero_hash.data(), 32) != 0) {
                 BlobRef ref;
                 std::memcpy(ref.blob_hash.data(), val_data.data(), 32);
-                ref.seq_num = decode_be_u64(
+                ref.seq_num = chromatindb::util::read_u64_be(
                     static_cast<const uint8_t*>(key_data.data()) + 32);
                 results.push_back(ref);
 
@@ -722,7 +692,7 @@ std::vector<NamespaceInfo> Storage::list_namespaces() {
                 auto k = cursor.current(false).key;
                 if (k.length() == 40 &&
                     std::memcmp(k.data(), info.namespace_id.data(), 32) == 0) {
-                    info.latest_seq_num = decode_be_u64(
+                    info.latest_seq_num = chromatindb::util::read_u64_be(
                         static_cast<const uint8_t*>(k.data()) + 32);
                 } else {
                     // It's in the next namespace; go back one
@@ -731,7 +701,7 @@ std::vector<NamespaceInfo> Storage::list_namespaces() {
                         auto pk = prev.key;
                         if (pk.length() == 40 &&
                             std::memcmp(pk.data(), info.namespace_id.data(), 32) == 0) {
-                            info.latest_seq_num = decode_be_u64(
+                            info.latest_seq_num = chromatindb::util::read_u64_be(
                                 static_cast<const uint8_t*>(pk.data()) + 32);
                         }
                     }
@@ -743,7 +713,7 @@ std::vector<NamespaceInfo> Storage::list_namespaces() {
                     auto lk = last.key;
                     if (lk.length() == 40 &&
                         std::memcmp(lk.data(), info.namespace_id.data(), 32) == 0) {
-                        info.latest_seq_num = decode_be_u64(
+                        info.latest_seq_num = chromatindb::util::read_u64_be(
                             static_cast<const uint8_t*>(lk.data()) + 32);
                     }
                 }
@@ -1041,7 +1011,7 @@ size_t Storage::run_expiry_scan() {
             auto key_data = current.key;
             if (key_data.length() != 40) break;
 
-            uint64_t expiry_ts = decode_be_u64(
+            uint64_t expiry_ts = chromatindb::util::read_u64_be(
                 static_cast<const uint8_t*>(key_data.data()));
 
             if (expiry_ts > now) break;
@@ -1142,7 +1112,7 @@ std::optional<uint64_t> Storage::get_earliest_expiry() const {
         auto key_data = cursor.current(false).key;
         if (key_data.length() < 8) return std::nullopt;
 
-        return decode_be_u64(
+        return chromatindb::util::read_u64_be(
             static_cast<const uint8_t*>(key_data.data()));
     } catch (const std::exception& e) {
         spdlog::error("get_earliest_expiry: {}", e.what());
