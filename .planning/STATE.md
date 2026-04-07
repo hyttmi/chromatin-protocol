@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.1.1
 milestone_name: Revocation & Key Lifecycle
 status: executing
-stopped_at: Completed 94-02-PLAN.md
-last_updated: "2026-04-07T09:01:32.641Z"
-last_activity: 2026-04-07
+stopped_at: Phase 93 context gathered
+last_updated: "2026-04-07T08:58:12.593Z"
+last_activity: 2026-04-07 -- Phase 94 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 9
-  completed_plans: 8
-  percent: 90
+  completed_plans: 7
+  percent: 50
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-06)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 93 — group-membership-revocation
+**Current focus:** Phase 94 — protocol-sdk-documentation
 
 ## Current Position
 
-Phase: 94
-Plan: 2 of 2
+Phase: 94 (protocol-sdk-documentation) — EXECUTING
+Plan: 1 of 2
 Status: Executing Phase 94
-Last activity: 2026-04-07
+Last activity: 2026-04-07 -- Phase 94 execution started
 
-Progress: [█████████░] 90%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -53,7 +53,6 @@ Progress: [█████████░] 90%
 
 *Updated after each plan completion*
 | Phase 92 P03 | 2min | 1 tasks | 2 files |
-| Phase 94 P02 | 1min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -69,7 +68,6 @@ Previous milestone decisions archived to milestones/v2.1.0-ROADMAP.md.
 - [Phase 91-01]: revoke_delegation uses delegation_list + delete_blob (not direct tombstone write) for correctness
 - [Phase 91-01]: DelegationNotFoundError subclasses DirectoryError (not ProtocolError) since it is a directory-level semantic error
 - [Phase 92]: envelope_decrypt uses _build_kem_ring_map() for O(N) stanza scan with O(1) ring lookup — replaces single-key bisect
-- [Phase 94]: Tutorial style matches existing getting-started.md: short snippets, ## headers, minimal prose
 
 ### Pending Todos
 
@@ -82,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07T09:01:32.638Z
-Stopped at: Completed 94-02-PLAN.md
-Resume file: None
+Last session: 2026-04-07T02:59:53.955Z
+Stopped at: Phase 93 context gathered
+Resume file: .planning/phases/93-group-membership-revocation/93-CONTEXT.md
