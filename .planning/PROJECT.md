@@ -193,6 +193,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ SDK delegation revocation (revoke_delegation, list_delegates on Directory) — v2.1.1 Phase 91
 - ✓ KEM key versioning (rotate_kem, key ring, UserEntry v2, resolve_recipient, envelope key ring fallback) — v2.1.1 Phase 92
 - ✓ Group membership revocation (write_to_group refresh, register() namespace fix, group timestamp resolution) — v2.1.1 Phase 93
+- ✓ Protocol & SDK documentation (PROTOCOL.md: revocation, UserEntry v2, group lifecycle; getting-started: revocation, rotation, groups tutorials) — v2.1.1 Phase 94
 - [ ] CLI tool for admin operations (quota check, list blobs, etc.)
 - [ ] C/C++/Rust/JS SDKs under sdk/ subdirectories
 
@@ -351,4 +352,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — Phase 93 complete (group membership revocation)*
+*Last updated: 2026-04-07 — Phase 94 complete (protocol & SDK documentation) — v2.1.1 all phases done*
