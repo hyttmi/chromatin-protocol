@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.2.0
-milestone_name: Node Hardening
-status: roadmap complete
-stopped_at: null
-last_updated: "2026-04-07T14:00:00.000Z"
-last_activity: 2026-04-07 -- Roadmap created for v2.2.0 Node Hardening
+milestone_name: milestone
+status: planning
+stopped_at: Phase 95 context gathered
+last_updated: "2026-04-07T12:18:28.160Z"
+last_activity: 2026-04-07 -- Roadmap created
 progress:
   total_phases: 5
   completed_phases: 0
@@ -35,6 +35,7 @@ Progress: [░░░░░░░░░░] 0%
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: -
 - Total execution time: 0 hours
@@ -46,6 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: -
 - Trend: starting
 
@@ -74,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-07
-Stopped at: Roadmap created for v2.2.0 Node Hardening
-Resume file: None
+Last session: 2026-04-07T12:18:28.156Z
+Stopped at: Phase 95 context gathered
+Resume file: .planning/phases/95-code-deduplication/95-CONTEXT.md
