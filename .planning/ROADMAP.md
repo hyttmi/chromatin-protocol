@@ -264,7 +264,7 @@ Plans:
 
 Plans:
 - [ ] 94-01-PLAN.md — PROTOCOL.md: delegation revocation, UserEntry v2 format, key ring decrypt, group membership revocation
-- [ ] 94-02-PLAN.md — SDK getting-started: delegation revocation, KEM key rotation, group membership management tutorials
+- [x] 94-02-PLAN.md — SDK getting-started: delegation revocation, KEM key rotation, group membership management tutorials
 
 ## Progress
 
@@ -276,4 +276,4 @@ Phases execute in numeric order: 91 -> 92 -> 93 -> 94
 | 91. SDK Delegation Revocation | 0/2 | Complete    | 2026-04-06 |
 | 92. KEM Key Versioning | 2/3 | Complete    | 2026-04-07 |
 | 93. Group Membership Revocation | 2/2 | Complete    | 2026-04-07 |
-| 94. Protocol & SDK Documentation | 0/2 | Not started | - |
+| 94. Protocol & SDK Documentation | 1/2 | In Progress|  |
