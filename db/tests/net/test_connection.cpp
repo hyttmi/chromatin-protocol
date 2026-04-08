@@ -1,10 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 #include "db/net/connection.h"
+#include "db/net/auth_helpers.h"
+#include "db/crypto/aead.h"
+#include "db/crypto/hash.h"
+#include "db/crypto/kdf.h"
 #include "db/identity/identity.h"
+#include "db/util/endian.h"
 
 #include <asio.hpp>
 #include <thread>
 #include <chrono>
+#include <cstring>
 
 using namespace chromatindb::net;
 using namespace chromatindb::wire;
@@ -649,6 +655,226 @@ TEST_CASE("Send queue: Pong reply goes through send_message", "[connection][send
 // =============================================================================
 // Phase 97: Nonce exhaustion tests (CRYPTO-01)
 // =============================================================================
+
+// =============================================================================
+// Phase 97: Lightweight handshake authentication tests (CRYPTO-03)
+// =============================================================================
+
+TEST_CASE("lightweight handshake authenticates both peers", "[connection][lightweight][auth]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    bool init_authenticated = false;
+    bool resp_authenticated = false;
+    std::vector<uint8_t> init_peer_pk;
+    std::vector<uint8_t> resp_peer_pk;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    auto trust_check = [](const asio::ip::address& addr) {
+        return addr.is_loopback();
+    };
+
+    // Responder
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        resp_conn->set_trust_check(trust_check);
+        co_await resp_conn->run();
+        resp_authenticated = resp_conn->is_authenticated();
+        resp_peer_pk = resp_conn->peer_pubkey();
+    }, asio::detached);
+
+    // Initiator
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->set_trust_check(trust_check);
+        co_await init_conn->run();
+        init_authenticated = init_conn->is_authenticated();
+        init_peer_pk = init_conn->peer_pubkey();
+    }, asio::detached);
+
+    // Close after handshake
+    asio::steady_timer timer(ioc);
+    timer.expires_after(std::chrono::seconds(3));
+    timer.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    REQUIRE(init_authenticated);
+    REQUIRE(resp_authenticated);
+    // Verify peer pubkeys are correctly exchanged via AuthSignature
+    auto resp_pk_span = resp_id.public_key();
+    auto init_pk_span = init_id.public_key();
+    REQUIRE(init_peer_pk.size() == resp_pk_span.size());
+    REQUIRE(std::memcmp(init_peer_pk.data(), resp_pk_span.data(), resp_pk_span.size()) == 0);
+    REQUIRE(resp_peer_pk.size() == init_pk_span.size());
+    REQUIRE(std::memcmp(resp_peer_pk.data(), init_pk_span.data(), init_pk_span.size()) == 0);
+}
+
+TEST_CASE("lightweight handshake rejects mismatched auth pubkey", "[connection][lightweight][auth]") {
+    // Scenario: attacker controls the responder side. The responder's
+    // TrustedHello uses peer_b's pubkey, but the AuthSignature contains
+    // attacker's pubkey + attacker's signature. The initiator must reject.
+
+    auto peer_a = chromatindb::identity::NodeIdentity::generate();
+    auto peer_b = chromatindb::identity::NodeIdentity::generate();
+    auto attacker = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    bool init_handshake_completed = false;
+    bool init_authenticated = false;
+    Connection::Ptr init_conn;
+
+    auto trust_check = [](const asio::ip::address& addr) {
+        return addr.is_loopback();
+    };
+
+    // Manual malicious responder: performs lightweight handshake steps
+    // but sends AuthSignature with attacker's identity
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        // Helper lambdas for raw frame IO
+        auto send_raw = [&](std::span<const uint8_t> data) -> asio::awaitable<bool> {
+            uint32_t len = static_cast<uint32_t>(data.size());
+            std::array<uint8_t, 4> header;
+            chromatindb::util::store_u32_be(header.data(), len);
+            auto [ec1, _n1] = co_await asio::async_write(
+                socket, asio::buffer(header), use_nothrow);
+            if (ec1) co_return false;
+            auto [ec2, _n2] = co_await asio::async_write(
+                socket, asio::buffer(data.data(), data.size()), use_nothrow);
+            co_return !ec2;
+        };
+
+        auto recv_raw = [&]() -> asio::awaitable<std::optional<std::vector<uint8_t>>> {
+            std::array<uint8_t, 4> header;
+            auto [ec1, _n1] = co_await asio::async_read(
+                socket, asio::buffer(header), use_nothrow);
+            if (ec1) co_return std::nullopt;
+            uint32_t len = chromatindb::util::read_u32_be(header.data());
+            if (len > 110 * 1024 * 1024) co_return std::nullopt;
+            std::vector<uint8_t> data(len);
+            auto [ec2, _n2] = co_await asio::async_read(
+                socket, asio::buffer(data), use_nothrow);
+            if (ec2) co_return std::nullopt;
+            co_return data;
+        };
+
+        // Step 1: Receive initiator's TrustedHello
+        auto init_msg_raw = co_await recv_raw();
+        if (!init_msg_raw) co_return;
+        auto init_decoded = chromatindb::net::TransportCodec::decode(*init_msg_raw);
+        if (!init_decoded) co_return;
+
+        constexpr size_t NONCE_SIZE = 32;
+        auto nonce_i = std::span<const uint8_t>(init_decoded->payload.data(), NONCE_SIZE);
+        auto init_signing_pk = std::span<const uint8_t>(
+            init_decoded->payload.data() + NONCE_SIZE,
+            init_decoded->payload.size() - NONCE_SIZE);
+
+        // Step 2: Send TrustedHello with peer_b's pubkey (legitimate)
+        std::array<uint8_t, 32> nonce_r{};
+        randombytes_buf(nonce_r.data(), nonce_r.size());
+
+        auto resp_pk = peer_b.public_key();
+        std::vector<uint8_t> resp_payload;
+        resp_payload.reserve(32 + resp_pk.size());
+        resp_payload.insert(resp_payload.end(), nonce_r.begin(), nonce_r.end());
+        resp_payload.insert(resp_payload.end(), resp_pk.begin(), resp_pk.end());
+
+        auto resp_msg = chromatindb::net::TransportCodec::encode(
+            chromatindb::wire::TransportMsgType_TrustedHello, resp_payload);
+        if (!co_await send_raw(resp_msg)) co_return;
+
+        // Step 3: Derive session keys (responder side, using peer_b's pk)
+        auto session_keys = chromatindb::net::derive_lightweight_session_keys(
+            nonce_i, nonce_r, init_signing_pk, resp_pk, false);
+
+        uint64_t send_ctr = 0;
+        uint64_t recv_ctr = 0;
+
+        // Step 4: Receive initiator's encrypted AuthSignature
+        // recv_encrypted manually
+        auto ct_raw = co_await recv_raw();
+        if (!ct_raw) co_return;
+
+        auto recv_nonce = chromatindb::net::make_nonce(recv_ctr++);
+        std::span<const uint8_t> empty_ad{};
+        auto init_auth_pt = chromatindb::crypto::AEAD::decrypt(
+            *ct_raw, empty_ad, recv_nonce, session_keys.recv_key.span());
+        if (!init_auth_pt) co_return;
+        // (initiator's auth is valid, we just discard it)
+
+        // Step 5: Send malicious AuthSignature with ATTACKER's pubkey
+        auto attacker_sig = attacker.sign(session_keys.session_fingerprint);
+        auto malicious_auth = chromatindb::net::encode_auth_payload(
+            attacker.public_key(), attacker_sig);
+        auto malicious_msg = chromatindb::net::TransportCodec::encode(
+            chromatindb::wire::TransportMsgType_AuthSignature, malicious_auth);
+
+        // send_encrypted manually
+        auto send_nonce = chromatindb::net::make_nonce(send_ctr++);
+        auto ciphertext = chromatindb::crypto::AEAD::encrypt(
+            malicious_msg, empty_ad, send_nonce, session_keys.send_key.span());
+        co_await send_raw(ciphertext);
+
+        // Connection should be rejected by initiator
+    }, asio::detached);
+
+    // Initiator (peer_a)
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), peer_a);
+        init_conn->set_trust_check(trust_check);
+        bool result = co_await init_conn->run();
+        init_handshake_completed = result;
+        init_authenticated = init_conn->is_authenticated();
+    }, asio::detached);
+
+    // Timeout
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(5));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(7));
+
+    // The handshake should have failed (run returns false, sets close callback)
+    REQUIRE_FALSE(init_authenticated);
+}
 
 TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") {
     auto init_id = chromatindb::identity::NodeIdentity::generate();
