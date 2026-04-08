@@ -210,6 +210,70 @@ To store a blob on a node:
 
 The node validates the signature, checks for duplicates, verifies the namespace matches the public key, and stores the blob. If the node is at capacity, it sends a StorageFull message instead of accepting the blob.
 
+## TTL Enforcement
+
+All TTL enforcement uses saturating arithmetic: if `timestamp + ttl` would overflow
+a 64-bit unsigned integer, the expiry time is clamped to `UINT64_MAX` (effectively
+permanent). A blob with `ttl = 0` is permanent and never expires.
+
+### Expiry Arithmetic
+
+All expiry calculations use saturating arithmetic:
+
+```
+saturating_expiry(timestamp, ttl):
+  if ttl == 0: return 0          // permanent
+  if timestamp + ttl overflows: return UINT64_MAX  // clamp
+  return timestamp + ttl
+```
+
+A blob is expired when `saturating_expiry(timestamp, ttl) <= now`.
+
+### Ingest Validation
+
+- **Already-expired blobs**: A blob where `saturating_expiry(timestamp, ttl) <= now`
+  is rejected at ingest with `timestamp_rejected`. This prevents storing blobs that
+  would be immediately expired.
+- **Tombstone TTL**: Tombstones (delete markers) MUST have `ttl = 0` (permanent).
+  A tombstone with `ttl > 0` is rejected at ingest with `invalid_ttl`. Tombstones
+  are permanent by design -- they must outlive the blobs they delete.
+
+### Query Path Filtering
+
+All query handlers filter expired blobs from results. An expired blob is treated
+as not-found:
+
+| Handler | Expired Behavior |
+|---------|-----------------|
+| ReadRequest | Returns 0x00 (not-found) |
+| ExistsRequest | Returns 0x00 (not-found) |
+| BatchExistsRequest | Returns 0x00 per expired entry |
+| BatchReadRequest | Returns status 0x00 per expired entry |
+| ListRequest | Excludes expired blobs from ref list |
+| TimeRangeRequest | Excludes expired blobs from results |
+| MetadataRequest | Returns 0x00 (not-found) |
+| StatsRequest | No filtering (reports storage reality) |
+| NamespaceStatsRequest | No filtering (reports storage reality) |
+
+### Fetch Path Filtering
+
+- **BlobFetch** (type 60): Returns 0x01 (not-found) for expired blobs.
+- **BlobNotify** (type 59): If a node receives a BlobNotify for a blob that
+  exists locally but is expired, it proceeds to fetch a fresh copy.
+
+### Notification Suppression
+
+When a blob is ingested with an expiry time that has already passed, no BlobNotify
+(type 59) or Notification (type 21) is emitted. This prevents wasted fetch
+round-trips and notifications for unserveable blobs.
+
+### Sync Path Filtering
+
+- Hash collection (`collect_namespace_hashes`) excludes expired blob hashes.
+- Blob retrieval (`get_blobs_by_hashes`) excludes expired blobs.
+- Phase C blob transfer checks expiry before sending each blob.
+- Sync ingest (`ingest_blobs`) skips expired blobs received from peers.
+
 ## Sync Protocol
 
 Nodes replicate blobs using a push-then-fetch model. When a blob is ingested, the node immediately pushes a lightweight notification to all connected peers. Peers that do not already have the blob fetch it directly. A periodic full reconciliation runs as a safety net to catch anything missed by the push path.

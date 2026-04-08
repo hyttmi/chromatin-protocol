@@ -20,11 +20,23 @@ SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
 
 std::vector<std::array<uint8_t, 32>> SyncProtocol::collect_namespace_hashes(
     std::span<const uint8_t, 32> namespace_id) {
-    // Read hashes directly from seq_map index -- no blob data loaded.
-    // This is O(n) on hash count, not O(n * blob_size).
-    // Expiry filtering is not done here; expired blobs synced to peers
-    // are harmless -- the peer's expiry scanner handles cleanup.
-    return storage_.get_hashes_by_namespace(namespace_id);
+    auto all_hashes = storage_.get_hashes_by_namespace(namespace_id);
+    uint64_t now = clock_();
+
+    std::vector<std::array<uint8_t, 32>> result;
+    result.reserve(all_hashes.size());
+
+    for (const auto& hash : all_hashes) {
+        auto blob = storage_.get_blob(namespace_id, hash);
+        if (!blob) continue;
+        if (wire::is_blob_expired(*blob, now)) {
+            spdlog::debug("filtered expired blob in collect_namespace_hashes");
+            continue;
+        }
+        result.push_back(hash);
+    }
+
+    return result;
 }
 
 // =============================================================================
@@ -36,10 +48,15 @@ std::vector<wire::BlobData> SyncProtocol::get_blobs_by_hashes(
     const std::vector<std::array<uint8_t, 32>>& hashes) {
     std::vector<wire::BlobData> blobs;
     blobs.reserve(hashes.size());
+    uint64_t now = clock_();
 
     for (const auto& hash : hashes) {
         auto blob = engine_.get_blob(namespace_id, hash);
         if (blob.has_value()) {
+            if (wire::is_blob_expired(*blob, now)) {
+                spdlog::debug("filtered expired blob in get_blobs_by_hashes");
+                continue;
+            }
             blobs.push_back(std::move(*blob));
         }
     }

@@ -77,8 +77,8 @@ Plans:
 
 Plans:
 - [x] 98-01-PLAN.md -- Core expiry functions (saturating_expiry, is_blob_expired) + engine ingest validation + storage/sync migration
-- [x] 98-02-PLAN.md -- Query handler + BlobFetch + BlobNotify + notification TTL enforcement with tests
-- [ ] 98-03-PLAN.md -- Sync path expiry filtering + PROTOCOL.md/README.md documentation
+- [ ] 98-02-PLAN.md -- Query handler + BlobFetch + BlobNotify + notification TTL enforcement with tests
+- [x] 98-03-PLAN.md -- Sync path expiry filtering + PROTOCOL.md/README.md documentation
 
 ### Phase 99: Sync, Resource & Concurrency Correctness
 **Goal**: Sync state is leak-free, resource limits are race-free, and coroutine counters are safe across co_await boundaries

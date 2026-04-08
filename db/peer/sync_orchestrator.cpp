@@ -11,6 +11,7 @@
 #include "db/util/blob_helpers.h"
 #include "db/util/endian.h"
 #include "db/util/hex.h"
+#include "db/wire/codec.h"
 
 #include <spdlog/spdlog.h>
 
@@ -489,6 +490,10 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                     for (const auto& hash : requested_hashes) {
                         auto blob = engine_.get_blob(req_ns, hash);
                         if (blob.has_value()) {
+                            if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                                spdlog::debug("filtered expired blob in sync transfer");
+                                continue;
+                            }
                             auto bt_payload =
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
                             co_await conn->send_message(
@@ -519,6 +524,10 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
             for (const auto& hash : requested_hashes) {
                 auto blob = engine_.get_blob(req_ns, hash);
                 if (blob.has_value()) {
+                    if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                        spdlog::debug("filtered expired blob in sync transfer");
+                        continue;
+                    }
                     auto bt_payload =
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
                     co_await conn->send_message(
@@ -924,6 +933,10 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                     for (const auto& hash : requested_hashes) {
                         auto blob = engine_.get_blob(req_ns, hash);
                         if (blob.has_value()) {
+                            if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                                spdlog::debug("filtered expired blob in sync transfer");
+                                continue;
+                            }
                             auto bt_payload =
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
                             co_await conn->send_message(
@@ -960,6 +973,10 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
             for (const auto& hash : requested_hashes) {
                 auto blob = engine_.get_blob(req_ns, hash);
                 if (blob.has_value()) {
+                    if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                        spdlog::debug("filtered expired blob in sync transfer");
+                        continue;
+                    }
                     auto bt_payload =
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
                     co_await conn->send_message(

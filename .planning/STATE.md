@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 98-02-PLAN.md
-last_updated: "2026-04-08T18:58:50.028Z"
+stopped_at: Completed 98-03-PLAN.md
+last_updated: "2026-04-08T18:23:23.946Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
@@ -58,7 +58,7 @@ Progress: [#.........] 8%
 | Phase 97 P01 | 37min | 2 tasks | 8 files |
 | Phase 97 P02 | 30min | 3 tasks | 11 files |
 | Phase 97 P03 | 72min | 2 tasks | 2 files |
-| Phase 98 P02 | 65min | 2 tasks | 3 files |
+| Phase 98 P03 | 30min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -87,8 +87,8 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 97]: Nonce exhaustion threshold at 2^63, static constexpr local to send/recv_encrypted functions
 - [Phase 97]: AuthSignature exchange in lightweight path mirrors PQ path pattern (same helpers, same ordering)
 - [Phase 97]: Initiator sends auth first in lightweight path (prevents AEAD nonce desync)
-- [Phase 98]: ExistsRequest/BatchExistsRequest upgraded from has_blob to get_blob for TTL expiry awareness
-- [Phase 98]: Tests use store.store_blob() to bypass engine already-expired rejection for handler testing
+- [Phase 98]: collect_namespace_hashes loads blobs for expiry filtering -- trades O(n) reads for correctness
+- [Phase 98]: SyncOrchestrator uses std::time(nullptr) for expiry checks (no injectable clock)
 
 ### Pending Todos
 
@@ -100,6 +100,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-08T18:58:50.025Z
-Stopped at: Completed 98-02-PLAN.md
+Last session: 2026-04-08T18:23:23.943Z
+Stopped at: Completed 98-03-PLAN.md
 Resume file: None
