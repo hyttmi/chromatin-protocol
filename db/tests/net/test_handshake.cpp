@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "db/net/handshake.h"
+#include "db/net/auth_helpers.h"
+#include "db/net/framing.h"
 #include "db/identity/identity.h"
 #include "db/crypto/kem.h"
 #include "db/crypto/aead.h"
@@ -320,6 +322,58 @@ TEST_CASE("derive_lightweight_session_keys: different nonces produce different k
         keys1.send_key.data(),
         keys1.send_key.data() + keys1.send_key.size(),
         keys2.send_key.data()));
+}
+
+// =============================================================================
+// Phase 97: CRYPTO-02 pubkey binding verification
+// =============================================================================
+
+TEST_CASE("verify_peer_auth rejects auth with mismatched pubkey", "[handshake][binding]") {
+    // CRYPTO-02: A valid AuthSignature from a different identity is rejected
+    // by the responder because the signing pubkey doesn't match the one
+    // sent during the KEM exchange.
+
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+    auto attacker_id = chromatindb::identity::NodeIdentity::generate();
+
+    // Normal KEM exchange between initiator and responder
+    HandshakeInitiator hs_init(init_id);
+    auto kem_pk_msg = hs_init.start();
+
+    HandshakeResponder hs_resp(resp_id);
+    auto [resp_err, kem_ct_msg] = hs_resp.receive_kem_pubkey(kem_pk_msg);
+    REQUIRE(resp_err == HandshakeError::Success);
+
+    auto init_err = hs_init.receive_kem_ciphertext(kem_ct_msg);
+    REQUIRE(init_err == HandshakeError::Success);
+
+    // Get the initiator's session keys to encrypt an attacker's auth message.
+    // take_session_keys() moves the keys out, so the initiator can't create
+    // auth messages after this -- we'll build our own manually.
+    auto init_keys = hs_init.take_session_keys();
+
+    // Attacker signs the session fingerprint with their own key (valid signature)
+    auto attacker_sig = attacker_id.sign(init_keys.session_fingerprint);
+
+    // Encode attacker's auth payload: [attacker_pubkey_size LE][attacker_pubkey][attacker_sig]
+    auto attacker_payload = encode_auth_payload(
+        attacker_id.public_key(), attacker_sig);
+
+    // Wrap as TransportMessage (AuthSignature type)
+    auto attacker_msg = TransportCodec::encode(
+        chromatindb::wire::TransportMsgType_AuthSignature, attacker_payload);
+
+    // Encrypt with the CORRECT session send key and counter 0
+    // (what create_auth_message would have used for the initiator)
+    auto encrypted_attacker_auth = write_frame(
+        attacker_msg, init_keys.send_key.span(), 0);
+
+    // Responder verifies: decryption succeeds (correct key), auth payload
+    // parses (valid format), but pubkey != initiator_signing_pubkey_ (mismatch).
+    auto [verify_err, peer_pk] = hs_resp.verify_peer_auth(encrypted_attacker_auth);
+    REQUIRE(verify_err == HandshakeError::AuthFailed);
+    REQUIRE(peer_pk.empty());
 }
 
 TEST_CASE("derive_lightweight_session_keys: deterministic with same inputs", "[handshake][lightweight]") {

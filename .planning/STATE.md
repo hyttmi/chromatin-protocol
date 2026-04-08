@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 97-01-PLAN.md
+stopped_at: Completed 97-01-PLAN.md and 97-02-PLAN.md
 last_updated: "2026-04-08T10:52:34.698Z"
 last_activity: 2026-04-08
 progress:
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 ## Current Position
 
 Phase: 97
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: Executing Phase 97
 Last activity: 2026-04-08
 
@@ -56,6 +56,7 @@ Progress: [#.........] 8%
 | Phase 96 P02 | 69min | 1 tasks | 9 files |
 | Phase 96 P03 | 93min | 2 tasks | 7 files |
 | Phase 97 P01 | 37min | 2 tasks | 8 files |
+| Phase 97 P02 | 30min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,9 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 96]: MessageDispatcher uses UptimeCallback/MaxStorageCallback lambdas instead of direct MetricsCollector/Config references
 - [Phase 96]: PeerManager facade is 679 lines (reload_config + constructor wiring are inherently large)
 - [Phase 97]: checked_mul/checked_add return std::optional<size_t> (D-02), overflow returns nullopt/empty (D-03)
+- [Phase 97]: Pubkey size validated against exact Signer::PUBLIC_KEY_SIZE constant in decode_auth_payload and decode_blob
+- [Phase 97]: AEAD MAX_AD_LENGTH (64 KiB) defense-in-depth bound in encrypt/decrypt
+- [Phase 97]: Nonce exhaustion threshold at 2^63, static constexpr local to send/recv_encrypted functions
 
 ### Pending Todos
 
@@ -91,5 +95,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-08T10:52:34.695Z
-Stopped at: Completed 97-01-PLAN.md
+Stopped at: Completed 97-01-PLAN.md and 97-02-PLAN.md
 Resume file: None

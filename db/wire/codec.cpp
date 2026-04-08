@@ -1,6 +1,7 @@
 #include "db/wire/codec.h"
 #include "db/wire/blob_generated.h"
 #include "db/crypto/hash.h"
+#include "db/crypto/signing.h"
 #include "db/util/endian.h"
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/sha3.h>
@@ -42,6 +43,9 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
     }
 
     if (fb_blob->pubkey()) {
+        if (fb_blob->pubkey()->size() != chromatindb::crypto::Signer::PUBLIC_KEY_SIZE) {
+            throw std::runtime_error("Invalid pubkey size in FlatBuffer blob");
+        }
         result.pubkey.assign(fb_blob->pubkey()->begin(), fb_blob->pubkey()->end());
     }
 

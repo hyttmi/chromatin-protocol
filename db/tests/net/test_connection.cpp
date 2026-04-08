@@ -645,3 +645,75 @@ TEST_CASE("Send queue: Pong reply goes through send_message", "[connection][send
 
     REQUIRE(pong_received);
 }
+
+// =============================================================================
+// Phase 97: Nonce exhaustion tests (CRYPTO-01)
+// =============================================================================
+
+TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    bool send_returned_false = false;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator -- after handshake, force counter to limit, then try to send
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            asio::co_spawn(ioc, [&, conn]() -> asio::awaitable<void> {
+                // Verify normal send works first
+                std::vector<uint8_t> payload = {0x01};
+                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                REQUIRE(ok);
+
+                // Force counter to nonce exhaustion threshold
+                conn->set_send_counter_for_test(1ULL << 63);
+
+                // This send should fail due to nonce exhaustion
+                std::vector<uint8_t> payload2 = {0x02};
+                bool ok2 = co_await conn->send_message(TransportMsgType_Data, payload2);
+                send_returned_false = !ok2;
+
+                if (init_conn) init_conn->close();
+                if (resp_conn) resp_conn->close();
+            }, asio::detached);
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    // Timeout
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(10));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(12));
+
+    REQUIRE(send_returned_false);
+}

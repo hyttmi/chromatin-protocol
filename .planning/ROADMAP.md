@@ -57,11 +57,11 @@ Plans:
   3. AEAD nonce counter kills the connection cleanly before reaching the 2^64 limit (no silent wraparound)
   4. Lightweight handshake verifies peer identity (not just transport trust), and PQ handshake initiator verifies responder pubkey binding
   5. All new validation paths have unit tests that trigger the reject/kill codepath, passing under ASAN/TSAN/UBSAN
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 97-01-PLAN.md -- Overflow-checked arithmetic helpers + wire into all protocol decode/encode paths
-- [ ] 97-02-PLAN.md -- Pubkey validation, AEAD AD bounds, nonce exhaustion, PQ handshake binding test
+- [x] 97-02-PLAN.md -- Pubkey validation, AEAD AD bounds, nonce exhaustion, PQ handshake binding test
 - [ ] 97-03-PLAN.md -- Lightweight handshake AuthSignature exchange + sanitizer gate
 
 ### Phase 98: TTL Enforcement

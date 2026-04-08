@@ -150,6 +150,13 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> Connection::recv_raw() {
 // =============================================================================
 
 asio::awaitable<bool> Connection::send_encrypted(std::span<const uint8_t> plaintext) {
+    static constexpr uint64_t NONCE_LIMIT = 1ULL << 63;
+    if (send_counter_ >= NONCE_LIMIT) {
+        spdlog::error("nonce exhaustion on send (counter={}), killing connection {}",
+                      send_counter_, remote_addr_);
+        close();
+        co_return false;
+    }
     auto nonce = make_nonce(send_counter_++);
     std::span<const uint8_t> empty_ad{};
     auto ciphertext = crypto::AEAD::encrypt(plaintext, empty_ad, nonce, session_keys_.send_key.span());
@@ -163,6 +170,13 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> Connection::recv_encrypted(
 
     // Decrypt the raw data (it IS the ciphertext, not a framed message)
     // The raw data we received is the ciphertext (no header -- we already stripped it in recv_raw)
+    static constexpr uint64_t NONCE_LIMIT = 1ULL << 63;
+    if (recv_counter_ >= NONCE_LIMIT) {
+        spdlog::error("nonce exhaustion on recv (counter={}), killing connection {}",
+                      recv_counter_, remote_addr_);
+        close();
+        co_return std::nullopt;
+    }
     auto nonce = make_nonce(recv_counter_++);
     std::span<const uint8_t> empty_ad{};
     auto plaintext = crypto::AEAD::decrypt(*raw, empty_ad, nonce, session_keys_.recv_key.span());

@@ -86,6 +86,39 @@ TEST_CASE("AEAD different nonces produce different ciphertext", "[aead]") {
     REQUIRE(ct1 != ct2);
 }
 
+TEST_CASE("AEAD encrypt rejects oversized AD", "[aead]") {
+    auto key = AEAD::keygen();
+    auto nonce = make_nonce(10);
+    std::vector<uint8_t> plaintext = {1, 2, 3};
+    std::vector<uint8_t> big_ad(AEAD::MAX_AD_LENGTH + 1, 0xCC);
+
+    REQUIRE_THROWS_AS(
+        AEAD::encrypt(plaintext, big_ad, nonce, key.span()),
+        std::runtime_error);
+}
+
+TEST_CASE("AEAD decrypt rejects oversized AD", "[aead]") {
+    auto key = AEAD::keygen();
+    auto nonce = make_nonce(11);
+    std::vector<uint8_t> plaintext = {1, 2, 3};
+    std::vector<uint8_t> ad = {};
+    auto ct = AEAD::encrypt(plaintext, ad, nonce, key.span());
+
+    std::vector<uint8_t> big_ad(AEAD::MAX_AD_LENGTH + 1, 0xCC);
+    REQUIRE_THROWS_AS(
+        AEAD::decrypt(ct, big_ad, nonce, key.span()),
+        std::runtime_error);
+}
+
+TEST_CASE("AEAD encrypt accepts AD at exact max length", "[aead]") {
+    auto key = AEAD::keygen();
+    auto nonce = make_nonce(12);
+    std::vector<uint8_t> plaintext = {1, 2, 3};
+    std::vector<uint8_t> max_ad(AEAD::MAX_AD_LENGTH, 0xDD);
+
+    REQUIRE_NOTHROW(AEAD::encrypt(plaintext, max_ad, nonce, key.span()));
+}
+
 TEST_CASE("AEAD ciphertext size is plaintext + tag", "[aead]") {
     auto key = AEAD::keygen();
     auto nonce = make_nonce(5);

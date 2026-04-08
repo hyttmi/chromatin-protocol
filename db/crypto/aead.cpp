@@ -25,6 +25,9 @@ std::vector<uint8_t> encrypt(
     if (key.size() != KEY_SIZE) {
         throw std::runtime_error("AEAD key must be 32 bytes");
     }
+    if (ad.size() > MAX_AD_LENGTH) {
+        throw std::runtime_error("AEAD associated data exceeds maximum length");
+    }
 
     std::vector<uint8_t> ciphertext(plaintext.size() + TAG_SIZE);
     unsigned long long ciphertext_len = 0;
@@ -57,6 +60,9 @@ std::optional<std::vector<uint8_t>> decrypt(
     }
     if (key.size() != KEY_SIZE) {
         throw std::runtime_error("AEAD key must be 32 bytes");
+    }
+    if (ad.size() > MAX_AD_LENGTH) {
+        throw std::runtime_error("AEAD associated data exceeds maximum length");
     }
     if (ciphertext.size() < TAG_SIZE) {
         return std::nullopt;  // Too short to contain tag
