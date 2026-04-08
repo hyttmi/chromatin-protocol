@@ -312,9 +312,54 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
             signing_pk, resp_signing_pk,
             true);
 
-        peer_pubkey_.assign(resp_signing_pk.begin(), resp_signing_pk.end());
+        // CRYPTO-03: Auth exchange over encrypted channel
+        // Initiator sends first (matches PQ path order, prevents nonce desync)
+
+        // Sign session fingerprint with our signing key
+        auto sig = identity_.sign(session_keys_.session_fingerprint);
+        auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+        auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
+        if (!co_await send_encrypted(auth_msg)) {
+            spdlog::warn("handshake: failed to send auth (lightweight initiator)");
+            co_return false;
+        }
+
+        // Receive responder's auth
+        auto resp_auth_raw = co_await recv_encrypted();
+        if (!resp_auth_raw) {
+            spdlog::warn("handshake: failed to receive peer auth (lightweight initiator)");
+            co_return false;
+        }
+
+        auto resp_transport = TransportCodec::decode(*resp_auth_raw);
+        if (!resp_transport || resp_transport->type != wire::TransportMsgType_AuthSignature) {
+            spdlog::warn("handshake: invalid auth message from peer (lightweight initiator)");
+            co_return false;
+        }
+
+        auto auth = chromatindb::net::decode_auth_payload(std::span{resp_transport->payload});
+        if (!auth) {
+            spdlog::warn("handshake: malformed auth payload (lightweight initiator)");
+            co_return false;
+        }
+
+        // Verify pubkey matches TrustedHello (prevents MitM substitution)
+        if (auth->pubkey.size() != resp_signing_pk.size() ||
+            std::memcmp(auth->pubkey.data(), resp_signing_pk.data(), resp_signing_pk.size()) != 0) {
+            spdlog::warn("handshake: auth pubkey mismatch (lightweight initiator)");
+            co_return false;
+        }
+
+        bool valid = co_await chromatindb::crypto::verify_with_offload(
+            pool_, session_keys_.session_fingerprint, auth->signature, auth->pubkey);
+        if (!valid) {
+            spdlog::warn("handshake: peer auth signature invalid (lightweight initiator)");
+            co_return false;
+        }
+
+        peer_pubkey_ = std::move(auth->pubkey);
         authenticated_ = true;
-        spdlog::info("handshake complete (initiator, lightweight)");
+        spdlog::info("handshake complete (initiator, lightweight, authenticated)");
         co_return true;
 
     } else if (decoded->type == wire::TransportMsgType_PQRequired) {
@@ -501,9 +546,54 @@ asio::awaitable<bool> Connection::do_handshake_responder_trusted(
         init_signing_pk, our_pk,
         false);
 
-    peer_pubkey_.assign(init_signing_pk.begin(), init_signing_pk.end());
+    // CRYPTO-03: Auth exchange over encrypted channel
+    // Responder receives first, then sends (initiator sends first)
+
+    // Receive initiator's auth
+    auto init_auth_raw = co_await recv_encrypted();
+    if (!init_auth_raw) {
+        spdlog::warn("handshake: failed to receive peer auth (lightweight responder)");
+        co_return false;
+    }
+
+    auto init_transport = TransportCodec::decode(*init_auth_raw);
+    if (!init_transport || init_transport->type != wire::TransportMsgType_AuthSignature) {
+        spdlog::warn("handshake: invalid auth message from peer (lightweight responder)");
+        co_return false;
+    }
+
+    auto auth = chromatindb::net::decode_auth_payload(std::span{init_transport->payload});
+    if (!auth) {
+        spdlog::warn("handshake: malformed auth payload (lightweight responder)");
+        co_return false;
+    }
+
+    // Verify pubkey matches TrustedHello (prevents MitM substitution)
+    if (auth->pubkey.size() != init_signing_pk.size() ||
+        std::memcmp(auth->pubkey.data(), init_signing_pk.data(), init_signing_pk.size()) != 0) {
+        spdlog::warn("handshake: auth pubkey mismatch (lightweight responder)");
+        co_return false;
+    }
+
+    bool valid = co_await chromatindb::crypto::verify_with_offload(
+        pool_, session_keys_.session_fingerprint, auth->signature, auth->pubkey);
+    if (!valid) {
+        spdlog::warn("handshake: peer auth signature invalid (lightweight responder)");
+        co_return false;
+    }
+
+    // Send our auth
+    auto sig = identity_.sign(session_keys_.session_fingerprint);
+    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+    auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
+    if (!co_await send_encrypted(auth_msg)) {
+        spdlog::warn("handshake: failed to send auth (lightweight responder)");
+        co_return false;
+    }
+
+    peer_pubkey_ = std::move(auth->pubkey);
     authenticated_ = true;
-    spdlog::info("handshake complete (responder, lightweight)");
+    spdlog::info("handshake complete (responder, lightweight, authenticated)");
     co_return true;
 }
 
