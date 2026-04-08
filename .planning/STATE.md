@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 96 — peermanager-architecture
+**Current focus:** Phase 98 — ttl-enforcement
 
 ## Current Position
 
 Phase: 98
 Plan: Not started
-Status: Ready to execute
+Status: Ready to plan
 Last activity: 2026-04-08
 
 Progress: [#.........] 8%
@@ -98,5 +98,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-08T15:07:47.594Z
-Stopped at: Completed 97-03-PLAN.md
+Stopped at: Phase 97 complete, ready to plan Phase 98
 Resume file: None
