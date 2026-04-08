@@ -1769,9 +1769,10 @@ TEST_CASE("Blob with timestamp 29 days in past passes timestamp check", "[engine
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    auto blob = make_signed_blob(id, "29-days-ago", 604800, now_ts - 29 * 24 * 3600);
+    // Use TTL long enough that the blob is NOT yet expired (29d old + 30d TTL = expires tomorrow)
+    auto blob = make_signed_blob(id, "29-days-ago", 30 * 24 * 3600, now_ts - 29 * 24 * 3600);
     auto result = run_async(pool, engine.ingest(blob));
-    // Should NOT be timestamp_rejected
+    // Should NOT be timestamp_rejected (within 30-day window and not yet expired)
     if (!result.accepted) {
         REQUIRE(result.error.value() != IngestError::timestamp_rejected);
     }
@@ -1867,4 +1868,108 @@ TEST_CASE("Delete request with timestamp too far in past rejected", "[engine][ti
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
     REQUIRE(result.error_detail.find("past") != std::string::npos);
+}
+
+// ============================================================================
+// TTL enforcement (Phase 98-01 Task 2)
+// ============================================================================
+
+TEST_CASE("Tombstone with TTL > 0 rejected at ingest", "[engine][ttl]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // First ingest a valid blob to get a target hash for the tombstone
+    auto blob = make_signed_blob(id, "target-blob");
+    auto ingest_result = run_async(pool, engine.ingest(blob));
+    REQUIRE(ingest_result.accepted);
+    auto target_hash = ingest_result.ack->blob_hash;
+
+    // Manually construct a tombstone-format blob with non-zero TTL
+    chromatindb::wire::BlobData bad_tombstone;
+    std::memcpy(bad_tombstone.namespace_id.data(), id.namespace_id().data(), 32);
+    bad_tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    bad_tombstone.data = chromatindb::wire::make_tombstone_data(target_hash);
+    bad_tombstone.ttl = 3600;  // Non-zero TTL -- invalid for tombstone
+    bad_tombstone.timestamp = current_timestamp();
+
+    auto signing_input = chromatindb::wire::build_signing_input(
+        bad_tombstone.namespace_id, bad_tombstone.data,
+        bad_tombstone.ttl, bad_tombstone.timestamp);
+    bad_tombstone.signature = id.sign(signing_input);
+
+    auto result = run_async(pool, engine.delete_blob(bad_tombstone));
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.has_value());
+    REQUIRE(result.error.value() == IngestError::invalid_ttl);
+    REQUIRE(result.error_detail.find("tombstone must have TTL=0") != std::string::npos);
+}
+
+TEST_CASE("Already-expired blob rejected at ingest", "[engine][ttl]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Create a blob with timestamp=now-1000, ttl=100 => expired 900 seconds ago
+    uint64_t now = current_timestamp();
+    auto blob = make_signed_blob(id, "expired-data", 100, now - 1000);
+
+    auto result = run_async(pool, engine.ingest(blob));
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.has_value());
+    REQUIRE(result.error.value() == IngestError::timestamp_rejected);
+    REQUIRE(result.error_detail.find("blob already expired") != std::string::npos);
+}
+
+TEST_CASE("Valid non-expired blob accepted at ingest", "[engine][ttl]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    auto blob = make_signed_blob(id, "valid-data", 86400, current_timestamp());
+
+    auto result = run_async(pool, engine.ingest(blob));
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("Tombstone with TTL=0 accepted at delete_blob", "[engine][ttl]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest a blob, then delete with proper tombstone (ttl=0)
+    auto blob = make_signed_blob(id, "to-delete");
+    auto ingest_result = run_async(pool, engine.ingest(blob));
+    REQUIRE(ingest_result.accepted);
+
+    auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
+    auto result = run_async(pool, engine.delete_blob(tombstone));
+    REQUIRE(result.accepted);
+}
+
+TEST_CASE("Permanent blob accepted regardless of timestamp age", "[engine][ttl]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Permanent blob (ttl=0) with recent timestamp should always be accepted
+    auto blob = make_signed_blob(id, "permanent-data", 0, current_timestamp());
+
+    auto result = run_async(pool, engine.ingest(blob));
+    REQUIRE(result.accepted);
 }

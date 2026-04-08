@@ -32,7 +32,8 @@ enum class IngestError {
     no_delegation,        ///< Delegate write rejected: no valid delegation exists.
     storage_full,         ///< Storage capacity exceeded (max_storage_bytes).
     quota_exceeded,       ///< Namespace quota exceeded (byte or count limit).
-    timestamp_rejected    ///< Blob timestamp too far in future or past.
+    timestamp_rejected,   ///< Blob timestamp too far in future or past.
+    invalid_ttl           ///< Tombstone with non-zero TTL.
 };
 
 /// Status of a successful ingest.

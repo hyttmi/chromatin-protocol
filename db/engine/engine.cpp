@@ -141,6 +141,18 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         }
     }
 
+    // Step 0d: Already-expired blob rejection
+    if (blob.ttl > 0) {
+        auto now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        if (wire::saturating_expiry(blob.timestamp, blob.ttl) <= now) {
+            spdlog::warn("Ingest rejected: blob already expired");
+            co_return IngestResult::rejection(IngestError::timestamp_rejected,
+                "blob already expired");
+        }
+    }
+
     // Step 1: Structural checks (cheapest first)
     if (blob.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {
         spdlog::warn("Ingest rejected: wrong pubkey size {} (expected {})",
@@ -326,6 +338,13 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             co_return IngestResult::rejection(IngestError::timestamp_rejected,
                 "timestamp too far in past (more than 30 days ago)");
         }
+    }
+
+    // Step 0d: Tombstone TTL validation (cheap integer compare)
+    if (delete_request.ttl != 0) {
+        spdlog::warn("Delete rejected: tombstone must have TTL=0 (permanent)");
+        co_return IngestResult::rejection(IngestError::invalid_ttl,
+            "tombstone must have TTL=0 (permanent)");
     }
 
     // Step 1: Structural checks
