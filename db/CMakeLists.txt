@@ -177,6 +177,8 @@ add_library(chromatindb_lib STATIC
   peer/pex_manager.cpp
   peer/connection_manager.cpp
   peer/blob_push_manager.cpp
+  peer/sync_orchestrator.cpp
+  peer/message_dispatcher.cpp
   acl/access_control.cpp
 )
 

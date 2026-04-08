@@ -5,44 +5,39 @@
 #include "db/peer/pex_manager.h"
 #include "db/peer/connection_manager.h"
 #include "db/peer/blob_push_manager.h"
+#include "db/peer/sync_orchestrator.h"
+#include "db/peer/message_dispatcher.h"
 
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
-#include "db/crypto/hash.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/net/connection.h"
 #include "db/net/server.h"
 #include "db/net/uds_acceptor.h"
 #include "db/storage/storage.h"
-#include "db/sync/sync_protocol.h"
 
 #include <asio.hpp>
 
-#include <chrono>
 #include <cstdint>
-#include <cstring>
-#include <deque>
 #include <filesystem>
 #include <memory>
-#include <mutex>
-#include <optional>
-#include <random>
 #include <set>
 #include <span>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace chromatindb::peer {
 
 /// Manages peer connections, sync scheduling, and connection policies.
 ///
-/// Wraps Server and adds:
-/// - Connection limit enforcement (max_peers)
-/// - Bootstrap vs non-bootstrap peer tracking
-/// - Sync-on-connect and periodic sync timer
-/// - Strike system for misbehaving peers
+/// Thin facade owning 6 focused components:
+/// - MetricsCollector: NodeMetrics, Prometheus /metrics, SIGUSR1 dump, periodic log
+/// - ConnectionManager: peers_ deque, connection lifecycle, keepalive, strike
+/// - SyncOrchestrator: sync protocol, expiry scanning, cursor/storage compaction
+/// - PexManager: PEX protocol, peer persistence, known address tracking
+/// - BlobPushManager: BlobNotify/BlobFetch protocol, on_blob_ingested fan-out
+/// - MessageDispatcher: message routing switch, all query handlers
 ///
 /// Thread safety: NOT thread-safe. Runs on single io_context thread.
 class PeerManager {
@@ -78,36 +73,31 @@ public:
     const NodeMetrics& metrics() const { return metrics_collector_.node_metrics(); }
 
     /// Sync constants (public for testing).
-    static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;  ///< Max hashes per BlobRequest
-    static constexpr auto BLOB_TRANSFER_TIMEOUT = std::chrono::seconds(120);  ///< Per-blob timeout
+    static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;
+    static constexpr auto BLOB_TRANSFER_TIMEOUT = std::chrono::seconds(120);
 
     /// Strike threshold (public for testing).
     static constexpr uint32_t STRIKE_THRESHOLD = 10;
-    static constexpr uint32_t STRIKE_COOLDOWN_SEC = 300;  // 5 minutes
+    static constexpr uint32_t STRIKE_COOLDOWN_SEC = 300;
 
     /// PEX constants (public for testing).
-    static constexpr uint32_t PEX_INTERVAL_SEC = 300;        // 5 minutes
-    static constexpr uint32_t MAX_PEERS_PER_EXCHANGE = 8;    // Max peers to share per response
-    static constexpr uint32_t MAX_DISCOVERED_PER_ROUND = 3;  // Max new peers to connect per round
-    static constexpr uint32_t MAX_PERSISTED_PEERS = 100;     // Max entries in peers.json
-    static constexpr uint32_t MAX_PERSIST_FAILURES = 3;      // Prune after N consecutive startup failures
+    static constexpr uint32_t PEX_INTERVAL_SEC = 300;
+    static constexpr uint32_t MAX_PEERS_PER_EXCHANGE = 8;
+    static constexpr uint32_t MAX_DISCOVERED_PER_ROUND = 3;
+    static constexpr uint32_t MAX_PERSISTED_PEERS = 100;
+    static constexpr uint32_t MAX_PERSIST_FAILURES = 3;
 
     /// PEX wire encoding (public for testing).
     static std::vector<uint8_t> encode_peer_list(const std::vector<std::string>& addresses);
     static std::vector<std::string> decode_peer_list(std::span<const uint8_t> payload);
 
     /// Pub/Sub wire encoding (public for testing).
-    /// Encode a list of 32-byte namespace IDs for Subscribe/Unsubscribe payload.
-    /// Format: [uint16_be count][ns_id:32][ns_id:32]...
     static std::vector<uint8_t> encode_namespace_list(
         const std::vector<std::array<uint8_t, 32>>& namespaces);
-
-    /// Decode Subscribe/Unsubscribe payload back to namespace ID list.
     static std::vector<std::array<uint8_t, 32>> decode_namespace_list(
         std::span<const uint8_t> payload);
 
     /// Encode a notification payload.
-    /// Format: [namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
     static std::vector<uint8_t> encode_notification(
         std::span<const uint8_t, 32> namespace_id,
         std::span<const uint8_t, 32> blob_hash,
@@ -115,15 +105,13 @@ public:
         uint32_t blob_size,
         bool is_tombstone);
 
-    /// Reload allowed_client_keys and allowed_peer_keys from config file and disconnect revoked peers.
-    /// Public for testing; called internally by SIGHUP handler.
+    /// Reload allowed_client_keys and allowed_peer_keys from config file.
     void reload_config();
 
     /// Format current metrics as Prometheus text exposition format (public for testing).
     std::string prometheus_metrics_text();
 
-    /// Check if an IP address is trusted (localhost or in trusted_peers).
-    /// Passed to Connection as trust-check function.
+    /// Check if an IP address is trusted.
     bool is_trusted_address(const asio::ip::address& addr) const {
         return conn_mgr_.is_trusted_address(addr);
     }
@@ -132,14 +120,9 @@ public:
     using NotificationCallback = BlobPushManager::NotificationCallback;
 
     /// Set a callback invoked whenever a notification is dispatched.
-    /// For testing only -- allows capturing notification events.
     void set_on_notification(NotificationCallback cb) { blob_push_.set_on_notification(std::move(cb)); }
 
-    // Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
-    /// BlobNotify (type 59) to all TCP peers + Notification (type 21) to subscribed clients.
-    /// Called after every successful ingest (Data, Delete, or sync).
-    /// Also handles event-driven expiry timer rearm (MAINT-03).
-    /// @param source Connection that originated the blob (nullptr for client writes via relay/UDS).
+    /// Unified notification fan-out.
     void on_blob_ingested(
         const std::array<uint8_t, 32>& namespace_id,
         const std::array<uint8_t, 32>& blob_hash,
@@ -150,25 +133,6 @@ public:
         net::Connection::Ptr source);
 
 private:
-
-    // Message routing
-    void on_peer_message(net::Connection::Ptr conn,
-                         wire::TransportMsgType type,
-                         std::vector<uint8_t> payload,
-                         uint32_t request_id);
-
-    // Sync orchestration
-    asio::awaitable<void> run_sync_with_peer(net::Connection::Ptr conn);
-    asio::awaitable<void> sync_all_peers();
-    asio::awaitable<void> sync_timer_loop();
-
-    // Sync message handling (responder side)
-    asio::awaitable<void> handle_sync_as_responder(net::Connection::Ptr conn);
-
-    // Sync message queue
-    void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
-    asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(const net::Connection::Ptr& conn, std::chrono::seconds timeout);
-
     // SIGHUP config reload
     void setup_sighup_handler();
     asio::awaitable<void> sighup_loop();
@@ -178,30 +142,8 @@ private:
     void setup_sigusr1_handler();
     asio::awaitable<void> sigusr1_loop();
 
-    // Cursor compaction (prune cursors for disconnected peers)
-    asio::awaitable<void> cursor_compaction_loop();
-
-    // Expiry scanning (cancellable member coroutine)
-    asio::awaitable<void> expiry_scan_loop();
-
-    // Storage compaction (periodic timer)
-    asio::awaitable<void> compaction_loop();
-
-    // Cursor-aware sync helpers
-    enum class FullResyncReason { None, Periodic, TimeGap };
-    FullResyncReason check_full_resync(
-        const storage::SyncCursor& cursor, uint64_t now) const;
-
-    // Sync rate limiting (Phase 40)
-    void send_sync_rejected(net::Connection::Ptr conn, uint8_t reason);
-
-    /// Cancel all periodic timers. Called from stop() and on_shutdown.
-    /// Must not throw (called from signal handler context in on_shutdown).
+    /// Cancel all periodic timers.
     void cancel_all_timers();
-
-    // Helpers
-    PeerInfo* find_peer(const net::Connection::Ptr& conn);
-    std::string peer_display_name(const net::Connection::Ptr& conn);
 
     const config::Config& config_;
     identity::NodeIdentity& identity_;
@@ -213,37 +155,26 @@ private:
 
     net::Server server_;
     std::unique_ptr<net::UdsAcceptor> uds_acceptor_;
-    sync::SyncProtocol sync_proto_;
     asio::signal_set sighup_signal_;
     asio::signal_set sigusr1_signal_;
     std::filesystem::path config_path_;
 
     bool stopping_ = false;
-    asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
-    asio::steady_timer* sync_timer_ = nullptr;    // Timer-cancel pattern for sync loop
-    asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
-    asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
-    uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
-    uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
-    uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
-    uint64_t cursor_stale_seconds_ = 3600;        // Force full resync after gap (Phase 34)
-    std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
-    uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
-    uint32_t safety_net_interval_seconds_ = 600;  // SIGHUP-reloadable (Phase 82)
-    uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
-    uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise
-    bool expiry_loop_running_ = false;   // Prevents double co_spawn of expiry_scan_loop
-    uint32_t compaction_interval_hours_ = 6;      // SIGHUP-reloadable (Phase 55)
-    uint64_t last_compaction_time_ = 0;           // Epoch seconds of last successful compaction
-    uint64_t compaction_count_ = 0;               // Monotonic counter of successful compactions
+    std::set<std::array<uint8_t, 32>> sync_namespaces_;
+
     // Component initialization order matters:
-    // 1. metrics_collector_ (owns NodeMetrics, needed by conn_mgr_ and blob_push_)
-    // 2. conn_mgr_ (owns peers_ deque, needed by metrics_collector_ and pex_ and blob_push_)
-    // Peers reference is wired via set_peers() in constructor body after both exist.
+    // 1. metrics_collector_ (owns NodeMetrics)
+    // 2. conn_mgr_ (owns peers_ deque)
+    // 3. sync_ (references peers_ and disconnected_peers)
+    // 4. pex_ (references peers_)
+    // 5. blob_push_ (references peers_)
+    // 6. dispatcher_ (references all components)
     MetricsCollector metrics_collector_;
     ConnectionManager conn_mgr_;
+    SyncOrchestrator sync_;
     PexManager pex_;
     BlobPushManager blob_push_;
+    MessageDispatcher dispatcher_;
 };
 
 } // namespace chromatindb::peer
