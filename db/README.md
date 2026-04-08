@@ -199,6 +199,24 @@ Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext
 
 The protocol defines 58 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
+## TTL Enforcement
+
+Every blob has a TTL (time-to-live) in seconds. `TTL = 0` means permanent.
+
+**Tombstones MUST have TTL = 0.** Tombstones are permanent delete markers. A tombstone
+with a non-zero TTL is rejected at ingest. This is enforced by the node -- tombstones
+must outlive the blobs they delete.
+
+Expired blobs are never served through any query, fetch, or sync path. The node
+filters expired blobs at every exit point. Storage-level cleanup happens asynchronously
+via the expiry scanner.
+
+Expiry arithmetic uses saturation: if `timestamp + ttl` would overflow, the blob is
+treated as effectively permanent (will never expire).
+
+See the [TTL Enforcement](PROTOCOL.md#ttl-enforcement) section in PROTOCOL.md for
+the full specification, including per-handler behavior tables.
+
 ## Scenarios
 
 ### Single Node
@@ -443,7 +461,7 @@ Stops and disables services, removes binaries, systemd units, and sysusers/tmpfi
 
 **Lightweight Handshake** -- Connections from localhost (127.0.0.1, ::1) and addresses listed in `trusted_peers` skip the ML-KEM-1024 key exchange, completing the handshake without post-quantum crypto overhead. Both sides verify identity via ML-DSA-87 signatures over a shared challenge. Non-trusted peers always perform the full PQ handshake.
 
-**Writer-Controlled TTL** -- Each blob carries its own TTL set by the writer in the signed data. TTL=0 means permanent (no expiry). Blobs with TTL>0 are expired by the node's periodic scan. Tombstones also support writer-controlled TTL: permanent tombstones (TTL=0) persist indefinitely, while time-limited tombstones (TTL>0) are garbage-collected along with their index entries.
+**Writer-Controlled TTL** -- Each blob carries its own TTL set by the writer in the signed data. TTL=0 means permanent (no expiry). Blobs with TTL>0 are expired by the node's event-driven expiry scanner. Tombstones MUST have TTL=0 (permanent) -- the node rejects tombstones with non-zero TTL at ingest. See [TTL Enforcement](#ttl-enforcement) for full details.
 
 **Sync Resumption** -- Per-peer per-namespace sequence number cursors track sync progress. Cursor-hit namespaces (no new blobs) skip blob requests entirely. When new data exists, range-based reconciliation identifies only the missing blobs in O(diff) wire traffic. Cursors persist across node restarts via libmdbx. A periodic full reconciliation resync every Nth round (configurable) serves as a safety net against cursor drift.
 
