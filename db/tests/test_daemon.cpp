@@ -3,6 +3,7 @@
 #include <random>
 #include <cstring>
 #include <ctime>
+#include <thread>
 
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
@@ -260,11 +261,13 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
-    // Store an expired blob in node1 (recent timestamp passes engine validation,
-    // but TTL=100 + timestamp 200s ago = expired by sync time)
-    auto expired_blob = make_signed_blob(id1, "should-not-sync", 100, now - 200);
+    // Store a blob that is valid now but will expire before sync (TTL=1 second).
+    // Engine accepts it at ingest, but sync 2+ seconds later sees it as expired.
+    auto expired_blob = make_signed_blob(id1, "should-not-sync", 1, now);
     auto r1 = run_async(pool, eng1.ingest(expired_blob));
     REQUIRE(r1.accepted);
+    // Wait 2s so the blob expires before sync begins
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // Store a valid blob in node1 -- proves sync works for non-expired blobs
     auto valid_blob = make_signed_blob(id1, "should-sync", 604800, now);
