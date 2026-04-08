@@ -9,6 +9,7 @@
 #include <spdlog/spdlog.h>
 
 #include <cstring>
+#include <ctime>
 
 namespace chromatindb::peer {
 
@@ -46,6 +47,11 @@ void BlobPushManager::on_blob_ingested(
     bool is_tombstone,
     uint64_t expiry_time,
     net::Connection::Ptr source) {
+    // Step 0: Suppress notification for expired blobs (D-18)
+    if (expiry_time > 0 && expiry_time <= static_cast<uint64_t>(std::time(nullptr))) {
+        return;
+    }
+
     // Test hook -- fire notification callback if set
     if (on_notification_) {
         on_notification_(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
@@ -109,8 +115,14 @@ void BlobPushManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint
         return;
     }
 
-    // D-04: Already have this blob?
-    if (storage_.has_blob(ns, hash)) return;
+    // D-04/D-17: Already have this blob? (check expiry — re-fetch if expired)
+    {
+        auto existing = storage_.get_blob(ns, hash);
+        if (existing.has_value() && !wire::is_blob_expired(*existing, static_cast<uint64_t>(std::time(nullptr)))) {
+            return;  // Have it and it's not expired
+        }
+        // If blob exists but expired, proceed to fetch fresh copy
+    }
 
     // D-05: Already fetching this blob?
     if (pending_fetches_.count(hash)) return;
@@ -135,6 +147,13 @@ void BlobPushManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<u
 
         auto blob = storage_.get_blob(ns, hash);
         if (blob) {
+            if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                spdlog::debug("filtered expired blob in BlobFetch");
+                std::vector<uint8_t> resp = {0x01};  // not-found
+                co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
+                                             std::span<const uint8_t>(resp));
+                co_return;
+            }
             auto encoded = wire::encode_blob(*blob);
             std::vector<uint8_t> resp(1 + encoded.size());
             resp[0] = 0x00;  // D-03: found

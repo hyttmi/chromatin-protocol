@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 
 namespace chromatindb::peer {
 
@@ -353,6 +354,13 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 auto blob = engine_.get_blob(ns, hash);
                 if (blob.has_value()) {
+                    if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
+                        spdlog::debug("filtered expired blob in ReadRequest");
+                        std::vector<uint8_t> response = {0x00};
+                        co_await conn->send_message(wire::TransportMsgType_ReadResponse,
+                                                     std::span<const uint8_t>(response), request_id);
+                        co_return;
+                    }
                     auto encoded = wire::encode_blob(*blob);
                     std::vector<uint8_t> response(1 + encoded.size());
                     response[0] = 0x01;
@@ -392,7 +400,20 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 if (has_more)
                     refs.resize(limit);
 
-                uint32_t count = static_cast<uint32_t>(refs.size());
+                // Filter expired blobs (D-09)
+                uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+                std::vector<storage::BlobRef> filtered_refs;
+                filtered_refs.reserve(refs.size());
+                for (const auto& ref : refs) {
+                    auto blob = storage_.get_blob(ns, ref.blob_hash);
+                    if (!blob || wire::is_blob_expired(*blob, now)) {
+                        spdlog::debug("filtered expired blob in ListRequest");
+                        continue;
+                    }
+                    filtered_refs.push_back(ref);
+                }
+
+                uint32_t count = static_cast<uint32_t>(filtered_refs.size());
                 auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{40});
                 if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_return; }
                 auto resp_size = chromatindb::util::checked_add(*body_size, size_t{5});
@@ -401,8 +422,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 chromatindb::util::store_u32_be(response.data(), count);
                 for (uint32_t i = 0; i < count; ++i) {
                     size_t off = 4 + i * 40;
-                    std::memcpy(response.data() + off, refs[i].blob_hash.data(), 32);
-                    chromatindb::util::store_u64_be(response.data() + off + 32, refs[i].seq_num);
+                    std::memcpy(response.data() + off, filtered_refs[i].blob_hash.data(), 32);
+                    chromatindb::util::store_u64_be(response.data() + off + 32, filtered_refs[i].seq_num);
                 }
                 response[*resp_size - 1] = has_more ? 1 : 0;
 
@@ -452,7 +473,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
 
-                bool exists = storage_.has_blob(ns, hash);
+                auto blob = storage_.get_blob(ns, hash);
+                bool exists = blob.has_value() && !wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)));
+                if (blob.has_value() && !exists) {
+                    spdlog::debug("filtered expired blob in ExistsRequest");
+                }
 
                 std::vector<uint8_t> response(33);
                 response[0] = exists ? 0x01 : 0x00;
@@ -716,6 +741,14 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
 
+                if (wire::is_blob_expired(*blob_opt, static_cast<uint64_t>(std::time(nullptr)))) {
+                    spdlog::debug("filtered expired blob in MetadataRequest");
+                    std::vector<uint8_t> response(1, 0x00);
+                    co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
+                                                 std::span<const uint8_t>(response), request_id);
+                    co_return;
+                }
+
                 const auto& blob = *blob_opt;
                 uint64_t data_size = blob.data.size();
                 uint16_t pubkey_len = static_cast<uint16_t>(blob.pubkey.size());
@@ -788,11 +821,13 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     co_return;
                 }
 
+                uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 std::vector<uint8_t> response(count);
                 for (uint32_t i = 0; i < count; ++i) {
                     std::array<uint8_t, 32> hash{};
                     std::memcpy(hash.data(), payload.data() + 36 + i * 32, 32);
-                    response[i] = storage_.has_blob(ns, hash) ? 0x01 : 0x00;
+                    auto blob = storage_.get_blob(ns, hash);
+                    response[i] = (blob.has_value() && !wire::is_blob_expired(*blob, now)) ? 0x01 : 0x00;
                 }
 
                 co_await conn->send_message(wire::TransportMsgType_BatchExistsResponse,
@@ -885,12 +920,20 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 std::vector<Entry> entries;
                 entries.reserve(count);
 
+                uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 for (uint32_t i = 0; i < count; ++i) {
                     std::array<uint8_t, 32> hash{};
                     std::memcpy(hash.data(), payload.data() + 40 + i * 32, 32);
 
                     auto blob = storage_.get_blob(ns, hash);
                     if (!blob) {
+                        entries.push_back({0x00, hash, {}});
+                        ++result_count;
+                        continue;
+                    }
+
+                    if (wire::is_blob_expired(*blob, now)) {
+                        spdlog::debug("filtered expired blob in BatchReadRequest");
                         entries.push_back({0x00, hash, {}});
                         ++result_count;
                         continue;
@@ -1057,9 +1100,15 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 uint8_t truncated = 0x00;
 
+                uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 for (const auto& ref : refs) {
                     auto blob = storage_.get_blob(ns, ref.blob_hash);
                     if (!blob) continue;
+
+                    if (wire::is_blob_expired(*blob, now)) {
+                        spdlog::debug("filtered expired blob in TimeRangeRequest");
+                        continue;
+                    }
 
                     if (blob->timestamp >= start_ts && blob->timestamp <= end_ts) {
                         results.push_back({ref.blob_hash, ref.seq_num, blob->timestamp});
