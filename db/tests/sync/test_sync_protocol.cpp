@@ -124,6 +124,97 @@ TEST_CASE("is_blob_expired", "[sync]") {
 }
 
 // ============================================================================
+// collect_namespace_hashes TTL filtering
+// ============================================================================
+
+TEST_CASE("collect_namespace_hashes filters expired blobs", "[sync][ttl]") {
+    TempDir tmp;
+    auto real_now = current_timestamp();
+    test_clock_value = real_now;
+
+    Storage store(tmp.path.string(), test_clock);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest an expired blob: ts=real_now, ttl=100 => expires at real_now+100
+    auto blob_expired = make_signed_blob(id, "expired-sync", 100, real_now);
+    REQUIRE(run_async(pool, engine.ingest(blob_expired)).accepted);
+
+    // Ingest a valid blob: ts=real_now, ttl=604800 => expires far in future
+    auto blob_valid = make_signed_blob(id, "valid-sync", 604800, real_now);
+    REQUIRE(run_async(pool, engine.ingest(blob_valid)).accepted);
+
+    // Advance clock past expiry of first blob
+    test_clock_value = real_now + 200;
+
+    SyncProtocol sync(engine, store, pool, test_clock);
+    auto hashes = sync.collect_namespace_hashes(id.namespace_id());
+
+    // Only the valid blob should remain -- expired blob filtered
+    REQUIRE(hashes.size() == 1);
+}
+
+TEST_CASE("collect_namespace_hashes includes permanent blobs", "[sync][ttl]") {
+    TempDir tmp;
+    auto real_now = current_timestamp();
+    test_clock_value = real_now;
+
+    Storage store(tmp.path.string(), test_clock);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest a permanent blob (ttl=0)
+    auto blob_permanent = make_signed_blob(id, "permanent-sync", 0, real_now);
+    REQUIRE(run_async(pool, engine.ingest(blob_permanent)).accepted);
+
+    // Set clock to far future -- permanent blobs never expire
+    test_clock_value = UINT64_MAX - 1;
+
+    SyncProtocol sync(engine, store, pool, test_clock);
+    auto hashes = sync.collect_namespace_hashes(id.namespace_id());
+
+    REQUIRE(hashes.size() == 1);
+}
+
+TEST_CASE("get_blobs_by_hashes filters expired blobs", "[sync][ttl]") {
+    TempDir tmp;
+    auto real_now = current_timestamp();
+    test_clock_value = real_now;
+
+    Storage store(tmp.path.string(), test_clock);
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Ingest an expired blob: ts=real_now, ttl=100
+    auto blob_expired = make_signed_blob(id, "expired-fetch", 100, real_now);
+    REQUIRE(run_async(pool, engine.ingest(blob_expired)).accepted);
+
+    // Ingest a valid blob: ts=real_now, ttl=604800
+    auto blob_valid = make_signed_blob(id, "valid-fetch", 604800, real_now);
+    REQUIRE(run_async(pool, engine.ingest(blob_valid)).accepted);
+
+    // Collect hashes while both are still valid
+    SyncProtocol sync_before(engine, store, pool, test_clock);
+    auto all_hashes = sync_before.collect_namespace_hashes(id.namespace_id());
+    REQUIRE(all_hashes.size() == 2);
+
+    // Advance clock past expiry
+    test_clock_value = real_now + 200;
+
+    SyncProtocol sync(engine, store, pool, test_clock);
+    auto blobs = sync.get_blobs_by_hashes(id.namespace_id(), all_hashes);
+
+    // Only the valid blob should be returned
+    REQUIRE(blobs.size() == 1);
+}
+
+// ============================================================================
 // collect_namespace_hashes
 // ============================================================================
 
