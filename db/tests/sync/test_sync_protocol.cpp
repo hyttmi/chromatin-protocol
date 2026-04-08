@@ -98,28 +98,28 @@ TEST_CASE("is_blob_expired", "[sync]") {
     SECTION("permanent blob is never expired") {
         blob.ttl = 0;
         blob.timestamp = 1000;
-        REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 999999));
+        REQUIRE_FALSE(chromatindb::wire::is_blob_expired(blob, 999999));
     }
 
     SECTION("non-expired blob") {
         blob.ttl = 604800;  // 7 days
         blob.timestamp = 10000;  // 10000 seconds
         // now = 10100, which is before 10000 + 604800 = 614800
-        REQUIRE_FALSE(SyncProtocol::is_blob_expired(blob, 10100));
+        REQUIRE_FALSE(chromatindb::wire::is_blob_expired(blob, 10100));
     }
 
     SECTION("expired blob") {
         blob.ttl = 100;
         blob.timestamp = 1000;  // 1000 seconds
         // now = 1200 > 1000 + 100 = 1100
-        REQUIRE(SyncProtocol::is_blob_expired(blob, 1200));
+        REQUIRE(chromatindb::wire::is_blob_expired(blob, 1200));
     }
 
     SECTION("exactly at expiry boundary") {
         blob.ttl = 100;
         blob.timestamp = 1000;  // 1000 seconds
         // now = 1100 == 1000 + 100 -- expired (<=)
-        REQUIRE(SyncProtocol::is_blob_expired(blob, 1100));
+        REQUIRE(chromatindb::wire::is_blob_expired(blob, 1100));
     }
 }
 

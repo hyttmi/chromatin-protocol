@@ -42,10 +42,6 @@ public:
                           asio::thread_pool& pool,
                           storage::Clock clock = storage::system_clock_seconds);
 
-    /// Check if a blob has expired given the current time.
-    /// Returns true if ttl > 0 AND timestamp + ttl <= now.
-    static bool is_blob_expired(const wire::BlobData& blob, uint64_t now);
-
     /// Collect blob hashes for a namespace from the storage index.
     /// Reads hashes directly from seq_map without loading blob data.
     std::vector<std::array<uint8_t, 32>> collect_namespace_hashes(

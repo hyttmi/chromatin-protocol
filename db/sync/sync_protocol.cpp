@@ -15,16 +15,6 @@ SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
     : engine_(engine), storage_(storage), pool_(pool), clock_(clock) {}
 
 // =============================================================================
-// Expiry check
-// =============================================================================
-
-bool SyncProtocol::is_blob_expired(const wire::BlobData& blob, uint64_t now) {
-    if (blob.ttl == 0) return false;  // Permanent blob
-    // Both timestamp and now are in seconds, TTL is in seconds.
-    return (blob.timestamp + blob.ttl) <= now;
-}
-
-// =============================================================================
 // Hash collection
 // =============================================================================
 
@@ -75,7 +65,7 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
 
     for (const auto& blob : blobs) {
         // Skip expired blobs (SYNC-03)
-        if (is_blob_expired(blob, now)) {
+        if (wire::is_blob_expired(blob, now)) {
             spdlog::debug("skipping expired blob during sync ingest");
             continue;
         }
@@ -87,9 +77,7 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
             if (result.ack.has_value() &&
                 result.ack->status == engine::IngestStatus::stored &&
                 on_blob_ingested_) {
-                uint64_t expiry_time = (blob.ttl > 0)
-                    ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
-                    : 0;
+                uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                 on_blob_ingested_(
                     blob.namespace_id,
                     result.ack->blob_hash,

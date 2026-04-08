@@ -39,6 +39,28 @@ std::array<uint8_t, 32> build_signing_input(
 std::array<uint8_t, 32> blob_hash(std::span<const uint8_t> encoded_blob);
 
 // =============================================================================
+// TTL / Expiry utilities
+// =============================================================================
+
+/// Compute expiry timestamp with saturating arithmetic (TTL-03).
+/// Returns 0 for permanent blobs (ttl == 0).
+/// Clamps to UINT64_MAX on overflow (effectively permanent).
+inline uint64_t saturating_expiry(uint64_t timestamp, uint32_t ttl) {
+    if (ttl == 0) return 0;  // Permanent
+    uint64_t ttl64 = static_cast<uint64_t>(ttl);
+    if (timestamp > UINT64_MAX - ttl64) return UINT64_MAX;  // Overflow -> clamp
+    return timestamp + ttl64;
+}
+
+/// Check if a blob has expired (TTL-01, TTL-02).
+/// Permanent blobs (ttl == 0) never expire.
+/// Uses saturating arithmetic for overflow safety (TTL-03).
+inline bool is_blob_expired(const BlobData& blob, uint64_t now) {
+    if (blob.ttl == 0) return false;  // Permanent
+    return saturating_expiry(blob.timestamp, blob.ttl) <= now;
+}
+
+// =============================================================================
 // Tombstone utilities
 // =============================================================================
 

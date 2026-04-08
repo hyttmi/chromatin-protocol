@@ -187,3 +187,72 @@ TEST_CASE("blob_hash is deterministic", "[codec]") {
     auto h2 = blob_hash(encoded);
     REQUIRE(h1 == h2);
 }
+
+// =============================================================================
+// saturating_expiry tests
+// =============================================================================
+
+TEST_CASE("saturating_expiry normal addition", "[codec][ttl][saturating]") {
+    REQUIRE(saturating_expiry(1000, 100) == 1100);
+}
+
+TEST_CASE("saturating_expiry overflow clamps to UINT64_MAX", "[codec][ttl][saturating]") {
+    REQUIRE(saturating_expiry(UINT64_MAX - 10, 20) == UINT64_MAX);
+}
+
+TEST_CASE("saturating_expiry permanent returns 0", "[codec][ttl][saturating]") {
+    REQUIRE(saturating_expiry(1000, 0) == 0);
+    REQUIRE(saturating_expiry(0, 0) == 0);
+}
+
+TEST_CASE("saturating_expiry max timestamp with ttl=1", "[codec][ttl][saturating]") {
+    REQUIRE(saturating_expiry(UINT64_MAX, 1) == UINT64_MAX);
+}
+
+// =============================================================================
+// is_blob_expired tests
+// =============================================================================
+
+TEST_CASE("is_blob_expired permanent never expires", "[codec][ttl]") {
+    BlobData blob;
+    blob.ttl = 0;
+    blob.timestamp = 1000;
+    REQUIRE_FALSE(is_blob_expired(blob, 0));
+    REQUIRE_FALSE(is_blob_expired(blob, UINT64_MAX));
+}
+
+TEST_CASE("is_blob_expired within TTL", "[codec][ttl]") {
+    BlobData blob;
+    blob.ttl = 100;
+    blob.timestamp = 1000;
+    REQUIRE_FALSE(is_blob_expired(blob, 1099));
+}
+
+TEST_CASE("is_blob_expired after TTL", "[codec][ttl]") {
+    BlobData blob;
+    blob.ttl = 100;
+    blob.timestamp = 1000;
+    REQUIRE(is_blob_expired(blob, 1200));
+}
+
+TEST_CASE("is_blob_expired at exact boundary", "[codec][ttl]") {
+    BlobData blob;
+    blob.ttl = 100;
+    blob.timestamp = 1000;
+    // Expired at equality per D-06: saturating_expiry(1000, 100) = 1100, 1100 <= 1100
+    REQUIRE(is_blob_expired(blob, 1100));
+}
+
+TEST_CASE("is_blob_expired overflow blob never expires", "[codec][ttl]") {
+    BlobData blob;
+    blob.ttl = 20;
+    blob.timestamp = UINT64_MAX - 10;
+    // saturating_expiry clamps to UINT64_MAX, so UINT64_MAX <= any_now is only true
+    // when now == UINT64_MAX, but that would mean the blob is "effectively permanent"
+    // Actually per the spec: overflow clamps to UINT64_MAX means UINT64_MAX <= now
+    // is true when now == UINT64_MAX. But the intent is "effectively permanent".
+    // Let's check: saturating_expiry(UINT64_MAX-10, 20) == UINT64_MAX.
+    // is_blob_expired checks saturating_expiry <= now. If now < UINT64_MAX, false.
+    REQUIRE_FALSE(is_blob_expired(blob, UINT64_MAX - 1));
+    REQUIRE_FALSE(is_blob_expired(blob, 0));
+}

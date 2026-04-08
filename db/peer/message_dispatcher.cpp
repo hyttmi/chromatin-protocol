@@ -302,9 +302,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     co_await conn->send_message(wire::TransportMsgType_DeleteAck,
                                                  std::span<const uint8_t>(ack_payload), request_id);
                     if (ack.status == engine::IngestStatus::stored) {
-                        uint64_t expiry_time = (blob.ttl > 0)
-                            ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
-                            : 0;
+                        uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                         on_blob_ingested_(
                             blob.namespace_id,
                             ack.blob_hash,
@@ -1131,9 +1129,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 }
                 if (result.accepted && result.ack.has_value() &&
                     result.ack->status == engine::IngestStatus::stored) {
-                    uint64_t expiry_time = (blob.ttl > 0)
-                        ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
-                        : 0;
+                    uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                     on_blob_ingested_(
                         blob.namespace_id,
                         result.ack->blob_hash,

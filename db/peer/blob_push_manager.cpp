@@ -176,9 +176,7 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
                 pending_fetches_.erase(result.ack->blob_hash);
 
                 if (result.ack->status == engine::IngestStatus::stored) {
-                    uint64_t expiry_time = (blob.ttl > 0)
-                        ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
-                        : 0;
+                    uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                     // Fan-out notification to other peers (source=conn excludes sender)
                     on_blob_ingested(
                         blob.namespace_id,
