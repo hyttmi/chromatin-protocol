@@ -174,6 +174,7 @@ add_library(chromatindb_lib STATIC
   sync/reconciliation.cpp
   peer/peer_manager.cpp
   peer/metrics_collector.cpp
+  peer/pex_manager.cpp
   acl/access_control.cpp
 )
 

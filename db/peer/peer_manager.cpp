@@ -83,7 +83,12 @@ PeerManager::PeerManager(const config::Config& config,
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path)
-    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_, peers_) {
+    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_, peers_)
+    , pex_(ioc, stopping_, peers_, server_, acl,
+           config.bind_address, config.data_dir, config.max_peers,
+           bootstrap_addresses_,
+           [](const std::vector<std::string>& addrs) { return PeerManager::encode_peer_list(addrs); },
+           [](std::span<const uint8_t> payload) { return PeerManager::decode_peer_list(payload); }) {
     // Initialize rate limit parameters from config
     rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
     rate_limit_burst_ = config.rate_limit_burst;
@@ -118,7 +123,7 @@ PeerManager::PeerManager(const config::Config& config,
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
         bootstrap_addresses_.insert(addr);
-        known_addresses_.insert(addr);
+        pex_.known_addresses().insert(addr);
     }
 
     // Wire trust check for lightweight handshake
@@ -192,12 +197,12 @@ void PeerManager::start() {
     setup_sigusr1_handler();
 
     // Load persisted peers before starting server
-    load_persisted_peers();
+    pex_.load_persisted_peers();
 
     // Startup cursor cleanup: remove cursors for peers no longer known
     {
         std::vector<std::array<uint8_t, 32>> known_hashes;
-        for (const auto& pp : persisted_peers_) {
+        for (const auto& pp : pex_.persisted_peers()) {
             if (!pp.pubkey_hash.empty() && pp.pubkey_hash.size() == 64) {
                 known_hashes.push_back(hex_to_namespace(pp.pubkey_hash));
             }
@@ -220,7 +225,7 @@ void PeerManager::start() {
     // Register shutdown callback (save peers before drain)
     server_.set_on_shutdown([this]() {
         stopping_ = true;
-        save_persisted_peers();  // Save while connection list is still accurate
+        pex_.save_persisted_peers();  // Save while connection list is still accurate
         if (uds_acceptor_) uds_acceptor_->stop();
         sighup_signal_.cancel();
         sigusr1_signal_.cancel();
@@ -228,9 +233,9 @@ void PeerManager::start() {
     });
 
     // Connect to persisted peers (in addition to bootstrap peers from server_.start())
-    for (const auto& pp : persisted_peers_) {
+    for (const auto& pp : pex_.persisted_peers()) {
         if (!bootstrap_addresses_.count(pp.address)) {
-            known_addresses_.insert(pp.address);
+            pex_.known_addresses().insert(pp.address);
             server_.connect_once(pp.address);
         }
     }
@@ -239,10 +244,10 @@ void PeerManager::start() {
     asio::co_spawn(ioc_, sync_timer_loop(), asio::detached);
 
     // Start periodic peer exchange timer
-    asio::co_spawn(ioc_, pex_timer_loop(), asio::detached);
+    asio::co_spawn(ioc_, pex_.pex_timer_loop(), asio::detached);
 
     // Start periodic peer list flush timer (30s)
-    asio::co_spawn(ioc_, peer_flush_timer_loop(), asio::detached);
+    asio::co_spawn(ioc_, pex_.peer_flush_timer_loop(), asio::detached);
 
     // Start event-driven expiry timer (D-06: replaces periodic scan)
     auto earliest = storage_.get_earliest_expiry();
@@ -285,11 +290,10 @@ void PeerManager::start() {
 void PeerManager::cancel_all_timers() {
     if (expiry_timer_) expiry_timer_->cancel();
     if (sync_timer_) sync_timer_->cancel();
-    if (pex_timer_) pex_timer_->cancel();
-    if (flush_timer_) flush_timer_->cancel();
     if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
     if (compaction_timer_) compaction_timer_->cancel();
     if (keepalive_timer_) keepalive_timer_->cancel();
+    pex_.cancel_timers();
     metrics_collector_.cancel_timers();
 }
 
@@ -455,16 +459,16 @@ void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
     ++metrics_collector_.node_metrics().peers_connected_total;
 
     // Track this peer's address
-    known_addresses_.insert(info.address);
+    pex_.known_addresses().insert(info.address);
 
     // Persist successful connection and store pubkey hash for cursor cleanup
-    update_persisted_peer(info.address, true);
+    pex_.update_persisted_peer(info.address, true);
     {
         auto pk_hash = crypto::sha3_256(conn->peer_pubkey());
         auto pk_hex = to_hex(std::span<const uint8_t>(pk_hash.data(), pk_hash.size()), 32);
-        auto it = std::find_if(persisted_peers_.begin(), persisted_peers_.end(),
+        auto it = std::find_if(pex_.persisted_peers().begin(), pex_.persisted_peers().end(),
                                [&info](const PersistedPeer& p) { return p.address == info.address; });
-        if (it != persisted_peers_.end()) {
+        if (it != pex_.persisted_peers().end()) {
             it->pubkey_hash = pk_hex;
         }
     }
@@ -711,7 +715,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 // Start PEX responder: push the message into inbox first, then spawn handler
                 route_sync_message(peer, type, std::move(payload));
                 asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-                    co_await handle_pex_as_responder(conn);
+                    co_await pex_.handle_pex_as_responder(conn);
                 }, asio::detached);
             }
         }
@@ -2316,7 +2320,7 @@ asio::awaitable<void> PeerManager::run_sync_with_peer(net::Connection::Ptr conn)
         // Wait for PeerListResponse (with timeout)
         auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListResponse) {
-            handle_peer_list_response(conn, std::move(pex_msg->payload));
+            pex_.handle_peer_list_response(conn, std::move(pex_msg->payload));
         }
     }
 
@@ -2761,7 +2765,7 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
     if (!acl_.is_peer_closed_mode()) {
         auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
         if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
-            auto addresses = build_peer_list_response(conn->remote_address());
+            auto addresses = pex_.build_peer_list_response(conn->remote_address());
             auto payload = encode_peer_list(addresses);
             spdlog::debug("PEX: sending {} peers to {}", addresses.size(), conn->remote_address());
             co_await conn->send_message(wire::TransportMsgType_PeerListResponse,
@@ -2947,6 +2951,7 @@ void PeerManager::reload_config() {
 
     // Reload max_peers (Phase 86, OPS-01)
     max_peers_ = new_cfg.max_peers;
+    pex_.set_max_peers(new_cfg.max_peers);
     if (peers_.size() > max_peers_) {
         spdlog::warn("config reload: max_peers={} but {} peers connected "
                      "(excess will drain naturally, new connections refused)",
@@ -3131,23 +3136,6 @@ asio::awaitable<void> PeerManager::expiry_scan_loop() {
         }
     }
     expiry_loop_running_ = false;
-}
-
-// =============================================================================
-// Periodic peer list flush
-// =============================================================================
-
-asio::awaitable<void> PeerManager::peer_flush_timer_loop() {
-    while (!stopping_) {
-        asio::steady_timer timer(ioc_);
-        flush_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(30));
-        auto [ec] = co_await timer.async_wait(
-            asio::as_tuple(asio::use_awaitable));
-        flush_timer_ = nullptr;
-        if (ec || stopping_) co_return;
-        save_persisted_peers();
-    }
 }
 
 // =============================================================================
@@ -3408,286 +3396,6 @@ std::vector<uint8_t> PeerManager::encode_notification(
     uint32_t blob_size,
     bool is_tombstone) {
     return chromatindb::util::encode_blob_ref(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
-}
-
-// =============================================================================
-// PEX protocol
-// =============================================================================
-
-asio::awaitable<void> PeerManager::run_pex_with_peer(net::Connection::Ptr conn) {
-    auto* peer = find_peer(conn);
-    if (!peer || peer->syncing) co_return;
-    peer->syncing = true;
-    peer->sync_inbox.clear();
-
-    // Send PeerListRequest
-    std::span<const uint8_t> empty{};
-    if (!co_await conn->send_message(wire::TransportMsgType_PeerListRequest, empty)) {
-        spdlog::debug("PEX: failed to send PeerListRequest to {}", conn->remote_address());
-        peer = find_peer(conn);
-        if (peer) peer->syncing = false;
-        co_return;
-    }
-
-    // Wait for PeerListResponse
-    auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
-    if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListResponse) {
-        handle_peer_list_response(conn, std::move(pex_msg->payload));
-    }
-
-    peer = find_peer(conn);
-    if (peer) peer->syncing = false;
-}
-
-std::vector<std::string> PeerManager::build_peer_list_response(const std::string& exclude_address) {
-    std::vector<std::string> candidates;
-
-    for (const auto& peer : peers_) {
-        if (!peer->connection->is_authenticated()) continue;
-        if (peer->address == exclude_address) continue;
-        if (peer->address == config_.bind_address) continue;
-        candidates.push_back(peer->address);
-    }
-
-    // Shuffle for random subset
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::shuffle(candidates.begin(), candidates.end(), gen);
-
-    // Truncate to MAX_PEERS_PER_EXCHANGE
-    if (candidates.size() > MAX_PEERS_PER_EXCHANGE) {
-        candidates.resize(MAX_PEERS_PER_EXCHANGE);
-    }
-
-    return candidates;
-}
-
-asio::awaitable<void> PeerManager::handle_pex_as_responder(net::Connection::Ptr conn) {
-    auto* peer = find_peer(conn);
-    if (!peer || peer->syncing) co_return;
-
-    // In closed mode, don't respond to PEX requests (no address sharing)
-    if (acl_.is_peer_closed_mode()) co_return;
-
-    peer->syncing = true;
-    // NOTE: do NOT clear sync_inbox -- PeerListRequest is already queued in it
-
-    // Read PeerListRequest from inbox (already pushed by on_peer_message)
-    auto pex_msg = co_await recv_sync_msg(conn, std::chrono::seconds(5));
-    peer = find_peer(conn);
-    if (!peer) co_return;
-    if (pex_msg && pex_msg->type == wire::TransportMsgType_PeerListRequest) {
-        auto addresses = build_peer_list_response(conn->remote_address());
-        auto payload = encode_peer_list(addresses);
-        spdlog::debug("PEX: sending {} peers to {}", addresses.size(), conn->remote_address());
-        co_await conn->send_message(wire::TransportMsgType_PeerListResponse,
-                                     std::span<const uint8_t>(payload));
-    }
-
-    peer = find_peer(conn);
-    if (peer) peer->syncing = false;
-}
-
-void PeerManager::handle_peer_list_response(net::Connection::Ptr conn,
-                                             std::vector<uint8_t> payload) {
-    auto addresses = decode_peer_list(payload);
-    spdlog::debug("PEX: received {} peer addresses from {}",
-                  addresses.size(), conn->remote_address());
-
-    uint32_t connected = 0;
-    for (const auto& addr : addresses) {
-        // Skip if we already know about this address
-        if (known_addresses_.count(addr)) continue;
-        // Skip if it's our own address
-        if (addr == config_.bind_address) continue;
-        // Skip if we're at max peers
-        if (peers_.size() >= max_peers_) break;
-        // Skip if we've connected enough this round
-        if (connected >= MAX_DISCOVERED_PER_ROUND) break;
-
-        known_addresses_.insert(addr);
-        server_.connect_once(addr);
-        connected++;
-    }
-
-    if (connected > 0) {
-        spdlog::info("PEX: connecting to {} new peers discovered from {}",
-                     connected, conn->remote_address());
-    }
-}
-
-asio::awaitable<void> PeerManager::pex_timer_loop() {
-    while (!stopping_) {
-        asio::steady_timer timer(ioc_);
-        pex_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(PEX_INTERVAL_SEC));
-        auto [ec] = co_await timer.async_wait(
-            asio::as_tuple(asio::use_awaitable));
-        pex_timer_ = nullptr;
-        if (ec || stopping_) co_return;
-
-        // Skip PEX entirely in closed mode -- don't advertise or discover peers
-        if (acl_.is_peer_closed_mode()) continue;
-
-        co_await request_peers_from_all();
-    }
-}
-
-asio::awaitable<void> PeerManager::request_peers_from_all() {
-    // Take a snapshot of connection pointers to avoid iterator invalidation
-    // (peers_ may be modified during co_await when new peers connect/disconnect)
-    std::vector<net::Connection::Ptr> connections;
-    for (const auto& peer : peers_) {
-        connections.push_back(peer->connection);
-    }
-    for (const auto& conn : connections) {
-        auto* peer = find_peer(conn);
-        if (peer && peer->connection->is_authenticated() && !peer->syncing) {
-            co_await run_pex_with_peer(peer->connection);
-        }
-    }
-}
-
-// =============================================================================
-// Peer persistence
-// =============================================================================
-
-std::filesystem::path PeerManager::peers_file_path() const {
-    return std::filesystem::path(config_.data_dir) / "peers.json";
-}
-
-void PeerManager::load_persisted_peers() {
-    auto path = peers_file_path();
-    if (!std::filesystem::exists(path)) return;
-
-    try {
-        std::ifstream f(path);
-        auto j = nlohmann::json::parse(f);
-
-        persisted_peers_.clear();
-        for (const auto& entry : j.value("peers", nlohmann::json::array())) {
-            PersistedPeer p;
-            p.address = entry.value("address", "");
-            p.last_seen = entry.value("last_seen", uint64_t(0));
-            p.fail_count = entry.value("fail_count", uint32_t(0));
-            p.pubkey_hash = entry.value("pubkey_hash", std::string{});
-            if (!p.address.empty() && p.fail_count < MAX_PERSIST_FAILURES) {
-                persisted_peers_.push_back(std::move(p));
-            }
-        }
-
-        // Increment fail_count for all loaded peers (reset on successful connect)
-        for (auto& p : persisted_peers_) {
-            p.fail_count++;
-        }
-
-        spdlog::info("loaded {} persisted peers from {}", persisted_peers_.size(), path.string());
-        save_persisted_peers();  // Persist incremented fail_counts
-    } catch (const std::exception& e) {
-        spdlog::warn("failed to load persisted peers: {}", e.what());
-        persisted_peers_.clear();
-    }
-}
-
-void PeerManager::save_persisted_peers() {
-    // Prune peers with too many failures
-    persisted_peers_.erase(
-        std::remove_if(persisted_peers_.begin(), persisted_peers_.end(),
-                       [](const PersistedPeer& p) { return p.fail_count >= MAX_PERSIST_FAILURES; }),
-        persisted_peers_.end());
-
-    // Cap at MAX_PERSISTED_PEERS (keep most recently seen)
-    if (persisted_peers_.size() > MAX_PERSISTED_PEERS) {
-        std::sort(persisted_peers_.begin(), persisted_peers_.end(),
-                  [](const PersistedPeer& a, const PersistedPeer& b) {
-                      return a.last_seen > b.last_seen;
-                  });
-        persisted_peers_.resize(MAX_PERSISTED_PEERS);
-    }
-
-    nlohmann::json j;
-    j["peers"] = nlohmann::json::array();
-    for (const auto& p : persisted_peers_) {
-        nlohmann::json entry = {
-            {"address", p.address},
-            {"last_seen", p.last_seen},
-            {"fail_count", p.fail_count}
-        };
-        if (!p.pubkey_hash.empty()) {
-            entry["pubkey_hash"] = p.pubkey_hash;
-        }
-        j["peers"].push_back(std::move(entry));
-    }
-
-    auto path = peers_file_path();
-    auto tmp_path = std::filesystem::path(path.string() + ".tmp");
-
-    try {
-        std::filesystem::create_directories(path.parent_path());
-        auto json_str = j.dump(2);
-
-        // Write to temp file via raw POSIX (std::ofstream cannot fsync)
-        int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-            spdlog::warn("failed to create temp peer file: {}", strerror(errno));
-            return;
-        }
-
-        auto written = ::write(fd, json_str.data(), json_str.size());
-        if (written < 0 || static_cast<size_t>(written) != json_str.size()) {
-            ::close(fd);
-            std::filesystem::remove(tmp_path);
-            spdlog::warn("failed to write temp peer file");
-            return;
-        }
-
-        if (::fsync(fd) != 0) {
-            ::close(fd);
-            std::filesystem::remove(tmp_path);
-            spdlog::warn("failed to fsync temp peer file");
-            return;
-        }
-        ::close(fd);
-
-        // Atomic rename
-        std::filesystem::rename(tmp_path, path);
-
-        // Directory fsync (required on Linux for rename durability)
-        int dir_fd = ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
-        if (dir_fd >= 0) {
-            ::fsync(dir_fd);
-            ::close(dir_fd);
-        }
-
-        spdlog::debug("saved {} persisted peers", persisted_peers_.size());
-    } catch (const std::exception& e) {
-        spdlog::warn("failed to save persisted peers: {}", e.what());
-        std::error_code ec;
-        std::filesystem::remove(tmp_path, ec);
-    }
-}
-
-void PeerManager::update_persisted_peer(const std::string& address, bool success) {
-    // Don't persist bootstrap peers (they have their own reconnect logic)
-    if (bootstrap_addresses_.count(address)) return;
-
-    auto it = std::find_if(persisted_peers_.begin(), persisted_peers_.end(),
-                           [&address](const PersistedPeer& p) { return p.address == address; });
-
-    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
-
-    if (it != persisted_peers_.end()) {
-        if (success) {
-            it->last_seen = now;
-            it->fail_count = 0;
-        } else {
-            it->fail_count++;
-        }
-    } else if (success) {
-        persisted_peers_.push_back({address, now, 0, {}});
-    }
-
-    save_persisted_peers();
 }
 
 // =============================================================================

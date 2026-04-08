@@ -2,6 +2,7 @@
 
 #include "db/peer/peer_types.h"
 #include "db/peer/metrics_collector.h"
+#include "db/peer/pex_manager.h"
 
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
@@ -176,23 +177,6 @@ private:
     void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
     asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(const net::Connection::Ptr& conn, std::chrono::seconds timeout);
 
-    // Periodic peer list flush
-    asio::awaitable<void> peer_flush_timer_loop();
-
-    // PEX protocol
-    asio::awaitable<void> pex_timer_loop();
-    asio::awaitable<void> request_peers_from_all();
-    asio::awaitable<void> run_pex_with_peer(net::Connection::Ptr conn);
-    asio::awaitable<void> handle_pex_as_responder(net::Connection::Ptr conn);
-    void handle_peer_list_response(net::Connection::Ptr conn, std::vector<uint8_t> payload);
-    std::vector<std::string> build_peer_list_response(const std::string& exclude_address);
-
-    // Peer persistence
-    void load_persisted_peers();
-    void save_persisted_peers();
-    void update_persisted_peer(const std::string& address, bool success);
-    std::filesystem::path peers_file_path() const;
-
     // Strike system
     void record_strike(net::Connection::Ptr conn, const std::string& reason);
 
@@ -261,14 +245,10 @@ private:
 
     std::deque<std::unique_ptr<PeerInfo>> peers_;
     std::set<std::string> bootstrap_addresses_;
-    std::set<std::string> known_addresses_;      // All addresses we know about
     std::set<std::string> trusted_peers_;         // IP strings for transport trust
-    std::vector<PersistedPeer> persisted_peers_;  // Peers persisted to disk
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
     asio::steady_timer* sync_timer_ = nullptr;    // Timer-cancel pattern for sync loop
-    asio::steady_timer* pex_timer_ = nullptr;     // Timer-cancel pattern for PEX loop
-    asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
     asio::steady_timer* keepalive_timer_ = nullptr;           // Timer-cancel pattern for keepalive loop
     asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
@@ -298,6 +278,7 @@ private:
         disconnected_peers_;
     static constexpr uint64_t CURSOR_GRACE_PERIOD_MS = 5 * 60 * 1000;  // 5 minutes
     MetricsCollector metrics_collector_;
+    PexManager pex_;
 };
 
 } // namespace chromatindb::peer
