@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 98 context gathered
-last_updated: "2026-04-08T16:20:33.351Z"
-last_activity: 2026-04-08 -- Phase 98 execution started
+stopped_at: Completed 98-02-PLAN.md
+last_updated: "2026-04-08T18:58:50.028Z"
+last_activity: 2026-04-08
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 12
-  completed_plans: 9
+  completed_plans: 11
   percent: 8
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 ## Current Position
 
 Phase: 98 (ttl-enforcement) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 98
-Last activity: 2026-04-08 -- Phase 98 execution started
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-04-08
 
 Progress: [#.........] 8%
 
@@ -58,6 +58,7 @@ Progress: [#.........] 8%
 | Phase 97 P01 | 37min | 2 tasks | 8 files |
 | Phase 97 P02 | 30min | 3 tasks | 11 files |
 | Phase 97 P03 | 72min | 2 tasks | 2 files |
+| Phase 98 P02 | 65min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 97]: Nonce exhaustion threshold at 2^63, static constexpr local to send/recv_encrypted functions
 - [Phase 97]: AuthSignature exchange in lightweight path mirrors PQ path pattern (same helpers, same ordering)
 - [Phase 97]: Initiator sends auth first in lightweight path (prevents AEAD nonce desync)
+- [Phase 98]: ExistsRequest/BatchExistsRequest upgraded from has_blob to get_blob for TTL expiry awareness
+- [Phase 98]: Tests use store.store_blob() to bypass engine already-expired rejection for handler testing
 
 ### Pending Todos
 
@@ -97,6 +100,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-08T15:52:59.994Z
-Stopped at: Phase 98 context gathered
-Resume file: .planning/phases/98-ttl-enforcement/98-CONTEXT.md
+Last session: 2026-04-08T18:58:50.025Z
+Stopped at: Completed 98-02-PLAN.md
+Resume file: None
