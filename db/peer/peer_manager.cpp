@@ -83,12 +83,57 @@ PeerManager::PeerManager(const config::Config& config,
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path)
-    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_, peers_)
-    , pex_(ioc, stopping_, peers_, server_, acl,
+    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_)
+    , conn_mgr_(identity, acl, metrics_collector_.node_metrics(), server_, ioc,
+                stopping_, sync_namespaces_, config.rate_limit_burst, config.max_peers,
+                // MessageCallback: route to on_peer_message
+                [this](net::Connection::Ptr c, wire::TransportMsgType type,
+                       std::vector<uint8_t> payload, uint32_t rid) {
+                    on_peer_message(c, type, std::move(payload), rid);
+                },
+                // SyncTrigger: run_sync_with_peer
+                [this](net::Connection::Ptr c) -> asio::awaitable<void> {
+                    co_await run_sync_with_peer(c);
+                },
+                // ConnectCallback: PEX tracking on connect
+                [this](net::Connection::Ptr conn, const std::string& addr) {
+                    pex_.known_addresses().insert(addr);
+                    pex_.update_persisted_peer(addr, true);
+                    // Store pubkey hash in persisted peer
+                    auto pk_hash = crypto::sha3_256(conn->peer_pubkey());
+                    auto pk_hex = chromatindb::util::to_hex(
+                        std::span<const uint8_t>(pk_hash.data(), pk_hash.size()), 32);
+                    auto it = std::find_if(pex_.persisted_peers().begin(), pex_.persisted_peers().end(),
+                                           [&addr](const PersistedPeer& p) { return p.address == addr; });
+                    if (it != pex_.persisted_peers().end()) {
+                        it->pubkey_hash = pk_hex;
+                    }
+                },
+                // DisconnectCallback: clean blob_push pending_fetches
+                [this](net::Connection::Ptr conn) {
+                    blob_push_.clean_pending_fetches(conn);
+                })
+    , pex_(ioc, stopping_, conn_mgr_.peers(), server_, acl,
            config.bind_address, config.data_dir, config.max_peers,
-           bootstrap_addresses_,
+           conn_mgr_.bootstrap_addresses(),
            [](const std::vector<std::string>& addrs) { return PeerManager::encode_peer_list(addrs); },
-           [](std::span<const uint8_t> payload) { return PeerManager::decode_peer_list(payload); }) {
+           [](std::span<const uint8_t> payload) { return PeerManager::decode_peer_list(payload); })
+    , blob_push_(ioc, engine, storage, metrics_collector_.node_metrics(),
+                 stopping_, sync_namespaces_, conn_mgr_.peers(),
+                 // rearm_expiry callback
+                 [this](uint64_t expiry_time) {
+                     if (next_expiry_target_ == 0 || expiry_time < next_expiry_target_) {
+                         next_expiry_target_ = expiry_time;
+                         if (expiry_loop_running_) {
+                             if (expiry_timer_) expiry_timer_->cancel();
+                         } else {
+                             asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
+                         }
+                     }
+                 }) {
+    // Wire peers reference to MetricsCollector (deferred: conn_mgr_ owns peers_)
+    metrics_collector_.set_peers(conn_mgr_.peers());
+
     // Initialize rate limit parameters from config
     rate_limit_bytes_per_sec_ = config.rate_limit_bytes_per_sec;
     rate_limit_burst_ = config.rate_limit_burst;
@@ -97,7 +142,6 @@ PeerManager::PeerManager(const config::Config& config,
     sync_cooldown_seconds_ = config.sync_cooldown_seconds;
     max_sync_sessions_ = config.max_sync_sessions;
     safety_net_interval_seconds_ = config.safety_net_interval_seconds;
-    max_peers_ = config.max_peers;
 
     // Initialize compaction interval from config
     compaction_interval_hours_ = config.compaction_interval_hours;
@@ -112,37 +156,41 @@ PeerManager::PeerManager(const config::Config& config,
     }
 
     // Initialize trusted peers from config (canonicalize via Asio parsing)
-    for (const auto& ip_str : config.trusted_peers) {
-        asio::error_code ec;
-        auto addr = asio::ip::make_address(ip_str, ec);
-        if (!ec) {
-            trusted_peers_.insert(addr.to_string());
+    {
+        std::set<std::string> trusted;
+        for (const auto& ip_str : config.trusted_peers) {
+            asio::error_code ec;
+            auto addr = asio::ip::make_address(ip_str, ec);
+            if (!ec) {
+                trusted.insert(addr.to_string());
+            }
         }
+        conn_mgr_.set_trusted_peers(std::move(trusted));
     }
 
     // Track bootstrap addresses
     for (const auto& addr : config.bootstrap_peers) {
-        bootstrap_addresses_.insert(addr);
+        conn_mgr_.bootstrap_addresses().insert(addr);
         pex_.known_addresses().insert(addr);
     }
 
     // Wire trust check for lightweight handshake
     server_.set_trust_check([this](const asio::ip::address& addr) {
-        return is_trusted_address(addr);
+        return conn_mgr_.is_trusted_address(addr);
     });
 
     // Wire thread pool for crypto offload
     server_.set_pool(pool);
 
-    // Wire server callbacks
-    server_.set_accept_filter([this]() { return should_accept_connection(); });
+    // Wire server callbacks -- delegate to ConnectionManager
+    server_.set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
 
     server_.set_on_connected([this](net::Connection::Ptr conn) {
-        on_peer_connected(conn);
+        conn_mgr_.on_peer_connected(conn);
     });
 
     server_.set_on_disconnected([this](net::Connection::Ptr conn) {
-        on_peer_disconnected(conn);
+        conn_mgr_.on_peer_disconnected(conn);
     });
 
     // UDS acceptor setup (only if uds_path is configured)
@@ -151,12 +199,12 @@ PeerManager::PeerManager(const config::Config& config,
             config.uds_path, identity, ioc);
 
         // Wire same callbacks as TCP server — UDS connections get identical treatment
-        uds_acceptor_->set_accept_filter([this]() { return should_accept_connection(); });
+        uds_acceptor_->set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
         uds_acceptor_->set_on_connected([this](net::Connection::Ptr conn) {
-            on_peer_connected(conn);
+            conn_mgr_.on_peer_connected(conn);
         });
         uds_acceptor_->set_on_disconnected([this](net::Connection::Ptr conn) {
-            on_peer_disconnected(conn);
+            conn_mgr_.on_peer_disconnected(conn);
         });
         uds_acceptor_->set_pool(pool);
     }
@@ -234,7 +282,7 @@ void PeerManager::start() {
 
     // Connect to persisted peers (in addition to bootstrap peers from server_.start())
     for (const auto& pp : pex_.persisted_peers()) {
-        if (!bootstrap_addresses_.count(pp.address)) {
+        if (!conn_mgr_.bootstrap_addresses().count(pp.address)) {
             pex_.known_addresses().insert(pp.address);
             server_.connect_once(pp.address);
         }
@@ -270,7 +318,7 @@ void PeerManager::start() {
 
     // Keepalive: unconditionally send Ping to all TCP peers every 30s,
     // disconnect peers silent for 60s (Phase 83 CONN-01, CONN-02)
-    asio::co_spawn(ioc_, keepalive_loop(), asio::detached);
+    asio::co_spawn(ioc_, conn_mgr_.keepalive_loop(), asio::detached);
 
     // Set up dump extra callback (UDS + compaction stats)
     metrics_collector_.set_dump_extra([this]() -> std::string {
@@ -292,7 +340,7 @@ void PeerManager::cancel_all_timers() {
     if (sync_timer_) sync_timer_->cancel();
     if (cursor_compaction_timer_) cursor_compaction_timer_->cancel();
     if (compaction_timer_) compaction_timer_->cancel();
-    if (keepalive_timer_) keepalive_timer_->cancel();
+    conn_mgr_.cancel_timers();
     pex_.cancel_timers();
     metrics_collector_.cancel_timers();
 }
@@ -310,275 +358,12 @@ int PeerManager::exit_code() const {
     return server_.exit_code();
 }
 
-size_t PeerManager::peer_count() const {
-    return peers_.size();
-}
-
 size_t PeerManager::bootstrap_peer_count() const {
     size_t count = 0;
-    for (const auto& p : peers_) {
+    for (const auto& p : conn_mgr_.peers()) {
         if (p->is_bootstrap) ++count;
     }
     return count;
-}
-
-// =============================================================================
-// Connection callbacks
-// =============================================================================
-
-bool PeerManager::should_accept_connection() {
-    return peers_.size() < max_peers_;
-}
-
-void PeerManager::on_peer_connected(net::Connection::Ptr conn) {
-    // ACL check: derive peer namespace hash and verify against allowed list.
-    // Branch on connection type: UDS = client, TCP = peer.
-    // Must happen BEFORE adding to peers_ so unauthorized peers never see data.
-    auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
-
-    bool allowed = conn->is_uds()
-        ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
-        : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
-
-    if (!allowed) {
-        auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
-        spdlog::warn("access denied ({}): namespace={} ip={}",
-                     conn->is_uds() ? "client" : "peer",
-                     full_hex, conn->remote_address());
-        // Signal ACL rejection to Server for backoff tracking (outbound only)
-        if (!conn->connect_address().empty()) {
-            server_.notify_acl_rejected(conn->connect_address());
-        }
-        ++metrics_collector_.node_metrics().peers_disconnected_total;
-        conn->close();  // Silent close, no goodbye
-        return;
-    }
-
-    PeerInfo info;
-    info.connection = conn;
-    info.address = conn->remote_address();
-    info.is_bootstrap = false;
-    info.strike_count = 0;
-    info.syncing = false;
-
-    // Initialize token bucket for rate limiting (full burst capacity on connect)
-    info.bucket_tokens = rate_limit_burst_;
-    info.bucket_last_refill = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    // Initialize last_message_time for inactivity detection (CONN-03)
-    info.last_message_time = info.bucket_last_refill;
-
-    // Check if this connection is to a bootstrap peer
-    // Note: remote_address includes port, bootstrap_addresses may not match exactly
-    // We check if any bootstrap address is a prefix of the remote address
-    for (const auto& bp : bootstrap_addresses_) {
-        // Simple check: bootstrap is "host:port", remote is "host:port"
-        // They may differ in port (bootstrap is listen port, remote is ephemeral)
-        // So we check host part only
-        auto bp_colon = bp.rfind(':');
-        auto ra_colon = info.address.rfind(':');
-        if (bp_colon != std::string::npos && ra_colon != std::string::npos) {
-            auto bp_host = bp.substr(0, bp_colon);
-            auto ra_host = info.address.substr(0, ra_colon);
-            if (bp_host == ra_host) {
-                info.is_bootstrap = true;
-                break;
-            }
-        }
-    }
-
-    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
-
-    // Connection dedup: check if we already have a connection from this peer namespace.
-    // When two nodes are mutual bootstrap peers, both initiate connections simultaneously.
-    // We use a deterministic tie-break so both sides independently close the same connection.
-    // Skip dedup for UDS connections: the relay opens a separate UDS session per client,
-    // all sharing the relay's identity. Deduping would close earlier clients' pipes.
-    if (!conn->is_uds()) {
-        for (auto it = peers_.begin(); it != peers_.end(); ++it) {
-            auto existing_ns = crypto::sha3_256((*it)->connection->peer_pubkey());
-            if (existing_ns == peer_ns) {
-                // Deterministic tie-break: the node with the lower namespace_id keeps
-                // its initiated (outbound) connection. Since both sides see the same
-                // pair of namespace IDs, they will independently close the same connection.
-                auto own_ns = identity_.namespace_id();
-                bool own_ns_lower = std::lexicographical_compare(
-                    own_ns.begin(), own_ns.end(),
-                    peer_ns.data(), peer_ns.data() + 32);
-
-                bool keep_new;
-                if (own_ns_lower) {
-                    // We have the lower namespace: keep whichever connection we initiated
-                    keep_new = conn->is_initiator();
-                } else {
-                    // They have the lower namespace: keep whichever they initiated (= we received)
-                    keep_new = !conn->is_initiator();
-                }
-
-                if (keep_new) {
-                    spdlog::info("duplicate connection from peer {}: closing existing, keeping new",
-                                 ns_hex);
-                    // Delay reconnect for the closed connection's bootstrap address
-                    // to dampen reconnect-dedup cycles without permanently losing
-                    // connectivity (stop_reconnect would prevent recovery if the
-                    // kept connection later fails).
-                    auto closed_addr = (*it)->connection->connect_address();
-                    if (!closed_addr.empty()) {
-                        server_.delay_reconnect(closed_addr);
-                    }
-                    (*it)->connection->close();
-                    peers_.erase(it);
-                } else {
-                    spdlog::info("duplicate connection from peer {}: closing new, keeping existing",
-                                 ns_hex);
-                    // Delay reconnect for the closed connection's bootstrap address
-                    auto closed_addr = conn->connect_address();
-                    if (!closed_addr.empty()) {
-                        server_.delay_reconnect(closed_addr);
-                    }
-                    conn->close();
-                    return;  // Don't add to peers_
-                }
-                break;
-            }
-        }
-    }  // !conn->is_uds()
-
-    spdlog::info("Connected to peer {}@{}", ns_hex, info.address);
-
-    // Set up message routing
-    conn->on_message([this](net::Connection::Ptr c, wire::TransportMsgType type,
-                            std::vector<uint8_t> payload, uint32_t request_id) {
-        on_peer_message(c, type, std::move(payload), request_id);
-    });
-
-    peers_.push_back(std::make_unique<PeerInfo>(std::move(info)));
-    peers_.back()->sync_inbox.clear();
-    ++metrics_collector_.node_metrics().peers_connected_total;
-
-    // Track this peer's address
-    pex_.known_addresses().insert(info.address);
-
-    // Persist successful connection and store pubkey hash for cursor cleanup
-    pex_.update_persisted_peer(info.address, true);
-    {
-        auto pk_hash = crypto::sha3_256(conn->peer_pubkey());
-        auto pk_hex = to_hex(std::span<const uint8_t>(pk_hash.data(), pk_hash.size()), 32);
-        auto it = std::find_if(pex_.persisted_peers().begin(), pex_.persisted_peers().end(),
-                               [&info](const PersistedPeer& p) { return p.address == info.address; });
-        if (it != pex_.persisted_peers().end()) {
-            it->pubkey_hash = pk_hex;
-        }
-    }
-
-    // Phase 82 MAINT-04/MAINT-05: Check cursor grace period for reconnecting peers (D-01, D-02)
-    {
-        auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
-        auto it = disconnected_peers_.find(peer_hash);
-        if (it != disconnected_peers_.end()) {
-            auto now_ms = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
-            if (now_ms - it->second.disconnect_time <= CURSOR_GRACE_PERIOD_MS) {
-                spdlog::info("peer {} reconnected within grace period, cursors preserved",
-                             ns_hex);
-            } else {
-                spdlog::info("peer {} reconnected after grace period, cursors expired",
-                             ns_hex);
-            }
-            disconnected_peers_.erase(it);
-        }
-    }
-
-    // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync (D-01).
-    // Only the initiator triggers sync-on-connect after the announce exchange.
-    // The responder waits for SyncRequest from the peer.
-    asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-        co_await announce_and_sync(conn);
-    }, asio::detached);
-}
-
-void PeerManager::on_peer_disconnected(net::Connection::Ptr conn) {
-    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
-    bool graceful = conn->received_goodbye();
-    spdlog::info("Peer {} disconnected ({})", ns_hex,
-                 graceful ? "graceful" : "timeout");
-
-    // Phase 80: Clean pending BlobFetch entries for this peer (D-09 fire-and-forget cleanup)
-    for (auto it = pending_fetches_.begin(); it != pending_fetches_.end(); ) {
-        if (it->second == conn) {
-            it = pending_fetches_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // Phase 82 MAINT-04: Record disconnect time for cursor grace period (D-01)
-    // Actual cursors persist in MDBX -- we just track when the peer left
-    // so on_peer_connected can decide: reuse cursors (< 5 min) or discard.
-    {
-        auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
-        auto now_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        disconnected_peers_[peer_hash] = DisconnectedPeerState{now_ms};
-    }
-
-    // Remove from peers
-    peers_.erase(
-        std::remove_if(peers_.begin(), peers_.end(),
-                       [&conn](const std::unique_ptr<PeerInfo>& p) {
-                           return p->connection == conn;
-                       }),
-        peers_.end());
-    ++metrics_collector_.node_metrics().peers_disconnected_total;
-}
-
-// =============================================================================
-// Namespace announce exchange (Phase 86: FILT-01)
-// =============================================================================
-
-asio::awaitable<void> PeerManager::announce_and_sync(net::Connection::Ptr conn) {
-    auto* peer = find_peer(conn);
-    if (!peer) co_return;
-
-    // Send our sync_namespaces (using existing encode_namespace_list)
-    auto ns_list = std::vector<std::array<uint8_t, 32>>(
-        sync_namespaces_.begin(), sync_namespaces_.end());
-    auto payload = encode_namespace_list(ns_list);
-    if (!co_await conn->send_message(
-            wire::TransportMsgType_SyncNamespaceAnnounce, payload)) {
-        co_return;
-    }
-
-    // Re-lookup after co_await — peer may have disconnected
-    peer = find_peer(conn);
-    if (!peer) co_return;
-
-    // Wait for peer's announce (timeout 5s) using timer-cancel pattern
-    if (!peer->announce_received) {
-        asio::steady_timer timer(ioc_);
-        peer->announce_notify = &timer;
-        timer.expires_after(std::chrono::seconds(5));
-        auto [ec] = co_await timer.async_wait(
-            asio::as_tuple(asio::use_awaitable));
-        // Re-lookup after co_await — peer may have disconnected
-        peer = find_peer(conn);
-        if (!peer) co_return;
-        peer->announce_notify = nullptr;
-        if (!peer->announce_received) {
-            spdlog::warn("peer {} did not send SyncNamespaceAnnounce within 5s, treating as replicate-all",
-                         peer_display_name(conn));
-            // D-07: Treat timeout as "replicate everything" (empty set)
-        }
-    }
-
-    // Initiator triggers sync after announce exchange (per D-01)
-    if (conn->is_initiator()) {
-        co_await run_sync_with_peer(conn);
-    }
 }
 
 // =============================================================================
@@ -788,17 +573,17 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
     // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
     if (type == wire::TransportMsgType_BlobNotify) {
-        on_blob_notify(conn, std::move(payload));
+        blob_push_.on_blob_notify(conn, std::move(payload));
         return;
     }
 
     if (type == wire::TransportMsgType_BlobFetch) {
-        handle_blob_fetch(conn, std::move(payload));
+        blob_push_.handle_blob_fetch(conn, std::move(payload));
         return;
     }
 
     if (type == wire::TransportMsgType_BlobFetchResponse) {
-        handle_blob_fetch_response(conn, std::move(payload));
+        blob_push_.handle_blob_fetch_response(conn, std::move(payload));
         return;
     }
 
@@ -843,12 +628,12 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 } else if (result.error.has_value()) {
                     spdlog::warn("delete rejected from {}: {}",
                                  conn->remote_address(), result.error_detail);
-                    record_strike(conn, result.error_detail);
+                    conn_mgr_.record_strike(conn, result.error_detail);
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed delete from {}: {}",
                              conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -875,7 +660,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 64) {
-                    record_strike(conn, "ReadRequest too short");
+                    conn_mgr_.record_strike(conn, "ReadRequest too short");
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -895,7 +680,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ReadRequest from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -905,7 +690,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 44) {
-                    record_strike(conn, "ListRequest too short");
+                    conn_mgr_.record_strike(conn, "ListRequest too short");
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -939,7 +724,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ListRequest from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -949,7 +734,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 32) {
-                    record_strike(conn, "StatsRequest too short");
+                    conn_mgr_.record_strike(conn, "StatsRequest too short");
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -967,7 +752,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed StatsRequest from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -977,7 +762,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 64) {
-                    record_strike(conn, "ExistsRequest too short");
+                    conn_mgr_.record_strike(conn, "ExistsRequest too short");
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -993,7 +778,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ExistsRequest from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1081,7 +866,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("NodeInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1091,7 +876,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 36) {
-                    record_strike(conn, "NamespaceListRequest too short");
+                    conn_mgr_.record_strike(conn, "NamespaceListRequest too short");
                     co_return;
                 }
 
@@ -1153,7 +938,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("NamespaceListRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1199,7 +984,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("StorageStatusRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1209,7 +994,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 32) {
-                    record_strike(conn, "NamespaceStatsRequest too short");
+                    conn_mgr_.record_strike(conn, "NamespaceStatsRequest too short");
                     co_return;
                 }
 
@@ -1258,7 +1043,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("NamespaceStatsRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1268,7 +1053,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 64) {
-                    record_strike(conn, "MetadataRequest too short");
+                    conn_mgr_.record_strike(conn, "MetadataRequest too short");
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -1335,7 +1120,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("MetadataRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1345,7 +1130,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 36) {
-                    record_strike(conn, "BatchExistsRequest too short");
+                    conn_mgr_.record_strike(conn, "BatchExistsRequest too short");
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -1353,13 +1138,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
                 if (count == 0 || count > 1024) {
-                    record_strike(conn, "BatchExistsRequest invalid count");
+                    conn_mgr_.record_strike(conn, "BatchExistsRequest invalid count");
                     co_return;
                 }
 
                 size_t expected_size = 36 + static_cast<size_t>(count) * 32;
                 if (payload.size() < expected_size) {
-                    record_strike(conn, "BatchExistsRequest payload too short for count");
+                    conn_mgr_.record_strike(conn, "BatchExistsRequest payload too short for count");
                     co_return;
                 }
 
@@ -1375,7 +1160,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("BatchExistsRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1385,7 +1170,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             try {
                 if (payload.size() < 32) {
-                    record_strike(conn, "DelegationListRequest too short");
+                    conn_mgr_.record_strike(conn, "DelegationListRequest too short");
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -1414,7 +1199,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("DelegationListRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1425,7 +1210,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
             try {
                 // Step 0: minimum payload 40 bytes = namespace(32) + cap_bytes(4) + count(4)
                 if (payload.size() < 40) {
-                    record_strike(conn, "BatchReadRequest too short");
+                    conn_mgr_.record_strike(conn, "BatchReadRequest too short");
                     co_return;
                 }
 
@@ -1443,13 +1228,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 uint32_t count = chromatindb::util::read_u32_be(payload.data() + 36);
 
                 if (count == 0 || count > 256) {
-                    record_strike(conn, "BatchReadRequest invalid count");
+                    conn_mgr_.record_strike(conn, "BatchReadRequest invalid count");
                     co_return;
                 }
 
                 size_t expected_size = 40 + static_cast<size_t>(count) * 32;
                 if (payload.size() < expected_size) {
-                    record_strike(conn, "BatchReadRequest payload too short for count");
+                    conn_mgr_.record_strike(conn, "BatchReadRequest payload too short for count");
                     co_return;
                 }
 
@@ -1531,7 +1316,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("BatchReadRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1579,7 +1364,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                 // Pre-compute response size
                 size_t resp_size = 8;  // peer_count + bootstrap_count
-                for (const auto& peer : peers_) {
+                for (const auto& peer : conn_mgr_.peers()) {
                     resp_size += 2 + peer->address.size() + 1 + 1 + 1 + 8;
                 }
 
@@ -1591,7 +1376,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 chromatindb::util::store_u32_be(response.data() + off, bc);
                 off += 4;
 
-                for (const auto& peer : peers_) {
+                for (const auto& peer : conn_mgr_.peers()) {
                     // address length (2 bytes big-endian)
                     uint16_t addr_len = static_cast<uint16_t>(peer->address.size());
                     response[off++] = static_cast<uint8_t>(addr_len >> 8);
@@ -1613,7 +1398,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("PeerInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1624,7 +1409,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
             try {
                 // Step 0: minimum payload 52 bytes = namespace(32) + start(8) + end(8) + limit(4)
                 if (payload.size() < 52) {
-                    record_strike(conn, "TimeRangeRequest too short");
+                    conn_mgr_.record_strike(conn, "TimeRangeRequest too short");
                     co_return;
                 }
 
@@ -1638,7 +1423,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
 
                 // D-17: strike if start > end
                 if (start_ts > end_ts) {
-                    record_strike(conn, "TimeRangeRequest invalid range (start > end)");
+                    conn_mgr_.record_strike(conn, "TimeRangeRequest invalid range (start > end)");
                     co_return;
                 }
 
@@ -1707,7 +1492,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                                              std::span<const uint8_t>(response), request_id);
             } catch (const std::exception& e) {
                 spdlog::warn("TimeRangeRequest handler error from {}: {}", conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -1730,7 +1515,7 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                 // engine_.ingest() internally calls crypto::offload(pool_, ...) which
                 // resumes this coroutine on the thread pool. All subsequent code must
                 // run on the IO thread: send_message (AEAD nonce safety),
-                // on_blob_ingested (peers_ access), metrics_, record_strike.
+                // on_blob_ingested (peers access via conn_mgr_), metrics_, record_strike.
                 co_await asio::post(ioc_, asio::use_awaitable);
                 // Send WriteAck for all accepted ingests (stored + duplicate)
                 if (result.accepted && result.ack.has_value()) {
@@ -1781,13 +1566,13 @@ void PeerManager::on_peer_message(net::Connection::Ptr conn,
                         spdlog::warn("invalid blob from peer {}: {}",
                                      conn->remote_address(),
                                      result.error_detail.empty() ? "validation failed" : result.error_detail);
-                        record_strike(conn, result.error_detail);
+                        conn_mgr_.record_strike(conn, result.error_detail);
                     }
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed data message from peer {}: {}",
                              conn->remote_address(), e.what());
-                record_strike(conn, e.what());
+                conn_mgr_.record_strike(conn, e.what());
             }
         }, asio::detached);
         return;
@@ -2780,9 +2565,9 @@ asio::awaitable<void> PeerManager::handle_sync_as_responder(net::Connection::Ptr
 
 asio::awaitable<void> PeerManager::sync_all_peers() {
     // Take a snapshot of connection pointers to avoid iterator invalidation
-    // (peers_ may be modified during co_await when new peers connect/disconnect)
+    // (conn_mgr_.peers() may be modified during co_await when new peers connect/disconnect)
     std::vector<net::Connection::Ptr> connections;
-    for (const auto& peer : peers_) {
+    for (const auto& peer : conn_mgr_.peers()) {
         connections.push_back(peer->connection);
     }
     for (const auto& conn : connections) {
@@ -2815,36 +2600,16 @@ asio::awaitable<void> PeerManager::sync_timer_loop() {
             auto now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count());
-            for (auto it = disconnected_peers_.begin(); it != disconnected_peers_.end(); ) {
-                if (now_ms - it->second.disconnect_time > CURSOR_GRACE_PERIOD_MS) {
+            for (auto it = conn_mgr_.disconnected_peers().begin(); it != conn_mgr_.disconnected_peers().end(); ) {
+                if (now_ms - it->second.disconnect_time > ConnectionManager::CURSOR_GRACE_PERIOD_MS) {
                     // Delete MDBX cursors for this permanently-gone peer
                     storage_.delete_peer_cursors(it->first);
-                    it = disconnected_peers_.erase(it);
+                    it = conn_mgr_.disconnected_peers().erase(it);
                 } else {
                     ++it;
                 }
             }
         }
-    }
-}
-
-// =============================================================================
-// Strike system
-// =============================================================================
-
-void PeerManager::record_strike(net::Connection::Ptr conn, const std::string& reason) {
-    auto* peer = find_peer(conn);
-    if (!peer) return;
-
-    peer->strike_count++;
-    spdlog::warn("strike {}/{} for peer {} ({})",
-                 peer->strike_count, STRIKE_THRESHOLD,
-                 conn->remote_address(), reason);
-
-    if (peer->strike_count >= STRIKE_THRESHOLD) {
-        spdlog::warn("disconnecting peer {}: {} validation failures",
-                     conn->remote_address(), peer->strike_count);
-        asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);
     }
 }
 
@@ -2871,11 +2636,6 @@ void PeerManager::handle_sighup() {
     reload_config();
     server_.clear_reconnect_state();
     spdlog::info("reconnect state cleared (ACL rejection counters reset)");
-}
-
-bool PeerManager::is_trusted_address(const asio::ip::address& addr) const {
-    if (addr.is_loopback()) return true;
-    return trusted_peers_.count(addr.to_string()) > 0;
 }
 
 void PeerManager::reload_config() {
@@ -2921,7 +2681,7 @@ void PeerManager::reload_config() {
     // Disconnect revoked peers (check both lists)
     if (result.client_removed > 0 || result.peer_removed > 0 ||
         acl_.is_client_closed_mode() || acl_.is_peer_closed_mode()) {
-        disconnect_unauthorized_peers();
+        conn_mgr_.disconnect_unauthorized_peers();
     }
 
     // Reload rate limit parameters
@@ -2950,14 +2710,14 @@ void PeerManager::reload_config() {
     spdlog::info("config reload: safety_net_interval={}s", safety_net_interval_seconds_);
 
     // Reload max_peers (Phase 86, OPS-01)
-    max_peers_ = new_cfg.max_peers;
+    conn_mgr_.set_max_peers(new_cfg.max_peers);
     pex_.set_max_peers(new_cfg.max_peers);
-    if (peers_.size() > max_peers_) {
+    if (conn_mgr_.peer_count() > new_cfg.max_peers) {
         spdlog::warn("config reload: max_peers={} but {} peers connected "
                      "(excess will drain naturally, new connections refused)",
-                     max_peers_, peers_.size());
+                     new_cfg.max_peers, conn_mgr_.peer_count());
     } else {
-        spdlog::info("config reload: max_peers={}", max_peers_);
+        spdlog::info("config reload: max_peers={}", new_cfg.max_peers);
     }
 
     // Reload sync_namespaces
@@ -2983,7 +2743,7 @@ void PeerManager::reload_config() {
         auto ns_list = std::vector<std::array<uint8_t, 32>>(
             sync_namespaces_.begin(), sync_namespaces_.end());
         auto announce_payload = encode_namespace_list(ns_list);
-        for (auto& peer : peers_) {
+        for (auto& peer : conn_mgr_.peers()) {
             if (peer->connection->is_uds()) continue;
             auto conn = peer->connection;
             auto payload_copy = announce_payload;
@@ -2993,7 +2753,7 @@ void PeerManager::reload_config() {
             }, asio::detached);
         }
         spdlog::info("config reload: re-announced sync_namespaces to {} TCP peers",
-                     std::count_if(peers_.begin(), peers_.end(),
+                     std::count_if(conn_mgr_.peers().begin(), conn_mgr_.peers().end(),
                                    [](const std::unique_ptr<PeerInfo>& p) { return !p->connection->is_uds(); }));
     }
 
@@ -3041,15 +2801,18 @@ void PeerManager::reload_config() {
         spdlog::error("config reload rejected (invalid trusted_peer): {} (keeping current)", e.what());
         return;
     }
-    trusted_peers_.clear();
-    for (const auto& ip_str : new_cfg.trusted_peers) {
-        asio::error_code ec;
-        auto addr = asio::ip::make_address(ip_str, ec);
-        if (!ec) {
-            trusted_peers_.insert(addr.to_string());
+    {
+        std::set<std::string> new_trusted;
+        for (const auto& ip_str : new_cfg.trusted_peers) {
+            asio::error_code ec;
+            auto addr = asio::ip::make_address(ip_str, ec);
+            if (!ec) {
+                new_trusted.insert(addr.to_string());
+            }
         }
+        conn_mgr_.set_trusted_peers(std::move(new_trusted));
     }
-    spdlog::info("config reload: trusted_peers={} addresses", trusted_peers_.size());
+    spdlog::info("config reload: trusted_peers={} addresses", conn_mgr_.trusted_peers().size());
 
     // Reload compaction interval
     auto old_compaction = compaction_interval_hours_;
@@ -3068,31 +2831,6 @@ void PeerManager::reload_config() {
 
     // Reload metrics_bind (Phase 90, OPS-02)
     metrics_collector_.set_metrics_bind(new_cfg.metrics_bind);
-}
-
-void PeerManager::disconnect_unauthorized_peers() {
-    // Take snapshot -- closing connections triggers on_peer_disconnected which modifies peers_
-    std::vector<net::Connection::Ptr> to_disconnect;
-
-    for (const auto& peer : peers_) {
-        auto peer_ns = crypto::sha3_256(peer->connection->peer_pubkey());
-        bool peer_allowed = peer->connection->is_uds()
-            ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
-            : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
-        if (!peer_allowed) {
-            to_disconnect.push_back(peer->connection);
-        }
-    }
-
-    for (const auto& conn : to_disconnect) {
-        auto full_hex = to_hex(std::span<const uint8_t>(conn->peer_pubkey()), 32);
-        spdlog::warn("revoking peer: namespace={} ip={}", full_hex, conn->remote_address());
-        conn->close();  // Immediate close, no goodbye
-    }
-
-    if (!to_disconnect.empty()) {
-        spdlog::info("config reload: disconnected {} peer(s)", to_disconnect.size());
-    }
 }
 
 // =============================================================================
@@ -3179,7 +2917,7 @@ std::vector<std::string> PeerManager::decode_peer_list(std::span<const uint8_t> 
 }
 
 // =============================================================================
-// Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
+// Facade delegation: on_blob_ingested -> blob_push_
 // =============================================================================
 
 void PeerManager::on_blob_ingested(
@@ -3190,175 +2928,8 @@ void PeerManager::on_blob_ingested(
     bool is_tombstone,
     uint64_t expiry_time,
     net::Connection::Ptr source) {
-    // Test hook -- fire notification callback if set
-    if (on_notification_) {
-        on_notification_(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
-    }
-
-    // Build notification payload once (77 bytes) -- reuse existing encode_notification
-    auto payload = encode_notification(namespace_id, blob_hash, seq_num, blob_size, is_tombstone);
-
-    // BlobNotify (type 59) to all TCP peers except source (PUSH-01, PUSH-07, PUSH-08)
-    for (auto& peer : peers_) {
-        if (peer->connection == source) continue;  // Source exclusion (D-06, D-09)
-        if (peer->connection->is_uds()) continue;  // UDS = client, not peer
-
-        // Phase 86: Namespace filtering (D-05, D-07)
-        // Empty announced set = replicate all (no filter applied)
-        if (!peer->announced_namespaces.empty() &&
-            peer->announced_namespaces.count(namespace_id) == 0) continue;
-
-        auto conn = peer->connection;
-        auto payload_copy = payload;
-        asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
-            co_await conn->send_message(wire::TransportMsgType_BlobNotify,
-                                         std::span<const uint8_t>(p));
-        }, asio::detached);
-    }
-
-    // Notification (type 21) to subscribed clients -- existing pub/sub behavior
-    for (auto& peer : peers_) {
-        if (peer->subscribed_namespaces.count(namespace_id)) {
-            auto conn = peer->connection;
-            auto payload_copy = payload;
-            asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
-                co_await conn->send_message(wire::TransportMsgType_Notification,
-                                             std::span<const uint8_t>(p));
-            }, asio::detached);
-        }
-    }
-
-    // Event-driven expiry: check if new blob expires sooner than current target (D-03, MAINT-03)
-    if (expiry_time > 0) {
-        if (next_expiry_target_ == 0 || expiry_time < next_expiry_target_) {
-            next_expiry_target_ = expiry_time;
-            if (expiry_loop_running_) {
-                // Rearm existing timer
-                if (expiry_timer_) expiry_timer_->cancel();
-            } else {
-                // Spawn new loop (was idle -- no expiring blobs existed)
-                asio::co_spawn(ioc_, expiry_scan_loop(), asio::detached);
-            }
-        }
-    }
-}
-
-// =============================================================================
-// Phase 80: Targeted blob fetch
-// =============================================================================
-
-void PeerManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
-    // BlobNotify payload: [namespace_id:32][blob_hash:32][seq_num_be:8][blob_size_be:4][is_tombstone:1]
-    if (payload.size() != 77) return;
-
-    auto* peer = find_peer(conn);
-    if (!peer) return;
-
-    auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
-
-    // D-07: Suppress during active sync with this peer
-    if (peer->syncing) {
-        spdlog::debug("BlobNotify from {} suppressed: sync active", peer_display_name(conn));
-        return;
-    }
-
-    // D-04: Already have this blob?
-    if (storage_.has_blob(ns, hash)) return;
-
-    // D-05: Already fetching this blob?
-    if (pending_fetches_.count(hash)) return;
-    pending_fetches_.emplace(hash, conn);
-
-    // Send BlobFetch: [namespace_id:32][blob_hash:32] = 64 bytes
-    // Using namespace_id+hash because storage_.get_blob() requires compound key
-    // (corrected from D-01 hash-only design -- see RESEARCH.md)
-    asio::co_spawn(ioc_, [this, conn, ns, hash]() -> asio::awaitable<void> {
-        auto fetch_payload = chromatindb::util::encode_namespace_hash(
-            std::span<const uint8_t, 32>{ns}, std::span<const uint8_t, 32>{hash});
-        co_await conn->send_message(wire::TransportMsgType_BlobFetch,
-                                     std::span<const uint8_t>(fetch_payload));
-    }, asio::detached);
-}
-
-void PeerManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
-    // BlobFetch payload: [namespace_id:32][blob_hash:32] = 64 bytes
-    if (payload.size() != 64) return;
-
-    // co_spawn on ioc_ for storage lookup + send (same pattern as ReadRequest)
-    asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
-        auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
-
-        auto blob = storage_.get_blob(ns, hash);
-        if (blob) {
-            auto encoded = wire::encode_blob(*blob);
-            std::vector<uint8_t> resp(1 + encoded.size());
-            resp[0] = 0x00;  // D-03: found
-            std::memcpy(resp.data() + 1, encoded.data(), encoded.size());
-            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
-                                         std::span<const uint8_t>(resp));
-        } else {
-            std::vector<uint8_t> resp = {0x01};  // D-03: not-found
-            co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
-                                         std::span<const uint8_t>(resp));
-        }
-    }, asio::detached);
-}
-
-void PeerManager::handle_blob_fetch_response(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
-    if (payload.empty()) return;
-
-    uint8_t status = payload[0];
-    if (status == 0x01) {
-        // D-08: Not-found -- debug log, pending set entry stays until disconnect (harmless)
-        spdlog::debug("BlobFetchResponse not-found from {}", peer_display_name(conn));
-        return;
-    }
-    if (status != 0x00 || payload.size() < 2) return;
-
-    // co_spawn with engine offload (same pattern as Data handler, CONC-03)
-    asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
-        try {
-            auto blob = wire::decode_blob(
-                std::span<const uint8_t>(payload.data() + 1, payload.size() - 1));
-
-            auto result = co_await engine_.ingest(blob, conn);
-
-            // CONC-03: Transfer back to IO thread before accessing PeerManager state
-            co_await asio::post(ioc_, asio::use_awaitable);
-
-            // Clean pending set using ack blob_hash (Pitfall 5 from RESEARCH.md)
-            if (result.accepted && result.ack.has_value()) {
-                pending_fetches_.erase(result.ack->blob_hash);
-
-                if (result.ack->status == engine::IngestStatus::stored) {
-                    uint64_t expiry_time = (blob.ttl > 0)
-                        ? static_cast<uint64_t>(blob.timestamp) + static_cast<uint64_t>(blob.ttl)
-                        : 0;
-                    // Fan-out notification to other peers (source=conn excludes sender)
-                    on_blob_ingested(
-                        blob.namespace_id,
-                        result.ack->blob_hash,
-                        result.ack->seq_num,
-                        static_cast<uint32_t>(blob.data.size()),
-                        wire::is_tombstone(blob.data),
-                        expiry_time,
-                        conn);  // Source exclusion: don't notify the peer we fetched from
-                    ++metrics_collector_.node_metrics().ingests;
-                } else {
-                    // Duplicate -- already had it (race with concurrent sync)
-                    ++metrics_collector_.node_metrics().ingests;
-                }
-            } else if (!result.accepted && result.error.has_value()) {
-                // D-10: Failed ingestion -- log warning, no disconnect, no strike
-                spdlog::warn("BlobFetchResponse ingest rejected from {}: {}",
-                             peer_display_name(conn), result.error_detail);
-            }
-        } catch (const std::exception& e) {
-            // D-10: Malformed response -- log warning, no disconnect, no strike
-            spdlog::warn("malformed BlobFetchResponse from {}: {}",
-                         conn->remote_address(), e.what());
-        }
-    }, asio::detached);
+    blob_push_.on_blob_ingested(namespace_id, blob_hash, seq_num, blob_size,
+                                 is_tombstone, expiry_time, std::move(source));
 }
 
 // =============================================================================
@@ -3403,15 +2974,11 @@ std::vector<uint8_t> PeerManager::encode_notification(
 // =============================================================================
 
 PeerInfo* PeerManager::find_peer(const net::Connection::Ptr& conn) {
-    for (auto& p : peers_) {
-        if (p->connection == conn) return p.get();
-    }
-    return nullptr;
+    return conn_mgr_.find_peer(conn);
 }
 
 std::string PeerManager::peer_display_name(const net::Connection::Ptr& conn) {
-    auto ns_hex = to_hex(conn->peer_pubkey(), 8);
-    return ns_hex + "@" + conn->remote_address();
+    return conn_mgr_.peer_display_name(conn);
 }
 
 // =============================================================================
@@ -3464,7 +3031,7 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
 
         // Build set of currently-connected peer pubkey hashes
         std::vector<std::array<uint8_t, 32>> connected;
-        for (const auto& peer : peers_) {
+        for (const auto& peer : conn_mgr_.peers()) {
             if (peer->connection && !peer->connection->peer_pubkey().empty()) {
                 auto hash = crypto::sha3_256(peer->connection->peer_pubkey());
                 connected.push_back(hash);
@@ -3475,8 +3042,8 @@ asio::awaitable<void> PeerManager::cursor_compaction_loop() {
             auto now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count());
-            for (const auto& [hash, state] : disconnected_peers_) {
-                if (now_ms - state.disconnect_time <= CURSOR_GRACE_PERIOD_MS) {
+            for (const auto& [hash, state] : conn_mgr_.disconnected_peers()) {
+                if (now_ms - state.disconnect_time <= ConnectionManager::CURSOR_GRACE_PERIOD_MS) {
                     connected.push_back(hash);
                 }
             }
@@ -3521,55 +3088,6 @@ asio::awaitable<void> PeerManager::compaction_loop() {
             ++compaction_count_;
         }
         // On failure, Storage::compact() already logged the error
-    }
-}
-
-asio::awaitable<void> PeerManager::keepalive_loop() {
-    static constexpr auto KEEPALIVE_INTERVAL = std::chrono::seconds(30);
-    static constexpr auto KEEPALIVE_TIMEOUT  = std::chrono::seconds(60);
-
-    while (!stopping_) {
-        asio::steady_timer timer(ioc_);
-        keepalive_timer_ = &timer;
-        timer.expires_after(KEEPALIVE_INTERVAL);
-        auto [ec] = co_await timer.async_wait(
-            asio::as_tuple(asio::use_awaitable));
-        keepalive_timer_ = nullptr;
-        if (ec || stopping_) co_return;
-
-        auto now = std::chrono::steady_clock::now();
-
-        // Snapshot connections -- peers_ may change across co_await points
-        std::vector<net::Connection::Ptr> tcp_peers;
-        for (const auto& peer : peers_) {
-            if (!peer->connection->is_uds()) {
-                tcp_peers.push_back(peer->connection);
-            }
-        }
-
-        // Phase 1: Check for dead peers (before sending new Pings)
-        std::vector<net::Connection::Ptr> to_close;
-        for (const auto& conn : tcp_peers) {
-            auto silence = now - conn->last_recv_time();
-            if (silence > KEEPALIVE_TIMEOUT) {
-                auto secs = std::chrono::duration_cast<std::chrono::seconds>(silence).count();
-                spdlog::warn("keepalive: disconnecting {} ({}s silent)",
-                             conn->remote_address(), secs);
-                to_close.push_back(conn);
-            }
-        }
-        for (auto& conn : to_close) {
-            conn->close();
-        }
-
-        // Phase 2: Send Ping to remaining live TCP peers
-        for (const auto& conn : tcp_peers) {
-            if (std::find(to_close.begin(), to_close.end(), conn) != to_close.end()) {
-                continue;  // Already closed
-            }
-            std::span<const uint8_t> empty{};
-            co_await conn->send_message(wire::TransportMsgType_Ping, empty);
-        }
     }
 }
 

@@ -23,8 +23,7 @@ public:
     using DumpExtraCallback = std::function<std::string()>;
 
     MetricsCollector(storage::Storage& storage, asio::io_context& ioc,
-                     const std::string& metrics_bind, const bool& stopping,
-                     const std::deque<std::unique_ptr<PeerInfo>>& peers);
+                     const std::string& metrics_bind, const bool& stopping);
 
     // Timer loops (co_spawn from PeerManager::start)
     asio::awaitable<void> metrics_timer_loop();
@@ -50,6 +49,9 @@ public:
     // Set callback for extra dump info (UDS count, compaction stats)
     void set_dump_extra(DumpExtraCallback cb) { dump_extra_ = std::move(cb); }
 
+    // Set peers reference (called after ConnectionManager is constructed)
+    void set_peers(const std::deque<std::unique_ptr<PeerInfo>>& peers) { peers_ = &peers; }
+
     // Record start time (called from PeerManager::start)
     void record_start_time() { start_time_ = std::chrono::steady_clock::now(); }
 
@@ -59,7 +61,7 @@ private:
     storage::Storage& storage_;
     asio::io_context& ioc_;
     const bool& stopping_;
-    const std::deque<std::unique_ptr<PeerInfo>>& peers_;
+    const std::deque<std::unique_ptr<PeerInfo>>* peers_ = nullptr;
 
     NodeMetrics metrics_;
     std::chrono::steady_clock::time_point start_time_;

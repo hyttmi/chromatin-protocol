@@ -16,12 +16,10 @@ using chromatindb::util::to_hex;
 MetricsCollector::MetricsCollector(storage::Storage& storage,
                                    asio::io_context& ioc,
                                    const std::string& metrics_bind,
-                                   const bool& stopping,
-                                   const std::deque<std::unique_ptr<PeerInfo>>& peers)
+                                   const bool& stopping)
     : storage_(storage)
     , ioc_(ioc)
     , stopping_(stopping)
-    , peers_(peers)
     , metrics_bind_(metrics_bind) {
 }
 
@@ -60,7 +58,7 @@ void MetricsCollector::log_metrics_line() {
                  "syncs={} ingests={} rejections={} rate_limited={} "
                  "cursor_hits={} cursor_misses={} full_resyncs={} "
                  "quota_rejections={} sync_rejections={} uptime={}",
-                 peers_.size(),
+                 peers_->size(),
                  metrics_.peers_connected_total,
                  metrics_.peers_disconnected_total,
                  blob_count,
@@ -94,8 +92,8 @@ void MetricsCollector::dump_metrics() {
     log_metrics_line();
 
     // Per-peer breakdown
-    spdlog::info("  peers: {}", peers_.size());
-    for (const auto& peer : peers_) {
+    spdlog::info("  peers: {}", peers_->size());
+    for (const auto& peer : *peers_) {
         auto ns_hex = to_hex(peer->connection->peer_pubkey(), 4);
         spdlog::info("    {} (ns:{}...)", peer->address, ns_hex);
     }
@@ -311,7 +309,7 @@ std::string MetricsCollector::format_prometheus_metrics() {
     // Gauges (5 -- derived current-state values)
     out += "# HELP chromatindb_peers_connected Current number of connected peers.\n"
            "# TYPE chromatindb_peers_connected gauge\n"
-           "chromatindb_peers_connected " + std::to_string(peers_.size()) + "\n"
+           "chromatindb_peers_connected " + std::to_string(peers_->size()) + "\n"
            "\n";
 
     // Sum latest_seq_num across namespaces as blob count proxy

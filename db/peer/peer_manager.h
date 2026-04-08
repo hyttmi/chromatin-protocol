@@ -3,6 +3,8 @@
 #include "db/peer/peer_types.h"
 #include "db/peer/metrics_collector.h"
 #include "db/peer/pex_manager.h"
+#include "db/peer/connection_manager.h"
+#include "db/peer/blob_push_manager.h"
 
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
@@ -61,7 +63,7 @@ public:
     void stop();
 
     /// Number of currently connected peers.
-    size_t peer_count() const;
+    size_t peer_count() const { return conn_mgr_.peer_count(); }
 
     /// Exit code from Server: 0 = clean shutdown, 1 = forced/timeout.
     int exit_code() const;
@@ -122,19 +124,16 @@ public:
 
     /// Check if an IP address is trusted (localhost or in trusted_peers).
     /// Passed to Connection as trust-check function.
-    bool is_trusted_address(const asio::ip::address& addr) const;
+    bool is_trusted_address(const asio::ip::address& addr) const {
+        return conn_mgr_.is_trusted_address(addr);
+    }
 
     /// Callback type for notification dispatch (public for testing).
-    using NotificationCallback = std::function<void(
-        const std::array<uint8_t, 32>& namespace_id,
-        const std::array<uint8_t, 32>& blob_hash,
-        uint64_t seq_num,
-        uint32_t blob_size,
-        bool is_tombstone)>;
+    using NotificationCallback = BlobPushManager::NotificationCallback;
 
     /// Set a callback invoked whenever a notification is dispatched.
     /// For testing only -- allows capturing notification events.
-    void set_on_notification(NotificationCallback cb) { on_notification_ = std::move(cb); }
+    void set_on_notification(NotificationCallback cb) { blob_push_.set_on_notification(std::move(cb)); }
 
     // Unified notification fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
     /// BlobNotify (type 59) to all TCP peers + Notification (type 21) to subscribed clients.
@@ -151,13 +150,6 @@ public:
         net::Connection::Ptr source);
 
 private:
-    // Server callbacks
-    void on_peer_connected(net::Connection::Ptr conn);
-    void on_peer_disconnected(net::Connection::Ptr conn);
-
-    // Phase 86: Announce exchange + optional sync-on-connect
-    asio::awaitable<void> announce_and_sync(net::Connection::Ptr conn);
-    bool should_accept_connection();
 
     // Message routing
     void on_peer_message(net::Connection::Ptr conn,
@@ -177,14 +169,10 @@ private:
     void route_sync_message(PeerInfo* peer, wire::TransportMsgType type, std::vector<uint8_t> payload);
     asio::awaitable<std::optional<SyncMessage>> recv_sync_msg(const net::Connection::Ptr& conn, std::chrono::seconds timeout);
 
-    // Strike system
-    void record_strike(net::Connection::Ptr conn, const std::string& reason);
-
     // SIGHUP config reload
     void setup_sighup_handler();
     asio::awaitable<void> sighup_loop();
     void handle_sighup();
-    void disconnect_unauthorized_peers();
 
     // SIGUSR1 metrics dump
     void setup_sigusr1_handler();
@@ -193,24 +181,11 @@ private:
     // Cursor compaction (prune cursors for disconnected peers)
     asio::awaitable<void> cursor_compaction_loop();
 
-    // Keepalive: send Ping to TCP peers, disconnect silent ones (Phase 83)
-    asio::awaitable<void> keepalive_loop();
-
     // Expiry scanning (cancellable member coroutine)
     asio::awaitable<void> expiry_scan_loop();
 
     // Storage compaction (periodic timer)
     asio::awaitable<void> compaction_loop();
-
-    // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
-    /// Handle incoming BlobNotify: dedup check, send BlobFetch if needed.
-    void on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t> payload);
-
-    /// Handle incoming BlobFetch: look up blob, send BlobFetchResponse.
-    void handle_blob_fetch(net::Connection::Ptr conn, std::vector<uint8_t> payload);
-
-    /// Handle incoming BlobFetchResponse: ingest blob, clean pending set.
-    void handle_blob_fetch_response(net::Connection::Ptr conn, std::vector<uint8_t> payload);
 
     // Cursor-aware sync helpers
     enum class FullResyncReason { None, Periodic, TimeGap };
@@ -243,14 +218,10 @@ private:
     asio::signal_set sigusr1_signal_;
     std::filesystem::path config_path_;
 
-    std::deque<std::unique_ptr<PeerInfo>> peers_;
-    std::set<std::string> bootstrap_addresses_;
-    std::set<std::string> trusted_peers_;         // IP strings for transport trust
     bool stopping_ = false;
     asio::steady_timer* expiry_timer_ = nullptr;  // Timer-cancel pattern for expiry scan
     asio::steady_timer* sync_timer_ = nullptr;    // Timer-cancel pattern for sync loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
-    asio::steady_timer* keepalive_timer_ = nullptr;           // Timer-cancel pattern for keepalive loop
     asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
@@ -259,26 +230,20 @@ private:
     std::set<std::array<uint8_t, 32>> sync_namespaces_;  // Empty = replicate all
     uint32_t sync_cooldown_seconds_ = 30;         // SIGHUP-reloadable (Phase 40)
     uint32_t safety_net_interval_seconds_ = 600;  // SIGHUP-reloadable (Phase 82)
-    uint32_t max_peers_ = 32;                     // SIGHUP-reloadable (Phase 86)
     uint32_t max_sync_sessions_ = 1;              // SIGHUP-reloadable (Phase 40)
     uint64_t next_expiry_target_ = 0;   // 0 = no timer armed, wall-clock seconds otherwise
     bool expiry_loop_running_ = false;   // Prevents double co_spawn of expiry_scan_loop
     uint32_t compaction_interval_hours_ = 6;      // SIGHUP-reloadable (Phase 55)
     uint64_t last_compaction_time_ = 0;           // Epoch seconds of last successful compaction
     uint64_t compaction_count_ = 0;               // Monotonic counter of successful compactions
-    NotificationCallback on_notification_;        // Test hook for notification dispatch
-    // Phase 80: Track in-flight BlobFetch requests for dedup (D-05)
-    // Maps blob_hash -> connection that we sent the BlobFetch to.
-    // Cleaned on: successful ingest (by hash), peer disconnect (by connection).
-    std::unordered_map<std::array<uint8_t, 32>, net::Connection::Ptr, ArrayHash32> pending_fetches_;
-    // Phase 82: Track disconnected peers for cursor grace period (MAINT-04)
-    // Map: SHA3-256(peer_pubkey) -> disconnect timestamp
-    // Cursors live in MDBX; this map only tracks WHEN they disconnected.
-    std::unordered_map<std::array<uint8_t, 32>, DisconnectedPeerState, ArrayHash32>
-        disconnected_peers_;
-    static constexpr uint64_t CURSOR_GRACE_PERIOD_MS = 5 * 60 * 1000;  // 5 minutes
+    // Component initialization order matters:
+    // 1. metrics_collector_ (owns NodeMetrics, needed by conn_mgr_ and blob_push_)
+    // 2. conn_mgr_ (owns peers_ deque, needed by metrics_collector_ and pex_ and blob_push_)
+    // Peers reference is wired via set_peers() in constructor body after both exist.
     MetricsCollector metrics_collector_;
+    ConnectionManager conn_mgr_;
     PexManager pex_;
+    BlobPushManager blob_push_;
 };
 
 } // namespace chromatindb::peer
