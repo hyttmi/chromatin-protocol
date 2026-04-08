@@ -215,7 +215,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v2.1.0 with ~31,000 LOC C++20 + Python SDK (~4,600 LOC, 548 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. Phase 95 complete — duplicate encoding/decoding patterns centralized into shared utility headers (endian.h, blob_helpers.h, auth_helpers.h, verify_helpers.h).
+Shipped v2.1.0 with ~31,000 LOC C++20 + Python SDK (~4,600 LOC, 548 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. Phase 96 complete — PeerManager god object (4187 lines) decomposed into 6 focused components: ConnectionManager, MessageDispatcher, SyncOrchestrator, MetricsCollector, PexManager, BlobPushManager. PeerManager is now a thin 679-line facade. All tests pass under ASAN/TSAN.
 Built across 36 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d).
 19 milestones, 92 phases, 193 plans, 301 requirements total.
 
@@ -362,4 +362,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 — Phase 95 (Code Deduplication) complete, v2.2.0 in progress*
+*Last updated: 2026-04-08 — Phase 96 (PeerManager Architecture) complete, v2.2.0 in progress*
