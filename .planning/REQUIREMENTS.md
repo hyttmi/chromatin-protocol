@@ -46,7 +46,7 @@
 
 ## Architecture
 
-- [ ] **ARCH-01**: PeerManager split into focused components (connection management, message dispatch, sync orchestration, metrics)
+- [x] **ARCH-01**: PeerManager split into focused components (connection management, message dispatch, sync orchestration, metrics)
 
 ## Future Requirements
 
@@ -68,7 +68,7 @@
 | DEDUP-03 | Phase 95 | Complete |
 | DEDUP-04 | Phase 95 | Complete |
 | DEDUP-05 | Phase 95 | Complete |
-| ARCH-01 | Phase 96 | Pending |
+| ARCH-01 | Phase 96 | Complete |
 | PROTO-01 | Phase 97 | Pending |
 | PROTO-02 | Phase 97 | Pending |
 | PROTO-03 | Phase 97 | Pending |
