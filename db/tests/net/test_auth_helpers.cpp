@@ -8,7 +8,7 @@ using namespace chromatindb::net;
 
 TEST_CASE("encode_auth_payload round-trips through decode_auth_payload",
           "[auth_helpers]") {
-    std::vector<uint8_t> pubkey(64, 0xAA);
+    std::vector<uint8_t> pubkey(2592, 0xAA);  // Must be Signer::PUBLIC_KEY_SIZE
     std::vector<uint8_t> signature(128, 0xBB);
 
     auto encoded = encode_auth_payload(pubkey, signature);
@@ -91,18 +91,31 @@ TEST_CASE("decode_auth_payload with pubkey_size larger than remaining data retur
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("decode_auth_payload with pubkey_size=0 returns empty pubkey",
+TEST_CASE("decode_auth_payload with pubkey_size=0 returns nullopt (wrong size)",
           "[auth_helpers]") {
-    // pubkey_size=0 (LE: 0x00, 0x00, 0x00, 0x00), rest is signature
+    // pubkey_size=0 != Signer::PUBLIC_KEY_SIZE (2592), rejected by PROTO-02
     std::vector<uint8_t> data = {0x00, 0x00, 0x00, 0x00,
                                   0xAA, 0xBB, 0xCC};
     auto result = decode_auth_payload(data);
-    REQUIRE(result.has_value());
-    REQUIRE(result->pubkey.empty());
-    REQUIRE(result->signature.size() == 3);
-    REQUIRE(result->signature[0] == 0xAA);
-    REQUIRE(result->signature[1] == 0xBB);
-    REQUIRE(result->signature[2] == 0xCC);
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("decode_auth_payload rejects wrong pubkey size", "[auth_helpers]") {
+    // Encode with a 64-byte pubkey (not 2592)
+    std::vector<uint8_t> pubkey(64, 0xAA);
+    std::vector<uint8_t> signature(128, 0xBB);
+    auto encoded = encode_auth_payload(pubkey, signature);
+    auto decoded = decode_auth_payload(encoded);
+    REQUIRE_FALSE(decoded.has_value());
+}
+
+TEST_CASE("decode_auth_payload accepts correct ML-DSA-87 pubkey size", "[auth_helpers]") {
+    std::vector<uint8_t> pubkey(2592, 0xAA);  // Signer::PUBLIC_KEY_SIZE
+    std::vector<uint8_t> signature(4627, 0xBB);
+    auto encoded = encode_auth_payload(pubkey, signature);
+    auto decoded = decode_auth_payload(encoded);
+    REQUIRE(decoded.has_value());
+    REQUIRE(decoded->pubkey.size() == 2592);
 }
 
 TEST_CASE("encode_auth_payload byte-level LE verification",

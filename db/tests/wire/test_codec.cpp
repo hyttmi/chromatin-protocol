@@ -37,11 +37,11 @@ TEST_CASE("Encode/decode round-trip preserves all fields", "[codec]") {
 TEST_CASE("Encode/decode preserves empty data field", "[codec]") {
     BlobData blob;
     blob.namespace_id.fill(0x42);
-    blob.pubkey = {1, 2, 3};
+    blob.pubkey.resize(2592, 0x01);  // Must be Signer::PUBLIC_KEY_SIZE
     blob.data = {};  // empty
     blob.ttl = 0;
     blob.timestamp = 0;
-    blob.signature = {4, 5, 6};
+    blob.signature.resize(4627, 0x06);
 
     auto encoded = encode_blob(blob);
     auto decoded = decode_blob(encoded);
@@ -69,6 +69,7 @@ TEST_CASE("Encode -> decode -> encode produces identical bytes (canonicality)", 
 TEST_CASE("ForceDefaults encodes zero-value ttl", "[codec]") {
     BlobData blob;
     blob.namespace_id.fill(0);
+    blob.pubkey.resize(2592, 0x00);  // Must be Signer::PUBLIC_KEY_SIZE
     blob.ttl = 0;  // zero should still be encoded
     blob.timestamp = 0;
 
@@ -136,6 +137,22 @@ TEST_CASE("build_signing_input is deterministic for same logical content", "[cod
     auto s1 = build_signing_input(ns, data, 100, 200);
     auto s2 = build_signing_input(ns, data, 100, 200);
     REQUIRE(s1 == s2);
+}
+
+TEST_CASE("decode_blob rejects wrong pubkey size", "[codec]") {
+    // Create a blob with wrong pubkey size, encode it, then decode should throw
+    chromatindb::wire::BlobData blob;
+    blob.namespace_id.fill(0x01);
+    blob.pubkey.assign(100, 0xAA);  // Wrong size (not 2592)
+    blob.data = {1, 2, 3};
+    blob.ttl = 3600;
+    blob.timestamp = 1000;
+    blob.signature.assign(4627, 0xBB);
+
+    auto encoded = chromatindb::wire::encode_blob(blob);
+    REQUIRE_THROWS_AS(
+        chromatindb::wire::decode_blob(encoded),
+        std::runtime_error);
 }
 
 TEST_CASE("blob_hash produces SHA3-256 of full encoded blob", "[codec]") {

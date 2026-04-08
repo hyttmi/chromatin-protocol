@@ -1,5 +1,6 @@
 #pragma once
 
+#include "db/crypto/signing.h"
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -47,6 +48,9 @@ inline std::optional<AuthPayload> decode_auth_payload(std::span<const uint8_t> d
                        (static_cast<uint32_t>(data[1]) << 8) |
                        (static_cast<uint32_t>(data[2]) << 16) |
                        (static_cast<uint32_t>(data[3]) << 24);
+
+    // Step 0: exact pubkey size check (PROTO-02, per D-05)
+    if (pk_size != chromatindb::crypto::Signer::PUBLIC_KEY_SIZE) return std::nullopt;
 
     // Overflow-safe bounds check: pk_size could be up to UINT32_MAX
     if (pk_size > data.size() - 4) return std::nullopt;
