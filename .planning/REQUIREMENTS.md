@@ -2,7 +2,7 @@
 
 ## Protocol Safety
 
-- [ ] **PROTO-01**: All integer arithmetic in protocol parsing uses overflow-checked helpers (decode_namespace_list, decode_blob_request, encode_namespace_list, decode_blob_transfer, encode_blob_transfer)
+- [x] **PROTO-01**: All integer arithmetic in protocol parsing uses overflow-checked helpers (decode_namespace_list, decode_blob_request, encode_namespace_list, decode_blob_transfer, encode_blob_transfer)
 - [ ] **PROTO-02**: Auth payload pubkey size validated against exact expected constant (ML-DSA-87 public key size) in all handshake paths
 - [ ] **PROTO-03**: FlatBuffer decode validates pubkey and data field sizes before passing to signature verification
 - [ ] **PROTO-04**: AEAD associated data length bounded to prevent unbounded allocation
@@ -69,7 +69,7 @@
 | DEDUP-04 | Phase 95 | Complete |
 | DEDUP-05 | Phase 95 | Complete |
 | ARCH-01 | Phase 96 | Complete |
-| PROTO-01 | Phase 97 | Pending |
+| PROTO-01 | Phase 97 | Complete |
 | PROTO-02 | Phase 97 | Pending |
 | PROTO-03 | Phase 97 | Pending |
 | PROTO-04 | Phase 97 | Pending |
