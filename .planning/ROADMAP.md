@@ -40,11 +40,11 @@ Plans:
   2. Each component has a testable interface that can be unit-tested independently
   3. PeerManager public API remains unchanged (no caller-side changes needed)
   4. All 615+ existing unit tests and Docker integration tests pass under ASAN/TSAN/UBSAN
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 96-01-PLAN.md -- Extract peer_types.h, MetricsCollector, and PexManager from PeerManager
-- [ ] 96-02-PLAN.md -- Extract ConnectionManager (owns peers_) and BlobPushManager from PeerManager
+- [x] 96-02-PLAN.md -- Extract ConnectionManager (owns peers_) and BlobPushManager from PeerManager
 - [ ] 96-03-PLAN.md -- Extract SyncOrchestrator and MessageDispatcher; final facade cleanup; sanitizer gate
 
 ### Phase 97: Protocol & Crypto Safety
@@ -91,7 +91,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 95. Code Deduplication | 3/3 | Complete    | 2026-04-07 |
-| 96. PeerManager Architecture | 1/3 | In Progress|  |
+| 96. PeerManager Architecture | 2/3 | In Progress|  |
 | 97. Protocol & Crypto Safety | 0/TBD | Not started | - |
 | 98. TTL Enforcement | 0/TBD | Not started | - |
 | 99. Sync, Resource & Concurrency Correctness | 0/TBD | Not started | - |
