@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 using namespace chromatindb::util;
@@ -217,4 +218,55 @@ TEST_CASE("Boundary: u64 zero and max", "[endian]") {
     write_u64_be(buf, UINT64_MAX);
     REQUIRE(read_u64_be(std::span<const uint8_t>(buf.data(), 8)) == 0);
     REQUIRE(read_u64_be(std::span<const uint8_t>(buf.data() + 8, 8)) == UINT64_MAX);
+}
+
+// =============================================================================
+// checked_mul
+// =============================================================================
+
+TEST_CASE("checked_mul returns product for small values", "[endian]") {
+    auto r = checked_mul(10, 40);
+    REQUIRE(r.has_value());
+    REQUIRE(*r == 400);
+}
+
+TEST_CASE("checked_mul returns 0 when either operand is 0", "[endian]") {
+    REQUIRE(checked_mul(0, 1000) == size_t{0});
+    REQUIRE(checked_mul(999, 0) == size_t{0});
+}
+
+TEST_CASE("checked_mul returns nullopt on overflow", "[endian]") {
+    size_t big = std::numeric_limits<size_t>::max();
+    REQUIRE_FALSE(checked_mul(big, 2).has_value());
+    REQUIRE_FALSE(checked_mul(big / 2 + 1, 3).has_value());
+}
+
+TEST_CASE("checked_mul handles max * 1", "[endian]") {
+    size_t max_val = std::numeric_limits<size_t>::max();
+    auto r = checked_mul(max_val, 1);
+    REQUIRE(r.has_value());
+    REQUIRE(*r == max_val);
+}
+
+// =============================================================================
+// checked_add
+// =============================================================================
+
+TEST_CASE("checked_add returns sum for small values", "[endian]") {
+    auto r = checked_add(100, 200);
+    REQUIRE(r.has_value());
+    REQUIRE(*r == 300);
+}
+
+TEST_CASE("checked_add returns nullopt on overflow", "[endian]") {
+    size_t max_val = std::numeric_limits<size_t>::max();
+    REQUIRE_FALSE(checked_add(max_val, 1).has_value());
+    REQUIRE_FALSE(checked_add(max_val, max_val).has_value());
+}
+
+TEST_CASE("checked_add handles max + 0", "[endian]") {
+    size_t max_val = std::numeric_limits<size_t>::max();
+    auto r = checked_add(max_val, 0);
+    REQUIRE(r.has_value());
+    REQUIRE(*r == max_val);
 }

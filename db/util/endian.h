@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -127,6 +128,25 @@ inline uint64_t read_u64_be(const uint8_t* p) {
            (static_cast<uint64_t>(p[5]) << 16) |
            (static_cast<uint64_t>(p[6]) << 8) |
            static_cast<uint64_t>(p[7]);
+}
+
+// =============================================================================
+// Overflow-checked arithmetic (for protocol parsing)
+// =============================================================================
+
+/// Checked multiplication: returns nullopt on overflow.
+inline std::optional<size_t> checked_mul(size_t a, size_t b) {
+    if (a == 0 || b == 0) return size_t{0};
+    size_t result = a * b;
+    if (result / a != b) return std::nullopt;
+    return result;
+}
+
+/// Checked addition: returns nullopt on overflow.
+inline std::optional<size_t> checked_add(size_t a, size_t b) {
+    size_t result = a + b;
+    if (result < a) return std::nullopt;
+    return result;
 }
 
 } // namespace chromatindb::util
