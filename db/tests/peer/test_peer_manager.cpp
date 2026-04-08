@@ -4439,3 +4439,797 @@ TEST_CASE("disconnected peer tracked in grace period", "[peer-manager][safety-ne
     pm2c.stop();
     ioc.run_for(std::chrono::seconds(2));
 }
+
+// ============================================================================
+// Phase 98: TTL enforcement tests (Plan 02)
+// ============================================================================
+
+TEST_CASE("ReadRequest returns not-found for expired blob", "[peer][read][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Expired blob: timestamp 1000s ago, TTL 100s -> expired 900s ago (D-30)
+    // Use store_blob directly to bypass engine's already-expired rejection
+    auto expired_blob = make_signed_blob(owner, "expired-data", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    // Valid blob: timestamp now, TTL 1 day
+    auto valid_blob = make_signed_blob(owner, "valid-data", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_ReadResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // ReadRequest for expired blob
+                std::vector<uint8_t> req1(64);
+                std::memcpy(req1.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req1.data() + 32, expired_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ReadRequest, req1, 100);
+                // ReadRequest for valid blob
+                std::vector<uint8_t> req2(64);
+                std::memcpy(req2.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req2.data() + 32, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ReadRequest, req2, 101);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        for (const auto& [rid, payload] : responses) {
+            if (rid == 100) {
+                CHECK(payload[0] == 0x00);  // expired -> not-found
+            } else if (rid == 101) {
+                CHECK(payload[0] == 0x01);  // valid -> found
+            }
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("ExistsRequest returns not-found for expired blob", "[peer][exists][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-exists", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    auto valid_blob = make_signed_blob(owner, "valid-exists", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_ExistsResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                std::vector<uint8_t> req1(64);
+                std::memcpy(req1.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req1.data() + 32, expired_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ExistsRequest, req1, 200);
+                std::vector<uint8_t> req2(64);
+                std::memcpy(req2.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req2.data() + 32, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ExistsRequest, req2, 201);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        for (const auto& [rid, payload] : responses) {
+            REQUIRE(payload.size() == 33);
+            if (rid == 200) {
+                CHECK(payload[0] == 0x00);  // expired -> not-found
+            } else if (rid == 201) {
+                CHECK(payload[0] == 0x01);  // valid -> found
+            }
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("BatchExistsRequest filters expired blobs", "[peer][batchexists][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-batchexists", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    auto valid_blob = make_signed_blob(owner, "valid-batchexists", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_BatchExistsResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // BatchExistsRequest: namespace(32) + count(4) + [expired_hash, valid_hash]
+                std::vector<uint8_t> req(100);  // 32 + 4 + 2*32
+                std::memcpy(req.data(), owner.namespace_id().data(), 32);
+                req[32] = 0; req[33] = 0; req[34] = 0; req[35] = 2;  // count=2
+                std::memcpy(req.data() + 36, expired_hash.data(), 32);
+                std::memcpy(req.data() + 68, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_BatchExistsRequest, req, 300);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 1);
+        const auto& [rid, payload] = responses[0];
+        CHECK(rid == 300);
+        REQUIRE(payload.size() == 2);
+        CHECK(payload[0] == 0x00);  // expired -> not-found
+        CHECK(payload[1] == 0x01);  // valid -> found
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("BatchReadRequest returns not-found for expired blob", "[peer][batchread][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-batchread", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    auto valid_blob = make_signed_blob(owner, "valid-batchread", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_BatchReadResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // BatchReadRequest: namespace(32) + cap_bytes(4) + count(4) + [expired_hash, valid_hash]
+                std::vector<uint8_t> req(104);  // 32 + 4 + 4 + 2*32
+                std::memcpy(req.data(), owner.namespace_id().data(), 32);
+                // cap_bytes = 0 (default to 4 MiB)
+                req[32] = 0; req[33] = 0; req[34] = 0; req[35] = 0;
+                // count = 2
+                req[36] = 0; req[37] = 0; req[38] = 0; req[39] = 2;
+                std::memcpy(req.data() + 40, expired_hash.data(), 32);
+                std::memcpy(req.data() + 72, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_BatchReadRequest, req, 400);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 1);
+        const auto& [rid, payload] = responses[0];
+        CHECK(rid == 400);
+        // Response: [truncated:1][count:4 BE] + entries
+        REQUIRE(payload.size() >= 5);
+        uint32_t count = 0;
+        for (int i = 0; i < 4; ++i) count = (count << 8) | payload[1 + i];
+        CHECK(count == 2);
+
+        // Parse entries: first should be not-found (expired), second should be found (valid)
+        size_t off = 5;
+        uint32_t found_count = 0;
+        uint32_t not_found_count = 0;
+        for (uint32_t i = 0; i < count && off < payload.size(); ++i) {
+            uint8_t status = payload[off++];
+            std::array<uint8_t, 32> entry_hash{};
+            std::memcpy(entry_hash.data(), payload.data() + off, 32);
+            off += 32;
+            if (status == 0x01) {
+                ++found_count;
+                uint64_t sz = 0;
+                for (int j = 0; j < 8; ++j) sz = (sz << 8) | payload[off++];
+                off += sz;
+            } else {
+                ++not_found_count;
+                // Verify expired blob is the not-found one
+                if (entry_hash == expired_hash) {
+                    CHECK(status == 0x00);
+                }
+            }
+        }
+        CHECK(found_count == 1);
+        CHECK(not_found_count == 1);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("ListRequest filters expired blobs from results", "[peer][list][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-list", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+
+    auto valid_blob = make_signed_blob(owner, "valid-list", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_ListResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // ListRequest: namespace(32) + since_seq(8) + limit(4)
+                std::vector<uint8_t> req(44, 0);
+                std::memcpy(req.data(), owner.namespace_id().data(), 32);
+                // since_seq = 0
+                // limit = 100 (big-endian)
+                req[40] = 0; req[41] = 0; req[42] = 0; req[43] = 100;
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_ListRequest, req, 500);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 1);
+        const auto& [rid, payload] = responses[0];
+        CHECK(rid == 500);
+        // Response: [count:4 BE] + count * [hash:32][seq_num:8 BE] + [has_more:1]
+        REQUIRE(payload.size() >= 5);
+        uint32_t count = 0;
+        for (int i = 0; i < 4; ++i) count = (count << 8) | payload[i];
+        CHECK(count == 1);  // Only valid blob, expired filtered out
+
+        // Verify the single result is the valid blob
+        if (count == 1) {
+            std::array<uint8_t, 32> result_hash{};
+            std::memcpy(result_hash.data(), payload.data() + 4, 32);
+            CHECK(result_hash == valid_hash);
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("TimeRangeRequest filters expired blobs", "[peer][timerange][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    // Expired blob with timestamp in range but TTL expired
+    auto expired_blob = make_signed_blob(owner, "expired-timerange", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+
+    // Valid blob with timestamp in range
+    auto valid_blob = make_signed_blob(owner, "valid-timerange", 86400, now - 50);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_TimeRangeResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // TimeRangeRequest: namespace(32) + start(8) + end(8) + limit(4) = 52 bytes
+                // Query range covers both blobs' timestamps
+                std::vector<uint8_t> req(52);
+                std::memcpy(req.data(), owner.namespace_id().data(), 32);
+                uint64_t start_ts = now - 2000;
+                for (int i = 7; i >= 0; --i)
+                    req[32 + (7 - i)] = static_cast<uint8_t>(start_ts >> (i * 8));
+                uint64_t end_ts = now + 100;
+                for (int i = 7; i >= 0; --i)
+                    req[40 + (7 - i)] = static_cast<uint8_t>(end_ts >> (i * 8));
+                req[48] = 0; req[49] = 0; req[50] = 0; req[51] = 100;  // limit=100
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_TimeRangeRequest, req, 600);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 1);
+        const auto& [rid, payload] = responses[0];
+        CHECK(rid == 600);
+        // Response: [truncated:1][count:4 BE] + count * [hash:32][seq_num:8 BE][timestamp:8 BE]
+        REQUIRE(payload.size() >= 5);
+        uint32_t count = 0;
+        for (int i = 0; i < 4; ++i) count = (count << 8) | payload[1 + i];
+        CHECK(count == 1);  // Only valid blob, expired filtered
+
+        // Verify the valid blob hash is in results
+        if (count == 1) {
+            std::array<uint8_t, 32> result_hash{};
+            std::memcpy(result_hash.data(), payload.data() + 5, 32);
+            CHECK(result_hash == valid_hash);
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("MetadataRequest returns not-found for expired blob", "[peer][metadata][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-metadata", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    auto valid_blob = make_signed_blob(owner, "valid-metadata", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_MetadataResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // MetadataRequest for expired blob
+                std::vector<uint8_t> req1(64);
+                std::memcpy(req1.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req1.data() + 32, expired_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_MetadataRequest, req1, 700);
+                // MetadataRequest for valid blob
+                std::vector<uint8_t> req2(64);
+                std::memcpy(req2.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req2.data() + 32, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_MetadataRequest, req2, 701);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        for (const auto& [rid, payload] : responses) {
+            if (rid == 700) {
+                REQUIRE(payload.size() == 1);
+                CHECK(payload[0] == 0x00);  // expired -> not-found
+            } else if (rid == 701) {
+                REQUIRE(payload.size() >= 63);
+                CHECK(payload[0] == 0x01);  // valid -> found with metadata
+            }
+        }
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("BlobFetch returns not-found for expired blob", "[peer][blobfetch][ttl]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+    auto owner = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+    auto expired_blob = make_signed_blob(owner, "expired-blobfetch", 100, now - 1000);
+    auto sr1 = store.store_blob(expired_blob);
+    REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
+    auto expired_hash = sr1.blob_hash;
+
+    auto valid_blob = make_signed_blob(owner, "valid-blobfetch", 86400, now);
+    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    REQUIRE(r2.accepted);
+    auto valid_hash = r2.ack->blob_hash;
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> responses;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t req_id) {
+            if (type == chromatindb::wire::TransportMsgType_BlobFetchResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                responses.emplace_back(req_id, std::move(payload));
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                // BlobFetch: [namespace:32][blob_hash:32] = 64 bytes
+                std::vector<uint8_t> req1(64);
+                std::memcpy(req1.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req1.data() + 32, expired_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_BlobFetch, req1, 0);
+                std::vector<uint8_t> req2(64);
+                std::memcpy(req2.data(), owner.namespace_id().data(), 32);
+                std::memcpy(req2.data() + 32, valid_hash.data(), 32);
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_BlobFetch, req2, 0);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(responses.size() == 2);
+        // BlobFetchResponse has no request_id routing (it's 0), so check by status byte
+        uint32_t found_count = 0;
+        uint32_t not_found_count = 0;
+        for (const auto& [rid, payload] : responses) {
+            REQUIRE(payload.size() >= 1);
+            if (payload[0] == 0x00) {
+                ++found_count;  // valid blob
+            } else if (payload[0] == 0x01) {
+                ++not_found_count;  // expired blob
+            }
+        }
+        CHECK(found_count == 1);
+        CHECK(not_found_count == 1);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
