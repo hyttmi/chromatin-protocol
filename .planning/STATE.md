@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 96-02-PLAN.md
-last_updated: "2026-04-08T06:17:46.132Z"
+status: verifying
+stopped_at: Completed 96-03-PLAN.md
+last_updated: "2026-04-08T08:03:23.493Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 8
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 
 Phase: 96 (peermanager-architecture) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-08
 
 Progress: [#.........] 8%
@@ -54,6 +54,7 @@ Progress: [#.........] 8%
 *Updated after each plan completion*
 | Phase 96 P01 | 104min | 2 tasks | 8 files |
 | Phase 96 P02 | 69min | 1 tasks | 9 files |
+| Phase 96 P03 | 93min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,9 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 96]: MetricsCollector receives peers_ by const ref for gauge/dump access; PexManager copies find_peer/recv_sync_msg; DumpExtraCallback for facade-owned state
 - [Phase 96]: MetricsCollector uses deferred set_peers() pointer instead of constructor reference to break init-order dependency with ConnectionManager
 - [Phase 96]: ConnectionManager takes ConnectCallback/DisconnectCallback for cross-component wiring without circular dependencies
+- [Phase 96]: SyncOrchestrator receives awaitable PEX callbacks to avoid circular deps while keeping inline PEX after sync
+- [Phase 96]: MessageDispatcher uses UptimeCallback/MaxStorageCallback lambdas instead of direct MetricsCollector/Config references
+- [Phase 96]: PeerManager facade is 679 lines (reload_config + constructor wiring are inherently large)
 
 ### Pending Todos
 
@@ -84,6 +88,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-08T06:17:46.129Z
-Stopped at: Completed 96-02-PLAN.md
+Last session: 2026-04-08T08:03:23.491Z
+Stopped at: Completed 96-03-PLAN.md
 Resume file: None
