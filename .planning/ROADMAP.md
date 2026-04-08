@@ -97,6 +97,6 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 |-------|----------------|--------|-----------|
 | 95. Code Deduplication | 3/3 | Complete    | 2026-04-07 |
 | 96. PeerManager Architecture | 3/3 | Complete    | 2026-04-08 |
-| 97. Protocol & Crypto Safety | 3/3 | Complete   | 2026-04-08 |
+| 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
 | 98. TTL Enforcement | 0/TBD | Not started | - |
 | 99. Sync, Resource & Concurrency Correctness | 0/TBD | Not started | - |
