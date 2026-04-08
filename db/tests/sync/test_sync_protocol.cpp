@@ -346,11 +346,11 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
 
-    // Collect hashes -- index-only reads include all hashes (expired too)
+    // Collect hashes -- expired blobs filtered from hash collection
     auto hashes = sync1.collect_namespace_hashes(id.namespace_id());
-    REQUIRE(hashes.size() == 2);  // Both blobs in index
+    REQUIRE(hashes.size() == 1);  // Only non-expired blob
 
-    // Expired blob ingestion on the receiving side is skipped
+    // Expired blob ingestion on the receiving side is also skipped
     auto stats = run_async(pool, sync2.ingest_blobs({blob_expired}));
     REQUIRE(stats.blobs_received == 0);  // Expired, not ingested
 }
