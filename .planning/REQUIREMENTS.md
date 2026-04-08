@@ -17,7 +17,7 @@
 
 - [ ] **TTL-01**: BlobFetch handler checks expiry before serving blobs
 - [ ] **TTL-02**: All query paths (Read, List, Stats, Exists, BatchRead, TimeRange) filter expired blobs from results
-- [ ] **TTL-03**: Expiry timestamp calculation uses saturating arithmetic (no uint64 overflow on timestamp + ttl)
+- [x] **TTL-03**: Expiry timestamp calculation uses saturating arithmetic (no uint64 overflow on timestamp + ttl)
 
 ## Sync Correctness
 
@@ -78,7 +78,7 @@
 | CRYPTO-03 | Phase 97 | Complete |
 | TTL-01 | Phase 98 | Pending |
 | TTL-02 | Phase 98 | Pending |
-| TTL-03 | Phase 98 | Pending |
+| TTL-03 | Phase 98 | Complete |
 | SYNC-01 | Phase 99 | Pending |
 | SYNC-02 | Phase 99 | Pending |
 | SYNC-03 | Phase 99 | Pending |

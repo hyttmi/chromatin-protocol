@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 98 context gathered
+status: executing
+stopped_at: Completed 98-01-PLAN.md
 last_updated: "2026-04-08T15:52:59.996Z"
 last_activity: 2026-04-08
 progress:
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 ## Current Position
 
 Phase: 98
-Plan: Not started
-Status: Ready to plan
+Plan: 1 of 3 complete
+Status: Executing Phase 98
 Last activity: 2026-04-08
 
-Progress: [#.........] 8%
+Progress: [##........] 17%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [#.........] 8%
 | Phase 97 P01 | 37min | 2 tasks | 8 files |
 | Phase 97 P02 | 30min | 3 tasks | 11 files |
 | Phase 97 P03 | 72min | 2 tasks | 2 files |
+| Phase 98 P01 | 79min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,11 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 97]: Nonce exhaustion threshold at 2^63, static constexpr local to send/recv_encrypted functions
 - [Phase 97]: AuthSignature exchange in lightweight path mirrors PQ path pattern (same helpers, same ordering)
 - [Phase 97]: Initiator sends auth first in lightweight path (prevents AEAD nonce desync)
+- [Phase 98-01]: saturating_expiry returns 0 for ttl==0, clamps UINT64_MAX on overflow
+- [Phase 98-01]: is_blob_expired uses <= comparison (expired at equality, per D-06)
+- [Phase 98-01]: All expiry computation MUST use wire::saturating_expiry -- no raw timestamp+ttl
+- [Phase 98-01]: IngestError::invalid_ttl for tombstone TTL validation
+- [Phase 98-01]: Already-expired blobs rejected with timestamp_rejected "blob already expired"
 
 ### Pending Todos
 
@@ -97,6 +103,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-08T15:52:59.994Z
-Stopped at: Phase 98 context gathered
-Resume file: .planning/phases/98-ttl-enforcement/98-CONTEXT.md
+Last session: 2026-04-08T17:40:03Z
+Stopped at: Completed 98-01-PLAN.md
+Resume file: .planning/phases/98-ttl-enforcement/98-01-SUMMARY.md
