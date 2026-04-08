@@ -431,7 +431,10 @@ std::vector<std::array<uint8_t, 32>> PeerManager::decode_namespace_list(
     std::vector<std::array<uint8_t, 32>> result;
     if (payload.size() < 2) return result;
     uint16_t count = chromatindb::util::read_u16_be(payload);
-    if (payload.size() != 2 + static_cast<size_t>(count) * 32) return result;
+    auto product = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{32});
+    if (!product) return result;
+    auto expected = chromatindb::util::checked_add(size_t{2}, *product);
+    if (!expected || payload.size() != *expected) return result;
     for (uint16_t i = 0; i < count; ++i) {
         result.push_back(chromatindb::util::extract_namespace(
             payload.subspan(2 + static_cast<size_t>(i) * 32)));

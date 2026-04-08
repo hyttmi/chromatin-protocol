@@ -395,14 +395,18 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     refs.resize(limit);
 
                 uint32_t count = static_cast<uint32_t>(refs.size());
-                std::vector<uint8_t> response(4 + count * 40 + 1);
+                auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{40});
+                if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_return; }
+                auto resp_size = chromatindb::util::checked_add(*body_size, size_t{5});
+                if (!resp_size) { record_strike_(conn, "ListResponse overflow"); co_return; }
+                std::vector<uint8_t> response(*resp_size);
                 chromatindb::util::store_u32_be(response.data(), count);
                 for (uint32_t i = 0; i < count; ++i) {
                     size_t off = 4 + i * 40;
                     std::memcpy(response.data() + off, refs[i].blob_hash.data(), 32);
                     chromatindb::util::store_u64_be(response.data() + off + 32, refs[i].seq_num);
                 }
-                response[4 + count * 40] = has_more ? 1 : 0;
+                response[*resp_size - 1] = has_more ? 1 : 0;
 
                 co_await conn->send_message(wire::TransportMsgType_ListResponse,
                                              std::span<const uint8_t>(response), request_id);
@@ -576,7 +580,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 }
                 bool has_more = (it != all_ns.end());
 
-                size_t resp_size = 4 + 1 + entries.size() * 40;
+                auto body = chromatindb::util::checked_mul(entries.size(), size_t{40});
+                if (!body) { record_strike_(conn, "NamespaceListResponse overflow"); co_return; }
+                auto resp_size_opt = chromatindb::util::checked_add(*body, size_t{5});
+                if (!resp_size_opt) { record_strike_(conn, "NamespaceListResponse overflow"); co_return; }
+                size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
@@ -811,7 +819,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 auto entries = storage_.list_delegations(ns);
 
                 uint32_t entry_count = static_cast<uint32_t>(entries.size());
-                size_t resp_size = 4 + entry_count * 64;
+                auto body = chromatindb::util::checked_mul(static_cast<size_t>(entry_count), size_t{64});
+                if (!body) { record_strike_(conn, "DelegationListResponse overflow"); co_return; }
+                auto resp_size_opt = chromatindb::util::checked_add(size_t{4}, *body);
+                if (!resp_size_opt) { record_strike_(conn, "DelegationListResponse overflow"); co_return; }
+                size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
@@ -1064,7 +1076,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     truncated = 0x01;
 
                 uint32_t result_count = static_cast<uint32_t>(results.size());
-                size_t resp_size = 5 + result_count * 48;
+                auto body = chromatindb::util::checked_mul(static_cast<size_t>(result_count), size_t{48});
+                if (!body) { record_strike_(conn, "TimeRangeResponse overflow"); co_return; }
+                auto resp_size_opt = chromatindb::util::checked_add(size_t{5}, *body);
+                if (!resp_size_opt) { record_strike_(conn, "TimeRangeResponse overflow"); co_return; }
+                size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 

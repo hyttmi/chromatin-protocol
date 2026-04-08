@@ -130,7 +130,11 @@ std::vector<uint8_t> SyncProtocol::encode_namespace_list(
     const std::vector<storage::NamespaceInfo>& namespaces) {
     // Format: [count:u32BE][ns1:32B][seq1:u64BE]...
     std::vector<uint8_t> buf;
-    buf.reserve(4 + namespaces.size() * 40);  // 32 + 8 per entry
+    auto reserve_size = chromatindb::util::checked_mul(namespaces.size(), size_t{40});
+    if (reserve_size) {
+        auto total = chromatindb::util::checked_add(size_t{4}, *reserve_size);
+        if (total) buf.reserve(*total);
+    }
 
     chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(namespaces.size()));
     for (const auto& ns : namespaces) {
@@ -146,8 +150,10 @@ std::vector<storage::NamespaceInfo> SyncProtocol::decode_namespace_list(
     if (payload.size() < 4) return {};
 
     uint32_t count = chromatindb::util::read_u32_be(payload.data());
-    size_t expected = 4 + count * 40;
-    if (payload.size() < expected) return {};
+    auto product = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{40});
+    if (!product) return {};
+    auto expected = chromatindb::util::checked_add(size_t{4}, *product);
+    if (!expected || payload.size() < *expected) return {};
 
     std::vector<storage::NamespaceInfo> result;
     result.reserve(count);
@@ -170,7 +176,11 @@ std::vector<uint8_t> SyncProtocol::encode_blob_request(
     const std::vector<std::array<uint8_t, 32>>& hashes) {
     // Format: [ns:32B][count:u32BE][hash1:32B]...[hashN:32B]
     std::vector<uint8_t> buf;
-    buf.reserve(32 + 4 + hashes.size() * 32);
+    auto reserve_size = chromatindb::util::checked_mul(hashes.size(), size_t{32});
+    if (reserve_size) {
+        auto total = chromatindb::util::checked_add(size_t{36}, *reserve_size);
+        if (total) buf.reserve(*total);
+    }
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
     chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(hashes.size()));
@@ -191,8 +201,10 @@ SyncProtocol::decode_blob_request(std::span<const uint8_t> payload) {
     std::memcpy(ns.data(), payload.data(), 32);
     uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
-    size_t expected = 36 + count * 32;
-    if (payload.size() < expected) return {ns, hashes};
+    auto product = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{32});
+    if (!product) return {ns, hashes};
+    auto expected = chromatindb::util::checked_add(size_t{36}, *product);
+    if (!expected || payload.size() < *expected) return {ns, hashes};
 
     hashes.reserve(count);
     size_t offset = 36;
@@ -242,11 +254,13 @@ std::vector<wire::BlobData> SyncProtocol::decode_blob_transfer(
 
     size_t offset = 4;
     for (uint32_t i = 0; i < count; ++i) {
-        if (offset + 4 > payload.size()) break;
+        auto next = chromatindb::util::checked_add(offset, size_t{4});
+        if (!next || *next > payload.size()) break;
         uint32_t len = chromatindb::util::read_u32_be(payload.data() + offset);
         offset += 4;
 
-        if (offset + len > payload.size()) break;
+        auto blob_end = chromatindb::util::checked_add(offset, static_cast<size_t>(len));
+        if (!blob_end || *blob_end > payload.size()) break;
         auto blob = wire::decode_blob(payload.subspan(offset, len));
         blobs.push_back(std::move(blob));
         offset += len;

@@ -10,6 +10,7 @@
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/storage/storage.h"
+#include "db/util/endian.h"
 #include "db/wire/codec.h"
 #include "db/config/config.h"
 
@@ -1066,4 +1067,23 @@ TEST_CASE("cleanup_stale_cursors removes cursors for unknown peers", "[sync][cur
     // peer_b's cursor gone
     auto cb = store.get_sync_cursor(peer_b, ns1);
     REQUIRE_FALSE(cb.has_value());
+}
+
+// ============================================================================
+// Overflow rejection tests (PROTO-01)
+// ============================================================================
+
+TEST_CASE("decode_namespace_list rejects count that would overflow", "[sync_protocol]") {
+    // Craft payload with count = 0xFFFFFFFF (would overflow: 4 + 0xFFFFFFFF * 40)
+    std::vector<uint8_t> payload(4);
+    chromatindb::util::store_u32_be(payload.data(), 0xFFFFFFFF);
+    auto result = chromatindb::sync::SyncProtocol::decode_namespace_list(payload);
+    REQUIRE(result.empty());
+}
+
+TEST_CASE("decode_blob_request rejects count that would overflow", "[sync_protocol]") {
+    std::vector<uint8_t> payload(36, 0);  // 32 ns + 4 count
+    chromatindb::util::store_u32_be(payload.data() + 32, 0xFFFFFFFF);
+    auto [ns, hashes] = chromatindb::sync::SyncProtocol::decode_blob_request(payload);
+    REQUIRE(hashes.empty());
 }

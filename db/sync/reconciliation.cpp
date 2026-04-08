@@ -267,7 +267,11 @@ std::vector<uint8_t> encode_reconcile_ranges(
     const std::vector<RangeEntry>& ranges) {
     std::vector<uint8_t> buf;
     // Estimate size: ns(32) + count(4) + per range(32 + 1 + variable)
-    buf.reserve(36 + ranges.size() * 69);
+    auto reserve_size = chromatindb::util::checked_mul(ranges.size(), size_t{69});
+    if (reserve_size) {
+        auto total = chromatindb::util::checked_add(size_t{36}, *reserve_size);
+        if (total) buf.reserve(*total);
+    }
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
     chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(ranges.size()));
@@ -335,7 +339,10 @@ std::optional<DecodedRanges> decode_reconcile_ranges(std::span<const uint8_t> pa
                 if (offset + 4 > payload.size()) return std::nullopt;
                 entry.count = chromatindb::util::read_u32_be(payload.data() + offset);
                 offset += 4;
-                if (offset + entry.count * 32 > payload.size()) return std::nullopt;
+                auto items_size = chromatindb::util::checked_mul(static_cast<size_t>(entry.count), size_t{32});
+                if (!items_size) return std::nullopt;
+                auto items_end = chromatindb::util::checked_add(offset, *items_size);
+                if (!items_end || *items_end > payload.size()) return std::nullopt;
                 entry.items.reserve(entry.count);
                 for (uint32_t j = 0; j < entry.count; ++j) {
                     Hash32 item;
@@ -363,7 +370,11 @@ std::vector<uint8_t> encode_reconcile_items(
     std::span<const uint8_t, 32> namespace_id,
     const std::vector<Hash32>& items) {
     std::vector<uint8_t> buf;
-    buf.reserve(32 + 4 + items.size() * 32);
+    auto reserve_size = chromatindb::util::checked_mul(items.size(), size_t{32});
+    if (reserve_size) {
+        auto total = chromatindb::util::checked_add(size_t{36}, *reserve_size);
+        if (total) buf.reserve(*total);
+    }
 
     buf.insert(buf.end(), namespace_id.begin(), namespace_id.end());
     chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(items.size()));
@@ -382,7 +393,10 @@ std::optional<DecodedItems> decode_reconcile_items(std::span<const uint8_t> payl
     std::memcpy(result.namespace_id.data(), payload.data(), 32);
     uint32_t count = chromatindb::util::read_u32_be(payload.data() + 32);
 
-    if (payload.size() < HEADER_SIZE + count * 32) return std::nullopt;
+    auto items_size = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{32});
+    if (!items_size) return std::nullopt;
+    auto total = chromatindb::util::checked_add(HEADER_SIZE, *items_size);
+    if (!total || payload.size() < *total) return std::nullopt;
 
     result.items.reserve(count);
     size_t offset = HEADER_SIZE;

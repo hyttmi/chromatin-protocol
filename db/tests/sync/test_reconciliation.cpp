@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "db/sync/reconciliation.h"
+#include "db/util/endian.h"
 
 #include <algorithm>
 #include <random>
@@ -662,4 +663,15 @@ TEST_CASE("network-style reconciliation: single item each side", "[reconciliatio
     REQUIRE(init_miss[0] == h_b);
     REQUIRE(resp_miss.size() == 1);
     REQUIRE(resp_miss[0] == h_a);
+}
+
+// ============================================================================
+// Overflow rejection tests (PROTO-01)
+// ============================================================================
+
+TEST_CASE("decode_reconcile_items rejects count that would overflow", "[reconciliation]") {
+    std::vector<uint8_t> payload(36, 0);  // 32 ns + 4 count
+    chromatindb::util::store_u32_be(payload.data() + 32, 0xFFFFFFFF);
+    auto result = chromatindb::sync::decode_reconcile_items(payload);
+    REQUIRE_FALSE(result.has_value());
 }
