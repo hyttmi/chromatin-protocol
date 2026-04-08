@@ -9,7 +9,7 @@ Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety 
 - [x] **Phase 95: Code Deduplication** - Centralize 64+ duplicate encoding/decoding patterns into shared utility headers (completed 2026-04-07)
 - [x] **Phase 96: PeerManager Architecture** - Split PeerManager god object into focused components (completed 2026-04-08)
 - [x] **Phase 97: Protocol & Crypto Safety** - Harden all protocol parsing and cryptographic handshake paths (completed 2026-04-08)
-- [ ] **Phase 98: TTL Enforcement** - Enforce expiry checks in every query and fetch path
+- [x] **Phase 98: TTL Enforcement** - Enforce expiry checks in every query and fetch path (completed 2026-04-08)
 - [ ] **Phase 99: Sync, Resource & Concurrency Correctness** - Fix sync leaks, resource limit races, and coroutine safety
 
 ## Phase Details
@@ -73,7 +73,7 @@ Plans:
   2. All six query handlers (Read, List, Stats, Exists, BatchRead, TimeRange) filter expired blobs from results
   3. Expiry timestamp calculation uses saturating arithmetic so timestamp + ttl never overflows uint64
   4. Unit tests prove each path rejects/filters expired blobs, passing under ASAN/TSAN/UBSAN
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 98-01-PLAN.md -- Core expiry functions (saturating_expiry, is_blob_expired) + engine ingest validation + storage/sync migration
@@ -103,5 +103,5 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | 95. Code Deduplication | 3/3 | Complete    | 2026-04-07 |
 | 96. PeerManager Architecture | 3/3 | Complete    | 2026-04-08 |
 | 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
-| 98. TTL Enforcement | 2/3 | In Progress|  |
+| 98. TTL Enforcement | 2/3 | Complete    | 2026-04-08 |
 | 99. Sync, Resource & Concurrency Correctness | 0/TBD | Not started | - |
