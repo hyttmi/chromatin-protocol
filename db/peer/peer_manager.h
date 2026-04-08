@@ -1,5 +1,8 @@
 #pragma once
 
+#include "db/peer/peer_types.h"
+#include "db/peer/metrics_collector.h"
+
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
 #include "db/crypto/hash.h"
@@ -29,78 +32,6 @@
 #include <vector>
 
 namespace chromatindb::peer {
-
-/// A persisted peer address with connection tracking.
-struct PersistedPeer {
-    std::string address;
-    uint64_t last_seen = 0;     // Unix timestamp
-    uint32_t fail_count = 0;
-    std::string pubkey_hash;    // SHA3-256(pubkey) hex string, empty = unknown
-};
-
-/// A sync message received from a peer, queued for processing.
-struct SyncMessage {
-    wire::TransportMsgType type;
-    std::vector<uint8_t> payload;
-};
-
-/// Info about a connected peer.
-struct PeerInfo {
-    net::Connection::Ptr connection;
-    std::string address;
-    bool is_bootstrap = false;
-    uint32_t strike_count = 0;
-    bool syncing = false;
-    // Sync message queue (timer-cancel pattern)
-    std::deque<SyncMessage> sync_inbox;
-    asio::steady_timer* sync_notify = nullptr;
-    // Pub/Sub subscriptions (connection-scoped)
-    std::set<std::array<uint8_t, 32>> subscribed_namespaces;
-    // Phase 16: Storage capacity signaling (resets on reconnect via PeerInfo recreation)
-    bool peer_is_full = false;
-    // Phase 18: Token bucket rate limiting (resets on reconnect via PeerInfo recreation)
-    uint64_t bucket_tokens = 0;        // Available throughput tokens (bytes)
-    uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
-    uint64_t last_sync_initiated = 0;  // steady_clock ms since epoch (0 = never synced as responder)
-    uint64_t last_message_time = 0;   // steady_clock ms since epoch (0 = not yet set)
-    // Phase 86: Peer's declared replication scope (empty = replicate all, per D-07)
-    std::set<std::array<uint8_t, 32>> announced_namespaces;
-    // Phase 86: Announce handshake coordination (timer-cancel pattern)
-    bool announce_received = false;
-    asio::steady_timer* announce_notify = nullptr;
-};
-
-/// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
-/// Monotonically increasing since startup (never reset).
-struct NodeMetrics {
-    uint64_t ingests = 0;                  // Successful blob ingestions
-    uint64_t rejections = 0;               // Failed ingestions (validation errors)
-    uint64_t syncs = 0;                    // Completed sync rounds
-    uint64_t rate_limited = 0;             // Rate limit disconnections
-    uint64_t peers_connected_total = 0;    // Total peer connections since startup
-    uint64_t peers_disconnected_total = 0; // Total peer disconnections since startup
-    uint64_t cursor_hits = 0;             // Namespaces skipped via cursor match
-    uint64_t cursor_misses = 0;           // Namespaces requiring full hash diff
-    uint64_t full_resyncs = 0;            // Full resync rounds triggered
-    uint64_t quota_rejections = 0;        // Namespace quota exceeded rejections
-    uint64_t sync_rejections = 0;          // Sync rate limit rejections (cooldown + session + byte rate)
-};
-
-/// Hash functor for 32-byte arrays (first 8 bytes as uint64_t -- sufficient entropy for blob hashes).
-struct ArrayHash32 {
-    size_t operator()(const std::array<uint8_t, 32>& arr) const noexcept {
-        uint64_t h;
-        std::memcpy(&h, arr.data(), sizeof(h));
-        return static_cast<size_t>(h);
-    }
-};
-
-/// Tracks when a peer disconnected for cursor grace period (Phase 82 MAINT-04).
-/// Cursors persist in MDBX -- we only need the disconnect timestamp to decide
-/// whether to reuse them (within 5 min) or discard them (after 5 min).
-struct DisconnectedPeerState {
-    uint64_t disconnect_time;  // steady_clock milliseconds since epoch
-};
 
 /// Manages peer connections, sync scheduling, and connection policies.
 ///
@@ -141,7 +72,7 @@ public:
     size_t bootstrap_peer_count() const;
 
     /// Access metrics (for testing and metrics output).
-    const NodeMetrics& metrics() const { return metrics_; }
+    const NodeMetrics& metrics() const { return metrics_collector_.node_metrics(); }
 
     /// Sync constants (public for testing).
     static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;  ///< Max hashes per BlobRequest
@@ -274,27 +205,12 @@ private:
     // SIGUSR1 metrics dump
     void setup_sigusr1_handler();
     asio::awaitable<void> sigusr1_loop();
-    void dump_metrics();
-
-    // Periodic metrics
-    asio::awaitable<void> metrics_timer_loop();
-    void log_metrics_line();
 
     // Cursor compaction (prune cursors for disconnected peers)
     asio::awaitable<void> cursor_compaction_loop();
 
     // Keepalive: send Ping to TCP peers, disconnect silent ones (Phase 83)
     asio::awaitable<void> keepalive_loop();
-
-    // Prometheus /metrics HTTP endpoint (Phase 90)
-    asio::awaitable<void> metrics_accept_loop();
-    asio::awaitable<void> metrics_handle_connection(asio::ip::tcp::socket socket);
-    std::string format_prometheus_metrics();
-    void start_metrics_listener();
-    void stop_metrics_listener();
-
-    // Helpers
-    uint64_t compute_uptime_seconds() const;
 
     // Expiry scanning (cancellable member coroutine)
     asio::awaitable<void> expiry_scan_loop();
@@ -353,12 +269,9 @@ private:
     asio::steady_timer* sync_timer_ = nullptr;    // Timer-cancel pattern for sync loop
     asio::steady_timer* pex_timer_ = nullptr;     // Timer-cancel pattern for PEX loop
     asio::steady_timer* flush_timer_ = nullptr;   // Timer-cancel pattern for peer flush loop
-    asio::steady_timer* metrics_timer_ = nullptr;  // Timer-cancel pattern for metrics loop
     asio::steady_timer* cursor_compaction_timer_ = nullptr;  // Timer-cancel pattern for cursor compaction
     asio::steady_timer* keepalive_timer_ = nullptr;           // Timer-cancel pattern for keepalive loop
     asio::steady_timer* compaction_timer_ = nullptr;          // Timer-cancel pattern for storage compaction
-    std::unique_ptr<asio::ip::tcp::acceptor> metrics_acceptor_;  // Prometheus /metrics HTTP acceptor
-    std::string metrics_bind_;                                    // SIGHUP-reloadable (Phase 90)
     uint64_t rate_limit_bytes_per_sec_ = 0;       // 0 = disabled (Phase 18)
     uint64_t rate_limit_burst_ = 0;               // Burst capacity in bytes (Phase 18)
     uint32_t full_resync_interval_ = 10;          // Full resync every Nth round (Phase 34)
@@ -384,8 +297,7 @@ private:
     std::unordered_map<std::array<uint8_t, 32>, DisconnectedPeerState, ArrayHash32>
         disconnected_peers_;
     static constexpr uint64_t CURSOR_GRACE_PERIOD_MS = 5 * 60 * 1000;  // 5 minutes
-    NodeMetrics metrics_;
-    std::chrono::steady_clock::time_point start_time_;
+    MetricsCollector metrics_collector_;
 };
 
 } // namespace chromatindb::peer
