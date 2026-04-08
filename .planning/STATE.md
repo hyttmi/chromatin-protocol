@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
 status: verifying
-stopped_at: Phase 97 context gathered
-last_updated: "2026-04-08T09:14:59.889Z"
+stopped_at: Completed 97-02-PLAN.md
+last_updated: "2026-04-08T10:45:55.508Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 9
+  completed_plans: 7
   percent: 8
 ---
 
@@ -55,6 +55,7 @@ Progress: [#.........] 8%
 | Phase 96 P01 | 104min | 2 tasks | 8 files |
 | Phase 96 P02 | 69min | 1 tasks | 9 files |
 | Phase 96 P03 | 93min | 2 tasks | 7 files |
+| Phase 97 P02 | 30min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,9 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 96]: SyncOrchestrator receives awaitable PEX callbacks to avoid circular deps while keeping inline PEX after sync
 - [Phase 96]: MessageDispatcher uses UptimeCallback/MaxStorageCallback lambdas instead of direct MetricsCollector/Config references
 - [Phase 96]: PeerManager facade is 679 lines (reload_config + constructor wiring are inherently large)
+- [Phase 97]: Pubkey size validated against exact Signer::PUBLIC_KEY_SIZE constant in decode_auth_payload and decode_blob
+- [Phase 97]: AEAD MAX_AD_LENGTH (64 KiB) defense-in-depth bound in encrypt/decrypt
+- [Phase 97]: Nonce exhaustion threshold at 2^63, static constexpr local to send/recv_encrypted functions
 
 ### Pending Todos
 
@@ -88,6 +92,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-08T09:14:59.887Z
-Stopped at: Phase 97 context gathered
-Resume file: .planning/phases/97-protocol-crypto-safety/97-CONTEXT.md
+Last session: 2026-04-08T10:45:55.505Z
+Stopped at: Completed 97-02-PLAN.md
+Resume file: None

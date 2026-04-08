@@ -3,14 +3,14 @@
 ## Protocol Safety
 
 - [ ] **PROTO-01**: All integer arithmetic in protocol parsing uses overflow-checked helpers (decode_namespace_list, decode_blob_request, encode_namespace_list, decode_blob_transfer, encode_blob_transfer)
-- [ ] **PROTO-02**: Auth payload pubkey size validated against exact expected constant (ML-DSA-87 public key size) in all handshake paths
-- [ ] **PROTO-03**: FlatBuffer decode validates pubkey and data field sizes before passing to signature verification
-- [ ] **PROTO-04**: AEAD associated data length bounded to prevent unbounded allocation
+- [x] **PROTO-02**: Auth payload pubkey size validated against exact expected constant (ML-DSA-87 public key size) in all handshake paths
+- [x] **PROTO-03**: FlatBuffer decode validates pubkey and data field sizes before passing to signature verification
+- [x] **PROTO-04**: AEAD associated data length bounded to prevent unbounded allocation
 
 ## Crypto Safety
 
-- [ ] **CRYPTO-01**: AEAD nonce counters kill the connection before reaching 2^64 to prevent nonce reuse
-- [ ] **CRYPTO-02**: PQ handshake initiator verifies responder pubkey binding
+- [x] **CRYPTO-01**: AEAD nonce counters kill the connection before reaching 2^64 to prevent nonce reuse
+- [x] **CRYPTO-02**: PQ handshake initiator verifies responder pubkey binding
 - [ ] **CRYPTO-03**: Lightweight handshake authenticates peer identity (not just transport trust)
 
 ## TTL Enforcement
@@ -70,11 +70,11 @@
 | DEDUP-05 | Phase 95 | Complete |
 | ARCH-01 | Phase 96 | Complete |
 | PROTO-01 | Phase 97 | Pending |
-| PROTO-02 | Phase 97 | Pending |
-| PROTO-03 | Phase 97 | Pending |
-| PROTO-04 | Phase 97 | Pending |
-| CRYPTO-01 | Phase 97 | Pending |
-| CRYPTO-02 | Phase 97 | Pending |
+| PROTO-02 | Phase 97 | Complete |
+| PROTO-03 | Phase 97 | Complete |
+| PROTO-04 | Phase 97 | Complete |
+| CRYPTO-01 | Phase 97 | Complete |
+| CRYPTO-02 | Phase 97 | Complete |
 | CRYPTO-03 | Phase 97 | Pending |
 | TTL-01 | Phase 98 | Pending |
 | TTL-02 | Phase 98 | Pending |
