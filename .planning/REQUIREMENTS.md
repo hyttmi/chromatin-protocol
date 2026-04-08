@@ -11,7 +11,7 @@
 
 - [x] **CRYPTO-01**: AEAD nonce counters kill the connection before reaching 2^64 to prevent nonce reuse
 - [x] **CRYPTO-02**: PQ handshake initiator verifies responder pubkey binding
-- [ ] **CRYPTO-03**: Lightweight handshake authenticates peer identity (not just transport trust)
+- [x] **CRYPTO-03**: Lightweight handshake authenticates peer identity (not just transport trust)
 
 ## TTL Enforcement
 
@@ -75,7 +75,7 @@
 | PROTO-04 | Phase 97 | Complete |
 | CRYPTO-01 | Phase 97 | Complete |
 | CRYPTO-02 | Phase 97 | Complete |
-| CRYPTO-03 | Phase 97 | Pending |
+| CRYPTO-03 | Phase 97 | Complete |
 | TTL-01 | Phase 98 | Pending |
 | TTL-02 | Phase 98 | Pending |
 | TTL-03 | Phase 98 | Pending |
