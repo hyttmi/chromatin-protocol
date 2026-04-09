@@ -1237,7 +1237,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
-    // Other message types ignored (Ping/Pong/Goodbye handled by Connection)
+    // Ping/Pong/Goodbye handled by Connection before dispatch.
+    // Log anything else so protocol mismatches don't disappear silently.
+    spdlog::debug("unrecognized message type {} from {}",
+                  static_cast<int>(type), conn->remote_address());
 }
 
 } // namespace chromatindb::peer

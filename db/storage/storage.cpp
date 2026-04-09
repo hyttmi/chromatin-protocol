@@ -113,6 +113,15 @@ static constexpr size_t ENVELOPE_OVERHEAD =
     1 + crypto::AEAD::NONCE_SIZE + crypto::AEAD::TAG_SIZE;  // 29 bytes
 
 // =============================================================================
+// Schema version
+// =============================================================================
+
+// Increment when subdatabase layout or key/value format changes.
+// Node refuses to start if the on-disk version is newer than this constant.
+static constexpr uint32_t SCHEMA_VERSION = 1;
+static constexpr const char* SCHEMA_VERSION_KEY = "schema_version";
+
+// =============================================================================
 // Storage::Impl
 // =============================================================================
 
@@ -125,6 +134,7 @@ struct Storage::Impl {
     mdbx::map_handle tombstone_map{0};
     mdbx::map_handle cursor_map{0};
     mdbx::map_handle quota_map{0};
+    mdbx::map_handle meta_map{0};
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
     std::string data_dir_;          // Stored for compact() reopen
@@ -167,7 +177,7 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 8;  // 7 named sub-databases + 1 default
+        operate_params.max_maps = 9;  // 8 named sub-databases + 1 default
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
@@ -184,6 +194,32 @@ struct Storage::Impl {
             tombstone_map = txn.create_map("tombstone");
             cursor_map = txn.create_map("cursor");
             quota_map = txn.create_map("quota");
+            meta_map = txn.create_map("meta");
+
+            // Schema version check/stamp
+            auto key_slice = mdbx::slice(SCHEMA_VERSION_KEY, std::strlen(SCHEMA_VERSION_KEY));
+            auto existing = txn.get(meta_map, key_slice, not_found_sentinel);
+            if (existing.data() != nullptr) {
+                if (existing.length() != sizeof(uint32_t)) {
+                    throw std::runtime_error("corrupt schema_version entry in meta map");
+                }
+                uint32_t on_disk = chromatindb::util::read_u32_be(
+                    static_cast<const uint8_t*>(existing.data()));
+                if (on_disk > SCHEMA_VERSION) {
+                    throw std::runtime_error(
+                        "database schema version " + std::to_string(on_disk) +
+                        " is newer than this binary (supports up to " +
+                        std::to_string(SCHEMA_VERSION) + "). Upgrade chromatindb.");
+                }
+                // Future: run migrations here if on_disk < SCHEMA_VERSION
+            } else {
+                // First open or pre-versioned database: stamp current version
+                std::array<uint8_t, 4> ver_buf;
+                chromatindb::util::store_u32_be(ver_buf.data(), SCHEMA_VERSION);
+                txn.upsert(meta_map, key_slice,
+                            mdbx::slice(ver_buf.data(), ver_buf.size()));
+            }
+
             txn.commit();
         }
     }
@@ -1524,6 +1560,21 @@ CompactResult Storage::compact() {
         std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 
     return result;
+}
+
+// =============================================================================
+// Backup
+// =============================================================================
+
+bool Storage::backup(const std::string& dest_path) {
+    try {
+        // Live compacted copy to destination — does NOT block concurrent reads/writes
+        impl_->env.copy(dest_path, true);
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::error("backup failed: {}", e.what());
+        return false;
+    }
 }
 
 } // namespace chromatindb::storage

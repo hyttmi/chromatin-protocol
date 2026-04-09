@@ -239,6 +239,12 @@ public:
     /// @return CompactResult with before/after bytes, duration, and success flag.
     CompactResult compact();
 
+    /// Create a live compacted backup at the given file path.
+    /// Does NOT block concurrent reads/writes.
+    /// @param dest_path Destination file path (e.g., "/backups/chromatindb.dat").
+    /// @return true if backup succeeded, false on error.
+    bool backup(const std::string& dest_path);
+
     /// Perform a read-only integrity scan of all sub-databases at startup.
     /// Logs entry counts and any cross-reference inconsistencies as warnings.
     /// Does NOT refuse to start on inconsistencies -- informational only.

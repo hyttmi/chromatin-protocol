@@ -30,6 +30,7 @@ void print_usage(const char* prog) {
               << "  run        Start the daemon\n"
               << "  keygen     Generate identity keypair\n"
               << "  show-key   Print namespace (public key hash)\n"
+              << "  backup     Create a live database backup\n"
               << "  version    Print version\n\n"
               << "Run options:\n"
               << "  --config <path>     JSON config file\n"
@@ -100,6 +101,40 @@ int cmd_show_key(int argc, char* argv[]) {
     }
 
     return 0;
+}
+
+int cmd_backup(int argc, char* argv[]) {
+    std::string data_dir = "./data";
+    std::string dest_path;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--data-dir" && i + 1 < argc) {
+            data_dir = argv[++i];
+        } else if (dest_path.empty() && arg[0] != '-') {
+            dest_path = arg;
+        }
+    }
+
+    if (dest_path.empty()) {
+        std::cerr << "Usage: chromatindb backup <dest-path> [--data-dir <path>]\n"
+                  << "Creates a live compacted copy of the database at <dest-path>.\n";
+        return 1;
+    }
+
+    try {
+        chromatindb::storage::Storage storage(data_dir);
+        if (storage.backup(dest_path)) {
+            std::cout << "Backup written to " << dest_path << std::endl;
+            return 0;
+        } else {
+            std::cerr << "Backup failed." << std::endl;
+            return 1;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 }
 
 int cmd_run(int argc, char* argv[]) {
@@ -212,6 +247,7 @@ int main(int argc, char* argv[]) {
     if (cmd == "run") return cmd_run(argc - 1, argv + 1);
     if (cmd == "keygen") return cmd_keygen(argc - 1, argv + 1);
     if (cmd == "show-key") return cmd_show_key(argc - 1, argv + 1);
+    if (cmd == "backup") return cmd_backup(argc - 1, argv + 1);
     if (cmd == "version" || cmd == "--version" || cmd == "-v") return cmd_version();
     if (cmd == "help" || cmd == "--help" || cmd == "-h") { print_usage(argv[0]); return 0; }
 
