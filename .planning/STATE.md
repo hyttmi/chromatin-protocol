@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 101 context gathered
-last_updated: "2026-04-09T13:17:59.562Z"
-last_activity: 2026-04-09 -- Phase 101 execution started
+stopped_at: Completed 101-02-PLAN.md
+last_updated: "2026-04-09T14:28:46.078Z"
+last_activity: 2026-04-09
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 4
   percent: 0
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 101 (websocket-transport) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 101
-Last activity: 2026-04-09 -- Phase 101 execution started
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-04-09
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion*
 | Phase 100 P01 | 52min | 2 tasks | 63 files |
 | Phase 100 P02 | 11min | 1 tasks | 14 files |
+| Phase 101 P02 | 42min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,9 @@ Recent decisions affecting current work:
 - [Phase 100]: dist/install.sh reduced to single binary (node only) until new relay is installable
 - [Phase 100]: Session::close() drains pending queue directly to prevent hangs without drain coroutine
 - [Phase 100]: Relay CMake uses if(NOT TARGET) guards for FetchContent -- works in-repo and standalone
+- [Phase 101]: std::variant<tcp::socket, TlsStream> for dual-mode WS stream -- avoids virtual dispatch
+- [Phase 101]: shared_ptr<ssl::context> with mutex for atomic TLS swap on SIGHUP
+- [Phase 101]: Control frames bypass Session queue via send_raw() to prevent keepalive backpressure
 
 ### Pending Todos
 
@@ -82,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T12:48:39.738Z
-Stopped at: Phase 101 context gathered
-Resume file: .planning/phases/101-websocket-transport/101-CONTEXT.md
+Last session: 2026-04-09T14:28:46.074Z
+Stopped at: Completed 101-02-PLAN.md
+Resume file: None

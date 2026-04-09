@@ -11,7 +11,7 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
 - v3.0.0 starts at Phase 100
 
 - [x] **Phase 100: Cleanup & Foundation** - Delete old relay/SDK, scaffold new relay binary with per-client send queues and structured logging (completed 2026-04-09)
-- [ ] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS
+- [x] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS (completed 2026-04-09)
 - [ ] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types
 - [ ] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation
 - [ ] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay
@@ -48,7 +48,7 @@ Plans:
 
 Plans:
 - [x] 101-01-PLAN.md -- WS framing library, HTTP upgrade handshake, Session write callback, TLS config, OpenSSL build
-- [ ] 101-02-PLAN.md -- WsSession, WsAcceptor, SessionManager, main() integration with thread pool and SIGHUP TLS reload
+- [x] 101-02-PLAN.md -- WsSession, WsAcceptor, SessionManager, main() integration with thread pool and SIGHUP TLS reload
 
 ### Phase 102: Authentication & JSON Schema
 **Goal**: Clients authenticate via ML-DSA-87 challenge-response over WebSocket, and the JSON message schema for all 38 relay-allowed types is designed and validated
@@ -120,7 +120,7 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
-| 101. WebSocket Transport | 1/2 | In Progress|  |
+| 101. WebSocket Transport | 2/2 | Complete   | 2026-04-09 |
 | 102. Authentication & JSON Schema | 0/2 | Not started | - |
 | 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
