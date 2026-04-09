@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 ## Current Position
 
 Phase: 99
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-08
+Plan: 1 of 3
+Status: Executing Phase 99
+Last activity: 2026-04-09
 
 Progress: [#.........] 8%
 
@@ -59,6 +59,7 @@ Progress: [#.........] 8%
 | Phase 97 P02 | 30min | 3 tasks | 11 files |
 | Phase 97 P03 | 72min | 2 tasks | 2 files |
 | Phase 98 P03 | 30min | 2 tasks | 5 files |
+| Phase 99 P01 | 41min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,9 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 97]: Initiator sends auth first in lightweight path (prevents AEAD nonce desync)
 - [Phase 98]: collect_namespace_hashes loads blobs for expiry filtering -- trades O(n) reads for correctness
 - [Phase 98]: SyncOrchestrator uses std::time(nullptr) for expiry checks (no injectable clock)
+- [Phase 99-01]: pending_fetches_ uses 64-byte namespace||hash composite key (SYNC-02 cross-namespace collision fix)
+- [Phase 99-01]: Unconditional pending_fetches_.erase before result branching (SYNC-01 state leak fix)
+- [Phase 99-01]: collect_namespace_hashes MDBX MVCC snapshot safety documented as correct-by-design (SYNC-03)
 
 ### Pending Todos
 
@@ -100,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-09T02:13:50.987Z
-Stopped at: Phase 99 context gathered
-Resume file: .planning/phases/99-sync-resource-concurrency-correctness/99-CONTEXT.md
+Last session: 2026-04-09T03:19:43Z
+Stopped at: Completed 99-01-PLAN.md
+Resume file: .planning/phases/99-sync-resource-concurrency-correctness/99-01-SUMMARY.md

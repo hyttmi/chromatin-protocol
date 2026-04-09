@@ -93,7 +93,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 99-01-PLAN.md -- Fix sync state leaks: composite pending_fetches key, unconditional cleanup, MDBX MVCC documentation
+- [x] 99-01-PLAN.md -- Fix sync state leaks: composite pending_fetches key, unconditional cleanup, MDBX MVCC documentation
 - [ ] 99-02-PLAN.md -- Resource limit fixes: subscription limit, bootstrap endpoint, atomic store_blob capacity/quota, iterator fix
 - [ ] 99-03-PLAN.md -- Coroutine safety verification + ASAN/UBSAN/TSAN sanitizer gate
 
@@ -109,7 +109,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | 96. PeerManager Architecture | 3/3 | Complete    | 2026-04-08 |
 | 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
 | 98. TTL Enforcement | 2/3 | Complete    | 2026-04-08 |
-| 99. Sync, Resource & Concurrency Correctness | 0/3 | Not started | - |
+| 99. Sync, Resource & Concurrency Correctness | 1/3 | In progress | - |
 
 ## Backlog
 
