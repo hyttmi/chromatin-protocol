@@ -105,3 +105,14 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
 | 98. TTL Enforcement | 2/3 | Complete    | 2026-04-08 |
 | 99. Sync, Resource & Concurrency Correctness | 0/TBD | Not started | - |
+
+## Backlog
+
+### Phase 999.1: Tombstone TTL & Lifecycle Management (BACKLOG)
+
+**Goal:** Allow operators to set TTL>0 on tombstones so they auto-expire after all nodes have synced. Currently tombstones are forced permanent (TTL=0, enforced Phase 98). Needs: tombstone query API (list tombstones with age/target hash), operator-controlled TTL with resurrection risk documentation, possibly minimum TTL floor. Preferred approach: keep node dumb, expose tombstone metadata via query, let operator decide when it's safe to expire tombstones.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
