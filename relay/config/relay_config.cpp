@@ -42,6 +42,8 @@ RelayConfig load_relay_config(const std::filesystem::path& path) {
     cfg.log_level = j.value("log_level", cfg.log_level);
     cfg.log_file = j.value("log_file", cfg.log_file);
     cfg.max_send_queue = j.value("max_send_queue", cfg.max_send_queue);
+    cfg.cert_path = j.value("cert_path", cfg.cert_path);
+    cfg.key_path = j.value("key_path", cfg.key_path);
 
     return cfg;
 }
@@ -59,6 +61,23 @@ void validate_relay_config(const RelayConfig& cfg) {
 
     if (cfg.identity_key_path.empty()) {
         errors += "identity_key_path must not be empty. ";
+    }
+
+    // TLS fields: both or neither
+    bool has_cert = !cfg.cert_path.empty();
+    bool has_key = !cfg.key_path.empty();
+    if (has_cert != has_key) {
+        errors += "cert_path and key_path must both be set or both be empty. ";
+    }
+
+    // If both set, verify files exist (per D-01: must load or refuse to start)
+    if (has_cert && has_key) {
+        if (!std::filesystem::exists(cfg.cert_path)) {
+            errors += "cert_path file not found: " + cfg.cert_path + ". ";
+        }
+        if (!std::filesystem::exists(cfg.key_path)) {
+            errors += "key_path file not found: " + cfg.key_path + ". ";
+        }
     }
 
     if (!errors.empty()) {

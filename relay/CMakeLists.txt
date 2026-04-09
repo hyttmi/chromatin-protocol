@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # Relay static library
 # =============================================================================
 add_library(chromatindb_relay_lib STATIC
+  asio_ssl.cpp
   config/relay_config.cpp
   core/session.cpp
   identity/relay_identity.cpp

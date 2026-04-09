@@ -111,3 +111,54 @@ TEST_CASE("Config: validate bind_port=65536 throws", "[config]") {
 
     REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
 }
+
+TEST_CASE("Config: load with cert_path and key_path populates TLS fields", "[config]") {
+    auto j = valid_config();
+    j["cert_path"] = "/tmp/test_cert.pem";
+    j["key_path"] = "/tmp/test_key.pem";
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.cert_path == "/tmp/test_cert.pem");
+    REQUIRE(cfg.key_path == "/tmp/test_key.pem");
+}
+
+TEST_CASE("Config: load without cert_path and key_path defaults to empty", "[config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.cert_path.empty());
+    REQUIRE(cfg.key_path.empty());
+}
+
+TEST_CASE("Config: tls_enabled returns true when both set, false when empty", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+
+    REQUIRE(cfg.tls_enabled() == false);
+
+    cfg.cert_path = "/tmp/cert.pem";
+    cfg.key_path = "/tmp/key.pem";
+    REQUIRE(cfg.tls_enabled() == true);
+}
+
+TEST_CASE("Config: validate with cert_path set but key_path empty throws", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.cert_path = "/tmp/cert.pem";
+    // key_path is empty
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("Config: validate with nonexistent cert_path throws", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.cert_path = "/nonexistent/cert.pem";
+    cfg.key_path = "/nonexistent/key.pem";
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}

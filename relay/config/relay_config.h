@@ -14,6 +14,11 @@ struct RelayConfig {
     std::string log_level = "info";    // trace|debug|info|warn|error
     std::string log_file;              // Empty = console only
     uint32_t max_send_queue = 256;     // Per-client send queue cap
+    std::string cert_path;             // TLS certificate chain file (PEM). Empty = plain WS mode.
+    std::string key_path;              // TLS private key file (PEM). Empty = plain WS mode.
+
+    /// Returns true when both cert_path and key_path are set (WSS mode).
+    bool tls_enabled() const { return !cert_path.empty() && !key_path.empty(); }
 };
 
 /// Load relay config from JSON file.

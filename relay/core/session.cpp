@@ -77,8 +77,16 @@ asio::awaitable<void> Session::drain_send_queue() {
     drain_running_ = false;
 }
 
+void Session::set_write_callback(WriteCallback cb) {
+    write_cb_ = std::move(cb);
+}
+
 asio::awaitable<bool> Session::do_send(const std::string& data) {
-    // Phase 100: stub write -- just record the message for testing
+    if (write_cb_) {
+        co_return co_await write_cb_(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size()));
+    }
+    // Fallback: stub write for testing (no callback set)
     delivered_.push_back(data);
     co_return true;
 }

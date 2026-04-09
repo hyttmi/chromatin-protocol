@@ -2,6 +2,8 @@
 
 #include <asio.hpp>
 #include <deque>
+#include <functional>
+#include <span>
 #include <string>
 #include <cstddef>
 
@@ -12,7 +14,15 @@ namespace chromatindb::relay::core {
 /// and bounding memory per client.
 class Session {
 public:
+    /// Write callback type for injecting transport-specific write logic.
+    /// WsSession (Plan 02) injects a callback that writes WebSocket frames.
+    /// If no callback is set, do_send() falls through to the delivered_ test stub.
+    using WriteCallback = std::function<asio::awaitable<bool>(std::span<const uint8_t>)>;
+
     explicit Session(asio::any_io_executor executor, size_t max_queue = 256);
+
+    /// Set a write callback for transport-specific output (e.g., WebSocket frame writing).
+    void set_write_callback(WriteCallback cb);
 
     /// Enqueue a message for sending. Returns false if queue full (overflow).
     /// On overflow, session is closed immediately -- no silent message dropping.
@@ -44,6 +54,7 @@ private:
     std::deque<PendingMessage> send_queue_;
     std::deque<std::string> delivered_;  // For Phase 100 testing
     asio::steady_timer send_signal_;
+    WriteCallback write_cb_;
     size_t max_queue_;
     bool closed_ = false;
     bool drain_running_ = false;
