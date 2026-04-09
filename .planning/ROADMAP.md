@@ -90,11 +90,11 @@ Plans:
   3. Per-peer subscription count is enforced at the node level with a rejection message sent to the client on limit breach
   4. Bootstrap peer detection considers host+port (not just host), TOCTOU race on capacity/quota is eliminated with atomic check-and-reserve, and quota rebuild iterator bug is fixed
   5. Send/recv counters use proper atomic operations or are confined to a single strand across co_await boundaries, verified by TSAN
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 99-01-PLAN.md -- Fix sync state leaks: composite pending_fetches key, unconditional cleanup, MDBX MVCC documentation
-- [ ] 99-02-PLAN.md -- Resource limit fixes: subscription limit, bootstrap endpoint, atomic store_blob capacity/quota, iterator fix
+- [x] 99-02-PLAN.md -- Resource limit fixes: subscription limit, bootstrap endpoint, atomic store_blob capacity/quota, iterator fix
 - [ ] 99-03-PLAN.md -- Coroutine safety verification + ASAN/UBSAN/TSAN sanitizer gate
 
 ## Progress
@@ -109,7 +109,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | 96. PeerManager Architecture | 3/3 | Complete    | 2026-04-08 |
 | 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
 | 98. TTL Enforcement | 2/3 | Complete    | 2026-04-08 |
-| 99. Sync, Resource & Concurrency Correctness | 0/3 | Not started | - |
+| 99. Sync, Resource & Concurrency Correctness | 1/3 | In Progress|  |
 
 ## Backlog
 

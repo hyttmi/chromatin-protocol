@@ -27,10 +27,10 @@
 
 ## Resource Limits
 
-- [ ] **RES-01**: Per-peer subscription count limit enforced at node level (with rejection message)
-- [ ] **RES-02**: Bootstrap peer detection considers port, not just host
-- [ ] **RES-03**: TOCTOU race on capacity and quota checks eliminated (atomic check-and-reserve)
-- [ ] **RES-04**: Quota rebuild clear loop fixed (iterator invalidation on skip-every-other bug)
+- [x] **RES-01**: Per-peer subscription count limit enforced at node level (with rejection message)
+- [x] **RES-02**: Bootstrap peer detection considers port, not just host
+- [x] **RES-03**: TOCTOU race on capacity and quota checks eliminated (atomic check-and-reserve)
+- [x] **RES-04**: Quota rebuild clear loop fixed (iterator invalidation on skip-every-other bug)
 
 ## Coroutine Safety
 
@@ -82,10 +82,10 @@
 | SYNC-01 | Phase 99 | Pending |
 | SYNC-02 | Phase 99 | Pending |
 | SYNC-03 | Phase 99 | Pending |
-| RES-01 | Phase 99 | Pending |
-| RES-02 | Phase 99 | Pending |
-| RES-03 | Phase 99 | Pending |
-| RES-04 | Phase 99 | Pending |
+| RES-01 | Phase 99 | Complete |
+| RES-02 | Phase 99 | Complete |
+| RES-03 | Phase 99 | Complete |
+| RES-04 | Phase 99 | Complete |
 | CORO-01 | Phase 99 | Pending |
 
 **Coverage:**
