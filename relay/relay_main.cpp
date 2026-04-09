@@ -1,4 +1,5 @@
 #include "relay/config/relay_config.h"
+#include "relay/core/authenticator.h"
 #include "relay/identity/relay_identity.h"
 #include "relay/ws/ws_acceptor.h"
 #include "relay/ws/ws_session.h"
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -38,6 +40,48 @@ std::string to_hex(std::span<const uint8_t> data) {
         s += buf;
     }
     return s;
+}
+
+std::optional<std::vector<uint8_t>> from_hex(std::string_view hex) {
+    if (hex.size() % 2 != 0) return std::nullopt;
+
+    std::vector<uint8_t> result;
+    result.reserve(hex.size() / 2);
+
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        uint8_t hi, lo;
+
+        char c = hex[i];
+        if (c >= '0' && c <= '9') hi = static_cast<uint8_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') hi = static_cast<uint8_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') hi = static_cast<uint8_t>(c - 'A' + 10);
+        else return std::nullopt;
+
+        c = hex[i + 1];
+        if (c >= '0' && c <= '9') lo = static_cast<uint8_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') lo = static_cast<uint8_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') lo = static_cast<uint8_t>(c - 'A' + 10);
+        else return std::nullopt;
+
+        result.push_back(static_cast<uint8_t>((hi << 4) | lo));
+    }
+
+    return result;
+}
+
+/// Build ACL KeySet from config's allowed_client_keys hex strings.
+chromatindb::relay::core::Authenticator::KeySet build_acl(
+    const std::vector<std::string>& hex_keys) {
+    chromatindb::relay::core::Authenticator::KeySet acl;
+    for (const auto& hex_str : hex_keys) {
+        auto bytes = from_hex(hex_str);
+        if (bytes && bytes->size() == 32) {
+            std::array<uint8_t, 32> arr{};
+            std::memcpy(arr.data(), bytes->data(), 32);
+            acl.insert(arr);
+        }
+    }
+    return acl;
 }
 
 void init_logging(const std::string& level, const std::string& log_file) {
@@ -123,6 +167,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("  bind: {}:{}", cfg.bind_address, cfg.bind_port);
     spdlog::info("  uds: {}", cfg.uds_path);
     spdlog::info("  max_send_queue: {}", cfg.max_send_queue);
+    spdlog::info("  max_connections: {}", cfg.max_connections);
 
     // Load or generate identity
     try {
@@ -134,6 +179,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Build Authenticator with ACL from config (per D-07, D-34)
+    auto acl = build_acl(cfg.allowed_client_keys);
+    chromatindb::relay::core::Authenticator authenticator(std::move(acl));
+    spdlog::info("  allowed_client_keys: {}",
+                 cfg.allowed_client_keys.empty()
+                     ? "open relay"
+                     : std::to_string(cfg.allowed_client_keys.size()) + " keys");
+
     // Create io_context
     asio::io_context ioc;
 
@@ -142,7 +195,8 @@ int main(int argc, char* argv[]) {
     chromatindb::relay::ws::WsAcceptor acceptor(
         ioc, session_manager,
         cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
-        cfg.max_send_queue);
+        cfg.max_send_queue, cfg.max_connections,
+        authenticator);
 
     // Initialize TLS if configured (per D-01)
     if (cfg.tls_enabled()) {
@@ -181,20 +235,39 @@ int main(int argc, char* argv[]) {
         });
     });
 
-    // SIGHUP TLS reload (per D-19, D-23)
+    // SIGHUP config reload (per D-19, D-23, D-32, D-34)
     asio::signal_set hup_signal(ioc, SIGHUP);
     std::function<void(const asio::error_code&, int)> hup_handler;
     hup_handler = [&](const asio::error_code& ec, int) {
         if (ec) return;
         spdlog::info("received SIGHUP -- reloading configuration");
 
-        // Reload TLS if enabled
-        if (cfg.tls_enabled()) {
-            if (acceptor.reload_tls(cfg.cert_path, cfg.key_path)) {
-                spdlog::info("TLS context reloaded successfully");
-            } else {
-                spdlog::error("TLS reload failed -- keeping previous context");
+        // Re-read config file
+        try {
+            auto new_cfg = chromatindb::relay::config::load_relay_config(config_path);
+
+            // Reload TLS if enabled
+            if (new_cfg.tls_enabled()) {
+                if (acceptor.reload_tls(new_cfg.cert_path, new_cfg.key_path)) {
+                    spdlog::info("TLS context reloaded successfully");
+                } else {
+                    spdlog::error("TLS reload failed -- keeping previous context");
+                }
             }
+
+            // Reload allowed_client_keys (per D-34)
+            auto new_acl = build_acl(new_cfg.allowed_client_keys);
+            authenticator.reload_allowed_keys(std::move(new_acl));
+            spdlog::info("allowed_client_keys reloaded: {}",
+                         new_cfg.allowed_client_keys.empty()
+                             ? "open relay"
+                             : std::to_string(new_cfg.allowed_client_keys.size()) + " keys");
+
+            // Reload max_connections (per D-32)
+            acceptor.set_max_connections(new_cfg.max_connections);
+
+        } catch (const std::exception& e) {
+            spdlog::error("SIGHUP config reload failed: {}", e.what());
         }
 
         hup_signal.async_wait(hup_handler);

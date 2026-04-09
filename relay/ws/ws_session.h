@@ -1,10 +1,12 @@
 #pragma once
 
+#include "relay/core/authenticator.h"
 #include "relay/core/session.h"
 #include "relay/ws/ws_frame.h"
 
 #include <asio.hpp>
 #include <asio/ssl.hpp>
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <chrono>
@@ -17,9 +19,18 @@ namespace chromatindb::relay::ws {
 
 class SessionManager;  // Forward declare
 
+/// Per D-11: explicit state enum for auth lifecycle.
+enum class SessionState : uint8_t {
+    AWAITING_AUTH,
+    AUTHENTICATED
+};
+
+/// Per D-04: custom WebSocket close code for all auth failures.
+constexpr uint16_t CLOSE_AUTH_FAILURE = 4001;
+
 /// WebSocket session wrapping core::Session with TLS/plain dual-mode stream.
 /// Handles RFC 6455 lifecycle: frame parsing, fragment reassembly, ping/pong
-/// keepalive, close handshake, idle timeout, and write callback injection.
+/// keepalive, close handshake, auth state machine, and write callback injection.
 class WsSession : public std::enable_shared_from_this<WsSession> {
 public:
     /// TLS stream type.
@@ -32,9 +43,11 @@ public:
         Stream stream,
         SessionManager& manager,
         asio::any_io_executor executor,
-        size_t max_send_queue);
+        size_t max_send_queue,
+        core::Authenticator& authenticator,
+        asio::io_context& ioc);
 
-    /// Start the session lifecycle (read loop + drain + ping + idle timer).
+    /// Start the session lifecycle (read loop + drain + ping + auth challenge).
     void start(uint64_t session_id);
 
     /// Initiate graceful close with status code + reason.
@@ -47,7 +60,8 @@ public:
 
 private:
     WsSession(Stream stream, SessionManager& manager,
-              asio::any_io_executor executor, size_t max_send_queue);
+              asio::any_io_executor executor, size_t max_send_queue,
+              core::Authenticator& authenticator, asio::io_context& ioc);
 
     /// Main read loop: reads raw bytes, parses frames, handles control frames.
     asio::awaitable<void> read_loop();
@@ -56,7 +70,16 @@ private:
     asio::awaitable<void> ping_loop();
 
     /// Handle a complete assembled message (text or binary).
-    void on_message(uint8_t opcode, std::vector<uint8_t> data);
+    asio::awaitable<void> on_message(uint8_t opcode, std::vector<uint8_t> data);
+
+    /// Handle auth message in AWAITING_AUTH state.
+    asio::awaitable<void> handle_auth_message(std::vector<uint8_t> data);
+
+    /// Send challenge JSON and start auth timer (per D-02).
+    void send_challenge();
+
+    /// Enqueue JSON text frame via send queue (fire-and-forget).
+    void send_json(const nlohmann::json& j);
 
     /// Handle control frames inline.
     asio::awaitable<void> handle_control(const AssembledMessage& msg);
@@ -79,11 +102,20 @@ private:
     uint64_t session_id_ = 0;
     bool closing_ = false;
 
+    // Auth state (per D-11, D-06)
+    core::Authenticator& authenticator_;
+    asio::io_context& ioc_;                          // For asio::post offload
+    SessionState state_ = SessionState::AWAITING_AUTH;
+    std::array<uint8_t, 32> challenge_{};            // Nonce sent to client
+    std::vector<uint8_t> client_pubkey_;             // Stored after auth (2592 bytes, per D-06)
+    std::array<uint8_t, 32> client_namespace_{};     // SHA3-256(pubkey, per D-06)
+    asio::steady_timer auth_timer_;                  // 10s auth timeout (per D-02)
+    static constexpr auto AUTH_TIMEOUT = std::chrono::seconds(10);  // Per D-33: hardcoded
+
     // Keepalive state (per D-15)
     std::chrono::steady_clock::time_point last_pong_;
-    bool first_message_received_ = false;
 
-    // Idle timeout: 30s after WS upgrade if no message received (per D-14)
+    // Idle timeout: 30s after auth if no message received (per D-14)
     asio::steady_timer idle_timer_;
     static constexpr auto IDLE_TIMEOUT = std::chrono::seconds(30);
 

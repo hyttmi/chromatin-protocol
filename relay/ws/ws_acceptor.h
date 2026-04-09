@@ -1,5 +1,6 @@
 #pragma once
 
+#include "relay/core/authenticator.h"
 #include "relay/ws/session_manager.h"
 
 #include <asio.hpp>
@@ -16,12 +17,13 @@ namespace chromatindb::relay::ws {
 
 /// Accepts WebSocket connections over TLS or plain TCP.
 /// Manages TLS context with SIGHUP reload support (per D-19).
-/// Enforces connection cap (per D-17) and handshake timeout (per D-13).
+/// Enforces configurable connection cap (per D-32) and handshake timeout (per D-13).
 class WsAcceptor {
 public:
     WsAcceptor(asio::io_context& ioc, SessionManager& manager,
                const std::string& bind_address, uint16_t bind_port,
-               size_t max_send_queue);
+               size_t max_send_queue, size_t max_connections,
+               core::Authenticator& authenticator);
 
     /// Initialize TLS context. Call before accept_loop if TLS enabled.
     /// Returns false on failure (relay should exit).
@@ -38,6 +40,9 @@ public:
     void stop();
 
     bool is_tls_enabled() const;
+
+    /// Update max connections on SIGHUP (per D-32).
+    void set_max_connections(size_t n);
 
 private:
     /// Handle a new TCP connection: TLS handshake (if enabled) + WS upgrade.
@@ -57,9 +62,10 @@ private:
     std::shared_ptr<asio::ssl::context> tls_ctx_;
 
     size_t max_send_queue_;
+    size_t max_connections_;             // Per D-32: SIGHUP-reloadable
+    core::Authenticator& authenticator_;
     bool stopping_ = false;
 
-    static constexpr size_t MAX_CONNECTIONS = 1024;  // Per D-17
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);  // Per D-13
 };
 

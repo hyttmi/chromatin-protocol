@@ -17,11 +17,14 @@ static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 
 WsAcceptor::WsAcceptor(asio::io_context& ioc, SessionManager& manager,
                        const std::string& bind_address, uint16_t bind_port,
-                       size_t max_send_queue)
+                       size_t max_send_queue, size_t max_connections,
+                       core::Authenticator& authenticator)
     : acceptor_(ioc)
     , manager_(manager)
     , ioc_(ioc)
-    , max_send_queue_(max_send_queue) {
+    , max_send_queue_(max_send_queue)
+    , max_connections_(max_connections)
+    , authenticator_(authenticator) {
 
     // Resolve bind address to determine protocol family (IPv4/IPv6).
     asio::ip::tcp::resolver resolver(ioc);
@@ -85,10 +88,10 @@ asio::awaitable<void> WsAcceptor::accept_loop() {
         auto [ec, socket] = co_await acceptor_.async_accept(use_nothrow);
         if (ec || stopping_) co_return;
 
-        // Enforce connection cap (per D-17).
-        if (manager_.count() >= MAX_CONNECTIONS) {
+        // Enforce configurable connection cap (per D-32).
+        if (manager_.count() >= max_connections_) {
             spdlog::warn("connection rejected: max connections ({}) reached",
-                        MAX_CONNECTIONS);
+                        max_connections_);
             asio::error_code close_ec;
             socket.close(close_ec);
             continue;
@@ -106,6 +109,18 @@ void WsAcceptor::stop() {
     stopping_ = true;
     asio::error_code ec;
     acceptor_.close(ec);
+}
+
+void WsAcceptor::set_max_connections(size_t n) {
+    auto old = max_connections_;
+    max_connections_ = n;
+    if (manager_.count() > n) {
+        spdlog::warn("max_connections reduced to {} but {} active sessions (no mass disconnect)",
+                    n, manager_.count());
+    }
+    if (old != n) {
+        spdlog::info("max_connections updated: {} -> {}", old, n);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +173,8 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
             // Create WsSession with TLS stream variant.
             auto session = WsSession::create(
                 WsSession::Stream(std::move(tls_stream)),
-                manager_, ioc_.get_executor(), max_send_queue_);
+                manager_, ioc_.get_executor(), max_send_queue_,
+                authenticator_, ioc_);
             auto id = manager_.add_session(session);
             spdlog::info("session {}: WebSocket connection established (WSS)", id);
             session->start(id);
@@ -176,7 +192,8 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
         // Create WsSession with plain TCP socket variant.
         auto session = WsSession::create(
             WsSession::Stream(std::move(socket)),
-            manager_, ioc_.get_executor(), max_send_queue_);
+            manager_, ioc_.get_executor(), max_send_queue_,
+            authenticator_, ioc_);
         auto id = manager_.add_session(session);
         spdlog::info("session {}: WebSocket connection established (WS)", id);
         session->start(id);
