@@ -11,8 +11,10 @@ endif()
 
 add_executable(chromatindb_relay_tests
   test_authenticator.cpp
+  test_message_filter.cpp
   test_session.cpp
   test_relay_config.cpp
+  test_type_registry.cpp
   test_ws_frame.cpp
   test_ws_handshake.cpp
 )

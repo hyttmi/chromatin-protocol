@@ -7,8 +7,11 @@ add_library(chromatindb_relay_lib STATIC
   asio_ssl.cpp
   config/relay_config.cpp
   core/authenticator.cpp
+  core/message_filter.cpp
   core/session.cpp
   identity/relay_identity.cpp
+  translate/type_registry.cpp
+  translate/json_schema.cpp
   ws/ws_frame.cpp
   ws/ws_handshake.cpp
   ws/ws_session.cpp
