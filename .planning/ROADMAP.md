@@ -44,11 +44,11 @@ Plans:
   2. A WebSocket client can connect over plain WS for local dev/testing
   3. WebSocket upgrade handshake, text frames, binary frames, ping/pong, and close frames work correctly per RFC 6455
   4. SIGHUP reloads the TLS certificate and key without restarting the relay
-**Plans**: TBD
+**Plans**: 2 plans (Wave 1: 101-01, Wave 2: 101-02)
 
 Plans:
-- [ ] 101-01: WSS/WS listener with Asio Beast and TLS context
-- [ ] 101-02: SIGHUP-reloadable TLS via atomic ssl::context swap
+- [ ] 101-01-PLAN.md -- WS framing library, HTTP upgrade handshake, Session write callback, TLS config, OpenSSL build
+- [ ] 101-02-PLAN.md -- WsSession, WsAcceptor, SessionManager, main() integration with thread pool and SIGHUP TLS reload
 
 ### Phase 102: Authentication & JSON Schema
 **Goal**: Clients authenticate via ML-DSA-87 challenge-response over WebSocket, and the JSON message schema for all 38 relay-allowed types is designed and validated
