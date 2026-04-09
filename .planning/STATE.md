@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.0.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 100 context gathered
-last_updated: "2026-04-09T09:53:14.967Z"
-last_activity: 2026-04-09 -- Roadmap created for v3.0.0 Relay v2
+status: executing
+stopped_at: Completed 100-01-PLAN.md
+last_updated: "2026-04-09T11:32:40.173Z"
+last_activity: 2026-04-09
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 2
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 100 - Cleanup & Foundation
+**Current focus:** Phase 100 — cleanup-foundation
 
 ## Current Position
 
-Phase: 100 (1 of 6) (Cleanup & Foundation)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-04-09 -- Roadmap created for v3.0.0 Relay v2
+Phase: 100 (cleanup-foundation) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-04-09
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 100 P01 | 52min | 2 tasks | 63 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,8 @@ Recent decisions affecting current work:
 - v3.0.0: Per-client send queue MUST exist before any message forwarding (Phase 100)
 - v3.0.0: JSON schema design before translation code (Phase 102)
 - v3.0.0: Test against local node on dev laptop (UDS), no KVM swarm needed
+- [Phase 100]: Removed all SDK-specific wording from PROTOCOL.md/README.md, replaced with generic client terminology
+- [Phase 100]: dist/install.sh reduced to single binary (node only) until new relay is installable
 
 ### Pending Todos
 
@@ -76,6 +79,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T09:53:14.964Z
-Stopped at: Phase 100 context gathered
-Resume file: .planning/phases/100-cleanup-foundation/100-CONTEXT.md
+Last session: 2026-04-09T11:32:40.170Z
+Stopped at: Completed 100-01-PLAN.md
+Resume file: None

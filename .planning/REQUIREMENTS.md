@@ -9,9 +9,9 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Cleanup
 
-- [ ] **CLEAN-01**: Old relay/ directory deleted
-- [ ] **CLEAN-02**: Old sdk/python/ directory deleted
-- [ ] **CLEAN-03**: Old relay/SDK Docker artifacts, test references, and doc references removed
+- [x] **CLEAN-01**: Old relay/ directory deleted
+- [x] **CLEAN-02**: Old sdk/python/ directory deleted
+- [x] **CLEAN-03**: Old relay/SDK Docker artifacts, test references, and doc references removed
 
 ### Transport
 
@@ -88,9 +88,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLEAN-01 | Phase 100 | Pending |
-| CLEAN-02 | Phase 100 | Pending |
-| CLEAN-03 | Phase 100 | Pending |
+| CLEAN-01 | Phase 100 | Complete |
+| CLEAN-02 | Phase 100 | Complete |
+| CLEAN-03 | Phase 100 | Complete |
 | SESS-01 | Phase 100 | Pending |
 | SESS-02 | Phase 100 | Pending |
 | OPS-04 | Phase 100 | Pending |

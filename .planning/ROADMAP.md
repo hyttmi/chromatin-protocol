@@ -32,7 +32,7 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
 **Plans**: 2 plans (Wave 1: 100-01, Wave 2: 100-02)
 
 Plans:
-- [ ] 100-01-PLAN.md -- Delete old relay and SDK, clean stale references
+- [x] 100-01-PLAN.md -- Delete old relay and SDK, clean stale references
 - [ ] 100-02-PLAN.md -- Scaffold relay binary with session send queue and spdlog
 
 ### Phase 101: WebSocket Transport
@@ -119,7 +119,7 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 100. Cleanup & Foundation | 0/2 | Not started | - |
+| 100. Cleanup & Foundation | 1/2 | In Progress|  |
 | 101. WebSocket Transport | 0/2 | Not started | - |
 | 102. Authentication & JSON Schema | 0/2 | Not started | - |
 | 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
