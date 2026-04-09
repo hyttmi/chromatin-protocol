@@ -4,6 +4,7 @@
 
 #include <asio.hpp>
 
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -15,6 +16,17 @@ namespace chromatindb::engine { class BlobEngine; }
 namespace chromatindb::storage { class Storage; }
 
 namespace chromatindb::peer {
+
+/// Build composite pending_fetches key: namespace_id || blob_hash (64 bytes).
+/// Prevents cross-namespace hash collision (SYNC-02, D-02).
+inline std::array<uint8_t, 64> make_pending_key(
+    const std::array<uint8_t, 32>& namespace_id,
+    const std::array<uint8_t, 32>& blob_hash) {
+    std::array<uint8_t, 64> key;
+    std::memcpy(key.data(), namespace_id.data(), 32);
+    std::memcpy(key.data() + 32, blob_hash.data(), 32);
+    return key;
+}
 
 /// Owns pending_fetches_ and handles BlobNotify/BlobFetch/on_blob_ingested
 /// fan-out.  Extracted from PeerManager (Phase 96 ARCH-01, component D-05).
@@ -64,7 +76,7 @@ private:
     std::deque<std::unique_ptr<PeerInfo>>& peers_;
     std::function<void(uint64_t)> rearm_expiry_;
 
-    std::unordered_map<std::array<uint8_t, 32>, net::Connection::Ptr, ArrayHash32>
+    std::unordered_map<std::array<uint8_t, 64>, net::Connection::Ptr, ArrayHash64>
         pending_fetches_;
     NotificationCallback on_notification_;
 };

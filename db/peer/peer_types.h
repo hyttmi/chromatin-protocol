@@ -79,6 +79,15 @@ struct ArrayHash32 {
     }
 };
 
+/// Hash functor for 64-byte arrays (first 8 bytes as uint64_t -- sufficient entropy for namespace||hash keys).
+struct ArrayHash64 {
+    size_t operator()(const std::array<uint8_t, 64>& arr) const noexcept {
+        uint64_t h;
+        std::memcpy(&h, arr.data(), sizeof(h));
+        return static_cast<size_t>(h);
+    }
+};
+
 /// Tracks when a peer disconnected for cursor grace period (Phase 82 MAINT-04).
 /// Cursors persist in MDBX -- we only need the disconnect timestamp to decide
 /// whether to reuse them (within 5 min) or discard them (after 5 min).

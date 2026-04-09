@@ -18,6 +18,13 @@ SyncProtocol::SyncProtocol(engine::BlobEngine& engine,
 // Hash collection
 // =============================================================================
 
+// SYNC-03: Snapshot consistency analysis (MDBX MVCC safety)
+// get_hashes_by_namespace() opens an MDBX read transaction (start_read at storage.cpp:626),
+// providing MVCC snapshot isolation for the hash list. Individual get_blob() calls open
+// separate read transactions, but this is safe:
+//   - A concurrent store_blob (new blob) won't appear in our hash list -> caught next sync round
+//   - A concurrent delete (expired blob) -> get_blob returns nullopt, we skip it (line 31)
+// The returned vector is by-value (independent snapshot). No code change needed.
 std::vector<std::array<uint8_t, 32>> SyncProtocol::collect_namespace_hashes(
     std::span<const uint8_t, 32> namespace_id) {
     auto all_hashes = storage_.get_hashes_by_namespace(namespace_id);

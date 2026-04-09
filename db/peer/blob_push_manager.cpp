@@ -124,9 +124,10 @@ void BlobPushManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint
         // If blob exists but expired, proceed to fetch fresh copy
     }
 
-    // D-05: Already fetching this blob?
-    if (pending_fetches_.count(hash)) return;
-    pending_fetches_.emplace(hash, conn);
+    // D-05: Already fetching this blob? (SYNC-02: composite namespace||hash key)
+    auto pending_key = make_pending_key(ns, hash);
+    if (pending_fetches_.count(pending_key)) return;
+    pending_fetches_.emplace(pending_key, conn);
 
     // Send BlobFetch: [namespace_id:32][blob_hash:32] = 64 bytes
     asio::co_spawn(ioc_, [this, conn, ns, hash]() -> asio::awaitable<void> {
@@ -173,8 +174,9 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
 
     uint8_t status = payload[0];
     if (status == 0x01) {
-        // D-08: Not-found -- debug log, pending set entry stays until disconnect (harmless)
-        spdlog::debug("BlobFetchResponse not-found from {}", peer_display_name(conn));
+        // D-08: Not-found -- pending entry cleaned on disconnect (no blob data available to build key)
+        spdlog::debug("BlobFetchResponse not-found from {} -- pending entry cleaned on disconnect",
+                       peer_display_name(conn));
         return;
     }
     if (status != 0x00 || payload.size() < 2) return;
@@ -190,10 +192,16 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
             // CONC-03: Transfer back to IO thread before accessing state
             co_await asio::post(ioc_, asio::use_awaitable);
 
-            // Clean pending set using ack blob_hash (Pitfall 5 from RESEARCH.md)
-            if (result.accepted && result.ack.has_value()) {
-                pending_fetches_.erase(result.ack->blob_hash);
+            // SYNC-01: Unconditional pending_fetches_ cleanup for ALL ingest outcomes
+            // (accepted, rejected, duplicate). Prevents state leak on rejected ingests.
+            // SYNC-02: Uses composite namespace||hash key.
+            {
+                auto decoded_hash = wire::blob_hash(wire::encode_blob(blob));
+                auto pending_key = make_pending_key(blob.namespace_id, decoded_hash);
+                pending_fetches_.erase(pending_key);
+            }
 
+            if (result.accepted && result.ack.has_value()) {
                 if (result.ack->status == engine::IngestStatus::stored) {
                     uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                     // Fan-out notification to other peers (source=conn excludes sender)
@@ -217,6 +225,7 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
             }
         } catch (const std::exception& e) {
             // D-10: Malformed response -- log warning, no disconnect, no strike
+            // Pending entry cleaned on disconnect (no blob data available to build key)
             spdlog::warn("malformed BlobFetchResponse from {}: {}",
                          conn->remote_address(), e.what());
         }
