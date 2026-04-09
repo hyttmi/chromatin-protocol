@@ -182,12 +182,11 @@ private:
     uint64_t send_counter_ = 0;
     uint64_t recv_counter_ = 0;
 
-    // Test support: allow setting counters to test nonce exhaustion
+    // Test support: allow setting counters to test nonce exhaustion.
+    // Only accessible via friend class, never compiled into public API.
     friend class ConnectionTestAccess;
-public:
     void set_send_counter_for_test(uint64_t v) { send_counter_ = v; }
     void set_recv_counter_for_test(uint64_t v) { recv_counter_ = v; }
-private:
 
     std::vector<uint8_t> peer_pubkey_;
 

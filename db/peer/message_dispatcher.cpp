@@ -26,6 +26,12 @@ namespace {
 
 using chromatindb::util::to_hex;
 
+// Wire protocol response status bytes.
+constexpr uint8_t STATUS_FOUND     = 0x01;
+constexpr uint8_t STATUS_NOT_FOUND = 0x00;
+constexpr uint8_t STATUS_EXISTS    = 0x01;
+constexpr uint8_t STATUS_MISSING   = 0x00;
+
 /// Token bucket rate limiter: returns true if tokens consumed, false if rate exceeded.
 /// Caller must check rate_bytes_per_sec > 0 before calling (0 = disabled).
 bool try_consume_tokens(PeerInfo& peer, uint64_t bytes,
@@ -371,19 +377,19 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 if (blob.has_value()) {
                     if (wire::is_blob_expired(*blob, static_cast<uint64_t>(std::time(nullptr)))) {
                         spdlog::debug("filtered expired blob in ReadRequest");
-                        std::vector<uint8_t> response = {0x00};
+                        std::vector<uint8_t> response = {STATUS_NOT_FOUND};
                         co_await conn->send_message(wire::TransportMsgType_ReadResponse,
                                                      std::span<const uint8_t>(response), request_id);
                         co_return;
                     }
                     auto encoded = wire::encode_blob(*blob);
                     std::vector<uint8_t> response(1 + encoded.size());
-                    response[0] = 0x01;
+                    response[0] = STATUS_FOUND;
                     std::memcpy(response.data() + 1, encoded.data(), encoded.size());
                     co_await conn->send_message(wire::TransportMsgType_ReadResponse,
                                                  std::span<const uint8_t>(response), request_id);
                 } else {
-                    std::vector<uint8_t> response = {0x00};
+                    std::vector<uint8_t> response = {STATUS_NOT_FOUND};
                     co_await conn->send_message(wire::TransportMsgType_ReadResponse,
                                                  std::span<const uint8_t>(response), request_id);
                 }
@@ -495,7 +501,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 }
 
                 std::vector<uint8_t> response(33);
-                response[0] = exists ? 0x01 : 0x00;
+                response[0] = exists ? STATUS_EXISTS : STATUS_MISSING;
                 std::memcpy(response.data() + 1, hash.data(), 32);
 
                 co_await conn->send_message(wire::TransportMsgType_ExistsResponse,
@@ -750,7 +756,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 auto blob_opt = storage_.get_blob(ns, hash);
                 if (!blob_opt) {
-                    std::vector<uint8_t> response(1, 0x00);
+                    std::vector<uint8_t> response(1, STATUS_NOT_FOUND);
                     co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
                                                  std::span<const uint8_t>(response), request_id);
                     co_return;
@@ -758,7 +764,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 if (wire::is_blob_expired(*blob_opt, static_cast<uint64_t>(std::time(nullptr)))) {
                     spdlog::debug("filtered expired blob in MetadataRequest");
-                    std::vector<uint8_t> response(1, 0x00);
+                    std::vector<uint8_t> response(1, STATUS_NOT_FOUND);
                     co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
                                                  std::span<const uint8_t>(response), request_id);
                     co_return;
@@ -781,7 +787,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
-                response[off++] = 0x01;
+                response[off++] = STATUS_FOUND;
 
                 std::memcpy(response.data() + off, hash.data(), 32);
                 off += 32;

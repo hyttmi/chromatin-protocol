@@ -496,8 +496,12 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                             }
                             auto bt_payload =
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
-                            co_await conn->send_message(
-                                wire::TransportMsgType_BlobTransfer, bt_payload);
+                            if (!co_await conn->send_message(
+                                wire::TransportMsgType_BlobTransfer, bt_payload)) {
+                                peer = find_peer(conn);
+                                if (peer) peer->syncing = false;
+                                co_return;
+                            }
                             peer = find_peer(conn);
                             if (!peer) co_return;
                             total_stats.blobs_sent++;
@@ -530,8 +534,12 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                     }
                     auto bt_payload =
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
-                    co_await conn->send_message(
-                        wire::TransportMsgType_BlobTransfer, bt_payload);
+                    if (!co_await conn->send_message(
+                        wire::TransportMsgType_BlobTransfer, bt_payload)) {
+                        peer = find_peer(conn);
+                        if (peer) peer->syncing = false;
+                        co_return;
+                    }
                     peer = find_peer(conn);
                     if (!peer) co_return;
                     total_stats.blobs_sent++;
@@ -560,7 +568,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                  cursor_hits_this_round, cursor_misses_this_round,
                  sync_is_full_resync ? ", full resync" : "");
 
-    // Post-sync StorageFull signal
+    // Post-sync StorageFull signal (best-effort — sync already complete, send failure is harmless)
     if (total_stats.storage_full_count > 0) {
         std::span<const uint8_t> empty{};
         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
@@ -568,7 +576,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                      peer_display_name(conn), total_stats.storage_full_count);
     }
 
-    // Post-sync QuotaExceeded signal
+    // Post-sync QuotaExceeded signal (best-effort — sync already complete, send failure is harmless)
     if (total_stats.quota_exceeded_count > 0) {
         std::span<const uint8_t> empty{};
         co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
@@ -609,7 +617,11 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
 
     // Send SyncAccept
     std::span<const uint8_t> empty{};
-    co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty);
+    if (!co_await conn->send_message(wire::TransportMsgType_SyncAccept, empty)) {
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
+        co_return;
+    }
     peer = find_peer(conn);
     if (!peer) co_return;
 
@@ -630,7 +642,11 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
         }
     }
     auto ns_payload = sync::SyncProtocol::encode_namespace_list(our_namespaces);
-    co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload);
+    if (!co_await conn->send_message(wire::TransportMsgType_NamespaceList, ns_payload)) {
+        peer = find_peer(conn);
+        if (peer) peer->syncing = false;
+        co_return;
+    }
 
     // Phase A (continued): Receive peer's NamespaceList
     auto ns_msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
@@ -772,12 +788,20 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
 
             if (result.complete) {
                 auto done_payload = sync::encode_reconcile_ranges(ns, {});
-                co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, done_payload);
+                if (!co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, done_payload)) {
+                    peer = find_peer(conn);
+                    if (peer) peer->syncing = false;
+                    co_return;
+                }
                 peer = find_peer(conn);
                 if (!peer) co_return;
             } else {
                 auto resp_payload = sync::encode_reconcile_ranges(ns, result.response_ranges);
-                co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, resp_payload);
+                if (!co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, resp_payload)) {
+                    peer = find_peer(conn);
+                    if (peer) peer->syncing = false;
+                    co_return;
+                }
                 peer = find_peer(conn);
                 if (!peer) co_return;
 
@@ -832,8 +856,12 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                             }
                             auto items_payload = sync::encode_reconcile_items(ns,
                                                                               our_range_items);
-                            co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
-                                                        items_payload);
+                            if (!co_await conn->send_message(wire::TransportMsgType_ReconcileItems,
+                                                        items_payload)) {
+                                peer = find_peer(conn);
+                                if (peer) peer->syncing = false;
+                                co_return;
+                            }
                             peer = find_peer(conn);
                             if (!peer) co_return;
                             break;
@@ -844,7 +872,11 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                                           rresult.have_items.begin(), rresult.have_items.end());
 
                         auto rp = sync::encode_reconcile_ranges(ns, rresult.response_ranges);
-                        co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, rp);
+                        if (!co_await conn->send_message(wire::TransportMsgType_ReconcileRanges, rp)) {
+                            peer = find_peer(conn);
+                            if (peer) peer->syncing = false;
+                            co_return;
+                        }
                         peer = find_peer(conn);
                         if (!peer) co_return;
                     } else if (rmsg->type == wire::TransportMsgType_ReconcileItems) {
@@ -898,7 +930,11 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                 missing.begin() + static_cast<ptrdiff_t>(batch_end));
 
             auto req_payload = sync::SyncProtocol::encode_blob_request(ns, batch);
-            co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload);
+            if (!co_await conn->send_message(wire::TransportMsgType_BlobRequest, req_payload)) {
+                peer = find_peer(conn);
+                if (peer) peer->syncing = false;
+                co_return;
+            }
             peer = find_peer(conn);
             if (!peer) co_return;
 
@@ -939,8 +975,12 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                             }
                             auto bt_payload =
                                 sync::SyncProtocol::encode_single_blob_transfer(*blob);
-                            co_await conn->send_message(
-                                wire::TransportMsgType_BlobTransfer, bt_payload);
+                            if (!co_await conn->send_message(
+                                wire::TransportMsgType_BlobTransfer, bt_payload)) {
+                                peer = find_peer(conn);
+                                if (peer) peer->syncing = false;
+                                co_return;
+                            }
                             peer = find_peer(conn);
                             if (!peer) co_return;
                             total_stats.blobs_sent++;
@@ -979,8 +1019,12 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                     }
                     auto bt_payload =
                         sync::SyncProtocol::encode_single_blob_transfer(*blob);
-                    co_await conn->send_message(
-                        wire::TransportMsgType_BlobTransfer, bt_payload);
+                    if (!co_await conn->send_message(
+                        wire::TransportMsgType_BlobTransfer, bt_payload)) {
+                        peer = find_peer(conn);
+                        if (peer) peer->syncing = false;
+                        co_return;
+                    }
                     peer = find_peer(conn);
                     if (!peer) co_return;
                     total_stats.blobs_sent++;
@@ -1009,6 +1053,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                  cursor_hits_this_round, cursor_misses_this_round,
                  sync_is_full_resync ? ", full resync" : "");
 
+    // Best-effort notification (sync already complete, send failure is harmless)
     if (total_stats.storage_full_count > 0) {
         std::span<const uint8_t> empty{};
         co_await conn->send_message(wire::TransportMsgType_StorageFull, empty);
@@ -1016,6 +1061,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                      peer_display_name(conn), total_stats.storage_full_count);
     }
 
+    // Best-effort notification (sync already complete, send failure is harmless)
     if (total_stats.quota_exceeded_count > 0) {
         std::span<const uint8_t> empty{};
         co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty);
@@ -1083,6 +1129,8 @@ asio::awaitable<void> SyncOrchestrator::sync_timer_loop() {
 
 void SyncOrchestrator::send_sync_rejected(net::Connection::Ptr conn, uint8_t reason) {
     std::vector<uint8_t> payload = { reason };
+    // Detached fire-and-forget — send failure is harmless since the connection is
+    // already being rate-limited and the return value cannot be observed.
     asio::co_spawn(ioc_, [conn, payload = std::move(payload)]() -> asio::awaitable<void> {
         co_await conn->send_message(wire::TransportMsgType_SyncRejected,
                                      std::span<const uint8_t>(payload));

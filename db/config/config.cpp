@@ -254,7 +254,10 @@ void validate_config(const Config& cfg) {
         errors.push_back("rate_limit_bytes_per_sec must be 0 (disabled) or >= 1024 (got " +
                           std::to_string(cfg.rate_limit_bytes_per_sec) + ")");
     }
-    if (cfg.rate_limit_bytes_per_sec > 0 && cfg.rate_limit_burst < cfg.rate_limit_bytes_per_sec) {
+    if (cfg.rate_limit_bytes_per_sec > 0 && cfg.rate_limit_burst == 0) {
+        errors.push_back("rate_limit_burst must be > 0 when rate limiting is enabled (got burst=0, rate=" +
+                          std::to_string(cfg.rate_limit_bytes_per_sec) + ")");
+    } else if (cfg.rate_limit_bytes_per_sec > 0 && cfg.rate_limit_burst < cfg.rate_limit_bytes_per_sec) {
         errors.push_back("rate_limit_burst must be >= rate_limit_bytes_per_sec when rate limiting is enabled (got burst=" +
                           std::to_string(cfg.rate_limit_burst) + ", rate=" +
                           std::to_string(cfg.rate_limit_bytes_per_sec) + ")");

@@ -766,6 +766,11 @@ asio::awaitable<void> Connection::message_loop() {
         // Update last-recv time for keepalive (any decoded message resets silence)
         last_recv_time_ = std::chrono::steady_clock::now();
 
+        if (!authenticated_) {
+            spdlog::error("received message before authentication from {}", remote_addr_);
+            break;
+        }
+
         switch (decoded->type) {
             case wire::TransportMsgType_Ping: {
                 // Reply with Pong -- through send queue for AEAD nonce ordering
