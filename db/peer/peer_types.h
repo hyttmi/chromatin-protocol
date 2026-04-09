@@ -54,7 +54,13 @@ struct PeerInfo {
     asio::steady_timer* announce_notify = nullptr;
 };
 
-/// Runtime metrics counters. Plain uint64_t (single io_context thread, no races).
+/// Runtime metrics counters. Plain uint64_t -- strand-confined to io_context thread.
+/// All increment sites verified Phase 99 (CORO-01):
+///   message_dispatcher.cpp: inline or after co_await post(ioc_)
+///   sync_orchestrator.cpp: coroutines on ioc_
+///   blob_push_manager.cpp: after co_await post(ioc_)
+///   connection_manager.cpp: inline callbacks on ioc_
+/// Do NOT use std::atomic -- that masks design bugs (D-14).
 /// Monotonically increasing since startup (never reset).
 struct NodeMetrics {
     uint64_t ingests = 0;                  // Successful blob ingestions
