@@ -24,7 +24,7 @@ Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace
 
 **Sync** works via range-based set reconciliation: peers exchange XOR fingerprints over sorted hash ranges, recursively splitting mismatched ranges until differences are isolated, then transfer only the missing blobs. Sync cost is O(differences), not O(total blobs). One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted. **Encryption at rest** protects stored blob payloads with ChaCha20-Poly1305 using a key derived from a node-local master key via HKDF-SHA256.
 
-**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones block future arrival of the deleted blob; they can be permanent (TTL=0) or time-limited (TTL>0), in which case they are garbage-collected by the expiry scanner. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
+**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones MUST have TTL=0 (permanent) -- the node rejects tombstones with non-zero TTL at ingest. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
 
 ## Building
 
@@ -61,7 +61,7 @@ The codebase is clean under all three sanitizers.
 
 ### Unit Tests
 
-567 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
+647 unit tests covering all subsystems (crypto, storage, sync, ACL, delegation, pub/sub, rate limiting, quotas, config validation):
 
 ```bash
 cd build
@@ -104,6 +104,14 @@ chromatindb run [--config <path>] [--data-dir <path>] [--log-level <lvl>]
 Starts the chromatindb daemon. The node loads or generates its identity, opens its storage database, binds to the configured address, and begins accepting peer connections. If bootstrap peers are configured, the node connects to them and initiates sync.
 
 Log levels: `trace`, `debug`, `info`, `warn`, `error` (default: `info`).
+
+### Backup Database
+
+```bash
+chromatindb backup /backups/chromatindb.dat [--data-dir <path>]
+```
+
+Creates a live compacted copy of the database at the given path. Does not block reads or writes.
 
 ### Print Version
 
@@ -197,7 +205,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 58 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines 62 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). Wire schemas are in [`schemas/`](schemas/) for client codegen in any language. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
 
 ## TTL Enforcement
 
@@ -332,92 +340,45 @@ Hostile network configuration with auto-reconnect, dead peer detection, and rate
 }
 ```
 
-## Relay
-
-chromatindb includes a relay binary (`chromatindb_relay`) that acts as a security boundary between untrusted clients and the node.
-
-### Architecture
-
-```
-Client (TCP, PQ handshake) --> Relay --> (UDS, TrustedHello) --> Node
-```
-
-The relay listens on TCP (default port 4201), performs a full PQ handshake (ML-KEM-1024 + ML-DSA-87) with each client, and forwards allowed messages to the node via Unix domain socket. The relay has its own ML-DSA-87 identity, separate from the node.
-
-### Message Filter
-
-The relay uses a default-deny message filter. Only 38 client-facing message types are allowed through:
-- **Storage:** Data, WriteAck, Delete, DeleteAck
-- **Queries:** ReadRequest/Response, ListRequest/Response, StatsRequest/Response, ExistsRequest/Response, NodeInfoRequest/Response
-- **Pub/Sub:** Subscribe, Unsubscribe, Notification
-- **Keepalive:** Ping, Pong, Goodbye
-- **v1.4.0 Extensions:** All 18 query types (NamespaceList, StorageStatus, NamespaceStats, Metadata, BatchExists, DelegationList, BatchRead, PeerInfo, TimeRange -- request and response)
-
-Blocked types include all sync, PEX, handshake, and reconciliation messages.
-
-### Relay Configuration
-
-```json
-{
-  "bind_address": "0.0.0.0",
-  "bind_port": 4201,
-  "uds_path": "/run/chromatindb/node.sock",
-  "identity_key_path": "/etc/chromatindb/relay.key",
-  "log_level": "info",
-  "log_file": "/var/log/chromatindb/relay.log"
-}
-```
-
-- **bind_address** -- address to listen on (default: `0.0.0.0`)
-- **bind_port** -- TCP port for client connections (default: `4201`)
-- **uds_path** -- path to the node's Unix domain socket
-- **identity_key_path** -- path to the relay's ML-DSA-87 private key
-- **log_level** -- log verbosity (default: `info`)
-- **log_file** -- path for log output (default: `""` = console only)
-
 ## Deployment
 
 chromatindb includes a production deployment kit in the `dist/` directory for bare-metal Linux systems.
 
 ### Quick Start
 
-Build both binaries, then run the install script:
+Build the binary, then run the install script:
 
 ```bash
 mkdir build && cd build
 cmake ..
 cmake --build .
 cd ..
-sudo dist/install.sh build/db/chromatindb build/relay/chromatindb_relay
+sudo dist/install.sh build/db/chromatindb
 ```
 
-The install script creates a `chromatindb` system user and group, installs binaries to `/usr/local/bin`, copies default configs to `/etc/chromatindb`, installs systemd units, creates data and log directories, and generates identity keys for both node and relay.
+The install script creates a `chromatindb` system user and group, installs the binary to `/usr/local/bin`, copies default config to `/etc/chromatindb`, installs the systemd unit, creates data and log directories, and generates an identity key.
 
 ### Start Services
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now chromatindb
-sudo systemctl enable --now chromatindb-relay
 ```
 
 ### FHS Paths
 
 | Artifact | Location |
 |----------|----------|
-| Node binary | `/usr/local/bin/chromatindb` |
-| Relay binary | `/usr/local/bin/chromatindb_relay` |
-| Node config | `/etc/chromatindb/node.json` |
-| Relay config | `/etc/chromatindb/relay.json` |
+| Binary | `/usr/local/bin/chromatindb` |
+| Config | `/etc/chromatindb/node.json` |
 | Data directory | `/var/lib/chromatindb` |
 | Log directory | `/var/log/chromatindb` |
 | Runtime (UDS) | `/run/chromatindb` |
-| Node systemd unit | `/usr/lib/systemd/system/chromatindb.service` |
-| Relay systemd unit | `/usr/lib/systemd/system/chromatindb-relay.service` |
+| Systemd unit | `/usr/lib/systemd/system/chromatindb.service` |
 
 ### Security Hardening
 
-Both systemd units include hardening directives: `ProtectSystem=strict`, `NoNewPrivileges=yes`, `MemoryDenyWriteExecute=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `ProtectHome=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `ProtectClock=yes`, `ProtectHostname=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes`, `RestrictNamespaces=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`.
+The systemd unit includes hardening directives: `ProtectSystem=strict`, `NoNewPrivileges=yes`, `MemoryDenyWriteExecute=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `ProtectHome=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `ProtectClock=yes`, `ProtectHostname=yes`, `RestrictRealtime=yes`, `RestrictSUIDSGID=yes`, `RestrictNamespaces=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`.
 
 ### Reinstall / Upgrade
 
