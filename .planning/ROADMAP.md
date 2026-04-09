@@ -12,7 +12,7 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
 
 - [x] **Phase 100: Cleanup & Foundation** - Delete old relay/SDK, scaffold new relay binary with per-client send queues and structured logging (completed 2026-04-09)
 - [x] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS (completed 2026-04-09)
-- [ ] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types
+- [x] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types (completed 2026-04-09)
 - [ ] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation
 - [ ] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay
 - [ ] **Phase 105: Operational Polish** - Prometheus metrics, rate limiting, SIGHUP config reload, graceful shutdown
@@ -64,7 +64,7 @@ Plans:
 
 Plans:
 - [x] 102-01-PLAN.md -- Challenge-response auth: Authenticator class, WsSession state machine, config extensions, SIGHUP reload
-- [ ] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
+- [x] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
 
 ### Phase 103: UDS Multiplexer & Protocol Translation
 **Goal**: Relay maintains a single multiplexed UDS connection to the node and translates JSON client requests to FlatBuffers and back, routing responses to the correct client
@@ -121,7 +121,7 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 |-------|----------------|--------|-----------|
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
-| 102. Authentication & JSON Schema | 1/2 | In Progress|  |
+| 102. Authentication & JSON Schema | 2/2 | Complete   | 2026-04-09 |
 | 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
 | 105. Operational Polish | 0/2 | Not started | - |

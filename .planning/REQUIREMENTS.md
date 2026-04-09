@@ -30,10 +30,10 @@ Requirements for Relay v2. Each maps to roadmap phases.
 ### Protocol Translation
 
 - [ ] **PROT-01**: Table-driven JSON to FlatBuffers translation for all 38 relay-allowed message types
-- [ ] **PROT-02**: Binary fields encoded as hex (32-byte hashes, namespaces) or base64 (blob data, signatures)
-- [ ] **PROT-03**: uint64 fields serialized as JSON strings (prevents JavaScript truncation)
+- [x] **PROT-02**: Binary fields encoded as hex (32-byte hashes, namespaces) or base64 (blob data, signatures)
+- [x] **PROT-03**: uint64 fields serialized as JSON strings (prevents JavaScript truncation)
 - [ ] **PROT-04**: Binary WebSocket frames for large payloads (ReadResponse, BatchReadResponse)
-- [ ] **PROT-05**: Message type filtering (blocklist for peer-internal types, same as old relay)
+- [x] **PROT-05**: Message type filtering (blocklist for peer-internal types, same as old relay)
 
 ### UDS Multiplexer
 
@@ -102,9 +102,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-02 | Phase 102 | Complete |
 | AUTH-03 | Phase 102 | Complete |
 | AUTH-04 | Phase 102 | Complete |
-| PROT-02 | Phase 102 | Pending |
-| PROT-03 | Phase 102 | Pending |
-| PROT-05 | Phase 102 | Pending |
+| PROT-02 | Phase 102 | Complete |
+| PROT-03 | Phase 102 | Complete |
+| PROT-05 | Phase 102 | Complete |
 | SESS-03 | Phase 102 | Complete |
 | MUX-01 | Phase 103 | Pending |
 | MUX-02 | Phase 103 | Pending |
