@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.2.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 99-02-PLAN.md
-last_updated: "2026-04-09T03:20:31Z"
+stopped_at: Completed 99-03-PLAN.md
+last_updated: "2026-04-09T04:25:00Z"
 last_activity: 2026-04-09
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
-  percent: 8
+  completed_phases: 5
+  total_plans: 15
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 98 — ttl-enforcement
+**Current focus:** Phase 99 — sync-resource-concurrency-correctness (COMPLETE)
 
 ## Current Position
 
 Phase: 99
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-08
+Plan: 3 of 3 (complete)
+Status: Phase 99 complete
+Last activity: 2026-04-09
 
-Progress: [#.........] 8%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [#.........] 8%
 | Phase 97 P03 | 72min | 2 tasks | 2 files |
 | Phase 98 P03 | 30min | 2 tasks | 5 files |
 | Phase 99 P02 | 43min | 2 tasks | 11 files |
+| Phase 99 P03 | 56min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,8 @@ Previous milestone decisions archived to milestones/v2.1.1-ROADMAP.md.
 - [Phase 97]: Initiator sends auth first in lightweight path (prevents AEAD nonce desync)
 - [Phase 98]: collect_namespace_hashes loads blobs for expiry filtering -- trades O(n) reads for correctness
 - [Phase 98]: SyncOrchestrator uses std::time(nullptr) for expiry checks (no injectable clock)
+- [Phase 99-03]: Pre-existing TSAN data races in connection_manager.cpp and Asio timer cleanup are out of scope (audit finding, not Phase 99)
+- [Phase 99-03]: No std::atomic used for NodeMetrics -- strand confinement is the correct design (per D-14)
 
 ### Pending Todos
 
@@ -101,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-09T03:20:31Z
-Stopped at: Completed 99-02-PLAN.md
-Resume file: .planning/phases/99-sync-resource-concurrency-correctness/99-02-SUMMARY.md
+Last session: 2026-04-09T04:25:00Z
+Stopped at: Completed 99-03-PLAN.md
+Resume file: .planning/phases/99-sync-resource-concurrency-correctness/99-03-SUMMARY.md

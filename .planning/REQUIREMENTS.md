@@ -34,7 +34,7 @@
 
 ## Coroutine Safety
 
-- [ ] **CORO-01**: Send/recv counters use proper atomic or single-thread guarantees across co_await boundaries
+- [x] **CORO-01**: Send/recv counters use proper atomic or single-thread guarantees across co_await boundaries
 
 ## Code Deduplication
 
@@ -86,7 +86,7 @@
 | RES-02 | Phase 99 | Complete |
 | RES-03 | Phase 99 | Complete |
 | RES-04 | Phase 99 | Complete |
-| CORO-01 | Phase 99 | Pending |
+| CORO-01 | Phase 99 | Complete |
 
 **Coverage:**
 - v2.2.0 requirements: 24 total
