@@ -10,26 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v2.2.0 Node Hardening
+## Previous Milestone: v2.2.0 Node Hardening (SHIPPED 2026-04-09)
 
-**Goal:** Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety gaps, duplicate code, and design debt so the database layer is production-grade and never needs revisiting.
-
-**Target features:**
-- Integer overflow fixes in all protocol parsing paths (6 HIGH severity)
-- Nonce counter wraparound protection (connection kill before reuse)
-- TTL enforcement in all query paths and BlobFetch
-- Sync correctness fixes (pending_fetches leak, namespace key, stale Phase B)
-- Peer authentication for lightweight handshake, PQ pubkey binding
-- Subscription limit, bootstrap detection, TOCTOU race closure
-- Centralize 64+ duplicate code instances (BE encoding, auth payload, sig verify)
-- Split PeerManager god object into focused components
-- Input validation hardening (pubkey sizes, FlatBuffer decode, AEAD AD bounds)
-
-**Constraints:**
-- C++ node only — no SDK changes
-- Must remain ASAN/TSAN/UBSAN clean
-- All 615+ existing unit tests must pass after each phase
-- No new dependencies
+**Delivered:** Centralized 64+ duplicate code patterns into 4 shared utility headers, decomposed 4187-line PeerManager god object into 6 focused components, overflow-checked arithmetic in all 14 protocol paths, challenge-response auth for lightweight handshake, TTL enforcement in all query/fetch/sync paths, fixed sync state leaks and 4 resource limit bugs, verified coroutine safety (CORO-01). 5 phases, 15 plans, 24 requirements — all complete. Closed 13 of 14 audit findings. ASAN/TSAN/UBSAN clean.
 
 ## Previous Milestone: v2.1.1 Revocation & Key Lifecycle (SHIPPED 2026-04-07)
 
@@ -198,26 +181,37 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ PROTOCOL.md envelope format spec + HKDF label registry — v1.7.0 Phase 78
 - ✓ SDK README encryption API docs + getting started encryption workflow — v1.7.0 Phase 78
 
+- ✓ SDK delegation revocation (revoke_delegation, list_delegates on Directory) — v2.1.1
+- ✓ KEM key versioning (rotate_kem, key ring, UserEntry v2, resolve_recipient, envelope key ring fallback) — v2.1.1
+- ✓ Group membership revocation (write_to_group refresh, register() namespace fix, group timestamp resolution) — v2.1.1
+- ✓ Protocol & SDK documentation (PROTOCOL.md: revocation, UserEntry v2, group lifecycle; getting-started tutorials) — v2.1.1
+- ✓ Centralized BE encoding/decoding utilities (endian.h, blob_helpers.h, auth_helpers.h, verify_helpers.h) — v2.2.0
+- ✓ PeerManager decomposed into 6 focused components (ConnectionManager, MessageDispatcher, SyncOrchestrator, MetricsCollector, PexManager, BlobPushManager) — v2.2.0
+- ✓ Overflow-checked arithmetic in all protocol decode/encode paths — v2.2.0
+- ✓ Pubkey size validation, AEAD AD bounds, nonce exhaustion protection — v2.2.0
+- ✓ Challenge-response authentication for lightweight handshake, PQ pubkey binding — v2.2.0
+- ✓ TTL enforcement in all query handlers, BlobFetch, BlobNotify, sync paths — v2.2.0
+- ✓ Sync state leak fixes (composite pending key, unconditional cleanup, MDBX MVCC) — v2.2.0
+- ✓ Resource limit fixes (subscription limit, bootstrap detection, atomic capacity/quota, iterator fix) — v2.2.0
+- ✓ Coroutine safety verified (strand confinement, TSAN clean) — v2.2.0
+
 ### Active
 
-- ✓ SDK delegation revocation (revoke_delegation, list_delegates on Directory) — v2.1.1 Phase 91
-- ✓ KEM key versioning (rotate_kem, key ring, UserEntry v2, resolve_recipient, envelope key ring fallback) — v2.1.1 Phase 92
-- ✓ Group membership revocation (write_to_group refresh, register() namespace fix, group timestamp resolution) — v2.1.1 Phase 93
-- ✓ Protocol & SDK documentation (PROTOCOL.md: revocation, UserEntry v2, group lifecycle; getting-started: revocation, rotation, groups tutorials) — v2.1.1 Phase 94
 - [ ] CLI tool for admin operations (quota check, list blobs, etc.)
 - [ ] C/C++/Rust/JS SDKs under sdk/ subdirectories
 
 ### Future
 
+- Relay v2: REST/WebSocket API, multiplexed UDS, PQ auth, C++ with Asio Beast
 - Performance benchmarks for Relay layer
 - Re-encryption on revocation (if compliance use case demands it)
 - Streaming encryption for blobs >10 MiB
 
 ## Context
 
-Shipped v2.1.0 with ~31,000 LOC C++20 + Python SDK (~4,600 LOC, 548 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. Phase 96 complete — PeerManager god object (4187 lines) decomposed into 6 focused components: ConnectionManager, MessageDispatcher, SyncOrchestrator, MetricsCollector, PexManager, BlobPushManager. PeerManager is now a thin 679-line facade. All tests pass under ASAN/TSAN.
-Built across 36 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d).
-19 milestones, 92 phases, 193 plans, 301 requirements total.
+Shipped v2.2.0 with ~34,300 LOC C++20 + Python SDK (~4,600 LOC, 656 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. All 14 audit findings from 2026-04-07 addressed (13 fixed, 1 accepted as non-issue at current scale). ASAN/TSAN/UBSAN clean. The C++ database layer is production-grade — remaining items are accepted trade-offs (O(n) seq scan, pre-existing TSAN in Asio timer cleanup) and future nice-to-haves (tombstone TTL lifecycle).
+Built across 38 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d), v2.1.1 (<1d), v2.2.0 (2d).
+21 milestones, 99 phases, 209 plans, 325 requirements total.
 
 Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
 
@@ -322,6 +316,13 @@ Three-layer architecture (all shipped):
 | RelayIdentity uses SSH-style .key/.pub siblings | Direct key path config instead of directory-based identity | ✓ Good — familiar infra pattern |
 | Shared headers for hex and test helpers | db/util/hex.h and db/tests/test_helpers.h eliminate 570+ lines of duplication | ✓ Good — Zero Duplication Policy enforced |
 
+| PeerManager 6-component decomposition | Reference injection at construction, direct method calls (no event bus); facade preserves public API | ✓ Good — Phase 96 |
+| checked_mul/checked_add return std::optional | Overflow returns nullopt/empty; all 14 protocol paths wired | ✓ Good — Phase 97 |
+| Nonce exhaustion kill at 2^63 | static constexpr local to send/recv_encrypted; kills connection before 2^64 reuse | ✓ Good — Phase 97 |
+| AuthSignature exchange in lightweight handshake | Mirrors PQ path pattern; initiator sends first (prevents nonce desync) | ✓ Good — Phase 97 |
+| saturating_expiry / is_blob_expired in codec.h | Shared expiry functions used by all query, fetch, and sync paths; saturating arithmetic prevents uint64 overflow | ✓ Good — Phase 98 |
+| Composite 64-byte pending_fetches_ key | namespace\|\|hash prevents cross-namespace collision; unconditional cleanup on all ingest outcomes | ✓ Good — Phase 99 |
+| Strand confinement over atomics for NodeMetrics | All 20+ increment sites on IO strand; no std::atomic needed; TSAN verified | ✓ Good — Phase 99 |
 | Concurrent dispatch via offload() pattern | Reuse proven thread pool offload for heavy read ops; send_counter_ AEAD nonce requires IO-thread serialization | ✓ Good — Phase 62 |
 | request_id in transport envelope | Per-connection correlation ID; node echoes, never generates; enables SDK pipelining | ✓ Good — Phase 61 |
 | ExistsRequest via has_blob() key-only lookup | 33-byte response [exists:1][hash:32]; no blob data read, tombstones return false | ✓ Good — Phase 63 |
@@ -347,6 +348,9 @@ Three-layer architecture (all shipped):
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
+
+---
+*Last updated: 2026-04-09 after v2.2.0 milestone*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason

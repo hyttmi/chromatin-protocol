@@ -1,5 +1,29 @@
 # Milestones
 
+## v2.2.0 Node Hardening (Shipped: 2026-04-09)
+
+**Phases completed:** 6 phases, 15 plans, 31 tasks
+
+**Key accomplishments:**
+
+- Two shared utility headers (endian.h, blob_helpers.h) with 36 tests, replacing all inline BE encode/decode in sync, storage, and framing layers (net -95 lines)
+- Replaced 68 inline BE shift, memcpy-32, and blob-ref encoding patterns in peer_manager.cpp with shared chromatindb::util calls -- net 74 LOC reduction, zero test regressions
+- Two shared utility headers (auth_helpers.h, verify_helpers.h) with 13 tests, replacing all 12 inline auth/verify blocks in connection.cpp and promoting handshake.cpp statics to shared headers (net -141 lines). ASAN/TSAN/UBSAN clean.
+- Extracted peer_types.h, MetricsCollector, and PexManager from PeerManager god object, reducing peer_manager.cpp from 4187 to 3576 lines
+- Extracted ConnectionManager (peers_ ownership, connection lifecycle, keepalive) and BlobPushManager (pending_fetches_, blob push/fetch protocol) from PeerManager, reducing peer_manager.cpp from 3576 to 3094 lines
+- Extracted SyncOrchestrator (1234 lines) and MessageDispatcher (1167 lines) from PeerManager, completing 6-component decomposition from 4187-line god object to thin facade
+- checked_mul/checked_add helpers in endian.h wired into all 14 protocol decode/encode/response paths, preventing integer overflow from untrusted wire counts
+- Pubkey size validation in auth/codec, AEAD AD 64 KiB bound, nonce exhaustion kill at 2^63, PQ handshake pubkey binding test
+- Challenge-response authentication added to lightweight handshake, closing the identity impersonation gap where knowing a peer's pubkey sufficed for trusted-path access
+- Overflow-safe saturating_expiry/is_blob_expired functions in codec.h with engine ingest hardening for tombstone TTL and already-expired blob rejection
+- Expiry checks in all 7 query handlers + MetadataRequest + BlobFetch + BlobNotify + notification fan-out, with 8 handler tests proving each path rejects expired blobs
+- Sync paths filter expired blobs in hash collection, blob retrieval, and Phase C transfer; PROTOCOL.md and README.md document all TTL enforcement guarantees
+- Fix pending_fetches_ state leaks: 64-byte composite namespace||hash key (SYNC-02), unconditional cleanup on all ingest outcomes (SYNC-01), MDBX MVCC snapshot safety documented (SYNC-03)
+- Four resource limit bugs fixed: subscription limit (256/conn with QuotaExceeded rejection), full endpoint bootstrap detection, atomic TOCTOU-safe capacity/quota in store_blob, and quota rebuild iterator
+- CORO-01 verified: all 20+ NodeMetrics increment sites confirmed strand-confined with zero TSAN data races
+
+---
+
 ## v2.1.1 Revocation & Key Lifecycle (Shipped: 2026-04-07)
 
 **Phases completed:** 4 phases, 9 plans, 11 tasks

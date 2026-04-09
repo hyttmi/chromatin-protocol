@@ -706,6 +706,51 @@
 
 ---
 
+## Milestone: v2.2.0 — Node Hardening
+
+**Shipped:** 2026-04-09
+**Phases:** 5 | **Plans:** 15
+
+### What Was Built
+- 4 shared utility headers (endian.h, blob_helpers.h, auth_helpers.h, verify_helpers.h) replacing 64+ inline encoding/decoding patterns — net -310 lines
+- PeerManager god object (4187 lines) decomposed into 6 focused components: ConnectionManager, MessageDispatcher, SyncOrchestrator, MetricsCollector, PexManager, BlobPushManager — thin 679-line facade
+- Overflow-checked arithmetic (checked_mul/checked_add) wired into all 14 protocol decode/encode paths
+- Pubkey size validation, AEAD AD 64 KiB bound, nonce exhaustion kill at 2^63, PQ handshake pubkey binding
+- Challenge-response AuthSignature exchange for lightweight handshake — closed identity impersonation gap
+- saturating_expiry/is_blob_expired in codec.h — TTL enforcement in all 7 query handlers + MetadataRequest + BlobFetch + BlobNotify + sync paths
+- Engine rejects tombstones with TTL>0 and already-expired blobs at ingest
+- Composite 64-byte pending_fetches_ key (namespace||hash), unconditional cleanup on all ingest outcomes
+- Subscription limit (256/conn), full-endpoint bootstrap detection, atomic capacity/quota in store_blob, quota rebuild iterator fix
+- CORO-01 strand confinement verified for all 20+ NodeMetrics increment sites
+
+### What Worked
+- Systematic approach: deduplicate first (Phase 95), then restructure (Phase 96), then harden (97-99) — each phase built on cleaner code from the previous one
+- Parallel worktree execution for independent plans within phases (e.g., 97-01 + 97-02, 98-02 + 98-03) significantly reduced elapsed time
+- Audit findings from v2.1.1 provided a clear, prioritized backlog — no scoping ambiguity, every phase had concrete targets
+- ASAN/TSAN/UBSAN gate at end of each phase caught issues early — no regression debt carried between phases
+
+### What Was Inefficient
+- STATE.md merge conflicts on every worktree merge — same boilerplate overhead as v2.1.1
+- Phase 98 plan 02 checkbox left unchecked in ROADMAP.md and progress table showed 2/3 despite completion — bookkeeping gap that had to be caught manually at milestone completion
+
+### Patterns Established
+- Utility header pattern (inline-only in db/util/, namespace chromatindb::util, following hex.h) as the standard for shared code extraction
+- Component decomposition via reference injection at construction with direct method calls — no event bus, no virtual interfaces
+- Sanitizer gate (ASAN+TSAN+UBSAN) as mandatory exit criterion for every plan in hardening milestones
+
+### Key Lessons
+- God object decomposition is mechanical when preceded by code deduplication — shared utilities eliminate cross-cutting concerns that make splitting hard
+- Audit findings are the best milestone backlog source — concrete, prioritized, with clear acceptance criteria
+- 13 of 14 audit findings resolved in 2 days proves that systematic hardening milestones are efficient when the code is already well-tested
+- Pre-existing TSAN races in third-party integration points (Asio timer cleanup) should be accepted rather than worked around — the fix belongs upstream
+
+### Cost Observations
+- Model mix: 100% quality profile (opus executors)
+- Sessions: ~3
+- Notable: 5 phases, 15 plans, 24 requirements in 2 days. Fastest per-requirement velocity of any milestone. Code deduplication in Phase 95 paid immediate dividends — subsequent phases had less code to modify and review.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -731,6 +776,8 @@
 | v1.7.0 | ~3 | 4 | Client-side encryption — envelope crypto, directory, groups, encrypted helpers, zero new deps |
 | v2.0.0 | ~3 | 7 | Event-driven sync — BlobNotify/BlobFetch, event-driven expiry, reconcile-on-connect, keepalive, SDK auto-reconnect |
 | v2.1.0 | ~2 | 5 | Compression, filtering, observability — namespace filtering, Brotli compression, relay resilience, multi-relay failover, Prometheus metrics |
+| v2.1.1 | ~2 | 4 | Revocation & key lifecycle — SDK delegation revocation, KEM rotation, group membership, PeerInfo UAF fix |
+| v2.2.0 | ~3 | 5 | Node hardening — code dedup, PeerManager decomp, protocol/crypto safety, TTL enforcement, sync/resource/concurrency fixes |
 
 ### Cumulative Quality
 
@@ -755,6 +802,8 @@
 | v1.7.0 | 1,223 | ~29,600 C++ + 4,418 SDK | ~140 | 26/26 |
 | v2.0.0 | 1,140+ | ~30,600 C++ + ~4,500 SDK | ~145 | 28/28 |
 | v2.1.0 | 1,155+ | ~31,000 C++ + ~4,600 SDK | ~150 | 18/18 |
+| v2.1.1 | 1,303+ | ~31,000 C++ + ~4,600 SDK | ~150 | 9/9 |
+| v2.2.0 | 1,303+ | ~34,300 C++ + ~4,600 SDK | ~155 | 24/24 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -776,3 +825,5 @@
 16. Protocol documentation must be verified against source code for crypto parameters — v1.6.0 found HKDF salt discrepancy that existed since v0.5.0
 17. Zero new dependencies is achievable when building on a solid crypto foundation — v1.7.0 added envelope encryption, directory, and groups using only v1.6.0 primitives
 18. KEM-then-Wrap is mandatory for ML-KEM envelope encryption — cannot choose encapsulated value like RSA; research phase caught this before implementation
+19. Deduplicate before decompose — extracting shared utilities first makes god object decomposition mechanical rather than surgical (v2.2.0 Phase 95 → Phase 96)
+20. Audit findings make the best hardening backlog — concrete, prioritized, with clear acceptance criteria; v2.2.0 closed 13/14 findings in 2 days
