@@ -166,6 +166,17 @@ add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
 # =============================================================================
+# Relay component
+# =============================================================================
+add_subdirectory(relay)
+
+# =============================================================================
+# Relay binary
+# =============================================================================
+add_executable(chromatindb_relay relay/relay_main.cpp)
+target_link_libraries(chromatindb_relay PRIVATE chromatindb_relay_lib)
+
+# =============================================================================
 # Load generator binary
 # =============================================================================
 add_executable(chromatindb_loadgen loadgen/loadgen_main.cpp)
