@@ -47,7 +47,7 @@ Plans:
 **Plans**: 2 plans (Wave 1: 101-01, Wave 2: 101-02)
 
 Plans:
-- [ ] 101-01-PLAN.md -- WS framing library, HTTP upgrade handshake, Session write callback, TLS config, OpenSSL build
+- [x] 101-01-PLAN.md -- WS framing library, HTTP upgrade handshake, Session write callback, TLS config, OpenSSL build
 - [ ] 101-02-PLAN.md -- WsSession, WsAcceptor, SessionManager, main() integration with thread pool and SIGHUP TLS reload
 
 ### Phase 102: Authentication & JSON Schema
@@ -120,7 +120,7 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
-| 101. WebSocket Transport | 0/2 | Not started | - |
+| 101. WebSocket Transport | 1/2 | In Progress|  |
 | 102. Authentication & JSON Schema | 0/2 | Not started | - |
 | 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |

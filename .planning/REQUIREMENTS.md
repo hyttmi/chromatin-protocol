@@ -15,10 +15,10 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Transport
 
-- [ ] **TRANS-01**: Relay accepts WebSocket Secure (WSS) connections with TLS cert/key from config
-- [ ] **TRANS-02**: Relay accepts plain WebSocket (WS) connections for local dev/testing
-- [ ] **TRANS-03**: Hand-rolled RFC 6455 WebSocket framing (upgrade handshake, text/binary frames, ping/pong/close)
-- [ ] **TRANS-04**: SIGHUP-reloadable TLS context via atomic ssl::context swap
+- [x] **TRANS-01**: Relay accepts WebSocket Secure (WSS) connections with TLS cert/key from config
+- [x] **TRANS-02**: Relay accepts plain WebSocket (WS) connections for local dev/testing
+- [x] **TRANS-03**: Hand-rolled RFC 6455 WebSocket framing (upgrade handshake, text/binary frames, ping/pong/close)
+- [x] **TRANS-04**: SIGHUP-reloadable TLS context via atomic ssl::context swap
 
 ### Authentication
 
@@ -94,10 +94,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SESS-01 | Phase 100 | Complete |
 | SESS-02 | Phase 100 | Complete |
 | OPS-04 | Phase 100 | Complete |
-| TRANS-01 | Phase 101 | Pending |
-| TRANS-02 | Phase 101 | Pending |
-| TRANS-03 | Phase 101 | Pending |
-| TRANS-04 | Phase 101 | Pending |
+| TRANS-01 | Phase 101 | Complete |
+| TRANS-02 | Phase 101 | Complete |
+| TRANS-03 | Phase 101 | Complete |
+| TRANS-04 | Phase 101 | Complete |
 | AUTH-01 | Phase 102 | Pending |
 | AUTH-02 | Phase 102 | Pending |
 | AUTH-03 | Phase 102 | Pending |
