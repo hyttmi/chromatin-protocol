@@ -41,7 +41,7 @@ Relay accepts WebSocket connections over TLS (WSS) and plain TCP (WS) with corre
 ### TLS
 - **D-18:** TLS 1.3 only. No TLS 1.2 or older.
 - **D-19:** SIGHUP TLS reload via `shared_ptr<ssl::context>` swap. New connections get new context. Existing connections keep old context (ref-counted lifetime). Reload failure -> keep old context + log error.
-- **D-20:** System OpenSSL 3.0+ (`find_package(OpenSSL 3.0 REQUIRED)`). wolfSSL rejected (GPLv2 blocks closed-source relay without commercial license). LibreSSL considered but OpenSSL is sufficient and universal. Not FetchContent'd -- system package only.
+- **D-20:** System OpenSSL 3.3+ (`find_package(OpenSSL 3.3 REQUIRED)`). wolfSSL rejected (GPLv2 blocks closed-source relay without commercial license). LibreSSL considered but OpenSSL is sufficient and universal. Not FetchContent'd -- system package only.
 
 ### Threading
 - **D-21:** Thread pool: `std::thread::hardware_concurrency()` threads running `ioc.run()`. Per-connection strand via natural Asio coroutine chain (implicit serialization per session). Different clients run concurrently across threads.
