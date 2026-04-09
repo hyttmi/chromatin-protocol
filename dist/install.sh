@@ -10,7 +10,7 @@ DATADIR="/var/lib/chromatindb"
 SCRIPTDIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
-    echo "Usage: install.sh [--uninstall] <chromatindb> <chromatindb_relay>" >&2
+    echo "Usage: install.sh [--uninstall] <chromatindb>" >&2
     exit 1
 }
 
@@ -45,18 +45,13 @@ do_install() {
     fi
 
     NODE_BIN="$1"
-    RELAY_BIN="$2"
 
     if [ ! -f "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
         die "$NODE_BIN is not an executable file"
     fi
-    if [ ! -f "$RELAY_BIN" ] || [ ! -x "$RELAY_BIN" ]; then
-        die "$RELAY_BIN is not an executable file"
-    fi
 
     # Install binaries
     install -m 0755 "$NODE_BIN" "$BINDIR/chromatindb"
-    install -m 0755 "$RELAY_BIN" "$BINDIR/chromatindb_relay"
 
     # Install sysusers.d and create user
     install -m 0644 "$SCRIPTDIR/sysusers.d/chromatindb.conf" "$SYSUSERSDIR/chromatindb.conf"
@@ -84,10 +79,6 @@ do_install() {
         "$BINDIR/chromatindb" keygen --data-dir "$DATADIR"
         chown chromatindb:chromatindb "$DATADIR/node.key" "$DATADIR/node.pub"
     fi
-    if [ ! -f "$DATADIR/relay.key" ]; then
-        "$BINDIR/chromatindb_relay" keygen --output "$DATADIR/relay.key"
-        chown chromatindb:chromatindb "$DATADIR/relay.key" "$DATADIR/relay.pub"
-    fi
 }
 
 case "${1:-}" in
@@ -98,9 +89,9 @@ case "${1:-}" in
         usage
         ;;
     *)
-        if [ $# -ne 2 ]; then
+        if [ $# -ne 1 ]; then
             usage
         fi
-        do_install "$1" "$2"
+        do_install "$1"
         ;;
 esac

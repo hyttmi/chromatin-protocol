@@ -244,9 +244,6 @@ if(BUILD_TESTING)
     tests/sync/test_sync_protocol.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
-    tests/relay/test_relay_config.cpp
-    tests/relay/test_relay_identity.cpp
-    tests/relay/test_message_filter.cpp
     tests/util/test_endian.cpp
     tests/util/test_blob_helpers.cpp
     tests/net/test_auth_helpers.cpp
@@ -255,7 +252,6 @@ if(BUILD_TESTING)
 
   target_link_libraries(chromatindb_tests PRIVATE
     chromatindb_lib
-    chromatindb_relay_lib
     Catch2::Catch2WithMain
   )
 

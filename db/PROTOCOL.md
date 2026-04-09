@@ -288,7 +288,7 @@ When a blob is ingested -- whether from a client write or from peer sync -- the 
 
 **Namespace filtering:** BlobNotify is only sent to peers whose announced namespace set (via SyncNamespaceAnnounce, type 62) includes the blob's namespace. Peers with an empty announced set (replicate-all) receive all notifications. This filtering is evaluated per-peer on every ingest event.
 
-**Client notifications:** UDS clients and relay-connected SDK clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
+**Client notifications:** UDS clients and relay-connected clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
 
 **BlobNotify (type 59) -- 77-byte payload:**
 
@@ -715,7 +715,7 @@ Tombstoned blobs return `exists = 0x00`. The echoed `blob_hash` allows clients t
 
 ### NodeInfoRequest / NodeInfoResponse (types 39-40)
 
-Query node version, state, and supported message types for SDK capability discovery.
+Query node version, state, and supported message types for client capability discovery.
 
 **NodeInfoRequest payload:** empty (0 bytes)
 
@@ -1017,9 +1017,9 @@ Validation: `start_timestamp > end_timestamp` triggers a strike.
 
 Implementation scans the namespace's sequence map (up to 10,000 entries) and filters by timestamp range. Returns blob references only (not full blob data). Clients use ReadRequest or BatchReadRequest to fetch the actual blob data.
 
-## SDK Client Notes
+## Client Implementation Notes
 
-Implementation details for SDK developers connecting to chromatindb via relay.
+Implementation details for developers connecting to chromatindb via relay.
 
 ### AEAD Nonce Counters
 
@@ -1027,7 +1027,7 @@ Post-handshake AEAD nonce counters start at 1 in both directions, not 0. Nonce 0
 
 ### Ping/Pong Behavior
 
-The C++ relay sends Pong responses with `request_id = 0`, regardless of the request_id sent in the Ping. SDK implementations should use a dedicated send path for Ping that does not rely on request_id correlation. A FIFO pending queue for Pong responses works well.
+The node sends Pong responses with `request_id = 0`, regardless of the request_id in the Ping. Client implementations should use a dedicated Ping send path that does not rely on request_id correlation. A FIFO pending queue for Pong responses works well.
 
 ### Wire Format Endianness
 
@@ -1035,23 +1035,19 @@ The protocol uses mixed endianness:
 - **Big-endian:** Frame length prefix (4 bytes), most wire format fields
 - **Little-endian:** Auth payload `pubkey_size` field (4 bytes), canonical signing input fields `ttl` (4 bytes) and `timestamp` (8 bytes)
 
-SDK implementations must encode/decode each field with the correct byte order.
-
-### Exception Hierarchy
-
-The Python SDK defines `chromatindb.exceptions.ConnectionError` which inherits from `ProtocolError`, not from Python's builtin `ConnectionError`. This is intentional -- SDK connection errors are protocol-level events, not OS-level socket errors. Code that catches `builtins.ConnectionError` will not catch SDK connection timeouts.
+Client implementations must encode/decode each field with the correct byte order.
 
 ### FlatBuffers Determinism
 
-FlatBuffers serialization is not deterministic across languages. The same logical message may produce different bytes in Python vs C++. Always use the server-returned `blob_hash` (from WriteAck) rather than computing it client-side from the serialized FlatBuffer.
+FlatBuffers serialization is not deterministic across implementations. The same logical message may produce different bytes in different languages or library versions. Always use the server-returned `blob_hash` (from WriteAck) rather than computing it client-side from the serialized FlatBuffer.
 
 ### ML-DSA-87 Signature Non-determinism
 
-ML-DSA-87 signatures are non-deterministic -- signing the same data twice produces different signatures. Since the FlatBuffer blob includes the signature, this means writing identical data produces a different `blob_hash` each time. SDK tests should verify individual fields (data, ttl, timestamp) rather than comparing serialized bytes.
+ML-DSA-87 signatures are non-deterministic -- signing the same data twice produces different signatures. Since the serialized blob includes the signature, writing identical data produces a different `blob_hash` each time. Client implementations should verify individual fields (data, ttl, timestamp) rather than comparing serialized bytes.
 
 ## Client-Side Envelope Encryption
 
-Multi-recipient envelope encryption for zero-knowledge storage. The node never sees plaintext -- all encryption and decryption happens in the SDK.
+Multi-recipient envelope encryption for zero-knowledge storage. The node never sees plaintext -- all encryption and decryption happens client-side.
 
 ### Overview
 
@@ -1169,7 +1165,7 @@ Implementations must retain all historical KEM secret keys for as long as data e
 
 ### Directory: User Entries and Groups
 
-The SDK implements a directory layer over the blob store for user discovery and group management. The directory uses the admin's namespace for storage. These formats are documented here because envelope encryption depends on them: `envelope_encrypt` resolves recipient KEM public keys from UserEntry blobs, and `write_to_group` resolves group membership from GroupEntry blobs.
+Clients implement a directory layer over the blob store for user discovery and group management. The directory uses the admin's namespace for storage. These formats are documented here because envelope encryption depends on them: `envelope_encrypt` resolves recipient KEM public keys from UserEntry blobs, and `write_to_group` resolves group membership from GroupEntry blobs.
 
 #### UserEntry Binary Format (v2)
 

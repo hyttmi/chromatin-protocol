@@ -1,5 +1,9 @@
 {
+  "bind_address": "0.0.0.0",
+  "bind_port": 4201,
   "uds_path": "/run/chromatindb/node.sock",
   "identity_key_path": "/var/lib/chromatindb/relay.key",
+  "max_send_queue": 256,
+  "log_level": "info",
   "log_file": "/var/log/chromatindb/relay.log"
 }

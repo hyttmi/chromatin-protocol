@@ -4,8 +4,7 @@ db/version.h
 deploy/results/
 deploy/configs/*-trusted.json
 
-# Python SDK
-sdk/python/.venv
+# Python
 __pycache__/
 *.egg-info/
 *.pyc

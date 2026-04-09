@@ -160,7 +160,7 @@ Create a JSON config file and pass it with `--config`:
 - **bind_address** -- address and port to listen on (default: `0.0.0.0:4200`)
 - **data_dir** -- directory for identity keys and blob storage (default: `./data`)
 - **bootstrap_peers** -- list of `host:port` strings to connect to on startup
-- **allowed_client_keys** -- namespace hashes (hex) of clients allowed to connect via UDS (through relay); empty means no restriction
+- **allowed_client_keys** -- namespace hashes (hex) of clients allowed to connect via UDS; empty means no restriction
 - **allowed_peer_keys** -- namespace hashes (hex) of peers allowed to connect via TCP for sync; empty means any peer that completes PQ handshake can sync
 - **trusted_peers** -- IP addresses (no ports) whose connections use a lightweight handshake without ML-KEM-1024 key exchange; localhost (127.0.0.1, ::1) is always trusted implicitly (default: `[]`)
 - **max_peers** -- maximum number of simultaneous peer connections (default: `32`)
@@ -185,7 +185,7 @@ Create a JSON config file and pass it with `--config`:
 - **inactivity_timeout_seconds** -- disconnect peers that send no messages within this many seconds; set to `0` to disable (default: `120`, minimum `30` when enabled)
 - **expiry_scan_interval_seconds** -- interval between periodic expired-blob scan passes in seconds; minimum is 10 seconds (default: `60`)
 - **compaction_interval_hours** -- interval between sync cursor compaction passes in hours; set to `0` to disable (default: `6`, minimum `1` when enabled)
-- **uds_path** -- path for Unix domain socket listener; relay connects via this path for trusted local communication (default: `""` = disabled)
+- **uds_path** -- path for Unix domain socket listener; external services connect via this path for trusted local communication (default: `""` = disabled)
 
 ## Signals
 
@@ -261,7 +261,7 @@ chromatindb run --config config-b.json
 
 ### Closed Mode with ACLs
 
-Populate `allowed_client_keys` and/or `allowed_peer_keys` with the namespace hashes of permitted connections. Client keys restrict UDS connections (from relays/clients); peer keys restrict TCP connections (from other nodes). Each list is independent -- a node can restrict which clients connect via relay while keeping peer sync open (or vice versa).
+Populate `allowed_client_keys` and/or `allowed_peer_keys` with the namespace hashes of permitted connections. Client keys restrict UDS connections; peer keys restrict TCP connections (from other nodes). Each list is independent -- a node can restrict which clients connect via relay while keeping peer sync open (or vice versa).
 
 ```json
 {
@@ -452,7 +452,7 @@ Stops and disables services, removes binaries, systemd units, and sysusers/tmpfi
 
 **Blob Existence Check** -- Clients send an ExistsRequest with a namespace and blob hash to check whether a blob exists without transferring its data. The node responds with a single-byte existence flag and the echoed blob hash. Tombstoned blobs are reported as not found.
 
-**Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version, git hash, uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. SDKs use the supported types list for feature detection.
+**Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version, git hash, uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. Clients use the supported types list for feature detection.
 
 **Namespace Enumeration** -- Clients list all namespaces stored on a node via NamespaceListRequest. Paginated response with after-cursor and configurable limit (max 1000 per page). Each entry includes the namespace ID and blob count.
 

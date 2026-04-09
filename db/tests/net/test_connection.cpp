@@ -12,6 +12,20 @@
 #include <chrono>
 #include <cstring>
 
+// Friend class accessor for private test-only methods on Connection.
+// Must be in chromatindb::net to match the friend declaration.
+namespace chromatindb::net {
+class ConnectionTestAccess {
+public:
+    static void set_send_counter(Connection& conn, uint64_t v) {
+        conn.set_send_counter_for_test(v);
+    }
+    static void set_recv_counter(Connection& conn, uint64_t v) {
+        conn.set_recv_counter_for_test(v);
+    }
+};
+} // namespace chromatindb::net
+
 using namespace chromatindb::net;
 using namespace chromatindb::wire;
 
@@ -917,7 +931,7 @@ TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") 
                 REQUIRE(ok);
 
                 // Force counter to nonce exhaustion threshold
-                conn->set_send_counter_for_test(1ULL << 63);
+                ConnectionTestAccess::set_send_counter(*conn, 1ULL << 63);
 
                 // This send should fail due to nonce exhaustion
                 std::vector<uint8_t> payload2 = {0x02};
