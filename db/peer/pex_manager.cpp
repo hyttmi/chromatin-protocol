@@ -276,7 +276,7 @@ void PexManager::save_persisted_peers() {
         auto json_str = j.dump(2);
 
         // Write to temp file via raw POSIX (std::ofstream cannot fsync)
-        int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd < 0) {
             spdlog::warn("failed to create temp peer file: {}", strerror(errno));
             return;

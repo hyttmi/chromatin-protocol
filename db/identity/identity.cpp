@@ -104,6 +104,12 @@ void NodeIdentity::save_to(const std::filesystem::path& data_dir) const {
     }
     auto sk = signer_.export_secret_key();
     key_file.write(reinterpret_cast<const char*>(sk.data()), sk.size());
+    key_file.close();
+
+    // Restrict secret key to owner-only (0600)
+    std::filesystem::permissions(key_path,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
 }
 
 } // namespace chromatindb::identity
