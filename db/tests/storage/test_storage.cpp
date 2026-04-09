@@ -2316,3 +2316,99 @@ TEST_CASE("list_delegations does not return delegations from other namespaces", 
         delegate2.public_key().data(), delegate2.public_key().size());
     CHECK(entries2[0].delegate_pk_hash == expected_hash2);
 }
+
+// ============================================================================
+// Phase 99 Plan 02: Atomic capacity/quota check in store_blob (RES-03)
+// ============================================================================
+
+TEST_CASE("store_blob rejects when capacity exceeded atomically", "[storage][resource]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a blob to occupy some space
+    auto blob1 = make_test_blob(0xC1, "fill-capacity");
+    auto encoded1 = chromatindb::wire::encode_blob(blob1);
+    auto hash1 = chromatindb::wire::blob_hash(encoded1);
+    auto r1 = store.store_blob(blob1, hash1, encoded1);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+
+    // Now try to store another blob with max_storage_bytes set to 1 (below used_bytes)
+    auto blob2 = make_test_blob(0xC1, "over-capacity");
+    auto encoded2 = chromatindb::wire::encode_blob(blob2);
+    auto hash2 = chromatindb::wire::blob_hash(encoded2);
+    auto r2 = store.store_blob(blob2, hash2, encoded2, 1, 0, 0);
+    REQUIRE(r2.status == StoreResult::Status::CapacityExceeded);
+    REQUIRE(r2.blob_hash == hash2);
+}
+
+TEST_CASE("store_blob rejects when quota exceeded atomically", "[storage][resource]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store one blob
+    auto blob1 = make_test_blob(0xC2, "fill-quota-count");
+    auto encoded1 = chromatindb::wire::encode_blob(blob1);
+    auto hash1 = chromatindb::wire::blob_hash(encoded1);
+    auto r1 = store.store_blob(blob1, hash1, encoded1);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+
+    // Try to store second blob with count_limit=1
+    auto blob2 = make_test_blob(0xC2, "over-quota-count");
+    auto encoded2 = chromatindb::wire::encode_blob(blob2);
+    auto hash2 = chromatindb::wire::blob_hash(encoded2);
+    auto r2 = store.store_blob(blob2, hash2, encoded2, 0, 0, 1);
+    REQUIRE(r2.status == StoreResult::Status::QuotaExceeded);
+    REQUIRE(r2.blob_hash == hash2);
+}
+
+TEST_CASE("store_blob duplicate bypasses capacity check", "[storage][resource]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a blob normally
+    auto blob = make_test_blob(0xC3, "dedup-capacity");
+    auto encoded = chromatindb::wire::encode_blob(blob);
+    auto hash = chromatindb::wire::blob_hash(encoded);
+    auto r1 = store.store_blob(blob, hash, encoded);
+    REQUIRE(r1.status == StoreResult::Status::Stored);
+
+    // Try to store the same blob with max_storage_bytes=1 (would fail for new blobs)
+    // Duplicate check runs before capacity check (Pitfall 4)
+    auto r2 = store.store_blob(blob, hash, encoded, 1, 0, 1);
+    REQUIRE(r2.status == StoreResult::Status::Duplicate);
+}
+
+TEST_CASE("rebuild_quota_aggregates clears all entries", "[storage][resource]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store blobs in 3 different namespaces
+    auto blob1 = make_test_blob(0xD1, "rebuild-ns1");
+    auto blob2 = make_test_blob(0xD2, "rebuild-ns2");
+    auto blob3 = make_test_blob(0xD3, "rebuild-ns3");
+    store.store_blob(blob1);
+    store.store_blob(blob2);
+    store.store_blob(blob3);
+
+    // Verify all 3 namespaces have quota entries
+    auto q1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.namespace_id));
+    auto q2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.namespace_id));
+    auto q3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.namespace_id));
+    REQUIRE(q1.blob_count == 1);
+    REQUIRE(q2.blob_count == 1);
+    REQUIRE(q3.blob_count == 1);
+
+    // Rebuild and verify all quotas are still correct
+    store.rebuild_quota_aggregates();
+
+    auto rq1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.namespace_id));
+    auto rq2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.namespace_id));
+    auto rq3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.namespace_id));
+    REQUIRE(rq1.blob_count == 1);
+    REQUIRE(rq2.blob_count == 1);
+    REQUIRE(rq3.blob_count == 1);
+    // Byte counts should match original
+    REQUIRE(rq1.total_bytes == q1.total_bytes);
+    REQUIRE(rq2.total_bytes == q2.total_bytes);
+    REQUIRE(rq3.total_bytes == q3.total_bytes);
+}

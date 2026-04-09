@@ -18,6 +18,7 @@ struct Config {
     std::vector<std::string> bootstrap_peers;
     std::string log_level = "info";
     uint32_t max_peers = 32;
+    uint32_t max_subscriptions_per_connection = 256; // Per-connection subscription limit (0 = unlimited, D-07)
     uint32_t safety_net_interval_seconds = 600;
     uint64_t max_storage_bytes = 0;                 // 0 = unlimited (no capacity limit)
     uint64_t rate_limit_bytes_per_sec = 0;          // 0 = disabled (no rate limiting)

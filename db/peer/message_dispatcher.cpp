@@ -223,6 +223,21 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         auto* peer = find_peer(conn);
         if (peer) {
             auto namespaces = PeerManager::decode_namespace_list(payload);
+            // RES-01 (D-06/D-07): Per-connection subscription limit
+            if (max_subscriptions_ > 0 &&
+                peer->subscribed_namespaces.size() + namespaces.size() > max_subscriptions_) {
+                spdlog::warn("Subscription limit exceeded for peer {}: {} existing + {} requested > {} max",
+                             peer_display_name(conn),
+                             peer->subscribed_namespaces.size(),
+                             namespaces.size(), max_subscriptions_);
+                // D-08: Send rejection using existing QuotaExceeded message type.
+                // Must co_spawn because send_message is awaitable and Subscribe handler is inline.
+                asio::co_spawn(ioc_, [conn, request_id]() -> asio::awaitable<void> {
+                    std::span<const uint8_t> empty{};
+                    co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty, request_id);
+                }, asio::detached);
+                return;
+            }
             for (const auto& ns : namespaces) {
                 peer->subscribed_namespaces.insert(ns);
             }

@@ -339,13 +339,23 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
 StoreResult Storage::store_blob(const wire::BlobData& blob,
                                 const std::array<uint8_t, 32>& precomputed_hash,
                                 std::span<const uint8_t> precomputed_encoded) {
+    return store_blob(blob, precomputed_hash, precomputed_encoded, 0, 0, 0);
+}
+
+StoreResult Storage::store_blob(const wire::BlobData& blob,
+                                const std::array<uint8_t, 32>& precomputed_hash,
+                                std::span<const uint8_t> precomputed_encoded,
+                                uint64_t max_storage_bytes,
+                                uint64_t quota_byte_limit,
+                                uint64_t quota_count_limit) {
     try {
         auto blob_key = make_blob_key(blob.namespace_id.data(), precomputed_hash.data());
         auto key_slice = to_slice(blob_key);
 
         auto txn = impl_->env.start_write();
 
-        // Check dedup BEFORE encryption (hash is on plaintext)
+        // Check dedup BEFORE encryption and capacity checks (hash is on plaintext)
+        // Duplicates must bypass capacity/quota checks (Pitfall 4)
         auto existing = txn.get(impl_->blobs_map, key_slice, not_found_sentinel);
         if (existing.data() != nullptr) {
             // Blob already exists -- find existing seq_num by scanning
@@ -377,6 +387,44 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
             result.seq_num = existing_seq;
             result.blob_hash = precomputed_hash;
             return result;
+        }
+
+        // RES-03 (D-10): Atomic capacity check inside write transaction
+        // Tombstones exempt (small, free space by deleting target)
+        if (max_storage_bytes > 0 && !wire::is_tombstone(blob.data)) {
+            if (used_bytes() >= max_storage_bytes) {
+                txn.abort();
+                StoreResult result;
+                result.status = StoreResult::Status::CapacityExceeded;
+                result.blob_hash = precomputed_hash;
+                return result;
+            }
+        }
+
+        // RES-03 (D-11): Atomic quota check inside write transaction
+        if (!wire::is_tombstone(blob.data) && (quota_byte_limit > 0 || quota_count_limit > 0)) {
+            auto ns_slice = mdbx::slice(blob.namespace_id.data(), 32);
+            auto existing_quota = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
+            NamespaceQuota current{};
+            if (existing_quota.data() != nullptr &&
+                existing_quota.length() == QUOTA_VALUE_SIZE) {
+                current = decode_quota_value(
+                    static_cast<const uint8_t*>(existing_quota.data()));
+            }
+            if (quota_byte_limit > 0 && current.total_bytes + precomputed_encoded.size() > quota_byte_limit) {
+                txn.abort();
+                StoreResult result;
+                result.status = StoreResult::Status::QuotaExceeded;
+                result.blob_hash = precomputed_hash;
+                return result;
+            }
+            if (quota_count_limit > 0 && current.blob_count + 1 > quota_count_limit) {
+                txn.abort();
+                StoreResult result;
+                result.status = StoreResult::Status::QuotaExceeded;
+                result.blob_hash = precomputed_hash;
+                return result;
+            }
         }
 
         // Encrypt the pre-computed encoded blob value (AD = 64-byte mdbx key)
@@ -1368,13 +1416,13 @@ void Storage::rebuild_quota_aggregates() {
         auto txn = impl_->env.start_write();
 
         // Clear existing quota entries
+        // RES-04 (D-12): Fixed iterator -- erase current, restart from first
         {
             auto cursor = txn.open_cursor(impl_->quota_map);
             auto result = cursor.to_first(false);
             while (result.done) {
-                auto next = cursor.to_next(false);
-                cursor.erase();
-                result.done = next.done;
+                cursor.erase();                    // erase current entry
+                result = cursor.to_first(false);   // restart from first remaining
             }
         }
 
