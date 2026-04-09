@@ -1,196 +1,381 @@
-# Stack Research
+# Stack Research: Relay v2 (WebSocket/JSON/TLS Gateway)
 
-**Domain:** ACL revocation, key versioning, group membership revocation for chromatindb
-**Researched:** 2026-04-06
-**Confidence:** HIGH
+**Domain:** WebSocket relay gateway translating JSON clients to FlatBuffers node over UDS
+**Researched:** 2026-04-09
+**Confidence:** HIGH (core stack is proven, additions are standard components)
 
-## Key Finding: No New Dependencies Required
+## Context
 
-The existing chromatindb crypto stack already contains every primitive needed for ACL revocation, key versioning in envelope encryption, and group membership revocation. This is a pure application-layer feature set built on top of proven cryptographic foundations.
+Relay v2 replaces the old PQ-authenticated TCP relay with a WebSocket/JSON/TLS gateway. The database node (db/) is frozen. The relay must:
 
-**The project constraint "No new dependencies" is not a limitation -- it is a confirmation that the original stack was well-chosen.**
+1. Accept WSS connections from clients (TLS + WebSocket)
+2. Perform ML-DSA-87 challenge-response auth over WebSocket
+3. Translate JSON messages to FlatBuffers binary and vice versa
+4. Forward to the node via a single multiplexed UDS connection
+5. Track subscriptions and route notifications
 
-## Existing Stack (Validated -- DO NOT CHANGE)
+The existing C++20/Asio/coroutine stack is validated and stays. This document covers ONLY new additions.
 
-| Technology | Version | Purpose | Status |
-|------------|---------|---------|--------|
-| liboqs (ML-DSA-87) | latest via FetchContent | Signing: namespace ownership, delegation blobs, tombstones, UserEntry KEM-sig | Sufficient for all revocation signing |
-| liboqs (ML-KEM-1024) | latest via FetchContent | Envelope encryption: per-recipient key encapsulation | Sufficient for key versioning |
-| libsodium (ChaCha20-Poly1305) | latest via FetchContent | AEAD: transport, envelope DEK wrapping, DARE | Sufficient -- no new AEAD needed |
-| libsodium (HKDF-SHA256) | latest via FetchContent | Key derivation: transport, DARE, envelope KEK | Sufficient -- new HKDF labels only |
-| hashlib (SHA3-256) | Python stdlib | Hashing: namespace derivation, pk_hash, blob addressing | Sufficient |
-| PyNaCl | pip dependency | Python AEAD bindings | Sufficient |
-| liboqs-python | pip dependency | Python ML-DSA-87 + ML-KEM-1024 bindings | Sufficient |
-| flatbuffers | pip dependency | Wire encoding for blob payloads | Sufficient |
-| brotli | pip dependency | Envelope compression (suite 0x02) | Sufficient |
-| libmdbx | latest via FetchContent | Storage: blob_map, delegation_map, tombstone_map | Sufficient -- delegation_map already tracks revocations |
+## Critical Decision: WebSocket Library
 
-## What Each Feature Needs (Stack Analysis)
+### Recommendation: Write a minimal RFC 6455 server (no third-party WebSocket library)
 
-### 1. ACL Revocation
+**Why not Boost.Beast:**
+- Boost.Beast requires Boost.Asio (boost:: namespace), NOT standalone Asio. This project uses standalone Asio (asio:: namespace) via OlivierLDff/asio.cmake with `ASIO_STANDALONE` defined. Switching to Boost.Asio would require changing every `asio::` reference in ~34,300 LOC of db/ code, which is frozen.
+- The beast-asio-standalone fork (vimpunk) is explicitly discouraged by its maintainer: "I don't recommend that you use this since the update frequency is going to be smaller." Tests don't work. Unmaintained.
 
-**Already implemented in C++ node (confirmed by test_engine.cpp lines 1090-1118):**
-- Owner tombstones a delegation blob -> `has_valid_delegation()` returns false
-- Delegate writes are rejected with `IngestError::no_delegation`
-- Re-delegation after revocation works (new timestamp = new blob hash)
-- Delegate-written blobs survive revocation (data persists, write access revoked)
+**Why not WebSocket++:**
+- Has real compatibility issues with recent standalone Asio (GitHub issue #794: compilation failures with executor model changes in Asio 1.28+). The project uses Asio 1.38.0.
+- CMake build still requires Boost for examples/tests (GitHub issue #1099: open, unresolved). Standalone Asio mode is second-class.
+- Callback-based API, not coroutine-native. Would require wrapping everything in coroutine adapters.
+- Header-only C++11 design -- not idiomatic with the project's C++20 coroutine patterns.
 
-**What's missing (SDK-only work, no new crypto):**
+**Why not eidheim/Simple-WebSocket-Server:**
+- C++11 callback-based, uses Boost.Asio, not standalone Asio coroutines.
 
-| Gap | What to Build | Primitives Used |
-|-----|---------------|-----------------|
-| SDK revocation helper | `Directory.revoke_delegate()` that tombstones the delegation blob | ML-DSA-87 sign + existing `delete_blob()` |
-| Delegation blob hash tracking | Directory must cache delegation blob_hashes per delegate | SHA3-256 for pk_hash lookup key |
-| Revocation status query | `Directory.is_revoked(identity)` checking tombstone existence | Existing `has_tombstone_for()` or blob read |
+**Why a hand-rolled implementation works here:**
 
-**Crypto primitives needed:** None new. ML-DSA-87 signing (for tombstone creation) and SHA3-256 (for delegation index key) are already in the stack.
+The relay only needs SERVER-side WebSocket (no client). The server-side subset of RFC 6455 is small:
 
-### 2. Key Versioning in Envelope Encryption
+1. **HTTP Upgrade handshake** (~40 lines): Parse `Sec-WebSocket-Key`, respond with `SHA-1(key + magic)` Base64-encoded in `Sec-WebSocket-Accept`. OpenSSL (already needed for TLS) provides SHA-1 and Base64.
+2. **Frame read** (~60 lines): Read 2-14 byte header, unmask client payload (XOR with 4-byte key). Clients MUST mask; server MUST NOT mask.
+3. **Frame write** (~30 lines): Write unmasked frames to client. Text frames (opcode 0x1) for JSON messages.
+4. **Control frames** (~20 lines): Handle Ping (respond Pong), Pong (ignore), Close (echo close frame).
 
-**Current state:** Each Identity has exactly one ML-KEM-1024 keypair. The UserEntry format stores one `kem_pk` per user. There is no concept of key generations.
+Total: ~150 lines of protocol logic, fully under project control, coroutine-native, zero dependency risk. The existing codebase already has hand-rolled binary protocol framing (db/net/framing.h) and a hand-rolled HTTP server (db/peer/metrics_collector.cpp Prometheus endpoint), so this pattern is proven.
 
-**What's needed for key rotation:**
+**Confidence:** HIGH -- RFC 6455 server-side is well-specified, the codebase has precedent for hand-rolled protocols, and all third-party options have disqualifying compatibility issues.
 
-| Component | What to Build | Primitives Used | Integration Point |
-|-----------|---------------|-----------------|-------------------|
-| Versioned UserEntry | New blob type `KROT` with `[magic:4][version:1][key_version:4 BE][kem_pk:1568][kem_sig:variable]` | ML-DSA-87 sign (cross-sign new KEM pk), ML-KEM-1024 keygen | `_directory.py` encode/decode |
-| Key version index in Directory | Cache maps `(pubkey_hash, version) -> kem_pk` | SHA3-256 for index keys | `Directory._populate_cache()` |
-| Versioned envelope encrypt | `envelope_encrypt()` uses latest KEM pubkey per recipient | ML-KEM-1024 encap (unchanged) | `_envelope.py` recipient resolution |
-| Old key retention for decrypt | Identity holds historical KEM keypairs for decrypting old envelopes | ML-KEM-1024 decap (unchanged) | `identity.py` + `_envelope.py` |
+## Recommended Stack Additions
 
-**Design decision (opinionated): Use new blob type, not UserEntry v2.**
+### New System Dependencies
 
-Why: A "key rotation" blob (`KROT`) is a separate blob from the UserEntry. This means:
-- Old UserEntry blobs remain valid and don't need updating
-- Key rotation is append-only (new blob published, old one stays)
-- Latest-timestamp-wins resolution (same pattern as GroupEntry)
-- No migration path needed (pre-MVP constraint)
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| OpenSSL | 3.x (system) | TLS termination for WSS, SHA-1+Base64 for WS handshake | Industry standard, Asio SSL built on it, already on every Linux server. System package, not FetchContent (too large, tightly coupled to OS). |
 
-**Proposed `KROT` binary format:**
+### Existing Technologies (Already Available, New Usage)
+
+| Technology | Current Usage | New Usage in Relay v2 |
+|------------|---------------|----------------------|
+| Standalone Asio 1.38.0 | TCP networking, UDS, C++20 coroutines | `asio::ssl::context` + `asio::ssl::stream` for TLS, WebSocket frame IO over TLS stream |
+| nlohmann/json 3.11.3 | Config file parsing | JSON message serialization/deserialization for all 38 client-allowed message types |
+| FlatBuffers 25.2.10 | Node wire format | Relay-side encoding/decoding for JSON-to-FlatBuffers translation |
+| liboqs 0.15.0 | ML-DSA-87, ML-KEM-1024 | ML-DSA-87 challenge-response auth verification (verify only, no signing by relay) |
+| spdlog 1.15.1 | Structured logging | Relay logging |
+| Catch2 | Unit testing | Relay unit tests |
+
+### No New FetchContent Dependencies
+
+The relay v2 requires ZERO new FetchContent dependencies. Everything it needs is either already fetched (Asio, nlohmann/json, FlatBuffers, liboqs, spdlog, Catch2) or is a system package (OpenSSL).
+
+## Detailed Component Analysis
+
+### 1. TLS Termination (Asio SSL)
+
+**How it works:** Standalone Asio includes `asio/ssl.hpp` which wraps OpenSSL. The headers are confirmed present at `asio/ssl/context.hpp`, `asio/ssl/stream.hpp`, etc. in the project's fetched Asio 1.38.0 source.
+
+**Pattern:**
+
+```cpp
+#include <asio/ssl.hpp>
+
+// Setup (once at relay startup)
+asio::ssl::context ssl_ctx(asio::ssl::context::tls_server);
+ssl_ctx.set_options(asio::ssl::context::default_workarounds |
+                    asio::ssl::context::no_sslv2 |
+                    asio::ssl::context::no_sslv3 |
+                    asio::ssl::context::no_tlsv1 |
+                    asio::ssl::context::no_tlsv1_1);
+ssl_ctx.use_certificate_chain_file(cert_path);
+ssl_ctx.use_private_key_file(key_path, asio::ssl::context::pem);
+
+// Per-connection: wrap accepted TCP socket in SSL stream
+asio::ssl::stream<asio::ip::tcp::socket> ssl_socket(std::move(tcp_socket), ssl_ctx);
+co_await ssl_socket.async_handshake(asio::ssl::stream_base::server,
+                                      asio::use_awaitable);
+// Then do WebSocket upgrade over ssl_socket
 ```
-[magic:4 "KROT"][version:1 0x01][key_version:4 BE][kem_pk:1568][kem_sig:variable]
+
+**Separate compilation requirement:** The asio.cmake wrapper's `asio.cpp` only includes `asio/impl/src.hpp`, NOT `asio/ssl/impl/src.hpp`. The relay must provide its own SSL compilation unit:
+
+```cpp
+// relay2/asio_ssl.cpp
+#include <asio/ssl/impl/src.hpp>
 ```
 
-Where `kem_sig` is ML-DSA-87 sign of `[key_version_be:4][kem_pk:1568]` -- binding the version number to the key prevents version downgrade attacks.
+This ensures SSL symbols are compiled only for the relay binary, keeping the db binary free of OpenSSL dependency.
 
-**Crypto primitives needed:** None new. ML-KEM-1024 keygen + ML-DSA-87 cross-signing are both in the stack. The HKDF label `chromatindb-envelope-kek-v1` remains unchanged because the KEM shared secret is already unique per encapsulation.
+**Config additions to RelayConfig:**
+```json
+{
+  "cert_path": "/etc/chromatindb/relay.crt",
+  "key_path": "/etc/chromatindb/relay.key"
+}
+```
 
-### 3. Group Membership Revocation
+**Gotcha -- ASIO_SEPARATE_COMPILATION:** The project defines `ASIO_SEPARATE_COMPILATION` (set by asio.cmake). When this is defined, Asio expects implementation code in exactly one translation unit. For SSL, this means `asio/ssl/impl/src.hpp` must be included in exactly one .cpp file in the relay, and any .cpp file using SSL headers must also see `ASIO_SEPARATE_COMPILATION` defined (which it will, since it's a PUBLIC compile definition on the asio target).
 
-**Current state:**
-- `Directory.remove_member()` writes a new GroupEntry blob without the removed member
-- `write_to_group()` resolves membership at call time from the latest GroupEntry
-- **Problem:** Removed member can still decrypt any envelope where they were a recipient (old data readable with old keys)
+**Confidence:** HIGH -- Asio SSL is mature, well-documented, and pattern is verified against source.
 
-**Project constraint (from PROJECT.md):** "Old data stays readable with old keys (no re-encryption)"
+### 2. WebSocket Protocol (Hand-Rolled, ~150 Lines)
 
-This means the only thing needed is:
-1. After `remove_member()`, new `write_to_group()` calls exclude the removed member (already works -- latest GroupEntry wins)
-2. If the removed member had access to shared symmetric keys, rotate them (not applicable -- chromatindb uses per-blob envelope encryption, not shared group keys)
-3. If the removed member's KEM pubkey should be excluded from future envelopes, rotate the admin's group key (not applicable -- KEM encap is per-recipient, there is no group key)
+**Upgrade handshake (over TLS stream):** After TLS handshake completes, the client sends a standard HTTP/1.1 upgrade request. The relay must:
 
-| Gap | What to Build | Primitives Used |
-|-----|---------------|-----------------|
-| Post-removal key rotation advisory | After `remove_member()`, recommend key rotation to all remaining members if forward secrecy desired | None -- documentation only |
-| Revocation timestamp tracking | GroupEntry gains `revocation_log` or separate revocation blob for audit | ML-DSA-87 sign (existing) |
-| write_to_group with freshness check | Force directory cache refresh before encrypting to ensure revoked member excluded | Existing pub/sub invalidation |
+1. Read HTTP request line + headers (same pattern as existing Prometheus endpoint in `metrics_collector.cpp`)
+2. Validate: `Connection: Upgrade`, `Upgrade: websocket`, `Sec-WebSocket-Version: 13`, presence of `Sec-WebSocket-Key`
+3. Compute accept: `Base64(SHA-1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`
+4. Respond with `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: <accept>\r\n\r\n`
 
-**Crypto primitives needed:** None new. The per-blob envelope encryption model (decided in v1.7.0 Phase 77 -- "Groups as blobs, NOT shared keys") was specifically designed to avoid key rotation complexity on membership changes. The decision was correct and pays off here.
+OpenSSL provides both SHA-1 (`EVP_sha1`) and Base64 (`EVP_EncodeBlock`) -- no additional deps needed.
 
-## Recommended Stack (Unchanged)
+**Frame format (server reads from client -- always masked):**
+```
+Byte 0: [FIN:1][RSV1:1][RSV2:1][RSV3:1][Opcode:4]
+Byte 1: [MASK:1][PayloadLen:7]
+  If PayloadLen == 126: next 2 bytes = BE uint16 actual length
+  If PayloadLen == 127: next 8 bytes = BE uint64 actual length
+Next 4 bytes: masking key (MUST be present for client-to-server)
+Remaining: masked payload (XOR each byte with mask[i % 4])
+```
 
-### Core Technologies (NO CHANGES)
+**Frame format (server writes to client -- never masked):**
+```
+Byte 0: [FIN:1][RSV1:1][RSV2:1][RSV3:1][Opcode:4]  -- FIN=1 always (no fragmentation)
+Byte 1: [0:1][PayloadLen:7]  -- MASK bit = 0
+  If PayloadLen == 126: next 2 bytes = BE uint16 actual length
+  If PayloadLen == 127: next 8 bytes = BE uint64 actual length
+Remaining: unmasked payload
+```
 
-| Technology | Version | Purpose | Why No Change Needed |
-|------------|---------|---------|---------------------|
-| liboqs ML-DSA-87 | latest | Signing revocation tombstones, cross-signing rotated KEM pubkeys | Same operations as delegation creation |
-| liboqs ML-KEM-1024 | latest | New keypair generation on rotation, encap to latest key per recipient | `generate_keypair()` already exists |
-| libsodium ChaCha20-Poly1305 | latest | AEAD for envelope DEK wrapping (unchanged) | KEK is unique per encapsulation regardless of key version |
-| libsodium HKDF-SHA256 | latest | KEK derivation (unchanged) | Label `chromatindb-envelope-kek-v1` stays the same |
-| hashlib SHA3-256 | stdlib | pk_hash for directory index, namespace derivation | Existing usage pattern |
+**Opcodes to implement:**
+- `0x1` (Text): JSON messages -- all application data
+- `0x8` (Close): Connection teardown with status code
+- `0x9` (Ping): Auto-respond with Pong (same payload)
+- `0xA` (Pong): Ignore (unsolicited keepalive ack from client)
 
-### Supporting Libraries (NO CHANGES)
+**Deliberately NOT implementing:**
+- `0x2` (Binary frames): Not needed -- all messages are JSON text
+- Fragmented messages (FIN=0 continuation frames): JSON messages are complete, no fragmentation needed
+- Per-message deflate (RSV1 extension): JSON messages are small, TLS handles compression
+- Subprotocol negotiation: Single protocol, no negotiation needed
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| PyNaCl | existing | Python AEAD + HKDF bindings | All SDK crypto operations |
-| liboqs-python | existing | Python ML-DSA-87 + ML-KEM-1024 | Identity operations, envelope encrypt |
-| flatbuffers | existing | Wire encoding for blobs | All blob payloads |
-| brotli | existing | Envelope compression (suite 0x02) | Large encrypted payloads |
+**Maximum frame size:** Cap at 110 MiB (matching `MAX_FRAME_SIZE` in db/net/framing.h) to handle large blob Data messages. In practice, JSON-encoded blob data (hex strings) will be roughly double the binary size, so the actual JSON frame limit should be ~220 MiB.
 
-### New HKDF Labels (Application-Layer Only)
+**Confidence:** HIGH -- server-side only, no fragmentation, no extensions, well-specified subset.
 
-No new HKDF labels are required. The existing `chromatindb-envelope-kek-v1` label works for all key versions because:
+### 3. JSON Message Format (nlohmann/json)
 
-1. The KEM shared secret is unique per ML-KEM encapsulation (different KEM pubkey = different shared secret)
-2. The HKDF info label is a domain separator, not a key-version identifier
-3. Changing the label per key version would add complexity with zero security benefit
+**Translation layer architecture:** The relay translates between JSON (client-facing) and the node's FlatBuffers binary wire format. Two translation paths exist:
 
-**Important: Do NOT create a `chromatindb-envelope-kek-v2` label.** The versioning happens at the key level (which KEM pubkey to use), not at the KDF level.
+**Path A -- Blob messages (types 8, 17, 32, 54):** These carry FlatBuffers-encoded `Blob` payloads. Translation uses `wire::encode_blob()` / `wire::decode_blob()` from `db/wire/codec.h`.
+
+**Path B -- Binary-struct messages (all other 34 types):** These carry hand-packed binary payloads with fields at fixed offsets (documented byte-by-byte in PROTOCOL.md). Translation is field-by-field pack/unpack.
+
+**JSON message envelope:**
+```json
+{
+  "type": "ReadRequest",
+  "request_id": 42,
+  "payload": { ... type-specific fields ... }
+}
+```
+
+**Binary field encoding in JSON:** All byte arrays (namespace_id, blob_hash, pubkey, signature, data) use hex encoding. This matches the existing codebase convention (`db/util/hex.h` provides `to_hex`/`from_hex`).
+
+**Translation layer structure:**
+
+```cpp
+// json_codec.h
+namespace chromatindb::relay2::json {
+
+// Client JSON -> node binary
+std::vector<uint8_t> json_to_payload(wire::TransportMsgType type,
+                                      const nlohmann::json& j);
+
+// Node binary -> client JSON
+nlohmann::json payload_to_json(wire::TransportMsgType type,
+                                std::span<const uint8_t> payload);
+
+// Type string -> enum
+std::optional<wire::TransportMsgType> type_from_string(std::string_view name);
+
+// Enum -> type string
+std::string_view type_to_string(wire::TransportMsgType type);
+
+} // namespace chromatindb::relay2::json
+```
+
+**Example translations:**
+
+ReadRequest:
+```json
+{"type":"ReadRequest","request_id":1,"payload":{"namespace":"a1b2...","hash":"d4e5..."}}
+```
+Binary: 64 bytes = `[namespace_id:32][blob_hash:32]`
+
+Data (blob write):
+```json
+{"type":"Data","request_id":2,"payload":{"namespace":"a1b2...","pubkey":"...","data":"...","ttl":86400,"timestamp":1712678400,"signature":"..."}}
+```
+Binary: FlatBuffers-encoded Blob via `wire::encode_blob()`
+
+Subscribe:
+```json
+{"type":"Subscribe","request_id":3,"payload":{"namespace":"a1b2..."}}
+```
+Binary: 32 bytes = `[namespace_id:32]`
+
+Notification (node->client):
+```json
+{"type":"Notification","payload":{"namespace":"a1b2...","data":"..."}}
+```
+Binary: `[namespace_id:32][blob_data:variable]`
+
+**Performance note:** nlohmann/json is not the fastest JSON library, but relay message rates are bounded by WebSocket + TLS overhead and node processing speed. JSON parsing will not be the bottleneck. Hex encoding doubles the size of binary data, but the tradeoff (human-readable messages, any language can participate) is the entire point of Relay v2.
+
+**Confidence:** HIGH -- nlohmann/json is already in the project, hex encoding is a proven pattern, message formats are fully specified in PROTOCOL.md.
+
+### 4. Challenge-Response Auth
+
+**Flow:**
+1. Client connects WSS, completes TLS handshake
+2. Client sends WebSocket upgrade, relay accepts (101)
+3. Relay generates 32-byte random challenge via `randombytes_buf()` (libsodium), sends: `{"type":"AuthChallenge","challenge":"...hex..."}`
+4. Client signs challenge with ML-DSA-87, responds: `{"type":"AuthResponse","pubkey":"...hex...","signature":"...hex..."}`
+5. Relay verifies signature using `OQS_SIG_verify` (liboqs, already linked)
+6. Relay derives namespace = `SHA3-256(pubkey)` (existing `crypto::sha3_256`)
+7. Session authenticated, relay forwards to node via UDS with TrustedHello (node trusts relay)
+
+**No new dependencies.** liboqs verify + libsodium randombytes + SHA3-256 are all already available via chromatindb_lib.
+
+**Confidence:** HIGH -- all crypto primitives already used throughout the codebase.
+
+### 5. Multiplexed UDS Connection
+
+**Architecture change from old relay:** The old relay creates one UDS connection per client. Relay v2 uses a SINGLE UDS connection to the node, multiplexing all client traffic.
+
+**Multiplexing via request_id remapping:**
+- Relay maintains `relay_request_id -> (client_session, original_request_id)` map
+- Each client request is assigned a relay-global `request_id` before forwarding
+- Node responses are demultiplexed back to the correct client session
+- Atomic uint32 counter for relay-global request_id generation
+
+**Subscription routing:**
+- Relay tracks `namespace -> set<client_session>` for Subscribe/Unsubscribe
+- Node sends Notification (type 21) with first 32 bytes = namespace_id
+- Relay extracts namespace, looks up subscribed sessions, sends JSON notification to each
+- Maximum 256 subscriptions per client (matching existing relay limit)
+
+**UDS reconnection:** Single-connection multiplexing means UDS disconnect affects ALL clients. Relay should:
+- Queue client messages during brief UDS reconnect attempts (jittered backoff, matching existing pattern)
+- Disconnect all clients if UDS cannot be restored within timeout
+- This is simpler than old relay's per-session reconnect logic
+
+**Uses existing Asio UDS support** (`asio::local::stream_protocol::socket`) and existing Connection class patterns.
+
+**Confidence:** HIGH -- UDS already used, multiplexing is standard.
+
+## CMake Integration
+
+```cmake
+# In root CMakeLists.txt (new relay2 subdirectory):
+find_package(OpenSSL REQUIRED)
+
+add_subdirectory(relay2)
+
+# relay2/CMakeLists.txt:
+add_library(chromatindb_relay2_lib STATIC
+  asio_ssl.cpp         # asio/ssl/impl/src.hpp (separate compilation unit)
+  config/config.cpp
+  ws/handshake.cpp     # HTTP upgrade + WebSocket accept
+  ws/frame.cpp         # RFC 6455 frame read/write
+  ws/session.cpp       # Per-client WebSocket session lifecycle
+  json/codec.cpp       # JSON <-> FlatBuffers translation (38 types)
+  auth/challenge.cpp   # ML-DSA-87 challenge-response verify
+  core/relay.cpp       # Main relay logic, UDS multiplexing, subscription routing
+)
+
+target_include_directories(chromatindb_relay2_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+)
+
+target_link_libraries(chromatindb_relay2_lib PUBLIC
+  chromatindb_lib       # Reuse db/ for FlatBuffers codec, crypto, hex, identity
+  OpenSSL::SSL
+  OpenSSL::Crypto
+)
+```
+
+**What chromatindb_lib provides (no duplication):**
+- `TransportCodec::encode/decode` (FlatBuffers transport envelope)
+- `wire::encode_blob / decode_blob` (blob FlatBuffers codec)
+- `wire::TransportMsgType` enum and `is_client_allowed` filter logic
+- `crypto::sha3_256` (namespace derivation from pubkey)
+- `util::to_hex / from_hex` (hex encoding for JSON)
+- `identity::NodeIdentity` (relay's own signing identity)
+- `net::Connection` patterns (UDS connection to node)
+
+**OpenSSL is linked ONLY to the relay target**, not to the db target. The db binary remains OpenSSL-free.
+
+## Alternatives Considered
+
+| Recommended | Alternative | Why Not |
+|-------------|-------------|---------|
+| Hand-rolled WS (~150 lines) | Boost.Beast | Requires Boost.Asio namespace. Incompatible with standalone Asio. Would touch 34K LOC of frozen db/ code. |
+| Hand-rolled WS | beast-asio-standalone fork | Maintainer discourages use, tests broken, infrequent updates. |
+| Hand-rolled WS | WebSocket++ 0.8.2 | Broken with Asio 1.28+ executor changes (issue #794), callback-based, Boost needed for CMake. |
+| Hand-rolled WS | eidheim/Simple-WebSocket-Server | Uses Boost.Asio, C++11 callbacks, not coroutine-native. |
+| System OpenSSL (find_package) | FetchContent OpenSSL | OpenSSL is too large and OS-coupled for FetchContent. System package is correct. |
+| nlohmann/json (existing) | simdjson / RapidJSON | Already in project, adequate for relay message rates. YAGNI. |
+| Single multiplexed UDS | Per-client UDS (old pattern) | Wasteful -- each client opens separate node connection. Single connection with request_id mux is cleaner. |
 
 ## What NOT to Use
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| Shared group symmetric key | Requires key rotation protocol on every membership change; violates "no new crypto" constraint | Per-blob envelope encryption (already implemented) |
-| Re-encryption on revocation | Project constraint says "old data stays readable with old keys"; re-encryption is O(N) in blob count | Accept old-data-readable, encrypt new data to new membership |
-| New cipher suite for key versions | Overloads suite semantics; suite identifies crypto algorithms, not key generations | Store key_version in directory blob, not envelope header |
-| ENVELOPE_VERSION bump to 0x02 | Version byte is for format changes, not key lifecycle changes; bumping it would break all existing envelopes | Keep version 0x01; key_version is metadata in directory, not envelope |
-| OpenSSL for any crypto | Project constraint: "No OpenSSL. Prefer minimal deps -- liboqs for PQ, libsodium for symmetric" | Continue using liboqs + libsodium |
-| External key management (KMS) | Unnecessary complexity; node-local master key + per-identity KEM keypairs is sufficient | Identity file-based key management |
-
-## Architecture Integration Points
-
-### C++ Node (Minimal Changes)
-
-The C++ node needs **zero crypto changes** for this milestone. The revocation mechanism (tombstone delegation blob -> `has_valid_delegation()` returns false) is already implemented and tested. Key versioning and group membership are SDK-only concerns -- the node stores blobs and verifies ownership, it does not interpret envelope encryption.
-
-Possible C++ change: a new query type to check "is this pubkey revoked in this namespace?" -- but this can be answered by the SDK via `has_tombstone_for()` or delegation list query, so it's optional.
-
-### Python SDK (Application Logic Changes)
-
-| Module | Change | Complexity |
-|--------|--------|------------|
-| `_directory.py` | Add KROT blob encode/decode, versioned key index in cache, `revoke_delegate()` helper | Medium |
-| `_envelope.py` | No changes to encrypt/decrypt -- recipient resolution happens before envelope_encrypt | None |
-| `identity.py` | Add `rotate_kem()` method that generates new ML-KEM keypair, increments version | Low |
-| `client.py` | Add `revoke_delegation()` convenience method wrapping delete_blob | Low |
-
-### Wire Format (NO CHANGES)
-
-The envelope wire format `[magic:4][version:1][suite:1][count:2 BE][nonce:12][stanzas][ciphertext]` does not change. Key versioning is a directory-layer concern: the envelope always encrypts to the latest KEM pubkey for each recipient. Decryption tries all known KEM keypairs (current + historical).
+| Boost (any component) | Would contaminate standalone Asio codebase, massive dependency | Standalone Asio + hand-rolled WS |
+| libwebsockets | C library, callback-based, poor C++ integration | Hand-rolled WS |
+| uWebSockets | Brings its own event loop (us_loop), conflicts with Asio io_context | Hand-rolled WS |
+| Per-message deflate (WS extension) | JSON messages are small, adds complexity, TLS handles transport | Plain text frames |
+| Binary WS frames for JSON | Text frames (opcode 0x1) are correct for JSON per RFC 6455 | Text frames |
+| WebSocket subprotocol negotiation | Single protocol, no negotiation needed | Fixed JSON protocol |
+| OpenSSL in db/ target | Database node must remain OpenSSL-free (libsodium + liboqs only) | Link OpenSSL only to relay2 target |
+| PQ-authenticated transport (old pattern) | TLS is sufficient -- payloads are already PQ-signed blobs + PQ-encrypted envelopes | Standard TLS + challenge-response auth |
 
 ## Version Compatibility
 
-| Package A | Compatible With | Notes |
-|-----------|-----------------|-------|
-| KROT blob (new) | UserEntry blob (existing) | Coexist in same directory namespace; KROT supplements, doesn't replace |
-| Identity with multiple KEM keys | envelope_decrypt (existing) | Decrypt tries current key first, then historical keys on NotARecipientError |
-| Rotated KEM pubkey | Old envelopes | Old envelopes encrypted to old KEM pk still decryptable if Identity retains old secret key |
-| Removed group member | write_to_group | Excluded from new envelopes automatically via latest GroupEntry resolution |
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| Standalone Asio 1.38.0 | OpenSSL 3.x | Asio SSL headers work with OpenSSL 1.1.x and 3.x. System OpenSSL 3.6.2 confirmed on build host. |
+| Standalone Asio 1.38.0 | `ASIO_SEPARATE_COMPILATION` | SSL needs its own `asio/ssl/impl/src.hpp` inclusion in one relay .cpp file. |
+| nlohmann/json 3.11.3 | C++20 | Full C++20 support, no issues. |
+| FlatBuffers 25.2.10 | Relay translation layer | Relay calls existing `encode_blob`/`decode_blob` + `TransportCodec`. No schema changes. |
+| liboqs 0.15.0 | Challenge-response auth | `OQS_SIG_verify` for ML-DSA-87. Already proven in db/ code. |
+| OpenSSL 3.6.2 (system) | Asio 1.38.0 SSL | Confirmed compatible. OpenSSL 3.x API used by Asio SSL. |
 
-## Risks and Mitigations
+## Installation
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Identity loses old KEM secret key after rotation | Cannot decrypt old envelopes | Identity.rotate_kem() MUST preserve old keypair; save all historical .kem files |
-| Directory cache stale during revocation window | Revoked member included in new encryption | Force cache refresh before write_to_group when revocation is recent |
-| Concurrent key rotation by same identity | Two KROT blobs with same version number | Use timestamp + sequence for ordering, not just version number; latest-timestamp-wins |
-| KROT blob replication lag | Remote nodes serve stale KEM pubkey | Accept eventual consistency; encrypting to old key is still secure (recipient can decrypt with old or new key) |
+```bash
+# System dependency (Arch Linux)
+sudo pacman -S openssl
+
+# No pip/npm/new FetchContent deps needed.
+# Everything else is already in CMakeLists.txt via FetchContent.
+```
 
 ## Sources
 
-- `db/tests/engine/test_engine.cpp` lines 1090-1250 -- ACL revocation via tombstone, verified working
-- `db/storage/storage.cpp` lines 911-926 -- `has_valid_delegation()` implementation
-- `sdk/python/chromatindb/_envelope.py` -- current envelope encrypt/decrypt, no key version concept
-- `sdk/python/chromatindb/_directory.py` -- UserEntry/GroupEntry encode/decode, Directory cache
-- `sdk/python/chromatindb/identity.py` -- single KEM keypair per Identity
-- `db/PROTOCOL.md` lines 975-1079 -- envelope binary format spec, HKDF label registry
-- `.planning/PROJECT.md` lines 13-26 -- v2.1.1 target features and constraints
-- MEMORY.md key decisions -- "Groups as blobs (NOT shared keys)", "KEM-then-Wrap mandatory"
-
-**Confidence: HIGH** -- All findings verified against source code. No external research needed because the feature set is built entirely on existing, validated primitives. The "no new dependencies" constraint is satisfied by design.
+- [Boost.Beast FAQ on standalone Asio](https://live.boost.org/doc/libs/1_87_0/libs/beast/doc/html/beast/design_choices/faq.html) -- confirms Beast requires Boost, not standalone Asio
+- [beast-asio-standalone fork](https://github.com/vimpunk/beast-asio-standalone) -- maintainer discourages use
+- [WebSocket++ standalone Asio compilation failure (issue #794)](https://github.com/zaphoyd/websocketpp/issues/794) -- broken with modern Asio executor model
+- [WebSocket++ CMake Boost dependency (issue #1099)](https://github.com/zaphoyd/websocketpp/issues/1099) -- open, unresolved
+- [OlivierLDff/asio.cmake](https://github.com/OlivierLDff/asio.cmake) -- CMake wrapper used by project, no SSL handling
+- [Standalone Asio SSL headers](https://github.com/chriskohlhoff/asio) -- full SSL support confirmed in asio/ssl/ directory
+- [Asio SSL documentation](https://dens.website/tutorials/cpp-asio/ssl-tls) -- TLS server pattern
+- [RFC 6455 WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455) -- server-side subset specification
+- [Boost.Beast vs WebSocket++ comparison](https://www.boost.org/doc/libs/1_86_0/libs/beast/doc/html/beast/design_choices/comparison_to_zaphoyd_studios_we.html) -- design differences
 
 ---
-*Stack research for: chromatindb v2.1.1 -- Revocation & Key Lifecycle*
-*Researched: 2026-04-06*
+*Stack research for: Relay v2 WebSocket/JSON/TLS Gateway*
+*Researched: 2026-04-09*

@@ -1,219 +1,258 @@
-# Feature Research: Revocation & Key Lifecycle
+# Feature Landscape: Relay v2 (WebSocket/JSON/TLS Gateway)
 
-**Domain:** ACL revocation, encryption key versioning, group membership revocation in encrypted decentralized storage
-**Researched:** 2026-04-06
-**Confidence:** HIGH (existing primitives well-understood, patterns well-established in industry)
+**Domain:** WebSocket relay gateway translating JSON clients to FlatBuffers database node
+**Researched:** 2026-04-09
+**Confidence:** HIGH (well-understood domain, existing node protocol frozen, clear architectural direction)
 
 ## Context: What Already Exists
 
-Before mapping features, the existing primitives that this milestone builds on:
+The Relay v2 builds on top of a frozen, production-grade C++20 database node. Understanding what the node already provides defines the relay's scope.
 
-| Primitive | Status | Where |
-|-----------|--------|-------|
-| Delegation blobs (signed, namespace-scoped) | SHIPPED v3.0 | `db/wire/codec.h`, `db/engine/engine.cpp` |
-| Tombstones (owner-only, replicated) | SHIPPED v3.0 | `db/wire/codec.h`, `db/storage/storage.cpp` |
-| Delegation index (O(1) lookup via `delegation_map`) | SHIPPED v3.0 | `db/storage/storage.cpp:911` |
-| Delegation revocation via tombstone | SHIPPED v3.0 | `storage.cpp:876-886` -- tombstoning delegation blob erases `delegation_map` entry |
-| Envelope encryption (ML-KEM-1024 + ChaCha20-Poly1305) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_envelope.py` |
-| Directory (UserEntry, pubkey discovery, delegation) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_directory.py` |
-| Groups (named member lists as blobs, latest-timestamp-wins) | SHIPPED v1.7.0 | `sdk/python/chromatindb/_directory.py` |
-| `write_encrypted` / `read_encrypted` / `write_to_group` | SHIPPED v1.7.0 | `sdk/python/chromatindb/client.py` |
-| `has_valid_delegation()` check on ingest hot path | SHIPPED v3.0 | `db/engine/engine.cpp:169` |
-| SIGHUP reload of `allowed_keys` + disconnect revoked peers | SHIPPED v2.0 | `db/peer/peer_manager.cpp:2884` |
+| Existing Capability | Where | Relay Implication |
+|---------------------|-------|-------------------|
+| 63 wire message types (FlatBuffers) | `db/wire/transport_generated.h` | 38 client-allowed types need JSON translation |
+| Blocklist message filter (21 blocked types) | `relay/core/message_filter.h` | Reuse blocklist approach -- new node types pass through |
+| UDS local access (TrustedHello, no PQ) | `db/net/connection.h` | Relay connects to node via UDS with lightweight handshake |
+| request_id correlation (uint32) | Transport envelope | Map to JSON `id` field for request-response pairing |
+| Subscribe/Unsubscribe (namespace-scoped) | Types 19/20, 32-byte namespace IDs | Relay tracks per-client subscriptions for notification routing |
+| Notification fan-out (77-byte payload) | Type 21 | Relay must route notifications only to subscribed clients |
+| Per-connection send queue with drain | `db/net/connection.h` | Node already handles UDS send buffering |
+| ML-DSA-87 identity (2592-byte pubkeys) | `db/identity/identity.h` | Challenge-response auth uses relay's own identity |
 
-**Key insight:** Delegation revocation at the node layer already works. Tombstoning a delegation blob removes the `delegation_map` entry, and subsequent writes from the revoked delegate are rejected. What is missing is: (1) SDK-level awareness of revocation, (2) encryption key versioning so revoked members cannot decrypt new data, and (3) group membership revocation that ties these two together.
+**Key architectural shift:** Old relay was per-client UDS (one UDS connection per client session). New relay uses a single multiplexed UDS connection to the node. This fundamentally changes how request routing works -- the relay must correlate responses from the node back to the correct WebSocket client.
 
-## Feature Landscape
+## Table Stakes
 
-### Table Stakes (Users Expect These)
+Features users expect. Missing any of these means the relay is non-functional or insecure.
 
-Features that anyone building revocation into an encrypted storage system would expect.
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **WebSocket server (WSS)** | The entire point of the relay. Clients connect via standard WebSocket over TLS. Every browser, every language has a WebSocket client library. | LOW | Asio Beast WebSocket + asio::ssl |
+| **TLS termination** | WSS requires TLS. Config takes cert_path + key_path. No plaintext WebSocket option -- always TLS. | LOW | OpenSSL (via asio::ssl). Unavoidable for TLS. |
+| **JSON message format** | Clients send/receive JSON instead of binary FlatBuffers. Every message has `type`, `id` (request_id), and type-specific fields. Hex-encoded byte arrays for hashes/pubkeys/signatures. | MEDIUM | nlohmann/json (already in stack). 38 message types to define JSON schemas for. |
+| **JSON-to-FlatBuffers translation** | Relay converts inbound JSON to binary payloads the node understands, and outbound binary payloads to JSON for the client. This is the relay's core function. | HIGH | Must handle all 38 client-allowed message types. Each type has a unique wire format (documented in PROTOCOL.md). Most complex part of the relay. |
+| **ML-DSA-87 challenge-response auth** | Client proves identity by signing a random challenge with their ML-DSA-87 private key. Relay verifies signature. No PQ key exchange needed (TLS handles transport). | MEDIUM | liboqs for ML-DSA-87 verification. Challenge: relay sends 32 random bytes. Client returns pubkey + signature. Relay verifies. |
+| **Message type filtering** | Blocklist approach: block 21 peer-internal types (handshake, sync, PEX, internal signals), allow everything else. Same as old relay. Future node types pass through without relay changes. | LOW | Reuse existing blocklist logic from `relay/core/message_filter.h` |
+| **UDS connection to node** | Single UDS connection to the local chromatindb node. TrustedHello handshake (no PQ crypto to own node). | LOW | Existing UDS + TrustedHello code in `db/net/connection.h` |
+| **Request-response correlation** | Map client JSON `id` field to node's uint32 `request_id` in transport envelope. Route responses back to the correct WebSocket client. | MEDIUM | With multiplexed UDS: relay must maintain a mapping of {request_id -> client_session}. Allocate unique request_ids across all clients. |
+| **Subscription tracking** | Track which WebSocket clients are subscribed to which namespaces. When a Notification arrives from the node, route it only to subscribed clients. | MEDIUM | Per-client NamespaceSet (like old relay's `subscribed_namespaces_`). Intercept Subscribe/Unsubscribe JSON messages before forwarding to node. 256-namespace cap per client. |
+| **Notification routing** | When node sends Notification (type 21), extract namespace_id from first 32 bytes, look up which clients are subscribed, translate to JSON, and send to each. | MEDIUM | Depends on subscription tracking. Must be efficient -- O(subscribers) per notification, not O(clients). |
+| **Per-client bounded send queue** | Each WebSocket client gets a bounded outbound message queue. When the queue fills (client not reading fast enough), disconnect the client. Prevents slow clients from consuming unbounded relay memory. | MEDIUM | Queue cap (e.g., 1024 messages). Backpressure strategy: disconnect on overflow. No dropping -- chromatindb messages are not idempotent/replaceable. |
+| **Connection lifecycle management** | Accept WebSocket upgrade, run auth challenge, create session, forward messages, handle disconnect/timeout, clean up state. | MEDIUM | State machine: UPGRADING -> AUTHENTICATING -> ACTIVE -> CLOSING. Timeouts for auth (e.g., 10s). Graceful Goodbye forwarding. |
+| **Graceful shutdown** | SIGTERM/SIGINT: stop accepting new connections, send WebSocket close frames to all clients, wait for in-flight messages to drain, then exit. | LOW | Standard pattern. Close acceptor, iterate sessions, send close, wait with timeout, force-close stragglers. |
+| **Configuration** | JSON config file: bind address, port, TLS cert/key paths, UDS path, log level, log file, max connections. Fail-fast validation on startup. | LOW | Same pattern as old relay + node config. Add TLS fields. |
+| **Logging** | Structured logging with client identity (pubkey hash hex), connection events, auth results, errors. spdlog. | LOW | Same as old relay. Per-session context (pubkey hash, remote address). |
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **SDK delegation revocation helper** | Node already enforces revocation via tombstone, but SDK has no `revoke_delegate()` method. Admin must manually construct tombstone data and call `write_blob`. Incomplete API surface. | LOW | Admin calls `directory.revoke_delegate(identity)`. Constructs tombstone targeting the delegation blob hash. Requires knowing the delegation blob hash -- either from cache or from `DelegationList` query. |
-| **Revocation confirmation** | After revoking, admin needs to verify the revocation took effect (delegation erased from index). Without confirmation, there is no way to distinguish "revocation in flight" from "revocation failed". | LOW | `has_valid_delegation` already exists in storage. SDK needs a way to check -- either via `DelegationList` query (already exists in v1.4.0) or a new `DelegationExists` query. Reusing `DelegationList` is sufficient. |
-| **Encryption key versioning (key epochs)** | After revoking a member, new data must be encrypted with a key the revoked member does not possess. Without key epochs, the revoked member can still decrypt any new data encrypted to the same group. This is the core security property of revocation. | MEDIUM | Per-namespace key versioning. New epoch = new KEM keypair published to directory. Old epochs remain readable with old keys. AWS KMS, Azure Key Vault, and all serious envelope encryption systems use this pattern. |
-| **Group membership revocation with key rotation** | Removing a member from a group list (already possible via `Directory.remove_member`) is insufficient without rotating the group encryption context. The removed member still holds the old group members' KEM pubkeys and can decrypt any envelope addressed to them. Must tie member removal to key epoch bump. | MEDIUM | Signal clears all Sender Keys on member removal. MLS re-derives epoch secrets. For chromatindb's per-blob envelope model: remove member from group, bump admin KEM epoch, re-publish directory entry. New `write_to_group` uses new epoch keys. |
-| **Old data remains readable** | PROJECT.md constraint: "Old data stays readable with old keys (no re-encryption)." Every key versioning system (AWS KMS, GCP KMS, Azure) retains old key versions for decryption. Re-encrypting all existing data is prohibitively expensive in a decentralized system. | LOW | `read_encrypted` must try current key first, then fall back to previous versions. Envelope format already includes `kem_pk_hash` per recipient -- identity with old KEM keypair can still decrypt old envelopes. |
-| **Admin KEM key rotation** | Admin must be able to rotate their own KEM keypair (publish new UserEntry with new KEM pubkey). This is the mechanism that makes key versioning work -- after rotation, new envelopes use the new KEM key. | LOW | Write new UserEntry to directory with new KEM keypair. Old UserEntry still exists (immutable blobs). Directory cache uses latest-timestamp-wins (already implemented for groups). Need same pattern for UserEntry. |
+## Differentiators
 
-### Differentiators (Competitive Advantage)
+Features that are not strictly required for function but significantly improve operational quality or developer experience.
 
-Features that go beyond table stakes and would distinguish chromatindb from simpler encrypted storage systems.
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Multiplexed UDS (single connection)** | Old relay opened one UDS per client. With 100 clients, that was 100 UDS connections to the node, each with its own AEAD state. Single multiplexed UDS dramatically reduces node connection overhead. | HIGH | Core architectural decision. Requires request_id multiplexing, subscription aggregation on the node side, and careful response routing. This is the hardest feature in the relay. |
+| **SIGHUP config reload** | Reload TLS certs, log level, max connections without restart. Zero-downtime cert rotation. Operators expect this from the node -- relay should match. | LOW | Same coroutine-based SIGHUP pattern as the node. TLS context can be swapped atomically. |
+| **Health check endpoint** | HTTP GET /health on the WebSocket port (or separate port). Returns 200 if relay is connected to node and accepting clients. Useful for load balancers, monitoring. | LOW | Beast already handles HTTP upgrade -- non-upgrade GET requests can return health status before WebSocket handshake. |
+| **Prometheus /metrics endpoint** | HTTP GET /metrics with relay-specific counters: active clients, messages forwarded, auth failures, queue overflows, node connection status. Matches node's existing Prometheus endpoint. | LOW | Same pattern as node's `db/peer/metrics_collector.h`. Share counter naming convention (chromatindb_relay_ prefix). |
+| **Rate limiting per client** | Per-client message rate limiting (token bucket). Prevents a single client from flooding the relay and consuming all UDS bandwidth. | LOW | Same token bucket pattern as node's rate limiter. Configurable rate/burst per client. |
+| **Connection limits** | Max total connections, max connections per IP. Prevents resource exhaustion from connection floods. | LOW | Atomic counter for total. unordered_map<ip, count> for per-IP. Reject with HTTP 503 before WebSocket upgrade. |
+| **Auth timeout** | If client does not complete challenge-response within N seconds after WebSocket upgrade, disconnect. Prevents lingering unauthenticated connections. | LOW | Timer started at upgrade, cancelled on auth success. Default 10s. |
+| **Binary payload encoding** | JSON uses hex strings for byte arrays (hashes, pubkeys, signatures). This is human-readable but verbose. Support optional base64 encoding for large payloads (blob data, signatures) to reduce JSON size. Hex for 32-byte hashes, base64 for large fields. | LOW | Convention decision: hex for fixed-size identifiers (namespace_id, blob_hash), base64 for variable-length data (blob data, pubkey, signature). Document clearly. |
+| **UDS auto-reconnect** | If UDS connection to node drops, attempt reconnection with jittered backoff. During reconnect, hold client connections open (or send error). Better than immediately disconnecting all clients. | MEDIUM | Old relay had this (ACTIVE/RECONNECTING/DEAD lifecycle). Reimplement for multiplexed UDS. During RECONNECTING, queue or reject client messages. |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Atomic revoke-and-rotate** | Single admin operation that: (1) tombstones delegation, (2) removes member from group, (3) rotates admin KEM key, (4) re-publishes group. Prevents the window where revocation happened but key has not rotated. | MEDIUM | SDK-level orchestration method. `directory.revoke_member(group_name, member)` does all four steps. No new wire types needed. |
-| **Revocation propagation notification** | Subscribers to the directory namespace get notified when a revocation happens, allowing connected clients to refresh their directory cache and pick up new KEM keys immediately. | LOW | Already works via existing Subscribe/Notification for directory namespace. `_check_invalidation()` already drains notifications and sets `_dirty`. Zero new code -- just documentation that this is the expected pattern. |
-| **Key history chain** | Directory entries form a discoverable history: UserEntry v1, v2, v3... all in the same namespace. `read_encrypted` can walk the chain to find the right decryption key for any epoch. | MEDIUM | Content-addressed dedup means each UserEntry version is a unique blob (different KEM keypair = different data = different hash). Need an index or convention for walking history. Could use a `key_version` field in UserEntry or rely on timestamp ordering. |
-| **Delegation audit trail** | Tombstoned delegation blobs still exist as tombstones. An admin can list all past delegations (active and revoked) for compliance. | LOW | Tombstones are permanent (TTL=0). The delegation blob hash is in the tombstone data. `DelegationList` shows active; tombstone scan shows revoked. SDK helper for audit view. |
+## Anti-Features
 
-### Anti-Features (Commonly Requested, Often Problematic)
+Features to explicitly NOT build. Each has been considered and rejected with rationale.
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| **Re-encryption of existing data on revocation** | "Revoked member can still read old data" -- sounds like a security gap. | Catastrophically expensive in a decentralized replicated system. Every blob encrypted to the group must be fetched, decrypted, re-encrypted with new key, and re-published. Violates PROJECT.md constraint. Creates huge write amplification. AWS/GCP/Azure all avoid this -- they keep old key versions. | Accept that old data is readable with old keys. This is the universal industry pattern. Document it clearly. Focus security guarantee on: "revoked members cannot read NEW data." |
-| **Distributed revocation consensus** | "All nodes must agree on revocation before it takes effect." | chromatindb is eventually consistent by design. Requiring consensus would need a new protocol layer (Raft/PBFT), violating YAGNI and the "intentionally dumb database" principle. | Revocation propagates via normal blob replication (tombstone sync). Eventually consistent. Acceptable latency for revocation -- measured in seconds, not minutes. |
-| **Automatic key rotation on timer** | "Rotate keys every N days automatically." | Adds timer complexity, requires background key management, and the rotation itself has no value without a revocation event. Rotating keys without revoking anyone is security theater in this context. | Rotate keys explicitly when a revocation happens. If compliance demands periodic rotation, add as a future SDK convenience -- but it is not table stakes. |
-| **Proxy re-encryption** | Academic papers propose allowing a proxy to transform ciphertexts from one key to another without seeing plaintext. | Requires new cryptographic primitives (PRE schemes), no PQ-secure PRE scheme is standardized or in liboqs, and violates "no new dependencies." Adds massive complexity for marginal benefit when envelope encryption already solves the problem. | Per-blob envelope encryption with key versioning. New data uses new keys. Old data stays under old keys. |
-| **Revocation CRL/OCSP-style checking** | "Check if a key is revoked before every decrypt." | Adds network dependency to every `read_encrypted` call. Breaks offline decryption. Adds latency. chromatindb blobs are self-verifiable -- the envelope either decrypts or it does not. | If the recipient has the KEM secret key, they can decrypt. Revocation prevents future writes and future encryption-to-group, not past decryption. This is the correct security model. |
-| **Node-enforced encryption** | "Nodes should refuse to store unencrypted blobs." | Violates "intentionally dumb database" principle. Nodes cannot inspect encrypted content. Some namespaces may intentionally store plaintext (public data). | Encryption is an SDK-layer concern. Nodes store signed blobs. Period. |
+| Anti-Feature | Why Tempting | Why Wrong | What to Do Instead |
+|--------------|-------------|-----------|-------------------|
+| **Per-client UDS connections** | Old relay did this. Simple 1:1 mapping. No multiplexing complexity. | Does not scale. 100 clients = 100 UDS connections = 100 TrustedHello handshakes = 100 AEAD states on the node. Node already has connection dedup logic that would interfere. | Single multiplexed UDS. Harder to build, dramatically better at scale. |
+| **WebSocket subprotocol negotiation** | RFC 6455 supports subprotocol negotiation. Could offer "chromatindb-json-v1" as a subprotocol. | Unnecessary complexity. There is exactly one protocol. No negotiation needed. Just use JSON over the WebSocket connection. Adding subprotocol headers adds nothing. | No subprotocol. JSON messages on the WebSocket. Period. |
+| **Message compression (permessage-deflate)** | WebSocket extension for per-message compression. Could reduce bandwidth. | Blob data is already encrypted (envelope encryption) -- encrypted data is incompressible. The JSON overhead for metadata messages is small. permessage-deflate adds CPU cost and memory per connection (zlib context). Node already decided wire compression is Out of Scope for this exact reason. | No compression. Encrypted payloads are incompressible. Metadata messages are small enough. |
+| **Binary WebSocket frames** | WebSocket supports both text (UTF-8) and binary frames. Could send binary for efficiency. | Defeats the purpose of the relay. The entire point is JSON accessibility -- any language, any tool (wscat, browser console) can interact. Binary frames require a codec. | Text frames only. JSON. Human-readable. Debuggable with standard tools. |
+| **HTTP REST API alongside WebSocket** | "Support both REST and WebSocket for flexibility." | Duplicates the entire message handling surface. REST requires separate request routing, cannot do pub/sub notifications, and adds a whole HTTP handler layer. The WebSocket JSON protocol already covers all operations. | WebSocket only (plus /health and /metrics as plain HTTP). All operations go through WebSocket. |
+| **Client-side keepalive (application-level)** | Old relay's PQ transport had Ping/Pong at the application layer. Could add JSON ping/pong. | WebSocket protocol has built-in Ping/Pong frames (opcode 0x9/0xA). Beast handles these automatically. Application-level keepalive is redundant. | Use WebSocket-level Ping/Pong. Beast's `auto_ping` or manual ping timer. No JSON-level keepalive. |
+| **Authentication via HTTP headers/tokens** | JWT, API keys, bearer tokens in the HTTP upgrade request. Standard for many WebSocket APIs. | chromatindb's identity model is ML-DSA-87 keypairs, not tokens. Adding a token layer would require a separate auth service, token issuance, token validation -- none of which exist. The challenge-response auth over WebSocket is simple and proves cryptographic identity. | Challenge-response over WebSocket after upgrade. Client proves they hold the ML-DSA-87 private key. No tokens, no external auth service. |
+| **Multi-node relay (connect to multiple db nodes)** | "Relay could load-balance across multiple nodes." | A relay is a gateway to ONE node. Multi-node would require routing logic, consistency decisions, and breaks the simple gateway model. The node's own peer mesh handles replication. | One relay = one node. Deploy multiple relays if needed (one per node). |
+| **Message queuing during UDS reconnect** | "Buffer client messages while reconnecting to node, replay when reconnected." | Unbounded memory risk. Clients could send megabytes of blob data during reconnect window. Order-sensitive protocol state could be violated. | Reject messages with an error response during RECONNECTING state. Client retries. Simple and safe. |
+| **Relay-to-relay communication** | "Relays should discover each other for redundancy." | Relay is a stateless gateway. It has no data to share with other relays. Client failover is the client's responsibility (connect to a different relay). | Independent relay instances. No relay mesh. Client decides which relay to connect to. |
+| **Automatic TLS cert provisioning (ACME/Let's Encrypt)** | "Relay should auto-provision TLS certs." | Adds HTTP-01/DNS-01 challenge handling, cert storage, renewal timers, ACME client library. Massive scope increase for something that certbot/caddy handle externally. | Operator provides cert_path + key_path. Use certbot/systemd timer externally. SIGHUP to reload new certs. |
 
 ## Feature Dependencies
 
 ```
-[SDK delegation revocation helper]
+[WebSocket server (WSS)]
     |
-    +--requires--> [DelegationList query] (ALREADY EXISTS v1.4.0 Phase 66)
+    +--requires--> [TLS termination]
     |
-    +--requires--> [Tombstone construction] (ALREADY EXISTS v3.0)
+    +--enables--> [Connection lifecycle management]
+                      |
+                      +--enables--> [Challenge-response auth]
+                      |                 |
+                      |                 +--enables--> [Session creation (ACTIVE state)]
+                      |
+                      +--enables--> [JSON message forwarding]
+                                        |
+                                        +--requires--> [JSON-to-FlatBuffers translation]
+                                        |
+                                        +--requires--> [Message type filtering]
+                                        |
+                                        +--requires--> [Request-response correlation]
+                                        |                   |
+                                        |                   +--requires--> [Multiplexed UDS]
+                                        |
+                                        +--requires--> [Subscription tracking]
+                                        |                   |
+                                        |                   +--enables--> [Notification routing]
+                                        |
+                                        +--requires--> [Per-client bounded send queue]
 
-[Encryption key versioning]
+[Multiplexed UDS]
     |
-    +--requires--> [Admin KEM key rotation]
-    |                  |
-    |                  +--requires--> [UserEntry with versioning support]
-    |                  |
-    |                  +--requires--> [Directory latest-entry-wins for UserEntry] (partial -- exists for groups)
+    +--requires--> [UDS connection to node]
     |
-    +--requires--> [Multi-version KEM key storage in Identity/Directory]
+    +--enables--> [UDS auto-reconnect]
     |
-    +--enhances--> [read_encrypted fallback to old keys]
+    +--requires--> [Request ID allocation + response routing]
 
-[Group membership revocation with key rotation]
-    |
-    +--requires--> [SDK delegation revocation helper]
-    |
-    +--requires--> [Encryption key versioning]
-    |
-    +--requires--> [Directory.remove_member] (ALREADY EXISTS v1.7.0)
-    |
-    +--enhances--> [Atomic revoke-and-rotate]
+[Configuration]
+    +--enables--> [SIGHUP config reload]
 
-[Atomic revoke-and-rotate]
-    |
-    +--requires--> [SDK delegation revocation helper]
-    +--requires--> [Encryption key versioning]
-    +--requires--> [Group membership revocation]
+[Logging]
+    (standalone, no dependencies)
 
-[Key history chain]
-    |
-    +--requires--> [Encryption key versioning]
-    +--enhances--> [read_encrypted fallback to old keys]
+[Graceful shutdown]
+    +--requires--> [Connection lifecycle management]
 ```
 
-### Dependency Notes
+### Critical Path
 
-- **Key versioning requires admin KEM rotation:** Without the ability to publish a new KEM keypair, there is no "new epoch" to encrypt to.
-- **Group revocation requires key versioning:** Removing a member from the group blob is pointless without also rotating the encryption key -- the removed member still has the old keys.
-- **Atomic revoke-and-rotate requires all three:** It is the composition of delegation revocation + group member removal + key rotation into one SDK call.
-- **Key history chain enhances read_encrypted:** Without history, old data encrypted to old KEM keys becomes unreadable when the directory cache only has the latest UserEntry.
+The hardest dependency chain is:
 
-## MVP Definition
+1. Multiplexed UDS with request_id routing (HIGH complexity)
+2. JSON-to-FlatBuffers translation for 38 message types (HIGH complexity, HIGH volume of work)
+3. Subscription tracking + notification routing on multiplexed UDS (MEDIUM complexity)
 
-### Launch With (v2.1.1)
+Everything else is LOW complexity and follows established patterns from the existing codebase.
 
-Minimum set to close the revocation story.
+## MVP Recommendation
 
-- [ ] **SDK delegation revocation helper** -- `directory.revoke_delegate(identity)` that finds delegation blob hash and tombstones it. LOW complexity, HIGH value.
-- [ ] **Admin KEM key rotation** -- `identity.rotate_kem()` generates new KEM keypair; `directory.register()` with new identity publishes updated UserEntry. Need UserEntry latest-timestamp-wins in directory cache (already done for groups).
-- [ ] **Encryption key versioning** -- Add `key_version` field to UserEntry format (USERENTRY_VERSION bump to 0x02). Directory tracks key history per user. `write_encrypted` uses latest KEM key. `read_encrypted` tries all known KEM keys for recipient identity.
-- [ ] **Group membership revocation + key rotation** -- `directory.revoke_member(group_name, member)` that removes member from group, tombstones their delegation, and rotates admin KEM key in one call.
-- [ ] **Documentation** -- PROTOCOL.md update for UserEntry v2 format, key versioning semantics, revocation flow.
+### Phase 1: Foundation (build order matters)
 
-### Add After Validation (v2.1.x)
+Prioritize in this order:
 
-Features to add once core revocation is working.
+1. **WebSocket server with TLS** -- the transport layer everything else sits on
+2. **Challenge-response authentication** -- must happen before any messages flow
+3. **UDS connection to node** -- single multiplexed connection
+4. **JSON message format definition** -- define the JSON schema for all 38 types
+5. **Configuration + logging** -- operational basics
 
-- [ ] **Delegation audit trail** -- SDK helper to list active + revoked delegations with timestamps. Trigger: compliance use case feedback.
-- [ ] **Key rotation audit log** -- Track all KEM key rotations per namespace with timestamps. Trigger: enterprise audit requirements.
-- [ ] **Revocation event callbacks** -- SDK `on_revocation` callback when directory cache detects a delegation tombstone. Trigger: real-time notification use case.
+### Phase 2: Core Protocol
 
-### Future Consideration (v3+)
+6. **JSON-to-FlatBuffers translation** -- the bulk of the work, type by type
+7. **Request-response correlation** -- request_id allocation and response routing
+8. **Message type filtering** -- blocklist, same as old relay
+9. **Per-client bounded send queue** -- backpressure
 
-Features to defer until product-market fit is established.
+### Phase 3: Pub/Sub + Lifecycle
 
-- [ ] **Periodic automatic key rotation** -- Timer-based rotation for compliance. Why defer: no value without active revocation; adds complexity.
-- [ ] **Re-encryption utility** -- Batch re-encrypt old data under new keys. Why defer: expensive, violates constraints, only needed for extreme compliance scenarios.
-- [ ] **Cross-SDK key versioning** -- C/C++/Rust/JS SDKs all support key epochs. Why defer: Python SDK only currently exists.
+10. **Subscription tracking** -- intercept Subscribe/Unsubscribe
+11. **Notification routing** -- route notifications to subscribed clients
+12. **Connection lifecycle management** -- auth timeouts, graceful disconnect
+13. **Graceful shutdown** -- SIGTERM handling
 
-## Feature Prioritization Matrix
+### Phase 4: Operational Polish
 
-| Feature | User Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| SDK delegation revocation helper | HIGH | LOW | P1 |
-| Admin KEM key rotation | HIGH | LOW | P1 |
-| Encryption key versioning (UserEntry v2) | HIGH | MEDIUM | P1 |
-| Group membership revocation + key rotation | HIGH | MEDIUM | P1 |
-| Old data readable with old keys | HIGH | LOW | P1 |
-| Documentation (PROTOCOL.md, SDK docs) | HIGH | LOW | P1 |
-| Atomic revoke-and-rotate | MEDIUM | MEDIUM | P2 |
-| Revocation propagation notification | MEDIUM | LOW (already works) | P2 |
-| Key history chain | MEDIUM | MEDIUM | P2 |
-| Delegation audit trail | LOW | LOW | P3 |
-| Revocation event callbacks | LOW | MEDIUM | P3 |
+14. **Health check endpoint** -- /health
+15. **Prometheus /metrics** -- operational observability
+16. **SIGHUP config reload** -- zero-downtime cert rotation
+17. **Rate limiting** -- per-client throttling
+18. **Connection limits** -- max total, max per-IP
+19. **UDS auto-reconnect** -- resilience
 
-**Priority key:**
-- P1: Must have for this milestone (closes the revocation story)
-- P2: Should have, makes the feature production-quality
-- P3: Nice to have, future consideration
+### Defer
 
-## Competitor/Prior Art Analysis
+- **Binary payload encoding (base64):** Nice optimization, not needed for correctness. Add when someone complains about JSON size.
+- **Auth timeout:** Can use WebSocket-level idle timeout initially. Dedicated auth timeout is polish.
 
-| Feature | Signal/WhatsApp | MLS (RFC 9420) | AWS KMS | chromatindb Approach |
-|---------|-----------------|----------------|---------|---------------------|
-| Member removal | Clear all Sender Keys, re-derive | Commit removes member, new epoch_secret | IAM policy revocation | Tombstone delegation blob, remove from group blob |
-| Key rotation on removal | All members re-derive sender keys | New tree secret, re-derive | Create new key version (automatic) | Rotate admin KEM keypair, re-publish UserEntry |
-| Old data access | Members keep old message keys | Old epoch keys retained | Old key versions kept for decrypt | Old UserEntry blobs remain, old KEM keys in directory history |
-| Re-encryption | Never | Never (old epochs frozen) | Manual (download + re-upload) | Never (constraint) |
-| Forward secrecy | Double Ratchet (per-message) | TreeKEM (per-epoch) | N/A (KEK versioning) | Per-blob random DEK (already achieved) -- revocation adds per-epoch KEM keys |
-| Revocation latency | Instant (online members) | Next Commit (async) | Instant (IAM) | Eventually consistent (blob replication, seconds) |
+## Message Type Translation Inventory
 
-### Key Takeaway from Prior Art
+The 38 client-allowed message types, grouped by translation complexity:
 
-Every production system (Signal, MLS, AWS, GCP, Azure) follows the same pattern:
-1. **Remove access** (revoke key/membership)
-2. **Rotate encryption key** (new epoch/version)
-3. **Keep old keys for decryption** (never re-encrypt)
+### Simple (fixed-size, straightforward mapping) -- 20 types
 
-chromatindb's existing primitives (tombstone delegation, group blobs, envelope encryption) map cleanly onto this pattern. The missing piece is the SDK orchestration that ties them together and the key versioning metadata in the directory.
+| Type | Name | Direction | Wire Size | JSON Fields |
+|------|------|-----------|-----------|-------------|
+| 5 | Ping | C->N | 0 | `{}` |
+| 6 | Pong | N->C | 0 | `{}` |
+| 7 | Goodbye | Both | 0 | `{}` |
+| 18 | DeleteAck | N->C | 0 | `{}` |
+| 35 | StatsRequest | C->N | 32 | namespace_id (hex) |
+| 36 | StatsResponse | N->C | 24 | blob_count, total_bytes, quota_bytes |
+| 37 | ExistsRequest | C->N | 64 | namespace_id, blob_hash (hex) |
+| 38 | ExistsResponse | N->C | 33 | exists (bool), blob_hash (hex) |
+| 39 | NodeInfoRequest | C->N | 0 | `{}` |
+| 43 | StorageStatusRequest | C->N | 0 | `{}` |
+| 44 | StorageStatusResponse | N->C | 44 | fields as integers |
+| 45 | NamespaceStatsRequest | C->N | 32 | namespace_id (hex) |
+| 46 | NamespaceStatsResponse | N->C | 41 | found, count, bytes, quota, seq |
+| 47 | MetadataRequest | C->N | 64 | namespace_id, blob_hash (hex) |
+| 49 | BatchExistsRequest | C->N | 36+N*32 | namespace_id, hashes[] (hex) |
+| 50 | BatchExistsResponse | N->C | N bytes | results[] (bool) |
+| 51 | DelegationListRequest | C->N | 32 | namespace_id (hex) |
+| 55 | PeerInfoRequest | C->N | 0 | `{}` |
+| 57 | TimeRangeRequest | C->N | 52 | namespace_id, start, end, limit |
 
-## Implementation Sketch: Key Versioning
+### Medium (variable-size, structured response) -- 12 types
 
-The core technical question is how to implement key epochs in the existing system without new wire types or C++ node changes.
+| Type | Name | Direction | Notes |
+|------|------|-----------|-------|
+| 19 | Subscribe | C->N | Namespace list encoding |
+| 20 | Unsubscribe | C->N | Namespace list encoding |
+| 21 | Notification | N->C | 77-byte fixed, but relay intercepts for routing |
+| 30 | WriteAck | N->C | 41-byte, blob_hash + seq + status |
+| 31 | ReadRequest | C->N | 64-byte, namespace + hash |
+| 33 | ListRequest | C->N | 44-byte, namespace + cursor + limit |
+| 34 | ListResponse | N->C | Variable, array of hash+seq pairs |
+| 40 | NodeInfoResponse | N->C | Variable, length-prefixed strings + arrays |
+| 42 | NamespaceListResponse | N->C | Variable, namespace array + cursor |
+| 52 | DelegationListResponse | N->C | Variable, pk_hash+blob_hash pairs |
+| 56 | PeerInfoResponse | N->C | Trust-gated, variable |
+| 58 | TimeRangeResponse | N->C | Variable, hash+seq+timestamp triples |
 
-**Approach: Directory-only key versioning (SDK layer)**
+### Complex (FlatBuffers encoding/decoding, large payloads) -- 6 types
 
-1. **UserEntry v2 format:** Add `key_version: uint32 BE` field after display_name. Backward-compatible: v1 entries have implicit key_version=0.
+| Type | Name | Direction | Notes |
+|------|------|-----------|-------|
+| 8 | Data | C->N | FlatBuffer Blob. Must construct from JSON fields (namespace, pubkey, data, ttl, timestamp, signature). Largest payload (up to 100 MiB data field). |
+| 17 | Delete | C->N | FlatBuffer Blob (tombstone). Same encoding as Data but with tombstone magic + target hash. |
+| 32 | ReadResponse | N->C | Status byte + optional FlatBuffer Blob. Must decode Blob fields to JSON. |
+| 48 | MetadataResponse | N->C | Variable, includes pubkey (2592 bytes as hex = 5184 chars). |
+| 53 | BatchReadRequest | C->N | namespace + cap_bytes + count + hashes |
+| 54 | BatchReadResponse | N->C | Truncated flag + multiple status+hash+data entries. Most complex response. |
 
-2. **Identity.rotate_kem():** Generate new ML-KEM-1024 keypair. Increment key_version. Sign new KEM pubkey with same signing key. Old KEM secret key retained in identity for decryption.
+### Translation Strategy
 
-3. **Directory tracks history:** Cache stores list of `(key_version, kem_pubkey)` per user, not just latest. Latest used for encryption. All versions tried for decryption.
+All binary byte arrays in JSON use lowercase hex encoding. Rationale:
+- 32-byte hash -> 64-char hex string (manageable)
+- 2592-byte pubkey -> 5184-char hex string (large but acceptable for JSON)
+- Blob data (up to 100 MiB) -> base64 encoding (hex would double an already large payload)
 
-4. **write_encrypted:** Uses latest KEM pubkey from directory for each recipient. No change to envelope format -- the `kem_pk_hash` in each stanza identifies which key version was used.
-
-5. **read_encrypted:** Current flow tries to decrypt with current KEM key. If `NotARecipientError`, try older KEM keys from directory history. The `kem_pk_hash` binary search in `envelope_decrypt` means only the matching key version is tried.
-
-6. **No node changes required.** Nodes store signed blobs. They do not interpret UserEntry format. Key versioning is entirely SDK-layer.
-
-**Why this works:** The envelope format already uses `kem_pk_hash` (SHA3-256 of KEM pubkey) to identify recipients. When the admin rotates KEM key, their new `kem_pk_hash` is different. Old envelopes have the old hash. `envelope_decrypt` does binary search on `kem_pk_hash` -- it will find the match only if the identity has the right KEM key version loaded. By keeping all KEM key versions in the identity, decryption of any epoch works.
+**Decision: hex for fixed identifiers, base64 for blob data and signatures.** This balances human readability for identifiers with reasonable size for large payloads.
 
 ## Sources
 
-- [Envelope encryption - Google Cloud KMS](https://cloud.google.com/kms/docs/envelope-encryption)
-- [Key rotation for AWS KMS - AWS Prescriptive Guidance](https://docs.aws.amazon.com/prescriptive-guidance/latest/aws-kms-best-practices/data-protection-key-rotation.html)
-- [Encryption Key Rotation Best Practices - Kiteworks](https://www.kiteworks.com/regulatory-compliance/encryption-key-rotation-strategies/)
-- [Secure Key-Updating for Lazy Revocation - Backes, Cachin, Oprea (ePrint 2005/334)](https://eprint.iacr.org/2005/334.pdf)
-- [MLS Protocol - RFC 9420](https://datatracker.ietf.org/doc/rfc9420/)
-- [MLS Architecture - RFC 9750](https://datatracker.ietf.org/doc/rfc9750/)
-- [Signal Double Ratchet specification](https://signal.org/docs/specifications/doubleratchet/)
-- [WhatsUpp with Sender Keys? - ePrint 2023/1385](https://eprint.iacr.org/2023/1385.pdf)
-- [Enhancing Security through Certificates, Envelope Encryption and Key Rotation - DEV Community](https://dev.to/0xog_pg/enhancing-security-through-certificates-envelope-encryption-and-key-rotation-602)
-- [Key rotation in AWS and GCP KMS - Medium](https://medium.com/@madhurajayashanka/key-rotation-in-aws-and-gcp-kms-what-really-happens-to-your-encrypted-data-7d2a12b07303)
-- [Revisiting Updatable Encryption - ePrint 2021/268](https://eprint.iacr.org/2021/268)
-- [Data encryption - HashiCorp Boundary](https://developer.hashicorp.com/boundary/docs/secure/encryption/data-encryption)
+- [Boost.Beast WebSocket documentation](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket.html)
+- [Beast async-ssl WebSocket server example](https://www.boost.org/doc/libs/master/libs/beast/example/websocket/server/async-ssl/websocket_server_async_ssl.cpp)
+- [WebSocket best practices for production (WebSocket.org)](https://websocket.org/guides/best-practices/)
+- [JSON event-based convention for WebSockets (Thoughtbot)](https://thoughtbot.com/blog/json-event-based-convention-websockets)
+- [Backpressure in WebSocket Streams (Skyline Codes)](https://skylinecodes.substack.com/p/backpressure-in-websocket-streams)
+- [WebSocket architecture best practices (Ably)](https://ably.com/topic/websocket-architecture-best-practices)
+- [WebSocket security: auth, TLS, rate limiting (WebSocket.org)](https://websocket.org/guides/security/)
+- [How to handle WebSocket rate limiting (OneUptime)](https://oneuptime.com/blog/post/2026-01-24-websocket-rate-limiting/view)
+- [How to handle graceful shutdown for WebSocket servers (OneUptime)](https://oneuptime.com/blog/post/2026-02-02-websocket-graceful-shutdown/view)
+- [Protocol translation patterns (OneUptime)](https://oneuptime.com/blog/post/2026-01-30-protocol-translation/view)
+- [PQ session protocol with ML-KEM + ML-DSA (Frontiers in Physics)](https://www.frontiersin.org/journals/physics/articles/10.3389/fphy.2025.1723966/full)
 
 ---
-*Feature research for: Revocation & Key Lifecycle (chromatindb v2.1.1)*
-*Researched: 2026-04-06*
+*Feature research for: Relay v2 WebSocket/JSON/TLS Gateway (chromatindb v3.0.0)*
+*Researched: 2026-04-09*
