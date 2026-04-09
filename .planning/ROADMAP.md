@@ -63,7 +63,7 @@ Plans:
 **Plans**: 2 plans (Wave 1: 102-01, Wave 2: 102-02)
 
 Plans:
-- [ ] 102-01-PLAN.md -- Challenge-response auth: Authenticator class, WsSession state machine, config extensions, SIGHUP reload
+- [x] 102-01-PLAN.md -- Challenge-response auth: Authenticator class, WsSession state machine, config extensions, SIGHUP reload
 - [ ] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
 
 ### Phase 103: UDS Multiplexer & Protocol Translation
@@ -121,7 +121,7 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 |-------|----------------|--------|-----------|
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
-| 102. Authentication & JSON Schema | 0/2 | Not started | - |
+| 102. Authentication & JSON Schema | 1/2 | In Progress|  |
 | 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
 | 105. Operational Polish | 0/2 | Not started | - |

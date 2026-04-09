@@ -22,10 +22,10 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Authentication
 
-- [ ] **AUTH-01**: Relay sends random 32-byte challenge on WebSocket connect
-- [ ] **AUTH-02**: Client signs challenge with ML-DSA-87 private key, relay verifies
-- [ ] **AUTH-03**: Auth timeout (10s) disconnects unresponsive clients
-- [ ] **AUTH-04**: Auth verification offloaded to thread pool (non-blocking)
+- [x] **AUTH-01**: Relay sends random 32-byte challenge on WebSocket connect
+- [x] **AUTH-02**: Client signs challenge with ML-DSA-87 private key, relay verifies
+- [x] **AUTH-03**: Auth timeout (10s) disconnects unresponsive clients
+- [x] **AUTH-04**: Auth verification offloaded to thread pool (non-blocking)
 
 ### Protocol Translation
 
@@ -49,7 +49,7 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 - [x] **SESS-01**: Per-client bounded send queue with drain coroutine
 - [x] **SESS-02**: Backpressure: disconnect slow clients on queue overflow
-- [ ] **SESS-03**: Configurable max concurrent WebSocket connections
+- [x] **SESS-03**: Configurable max concurrent WebSocket connections
 - [ ] **SESS-04**: Graceful shutdown on SIGTERM (drain queues, close frames)
 
 ### Observability & Operations
@@ -98,14 +98,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TRANS-02 | Phase 101 | Complete |
 | TRANS-03 | Phase 101 | Complete |
 | TRANS-04 | Phase 101 | Complete |
-| AUTH-01 | Phase 102 | Pending |
-| AUTH-02 | Phase 102 | Pending |
-| AUTH-03 | Phase 102 | Pending |
-| AUTH-04 | Phase 102 | Pending |
+| AUTH-01 | Phase 102 | Complete |
+| AUTH-02 | Phase 102 | Complete |
+| AUTH-03 | Phase 102 | Complete |
+| AUTH-04 | Phase 102 | Complete |
 | PROT-02 | Phase 102 | Pending |
 | PROT-03 | Phase 102 | Pending |
 | PROT-05 | Phase 102 | Pending |
-| SESS-03 | Phase 102 | Pending |
+| SESS-03 | Phase 102 | Complete |
 | MUX-01 | Phase 103 | Pending |
 | MUX-02 | Phase 103 | Pending |
 | PROT-01 | Phase 103 | Pending |
