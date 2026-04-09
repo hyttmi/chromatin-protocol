@@ -226,12 +226,12 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 Docker integration tests. ASAN/TSAN/UBSAN clean. Node code is frozen for v3.0.0.
 
-Old relay/ and sdk/python/ to be deleted at start of v3.0.0. Relay v2 is a fresh build — WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
+Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
 
 Relay is closed source. Database is open source. PROTOCOL.md documents the node wire format for third-party relay implementations.
 
 Tech stack (node): C++20, CMake, liboqs, libsodium, libmdbx, FlatBuffers, Standalone Asio, xxHash, Catch2, spdlog, nlohmann/json.
-Tech stack (relay v2): C++20, Asio Beast (WebSocket + HTTP), nlohmann/json, TLS, liboqs (for challenge-response auth verification).
+Tech stack (relay v2): C++20, Standalone Asio, nlohmann/json, spdlog, liboqs (ML-DSA-87 identity), Catch2. Hand-rolled WebSocket (Boost.Beast incompatible with standalone Asio). System OpenSSL for TLS (Phase 101).
 
 Two-layer architecture:
 - **Layer 1: chromatindb** (open source) — production-hardened database node
@@ -367,7 +367,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-09 after v3.0.0 milestone start*
+*Last updated: 2026-04-09 after Phase 100 (Cleanup & Foundation) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
