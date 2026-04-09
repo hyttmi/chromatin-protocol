@@ -147,8 +147,9 @@ PeerManager::PeerManager(const config::Config& config,
     sync_.set_compaction_interval(config.compaction_interval_hours);
     sync_.set_cursor_config(config.full_resync_interval, config.cursor_stale_seconds);
 
-    // Initialize dispatcher rate limits
+    // Initialize dispatcher rate limits and subscription limit
     dispatcher_.set_rate_limits(config.rate_limit_bytes_per_sec, config.rate_limit_burst);
+    dispatcher_.set_max_subscriptions(config.max_subscriptions_per_connection);
 
     // Initialize namespace filter from config
     for (const auto& hex : config.sync_namespaces) {
@@ -534,6 +535,12 @@ void PeerManager::reload_config() {
     } else {
         spdlog::info("config reload: rate_limit=disabled");
     }
+
+    // Reload subscription limit -> dispatcher
+    dispatcher_.set_max_subscriptions(new_cfg.max_subscriptions_per_connection);
+    spdlog::info("config reload: max_subscriptions_per_connection={}",
+                 new_cfg.max_subscriptions_per_connection == 0 ? std::string("unlimited") :
+                 std::to_string(new_cfg.max_subscriptions_per_connection));
 
     // Reload sync config -> sync_
     sync_.set_sync_config(new_cfg.sync_cooldown_seconds, new_cfg.max_sync_sessions,

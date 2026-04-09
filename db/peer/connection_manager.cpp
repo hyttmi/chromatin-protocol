@@ -95,16 +95,11 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     info.last_message_time = info.bucket_last_refill;
 
     // Check if this connection is to a bootstrap peer
+    // RES-02 (D-09): Compare full endpoint (host:port), not just host
     for (const auto& bp : bootstrap_addresses_) {
-        auto bp_colon = bp.rfind(':');
-        auto ra_colon = info.address.rfind(':');
-        if (bp_colon != std::string::npos && ra_colon != std::string::npos) {
-            auto bp_host = bp.substr(0, bp_colon);
-            auto ra_host = info.address.substr(0, ra_colon);
-            if (bp_host == ra_host) {
-                info.is_bootstrap = true;
-                break;
-            }
+        if (bp == info.address) {
+            info.is_bootstrap = true;
+            break;
         }
     }
 

@@ -1368,13 +1368,13 @@ void Storage::rebuild_quota_aggregates() {
         auto txn = impl_->env.start_write();
 
         // Clear existing quota entries
+        // RES-04 (D-12): Fixed iterator -- erase current, restart from first
         {
             auto cursor = txn.open_cursor(impl_->quota_map);
             auto result = cursor.to_first(false);
             while (result.done) {
-                auto next = cursor.to_next(false);
-                cursor.erase();
-                result.done = next.done;
+                cursor.erase();                    // erase current entry
+                result = cursor.to_first(false);   // restart from first remaining
             }
         }
 

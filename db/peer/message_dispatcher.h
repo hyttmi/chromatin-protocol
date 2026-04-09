@@ -58,6 +58,7 @@ public:
 
     // Config reload
     void set_rate_limits(uint64_t bytes_per_sec, uint64_t burst);
+    void set_max_subscriptions(uint32_t limit) { max_subscriptions_ = limit; }
 
 private:
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
@@ -82,6 +83,7 @@ private:
 
     uint64_t rate_limit_bytes_per_sec_ = 0;
     uint64_t rate_limit_burst_ = 0;
+    uint32_t max_subscriptions_ = 256;   // RES-01 (D-07): per-connection subscription limit
 };
 
 } // namespace chromatindb::peer
