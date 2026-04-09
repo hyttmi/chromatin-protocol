@@ -162,3 +162,67 @@ TEST_CASE("Config: validate with nonexistent cert_path throws", "[config]") {
 
     REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
 }
+
+TEST_CASE("Config: max_connections parsed from config", "[config]") {
+    auto j = valid_config();
+    j["max_connections"] = 512;
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.max_connections == 512);
+}
+
+TEST_CASE("Config: max_connections defaults to 1024", "[config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.max_connections == 1024);
+}
+
+TEST_CASE("Config: allowed_client_keys parsed", "[config]") {
+    auto j = valid_config();
+    j["allowed_client_keys"] = {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    };
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.allowed_client_keys.size() == 2);
+    REQUIRE(cfg.allowed_client_keys[0] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    REQUIRE(cfg.allowed_client_keys[1] == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+}
+
+TEST_CASE("Config: allowed_client_keys defaults to empty", "[config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.allowed_client_keys.empty());
+}
+
+TEST_CASE("Config: allowed_client_keys invalid hex rejected", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.allowed_client_keys = {"not_hex_at_all__________________________________________________"};
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("Config: allowed_client_keys wrong length rejected", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.allowed_client_keys = {"aabb"};  // Too short
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("Config: validate max_connections 0 throws", "[config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.max_connections = 0;
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}

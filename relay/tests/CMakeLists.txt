@@ -10,6 +10,7 @@ if(NOT TARGET Catch2::Catch2WithMain)
 endif()
 
 add_executable(chromatindb_relay_tests
+  test_authenticator.cpp
   test_session.cpp
   test_relay_config.cpp
   test_ws_frame.cpp

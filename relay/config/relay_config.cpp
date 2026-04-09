@@ -44,6 +44,11 @@ RelayConfig load_relay_config(const std::filesystem::path& path) {
     cfg.max_send_queue = j.value("max_send_queue", cfg.max_send_queue);
     cfg.cert_path = j.value("cert_path", cfg.cert_path);
     cfg.key_path = j.value("key_path", cfg.key_path);
+    cfg.max_connections = j.value("max_connections", cfg.max_connections);
+
+    if (j.contains("allowed_client_keys")) {
+        cfg.allowed_client_keys = j.at("allowed_client_keys").get<std::vector<std::string>>();
+    }
 
     return cfg;
 }
@@ -77,6 +82,27 @@ void validate_relay_config(const RelayConfig& cfg) {
         }
         if (!std::filesystem::exists(cfg.key_path)) {
             errors += "key_path file not found: " + cfg.key_path + ". ";
+        }
+    }
+
+    if (cfg.max_connections < 1) {
+        errors += "max_connections must be >= 1, got " + std::to_string(cfg.max_connections) + ". ";
+    }
+
+    // Validate allowed_client_keys: each entry must be exactly 64 hex chars
+    for (size_t i = 0; i < cfg.allowed_client_keys.size(); ++i) {
+        const auto& key = cfg.allowed_client_keys[i];
+        if (key.size() != 64) {
+            errors += "allowed_client_keys[" + std::to_string(i) +
+                      "] must be 64 hex chars, got " + std::to_string(key.size()) + ". ";
+            continue;
+        }
+        for (char c : key) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                errors += "allowed_client_keys[" + std::to_string(i) +
+                          "] contains non-hex character '" + std::string(1, c) + "'. ";
+                break;
+            }
         }
     }
 
