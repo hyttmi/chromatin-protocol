@@ -128,6 +128,7 @@ void MetricsCollector::dump_metrics() {
 // =============================================================================
 
 void MetricsCollector::start_metrics_listener() {
+    if (metrics_bind_.empty()) return;
     try {
         auto colon = metrics_bind_.rfind(':');
         if (colon == std::string::npos) {
