@@ -72,7 +72,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 - ✓ Data-at-rest encryption (ChaCha20-Poly1305 for stored blobs) — v0.5.0
 - ✓ Lightweight local handshake (skip PQ crypto for trusted/localhost peers) — v0.5.0
 - ✓ Configurable TTL (per-blob TTL set by writer, replacing hardcoded 7-day default) — v0.5.0
-- ✓ Tombstone TTL (tombstones expire after configurable period, garbage collected) — v0.5.0
+- ✓ Tombstones permanent (TTL=0 enforced at ingest, no configurable expiry) — v0.5.0, hardened v2.2.0
 - ✓ Build restructure (db/ as self-contained CMake component) — v0.5.0
 - ✓ Documentation updates for all v0.5.0 changes — v0.5.0
 
@@ -209,7 +209,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ## Context
 
-Shipped v2.2.0 with ~34,300 LOC C++20 + Python SDK (~4,600 LOC, 656 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. All 14 audit findings from 2026-04-07 addressed (13 fixed, 1 accepted as non-issue at current scale). ASAN/TSAN/UBSAN clean. The C++ database layer is production-grade — remaining items are accepted trade-offs (O(n) seq scan, pre-existing TSAN in Asio timer cleanup) and future nice-to-haves (tombstone TTL lifecycle).
+Shipped v2.2.0 with ~34,300 LOC C++20 + Python SDK (~4,600 LOC, 656 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. All 14 audit findings from 2026-04-07 addressed (13 fixed, 1 accepted as non-issue at current scale). ASAN/TSAN/UBSAN clean. The C++ database layer is production-grade — remaining items are accepted trade-offs (O(n) seq scan, pre-existing TSAN in Asio timer cleanup).
 Built across 38 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d), v2.1.1 (<1d), v2.2.0 (2d).
 21 milestones, 99 phases, 209 plans, 325 requirements total.
 
