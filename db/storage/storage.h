@@ -17,9 +17,11 @@ namespace chromatindb::storage {
 /// Result of a store_blob operation.
 struct StoreResult {
     enum class Status {
-        Stored,     ///< Blob successfully stored (new entry).
-        Duplicate,  ///< Blob already exists (content-addressed dedup).
-        Error       ///< Storage error occurred.
+        Stored,           ///< Blob successfully stored (new entry).
+        Duplicate,        ///< Blob already exists (content-addressed dedup).
+        CapacityExceeded, ///< Storage capacity limit exceeded (RES-03).
+        QuotaExceeded,    ///< Namespace quota limit exceeded (RES-03).
+        Error             ///< Storage error occurred.
     };
 
     Status status = Status::Error;
@@ -117,6 +119,16 @@ public:
     StoreResult store_blob(const wire::BlobData& blob,
                            const std::array<uint8_t, 32>& precomputed_hash,
                            std::span<const uint8_t> precomputed_encoded);
+
+    /// Store a blob with pre-computed hash/encoded AND capacity/quota limits.
+    /// Checks limits atomically inside the write transaction (RES-03, D-10/D-11).
+    /// Pass 0 for any limit to skip that check.
+    StoreResult store_blob(const wire::BlobData& blob,
+                           const std::array<uint8_t, 32>& precomputed_hash,
+                           std::span<const uint8_t> precomputed_encoded,
+                           uint64_t max_storage_bytes,
+                           uint64_t quota_byte_limit,
+                           uint64_t quota_count_limit);
 
     /// Retrieve a blob by namespace + content hash.
     /// @return The blob data if found, nullopt otherwise.

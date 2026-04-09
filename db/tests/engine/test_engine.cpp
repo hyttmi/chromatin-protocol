@@ -1959,6 +1959,26 @@ TEST_CASE("Tombstone with TTL=0 accepted at delete_blob", "[engine][ttl]") {
     REQUIRE(result.accepted);
 }
 
+// ============================================================================
+// Phase 99 Plan 02: Atomic capacity/quota check via store_blob (RES-03)
+// ============================================================================
+
+TEST_CASE("BlobEngine ingest rejects at capacity via store_blob", "[engine][resource]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    // Set max_storage_bytes=1 so any blob exceeds capacity
+    BlobEngine engine(store, pool, 1);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto blob = make_signed_blob(id, "capacity-atomic-test");
+
+    auto result = run_async(pool, engine.ingest(blob));
+    REQUIRE_FALSE(result.accepted);
+    REQUIRE(result.error.has_value());
+    REQUIRE(result.error.value() == IngestError::storage_full);
+}
+
 TEST_CASE("Permanent blob accepted regardless of timestamp age", "[engine][ttl]") {
     TempDir tmp;
     Storage store(tmp.path.string());

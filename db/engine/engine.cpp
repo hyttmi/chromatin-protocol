@@ -111,7 +111,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             " exceeds max " + std::to_string(net::MAX_BLOB_DATA_SIZE));
     }
 
-    // Step 0b: Capacity check (query + comparison, cheaper than crypto)
+    // Step 0b: Fast-reject optimization (not authoritative -- store_blob rechecks atomically, RES-03)
     // Tombstones exempt: small (36 bytes) and they free space by deleting target
     if (max_storage_bytes_ > 0 && !wire::is_tombstone(blob.data)) {
         if (storage_.used_bytes() >= max_storage_bytes_) {
@@ -204,7 +204,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     // Encode blob ONCE -- reused for quota check, dedup, tombstone check, and storage.
     auto encoded = wire::encode_blob(blob);
 
-    // Step 2a: Namespace quota check (after ownership, before dedup)
+    // Step 2a: Fast-reject optimization (not authoritative -- store_blob rechecks atomically, RES-03)
     // Tombstones exempt: consistent with Step 0b capacity exemption
     if (!wire::is_tombstone(blob.data)) {
         auto [byte_limit, count_limit] = effective_quota(blob.namespace_id);
@@ -279,7 +279,11 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     }
 
     // Step 4: Store to storage layer -- pass pre-computed hash and encoded bytes
-    auto store_result = storage_.store_blob(blob, content_hash, encoded);
+    // RES-03: Pass limits to store_blob for atomic check inside write transaction
+    auto [byte_limit, count_limit] = effective_quota(blob.namespace_id);
+    auto store_result = storage_.store_blob(blob, content_hash, encoded,
+        wire::is_tombstone(blob.data) ? 0 : max_storage_bytes_,
+        byte_limit, count_limit);
 
     switch (store_result.status) {
         case storage::StoreResult::Status::Stored: {
@@ -302,6 +306,12 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             result.source = std::move(source);
             co_return result;
         }
+        case storage::StoreResult::Status::CapacityExceeded:
+            co_return IngestResult::rejection(IngestError::storage_full,
+                "storage capacity exceeded (atomic check)");
+        case storage::StoreResult::Status::QuotaExceeded:
+            co_return IngestResult::rejection(IngestError::quota_exceeded,
+                "namespace quota exceeded (atomic check)");
         case storage::StoreResult::Status::Error:
             co_return IngestResult::rejection(IngestError::storage_error,
                 "storage write failed");
