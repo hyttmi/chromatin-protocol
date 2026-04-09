@@ -21,9 +21,9 @@
 
 ## Sync Correctness
 
-- [ ] **SYNC-01**: pending_fetches_ entries cleaned on rejected ingest (not just successful)
-- [ ] **SYNC-02**: pending_fetches_ key includes namespace to prevent cross-namespace hash collision
-- [ ] **SYNC-03**: Phase B reconciliation takes consistent hash snapshot (no stale reads from concurrent writes)
+- [x] **SYNC-01**: pending_fetches_ entries cleaned on rejected ingest (not just successful)
+- [x] **SYNC-02**: pending_fetches_ key includes namespace to prevent cross-namespace hash collision
+- [x] **SYNC-03**: Phase B reconciliation takes consistent hash snapshot (no stale reads from concurrent writes)
 
 ## Resource Limits
 
@@ -79,9 +79,9 @@
 | TTL-01 | Phase 98 | Complete |
 | TTL-02 | Phase 98 | Complete |
 | TTL-03 | Phase 98 | Complete |
-| SYNC-01 | Phase 99 | Pending |
-| SYNC-02 | Phase 99 | Pending |
-| SYNC-03 | Phase 99 | Pending |
+| SYNC-01 | Phase 99 | Complete |
+| SYNC-02 | Phase 99 | Complete |
+| SYNC-03 | Phase 99 | Complete |
 | RES-01 | Phase 99 | Complete |
 | RES-02 | Phase 99 | Complete |
 | RES-03 | Phase 99 | Complete |
