@@ -1,15 +1,21 @@
 #include "relay/config/relay_config.h"
 #include "relay/identity/relay_identity.h"
+#include "relay/ws/ws_acceptor.h"
+#include "relay/ws/ws_session.h"
+#include "relay/ws/session_manager.h"
 
 #include <asio.hpp>
+#include <asio/ssl.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -131,25 +137,89 @@ int main(int argc, char* argv[]) {
     // Create io_context
     asio::io_context ioc;
 
-    // Signal handling
+    // Create SessionManager and WsAcceptor
+    chromatindb::relay::ws::SessionManager session_manager;
+    chromatindb::relay::ws::WsAcceptor acceptor(
+        ioc, session_manager,
+        cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
+        cfg.max_send_queue);
+
+    // Initialize TLS if configured (per D-01)
+    if (cfg.tls_enabled()) {
+        if (!acceptor.init_tls(cfg.cert_path, cfg.key_path)) {
+            spdlog::error("failed to initialize TLS -- check cert_path and key_path");
+            return 1;
+        }
+        spdlog::info("  tls: enabled (TLS 1.3)");
+        spdlog::info("  cert: {}", cfg.cert_path);
+        spdlog::info("  key: {}", cfg.key_path);
+    } else {
+        spdlog::warn("  tls: DISABLED -- plain WebSocket mode (use cert_path/key_path for TLS)");
+    }
+
+    // Spawn accept loop
+    asio::co_spawn(ioc, acceptor.accept_loop(), asio::detached);
+
+    // SIGTERM/SIGINT graceful shutdown (per D-25)
     asio::signal_set term_signals(ioc, SIGTERM, SIGINT);
-    term_signals.async_wait([&](const asio::error_code&, int sig) {
-        spdlog::info("received signal {}, shutting down", sig);
-        ioc.stop();
+    term_signals.async_wait([&](const asio::error_code& ec, int sig) {
+        if (ec) return;
+        spdlog::info("received signal {}, shutting down with {} active sessions",
+                    sig, session_manager.count());
+        acceptor.stop();
+
+        // Best-effort Close(1001 Going Away) to all active sessions (per D-25)
+        session_manager.for_each([](uint64_t /*id*/, const auto& session) {
+            session->close(1001, "server shutting down");
+        });
+
+        // Give 2 seconds for close frames to send, then force stop
+        auto shutdown_timer = std::make_shared<asio::steady_timer>(ioc);
+        shutdown_timer->expires_after(std::chrono::seconds(2));
+        shutdown_timer->async_wait([&ioc, shutdown_timer](const asio::error_code&) {
+            ioc.stop();
+        });
     });
 
+    // SIGHUP TLS reload (per D-19, D-23)
     asio::signal_set hup_signal(ioc, SIGHUP);
     std::function<void(const asio::error_code&, int)> hup_handler;
     hup_handler = [&](const asio::error_code& ec, int) {
         if (ec) return;
-        spdlog::info("received SIGHUP -- config reload not yet implemented");
+        spdlog::info("received SIGHUP -- reloading configuration");
+
+        // Reload TLS if enabled
+        if (cfg.tls_enabled()) {
+            if (acceptor.reload_tls(cfg.cert_path, cfg.key_path)) {
+                spdlog::info("TLS context reloaded successfully");
+            } else {
+                spdlog::error("TLS reload failed -- keeping previous context");
+            }
+        }
+
         hup_signal.async_wait(hup_handler);
     };
     hup_signal.async_wait(hup_handler);
 
-    spdlog::info("relay ready (no accept loop -- Phase 101)");
+    // Thread pool (per D-21): hardware_concurrency() threads running ioc.run()
+    auto thread_count = std::thread::hardware_concurrency();
+    if (thread_count == 0) thread_count = 2;  // Fallback
+    spdlog::info("  threads: {}", thread_count);
 
-    ioc.run();
+    spdlog::info("relay listening on {}:{}{}",
+                cfg.bind_address, cfg.bind_port,
+                cfg.tls_enabled() ? " (WSS)" : " (WS)");
+
+    std::vector<std::thread> threads;
+    threads.reserve(thread_count - 1);
+    for (unsigned i = 1; i < thread_count; ++i) {
+        threads.emplace_back([&ioc]() { ioc.run(); });
+    }
+    ioc.run();  // Main thread also runs
+
+    for (auto& t : threads) {
+        t.join();
+    }
 
     spdlog::info("relay stopped");
     return 0;
