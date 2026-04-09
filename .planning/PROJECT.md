@@ -361,13 +361,18 @@ Two-layer architecture:
 | Group members as SHA3-256(signing_pk) hashes | 32 bytes each vs 2592-byte pubkeys; directory lookup resolves at encrypt-time | ✓ Good — Phase 77 |
 | write_to_group silently skips unresolvable members | Partial encryption safer than failing; group membership may be stale | ✓ Good — Phase 77 |
 | HKDF label registry in PROTOCOL.md | Four labels documented: 2 transport, 1 DARE, 1 envelope KEK — prevents accidental reuse | ✓ Good — Phase 78 |
+| Hand-rolled RFC 6455 WebSocket | Boost.Beast incompatible with standalone Asio; hand-rolled framing with OpenSSL SHA-1 for accept key | ✓ Good — Phase 101 |
+| WsSession wraps Session via callback | ws/ handles framing, core/ handles send queuing; WriteCallback injection decouples transport from queue | ✓ Good — Phase 101 |
+| shared_ptr<ssl::context> swap for SIGHUP TLS reload | Mutex-protected swap; new connections get new context, existing keep old (ref-counted lifetime) | ✓ Good — Phase 101 |
+| TLS 1.3 only (tlsv13_server) | No TLS 1.2 fallback; system OpenSSL 3.3+ required | ✓ Good — Phase 101 |
+| Dual-mode stream variant (tcp::socket / TlsStream) | std::variant enables WS and WSS from same WsSession class; auto-detect from config cert_path | ✓ Good — Phase 101 |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-09 after Phase 100 (Cleanup & Foundation) complete*
+*Last updated: 2026-04-09 after Phase 101 (WebSocket Transport) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
