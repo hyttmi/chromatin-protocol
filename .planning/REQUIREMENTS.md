@@ -47,8 +47,8 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Session Management
 
-- [ ] **SESS-01**: Per-client bounded send queue with drain coroutine
-- [ ] **SESS-02**: Backpressure: disconnect slow clients on queue overflow
+- [x] **SESS-01**: Per-client bounded send queue with drain coroutine
+- [x] **SESS-02**: Backpressure: disconnect slow clients on queue overflow
 - [ ] **SESS-03**: Configurable max concurrent WebSocket connections
 - [ ] **SESS-04**: Graceful shutdown on SIGTERM (drain queues, close frames)
 
@@ -57,7 +57,7 @@ Requirements for Relay v2. Each maps to roadmap phases.
 - [ ] **OPS-01**: Prometheus /metrics HTTP endpoint (connections, messages, errors)
 - [ ] **OPS-02**: SIGHUP config reload (TLS context, connection limits, rate limits)
 - [ ] **OPS-03**: Per-client rate limiting (messages/sec or bytes/sec)
-- [ ] **OPS-04**: Structured logging via spdlog
+- [x] **OPS-04**: Structured logging via spdlog
 
 ## Future Requirements
 
@@ -91,9 +91,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLEAN-01 | Phase 100 | Complete |
 | CLEAN-02 | Phase 100 | Complete |
 | CLEAN-03 | Phase 100 | Complete |
-| SESS-01 | Phase 100 | Pending |
-| SESS-02 | Phase 100 | Pending |
-| OPS-04 | Phase 100 | Pending |
+| SESS-01 | Phase 100 | Complete |
+| SESS-02 | Phase 100 | Complete |
+| OPS-04 | Phase 100 | Complete |
 | TRANS-01 | Phase 101 | Pending |
 | TRANS-02 | Phase 101 | Pending |
 | TRANS-03 | Phase 101 | Pending |
