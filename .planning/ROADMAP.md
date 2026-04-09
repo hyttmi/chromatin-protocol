@@ -29,11 +29,11 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
   3. No stale Docker artifacts, test references, or doc references to old relay/SDK remain
   4. New relay binary compiles and starts (exits cleanly with no config)
   5. Per-client session object exists with bounded send queue and drain coroutine, slow clients disconnected on overflow
-**Plans**: TBD
+**Plans**: 2 plans (Wave 1: 100-01, Wave 2: 100-02)
 
 Plans:
-- [ ] 100-01: Delete old relay and SDK, clean stale references
-- [ ] 100-02: Scaffold relay binary with session send queue and spdlog
+- [ ] 100-01-PLAN.md -- Delete old relay and SDK, clean stale references
+- [ ] 100-02-PLAN.md -- Scaffold relay binary with session send queue and spdlog
 
 ### Phase 101: WebSocket Transport
 **Goal**: Relay accepts WebSocket connections over TLS and plain TCP with correct RFC 6455 framing
