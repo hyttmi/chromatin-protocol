@@ -226,7 +226,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 Docker integration tests. ASAN/TSAN/UBSAN clean. Node code is frozen for v3.0.0.
 
-Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
+Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. Phase 101 delivered hand-rolled RFC 6455 WebSocket transport with TLS 1.3. Phase 102 added ML-DSA-87 challenge-response auth over WebSocket and JSON schema definitions for all 38 client-allowed types. WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
 
 Relay is closed source. Database is open source. PROTOCOL.md documents the node wire format for third-party relay implementations.
 
@@ -366,13 +366,16 @@ Two-layer architecture:
 | shared_ptr<ssl::context> swap for SIGHUP TLS reload | Mutex-protected swap; new connections get new context, existing keep old (ref-counted lifetime) | ✓ Good — Phase 101 |
 | TLS 1.3 only (tlsv13_server) | No TLS 1.2 fallback; system OpenSSL 3.3+ required | ✓ Good — Phase 101 |
 | Dual-mode stream variant (tcp::socket / TlsStream) | std::variant enables WS and WSS from same WsSession class; auto-detect from config cert_path | ✓ Good — Phase 101 |
+| Auth offload via asio::post(ioc) double-post | Bounce ML-DSA-87 verify to thread pool, post back to session strand — non-blocking IO | ✓ Good — Phase 102 |
+| Metadata-driven JSON schema (FieldSpec/MessageSchema) | 12 encoding types (HEX_32, BASE64, UINT64_STRING, etc.) — Phase 103 translation reads schema at runtime | ✓ Good — Phase 102 |
+| Constexpr message allowlist with binary_search | 38 client-sendable types; blocked types return error with request_id, connection stays open | ✓ Good — Phase 102 |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-09 after Phase 101 (WebSocket Transport) complete*
+*Last updated: 2026-04-09 after Phase 102 (Authentication & JSON Schema) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
