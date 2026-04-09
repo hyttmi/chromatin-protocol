@@ -10,7 +10,7 @@ Fix all known correctness bugs, integer overflow vulnerabilities, crypto safety 
 - [x] **Phase 96: PeerManager Architecture** - Split PeerManager god object into focused components (completed 2026-04-08)
 - [x] **Phase 97: Protocol & Crypto Safety** - Harden all protocol parsing and cryptographic handshake paths (completed 2026-04-08)
 - [x] **Phase 98: TTL Enforcement** - Enforce expiry checks in every query and fetch path (completed 2026-04-08)
-- [ ] **Phase 99: Sync, Resource & Concurrency Correctness** - Fix sync leaks, resource limit races, and coroutine safety
+- [x] **Phase 99: Sync, Resource & Concurrency Correctness** - Fix sync leaks, resource limit races, and coroutine safety (completed 2026-04-09)
 
 ## Phase Details
 
@@ -109,7 +109,7 @@ Phases execute in numeric order: 95 -> 96 -> 97 -> 98 -> 99
 | 96. PeerManager Architecture | 3/3 | Complete    | 2026-04-08 |
 | 97. Protocol & Crypto Safety | 3/3 | Complete    | 2026-04-08 |
 | 98. TTL Enforcement | 2/3 | Complete    | 2026-04-08 |
-| 99. Sync, Resource & Concurrency Correctness | 3/3 | Complete    | 2026-04-08 |
+| 99. Sync, Resource & Concurrency Correctness | 3/3 | Complete    | 2026-04-09 |
 
 ## Backlog
 
