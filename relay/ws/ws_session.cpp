@@ -1,5 +1,6 @@
 #include "relay/ws/ws_session.h"
 #include "relay/ws/session_manager.h"
+#include "relay/core/message_filter.h"
 
 #include <spdlog/spdlog.h>
 
@@ -343,12 +344,54 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
     }
 
     // AUTHENTICATED state:
-    // Phase 102: log and drop. Phase 103 adds JSON parsing + UDS forwarding.
-    // Plan 02 will add message filter check here.
-    spdlog::debug("session {}: received {} frame, {} bytes (authenticated, no handler yet)",
-                 session_id_,
-                 opcode == OPCODE_TEXT ? "text" : "binary",
-                 data.size());
+    // Only text frames expected from clients in Phase 102.
+    if (opcode != OPCODE_TEXT) {
+        spdlog::debug("session {}: ignoring non-text frame in authenticated state", session_id_);
+        co_return;
+    }
+
+    // Reset idle timer on any valid message.
+    idle_timer_.expires_after(IDLE_TIMEOUT);
+
+    // Parse JSON to extract type field (per D-28: extract type before any further parsing).
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(data.begin(), data.end());
+    } catch (const nlohmann::json::parse_error&) {
+        send_json({{"type", "error"}, {"code", "bad_json"}, {"message", "invalid JSON"}});
+        co_return;  // Keep connection open -- could be a client bug
+    }
+
+    if (!j.contains("type") || !j["type"].is_string()) {
+        send_json({{"type", "error"}, {"code", "missing_type"}, {"message", "missing or non-string 'type' field"}});
+        co_return;
+    }
+
+    auto type_str = j["type"].get<std::string>();
+
+    // Extract request_id for error responses (per D-22, D-29).
+    std::optional<uint32_t> request_id;
+    if (j.contains("request_id") && j["request_id"].is_number_unsigned()) {
+        request_id = j["request_id"].get<uint32_t>();
+    }
+
+    // Check allowlist (per D-28: filter at JSON parse time, before any further processing).
+    if (!core::is_type_allowed(type_str)) {
+        nlohmann::json err = {
+            {"type", "error"},
+            {"code", "blocked_type"},
+            {"message", "Message type '" + type_str + "' is not allowed"}
+        };
+        if (request_id) err["request_id"] = *request_id;
+        send_json(err);
+        spdlog::debug("session {}: blocked type '{}'{}", session_id_, type_str,
+                      request_id ? " (request_id=" + std::to_string(*request_id) + ")" : "");
+        co_return;  // Per D-29: keep connection open
+    }
+
+    // Type is allowed.  Phase 103 adds JSON->FlatBuffers translation + UDS forwarding.
+    spdlog::debug("session {}: accepted '{}'{}", session_id_, type_str,
+                  request_id ? " (request_id=" + std::to_string(*request_id) + ")" : "");
 }
 
 // ---------------------------------------------------------------------------
