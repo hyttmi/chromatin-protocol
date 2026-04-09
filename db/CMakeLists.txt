@@ -238,6 +238,7 @@ if(BUILD_TESTING)
     tests/peer/test_event_expiry.cpp
     tests/peer/test_keepalive.cpp
     tests/peer/test_metrics_endpoint.cpp
+    tests/peer/test_blob_push.cpp
     tests/storage/test_storage.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
