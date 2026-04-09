@@ -88,13 +88,43 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmapper) | | |
+| CLEAN-01 | Phase 100 | Pending |
+| CLEAN-02 | Phase 100 | Pending |
+| CLEAN-03 | Phase 100 | Pending |
+| SESS-01 | Phase 100 | Pending |
+| SESS-02 | Phase 100 | Pending |
+| OPS-04 | Phase 100 | Pending |
+| TRANS-01 | Phase 101 | Pending |
+| TRANS-02 | Phase 101 | Pending |
+| TRANS-03 | Phase 101 | Pending |
+| TRANS-04 | Phase 101 | Pending |
+| AUTH-01 | Phase 102 | Pending |
+| AUTH-02 | Phase 102 | Pending |
+| AUTH-03 | Phase 102 | Pending |
+| AUTH-04 | Phase 102 | Pending |
+| PROT-02 | Phase 102 | Pending |
+| PROT-03 | Phase 102 | Pending |
+| PROT-05 | Phase 102 | Pending |
+| SESS-03 | Phase 102 | Pending |
+| MUX-01 | Phase 103 | Pending |
+| MUX-02 | Phase 103 | Pending |
+| PROT-01 | Phase 103 | Pending |
+| PROT-04 | Phase 103 | Pending |
+| MUX-03 | Phase 104 | Pending |
+| MUX-04 | Phase 104 | Pending |
+| MUX-05 | Phase 104 | Pending |
+| MUX-06 | Phase 104 | Pending |
+| MUX-07 | Phase 104 | Pending |
+| OPS-01 | Phase 105 | Pending |
+| OPS-02 | Phase 105 | Pending |
+| OPS-03 | Phase 105 | Pending |
+| SESS-04 | Phase 105 | Pending |
 
 **Coverage:**
-- v3.0.0 requirements: 27 total
-- Mapped to phases: 0
-- Unmapped: 27
+- v3.0.0 requirements: 31 total
+- Mapped to phases: 31
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after initial definition*
+*Last updated: 2026-04-09 after roadmap creation*
