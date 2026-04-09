@@ -10,6 +10,9 @@ add_library(chromatindb_relay_lib STATIC
   identity/relay_identity.cpp
   ws/ws_frame.cpp
   ws/ws_handshake.cpp
+  ws/ws_session.cpp
+  ws/ws_acceptor.cpp
+  ws/session_manager.cpp
 )
 
 target_include_directories(chromatindb_relay_lib PUBLIC
