@@ -12,6 +12,8 @@ endif()
 add_executable(chromatindb_relay_tests
   test_session.cpp
   test_relay_config.cpp
+  test_ws_frame.cpp
+  test_ws_handshake.cpp
 )
 
 target_link_libraries(chromatindb_relay_tests PRIVATE

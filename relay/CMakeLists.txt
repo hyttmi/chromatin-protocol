@@ -7,6 +7,8 @@ add_library(chromatindb_relay_lib STATIC
   config/relay_config.cpp
   core/session.cpp
   identity/relay_identity.cpp
+  ws/ws_frame.cpp
+  ws/ws_handshake.cpp
 )
 
 target_include_directories(chromatindb_relay_lib PUBLIC
@@ -72,11 +74,18 @@ if(NOT TARGET oqs)
   )
 endif()
 
+# =============================================================================
+# System OpenSSL (TLS termination + SHA-1/Base64 for WebSocket handshake)
+# =============================================================================
+find_package(OpenSSL 3.3 REQUIRED)
+
 target_link_libraries(chromatindb_relay_lib PUBLIC
   asio::asio
   spdlog::spdlog
   nlohmann_json::nlohmann_json
   oqs
+  OpenSSL::SSL
+  OpenSSL::Crypto
 )
 
 target_compile_features(chromatindb_relay_lib PUBLIC cxx_std_20)
