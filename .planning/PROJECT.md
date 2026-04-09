@@ -10,6 +10,21 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v3.0.0 Relay v2
+
+**Goal:** Kill old relay + Python SDK, build a new closed-source WebSocket/JSON/TLS relay with PQ-signed payloads and challenge-response auth. No SDK needed — any language with WebSocket + liboqs can talk to the network.
+
+**Target features:**
+- Delete old relay/ and sdk/python/ (clean break)
+- New C++ relay binary with Asio Beast (WebSocket + HTTP)
+- WSS with TLS termination (cert_path + key_path in config)
+- JSON message format for all 38 relay-allowed message types
+- JSON ↔ FlatBuffers translation layer
+- ML-DSA-87 challenge-response authentication over WebSocket
+- Multiplexed UDS connection to node (single connection, not per-client)
+- Per-client bounded send queue with backpressure
+- Subscription tracking + notification routing
+
 ## Previous Milestone: v2.2.0 Node Hardening (SHIPPED 2026-04-09)
 
 **Delivered:** Centralized 64+ duplicate code patterns into 4 shared utility headers, decomposed 4187-line PeerManager god object into 6 focused components, overflow-checked arithmetic in all 14 protocol paths, challenge-response auth for lightweight handshake, TTL enforcement in all query/fetch/sync paths, fixed sync state leaks and 4 resource limit bugs, verified coroutine safety (CORO-01). 5 phases, 15 plans, 24 requirements — all complete. Closed 13 of 14 audit findings. ASAN/TSAN/UBSAN clean.
@@ -197,30 +212,32 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-- [ ] CLI tool for admin operations (quota check, list blobs, etc.)
-- [ ] C/C++/Rust/JS SDKs under sdk/ subdirectories
+- [ ] Relay v2: WebSocket/JSON/TLS relay with PQ challenge-response auth (v3.0.0)
 
 ### Future
 
-- Relay v2: REST/WebSocket API, multiplexed UDS, PQ auth, C++ with Asio Beast
+- CLI tool for admin operations (quota check, list blobs, etc.)
+- C/C++/Rust/JS SDKs under sdk/ subdirectories
 - Performance benchmarks for Relay layer
 - Re-encryption on revocation (if compliance use case demands it)
 - Streaming encryption for blobs >10 MiB
 
 ## Context
 
-Shipped v2.2.0 with ~34,300 LOC C++20 + Python SDK (~4,600 LOC, 656 tests) under sdk/python/. 647 unit tests (C++), 49 Docker integration test scripts. All 14 audit findings from 2026-04-07 addressed (13 fixed, 1 accepted as non-issue at current scale). ASAN/TSAN/UBSAN clean. The C++ database layer is production-grade — remaining items are accepted trade-offs (O(n) seq scan, pre-existing TSAN in Asio timer cleanup).
-Built across 38 days total: v1.0 (3d), v2.0 (2d), v3.0 (2d), v0.4.0 (5d), v0.5.0 (2d), v0.6.0 (2d), v0.7.0 (2d), v0.8.0 (1d), v0.9.0 (1d), v1.0.0 (2d), v1.1.0 (<1d), v1.2.0 (1d), v1.3.0 (1d), v1.4.0 (1d), v1.5.0 (<1d), v1.6.0 (3d), v1.7.0 (2d), v2.0.0 (<1d), v2.1.0 (<1d), v2.1.1 (<1d), v2.2.0 (2d).
-21 milestones, 99 phases, 209 plans, 325 requirements total.
+Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 Docker integration tests. ASAN/TSAN/UBSAN clean. Node code is frozen for v3.0.0.
 
-Tech stack: C++20, CMake, liboqs (ML-DSA-87, ML-KEM-1024, SHA3-256), libsodium (ChaCha20-Poly1305, HKDF-SHA256), libmdbx, FlatBuffers, Standalone Asio (C++20 coroutines, thread_pool), xxHash (XXH3), Catch2, spdlog, nlohmann/json. Python SDK: liboqs-python, PyNaCl, flatbuffers, asyncio.
+Old relay/ and sdk/python/ to be deleted at start of v3.0.0. Relay v2 is a fresh build — WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
 
-Three-layer architecture (all shipped):
-- **Layer 1 (v1.1.0 SHIPPED): chromatindb** — production-hardened database node. 567 unit tests, 49 Docker integration tests.
-- **Layer 2 (v1.2.0 SHIPPED): Relay** — PQ-authenticated message filter + UDS forwarder. Blocklist approach — future-proof.
-- **Layer 3 (v1.7.0 SHIPPED): Python SDK** — pip-installable client library. 18 async methods, 656 tests, PQ handshake, envelope encryption, directory, groups, tutorial.
+Relay is closed source. Database is open source. PROTOCOL.md documents the node wire format for third-party relay implementations.
 
-**Live test environment:** 3-node KVM swarm (192.168.1.200-202) with relay on 200.
+Tech stack (node): C++20, CMake, liboqs, libsodium, libmdbx, FlatBuffers, Standalone Asio, xxHash, Catch2, spdlog, nlohmann/json.
+Tech stack (relay v2): C++20, Asio Beast (WebSocket + HTTP), nlohmann/json, TLS, liboqs (for challenge-response auth verification).
+
+Two-layer architecture:
+- **Layer 1: chromatindb** (open source) — production-hardened database node
+- **Layer 2: Relay v2** (closed source) — WebSocket/JSON/TLS gateway with PQ auth
+
+**Test environment:** Local node on dev laptop (UDS connection). No multi-node replication needed for relay testing.
 
 **Product direction:** Storage vault for companies — seamless blob replication between nodes with fetch-from-anywhere. PQ crypto is a compliance selling point.
 
@@ -350,7 +367,7 @@ Three-layer architecture (all shipped):
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-09 after v2.2.0 milestone*
+*Last updated: 2026-04-09 after v3.0.0 milestone start*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
@@ -364,6 +381,3 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
-
----
-*Last updated: 2026-04-08 — Phase 98 (TTL Enforcement) complete, v2.2.0 in progress*

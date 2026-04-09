@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2.0
-milestone_name: Node Hardening
-status: completed
-stopped_at: Milestone complete
+milestone: v3.0.0
+milestone_name: Relay v2
+status: requirements
+stopped_at: Defining requirements
 last_updated: "2026-04-09"
 last_activity: 2026-04-09
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,23 +21,25 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v2.2.0 milestone complete. Planning next milestone.
+**Current focus:** v3.0.0 Relay v2 — defining requirements
 
 ## Current Position
 
-Phase: N/A (milestone complete)
-Plan: N/A
-Status: v2.2.0 shipped
-Last activity: 2026-04-09
-
-Progress: [##########] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-09 — Milestone v3.0.0 started
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
+- Relay is closed source, database is open source
+- Delete old relay/ and sdk/python/ at milestone start (clean break)
+- Test against local node on dev laptop (UDS), no KVM swarm needed
+- TLS via cert_path + key_path in relay config
+- ML-DSA-87 challenge-response auth over WebSocket
+- All 38 relay-allowed message types supported
 
 ### Pending Todos
 
