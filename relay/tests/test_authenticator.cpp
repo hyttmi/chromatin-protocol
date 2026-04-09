@@ -4,7 +4,6 @@
 #include "relay/identity/relay_identity.h"
 
 using chromatindb::relay::core::Authenticator;
-using chromatindb::relay::core::AuthResult;
 using chromatindb::relay::identity::RelayIdentity;
 
 TEST_CASE("Authenticator: generate_challenge returns 32 bytes", "[auth]") {
