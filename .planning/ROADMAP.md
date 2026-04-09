@@ -60,11 +60,11 @@ Plans:
   3. Clients that do not authenticate within 10 seconds are disconnected
   4. Signature verification runs on a thread pool and does not block the IO loop
   5. JSON schema covers all 38 relay-allowed message types with hex encoding for hashes/namespaces, base64 for blob data/signatures, and string encoding for uint64 fields
-**Plans**: TBD
+**Plans**: 2 plans (Wave 1: 102-01, Wave 2: 102-02)
 
 Plans:
-- [ ] 102-01: Challenge-response auth protocol over WebSocket
-- [ ] 102-02: JSON schema design and message type filter
+- [ ] 102-01-PLAN.md -- Challenge-response auth: Authenticator class, WsSession state machine, config extensions, SIGHUP reload
+- [ ] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
 
 ### Phase 103: UDS Multiplexer & Protocol Translation
 **Goal**: Relay maintains a single multiplexed UDS connection to the node and translates JSON client requests to FlatBuffers and back, routing responses to the correct client
