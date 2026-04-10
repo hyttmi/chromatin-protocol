@@ -14,7 +14,7 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
 - [x] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS (completed 2026-04-09)
 - [x] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types (completed 2026-04-09)
 - [x] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation (completed 2026-04-10)
-- [ ] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay
+- [x] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay (completed 2026-04-10)
 - [ ] **Phase 105: Operational Polish** - Prometheus metrics, rate limiting, SIGHUP config reload, graceful shutdown
 
 ## Phase Details
@@ -94,7 +94,7 @@ Plans:
 
 Plans:
 - [x] 104-01-PLAN.md -- Subscription aggregation with reference counting and notification fan-out
-- [ ] 104-02-PLAN.md -- UDS auto-reconnect with subscription replay and pending request cleanup
+- [x] 104-02-PLAN.md -- UDS auto-reconnect with subscription replay and pending request cleanup
 
 ### Phase 105: Operational Polish
 **Goal**: Relay is production-ready with observability, rate limiting, config reload, and graceful shutdown
@@ -123,5 +123,5 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
 | 102. Authentication & JSON Schema | 2/2 | Complete    | 2026-04-09 |
 | 103. UDS Multiplexer & Protocol Translation | 2/2 | Complete    | 2026-04-10 |
-| 104. Pub/Sub & UDS Resilience | 1/2 | In Progress|  |
+| 104. Pub/Sub & UDS Resilience | 2/2 | Complete   | 2026-04-10 |
 | 105. Operational Polish | 0/2 | Not started | - |

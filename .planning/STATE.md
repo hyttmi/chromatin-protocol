@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.0.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 104-01-PLAN.md
-last_updated: "2026-04-10T07:29:49.024Z"
+status: verifying
+stopped_at: Completed 104-02-PLAN.md
+last_updated: "2026-04-10T07:38:28.220Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
   percent: 50
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 
 Phase: 104 (pub-sub-uds-resilience) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-10
 
 Progress: [#####░░░░░] 50%
@@ -59,6 +59,7 @@ Progress: [#####░░░░░] 50%
 | Phase 102 P02 | 10min | 2 tasks | 11 files |
 | Phase 103 P02 | 20min | 2 tasks | 16 files |
 | Phase 104 P01 | 10min | 2 tasks | 14 files |
+| Phase 104 P02 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Recent decisions affecting current work:
 - [Phase 103]: Binary WS frame via marker-prefix: send_binary() prepends 0x02 byte for OPCODE_BINARY detection in write_frame()
 - [Phase 103]: 10 compound response types (vs 7 in plan) with custom decode helpers -- NodeInfoResponse, NamespaceStatsResponse, StorageStatusResponse also need compound decode
 - [Phase 104]: SubscriptionTracker as standalone component-per-concern class, u16BE namespace list encoding (not u32BE translator path), translate-once notification fan-out
+- [Phase 104]: D-14 disconnect ordering applied to both read_loop and drain_send_queue failure paths
+- [Phase 104]: replay_subscriptions uses u16BE count prefix, skips empty set
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T07:29:49.019Z
-Stopped at: Completed 104-01-PLAN.md
+Last session: 2026-04-10T07:38:28.217Z
+Stopped at: Completed 104-02-PLAN.md
 Resume file: None
