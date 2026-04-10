@@ -10,6 +10,23 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
+## Current Milestone: v3.1.0 Relay Live Hardening
+
+**Goal:** Fix all bugs found in live relay+node testing and verify every feature works end-to-end against a running node.
+
+**Target features:**
+- Fix binary_to_json translation failures (NodeInfoResponse type=40 and other compound types)
+- Audit and fix all std::visit + coroutine lambda patterns in relay/ (ASAN stack-use-after-return bug class)
+- Test all 38 message types end-to-end through relay→node→relay
+- Test subscribe/notification fan-out flow live
+- Test rate limiting enforcement live
+- Test SIGHUP config reload live
+- Test graceful SIGTERM shutdown live
+- Performance testing: throughput (messages/sec), latency (relay overhead vs direct UDS), concurrent client load
+- Source exclusion for notifications (FUTURE-01)
+- Relay-side max blob size limit (FUTURE-02)
+- Health check endpoint /health (FUTURE-03)
+
 ## Previous Milestone: v3.0.0 Relay v2 (SHIPPED 2026-04-10)
 
 **Delivered:** Closed-source WebSocket/JSON/TLS relay replacing old relay + Python SDK. Hand-rolled RFC 6455 WebSocket transport, ML-DSA-87 challenge-response authentication, table-driven JSON-to-FlatBuffers translation for all 38 client-allowed types, multiplexed UDS connection to node with AEAD-encrypted transport, subscription tracking with reference-counted aggregation and notification fan-out, UDS auto-reconnect with subscription replay, Prometheus /metrics endpoint, per-client token bucket rate limiting, drain-first graceful SIGTERM shutdown, SIGHUP config reload for TLS/ACL/rate limits/metrics. 6 phases, 12 plans, 31 requirements — all complete. 205 relay tests, 2378 assertions.
@@ -201,7 +218,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-- ✓ Relay v2: WebSocket/JSON/TLS relay with PQ challenge-response auth — v3.0.0
+- [ ] Relay live hardening: fix translation bugs, end-to-end testing, source exclusion, /health — v3.1.0
 
 ### Future
 
