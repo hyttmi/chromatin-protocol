@@ -10,6 +10,7 @@
 #include "relay/ws/ws_frame.h"
 #include "relay/ws/ws_session.h"
 
+#include <nlohmann/json.hpp>
 #include <oqs/oqs.h>
 #include <oqs/sha3.h>
 #include <openssl/rand.h>
@@ -101,6 +102,25 @@ asio::awaitable<void> UdsMultiplexer::drain_send_queue() {
             break;
         }
     }
+
+    // If disconnected due to send failure, perform D-14 ordered cleanup
+    if (!connected_) {
+        bulk_fail_pending_requests();
+        send_key_.clear();
+        recv_key_.clear();
+        send_counter_ = 0;
+        recv_counter_ = 0;
+        send_queue_.clear();
+        asio::error_code ec;
+        socket_.close(ec);
+
+        spdlog::info("UDS: send failure -- starting reconnect loop");
+        auto self_ptr = this;
+        asio::co_spawn(ioc_,
+            [self_ptr]() -> asio::awaitable<void> {
+                co_await self_ptr->connect_loop();
+            }, asio::detached);
+    }
     draining_ = false;
 }
 
@@ -138,6 +158,9 @@ asio::awaitable<void> UdsMultiplexer::connect_loop() {
             connected_ = true;
             attempt = 0;
             spdlog::info("UDS handshake complete -- relay connected to node");
+
+            // D-10: replay all active subscriptions after reconnect
+            replay_subscriptions();
 
             // Spawn read loop and cleanup loop
             {
@@ -431,10 +454,25 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
             spdlog::warn("UDS read_loop: recv failed -- disconnecting");
             connected_ = false;
 
-            // Close socket and restart connection.
+            // D-14: cleanup pending requests FIRST
+            bulk_fail_pending_requests();
+
+            // D-09: reset AEAD state
+            send_key_.clear();
+            recv_key_.clear();
+            send_counter_ = 0;
+            recv_counter_ = 0;
+
+            // Close socket
             asio::error_code ec;
             socket_.close(ec);
 
+            // Clear send queue (stale encrypted data per Pitfall 2)
+            send_queue_.clear();
+            draining_ = false;
+
+            // Re-enter connect_loop (infinite reconnect per D-09)
+            spdlog::info("UDS: starting reconnect loop");
             auto self_ptr = this;
             asio::co_spawn(ioc_,
                 [self_ptr]() -> asio::awaitable<void> {
@@ -557,6 +595,60 @@ void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> 
             session->send_json(*json_opt);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pending request bulk-fail (D-13)
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::bulk_fail_pending_requests() {
+    size_t count = router_.pending_count();
+    if (count == 0) return;
+
+    router_.bulk_fail_all([this](uint64_t session_id, uint32_t client_rid) {
+        auto session = sessions_.get_session(session_id);
+        if (!session) return;  // Session already gone (Pitfall 3)
+
+        nlohmann::json err = {
+            {"type", "error"},
+            {"code", "node_disconnected"},
+            {"message", "Node connection lost"}
+        };
+        if (client_rid != 0) err["request_id"] = client_rid;
+        session->send_json(err);
+    });
+    spdlog::info("UDS: bulk-failed {} pending request(s)", count);
+}
+
+// ---------------------------------------------------------------------------
+// Subscription replay after reconnect (D-10)
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::replay_subscriptions() {
+    if (!tracker_) return;
+
+    auto namespaces = tracker_->get_all_namespaces();
+    if (namespaces.empty()) {
+        spdlog::debug("UDS: no subscriptions to replay after reconnect");
+        return;
+    }
+
+    // Build u16BE namespace list (same format node expects)
+    std::vector<uint8_t> payload;
+    payload.reserve(2 + namespaces.size() * 32);
+    uint8_t buf[2];
+    util::store_u16_be(buf, static_cast<uint16_t>(namespaces.size()));
+    payload.insert(payload.end(), buf, buf + 2);
+    for (const auto& ns : namespaces) {
+        payload.insert(payload.end(), ns.begin(), ns.end());
+    }
+
+    auto msg = wire::TransportCodec::encode(
+        chromatindb::wire::TransportMsgType_Subscribe, payload, 0);
+    send(std::move(msg));
+
+    spdlog::info("UDS: replayed {} subscription(s) after reconnect",
+                  namespaces.size());
 }
 
 // ---------------------------------------------------------------------------

@@ -53,6 +53,14 @@ size_t RequestRouter::purge_stale(std::chrono::seconds timeout) {
     return count;
 }
 
+void RequestRouter::bulk_fail_all(
+    std::function<void(uint64_t session_id, uint32_t client_rid)> on_fail) {
+    for (const auto& [relay_rid, pending] : pending_) {
+        on_fail(pending.client_session_id, pending.client_request_id);
+    }
+    pending_.clear();
+}
+
 size_t RequestRouter::pending_count() const {
     return pending_.size();
 }

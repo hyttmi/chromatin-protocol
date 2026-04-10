@@ -3,6 +3,9 @@
 #include "relay/core/request_router.h"
 
 #include <cstdint>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 using chromatindb::relay::core::RequestRouter;
 
@@ -146,5 +149,47 @@ TEST_CASE("pending_count reflects current state", "[request_router]") {
     REQUIRE(router.pending_count() == 1);
 
     router.resolve_response(2);
+    REQUIRE(router.pending_count() == 0);
+}
+
+TEST_CASE("bulk_fail_all invokes callback for each pending entry", "[request_router][bulk_fail]") {
+    RequestRouter router;
+
+    router.register_request(1, 10);
+    router.register_request(2, 20);
+    router.register_request(3, 30);
+
+    std::vector<std::pair<uint64_t, uint32_t>> failed;
+    router.bulk_fail_all([&](uint64_t session_id, uint32_t client_rid) {
+        failed.emplace_back(session_id, client_rid);
+    });
+
+    REQUIRE(failed.size() == 3);
+    REQUIRE(router.pending_count() == 0);
+
+    // All three pairs must be present (order may vary)
+    std::unordered_set<uint64_t> sessions;
+    std::unordered_set<uint32_t> rids;
+    for (const auto& [sid, rid] : failed) {
+        sessions.insert(sid);
+        rids.insert(rid);
+    }
+    REQUIRE(sessions.count(1) == 1);
+    REQUIRE(sessions.count(2) == 1);
+    REQUIRE(sessions.count(3) == 1);
+    REQUIRE(rids.count(10) == 1);
+    REQUIRE(rids.count(20) == 1);
+    REQUIRE(rids.count(30) == 1);
+}
+
+TEST_CASE("bulk_fail_all on empty map is no-op", "[request_router][bulk_fail]") {
+    RequestRouter router;
+
+    int counter = 0;
+    router.bulk_fail_all([&](uint64_t, uint32_t) {
+        ++counter;
+    });
+
+    REQUIRE(counter == 0);
     REQUIRE(router.pending_count() == 0);
 }

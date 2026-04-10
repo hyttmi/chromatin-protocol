@@ -75,6 +75,12 @@ private:
     /// Handle Notification (type 21) fan-out to subscribed sessions (Phase 104 D-06).
     void handle_notification(uint8_t type, std::span<const uint8_t> payload);
 
+    /// Replay all active subscriptions as a batched Subscribe to the node (D-10).
+    void replay_subscriptions();
+
+    /// Bulk-fail all pending requests, sending error JSON to each client (D-13).
+    void bulk_fail_pending_requests();
+
     asio::io_context& ioc_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;

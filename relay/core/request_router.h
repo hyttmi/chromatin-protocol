@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 
@@ -34,6 +35,10 @@ public:
     /// Per D-11: Purge entries older than timeout (default 60s).
     /// Returns the number of purged entries.
     size_t purge_stale(std::chrono::seconds timeout = std::chrono::seconds(60));
+
+    /// Bulk-fail all pending requests. Calls on_fail for each entry before clearing.
+    /// Per D-13: used on UDS disconnect to fail all pending client requests.
+    void bulk_fail_all(std::function<void(uint64_t session_id, uint32_t client_rid)> on_fail);
 
     /// Number of pending requests (for metrics/debugging).
     size_t pending_count() const;
