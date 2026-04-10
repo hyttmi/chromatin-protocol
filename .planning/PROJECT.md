@@ -379,7 +379,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-10 after Phase 103 (UDS Multiplexer & Protocol Translation) complete*
+*Last updated: 2026-04-10 after Phase 104 (Pub/Sub & UDS Resilience) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
