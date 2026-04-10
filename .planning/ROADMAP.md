@@ -78,7 +78,7 @@ Plans:
 **Plans**: 2 plans (Wave 1: 103-01, Wave 2: 103-02)
 
 Plans:
-- [ ] 103-01-PLAN.md -- Wire infrastructure (AEAD, TransportCodec, utilities, FlatBuffers) and RequestRouter
+- [x] 103-01-PLAN.md -- Wire infrastructure (AEAD, TransportCodec, utilities, FlatBuffers) and RequestRouter
 - [ ] 103-02-PLAN.md -- UdsMultiplexer with TrustedHello handshake, table-driven translator, and WsSession integration
 
 ### Phase 104: Pub/Sub & UDS Resilience
@@ -122,6 +122,6 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
 | 102. Authentication & JSON Schema | 2/2 | Complete    | 2026-04-09 |
-| 103. UDS Multiplexer & Protocol Translation | 0/2 | Not started | - |
+| 103. UDS Multiplexer & Protocol Translation | 1/2 | In progress | - |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
 | 105. Operational Polish | 0/2 | Not started | - |

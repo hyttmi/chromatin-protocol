@@ -38,7 +38,7 @@ Requirements for Relay v2. Each maps to roadmap phases.
 ### UDS Multiplexer
 
 - [ ] **MUX-01**: Single multiplexed UDS connection from relay to node
-- [ ] **MUX-02**: Relay-scoped request_id allocation with client-to-relay mapping for response routing
+- [x] **MUX-02**: Relay-scoped request_id allocation with client-to-relay mapping for response routing
 - [ ] **MUX-03**: Subscription aggregation with reference counting (first subscribe sends to node, last unsubscribe sends to node)
 - [ ] **MUX-04**: Notification fan-out from node to subscribed WebSocket clients
 - [ ] **MUX-05**: UDS auto-reconnect with jittered backoff on node disconnect
@@ -107,7 +107,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROT-05 | Phase 102 | Complete |
 | SESS-03 | Phase 102 | Complete |
 | MUX-01 | Phase 103 | Pending |
-| MUX-02 | Phase 103 | Pending |
+| MUX-02 | Phase 103 | Complete |
 | PROT-01 | Phase 103 | Pending |
 | PROT-04 | Phase 103 | Pending |
 | MUX-03 | Phase 104 | Pending |
@@ -127,4 +127,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after roadmap creation*
+*Last updated: 2026-04-10 after Phase 103 Plan 01 completion*
