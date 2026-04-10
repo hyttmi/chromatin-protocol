@@ -90,11 +90,11 @@ Plans:
   2. Notifications from the node are fanned out to all WebSocket clients subscribed to that namespace
   3. When the UDS connection to the node drops, relay reconnects with jittered backoff and replays all active subscriptions
   4. Pending client requests are failed with an error when the UDS connection drops (no orphaned requests)
-**Plans**: TBD
+**Plans**: 2 plans (Wave 1: 104-01, Wave 2: 104-02)
 
 Plans:
-- [ ] 104-01: Subscription aggregation with reference counting and notification fan-out
-- [ ] 104-02: UDS auto-reconnect with subscription replay and pending request cleanup
+- [ ] 104-01-PLAN.md -- Subscription aggregation with reference counting and notification fan-out
+- [ ] 104-02-PLAN.md -- UDS auto-reconnect with subscription replay and pending request cleanup
 
 ### Phase 105: Operational Polish
 **Goal**: Relay is production-ready with observability, rate limiting, config reload, and graceful shutdown
