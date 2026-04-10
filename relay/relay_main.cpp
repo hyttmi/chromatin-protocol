@@ -1,8 +1,12 @@
 #include "relay/config/relay_config.h"
 #include "relay/core/authenticator.h"
 #include "relay/core/request_router.h"
+#include "relay/core/subscription_tracker.h"
 #include "relay/core/uds_multiplexer.h"
 #include "relay/identity/relay_identity.h"
+#include "relay/util/endian.h"
+#include "relay/wire/transport_codec.h"
+#include "relay/wire/transport_generated.h"
 #include "relay/ws/ws_acceptor.h"
 #include "relay/ws/ws_session.h"
 #include "relay/ws/session_manager.h"
@@ -193,21 +197,42 @@ int main(int argc, char* argv[]) {
     // Create io_context
     asio::io_context ioc;
 
-    // Create RequestRouter and UdsMultiplexer
+    // Create RequestRouter, SessionManager, SubscriptionTracker
     chromatindb::relay::core::RequestRouter request_router;
     chromatindb::relay::ws::SessionManager session_manager;
+    chromatindb::relay::core::SubscriptionTracker subscription_tracker;
 
     chromatindb::relay::core::UdsMultiplexer uds_mux(
         ioc, cfg.uds_path, identity, request_router, session_manager);
+    uds_mux.set_tracker(&subscription_tracker);
     uds_mux.start();
     spdlog::info("  uds_mux: started (connecting to {})", cfg.uds_path);
+
+    // Wire subscription tracker into session manager for disconnect cleanup (D-05)
+    session_manager.set_tracker(&subscription_tracker);
+    session_manager.set_on_namespaces_empty(
+        [&uds_mux](const std::vector<std::array<uint8_t, 32>>& namespaces) {
+            if (namespaces.empty() || !uds_mux.is_connected()) return;
+            // Build u16BE namespace list payload
+            std::vector<uint8_t> payload;
+            payload.reserve(2 + namespaces.size() * 32);
+            uint8_t buf[2];
+            chromatindb::relay::util::store_u16_be(buf, static_cast<uint16_t>(namespaces.size()));
+            payload.insert(payload.end(), buf, buf + 2);
+            for (const auto& ns : namespaces) {
+                payload.insert(payload.end(), ns.begin(), ns.end());
+            }
+            auto msg = chromatindb::relay::wire::TransportCodec::encode(
+                chromatindb::wire::TransportMsgType_Unsubscribe, payload, 0);
+            uds_mux.send(std::move(msg));
+        });
 
     // Create WsAcceptor
     chromatindb::relay::ws::WsAcceptor acceptor(
         ioc, session_manager,
         cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
         cfg.max_send_queue, cfg.max_connections,
-        authenticator, &uds_mux, &request_router);
+        authenticator, &uds_mux, &request_router, &subscription_tracker);
 
     // Initialize TLS if configured (per D-01)
     if (cfg.tls_enabled()) {

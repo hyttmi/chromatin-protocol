@@ -9,10 +9,13 @@
 
 #include <cstdint>
 #include <deque>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace chromatindb::relay::core {
+
+class SubscriptionTracker;  // Forward declaration (Phase 104)
 
 /// Single multiplexed UDS connection to the local chromatindb node.
 /// Performs TrustedHello + HKDF + AEAD handshake, encrypts all post-handshake
@@ -34,6 +37,9 @@ public:
 
     /// Whether UDS is connected and handshake complete.
     bool is_connected() const;
+
+    /// Set subscription tracker for notification fan-out (Phase 104).
+    void set_tracker(SubscriptionTracker* t);
 
 private:
     /// Retry connect with jittered backoff (1s base, 30s cap). Per D-04.
@@ -66,6 +72,9 @@ private:
     /// Route a decoded response from the node to the correct WsSession.
     void route_response(uint8_t type, std::vector<uint8_t> payload, uint32_t request_id);
 
+    /// Handle Notification (type 21) fan-out to subscribed sessions (Phase 104 D-06).
+    void handle_notification(uint8_t type, std::span<const uint8_t> payload);
+
     asio::io_context& ioc_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
@@ -84,6 +93,9 @@ private:
     // Send serialization (only one send at a time on UDS)
     std::deque<std::vector<uint8_t>> send_queue_;
     bool draining_ = false;
+
+    // Subscription tracking (Phase 104)
+    SubscriptionTracker* tracker_ = nullptr;
 };
 
 } // namespace chromatindb::relay::core

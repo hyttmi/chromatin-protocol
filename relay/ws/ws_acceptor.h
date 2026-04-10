@@ -6,6 +6,7 @@
 namespace chromatindb::relay::core {
 class UdsMultiplexer;
 class RequestRouter;
+class SubscriptionTracker;
 } // namespace chromatindb::relay::core
 
 #include <asio.hpp>
@@ -30,7 +31,8 @@ public:
                size_t max_send_queue, size_t max_connections,
                core::Authenticator& authenticator,
                core::UdsMultiplexer* uds_mux = nullptr,
-               core::RequestRouter* router = nullptr);
+               core::RequestRouter* router = nullptr,
+               core::SubscriptionTracker* tracker = nullptr);
 
     /// Initialize TLS context. Call before accept_loop if TLS enabled.
     /// Returns false on failure (relay should exit).
@@ -73,6 +75,7 @@ private:
     core::Authenticator& authenticator_;
     core::UdsMultiplexer* uds_mux_ = nullptr;
     core::RequestRouter* router_ = nullptr;
+    core::SubscriptionTracker* tracker_ = nullptr;
     bool stopping_ = false;
 
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);  // Per D-13

@@ -1,7 +1,9 @@
 #include "relay/core/uds_multiplexer.h"
+#include "relay/core/subscription_tracker.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
 #include "relay/util/endian.h"
+#include "relay/util/hex.h"
 #include "relay/wire/aead.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
@@ -58,6 +60,10 @@ void UdsMultiplexer::start() {
 
 bool UdsMultiplexer::is_connected() const {
     return connected_;
+}
+
+void UdsMultiplexer::set_tracker(SubscriptionTracker* t) {
+    tracker_ = t;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,11 +462,31 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
 void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
                                      uint32_t request_id) {
     if (request_id == 0) {
-        // Server-initiated: Notification, StorageFull, QuotaExceeded.
-        // Phase 104 handles Notification fan-out.
-        // StorageFull(22) / QuotaExceeded(25) with rid=0 can be broadcast.
+        // Server-initiated messages (Phase 104)
+        if (type == 21) {
+            // Notification: fan-out to subscribed sessions (D-06)
+            handle_notification(type, payload);
+            return;
+        }
+
+        if (type == 22 || type == 25) {
+            // StorageFull(22) / QuotaExceeded(25): broadcast to ALL sessions (D-08)
+            auto json_opt = translate::binary_to_json(type, payload);
+            if (!json_opt) {
+                spdlog::warn("UDS: binary_to_json failed for broadcast type={}", type);
+                return;
+            }
+            spdlog::debug("UDS: broadcasting type={} to all sessions", type);
+            sessions_.for_each([&json_opt](uint64_t /*id*/, const auto& session) {
+                if (session) {
+                    session->send_json(*json_opt);
+                }
+            });
+            return;
+        }
+
         auto type_name = translate::type_to_string(type);
-        spdlog::debug("UDS: server-initiated message type={} ({})",
+        spdlog::debug("UDS: unhandled server-initiated message type={} ({})",
                       type, type_name.value_or("unknown"));
         return;
     }
@@ -497,6 +523,39 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         session->send_binary(json_opt->dump());
     } else {
         session->send_json(*json_opt);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Notification fan-out (Phase 104 D-06)
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> payload) {
+    if (payload.size() < 32) return;  // Need at least namespace_id
+
+    // Extract namespace from first 32 bytes
+    std::array<uint8_t, 32> ns{};
+    std::memcpy(ns.data(), payload.data(), 32);
+
+    if (!tracker_) return;
+
+    // Get subscribed sessions
+    auto session_ids = tracker_->get_subscribers(ns);
+    if (session_ids.empty()) return;
+
+    // Translate ONCE (D-06 optimization)
+    auto json_opt = translate::binary_to_json(type, payload);
+    if (!json_opt) return;
+
+    spdlog::debug("notification: fan-out to {} subscribers for namespace {}",
+                  session_ids.size(), util::to_hex(ns));
+
+    // Fan-out to all subscribers (D-07: text frames via send_json)
+    for (uint64_t sid : session_ids) {
+        auto session = sessions_.get_session(sid);
+        if (session) {
+            session->send_json(*json_opt);
+        }
     }
 }
 

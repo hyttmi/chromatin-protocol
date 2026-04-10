@@ -2,9 +2,11 @@
 #include "relay/ws/session_manager.h"
 #include "relay/core/message_filter.h"
 #include "relay/core/request_router.h"
+#include "relay/core/subscription_tracker.h"
 #include "relay/core/uds_multiplexer.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
+#include "relay/util/endian.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
 
@@ -66,7 +68,8 @@ static std::optional<std::vector<uint8_t>> from_hex(std::string_view hex) {
 WsSession::WsSession(Stream stream, SessionManager& manager,
                      asio::any_io_executor executor, size_t max_send_queue,
                      core::Authenticator& authenticator, asio::io_context& ioc,
-                     core::UdsMultiplexer* uds_mux, core::RequestRouter* router)
+                     core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
+                     core::SubscriptionTracker* tracker)
     : stream_(std::move(stream))
     , session_(executor, max_send_queue)
     , manager_(manager)
@@ -76,7 +79,8 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
     , auth_timer_(executor)
     , idle_timer_(executor)
     , uds_mux_(uds_mux)
-    , router_(router) {
+    , router_(router)
+    , tracker_(tracker) {
     last_pong_ = std::chrono::steady_clock::now();
 }
 
@@ -88,11 +92,12 @@ std::shared_ptr<WsSession> WsSession::create(
     core::Authenticator& authenticator,
     asio::io_context& ioc,
     core::UdsMultiplexer* uds_mux,
-    core::RequestRouter* router) {
+    core::RequestRouter* router,
+    core::SubscriptionTracker* tracker) {
     // Cannot use make_shared due to private constructor.
     return std::shared_ptr<WsSession>(
         new WsSession(std::move(stream), manager, executor, max_send_queue,
-                       authenticator, ioc, uds_mux, router));
+                       authenticator, ioc, uds_mux, router, tracker));
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +158,39 @@ void WsSession::send_challenge() {
                 self->close(CLOSE_AUTH_FAILURE, "auth timeout");
             }
         }, asio::detached);
+}
+
+// ---------------------------------------------------------------------------
+// Namespace list helpers (Phase 104)
+// ---------------------------------------------------------------------------
+
+std::vector<std::array<uint8_t, 32>> WsSession::parse_namespace_list(const nlohmann::json& j) {
+    std::vector<std::array<uint8_t, 32>> result;
+    if (!j.contains("namespaces") || !j["namespaces"].is_array()) return result;
+
+    for (const auto& item : j["namespaces"]) {
+        if (!item.is_string()) continue;
+        auto hex = item.get<std::string>();
+        auto bytes = from_hex(hex);
+        if (!bytes || bytes->size() != 32) continue;
+        std::array<uint8_t, 32> ns{};
+        std::memcpy(ns.data(), bytes->data(), 32);
+        result.push_back(ns);
+    }
+    return result;
+}
+
+std::vector<uint8_t> WsSession::encode_namespace_list_u16be(
+    const std::vector<std::array<uint8_t, 32>>& namespaces) {
+    std::vector<uint8_t> result;
+    result.reserve(2 + namespaces.size() * 32);
+    uint8_t buf[2];
+    util::store_u16_be(buf, static_cast<uint16_t>(namespaces.size()));
+    result.insert(result.end(), buf, buf + 2);
+    for (const auto& ns : namespaces) {
+        result.insert(result.end(), ns.begin(), ns.end());
+    }
+    return result;
 }
 
 void WsSession::send_json(const nlohmann::json& j) {
@@ -442,6 +480,44 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
         co_return;
     }
 
+    // 1.5. Subscribe/Unsubscribe interception (Phase 104 D-04)
+    auto wire_type = result->wire_type;
+    if (wire_type == 19 || wire_type == 20) {
+        auto namespaces = parse_namespace_list(j);
+        if (namespaces.empty()) co_return;  // No valid namespaces
+
+        if (wire_type == 19) {
+            // Per D-03: check cap BEFORE subscribe
+            if (tracker_ && tracker_->client_subscription_count(session_id_) + namespaces.size() > 256) {
+                nlohmann::json err = {{"type", "error"}, {"code", "subscription_limit"},
+                                      {"message", "Maximum 256 subscriptions per client"}};
+                if (request_id) err["request_id"] = *request_id;
+                send_json(err);
+                co_return;
+            }
+            if (tracker_) {
+                auto sub_result = tracker_->subscribe(session_id_, namespaces);
+                if (sub_result.forward_to_node && uds_mux_ && uds_mux_->is_connected()) {
+                    auto payload = encode_namespace_list_u16be(sub_result.new_namespaces);
+                    auto msg = wire::TransportCodec::encode(
+                        chromatindb::wire::TransportMsgType_Subscribe, payload, 0);
+                    uds_mux_->send(std::move(msg));
+                }
+            }
+        } else {  // wire_type == 20 (Unsubscribe)
+            if (tracker_) {
+                auto unsub_result = tracker_->unsubscribe(session_id_, namespaces);
+                if (unsub_result.forward_to_node && uds_mux_ && uds_mux_->is_connected()) {
+                    auto payload = encode_namespace_list_u16be(unsub_result.removed_namespaces);
+                    auto msg = wire::TransportCodec::encode(
+                        chromatindb::wire::TransportMsgType_Unsubscribe, payload, 0);
+                    uds_mux_->send(std::move(msg));
+                }
+            }
+        }
+        co_return;  // Do NOT register with RequestRouter -- fire-and-forget
+    }
+
     // 2. Check UDS connection
     if (!uds_mux_ || !uds_mux_->is_connected()) {
         nlohmann::json err = {{"type", "error"}, {"code", "node_unavailable"},
@@ -453,7 +529,6 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
 
     // 3. Fire-and-forget messages (Ping=5, Pong=6, Goodbye=7) per D-09:
     // Forward directly without RequestRouter.
-    auto wire_type = result->wire_type;
     if (wire_type == 5 || wire_type == 6 || wire_type == 7) {
         auto transport_msg = wire::TransportCodec::encode(
             static_cast<chromatindb::wire::TransportMsgType>(wire_type),

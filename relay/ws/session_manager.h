@@ -1,8 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
+#include <vector>
+
+namespace chromatindb::relay::core {
+class SubscriptionTracker;
+} // namespace chromatindb::relay::core
 
 namespace chromatindb::relay::ws {
 
@@ -32,9 +39,19 @@ public:
         }
     }
 
+    /// Set subscription tracker for disconnect cleanup (Phase 104).
+    void set_tracker(core::SubscriptionTracker* t);
+
+    /// Set callback for when namespaces become empty after client disconnect.
+    /// Used by main() to send Unsubscribe to node via UdsMultiplexer.
+    void set_on_namespaces_empty(
+        std::function<void(const std::vector<std::array<uint8_t, 32>>&)> cb);
+
 private:
     std::unordered_map<uint64_t, std::shared_ptr<WsSession>> sessions_;
     uint64_t next_id_ = 1;
+    core::SubscriptionTracker* tracker_ = nullptr;
+    std::function<void(const std::vector<std::array<uint8_t, 32>>&)> on_namespaces_empty_;
 };
 
 } // namespace chromatindb::relay::ws

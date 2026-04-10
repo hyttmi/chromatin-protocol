@@ -7,6 +7,7 @@
 namespace chromatindb::relay::core {
 class UdsMultiplexer;
 class RequestRouter;
+class SubscriptionTracker;
 } // namespace chromatindb::relay::core
 
 #include <asio.hpp>
@@ -52,7 +53,8 @@ public:
         core::Authenticator& authenticator,
         asio::io_context& ioc,
         core::UdsMultiplexer* uds_mux = nullptr,
-        core::RequestRouter* router = nullptr);
+        core::RequestRouter* router = nullptr,
+        core::SubscriptionTracker* tracker = nullptr);
 
     /// Start the session lifecycle (read loop + drain + ping + auth challenge).
     void start(uint64_t session_id);
@@ -75,7 +77,15 @@ private:
     WsSession(Stream stream, SessionManager& manager,
               asio::any_io_executor executor, size_t max_send_queue,
               core::Authenticator& authenticator, asio::io_context& ioc,
-              core::UdsMultiplexer* uds_mux, core::RequestRouter* router);
+              core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
+              core::SubscriptionTracker* tracker);
+
+    /// Parse "namespaces" array of hex strings from JSON into Namespace32 vector.
+    static std::vector<std::array<uint8_t, 32>> parse_namespace_list(const nlohmann::json& j);
+
+    /// Encode namespace list with u16BE count prefix for node wire format.
+    static std::vector<uint8_t> encode_namespace_list_u16be(
+        const std::vector<std::array<uint8_t, 32>>& namespaces);
 
     /// Main read loop: reads raw bytes, parses frames, handles control frames.
     asio::awaitable<void> read_loop();
@@ -133,6 +143,9 @@ private:
     // UDS forwarding (Phase 103)
     core::UdsMultiplexer* uds_mux_ = nullptr;
     core::RequestRouter* router_ = nullptr;
+
+    // Subscription tracking (Phase 104)
+    core::SubscriptionTracker* tracker_ = nullptr;
 
     // Read buffer (persistent across reads)
     static constexpr size_t READ_BUF_SIZE = 8192;
