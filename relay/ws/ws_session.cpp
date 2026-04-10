@@ -236,19 +236,30 @@ void WsSession::send_binary(const std::string& json_payload) {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<size_t> WsSession::async_read(asio::mutable_buffer buf) {
-    return std::visit([&](auto& stream) -> asio::awaitable<size_t> {
-        auto [ec, n] = co_await stream.async_read_some(buf, use_nothrow);
+    // Cannot use std::visit with coroutine lambdas — the enclosing function's
+    // stack frame is destroyed when the returned awaitable suspends, leaving
+    // dangling references (ASAN stack-use-after-return).
+    if (auto* tcp = std::get_if<asio::ip::tcp::socket>(&stream_)) {
+        auto [ec, n] = co_await tcp->async_read_some(buf, use_nothrow);
         if (ec) co_return 0;
         co_return n;
-    }, stream_);
+    }
+    auto& tls = std::get<TlsStream>(stream_);
+    auto [ec, n] = co_await tls.async_read_some(buf, use_nothrow);
+    if (ec) co_return 0;
+    co_return n;
 }
 
 asio::awaitable<size_t> WsSession::async_write(asio::const_buffer buf) {
-    return std::visit([&](auto& stream) -> asio::awaitable<size_t> {
-        auto [ec, n] = co_await asio::async_write(stream, buf, use_nothrow);
+    if (auto* tcp = std::get_if<asio::ip::tcp::socket>(&stream_)) {
+        auto [ec, n] = co_await asio::async_write(*tcp, buf, use_nothrow);
         if (ec) co_return 0;
         co_return n;
-    }, stream_);
+    }
+    auto& tls = std::get<TlsStream>(stream_);
+    auto [ec, n] = co_await asio::async_write(tls, buf, use_nothrow);
+    if (ec) co_return 0;
+    co_return n;
 }
 
 asio::awaitable<bool> WsSession::send_raw(const std::string& frame) {
