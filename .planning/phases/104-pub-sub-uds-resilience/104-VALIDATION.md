@@ -53,9 +53,8 @@ created: 2026-04-10
 
 ## Wave 0 Requirements
 
-- [ ] `relay/tests/test_subscription_tracker.cpp` -- stubs for MUX-03 (reference counting, cap, cleanup)
-- [ ] `relay/tests/test_notification_fanout.cpp` -- stubs for MUX-04 (notification routing, broadcast)
-- [ ] `relay/tests/test_uds_reconnect.cpp` -- stubs for MUX-05, MUX-06, MUX-07 (reconnect, replay, bulk-fail)
+- [ ] `relay/tests/test_subscription_tracker.cpp` -- stubs for MUX-03 (reference counting, cap, cleanup), MUX-04 (notification routing, broadcast), MUX-05 (reconnect contract), MUX-06 (subscription replay)
+- [ ] `relay/tests/test_request_router.cpp` -- stubs for MUX-07 (bulk-fail)
 
 ---
 
