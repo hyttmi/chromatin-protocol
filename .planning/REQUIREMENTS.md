@@ -54,9 +54,9 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Observability & Operations
 
-- [ ] **OPS-01**: Prometheus /metrics HTTP endpoint (connections, messages, errors)
-- [ ] **OPS-02**: SIGHUP config reload (TLS context, connection limits, rate limits)
-- [ ] **OPS-03**: Per-client rate limiting (messages/sec or bytes/sec)
+- [x] **OPS-01**: Prometheus /metrics HTTP endpoint (connections, messages, errors)
+- [x] **OPS-02**: SIGHUP config reload (TLS context, connection limits, rate limits)
+- [x] **OPS-03**: Per-client rate limiting (messages/sec or bytes/sec)
 - [x] **OPS-04**: Structured logging via spdlog
 
 ## Future Requirements
@@ -115,9 +115,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MUX-05 | Phase 104 | Complete |
 | MUX-06 | Phase 104 | Complete |
 | MUX-07 | Phase 104 | Complete |
-| OPS-01 | Phase 105 | Pending |
-| OPS-02 | Phase 105 | Pending |
-| OPS-03 | Phase 105 | Pending |
+| OPS-01 | Phase 105 | Complete |
+| OPS-02 | Phase 105 | Complete |
+| OPS-03 | Phase 105 | Complete |
 | SESS-04 | Phase 105 | Pending |
 
 **Coverage:**
