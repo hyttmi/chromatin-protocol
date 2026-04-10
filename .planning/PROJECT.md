@@ -226,12 +226,12 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 Docker integration tests. ASAN/TSAN/UBSAN clean. Node code is frozen for v3.0.0.
 
-Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. Phase 101 delivered hand-rolled RFC 6455 WebSocket transport with TLS 1.3. Phase 102 added ML-DSA-87 challenge-response auth over WebSocket and JSON schema definitions for all 38 client-allowed types. WebSocket/JSON/TLS gateway translating between JSON clients and the FlatBuffers node protocol over UDS.
+Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. Phase 101 delivered hand-rolled RFC 6455 WebSocket transport with TLS 1.3. Phase 102 added ML-DSA-87 challenge-response auth over WebSocket and JSON schema definitions for all 38 client-allowed types. Phase 103 completed the core data path: single multiplexed UDS connection to node with TrustedHello + HKDF + AEAD handshake, table-driven JSON-to-FlatBuffers translation for all 38 types, relay-scoped request_id multiplexing for response routing, and binary WebSocket frames for large payloads. 161 relay tests, 1136 assertions.
 
 Relay is closed source. Database is open source. PROTOCOL.md documents the node wire format for third-party relay implementations.
 
 Tech stack (node): C++20, CMake, liboqs, libsodium, libmdbx, FlatBuffers, Standalone Asio, xxHash, Catch2, spdlog, nlohmann/json.
-Tech stack (relay v2): C++20, Standalone Asio, nlohmann/json, spdlog, liboqs (ML-DSA-87 identity), Catch2. Hand-rolled WebSocket (Boost.Beast incompatible with standalone Asio). System OpenSSL for TLS (Phase 101).
+Tech stack (relay v2): C++20, Standalone Asio, nlohmann/json, spdlog, liboqs (ML-DSA-87 identity), FlatBuffers, Catch2. Hand-rolled WebSocket (Boost.Beast incompatible with standalone Asio). System OpenSSL for TLS + AEAD + HKDF (Phase 101/103).
 
 Two-layer architecture:
 - **Layer 1: chromatindb** (open source) — production-hardened database node
@@ -369,13 +369,17 @@ Two-layer architecture:
 | Auth offload via asio::post(ioc) double-post | Bounce ML-DSA-87 verify to thread pool, post back to session strand — non-blocking IO | ✓ Good — Phase 102 |
 | Metadata-driven JSON schema (FieldSpec/MessageSchema) | 12 encoding types (HEX_32, BASE64, UINT64_STRING, etc.) — Phase 103 translation reads schema at runtime | ✓ Good — Phase 102 |
 | Constexpr message allowlist with binary_search | 38 client-sendable types; blocked types return error with request_id, connection stays open | ✓ Good — Phase 102 |
+| Single multiplexed UDS with request_id routing | RequestRouter assigns relay-scoped IDs, maps responses back to originating WsSession | ✓ Good — Phase 103 |
+| TrustedHello + HKDF + AEAD on UDS | Relay authenticates to node via ML-DSA-87 identity, derives session keys, encrypts all UDS traffic | ✓ Good — Phase 103 |
+| Table-driven JSON<->binary translation | Generic encoder/decoder iterates FieldSpec metadata; compound types get custom decode helpers; FlatBuffer types use blob_codec | ✓ Good — Phase 103 |
+| Binary WebSocket frames for large payloads | ReadResponse/BatchReadResponse always sent as opcode 0x2; type-based rule, no size threshold | ✓ Good — Phase 103 |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-09 after Phase 102 (Authentication & JSON Schema) complete*
+*Last updated: 2026-04-10 after Phase 103 (UDS Multiplexer & Protocol Translation) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
