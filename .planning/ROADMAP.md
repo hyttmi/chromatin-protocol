@@ -1,126 +1,86 @@
-# Roadmap: chromatindb v3.0.0 Relay v2
+# Roadmap: chromatindb v3.1.0 Relay Live Hardening
 
 ## Overview
 
-Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS relay from scratch. The relay translates between JSON WebSocket clients and the FlatBuffers node protocol over a single multiplexed UDS connection. PQ challenge-response authentication, per-client send queues with backpressure, subscription aggregation with notification fan-out, and Prometheus observability. Node code (db/) is frozen -- no changes. Six phases: cleanup and foundation, WebSocket transport, authentication and JSON schema, UDS multiplexer with protocol translation, pub/sub with UDS resilience, and operational polish.
+Fix all bugs found in live relay+node testing, verify every feature works end-to-end against a running node, add missing relay capabilities (source exclusion, blob size limits, health check), and benchmark throughput and latency under realistic workloads including large blob transfers. Node code (db/) is frozen. Five phases: bug fixes, message type verification, live feature verification, new features, and performance benchmarking.
 
 ## Phases
 
 **Phase Numbering:**
-- Continues from v2.2.0 (Phases 95-99)
-- v3.0.0 starts at Phase 100
+- Continues from v3.0.0 (Phases 100-105)
+- v3.1.0 starts at Phase 106
 
-- [x] **Phase 100: Cleanup & Foundation** - Delete old relay/SDK, scaffold new relay binary with per-client send queues and structured logging (completed 2026-04-09)
-- [x] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS (completed 2026-04-09)
-- [x] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types (completed 2026-04-09)
-- [x] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation (completed 2026-04-10)
-- [x] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay (completed 2026-04-10)
-- [x] **Phase 105: Operational Polish** - Prometheus metrics, rate limiting, SIGHUP config reload, graceful shutdown (completed 2026-04-10)
+- [ ] **Phase 106: Bug Fixes** - Fix compound type translation failures and audit all std::visit + coroutine lambda patterns for ASAN safety
+- [ ] **Phase 107: Message Type Verification** - Verify all 38 relay-allowed message types translate correctly through relay with live node
+- [ ] **Phase 108: Live Feature Verification** - Verify pub/sub, rate limiting, SIGHUP reload, and graceful shutdown end-to-end
+- [ ] **Phase 109: New Features** - Source exclusion for notifications, relay-side blob size limit, and /health endpoint
+- [ ] **Phase 110: Performance Benchmarking** - Throughput, latency, large blob, and mixed workload benchmarks
 
 ## Phase Details
 
-### Phase 100: Cleanup & Foundation
-**Goal**: Clean break from old code and a buildable relay skeleton with the per-client send queue primitive that all downstream phases depend on
-**Depends on**: Nothing (first phase)
-**Requirements**: CLEAN-01, CLEAN-02, CLEAN-03, SESS-01, SESS-02, OPS-04
+### Phase 106: Bug Fixes
+**Goal**: All known relay bugs are fixed -- compound response translation works and coroutine-unsafe std::visit patterns are eliminated
+**Depends on**: Nothing (first phase of v3.1.0)
+**Requirements**: FIX-01, FIX-02
 **Success Criteria** (what must be TRUE):
-  1. Old relay/ directory is gone from the repo
-  2. Old sdk/python/ directory is gone from the repo
-  3. No stale Docker artifacts, test references, or doc references to old relay/SDK remain
-  4. New relay binary compiles and starts (exits cleanly with no config)
-  5. Per-client session object exists with bounded send queue and drain coroutine, slow clients disconnected on overflow
-**Plans**: 2 plans (Wave 1: 100-01, Wave 2: 100-02)
+  1. binary_to_json produces valid JSON for NodeInfoResponse, StatsResponse, NamespaceStatsResponse, StorageStatusResponse, and all other compound response types when fed live node data
+  2. Every std::visit call site in relay/ either uses get_if/get branching or is provably safe (no coroutine lambda captures of variant alternatives)
+  3. Relay runs clean under ASAN with no stack-use-after-return warnings during a basic request/response cycle
+**Plans**: TBD
 
-Plans:
-- [x] 100-01-PLAN.md -- Delete old relay and SDK, clean stale references
-- [x] 100-02-PLAN.md -- Scaffold relay binary with session send queue and spdlog
-
-### Phase 101: WebSocket Transport
-**Goal**: Relay accepts WebSocket connections over TLS and plain TCP with correct RFC 6455 framing
-**Depends on**: Phase 100
-**Requirements**: TRANS-01, TRANS-02, TRANS-03, TRANS-04
+### Phase 107: Message Type Verification
+**Goal**: Every relay-allowed message type is proven to translate correctly through the full relay pipeline against a live node
+**Depends on**: Phase 106
+**Requirements**: E2E-01
 **Success Criteria** (what must be TRUE):
-  1. A WebSocket client can connect over WSS with a TLS cert/key configured in the relay config file
-  2. A WebSocket client can connect over plain WS for local dev/testing
-  3. WebSocket upgrade handshake, text frames, binary frames, ping/pong, and close frames work correctly per RFC 6455
-  4. SIGHUP reloads the TLS certificate and key without restarting the relay
-**Plans**: 2 plans (Wave 1: 101-01, Wave 2: 101-02)
+  1. A test script sends each of the 38 relay-allowed message types as JSON through the WebSocket relay, receives a response, and the response is valid JSON with correct field types
+  2. Response payloads match expected values for known test data (e.g., a written blob can be read back with correct content)
+  3. Error responses (invalid namespace, nonexistent blob) return properly structured JSON error messages
+**Plans**: TBD
 
-Plans:
-- [x] 101-01-PLAN.md -- WS framing library, HTTP upgrade handshake, Session write callback, TLS config, OpenSSL build
-- [x] 101-02-PLAN.md -- WsSession, WsAcceptor, SessionManager, main() integration with thread pool and SIGHUP TLS reload
-
-### Phase 102: Authentication & JSON Schema
-**Goal**: Clients authenticate via ML-DSA-87 challenge-response over WebSocket, and the JSON message schema for all 38 relay-allowed types is designed and validated
-**Depends on**: Phase 101
-**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, PROT-02, PROT-03, PROT-05, SESS-03
+### Phase 108: Live Feature Verification
+**Goal**: Pub/sub, rate limiting, config reload, and graceful shutdown all work correctly in a live relay+node environment
+**Depends on**: Phase 107
+**Requirements**: E2E-02, E2E-03, E2E-04, E2E-05
 **Success Criteria** (what must be TRUE):
-  1. Relay sends a random 32-byte challenge immediately on WebSocket connect
-  2. Client signs the challenge with ML-DSA-87 and relay verifies the signature, establishing the client's identity
-  3. Clients that do not authenticate within 10 seconds are disconnected
-  4. Signature verification runs on a thread pool and does not block the IO loop
-  5. JSON schema covers all 38 relay-allowed message types with hex encoding for hashes/namespaces, base64 for blob data/signatures, and string encoding for uint64 fields
-**Plans**: 2 plans (Wave 1: 102-01, Wave 2: 102-02)
+  1. A client subscribes to a namespace, another client writes a blob, and the subscriber receives a JSON notification with the correct namespace and blob hash
+  2. A client exceeding the configured rate limit is disconnected by the relay after sustained violation
+  3. Sending SIGHUP to the relay process reloads TLS certificates, ACL (allowed client keys), rate limit settings, and metrics_bind address -- verified by observing changed behavior without restart
+  4. Sending SIGTERM to the relay process results in all connected clients receiving WebSocket close frames before the process exits
+**Plans**: TBD
 
-Plans:
-- [x] 102-01-PLAN.md -- Challenge-response auth: Authenticator class, WsSession state machine, config extensions, SIGHUP reload
-- [x] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
-
-### Phase 103: UDS Multiplexer & Protocol Translation
-**Goal**: Relay maintains a single multiplexed UDS connection to the node and translates JSON client requests to FlatBuffers and back, routing responses to the correct client via relay-scoped request_id mapping
-**Depends on**: Phase 102
-**Requirements**: MUX-01, MUX-02, PROT-01, PROT-04
+### Phase 109: New Features
+**Goal**: Relay gains source exclusion for notifications, configurable blob size limits, and a health check endpoint
+**Depends on**: Phase 106
+**Requirements**: FEAT-01, FEAT-02, FEAT-03
 **Success Criteria** (what must be TRUE):
-  1. Relay opens and maintains a single UDS connection to the local node
-  2. Client JSON requests are translated to FlatBuffers, sent to node over UDS, and responses are translated back to JSON and routed to the originating client via relay-scoped request_id mapping
-  3. Table-driven translation covers all 38 relay-allowed message types without per-type handler functions
-  4. Large payloads (ReadResponse, BatchReadResponse) are sent as binary WebSocket frames
-**Plans**: 2 plans (Wave 1: 103-01, Wave 2: 103-02)
+  1. When a client writes a blob to a namespace it is subscribed to, that client does NOT receive its own notification -- other subscribers do
+  2. A client attempting to write a blob larger than the configured max_blob_size receives a rejection before the relay forwards it to the node
+  3. HTTP GET /health returns 200 with a JSON body indicating relay and UDS connection status; returns 503 when the UDS connection to the node is down
+**Plans**: TBD
+**UI hint**: no
 
-Plans:
-- [x] 103-01-PLAN.md -- Wire infrastructure (AEAD, TransportCodec, utilities, FlatBuffers) and RequestRouter
-- [x] 103-02-PLAN.md -- UdsMultiplexer with TrustedHello handshake, table-driven translator, and WsSession integration
-
-### Phase 104: Pub/Sub & UDS Resilience
-**Goal**: Clients can subscribe to namespace changes and receive notifications, and the relay recovers gracefully from node disconnects
-**Depends on**: Phase 103
-**Requirements**: MUX-03, MUX-04, MUX-05, MUX-06, MUX-07
+### Phase 110: Performance Benchmarking
+**Goal**: Relay performance is measured under realistic workloads to establish baselines and identify bottlenecks
+**Depends on**: Phase 108, Phase 109
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04
 **Success Criteria** (what must be TRUE):
-  1. Multiple clients subscribing to the same namespace result in a single Subscribe sent to the node, with unsubscribe sent only when the last client unsubscribes (reference counting)
-  2. Notifications from the node are fanned out to all WebSocket clients subscribed to that namespace
-  3. When the UDS connection to the node drops, relay reconnects with jittered backoff and replays all active subscriptions
-  4. Pending client requests are failed with an error when the UDS connection drops (no orphaned requests)
-**Plans**: 2 plans (Wave 1: 104-01, Wave 2: 104-02)
-
-Plans:
-- [x] 104-01-PLAN.md -- Subscription aggregation with reference counting and notification fan-out
-- [x] 104-02-PLAN.md -- UDS auto-reconnect with subscription replay and pending request cleanup
-
-### Phase 105: Operational Polish
-**Goal**: Relay is production-ready with observability, rate limiting, config reload, and graceful shutdown
-**Depends on**: Phase 104
-**Requirements**: OPS-01, OPS-02, OPS-03, SESS-04
-**Success Criteria** (what must be TRUE):
-  1. Prometheus /metrics HTTP endpoint exposes connection count, message throughput, and error counters
-  2. SIGHUP reloads TLS context, connection limits, and rate limit configuration without restart
-  3. Per-client rate limiting enforces messages/sec or bytes/sec limits with disconnect on violation
-  4. SIGTERM triggers graceful shutdown: drain send queues, send WebSocket close frames, then exit
-**Plans**: 2 plans (Wave 1: 105-01, Wave 2: 105-02)
-
-Plans:
-- [x] 105-01-PLAN.md -- Core components: RateLimiter, RelayMetrics, MetricsCollector, config extensions, tests
-- [x] 105-02-PLAN.md -- Integration: WsSession rate limiting, metrics wiring, SIGHUP extension, SIGTERM drain-first
+  1. Throughput benchmark produces messages/sec numbers at 1, 10, and 100 concurrent WebSocket clients with results recorded in a benchmark report
+  2. Latency benchmark measures relay overhead by comparing same-operation timing through relay vs direct UDS, with per-operation overhead percentages recorded
+  3. Large blob benchmark demonstrates successful write+read of PDF-size (1-10 MiB) and X-ray/DICOM-size (50-100 MiB) blobs through the relay with throughput numbers recorded
+  4. Mixed workload benchmark runs concurrent small metadata queries alongside large blob transfers and reports whether small-message latency degrades under large-blob load
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
+Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
+(Phase 109 can execute in parallel with 107-108 since it only depends on 106)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
-| 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
-| 102. Authentication & JSON Schema | 2/2 | Complete    | 2026-04-09 |
-| 103. UDS Multiplexer & Protocol Translation | 2/2 | Complete    | 2026-04-10 |
-| 104. Pub/Sub & UDS Resilience | 2/2 | Complete    | 2026-04-10 |
-| 105. Operational Polish | 2/2 | Complete    | 2026-04-10 |
+| 106. Bug Fixes | 0/0 | Not started | - |
+| 107. Message Type Verification | 0/0 | Not started | - |
+| 108. Live Feature Verification | 0/0 | Not started | - |
+| 109. New Features | 0/0 | Not started | - |
+| 110. Performance Benchmarking | 0/0 | Not started | - |

@@ -55,25 +55,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIX-01 | TBD | Pending |
-| FIX-02 | TBD | Pending |
-| E2E-01 | TBD | Pending |
-| E2E-02 | TBD | Pending |
-| E2E-03 | TBD | Pending |
-| E2E-04 | TBD | Pending |
-| E2E-05 | TBD | Pending |
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| PERF-03 | TBD | Pending |
-| PERF-04 | TBD | Pending |
-| FEAT-01 | TBD | Pending |
-| FEAT-02 | TBD | Pending |
-| FEAT-03 | TBD | Pending |
+| FIX-01 | Phase 106 | Pending |
+| FIX-02 | Phase 106 | Pending |
+| E2E-01 | Phase 107 | Pending |
+| E2E-02 | Phase 108 | Pending |
+| E2E-03 | Phase 108 | Pending |
+| E2E-04 | Phase 108 | Pending |
+| E2E-05 | Phase 108 | Pending |
+| PERF-01 | Phase 110 | Pending |
+| PERF-02 | Phase 110 | Pending |
+| PERF-03 | Phase 110 | Pending |
+| PERF-04 | Phase 110 | Pending |
+| FEAT-01 | Phase 109 | Pending |
+| FEAT-02 | Phase 109 | Pending |
+| FEAT-03 | Phase 109 | Pending |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
