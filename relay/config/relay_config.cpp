@@ -50,6 +50,9 @@ RelayConfig load_relay_config(const std::filesystem::path& path) {
         cfg.allowed_client_keys = j.at("allowed_client_keys").get<std::vector<std::string>>();
     }
 
+    cfg.metrics_bind = j.value("metrics_bind", cfg.metrics_bind);
+    cfg.rate_limit_messages_per_sec = j.value("rate_limit_messages_per_sec", cfg.rate_limit_messages_per_sec);
+
     return cfg;
 }
 
@@ -82,6 +85,12 @@ void validate_relay_config(const RelayConfig& cfg) {
         }
         if (!std::filesystem::exists(cfg.key_path)) {
             errors += "key_path file not found: " + cfg.key_path + ". ";
+        }
+    }
+
+    if (!cfg.metrics_bind.empty()) {
+        if (cfg.metrics_bind.rfind(':') == std::string::npos) {
+            errors += "metrics_bind must be 'host:port' format, got '" + cfg.metrics_bind + "'. ";
         }
     }
 
