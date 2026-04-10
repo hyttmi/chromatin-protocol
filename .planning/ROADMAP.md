@@ -67,7 +67,7 @@ Plans:
 - [x] 102-02-PLAN.md -- JSON schema: type registry, field encoding metadata, message filter, WsSession filter wiring
 
 ### Phase 103: UDS Multiplexer & Protocol Translation
-**Goal**: Relay maintains a single multiplexed UDS connection to the node and translates JSON client requests to FlatBuffers and back, routing responses to the correct client
+**Goal**: Relay maintains a single multiplexed UDS connection to the node and translates JSON client requests to FlatBuffers and back, routing responses to the correct client via relay-scoped request_id mapping
 **Depends on**: Phase 102
 **Requirements**: MUX-01, MUX-02, PROT-01, PROT-04
 **Success Criteria** (what must be TRUE):
@@ -75,11 +75,11 @@ Plans:
   2. Client JSON requests are translated to FlatBuffers, sent to node over UDS, and responses are translated back to JSON and routed to the originating client via relay-scoped request_id mapping
   3. Table-driven translation covers all 38 relay-allowed message types without per-type handler functions
   4. Large payloads (ReadResponse, BatchReadResponse) are sent as binary WebSocket frames
-**Plans**: TBD
+**Plans**: 2 plans (Wave 1: 103-01, Wave 2: 103-02)
 
 Plans:
-- [ ] 103-01: UDS connection manager with request_id multiplexing
-- [ ] 103-02: Table-driven JSON-to-FlatBuffers translation
+- [ ] 103-01-PLAN.md -- Wire infrastructure (AEAD, TransportCodec, utilities, FlatBuffers) and RequestRouter
+- [ ] 103-02-PLAN.md -- UdsMultiplexer with TrustedHello handshake, table-driven translator, and WsSession integration
 
 ### Phase 104: Pub/Sub & UDS Resilience
 **Goal**: Clients can subscribe to namespace changes and receive notifications, and the relay recovers gracefully from node disconnects
