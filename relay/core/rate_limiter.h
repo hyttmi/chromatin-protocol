@@ -43,6 +43,9 @@ public:
     /// Returns the current consecutive rejection count (for testing).
     uint32_t consecutive_rejects() const { return consecutive_rejects_; }
 
+    /// Returns the current rate setting (for comparing against shared atomic).
+    uint32_t current_rate() const { return rate_; }
+
 private:
     void refill() {
         auto now = std::chrono::steady_clock::now();

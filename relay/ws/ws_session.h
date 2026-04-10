@@ -1,6 +1,7 @@
 #pragma once
 
 #include "relay/core/authenticator.h"
+#include "relay/core/rate_limiter.h"
 #include "relay/core/session.h"
 #include "relay/ws/ws_frame.h"
 
@@ -8,6 +9,7 @@ namespace chromatindb::relay::core {
 class UdsMultiplexer;
 class RequestRouter;
 class SubscriptionTracker;
+struct RelayMetrics;
 } // namespace chromatindb::relay::core
 
 #include <asio.hpp>
@@ -54,7 +56,9 @@ public:
         asio::io_context& ioc,
         core::UdsMultiplexer* uds_mux = nullptr,
         core::RequestRouter* router = nullptr,
-        core::SubscriptionTracker* tracker = nullptr);
+        core::SubscriptionTracker* tracker = nullptr,
+        core::RelayMetrics* metrics = nullptr,
+        const std::atomic<uint32_t>* shared_rate = nullptr);
 
     /// Start the session lifecycle (read loop + drain + ping + auth challenge).
     void start(uint64_t session_id);
@@ -78,7 +82,8 @@ private:
               asio::any_io_executor executor, size_t max_send_queue,
               core::Authenticator& authenticator, asio::io_context& ioc,
               core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
-              core::SubscriptionTracker* tracker);
+              core::SubscriptionTracker* tracker,
+              core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate);
 
     /// Parse "namespaces" array of hex strings from JSON into Namespace32 vector.
     static std::vector<std::array<uint8_t, 32>> parse_namespace_list(const nlohmann::json& j);
@@ -146,6 +151,12 @@ private:
 
     // Subscription tracking (Phase 104)
     core::SubscriptionTracker* tracker_ = nullptr;
+
+    // Rate limiting (Phase 105 -- per D-07, D-09, D-11, D-14)
+    core::RateLimiter rate_limiter_;
+    core::RelayMetrics* metrics_ = nullptr;
+    const std::atomic<uint32_t>* shared_rate_ = nullptr;
+    static constexpr uint32_t RATE_LIMIT_DISCONNECT_THRESHOLD = 10;
 
     // Read buffer (persistent across reads)
     static constexpr size_t READ_BUF_SIZE = 8192;

@@ -7,6 +7,7 @@ namespace chromatindb::relay::core {
 class UdsMultiplexer;
 class RequestRouter;
 class SubscriptionTracker;
+struct RelayMetrics;
 } // namespace chromatindb::relay::core
 
 #include <asio.hpp>
@@ -53,6 +54,12 @@ public:
     /// Update max connections on SIGHUP (per D-32).
     void set_max_connections(size_t n);
 
+    /// Set shared metrics struct pointer for new sessions.
+    void set_metrics(core::RelayMetrics* m) { metrics_ = m; }
+
+    /// Set shared rate atomic pointer for new sessions (per D-14).
+    void set_shared_rate(const std::atomic<uint32_t>* r) { shared_rate_ = r; }
+
 private:
     /// Handle a new TCP connection: TLS handshake (if enabled) + WS upgrade.
     asio::awaitable<void> handle_new_connection(asio::ip::tcp::socket socket);
@@ -76,6 +83,8 @@ private:
     core::UdsMultiplexer* uds_mux_ = nullptr;
     core::RequestRouter* router_ = nullptr;
     core::SubscriptionTracker* tracker_ = nullptr;
+    core::RelayMetrics* metrics_ = nullptr;
+    const std::atomic<uint32_t>* shared_rate_ = nullptr;
     bool stopping_ = false;
 
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);  // Per D-13

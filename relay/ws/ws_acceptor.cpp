@@ -180,7 +180,8 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
             auto session = WsSession::create(
                 WsSession::Stream(std::move(tls_stream)),
                 manager_, ioc_.get_executor(), max_send_queue_,
-                authenticator_, ioc_, uds_mux_, router_, tracker_);
+                authenticator_, ioc_, uds_mux_, router_, tracker_,
+                metrics_, shared_rate_);
             auto id = manager_.add_session(session);
             spdlog::info("session {}: WebSocket connection established (WSS)", id);
             session->start(id);
@@ -199,7 +200,8 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
         auto session = WsSession::create(
             WsSession::Stream(std::move(socket)),
             manager_, ioc_.get_executor(), max_send_queue_,
-            authenticator_, ioc_, uds_mux_, router_, tracker_);
+            authenticator_, ioc_, uds_mux_, router_, tracker_,
+            metrics_, shared_rate_);
         auto id = manager_.add_session(session);
         spdlog::info("session {}: WebSocket connection established (WS)", id);
         session->start(id);

@@ -9,6 +9,7 @@
 
 namespace chromatindb::relay::core {
 class SubscriptionTracker;
+struct RelayMetrics;
 } // namespace chromatindb::relay::core
 
 namespace chromatindb::relay::ws {
@@ -39,6 +40,9 @@ public:
         }
     }
 
+    /// Set shared metrics struct for connection counters.
+    void set_metrics(core::RelayMetrics* m) { metrics_ = m; }
+
     /// Set subscription tracker for disconnect cleanup (Phase 104).
     void set_tracker(core::SubscriptionTracker* t);
 
@@ -50,6 +54,7 @@ public:
 private:
     std::unordered_map<uint64_t, std::shared_ptr<WsSession>> sessions_;
     uint64_t next_id_ = 1;
+    core::RelayMetrics* metrics_ = nullptr;
     core::SubscriptionTracker* tracker_ = nullptr;
     std::function<void(const std::vector<std::array<uint8_t, 32>>&)> on_namespaces_empty_;
 };

@@ -1,6 +1,7 @@
 #include "relay/ws/ws_session.h"
 #include "relay/ws/session_manager.h"
 #include "relay/core/message_filter.h"
+#include "relay/core/metrics_collector.h"
 #include "relay/core/request_router.h"
 #include "relay/core/subscription_tracker.h"
 #include "relay/core/uds_multiplexer.h"
@@ -69,7 +70,8 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
                      asio::any_io_executor executor, size_t max_send_queue,
                      core::Authenticator& authenticator, asio::io_context& ioc,
                      core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
-                     core::SubscriptionTracker* tracker)
+                     core::SubscriptionTracker* tracker,
+                     core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate)
     : stream_(std::move(stream))
     , session_(executor, max_send_queue)
     , manager_(manager)
@@ -80,8 +82,14 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
     , idle_timer_(executor)
     , uds_mux_(uds_mux)
     , router_(router)
-    , tracker_(tracker) {
+    , tracker_(tracker)
+    , metrics_(metrics)
+    , shared_rate_(shared_rate) {
     last_pong_ = std::chrono::steady_clock::now();
+    // Initialize rate limiter from shared rate atomic if available.
+    if (shared_rate_) {
+        rate_limiter_.set_rate(shared_rate_->load(std::memory_order_relaxed));
+    }
 }
 
 std::shared_ptr<WsSession> WsSession::create(
@@ -93,11 +101,14 @@ std::shared_ptr<WsSession> WsSession::create(
     asio::io_context& ioc,
     core::UdsMultiplexer* uds_mux,
     core::RequestRouter* router,
-    core::SubscriptionTracker* tracker) {
+    core::SubscriptionTracker* tracker,
+    core::RelayMetrics* metrics,
+    const std::atomic<uint32_t>* shared_rate) {
     // Cannot use make_shared due to private constructor.
     return std::shared_ptr<WsSession>(
         new WsSession(std::move(stream), manager, executor, max_send_queue,
-                       authenticator, ioc, uds_mux, router, tracker));
+                       authenticator, ioc, uds_mux, router, tracker,
+                       metrics, shared_rate));
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +205,7 @@ std::vector<uint8_t> WsSession::encode_namespace_list_u16be(
 }
 
 void WsSession::send_json(const nlohmann::json& j) {
+    if (metrics_) metrics_->messages_sent_total.fetch_add(1, std::memory_order_relaxed);
     auto self = shared_from_this();
     auto text = j.dump();
     asio::co_spawn(executor_,
@@ -203,6 +215,7 @@ void WsSession::send_json(const nlohmann::json& j) {
 }
 
 void WsSession::send_binary(const std::string& json_payload) {
+    if (metrics_) metrics_->messages_sent_total.fetch_add(1, std::memory_order_relaxed);
     // Enqueue with binary marker prefix (0x02).
     // write_frame() detects this prefix and uses OPCODE_BINARY instead of OPCODE_TEXT.
     // JSON payloads always start with '{' or '[', never with a byte < 0x20,
@@ -452,6 +465,27 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
         request_id = j["request_id"].get<uint32_t>();
     }
 
+    // Rate limit check (per D-09: before translation/forwarding).
+    // Check if shared rate changed (per D-14: read from atomic on each message).
+    if (shared_rate_) {
+        uint32_t current = shared_rate_->load(std::memory_order_relaxed);
+        if (current != rate_limiter_.current_rate()) {
+            rate_limiter_.set_rate(current);
+        }
+    }
+    if (!rate_limiter_.try_consume()) {
+        if (metrics_) metrics_->rate_limited_total.fetch_add(1, std::memory_order_relaxed);
+        nlohmann::json err = {{"type", "error"}, {"code", "rate_limited"},
+                              {"message", "Rate limit exceeded"}};
+        if (request_id) err["request_id"] = *request_id;
+        send_json(err);
+        if (rate_limiter_.should_disconnect(RATE_LIMIT_DISCONNECT_THRESHOLD)) {
+            spdlog::warn("session {}: sustained rate limit violation, disconnecting", session_id_);
+            close(4002, "rate limit exceeded");
+        }
+        co_return;
+    }
+
     // Check allowlist (per D-28: filter at JSON parse time, before any further processing).
     if (!core::is_type_allowed(type_str)) {
         nlohmann::json err = {
@@ -466,7 +500,10 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
         co_return;  // Per D-29: keep connection open
     }
 
-    // Type is allowed. Translate JSON -> binary and forward to node via UDS.
+    // Type is allowed -- count as received message.
+    if (metrics_) metrics_->messages_received_total.fetch_add(1, std::memory_order_relaxed);
+
+    // Translate JSON -> binary and forward to node via UDS.
     spdlog::debug("session {}: accepted '{}'{}", session_id_, type_str,
                   request_id ? " (request_id=" + std::to_string(*request_id) + ")" : "");
 
@@ -629,6 +666,7 @@ asio::awaitable<void> WsSession::handle_auth_message(std::vector<uint8_t> data) 
 
     // 10. Handle verification failure (per D-04).
     if (!result.success) {
+        if (metrics_) metrics_->auth_failures_total.fetch_add(1, std::memory_order_relaxed);
         send_json({{"type", "auth_error"}, {"reason", result.error_code}});
         close(CLOSE_AUTH_FAILURE, result.error_code);
         co_return;
