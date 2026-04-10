@@ -17,6 +17,9 @@ add_executable(chromatindb_relay_tests
   test_type_registry.cpp
   test_ws_frame.cpp
   test_ws_handshake.cpp
+  test_base64.cpp
+  test_transport_codec.cpp
+  test_aead.cpp
 )
 
 target_link_libraries(chromatindb_relay_tests PRIVATE

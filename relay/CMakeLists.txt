@@ -12,6 +12,9 @@ add_library(chromatindb_relay_lib STATIC
   identity/relay_identity.cpp
   translate/type_registry.cpp
   translate/json_schema.cpp
+  util/base64.cpp
+  wire/transport_codec.cpp
+  wire/aead.cpp
   ws/ws_frame.cpp
   ws/ws_handshake.cpp
   ws/ws_session.cpp
@@ -58,6 +61,19 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
   FetchContent_MakeAvailable(json_relay)
 endif()
 
+# -- FlatBuffers (TransportMessage codec)
+if(NOT TARGET flatbuffers)
+  FetchContent_Declare(flatbuffers_relay
+    GIT_REPOSITORY https://github.com/google/flatbuffers.git
+    GIT_TAG        v25.2.10
+    GIT_SHALLOW    TRUE
+  )
+  set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+  set(FLATBUFFERS_BUILD_FLATC OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(flatbuffers_relay)
+endif()
+
 # -- liboqs (ML-DSA-87 identity)
 if(NOT TARGET oqs)
   set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
@@ -91,6 +107,7 @@ target_link_libraries(chromatindb_relay_lib PUBLIC
   asio::asio
   spdlog::spdlog
   nlohmann_json::nlohmann_json
+  flatbuffers
   oqs
   OpenSSL::SSL
   OpenSSL::Crypto
