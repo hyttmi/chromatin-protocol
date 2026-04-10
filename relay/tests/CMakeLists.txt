@@ -21,6 +21,7 @@ add_executable(chromatindb_relay_tests
   test_transport_codec.cpp
   test_aead.cpp
   test_request_router.cpp
+  test_subscription_tracker.cpp
   test_translator.cpp
 )
 
