@@ -10,9 +10,12 @@ add_library(chromatindb_relay_lib STATIC
   core/message_filter.cpp
   core/request_router.cpp
   core/session.cpp
+  core/uds_multiplexer.cpp
+  wire/blob_codec.cpp
   identity/relay_identity.cpp
   translate/type_registry.cpp
   translate/json_schema.cpp
+  translate/translator.cpp
   util/base64.cpp
   wire/transport_codec.cpp
   wire/aead.cpp

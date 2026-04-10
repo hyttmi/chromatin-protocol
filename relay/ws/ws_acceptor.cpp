@@ -18,13 +18,17 @@ static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 WsAcceptor::WsAcceptor(asio::io_context& ioc, SessionManager& manager,
                        const std::string& bind_address, uint16_t bind_port,
                        size_t max_send_queue, size_t max_connections,
-                       core::Authenticator& authenticator)
+                       core::Authenticator& authenticator,
+                       core::UdsMultiplexer* uds_mux,
+                       core::RequestRouter* router)
     : acceptor_(ioc)
     , manager_(manager)
     , ioc_(ioc)
     , max_send_queue_(max_send_queue)
     , max_connections_(max_connections)
-    , authenticator_(authenticator) {
+    , authenticator_(authenticator)
+    , uds_mux_(uds_mux)
+    , router_(router) {
 
     // Resolve bind address to determine protocol family (IPv4/IPv6).
     asio::ip::tcp::resolver resolver(ioc);
@@ -174,7 +178,7 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
             auto session = WsSession::create(
                 WsSession::Stream(std::move(tls_stream)),
                 manager_, ioc_.get_executor(), max_send_queue_,
-                authenticator_, ioc_);
+                authenticator_, ioc_, uds_mux_, router_);
             auto id = manager_.add_session(session);
             spdlog::info("session {}: WebSocket connection established (WSS)", id);
             session->start(id);
@@ -193,7 +197,7 @@ asio::awaitable<void> WsAcceptor::handle_new_connection(
         auto session = WsSession::create(
             WsSession::Stream(std::move(socket)),
             manager_, ioc_.get_executor(), max_send_queue_,
-            authenticator_, ioc_);
+            authenticator_, ioc_, uds_mux_, router_);
         auto id = manager_.add_session(session);
         spdlog::info("session {}: WebSocket connection established (WS)", id);
         session->start(id);

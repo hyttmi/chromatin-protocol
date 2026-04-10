@@ -4,6 +4,11 @@
 #include "relay/core/session.h"
 #include "relay/ws/ws_frame.h"
 
+namespace chromatindb::relay::core {
+class UdsMultiplexer;
+class RequestRouter;
+} // namespace chromatindb::relay::core
+
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 #include <nlohmann/json.hpp>
@@ -45,7 +50,9 @@ public:
         asio::any_io_executor executor,
         size_t max_send_queue,
         core::Authenticator& authenticator,
-        asio::io_context& ioc);
+        asio::io_context& ioc,
+        core::UdsMultiplexer* uds_mux = nullptr,
+        core::RequestRouter* router = nullptr);
 
     /// Start the session lifecycle (read loop + drain + ping + auth challenge).
     void start(uint64_t session_id);
@@ -58,10 +65,17 @@ public:
     /// Called by Session drain coroutine via WriteCallback.
     asio::awaitable<bool> write_frame(std::span<const uint8_t> data);
 
+    /// Enqueue JSON text frame via send queue (fire-and-forget).
+    void send_json(const nlohmann::json& j);
+
+    /// Send a binary WebSocket frame (opcode 0x2) via send queue.
+    void send_binary(const std::string& json_payload);
+
 private:
     WsSession(Stream stream, SessionManager& manager,
               asio::any_io_executor executor, size_t max_send_queue,
-              core::Authenticator& authenticator, asio::io_context& ioc);
+              core::Authenticator& authenticator, asio::io_context& ioc,
+              core::UdsMultiplexer* uds_mux, core::RequestRouter* router);
 
     /// Main read loop: reads raw bytes, parses frames, handles control frames.
     asio::awaitable<void> read_loop();
@@ -77,9 +91,6 @@ private:
 
     /// Send challenge JSON and start auth timer (per D-02).
     void send_challenge();
-
-    /// Enqueue JSON text frame via send queue (fire-and-forget).
-    void send_json(const nlohmann::json& j);
 
     /// Handle control frames inline.
     asio::awaitable<void> handle_control(const AssembledMessage& msg);
@@ -118,6 +129,10 @@ private:
     // Idle timeout: 30s after auth if no message received (per D-14)
     asio::steady_timer idle_timer_;
     static constexpr auto IDLE_TIMEOUT = std::chrono::seconds(30);
+
+    // UDS forwarding (Phase 103)
+    core::UdsMultiplexer* uds_mux_ = nullptr;
+    core::RequestRouter* router_ = nullptr;
 
     // Read buffer (persistent across reads)
     static constexpr size_t READ_BUF_SIZE = 8192;

@@ -3,6 +3,11 @@
 #include "relay/core/authenticator.h"
 #include "relay/ws/session_manager.h"
 
+namespace chromatindb::relay::core {
+class UdsMultiplexer;
+class RequestRouter;
+} // namespace chromatindb::relay::core
+
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
@@ -23,7 +28,9 @@ public:
     WsAcceptor(asio::io_context& ioc, SessionManager& manager,
                const std::string& bind_address, uint16_t bind_port,
                size_t max_send_queue, size_t max_connections,
-               core::Authenticator& authenticator);
+               core::Authenticator& authenticator,
+               core::UdsMultiplexer* uds_mux = nullptr,
+               core::RequestRouter* router = nullptr);
 
     /// Initialize TLS context. Call before accept_loop if TLS enabled.
     /// Returns false on failure (relay should exit).
@@ -64,6 +71,8 @@ private:
     size_t max_send_queue_;
     size_t max_connections_;             // Per D-32: SIGHUP-reloadable
     core::Authenticator& authenticator_;
+    core::UdsMultiplexer* uds_mux_ = nullptr;
+    core::RequestRouter* router_ = nullptr;
     bool stopping_ = false;
 
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);  // Per D-13

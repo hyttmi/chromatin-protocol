@@ -1,5 +1,7 @@
 #include "relay/config/relay_config.h"
 #include "relay/core/authenticator.h"
+#include "relay/core/request_router.h"
+#include "relay/core/uds_multiplexer.h"
 #include "relay/identity/relay_identity.h"
 #include "relay/ws/ws_acceptor.h"
 #include "relay/ws/ws_session.h"
@@ -169,8 +171,10 @@ int main(int argc, char* argv[]) {
     spdlog::info("  max_connections: {}", cfg.max_connections);
 
     // Load or generate identity
+    chromatindb::relay::identity::RelayIdentity identity =
+        chromatindb::relay::identity::RelayIdentity::generate();
     try {
-        auto identity = chromatindb::relay::identity::RelayIdentity::load_or_generate(
+        identity = chromatindb::relay::identity::RelayIdentity::load_or_generate(
             cfg.identity_key_path);
         spdlog::info("  identity: {}", to_hex(identity.public_key_hash()));
     } catch (const std::runtime_error& e) {
@@ -189,13 +193,21 @@ int main(int argc, char* argv[]) {
     // Create io_context
     asio::io_context ioc;
 
-    // Create SessionManager and WsAcceptor
+    // Create RequestRouter and UdsMultiplexer
+    chromatindb::relay::core::RequestRouter request_router;
     chromatindb::relay::ws::SessionManager session_manager;
+
+    chromatindb::relay::core::UdsMultiplexer uds_mux(
+        ioc, cfg.uds_path, identity, request_router, session_manager);
+    uds_mux.start();
+    spdlog::info("  uds_mux: started (connecting to {})", cfg.uds_path);
+
+    // Create WsAcceptor
     chromatindb::relay::ws::WsAcceptor acceptor(
         ioc, session_manager,
         cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
         cfg.max_send_queue, cfg.max_connections,
-        authenticator);
+        authenticator, &uds_mux, &request_router);
 
     // Initialize TLS if configured (per D-01)
     if (cfg.tls_enabled()) {

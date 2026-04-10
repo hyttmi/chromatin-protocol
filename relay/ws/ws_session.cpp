@@ -1,6 +1,8 @@
 #include "relay/ws/ws_session.h"
 #include "relay/ws/session_manager.h"
 #include "relay/core/message_filter.h"
+#include "relay/core/request_router.h"
+#include "relay/core/uds_multiplexer.h"
 
 #include <spdlog/spdlog.h>
 
@@ -59,7 +61,8 @@ static std::optional<std::vector<uint8_t>> from_hex(std::string_view hex) {
 
 WsSession::WsSession(Stream stream, SessionManager& manager,
                      asio::any_io_executor executor, size_t max_send_queue,
-                     core::Authenticator& authenticator, asio::io_context& ioc)
+                     core::Authenticator& authenticator, asio::io_context& ioc,
+                     core::UdsMultiplexer* uds_mux, core::RequestRouter* router)
     : stream_(std::move(stream))
     , session_(executor, max_send_queue)
     , manager_(manager)
@@ -67,7 +70,9 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
     , authenticator_(authenticator)
     , ioc_(ioc)
     , auth_timer_(executor)
-    , idle_timer_(executor) {
+    , idle_timer_(executor)
+    , uds_mux_(uds_mux)
+    , router_(router) {
     last_pong_ = std::chrono::steady_clock::now();
 }
 
@@ -77,11 +82,13 @@ std::shared_ptr<WsSession> WsSession::create(
     asio::any_io_executor executor,
     size_t max_send_queue,
     core::Authenticator& authenticator,
-    asio::io_context& ioc) {
+    asio::io_context& ioc,
+    core::UdsMultiplexer* uds_mux,
+    core::RequestRouter* router) {
     // Cannot use make_shared due to private constructor.
     return std::shared_ptr<WsSession>(
         new WsSession(std::move(stream), manager, executor, max_send_queue,
-                       authenticator, ioc));
+                       authenticator, ioc, uds_mux, router));
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +160,22 @@ void WsSession::send_json(const nlohmann::json& j) {
         }, asio::detached);
 }
 
+void WsSession::send_binary(const std::string& json_payload) {
+    // Enqueue with binary marker prefix (0x02).
+    // write_frame() detects this prefix and uses OPCODE_BINARY instead of OPCODE_TEXT.
+    // JSON payloads always start with '{' or '[', never with a byte < 0x20,
+    // so there's no false-positive risk.
+    auto self = shared_from_this();
+    std::string marked;
+    marked.reserve(1 + json_payload.size());
+    marked.push_back(static_cast<char>(OPCODE_BINARY));  // 0x02
+    marked.append(json_payload);
+    asio::co_spawn(executor_,
+        [self, marked = std::move(marked)]() mutable -> asio::awaitable<void> {
+            co_await self->session_.enqueue(std::move(marked));
+        }, asio::detached);
+}
+
 // ---------------------------------------------------------------------------
 // Async I/O helpers (dual-mode: plain TCP / TLS)
 // ---------------------------------------------------------------------------
@@ -185,8 +208,16 @@ asio::awaitable<bool> WsSession::send_raw(const std::string& frame) {
 asio::awaitable<bool> WsSession::write_frame(std::span<const uint8_t> data) {
     if (closing_) co_return false;
 
-    // Encode as text frame. Phase 102+ will distinguish text vs binary.
-    auto frame = encode_frame(OPCODE_TEXT, data);
+    // Check for binary marker prefix (0x02 from send_binary).
+    // JSON text always starts with '{' or '[' (>= 0x5B), never with 0x02.
+    uint8_t opcode = OPCODE_TEXT;
+    auto payload = data;
+    if (!data.empty() && data[0] == OPCODE_BINARY) {
+        opcode = OPCODE_BINARY;
+        payload = data.subspan(1);  // Strip the marker byte
+    }
+
+    auto frame = encode_frame(opcode, payload);
     auto n = co_await async_write(asio::buffer(frame));
     co_return n == frame.size();
 }
@@ -268,6 +299,10 @@ asio::awaitable<void> WsSession::read_loop() {
     // Read loop exited -- clean up session.
     if (!closing_) {
         spdlog::debug("session {}: connection closed by peer", session_id_);
+    }
+    // Per D-10: purge pending requests for this client.
+    if (router_) {
+        router_->remove_client(session_id_);
     }
     manager_.remove_session(session_id_);
     session_.close();
@@ -509,6 +544,11 @@ void WsSession::close(uint16_t code, std::string_view reason) {
 
     // Cancel auth timer if still running.
     auth_timer_.cancel();
+
+    // Per D-10: purge pending requests for this client.
+    if (router_) {
+        router_->remove_client(session_id_);
+    }
 
     // Send close frame directly (bypass send queue for control frames).
     auto self = shared_from_this();
