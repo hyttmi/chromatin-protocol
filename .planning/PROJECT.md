@@ -10,20 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v3.0.0 Relay v2
+## Previous Milestone: v3.0.0 Relay v2 (SHIPPED 2026-04-10)
 
-**Goal:** Kill old relay + Python SDK, build a new closed-source WebSocket/JSON/TLS relay with PQ-signed payloads and challenge-response auth. No SDK needed — any language with WebSocket + liboqs can talk to the network.
-
-**Target features:**
-- Delete old relay/ and sdk/python/ (clean break)
-- New C++ relay binary with Asio Beast (WebSocket + HTTP)
-- WSS with TLS termination (cert_path + key_path in config)
-- JSON message format for all 38 relay-allowed message types
-- JSON ↔ FlatBuffers translation layer
-- ML-DSA-87 challenge-response authentication over WebSocket
-- Multiplexed UDS connection to node (single connection, not per-client)
-- Per-client bounded send queue with backpressure
-- Subscription tracking + notification routing
+**Delivered:** Closed-source WebSocket/JSON/TLS relay replacing old relay + Python SDK. Hand-rolled RFC 6455 WebSocket transport, ML-DSA-87 challenge-response authentication, table-driven JSON-to-FlatBuffers translation for all 38 client-allowed types, multiplexed UDS connection to node with AEAD-encrypted transport, subscription tracking with reference-counted aggregation and notification fan-out, UDS auto-reconnect with subscription replay, Prometheus /metrics endpoint, per-client token bucket rate limiting, drain-first graceful SIGTERM shutdown, SIGHUP config reload for TLS/ACL/rate limits/metrics. 6 phases, 12 plans, 31 requirements — all complete. 205 relay tests, 2378 assertions.
 
 ## Previous Milestone: v2.2.0 Node Hardening (SHIPPED 2026-04-09)
 
@@ -212,7 +201,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-- [ ] Relay v2: WebSocket/JSON/TLS relay with PQ challenge-response auth (v3.0.0)
+- ✓ Relay v2: WebSocket/JSON/TLS relay with PQ challenge-response auth — v3.0.0
 
 ### Future
 
@@ -229,6 +218,8 @@ Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 D
 Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. Phase 101 delivered hand-rolled RFC 6455 WebSocket transport with TLS 1.3. Phase 102 added ML-DSA-87 challenge-response auth over WebSocket and JSON schema definitions for all 38 client-allowed types. Phase 103 completed the core data path: single multiplexed UDS connection to node with TrustedHello + HKDF + AEAD handshake, table-driven JSON-to-FlatBuffers translation for all 38 types, relay-scoped request_id multiplexing for response routing, and binary WebSocket frames for large payloads. 161 relay tests, 1136 assertions.
 
 Relay is closed source. Database is open source. PROTOCOL.md documents the node wire format for third-party relay implementations.
+
+Phase 104 completed pub/sub subscription tracking with reference-counted aggregation, notification fan-out, and UDS auto-reconnect with subscription replay. Phase 105 completed operational polish: Prometheus /metrics HTTP endpoint (7 counters + 3 gauges, chromatindb_relay_ prefix), per-client token bucket rate limiting (messages/sec, shared atomic SIGHUP propagation), extended SIGHUP config reload (rate_limit + metrics_bind), and drain-first graceful SIGTERM shutdown. 205 relay tests, 2378 assertions. All 31 v3.0.0 requirements complete.
 
 Tech stack (node): C++20, CMake, liboqs, libsodium, libmdbx, FlatBuffers, Standalone Asio, xxHash, Catch2, spdlog, nlohmann/json.
 Tech stack (relay v2): C++20, Standalone Asio, nlohmann/json, spdlog, liboqs (ML-DSA-87 identity), FlatBuffers, Catch2. Hand-rolled WebSocket (Boost.Beast incompatible with standalone Asio). System OpenSSL for TLS + AEAD + HKDF (Phase 101/103).
