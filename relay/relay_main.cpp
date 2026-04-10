@@ -1,5 +1,6 @@
 #include "relay/config/relay_config.h"
 #include "relay/core/authenticator.h"
+#include "relay/core/metrics_collector.h"
 #include "relay/core/request_router.h"
 #include "relay/core/subscription_tracker.h"
 #include "relay/core/uds_multiplexer.h"
@@ -197,10 +198,28 @@ int main(int argc, char* argv[]) {
     // Create io_context
     asio::io_context ioc;
 
+    // Shared state for graceful shutdown and rate limiting
+    std::atomic<bool> stopping{false};
+    std::atomic<uint32_t> rate_limit_rate{cfg.rate_limit_messages_per_sec};
+
     // Create RequestRouter, SessionManager, SubscriptionTracker
     chromatindb::relay::core::RequestRouter request_router;
     chromatindb::relay::ws::SessionManager session_manager;
     chromatindb::relay::core::SubscriptionTracker subscription_tracker;
+
+    // Create MetricsCollector (Prometheus /metrics endpoint)
+    chromatindb::relay::core::MetricsCollector metrics_collector(ioc, cfg.metrics_bind, stopping);
+    metrics_collector.start();
+    if (!cfg.metrics_bind.empty()) {
+        spdlog::info("  metrics: http://{}/metrics", cfg.metrics_bind);
+    } else {
+        spdlog::info("  metrics: disabled (set metrics_bind to enable)");
+    }
+    if (cfg.rate_limit_messages_per_sec > 0) {
+        spdlog::info("  rate_limit: {} msg/s", cfg.rate_limit_messages_per_sec);
+    } else {
+        spdlog::info("  rate_limit: disabled");
+    }
 
     chromatindb::relay::core::UdsMultiplexer uds_mux(
         ioc, cfg.uds_path, identity, request_router, session_manager);
@@ -234,6 +253,14 @@ int main(int argc, char* argv[]) {
         cfg.max_send_queue, cfg.max_connections,
         authenticator, &uds_mux, &request_router, &subscription_tracker);
 
+    // Wire metrics and rate limit atomics into components
+    session_manager.set_metrics(&metrics_collector.metrics());
+    acceptor.set_metrics(&metrics_collector.metrics());
+    acceptor.set_shared_rate(&rate_limit_rate);
+    metrics_collector.set_gauge_provider([&session_manager, &subscription_tracker]() {
+        return std::make_pair(session_manager.count(), subscription_tracker.namespace_count());
+    });
+
     // Initialize TLS if configured (per D-01)
     if (cfg.tls_enabled()) {
         if (!acceptor.init_tls(cfg.cert_path, cfg.key_path)) {
@@ -250,24 +277,36 @@ int main(int argc, char* argv[]) {
     // Spawn accept loop
     asio::co_spawn(ioc, acceptor.accept_loop(), asio::detached);
 
-    // SIGTERM/SIGINT graceful shutdown (per D-25)
+    // SIGTERM/SIGINT drain-first graceful shutdown (per D-16, D-17)
     asio::signal_set term_signals(ioc, SIGTERM, SIGINT);
     term_signals.async_wait([&](const asio::error_code& ec, int sig) {
         if (ec) return;
-        spdlog::info("received signal {}, shutting down with {} active sessions",
-                    sig, session_manager.count());
+        stopping.store(true, std::memory_order_relaxed);
+        spdlog::info("received signal {}, graceful shutdown ({} sessions)",
+                     sig, session_manager.count());
+
+        // 1. Stop accepting new connections (per D-16 step 1)
         acceptor.stop();
 
-        // Best-effort Close(1001 Going Away) to all active sessions (per D-25)
-        session_manager.for_each([](uint64_t /*id*/, const auto& session) {
-            session->close(1001, "server shutting down");
-        });
+        // 2. Stop metrics endpoint
+        metrics_collector.stop();
 
-        // Give 2 seconds for close frames to send, then force stop
-        auto shutdown_timer = std::make_shared<asio::steady_timer>(ioc);
-        shutdown_timer->expires_after(std::chrono::seconds(2));
-        shutdown_timer->async_wait([&ioc, shutdown_timer](const asio::error_code&) {
-            ioc.stop();
+        // 3. Wait up to 5s for send queues to drain (per D-17)
+        auto drain_timer = std::make_shared<asio::steady_timer>(ioc);
+        drain_timer->expires_after(std::chrono::seconds(5));
+        drain_timer->async_wait([&, drain_timer](const asio::error_code&) {
+            // 4. Send Close(1001) to all remaining sessions (per D-16 step 3)
+            spdlog::info("drain timeout, closing {} sessions", session_manager.count());
+            session_manager.for_each([](uint64_t, const auto& session) {
+                session->close(1001, "server shutting down");
+            });
+
+            // 5. Wait 2s for close handshake echo (per D-16 step 4)
+            auto close_timer = std::make_shared<asio::steady_timer>(ioc);
+            close_timer->expires_after(std::chrono::seconds(2));
+            close_timer->async_wait([&ioc, close_timer](const asio::error_code&) {
+                ioc.stop();
+            });
         });
     });
 
@@ -301,6 +340,16 @@ int main(int argc, char* argv[]) {
 
             // Reload max_connections (per D-32)
             acceptor.set_max_connections(new_cfg.max_connections);
+
+            // Reload rate limit (per D-13, D-14)
+            rate_limit_rate.store(new_cfg.rate_limit_messages_per_sec, std::memory_order_relaxed);
+            spdlog::info("rate_limit reloaded: {}",
+                         new_cfg.rate_limit_messages_per_sec == 0
+                             ? std::string("disabled")
+                             : std::to_string(new_cfg.rate_limit_messages_per_sec) + " msg/s");
+
+            // Reload metrics_bind (per D-15)
+            metrics_collector.set_metrics_bind(new_cfg.metrics_bind);
 
         } catch (const std::exception& e) {
             spdlog::error("SIGHUP config reload failed: {}", e.what());

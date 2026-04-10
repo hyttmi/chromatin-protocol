@@ -5,8 +5,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace chromatindb::relay::core {
 
@@ -44,6 +46,12 @@ public:
     RelayMetrics& metrics() { return metrics_; }
     const RelayMetrics& metrics() const { return metrics_; }
 
+    /// Gauge provider callback: returns (active_connections, active_subscriptions).
+    using GaugeProvider = std::function<std::pair<size_t, size_t>()>;
+
+    /// Set gauge provider for live data at scrape time.
+    void set_gauge_provider(GaugeProvider provider) { gauge_provider_ = std::move(provider); }
+
     /// Uptime in seconds since construction.
     uint64_t uptime_seconds() const;
 
@@ -62,6 +70,7 @@ private:
     std::chrono::steady_clock::time_point start_time_;
     std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
     std::string metrics_bind_;
+    GaugeProvider gauge_provider_;
 };
 
 } // namespace chromatindb::relay::core

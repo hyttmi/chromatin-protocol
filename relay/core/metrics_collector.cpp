@@ -127,7 +127,13 @@ asio::awaitable<void> MetricsCollector::handle_connection(asio::ip::tcp::socket 
 
     std::string response;
     if (first_line.find("GET /metrics") != std::string::npos) {
-        auto body = format_prometheus(0, 0);
+        size_t active_conns = 0, active_subs = 0;
+        if (gauge_provider_) {
+            auto [conns, subs] = gauge_provider_();
+            active_conns = conns;
+            active_subs = subs;
+        }
+        auto body = format_prometheus(active_conns, active_subs);
         response = "HTTP/1.1 200 OK\r\n"
                    "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n"
                    "Content-Length: " + std::to_string(body.size()) + "\r\n"
