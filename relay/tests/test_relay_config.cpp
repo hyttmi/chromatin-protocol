@@ -226,3 +226,66 @@ TEST_CASE("Config: validate max_connections 0 throws", "[config]") {
 
     REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
 }
+
+// =============================================================================
+// metrics_bind and rate_limit_messages_per_sec tests
+// =============================================================================
+
+TEST_CASE("Config: metrics_bind defaults to empty", "[relay_config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.metrics_bind.empty());
+}
+
+TEST_CASE("Config: metrics_bind parsed from JSON", "[relay_config]") {
+    auto j = valid_config();
+    j["metrics_bind"] = "0.0.0.0:9100";
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.metrics_bind == "0.0.0.0:9100");
+}
+
+TEST_CASE("Config: metrics_bind validation rejects missing colon", "[relay_config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.metrics_bind = "no_colon";
+
+    REQUIRE_THROWS_AS(validate_relay_config(cfg), std::runtime_error);
+}
+
+TEST_CASE("Config: metrics_bind validation accepts valid format", "[relay_config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.metrics_bind = "127.0.0.1:9100";
+
+    REQUIRE_NOTHROW(validate_relay_config(cfg));
+}
+
+TEST_CASE("Config: metrics_bind validation accepts empty (disabled)", "[relay_config]") {
+    RelayConfig cfg;
+    cfg.uds_path = "/tmp/node.sock";
+    cfg.identity_key_path = "/tmp/relay.key";
+    cfg.metrics_bind = "";
+
+    REQUIRE_NOTHROW(validate_relay_config(cfg));
+}
+
+TEST_CASE("Config: rate_limit_messages_per_sec defaults to zero", "[relay_config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.rate_limit_messages_per_sec == 0);
+}
+
+TEST_CASE("Config: rate_limit_messages_per_sec parsed from JSON", "[relay_config]") {
+    auto j = valid_config();
+    j["rate_limit_messages_per_sec"] = 100;
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.rate_limit_messages_per_sec == 100);
+}
