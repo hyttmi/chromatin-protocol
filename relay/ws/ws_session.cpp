@@ -3,6 +3,10 @@
 #include "relay/core/message_filter.h"
 #include "relay/core/request_router.h"
 #include "relay/core/uds_multiplexer.h"
+#include "relay/translate/translator.h"
+#include "relay/translate/type_registry.h"
+#include "relay/wire/transport_codec.h"
+#include "relay/wire/transport_generated.h"
 
 #include <spdlog/spdlog.h>
 
@@ -424,9 +428,56 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
         co_return;  // Per D-29: keep connection open
     }
 
-    // Type is allowed.  Phase 103 adds JSON->FlatBuffers translation + UDS forwarding.
+    // Type is allowed. Translate JSON -> binary and forward to node via UDS.
     spdlog::debug("session {}: accepted '{}'{}", session_id_, type_str,
                   request_id ? " (request_id=" + std::to_string(*request_id) + ")" : "");
+
+    // 1. Translate JSON -> binary
+    auto result = translate::json_to_binary(j);
+    if (!result) {
+        nlohmann::json err = {{"type", "error"}, {"code", "translation_error"},
+                              {"message", "Failed to translate message"}};
+        if (request_id) err["request_id"] = *request_id;
+        send_json(err);
+        co_return;
+    }
+
+    // 2. Check UDS connection
+    if (!uds_mux_ || !uds_mux_->is_connected()) {
+        nlohmann::json err = {{"type", "error"}, {"code", "node_unavailable"},
+                              {"message", "Node connection not ready"}};
+        if (request_id) err["request_id"] = *request_id;
+        send_json(err);
+        co_return;
+    }
+
+    // 3. Fire-and-forget messages (Ping=5, Pong=6, Goodbye=7) per D-09:
+    // Forward directly without RequestRouter.
+    auto wire_type = result->wire_type;
+    if (wire_type == 5 || wire_type == 6 || wire_type == 7) {
+        auto transport_msg = wire::TransportCodec::encode(
+            static_cast<chromatindb::wire::TransportMsgType>(wire_type),
+            result->payload, 0);
+        uds_mux_->send(std::move(transport_msg));
+        co_return;
+    }
+
+    // 4. Register request for response routing (per D-07, D-08)
+    uint32_t client_rid = request_id.value_or(0);
+    uint32_t relay_rid = router_->register_request(session_id_, client_rid);
+
+    // 5. Encode transport envelope with relay_rid and send to node
+    auto transport_msg = wire::TransportCodec::encode(
+        static_cast<chromatindb::wire::TransportMsgType>(wire_type),
+        result->payload, relay_rid);
+    if (!uds_mux_->send(std::move(transport_msg))) {
+        router_->resolve_response(relay_rid);  // Clean up pending entry
+        nlohmann::json err = {{"type", "error"}, {"code", "send_failed"},
+                              {"message", "Failed to send to node"}};
+        if (request_id) err["request_id"] = *request_id;
+        send_json(err);
+        co_return;
+    }
 }
 
 // ---------------------------------------------------------------------------

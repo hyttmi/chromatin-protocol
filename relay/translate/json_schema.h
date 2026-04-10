@@ -36,6 +36,7 @@ struct MessageSchema {
     std::string_view type_name;              // "read_request"
     uint8_t wire_type;                       // 31
     bool is_flatbuffer;                      // true for Data(8), ReadResponse(32), BatchReadResponse(54)
+    bool is_compound;                        // true for compound binary responses needing custom decode
     std::span<const FieldSpec> fields;       // Field definitions (empty for FB types)
 };
 
@@ -115,6 +116,7 @@ inline constexpr FieldSpec READ_REQUEST_FIELDS[] = {
 inline constexpr FieldSpec LIST_REQUEST_FIELDS[] = {
     {"request_id",  FieldEncoding::REQUEST_ID,     true},
     {"namespace",   FieldEncoding::HEX_32},
+    {"since_seq",   FieldEncoding::UINT64_STRING,  true},  // defaults to 0
     {"limit",       FieldEncoding::UINT32_NUMBER,   true},
 };
 
@@ -175,7 +177,9 @@ inline constexpr FieldSpec NODE_INFO_RESPONSE_FIELDS[] = {
 
 // --- NamespaceListRequest (41) ---
 inline constexpr FieldSpec NAMESPACE_LIST_REQUEST_FIELDS[] = {
-    {"request_id",  FieldEncoding::REQUEST_ID,     true},
+    {"request_id",        FieldEncoding::REQUEST_ID,     true},
+    {"after_namespace",   FieldEncoding::HEX_32,         true},  // 32-byte cursor
+    {"limit",             FieldEncoding::UINT32_NUMBER,   true},
 };
 
 // --- NamespaceListResponse (42) ---
@@ -264,8 +268,8 @@ inline constexpr FieldSpec DELEGATION_LIST_RESPONSE_FIELDS[] = {
 inline constexpr FieldSpec BATCH_READ_REQUEST_FIELDS[] = {
     {"request_id",  FieldEncoding::REQUEST_ID,     true},
     {"namespace",   FieldEncoding::HEX_32},
-    {"hashes",      FieldEncoding::HEX_32_ARRAY},
     {"max_bytes",   FieldEncoding::UINT32_NUMBER,   true},
+    {"hashes",      FieldEncoding::HEX_32_ARRAY},   // encoder adds u32BE count prefix
 };
 
 // --- PeerInfoRequest (55) ---
