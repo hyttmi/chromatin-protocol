@@ -93,7 +93,7 @@ Plans:
 **Plans**: 2 plans (Wave 1: 104-01, Wave 2: 104-02)
 
 Plans:
-- [ ] 104-01-PLAN.md -- Subscription aggregation with reference counting and notification fan-out
+- [x] 104-01-PLAN.md -- Subscription aggregation with reference counting and notification fan-out
 - [ ] 104-02-PLAN.md -- UDS auto-reconnect with subscription replay and pending request cleanup
 
 ### Phase 105: Operational Polish
@@ -123,5 +123,5 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
 | 102. Authentication & JSON Schema | 2/2 | Complete    | 2026-04-09 |
 | 103. UDS Multiplexer & Protocol Translation | 2/2 | Complete    | 2026-04-10 |
-| 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
+| 104. Pub/Sub & UDS Resilience | 1/2 | In Progress|  |
 | 105. Operational Polish | 0/2 | Not started | - |

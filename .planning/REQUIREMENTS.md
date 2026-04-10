@@ -39,8 +39,8 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 - [x] **MUX-01**: Single multiplexed UDS connection from relay to node
 - [x] **MUX-02**: Relay-scoped request_id allocation with client-to-relay mapping for response routing
-- [ ] **MUX-03**: Subscription aggregation with reference counting (first subscribe sends to node, last unsubscribe sends to node)
-- [ ] **MUX-04**: Notification fan-out from node to subscribed WebSocket clients
+- [x] **MUX-03**: Subscription aggregation with reference counting (first subscribe sends to node, last unsubscribe sends to node)
+- [x] **MUX-04**: Notification fan-out from node to subscribed WebSocket clients
 - [ ] **MUX-05**: UDS auto-reconnect with jittered backoff on node disconnect
 - [ ] **MUX-06**: Subscription replay after UDS reconnect
 - [ ] **MUX-07**: Pending request timeout on UDS disconnect (no orphaned client requests)
@@ -110,8 +110,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MUX-02 | Phase 103 | Complete |
 | PROT-01 | Phase 103 | Complete |
 | PROT-04 | Phase 103 | Complete |
-| MUX-03 | Phase 104 | Pending |
-| MUX-04 | Phase 104 | Pending |
+| MUX-03 | Phase 104 | Complete |
+| MUX-04 | Phase 104 | Complete |
 | MUX-05 | Phase 104 | Pending |
 | MUX-06 | Phase 104 | Pending |
 | MUX-07 | Phase 104 | Pending |
