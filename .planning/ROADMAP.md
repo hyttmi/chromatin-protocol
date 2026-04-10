@@ -105,12 +105,11 @@ Plans:
   2. SIGHUP reloads TLS context, connection limits, and rate limit configuration without restart
   3. Per-client rate limiting enforces messages/sec or bytes/sec limits with disconnect on violation
   4. SIGTERM triggers graceful shutdown: drain send queues, send WebSocket close frames, then exit
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 2 plans (Wave 1: 105-01, Wave 2: 105-02)
 
 Plans:
-- [ ] 105-01: Prometheus /metrics endpoint and per-client rate limiting
-- [ ] 105-02: SIGHUP config reload and graceful SIGTERM shutdown
+- [ ] 105-01-PLAN.md -- Core components: RateLimiter, RelayMetrics, MetricsCollector, config extensions, tests
+- [ ] 105-02-PLAN.md -- Integration: WsSession rate limiting, metrics wiring, SIGHUP extension, SIGTERM drain-first
 
 ## Progress
 
