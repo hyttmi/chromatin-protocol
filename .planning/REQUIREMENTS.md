@@ -50,7 +50,7 @@ Requirements for Relay v2. Each maps to roadmap phases.
 - [x] **SESS-01**: Per-client bounded send queue with drain coroutine
 - [x] **SESS-02**: Backpressure: disconnect slow clients on queue overflow
 - [x] **SESS-03**: Configurable max concurrent WebSocket connections
-- [ ] **SESS-04**: Graceful shutdown on SIGTERM (drain queues, close frames)
+- [x] **SESS-04**: Graceful shutdown on SIGTERM (drain queues, close frames)
 
 ### Observability & Operations
 
@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-01 | Phase 105 | Complete |
 | OPS-02 | Phase 105 | Complete |
 | OPS-03 | Phase 105 | Complete |
-| SESS-04 | Phase 105 | Pending |
+| SESS-04 | Phase 105 | Complete |
 
 **Coverage:**
 - v3.0.0 requirements: 31 total

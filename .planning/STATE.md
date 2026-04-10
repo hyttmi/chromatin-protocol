@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 105 context gathered
-last_updated: "2026-04-10T08:25:17.308Z"
-last_activity: 2026-04-10 -- Phase 105 execution started
+stopped_at: Completed 105-02-PLAN.md
+last_updated: "2026-04-10T09:21:31.558Z"
+last_activity: 2026-04-10
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
   percent: 55
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 105
-Plan: 1 of 2 complete
-Status: Executing Phase 105 plans
+Plan: 2 of 2 complete
+Status: Ready to execute
 Last activity: 2026-04-10
 
 Progress: [######░░░░] 55%
@@ -61,6 +61,7 @@ Progress: [######░░░░] 55%
 | Phase 104 P01 | 10min | 2 tasks | 14 files |
 | Phase 104 P02 | 5min | 2 tasks | 6 files |
 | Phase 105 P01 | 28min | 3 tasks | 11 files |
+| Phase 105 P02 | 18min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,9 @@ Recent decisions affecting current work:
 - [Phase 104]: replay_subscriptions uses u16BE count prefix, skips empty set
 - [Phase 105]: Token bucket burst equals rate, no separate burst config. Prometheus prefix chromatindb_relay_ distinct from node's chromatindb_
 - [Phase 105]: RelayMetrics uses std::atomic<uint64_t> with relaxed ordering for counter reads
+- [Phase 105]: Shared atomic<uint32_t> for rate limit SIGHUP propagation -- sessions lazy-sync on each message, only set_rate() when changed
+- [Phase 105]: GaugeProvider callback for MetricsCollector -- scrape-time evaluation of live session/subscription counts
+- [Phase 105]: Drain-first SIGTERM: stop acceptor -> 5s drain -> Close(1001) -> 2s close handshake -> ioc.stop()
 
 ### Pending Todos
 
@@ -105,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T08:55:33Z
-Stopped at: Completed 105-01-PLAN.md
-Resume file: .planning/phases/105-operational-polish/105-01-SUMMARY.md
+Last session: 2026-04-10T09:21:31.555Z
+Stopped at: Completed 105-02-PLAN.md
+Resume file: None
