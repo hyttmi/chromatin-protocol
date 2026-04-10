@@ -20,6 +20,7 @@ add_executable(chromatindb_relay_tests
   test_base64.cpp
   test_transport_codec.cpp
   test_aead.cpp
+  test_request_router.cpp
 )
 
 target_link_libraries(chromatindb_relay_tests PRIVATE
