@@ -8,6 +8,7 @@ add_library(chromatindb_relay_lib STATIC
   config/relay_config.cpp
   core/authenticator.cpp
   core/message_filter.cpp
+  core/metrics_collector.cpp
   core/request_router.cpp
   core/session.cpp
   core/subscription_tracker.cpp

@@ -64,6 +64,9 @@ public:
     /// Return number of namespaces a client is subscribed to (for cap enforcement).
     size_t client_subscription_count(uint64_t session_id) const;
 
+    /// Return total number of tracked namespaces (for gauge computation).
+    size_t namespace_count() const { return subs_.size(); }
+
 private:
     /// Namespace -> set of subscribed session IDs (per D-02)
     std::unordered_map<Namespace32, std::unordered_set<uint64_t>, Namespace32Hash> subs_;
