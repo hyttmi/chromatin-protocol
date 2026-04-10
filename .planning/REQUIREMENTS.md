@@ -29,15 +29,15 @@ Requirements for Relay v2. Each maps to roadmap phases.
 
 ### Protocol Translation
 
-- [ ] **PROT-01**: Table-driven JSON to FlatBuffers translation for all 38 relay-allowed message types
+- [x] **PROT-01**: Table-driven JSON to FlatBuffers translation for all 38 relay-allowed message types
 - [x] **PROT-02**: Binary fields encoded as hex (32-byte hashes, namespaces) or base64 (blob data, signatures)
 - [x] **PROT-03**: uint64 fields serialized as JSON strings (prevents JavaScript truncation)
-- [ ] **PROT-04**: Binary WebSocket frames for large payloads (ReadResponse, BatchReadResponse)
+- [x] **PROT-04**: Binary WebSocket frames for large payloads (ReadResponse, BatchReadResponse)
 - [x] **PROT-05**: Message type filtering (blocklist for peer-internal types, same as old relay)
 
 ### UDS Multiplexer
 
-- [ ] **MUX-01**: Single multiplexed UDS connection from relay to node
+- [x] **MUX-01**: Single multiplexed UDS connection from relay to node
 - [x] **MUX-02**: Relay-scoped request_id allocation with client-to-relay mapping for response routing
 - [ ] **MUX-03**: Subscription aggregation with reference counting (first subscribe sends to node, last unsubscribe sends to node)
 - [ ] **MUX-04**: Notification fan-out from node to subscribed WebSocket clients
@@ -106,10 +106,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROT-03 | Phase 102 | Complete |
 | PROT-05 | Phase 102 | Complete |
 | SESS-03 | Phase 102 | Complete |
-| MUX-01 | Phase 103 | Pending |
+| MUX-01 | Phase 103 | Complete |
 | MUX-02 | Phase 103 | Complete |
-| PROT-01 | Phase 103 | Pending |
-| PROT-04 | Phase 103 | Pending |
+| PROT-01 | Phase 103 | Complete |
+| PROT-04 | Phase 103 | Complete |
 | MUX-03 | Phase 104 | Pending |
 | MUX-04 | Phase 104 | Pending |
 | MUX-05 | Phase 104 | Pending |

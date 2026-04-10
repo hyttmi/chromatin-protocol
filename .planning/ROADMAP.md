@@ -13,7 +13,7 @@ Kill the old relay and Python SDK, build a new closed-source WebSocket/JSON/TLS 
 - [x] **Phase 100: Cleanup & Foundation** - Delete old relay/SDK, scaffold new relay binary with per-client send queues and structured logging (completed 2026-04-09)
 - [x] **Phase 101: WebSocket Transport** - WSS/WS listener with hand-rolled RFC 6455 framing and SIGHUP-reloadable TLS (completed 2026-04-09)
 - [x] **Phase 102: Authentication & JSON Schema** - ML-DSA-87 challenge-response auth over WebSocket, JSON message schema design for all 38 types (completed 2026-04-09)
-- [ ] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation
+- [x] **Phase 103: UDS Multiplexer & Protocol Translation** - Single multiplexed UDS to node with request routing, table-driven JSON-to-FlatBuffers translation (completed 2026-04-10)
 - [ ] **Phase 104: Pub/Sub & UDS Resilience** - Subscription aggregation, notification fan-out, UDS auto-reconnect with subscription replay
 - [ ] **Phase 105: Operational Polish** - Prometheus metrics, rate limiting, SIGHUP config reload, graceful shutdown
 
@@ -79,7 +79,7 @@ Plans:
 
 Plans:
 - [x] 103-01-PLAN.md -- Wire infrastructure (AEAD, TransportCodec, utilities, FlatBuffers) and RequestRouter
-- [ ] 103-02-PLAN.md -- UdsMultiplexer with TrustedHello handshake, table-driven translator, and WsSession integration
+- [x] 103-02-PLAN.md -- UdsMultiplexer with TrustedHello handshake, table-driven translator, and WsSession integration
 
 ### Phase 104: Pub/Sub & UDS Resilience
 **Goal**: Clients can subscribe to namespace changes and receive notifications, and the relay recovers gracefully from node disconnects
@@ -122,6 +122,6 @@ Phases execute in numeric order: 100 -> 101 -> 102 -> 103 -> 104 -> 105
 | 100. Cleanup & Foundation | 2/2 | Complete    | 2026-04-09 |
 | 101. WebSocket Transport | 2/2 | Complete    | 2026-04-09 |
 | 102. Authentication & JSON Schema | 2/2 | Complete    | 2026-04-09 |
-| 103. UDS Multiplexer & Protocol Translation | 1/2 | In progress | - |
+| 103. UDS Multiplexer & Protocol Translation | 2/2 | Complete   | 2026-04-10 |
 | 104. Pub/Sub & UDS Resilience | 0/2 | Not started | - |
 | 105. Operational Polish | 0/2 | Not started | - |
