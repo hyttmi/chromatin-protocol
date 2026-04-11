@@ -1,6 +1,7 @@
 #include "db/crypto/signing.h"
 #include <oqs/oqs.h>
 #include <cstring>
+#include <memory>
 
 namespace chromatindb::crypto {
 
@@ -74,14 +75,16 @@ std::vector<uint8_t> Signer::sign(std::span<const uint8_t> message) const {
 bool Signer::verify(std::span<const uint8_t> message,
                     std::span<const uint8_t> signature,
                     std::span<const uint8_t> public_key) {
-    // Process-lifetime cached context (one per thread, future-safe for thread pool).
+    // Per-thread cached context (avoids OQS_SIG_new on every verify call).
     // OQS_SIG_verify is read-only on the context -- safe to reuse.
-    thread_local OQS_SIG* sig = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
+    // unique_ptr ensures OQS_SIG_free runs when threads exit (ASAN clean).
+    thread_local auto sig = std::unique_ptr<OQS_SIG, decltype(&OQS_SIG_free)>(
+        OQS_SIG_new(OQS_SIG_alg_ml_dsa_87), OQS_SIG_free);
     if (!sig) {
         throw std::runtime_error("Failed to create ML-DSA-87 context for verification");
     }
 
-    OQS_STATUS rc = OQS_SIG_verify(sig, message.data(), message.size(),
+    OQS_STATUS rc = OQS_SIG_verify(sig.get(), message.data(), message.size(),
                                     signature.data(), signature.size(),
                                     public_key.data());
     return rc == OQS_SUCCESS;
