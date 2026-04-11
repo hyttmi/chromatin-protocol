@@ -193,3 +193,8 @@ target_link_libraries(chromatindb_verify PRIVATE chromatindb_lib)
 # =============================================================================
 add_executable(chromatindb_test_vectors tools/test_vector_generator.cpp)
 target_link_libraries(chromatindb_test_vectors PRIVATE chromatindb_lib)
+
+# =============================================================================
+# Relay tools (UDS tap, smoke test -- linked against relay library)
+# =============================================================================
+add_subdirectory(tools)
