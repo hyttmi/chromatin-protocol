@@ -55,7 +55,7 @@ Plans:
   4. Sending SIGTERM to the relay process results in all connected clients receiving WebSocket close frames before the process exits
 **Plans**: 2 plans
 Plans:
-- [ ] 108-01-PLAN.md — Extract shared test helpers + create relay_feature_test skeleton with CMake target
+- [x] 108-01-PLAN.md — Extract shared test helpers + create relay_feature_test skeleton with CMake target
 - [ ] 108-02-PLAN.md — Implement pub/sub, rate limit, SIGHUP, SIGTERM tests + update run-smoke.sh
 
 ### Phase 109: New Features
@@ -90,7 +90,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 |-------|----------------|--------|-----------|
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
-| 108. Live Feature Verification | 0/2 | In progress | - |
+| 108. Live Feature Verification | 1/2 | In Progress|  |
 | 109. New Features | 0/0 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
@@ -99,7 +99,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 ### Phase 999.1: Tombstone TTL lifecycle management (BACKLOG)
 **Goal:** [Captured for future planning]
 **Requirements:** TBD
-**Plans:** 0 plans
+**Plans:** 1/2 plans executed
 
 ### Phase 999.2: Node silent failure on malformed requests (BACKLOG)
 **Goal:** Node records strikes but sends NO error response on malformed requests — client hangs forever. Every request must guarantee a response. Add error response type for rejected messages.

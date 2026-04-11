@@ -15,10 +15,10 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 ### End-to-End Verification
 
 - [x] **E2E-01**: All 38 relay-allowed message types translate correctly through relay→node→relay with live node
-- [ ] **E2E-02**: Subscribe/Unsubscribe/Notification fan-out works end-to-end with live blob writes
-- [ ] **E2E-03**: Rate limiting enforces messages/sec limit and disconnects on sustained violation
-- [ ] **E2E-04**: SIGHUP reloads TLS, ACL, rate limit, and metrics_bind without restart
-- [ ] **E2E-05**: SIGTERM drains send queues and sends close frames before exit
+- [x] **E2E-02**: Subscribe/Unsubscribe/Notification fan-out works end-to-end with live blob writes
+- [x] **E2E-03**: Rate limiting enforces messages/sec limit and disconnects on sustained violation
+- [x] **E2E-04**: SIGHUP reloads TLS, ACL, rate limit, and metrics_bind without restart
+- [x] **E2E-05**: SIGTERM drains send queues and sends close frames before exit
 
 ### Performance
 
@@ -58,10 +58,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIX-01 | Phase 106 | Complete |
 | FIX-02 | Phase 106 | Complete |
 | E2E-01 | Phase 107 | Complete |
-| E2E-02 | Phase 108 | Pending |
-| E2E-03 | Phase 108 | Pending |
-| E2E-04 | Phase 108 | Pending |
-| E2E-05 | Phase 108 | Pending |
+| E2E-02 | Phase 108 | Complete |
+| E2E-03 | Phase 108 | Complete |
+| E2E-04 | Phase 108 | Complete |
+| E2E-05 | Phase 108 | Complete |
 | PERF-01 | Phase 110 | Pending |
 | PERF-02 | Phase 110 | Pending |
 | PERF-03 | Phase 110 | Pending |
