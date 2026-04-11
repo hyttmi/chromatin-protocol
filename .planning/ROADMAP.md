@@ -11,7 +11,7 @@ Fix all bugs found in live relay+node testing, verify every feature works end-to
 - v3.1.0 starts at Phase 106
 
 - [x] **Phase 106: Bug Fixes** - Fix compound type translation failures and audit all std::visit + coroutine lambda patterns for ASAN safety (completed 2026-04-11)
-- [ ] **Phase 107: Message Type Verification** - Verify all 38 relay-allowed message types translate correctly through relay with live node
+- [x] **Phase 107: Message Type Verification** - Verify all 38 relay-allowed message types translate correctly through relay with live node (completed 2026-04-11)
 - [ ] **Phase 108: Live Feature Verification** - Verify pub/sub, rate limiting, SIGHUP reload, and graceful shutdown end-to-end
 - [ ] **Phase 109: New Features** - Source exclusion for notifications, relay-side blob size limit, and /health endpoint
 - [ ] **Phase 110: Performance Benchmarking** - Throughput, latency, large blob, and mixed workload benchmarks
@@ -42,7 +42,7 @@ Plans:
   3. Error responses (invalid namespace, nonexistent blob) return properly structured JSON error messages
 **Plans**: 1 plan
 Plans:
-- [ ] 107-01-PLAN.md — Extend smoke test with all 38 message types (signed blob write, binary WS frames, error paths, fire-and-forget, notification)
+- [x] 107-01-PLAN.md — Extend smoke test with all 38 message types (signed blob write, binary WS frames, error paths, fire-and-forget, notification)
 
 ### Phase 108: Live Feature Verification
 **Goal**: Pub/sub, rate limiting, config reload, and graceful shutdown all work correctly in a live relay+node environment
@@ -86,7 +86,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
-| 107. Message Type Verification | 0/1 | In progress | - |
+| 107. Message Type Verification | 1/1 | Complete   | 2026-04-11 |
 | 108. Live Feature Verification | 0/0 | Not started | - |
 | 109. New Features | 0/0 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
