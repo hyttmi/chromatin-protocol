@@ -33,6 +33,17 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [ ] **FEAT-02**: Relay-side max blob size limit (configurable, separate from node's 100 MiB)
 - [ ] **FEAT-03**: Health check endpoint (HTTP GET /health returns 200 when relay+UDS connected)
 
+## Backlog Requirements
+
+### Error Response (Phase 999.2)
+
+- [ ] **ERR-01**: Node sends ErrorResponse(63) with error_code and original_type for all client-facing request failures instead of silent drop
+- [ ] **ERR-02**: Error codes are categorical (malformed_payload, unknown_type, decode_failed, validation_failed, internal_error) with no internal state leaked
+- [ ] **ERR-03**: NodeInfoRequest supported_types includes type 63 and PROTOCOL.md documents the ErrorResponse wire format
+- [ ] **ERR-04**: Relay translates ErrorResponse(63) binary to JSON with human-readable code and type names
+- [ ] **ERR-05**: Relay type_registry, message_filter, json_schema, and translator all handle ErrorResponse
+- [ ] **ERR-06**: Prometheus error_responses_total counter tracks error responses sent by the node
+
 ## Future Requirements
 
 ### Post-v3.1.0
@@ -69,11 +80,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FEAT-01 | Phase 109 | Pending |
 | FEAT-02 | Phase 109 | Pending |
 | FEAT-03 | Phase 109 | Pending |
+| ERR-01 | Phase 999.2 | Pending |
+| ERR-02 | Phase 999.2 | Pending |
+| ERR-03 | Phase 999.2 | Pending |
+| ERR-04 | Phase 999.2 | Pending |
+| ERR-05 | Phase 999.2 | Pending |
+| ERR-06 | Phase 999.2 | Pending |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Mapped to phases: 14
+- Backlog requirements: 6 total (Phase 999.2)
+- Mapped to phases: 20
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
+*Backlog requirements added: 2026-04-11*
