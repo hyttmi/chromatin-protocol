@@ -200,6 +200,11 @@ std::string MetricsCollector::format_prometheus(size_t active_connections,
            "chromatindb_relay_errors_total " +
            std::to_string(metrics_.errors_total.load(std::memory_order_relaxed)) + "\n\n";
 
+    out += "# HELP chromatindb_relay_request_timeouts_total Total request timeouts since startup.\n"
+           "# TYPE chromatindb_relay_request_timeouts_total counter\n"
+           "chromatindb_relay_request_timeouts_total " +
+           std::to_string(metrics_.request_timeouts_total.load(std::memory_order_relaxed)) + "\n\n";
+
     // Gauges (3 -- per D-05)
     out += "# HELP chromatindb_relay_ws_connections_active Current active WebSocket connections.\n"
            "# TYPE chromatindb_relay_ws_connections_active gauge\n"

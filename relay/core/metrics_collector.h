@@ -22,6 +22,7 @@ struct RelayMetrics {
     std::atomic<uint64_t> auth_failures_total{0};
     std::atomic<uint64_t> rate_limited_total{0};
     std::atomic<uint64_t> errors_total{0};
+    std::atomic<uint64_t> request_timeouts_total{0};
 };
 
 /// Prometheus /metrics HTTP endpoint and relay metrics management.
