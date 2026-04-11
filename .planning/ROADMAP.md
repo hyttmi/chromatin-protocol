@@ -113,9 +113,9 @@ Plans:
 ### Phase 999.3: Relay request timeout with error feedback (BACKLOG)
 **Goal:** RequestRouter lets requests sit pending 60s before silent cleanup. Add configurable per-request timeout (e.g. 10s) that sends `{"type": "error", "code": "timeout"}` to the client when the node doesn't respond.
 **Requirements:** TIMEOUT-01, TIMEOUT-02, TIMEOUT-03, TIMEOUT-04, TIMEOUT-05, TIMEOUT-06, TIMEOUT-07
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
-- [ ] 999.3-01-PLAN.md — Error code + PendingRequest extension + callback purge_stale + config field + unit tests
+- [x] 999.3-01-PLAN.md — Error code + PendingRequest extension + callback purge_stale + config field + unit tests
 - [ ] 999.3-02-PLAN.md — UdsMultiplexer timeout wiring + relay_main SIGHUP + metrics counter
 
 ### Phase 999.4: Relay ASAN heap-use-after-free on shutdown (BACKLOG)

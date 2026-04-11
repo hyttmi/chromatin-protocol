@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.3
-Plan: Not started
-Status: Ready to execute
+Plan: 1 of 2
+Status: Plan 01 complete, Plan 02 pending
 Last activity: 2026-04-11
 
 Progress: [######----] 67%
@@ -43,6 +43,7 @@ Progress: [######----] 67%
 - [Phase 999.2]: ErrorResponse uses compound decoder (not flat) for human-readable error code/type names
 - [Phase 999.2]: Alphabetical sort: 'error' < 'exists_request' -- plan's sort position was wrong, corrected
 - [Phase 999.2]: ErrorResponse E2E: validation_failed path preferred over malformed_payload (relay rejects truly malformed requests)
+- [Phase 999.3]: purge_stale name kept unchanged -- callback-based overload is optional extension, not rename-worthy
 
 ### Pending Todos
 
@@ -54,5 +55,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-11T16:38:31.421Z
-Stopped at: Phase 999.3 context gathered
+Last session: 2026-04-11T17:13:21Z
+Stopped at: Completed 999.3-01-PLAN.md
