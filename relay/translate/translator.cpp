@@ -243,6 +243,15 @@ std::optional<TranslateResult> json_to_binary(const nlohmann::json& msg) {
     // FlatBuffer special case: Data (type 8) and Delete (type 17)
     // Both send a full signed blob to the node (node calls decode_blob on payload)
     if (schema->is_flatbuffer && (schema->wire_type == 8 || schema->wire_type == 17)) {
+        // Delete requires tombstone data: [0xDE,0xAD,0xBE,0xEF][target_hash:32] = 36 bytes
+        if (schema->wire_type == 17 && msg.contains("data")) {
+            auto data = util::base64_decode(msg["data"].get<std::string>());
+            if (!data || data->size() != 36 ||
+                (*data)[0] != 0xDE || (*data)[1] != 0xAD ||
+                (*data)[2] != 0xBE || (*data)[3] != 0xEF) {
+                return std::nullopt;
+            }
+        }
         auto result = encode_data_blob(msg);
         if (result) result->wire_type = schema->wire_type;
         return result;

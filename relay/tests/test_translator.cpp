@@ -96,19 +96,23 @@ TEST_CASE("json_to_binary: StatsRequest with namespace", "[translator]") {
     }
 }
 
-TEST_CASE("json_to_binary: DeleteRequest (FlatBuffer blob)", "[translator]") {
-    // Delete sends a full signed tombstone blob, same as Data
+TEST_CASE("json_to_binary: DeleteRequest (FlatBuffer blob with tombstone)", "[translator]") {
+    // Delete sends a full signed tombstone blob: data = DEADBEEF + 32-byte target hash
     auto ns_hex = hex32(0x44);
     auto pk_bytes = std::vector<uint8_t>(2592, 0x55);
     auto pk_hex = to_hex(pk_bytes);
     auto sig = std::vector<uint8_t>(4627, 0x66);
     auto sig_b64 = base64_encode(sig);
 
+    // Tombstone data: 4-byte magic + 32-byte target hash = 36 bytes
+    std::vector<uint8_t> tombstone_data = {0xDE, 0xAD, 0xBE, 0xEF};
+    tombstone_data.insert(tombstone_data.end(), 32, 0xAA);  // target hash
+
     nlohmann::json msg = {
         {"type", "delete"},
         {"namespace", ns_hex},
         {"pubkey", pk_hex},
-        {"data", base64_encode(std::vector<uint8_t>{})},
+        {"data", base64_encode(tombstone_data)},
         {"ttl", 0},
         {"timestamp", "1700000000"},
         {"signature", sig_b64}
@@ -116,8 +120,44 @@ TEST_CASE("json_to_binary: DeleteRequest (FlatBuffer blob)", "[translator]") {
     auto result = json_to_binary(msg);
     REQUIRE(result.has_value());
     REQUIRE(result->wire_type == 17);
-    // FlatBuffer encoded blob (not flat fields)
     REQUIRE(result->payload.size() > 64);
+}
+
+TEST_CASE("json_to_binary: Delete rejects empty data (no tombstone magic)", "[translator]") {
+    auto ns_hex = hex32(0x44);
+    auto pk_bytes = std::vector<uint8_t>(2592, 0x55);
+    auto sig = std::vector<uint8_t>(4627, 0x66);
+
+    nlohmann::json msg = {
+        {"type", "delete"},
+        {"namespace", ns_hex},
+        {"pubkey", to_hex(pk_bytes)},
+        {"data", base64_encode(std::vector<uint8_t>{})},
+        {"ttl", 0},
+        {"timestamp", "1700000000"},
+        {"signature", base64_encode(sig)}
+    };
+    REQUIRE_FALSE(json_to_binary(msg).has_value());
+}
+
+TEST_CASE("json_to_binary: Delete rejects wrong tombstone magic", "[translator]") {
+    auto ns_hex = hex32(0x44);
+    auto pk_bytes = std::vector<uint8_t>(2592, 0x55);
+    auto sig = std::vector<uint8_t>(4627, 0x66);
+
+    std::vector<uint8_t> bad_data = {0x00, 0x00, 0x00, 0x00};
+    bad_data.insert(bad_data.end(), 32, 0xAA);
+
+    nlohmann::json msg = {
+        {"type", "delete"},
+        {"namespace", ns_hex},
+        {"pubkey", to_hex(pk_bytes)},
+        {"data", base64_encode(bad_data)},
+        {"ttl", 0},
+        {"timestamp", "1700000000"},
+        {"signature", base64_encode(sig)}
+    };
+    REQUIRE_FALSE(json_to_binary(msg).has_value());
 }
 
 TEST_CASE("json_to_binary: Data (FlatBuffer blob)", "[translator]") {
@@ -513,11 +553,14 @@ TEST_CASE("json_to_binary: Delete encodes as FlatBuffer blob type 17", "[transla
     auto sig = std::vector<uint8_t>(4627, 0x55);
     auto sig_b64 = base64_encode(sig);
 
+    std::vector<uint8_t> tombstone_data = {0xDE, 0xAD, 0xBE, 0xEF};
+    tombstone_data.insert(tombstone_data.end(), 32, 0xBB);
+
     nlohmann::json msg = {
         {"type", "delete"},
         {"namespace", ns_hex},
         {"pubkey", pk_hex},
-        {"data", base64_encode(std::vector<uint8_t>{})},
+        {"data", base64_encode(tombstone_data)},
         {"ttl", 0},
         {"timestamp", "1700000000"},
         {"signature", sig_b64}
@@ -529,7 +572,8 @@ TEST_CASE("json_to_binary: Delete encodes as FlatBuffer blob type 17", "[transla
     auto blob = decode_blob(binary->payload);
     REQUIRE(blob.has_value());
     REQUIRE(blob->namespace_id == make_bytes32(0x33));
-    REQUIRE(blob->data.empty());
+    REQUIRE(blob->data.size() == 36);
+    REQUIRE(blob->data[0] == 0xDE);
     REQUIRE(blob->ttl == 0);
 }
 
