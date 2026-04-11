@@ -53,7 +53,10 @@ Plans:
   2. A client exceeding the configured rate limit is disconnected by the relay after sustained violation
   3. Sending SIGHUP to the relay process reloads TLS certificates, ACL (allowed client keys), rate limit settings, and metrics_bind address -- verified by observing changed behavior without restart
   4. Sending SIGTERM to the relay process results in all connected clients receiving WebSocket close frames before the process exits
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 108-01-PLAN.md — Extract shared test helpers + create relay_feature_test skeleton with CMake target
+- [ ] 108-02-PLAN.md — Implement pub/sub, rate limit, SIGHUP, SIGTERM tests + update run-smoke.sh
 
 ### Phase 109: New Features
 **Goal**: Relay gains source exclusion for notifications, configurable blob size limits, and a health check endpoint
@@ -87,7 +90,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 |-------|----------------|--------|-----------|
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
-| 108. Live Feature Verification | 0/0 | Not started | - |
+| 108. Live Feature Verification | 0/2 | In progress | - |
 | 109. New Features | 0/0 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
