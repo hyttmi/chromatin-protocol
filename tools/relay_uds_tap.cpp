@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -58,9 +59,12 @@ static bool send_all(int fd, const uint8_t* data, size_t len) {
     return true;
 }
 
-static bool recv_all(int fd, uint8_t* buf, size_t len) {
+static bool recv_all(int fd, uint8_t* buf, size_t len, int timeout_ms = 5000) {
     size_t got = 0;
     while (got < len) {
+        struct pollfd pfd{fd, POLLIN, 0};
+        int r = ::poll(&pfd, 1, timeout_ms);
+        if (r <= 0) return false;  // timeout or error
         ssize_t n = ::read(fd, buf + got, len - got);
         if (n <= 0) return false;
         got += static_cast<size_t>(n);
@@ -288,12 +292,28 @@ static std::vector<RequestDesc> build_requests() {
     requests.push_back({"namespace_stats_response", 45, 46,
         std::vector<uint8_t>(zero_ns.begin(), zero_ns.end())});
 
-    // ListRequest(33) -> ListResponse(34): 32-byte namespace
-    requests.push_back({"list_response", 33, 34,
-        std::vector<uint8_t>(zero_ns.begin(), zero_ns.end())});
+    // ListRequest(33) -> ListResponse(34): 32-byte namespace + u64BE since_seq + u32BE limit
+    {
+        std::vector<uint8_t> list_payload;
+        list_payload.insert(list_payload.end(), zero_ns.begin(), zero_ns.end());
+        uint8_t since_buf[8];
+        util::store_u64_be(since_buf, 0);  // since_seq = 0 (from start)
+        list_payload.insert(list_payload.end(), since_buf, since_buf + 8);
+        uint8_t limit_buf[4];
+        util::store_u32_be(limit_buf, 10);  // limit = 10
+        list_payload.insert(list_payload.end(), limit_buf, limit_buf + 4);
+        requests.push_back({"list_response", 33, 34, std::move(list_payload)});
+    }
 
-    // NamespaceListRequest(41) -> NamespaceListResponse(42): empty payload
-    requests.push_back({"namespace_list_response", 41, 42, {}});
+    // NamespaceListRequest(41) -> NamespaceListResponse(42): 32-byte after_ns + u32BE limit
+    {
+        std::vector<uint8_t> nslist_payload;
+        nslist_payload.insert(nslist_payload.end(), zero_ns.begin(), zero_ns.end());
+        uint8_t limit_buf[4];
+        util::store_u32_be(limit_buf, 100);  // limit = 100
+        nslist_payload.insert(nslist_payload.end(), limit_buf, limit_buf + 4);
+        requests.push_back({"namespace_list_response", 41, 42, std::move(nslist_payload)});
+    }
 
     // MetadataRequest(47) -> MetadataResponse(48): 32+32 bytes (namespace + hash)
     {
@@ -321,13 +341,16 @@ static std::vector<RequestDesc> build_requests() {
     // PeerInfoRequest(55) -> PeerInfoResponse(56): empty payload
     requests.push_back({"peer_info_response", 55, 56, {}});
 
-    // TimeRangeRequest(57) -> TimeRangeResponse(58): 32-byte ns + u64BE since + u32BE limit
+    // TimeRangeRequest(57) -> TimeRangeResponse(58): 32-byte ns + u64BE start_ts + u64BE end_ts + u32BE limit
     {
         std::vector<uint8_t> tr_payload;
         tr_payload.insert(tr_payload.end(), zero_ns.begin(), zero_ns.end());
-        uint8_t since_buf[8];
-        util::store_u64_be(since_buf, 0);  // since = 0 (all time)
-        tr_payload.insert(tr_payload.end(), since_buf, since_buf + 8);
+        uint8_t start_buf[8];
+        util::store_u64_be(start_buf, 0);  // start_ts = 0 (all time)
+        tr_payload.insert(tr_payload.end(), start_buf, start_buf + 8);
+        uint8_t end_buf[8];
+        util::store_u64_be(end_buf, UINT64_MAX);  // end_ts = max (all time)
+        tr_payload.insert(tr_payload.end(), end_buf, end_buf + 8);
         uint8_t limit_buf[4];
         util::store_u32_be(limit_buf, 10);  // limit = 10
         tr_payload.insert(tr_payload.end(), limit_buf, limit_buf + 4);
@@ -420,6 +443,22 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: handshake failed\n";
         ::close(fd);
         return 1;
+    }
+
+    // Drain unsolicited SyncNamespaceAnnounce (type 62) the node sends after handshake
+    {
+        auto unsolicited = recv_encrypted(fd, aead);
+        if (unsolicited) {
+            auto decoded = wire::TransportCodec::decode(*unsolicited);
+            if (decoded) {
+                std::cout << "Drained unsolicited message: type="
+                          << static_cast<int>(decoded->type)
+                          << " request_id=" << decoded->request_id
+                          << " (" << decoded->payload.size() << " bytes)\n";
+            }
+        } else {
+            std::cerr << "WARNING: no unsolicited message after handshake (expected SyncNamespaceAnnounce)\n";
+        }
     }
 
     // Send each compound request type and capture responses
