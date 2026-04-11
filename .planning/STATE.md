@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Milestone v3.1.0 -- Relay Live Hardening
+**Current focus:** Phase 106 — bug-fixes
 
 ## Current Position
 
