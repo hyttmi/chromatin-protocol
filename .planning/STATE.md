@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 999.3 context gathered
-last_updated: "2026-04-11T16:38:31.425Z"
+stopped_at: Completed 999.3-02-PLAN.md
+last_updated: "2026-04-11T17:21:59.289Z"
 last_activity: 2026-04-11
 progress:
   total_phases: 11
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  completed_phases: 5
+  total_plans: 11
+  completed_plans: 11
   percent: 67
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.3
-Plan: 1 of 2
-Status: Plan 01 complete, Plan 02 pending
+Plan: 2 of 2
+Status: Ready to execute
 Last activity: 2026-04-11
 
 Progress: [######----] 67%
@@ -44,6 +44,7 @@ Progress: [######----] 67%
 - [Phase 999.2]: Alphabetical sort: 'error' < 'exists_request' -- plan's sort position was wrong, corrected
 - [Phase 999.2]: ErrorResponse E2E: validation_failed path preferred over malformed_payload (relay rejects truly malformed requests)
 - [Phase 999.3]: purge_stale name kept unchanged -- callback-based overload is optional extension, not rename-worthy
+- [Phase 999.3]: Both errors_total and request_timeouts_total counters increment on timeout for general + specific monitoring
 
 ### Pending Todos
 
@@ -55,5 +56,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-11T17:13:21Z
-Stopped at: Completed 999.3-01-PLAN.md
+Last session: 2026-04-11T17:21:59.285Z
+Stopped at: Completed 999.3-02-PLAN.md
