@@ -40,7 +40,9 @@ Plans:
   1. A test script sends each of the 38 relay-allowed message types as JSON through the WebSocket relay, receives a response, and the response is valid JSON with correct field types
   2. Response payloads match expected values for known test data (e.g., a written blob can be read back with correct content)
   3. Error responses (invalid namespace, nonexistent blob) return properly structured JSON error messages
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 107-01-PLAN.md — Extend smoke test with all 38 message types (signed blob write, binary WS frames, error paths, fire-and-forget, notification)
 
 ### Phase 108: Live Feature Verification
 **Goal**: Pub/sub, rate limiting, config reload, and graceful shutdown all work correctly in a live relay+node environment
@@ -84,7 +86,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
-| 107. Message Type Verification | 0/0 | Not started | - |
+| 107. Message Type Verification | 0/1 | In progress | - |
 | 108. Live Feature Verification | 0/0 | Not started | - |
 | 109. New Features | 0/0 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
