@@ -54,8 +54,8 @@ completed: 2026-04-11
 - **Duration:** 5 min
 - **Started:** 2026-04-11T10:36:39Z
 - **Completed:** 2026-04-11T10:41:16Z
-- **Tasks:** 3 (2 auto + 1 checkpoint auto-approved)
-- **Files modified:** 1
+- **Tasks:** 3 (2 auto + 1 live verification)
+- **Files modified:** 5 (1 smoke test + 3 relay translator + 1 relay test)
 
 ## Accomplishments
 - Full data write chain: data(8)->write_ack(30), read_request(31)->read_response(32) with data match, metadata_found, exists_found, batch_exists, batch_read, delete->delete_ack
@@ -69,13 +69,18 @@ completed: 2026-04-11
 
 ## Task Commits
 
-Each task was committed atomically:
-
 1. **Task 1+2: Add binary WS frame handler, blob signing, data write chain, remaining queries, fire-and-forget, and error path tests** - `e380ced` (feat)
-2. **Task 3: Live verification checkpoint** - auto-approved (auto_advance=true)
+2. **Task 3 relay bug fixes discovered during live testing:**
+   - `df8ef9a` - fix(relay): Delete(17) FlatBuffer encoding, DeleteAck(18) fields, TimeRange(57) missing end_ts, smoke test socket timeout
+   - `6879431` - fix(107): tombstone format for delete (DEADBEEF + target hash)
+3. **Live verification:** 31/31 PASS against live node+relay
 
 ## Files Created/Modified
-- `tools/relay_smoke_test.cpp` - Extended from 609 to 963 lines: WsFrame struct, ws_recv_frame(), build_signing_input(), make_data_message(), full data write chain, remaining query types, fire-and-forget, error paths
+- `tools/relay_smoke_test.cpp` - Extended from 609 to ~970 lines: WsFrame struct, ws_recv_frame(), build_signing_input(), make_data_message(), full data write chain, remaining query types, fire-and-forget, error paths, SO_RCVTIMEO safety, tombstone delete format
+- `relay/translate/json_schema.h` - Fixed DeleteAck fields (added hash+seq_num), TimeRangeRequest (added until/end_ts)
+- `relay/translate/json_schema.cpp` - Changed Delete(17) to FlatBuffer type
+- `relay/translate/translator.cpp` - Handle Delete(17) same as Data(8) in json_to_binary
+- `relay/tests/test_translator.cpp` - Updated Delete/TimeRange/DeleteAck tests
 
 ## Decisions Made
 - Implemented Tasks 1 and 2 together in a single atomic edit since all changes target the same file and are interdependent (data write chain uses helpers defined for Task 1)
@@ -101,16 +106,25 @@ Each task was committed atomically:
 **Impact on plan:** No scope change. Same total code, just committed as one unit instead of two.
 
 ## Issues Encountered
-None
+
+### 3 Relay Translation Bugs Found and Fixed
+
+**1. Delete(17) encoding** — Relay sent flat [ns:32][hash:32] but node expects FlatBuffer-encoded blob (calls `wire::decode_blob`). Node threw exception, sent no response, client hung forever. Fix: mark Delete as FlatBuffer type, encode same as Data(8).
+
+**2. DeleteAck(18) decoding** — Schema had only `{status}` but node sends [hash:32][seq_num:8BE][status:1] = 41 bytes (same format as WriteAck). Fix: added hash and seq_num fields.
+
+**3. TimeRangeRequest(57)** — Schema had `{ns, since, limit}` = 44 bytes but node requires `{ns, start_ts, end_ts, limit}` = 52 bytes. Node rejected with "too short", sent no response. Fix: added `until` field.
+
+**4. Delete tombstone format** — Node requires blob data = `[0xDE,0xAD,0xBE,0xEF][target_hash:32]` (36 bytes), not empty data. Fix: construct proper tombstone data with magic + target hash.
 
 ## User Setup Required
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- Smoke test binary ready for live testing against node+relay
-- All 38 message types have corresponding tests
-- Run via `/tmp/chromatindb-test/run-smoke.sh` for full validation
-- TimeRangeRequest wire format (44 vs 52 bytes) may need investigation during live testing if translator output doesn't match node expectations
+- 31/31 smoke tests passing against live node+relay
+- All 38 message types verified (E2E-01 complete)
+- Run via `/tmp/chromatindb-test/run-smoke.sh` for regression testing
+- 223 relay unit tests passing (2522 assertions)
 
 ## Self-Check: PASSED
 
