@@ -365,6 +365,39 @@ After the PQ handshake completes, both peers exchange SyncNamespaceAnnounce mess
 
 **Example:** A node configured with `sync_namespaces: ["a1b2..."]` sends `[0x00, 0x01, <32 bytes of a1b2...>]` after handshake. A node with empty `sync_namespaces` sends `[0x00, 0x00]` (replicate all).
 
+### ErrorResponse (Type 63)
+
+When a client-facing request fails validation, decoding, or processing, the node sends an ErrorResponse instead of silently dropping the request. The response echoes the client's `request_id` so the relay (or direct client) can match it to the pending request.
+
+**Direction:** Node -> Client (response to malformed/invalid client requests)
+
+**Wire format:**
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 1 | error_code | Error category (see table below) |
+| 1 | 1 | original_type | The TransportMsgType of the request that failed |
+
+Total payload: 2 bytes. The transport envelope's `request_id` field carries the client's original request ID.
+
+**Error codes:**
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0x01 | malformed_payload | Request payload too short or structurally invalid |
+| 0x02 | unknown_type | Unrecognized message type |
+| 0x03 | decode_failed | Exception during payload decoding (FlatBuffer or binary) |
+| 0x04 | validation_failed | Payload decoded but values are invalid (e.g., count=0, start_ts > end_ts) |
+| 0x05 | internal_error | Server-side processing error (e.g., arithmetic overflow computing response) |
+
+**Semantics:**
+
+- ErrorResponse is sent for all client-facing request types: Data(8), Delete(17), ReadRequest(31), ListRequest(33), StatsRequest(35), ExistsRequest(37), NodeInfoRequest(39), NamespaceListRequest(41), StorageStatusRequest(43), NamespaceStatsRequest(45), MetadataRequest(47), BatchExistsRequest(49), DelegationListRequest(51), BatchReadRequest(53), PeerInfoRequest(55), TimeRangeRequest(57).
+- Peer-to-peer types (sync, PEX, BlobNotify, BlobFetch) remain silent on failure.
+- The node still records a strike against the connection before sending ErrorResponse.
+- Existing explicit error responses (StorageFull, QuotaExceeded, WriteAck with error status) are unchanged.
+- Unknown/unrecognized message types receive ErrorResponse with code `unknown_type` (0x02).
+
 ### Full Reconciliation
 
 Full reconciliation is a three-phase protocol that efficiently transfers blobs between two connected peers. Either side can initiate a sync round.
@@ -807,6 +840,7 @@ All message types defined in the `TransportMsgType` enum:
 | 60 | BlobFetch | Targeted blob fetch: namespace + hash (64 bytes, peer-internal) |
 | 61 | BlobFetchResponse | Targeted blob fetch response: status + optional blob (peer-internal) |
 | 62 | SyncNamespaceAnnounce | Namespace replication scope announcement: count + namespace IDs (peer-internal, blocked by relay) |
+| 63 | ErrorResponse | Error response for malformed/invalid client requests: error_code + original_type (2 bytes) |
 
 ## Query Extensions
 
