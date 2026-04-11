@@ -12,13 +12,13 @@ struct TypeEntry {
     uint8_t wire_type;
 };
 
-/// Full registry of 40 type entries (38 client-allowed + 2 node-originated signals),
+/// Full registry of 41 type entries (38 client-allowed + 3 node-originated signals),
 /// sorted by json_name for binary search.  Source of truth for JSON type string <->
 /// wire type integer mapping.
 ///
 /// The 38 client types come from the node's supported_types array.
-/// StorageFull(22) and QuotaExceeded(25) are node->client error signals included
-/// for outbound translation even though clients don't send them.
+/// StorageFull(22), QuotaExceeded(25), and ErrorResponse(63) are node->client
+/// signals included for outbound translation even though clients don't send them.
 inline constexpr TypeEntry TYPE_REGISTRY[] = {
     {"batch_exists_request",        49},
     {"batch_exists_response",       50},
@@ -29,6 +29,7 @@ inline constexpr TypeEntry TYPE_REGISTRY[] = {
     {"delegation_list_response",    52},
     {"delete",                      17},
     {"delete_ack",                  18},
+    {"error",                       63},   // Phase 999.2: ErrorResponse
     {"exists_request",              37},
     {"exists_response",             38},
     {"goodbye",                      7},
