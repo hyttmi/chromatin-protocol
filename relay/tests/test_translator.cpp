@@ -942,3 +942,83 @@ TEST_CASE("bounds check: StorageStatusResponse empty payload returns nullopt", "
     auto json = binary_to_json(44, std::span<const uint8_t>{});
     REQUIRE_FALSE(json.has_value());
 }
+
+// =============================================================================
+// ErrorResponse (63) tests -- Phase 999.2
+// =============================================================================
+
+TEST_CASE("binary_to_json: ErrorResponse (type 63)", "[translator]") {
+    // Payload: [error_code:1][original_type:1]
+    // malformed_payload(1) for ReadRequest(31)
+    std::vector<uint8_t> payload = {0x01, 31};
+    auto result = binary_to_json(63, payload);
+    REQUIRE(result.has_value());
+
+    CHECK((*result)["type"] == "error");
+    CHECK((*result)["code"] == "malformed_payload");
+    CHECK((*result)["original_type"] == "read_request");
+}
+
+TEST_CASE("binary_to_json: ErrorResponse all error codes", "[translator]") {
+    struct TestCase {
+        uint8_t code;
+        std::string_view expected;
+    };
+    TestCase cases[] = {
+        {1, "malformed_payload"},
+        {2, "unknown_type"},
+        {3, "decode_failed"},
+        {4, "validation_failed"},
+        {5, "internal_error"},
+    };
+
+    for (const auto& tc : cases) {
+        SECTION(std::string(tc.expected)) {
+            std::vector<uint8_t> payload = {tc.code, 35};  // StatsRequest
+            auto result = binary_to_json(63, payload);
+            REQUIRE(result.has_value());
+            CHECK((*result)["code"] == tc.expected);
+            CHECK((*result)["original_type"] == "stats_request");
+        }
+    }
+}
+
+TEST_CASE("binary_to_json: ErrorResponse unknown error code", "[translator]") {
+    std::vector<uint8_t> payload = {0xFF, 31};  // Unknown code
+    auto result = binary_to_json(63, payload);
+    REQUIRE(result.has_value());
+    CHECK((*result)["code"] == "unknown");
+    CHECK((*result)["original_type"] == "read_request");
+}
+
+TEST_CASE("binary_to_json: ErrorResponse unknown original_type falls back to number", "[translator]") {
+    std::vector<uint8_t> payload = {0x01, 0xFF};  // Unknown wire type 255
+    auto result = binary_to_json(63, payload);
+    REQUIRE(result.has_value());
+    CHECK((*result)["code"] == "malformed_payload");
+    CHECK((*result)["original_type"] == "255");
+}
+
+TEST_CASE("binary_to_json: ErrorResponse truncated payload returns nullopt", "[translator]") {
+    SECTION("empty payload") {
+        std::vector<uint8_t> payload = {};
+        auto result = binary_to_json(63, payload);
+        CHECK_FALSE(result.has_value());
+    }
+    SECTION("1-byte payload") {
+        std::vector<uint8_t> payload = {0x01};
+        auto result = binary_to_json(63, payload);
+        CHECK_FALSE(result.has_value());
+    }
+}
+
+TEST_CASE("binary_to_json: ErrorResponse without request_id has no request_id field", "[translator]") {
+    std::vector<uint8_t> payload = {0x03, 37};  // decode_failed for ExistsRequest
+    auto result = binary_to_json(63, payload);
+    REQUIRE(result.has_value());
+    CHECK((*result)["type"] == "error");
+    CHECK((*result)["code"] == "decode_failed");
+    CHECK((*result)["original_type"] == "exists_request");
+    // binary_to_json does not add request_id; that's done by the caller
+    CHECK_FALSE(result->contains("request_id"));
+}

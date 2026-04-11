@@ -14,8 +14,8 @@ TEST_CASE("TYPE_REGISTRY is sorted by json_name", "[type_registry]") {
 }
 
 TEST_CASE("registry has expected size", "[type_registry]") {
-    REQUIRE(TYPE_REGISTRY_SIZE == 40);
-    REQUIRE(registry_size() == 40);
+    REQUIRE(TYPE_REGISTRY_SIZE == 41);
+    REQUIRE(registry_size() == 41);
 }
 
 TEST_CASE("type_from_string returns correct wire type for all entries", "[type_registry]") {
@@ -63,6 +63,16 @@ TEST_CASE("roundtrip all types", "[type_registry]") {
         REQUIRE(back.has_value());
         REQUIRE(*back == name);
     }
+}
+
+TEST_CASE("ErrorResponse type 63 maps to 'error'", "[type_registry]") {
+    auto name = type_to_string(63);
+    REQUIRE(name.has_value());
+    CHECK(*name == "error");
+
+    auto wire = type_from_string("error");
+    REQUIRE(wire.has_value());
+    CHECK(*wire == 63);
 }
 
 TEST_CASE("specific type mappings", "[type_registry]") {

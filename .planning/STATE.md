@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 999.2-01-PLAN.md
+stopped_at: Completed 999.2-02-PLAN.md
 last_updated: "2026-04-11T15:45:50.156Z"
 last_activity: 2026-04-11
 progress:
@@ -11,7 +11,7 @@ progress:
   completed_phases: 3
   total_plans: 9
   completed_plans: 7
-  percent: 33
+  percent: 67
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.2-node-silent-failure-on-malformed-requests
-Plan: 01 of 3
-Status: Plan 01 complete
+Plan: 02 of 3
+Status: Plans 01-02 complete
 Last activity: 2026-04-11
 
-Progress: [###-------] 33%
+Progress: [######----] 67%
 
 ## Accumulated Context
 
@@ -40,6 +40,8 @@ Progress: [###-------] 33%
 - 10-second SO_RCVTIMEO for SIGTERM test to accommodate worst-case shutdown sequence
 - catch_error flag pattern for GCC co_await-in-catch limitation (Phase 999.2-01)
 - Static free function for send_error_response helper (Phase 999.2-01)
+- [Phase 999.2]: ErrorResponse uses compound decoder (not flat) for human-readable error code/type names
+- [Phase 999.2]: Alphabetical sort: 'error' < 'exists_request' -- plan's sort position was wrong, corrected
 
 ### Pending Todos
 
@@ -52,4 +54,4 @@ None.
 ### Session
 
 Last session: 2026-04-11T15:45:50.153Z
-Stopped at: Completed 999.2-01-PLAN.md
+Stopped at: Completed 999.2-02-PLAN.md

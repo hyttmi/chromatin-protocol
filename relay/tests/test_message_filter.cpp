@@ -4,13 +4,14 @@
 
 using namespace chromatindb::relay::core;
 
-TEST_CASE("all 38 client types are allowed", "[message_filter]") {
-    // All 38 types from the node's supported_types array.
+TEST_CASE("all 39 client types are allowed", "[message_filter]") {
+    // All 39 types: 38 from the node's supported_types array + ErrorResponse.
     const char* allowed[] = {
         "batch_exists_request", "batch_exists_response",
         "batch_read_request", "batch_read_response",
         "data", "delete", "delete_ack",
         "delegation_list_request", "delegation_list_response",
+        "error",
         "exists_request", "exists_response",
         "goodbye",
         "list_request", "list_response",
@@ -60,7 +61,6 @@ TEST_CASE("auth types not in filter", "[message_filter]") {
     REQUIRE_FALSE(is_type_allowed("challenge_response"));
     REQUIRE_FALSE(is_type_allowed("auth_ok"));
     REQUIRE_FALSE(is_type_allowed("auth_error"));
-    REQUIRE_FALSE(is_type_allowed("error"));
 }
 
 TEST_CASE("node-originated signals not in client-send allowlist", "[message_filter]") {
@@ -86,6 +86,12 @@ TEST_CASE("is_wire_type_allowed accepts 38 client types + node signals", "[messa
     // Node-originated signals also allowed outbound.
     REQUIRE(is_wire_type_allowed(22));  // StorageFull
     REQUIRE(is_wire_type_allowed(25));  // QuotaExceeded
+    REQUIRE(is_wire_type_allowed(63));  // ErrorResponse
+}
+
+TEST_CASE("ErrorResponse type allowed through filter", "[message_filter]") {
+    CHECK(is_type_allowed("error"));
+    CHECK(is_wire_type_allowed(63));
 }
 
 TEST_CASE("is_wire_type_allowed rejects blocked wire types", "[message_filter]") {

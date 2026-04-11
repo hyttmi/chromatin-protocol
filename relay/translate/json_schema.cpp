@@ -15,7 +15,7 @@ static constexpr std::span<const FieldSpec> fields_of(const FieldSpec (&arr)[N])
 // Empty span for FlatBuffer types and types with no fields.
 static constexpr std::span<const FieldSpec> NO_FIELDS{};
 
-/// Full schema table for all 40 registered types.
+/// Full schema table for all 41 registered types.
 /// Sorted by wire_type for binary search.
 static const std::array<MessageSchema, TYPE_REGISTRY_SIZE> SCHEMAS = {{
     // Ping (5)
@@ -98,6 +98,8 @@ static const std::array<MessageSchema, TYPE_REGISTRY_SIZE> SCHEMAS = {{
     {"time_range_request",          57, false, false, fields_of(TIME_RANGE_REQUEST_FIELDS)},
     // TimeRangeResponse (58) -- compound: [count:u32BE][ [hash:32][timestamp:u64BE] * count ][truncated:u8]
     {"time_range_response",         58, false, true,  NO_FIELDS},
+    // ErrorResponse (63) -- compound: custom decode for human-readable names (Phase 999.2)
+    {"error",                       63, false, true,  NO_FIELDS},
 }};
 
 const MessageSchema* schema_for_type(uint8_t wire_type) {

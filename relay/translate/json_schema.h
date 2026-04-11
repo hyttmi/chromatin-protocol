@@ -305,6 +305,14 @@ inline constexpr FieldSpec TIME_RANGE_RESPONSE_FIELDS[] = {
     {"truncated",    FieldEncoding::BOOL,            true},
 };
 
+// --- ErrorResponse (63) --- Phase 999.2
+// Custom compound decode: translates code byte and original_type byte to human-readable strings.
+// FieldSpec array not used by flat decoder, but schema entry needed for registry consistency.
+inline constexpr FieldSpec ERROR_RESPONSE_FIELDS[] = {
+    {"code",           FieldEncoding::UINT8_NUMBER},
+    {"original_type",  FieldEncoding::UINT8_NUMBER},
+};
+
 /// Look up schema for a wire type.  Returns nullptr if not found.
 const MessageSchema* schema_for_type(uint8_t wire_type);
 

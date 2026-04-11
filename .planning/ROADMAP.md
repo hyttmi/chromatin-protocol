@@ -104,10 +104,10 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 ### Phase 999.2: Node silent failure on malformed requests (BACKLOG)
 **Goal:** Node records strikes but sends NO error response on malformed requests — client hangs forever. Every request must guarantee a response. Add error response type for rejected messages.
 **Requirements:** ERR-01, ERR-02, ERR-03, ERR-04, ERR-05, ERR-06
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 Plans:
 - [x] 999.2-01-PLAN.md — Node ErrorResponse(63): error_codes.h, transport.fbs, 43 silent paths, metrics, PROTOCOL.md
-- [ ] 999.2-02-PLAN.md — Relay ErrorResponse: type_registry, message_filter, json_schema, translator, unit tests
+- [x] 999.2-02-PLAN.md — Relay ErrorResponse: type_registry, message_filter, json_schema, translator, unit tests
 - [ ] 999.2-03-PLAN.md — Smoke test E2E verification of ErrorResponse through relay+node pipeline
 
 ### Phase 999.3: Relay request timeout with error feedback (BACKLOG)

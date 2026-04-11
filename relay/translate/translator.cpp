@@ -704,6 +704,39 @@ static std::optional<nlohmann::json> decode_node_info_response(std::span<const u
     return j;
 }
 
+/// ErrorResponse(63): 2-byte payload [error_code:1][original_type:1]
+/// Translates both bytes to human-readable strings per D-11.
+static std::optional<nlohmann::json> decode_error_response(std::span<const uint8_t> payload) {
+    if (payload.size() < 2) return std::nullopt;
+
+    nlohmann::json j;
+    j["type"] = "error";
+
+    // Map error code byte to name
+    uint8_t code = payload[0];
+    static constexpr std::pair<uint8_t, std::string_view> ERROR_CODES[] = {
+        {1, "malformed_payload"},
+        {2, "unknown_type"},
+        {3, "decode_failed"},
+        {4, "validation_failed"},
+        {5, "internal_error"},
+    };
+    std::string_view code_name = "unknown";
+    for (const auto& [c, name] : ERROR_CODES) {
+        if (c == code) { code_name = name; break; }
+    }
+    j["code"] = std::string(code_name);
+
+    // Map original_type byte to name via type_registry
+    uint8_t orig_type = payload[1];
+    auto type_name = type_to_string(orig_type);
+    j["original_type"] = type_name
+        ? std::string(*type_name)
+        : std::to_string(orig_type);
+
+    return j;
+}
+
 // =============================================================================
 // FlatBuffer response decode helpers
 // =============================================================================
@@ -824,6 +857,7 @@ std::optional<nlohmann::json> binary_to_json(uint8_t type,
         case 52: return decode_delegation_list_response(payload);
         case 56: return decode_peer_info_response(payload);
         case 58: return decode_time_range_response(payload);
+        case 63: return decode_error_response(payload);
         default:
             return std::nullopt;
         }
