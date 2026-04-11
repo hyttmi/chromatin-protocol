@@ -697,9 +697,15 @@ int main(int argc, char* argv[]) {
     }
 
     // delete(17) -> delete_ack(18)
-    // Delete sends a full signed tombstone blob (same fields as Data but type="delete", TTL=0)
+    // Delete sends a full signed tombstone blob: data = [0xDE,0xAD,0xBE,0xEF] + target_hash
     if (!written_blob_hash.empty()) {
-        auto delete_msg = make_data_message(id, 106, {}, 0, static_cast<uint64_t>(std::time(nullptr)));
+        // Build tombstone data: 4-byte magic + 32-byte target hash
+        std::vector<uint8_t> tombstone_data = {0xDE, 0xAD, 0xBE, 0xEF};
+        auto target_hash = util::from_hex(written_blob_hash);
+        if (target_hash) {
+            tombstone_data.insert(tombstone_data.end(), target_hash->begin(), target_hash->end());
+        }
+        auto delete_msg = make_data_message(id, 106, tombstone_data, 0, static_cast<uint64_t>(std::time(nullptr)));
         delete_msg["type"] = "delete";
         auto resp = send_recv(delete_msg);
         bool ok = resp && resp->contains("type") &&
