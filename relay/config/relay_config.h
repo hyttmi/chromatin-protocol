@@ -21,6 +21,7 @@ struct RelayConfig {
     std::vector<std::string> allowed_client_keys;     // Per D-34: array of 64-char hex namespace hashes
     std::string metrics_bind;                          // Empty=disabled, "host:port"=enabled (per D-02)
     uint32_t rate_limit_messages_per_sec = 0;          // 0=disabled (per D-10)
+    uint32_t request_timeout_seconds = 10;             // D-01: 0=disabled, min 1 when enabled. SIGHUP-reloadable.
 
     /// Returns true when both cert_path and key_path are set (WSS mode).
     bool tls_enabled() const { return !cert_path.empty() && !key_path.empty(); }

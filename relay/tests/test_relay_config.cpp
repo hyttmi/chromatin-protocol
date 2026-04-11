@@ -289,3 +289,43 @@ TEST_CASE("Config: rate_limit_messages_per_sec parsed from JSON", "[relay_config
 
     REQUIRE(cfg.rate_limit_messages_per_sec == 100);
 }
+
+// =============================================================================
+// request_timeout_seconds tests (Phase 999.3)
+// =============================================================================
+
+TEST_CASE("Config: request_timeout_seconds defaults to 10", "[relay_config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.request_timeout_seconds == 10);
+}
+
+TEST_CASE("Config: request_timeout_seconds parsed from JSON", "[relay_config]") {
+    auto j = valid_config();
+    j["request_timeout_seconds"] = 30;
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.request_timeout_seconds == 30);
+}
+
+TEST_CASE("Config: request_timeout_seconds 0 is valid (disabled)", "[relay_config]") {
+    auto j = valid_config();
+    j["request_timeout_seconds"] = 0;
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.request_timeout_seconds == 0);
+    REQUIRE_NOTHROW(validate_relay_config(cfg));
+}
+
+TEST_CASE("Config: request_timeout_seconds 1 is valid (minimum)", "[relay_config]") {
+    auto j = valid_config();
+    j["request_timeout_seconds"] = 1;
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+
+    REQUIRE(cfg.request_timeout_seconds == 1);
+    REQUIRE_NOTHROW(validate_relay_config(cfg));
+}
