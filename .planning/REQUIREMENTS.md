@@ -44,6 +44,16 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **ERR-05**: Relay type_registry, message_filter, json_schema, and translator all handle ErrorResponse
 - [x] **ERR-06**: Prometheus error_responses_total counter tracks error responses sent by the node
 
+### Request Timeout (Phase 999.3)
+
+- [ ] **TIMEOUT-01**: PendingRequest stores original_type byte, register_request accepts type parameter
+- [ ] **TIMEOUT-02**: purge_stale accepts optional callback invoked per stale entry with full PendingRequest
+- [ ] **TIMEOUT-03**: ERROR_TIMEOUT (0x06) defined in error_codes.h and mapped in relay translator
+- [ ] **TIMEOUT-04**: RelayConfig has request_timeout_seconds field (default 10, 0=disabled, SIGHUP-reloadable)
+- [ ] **TIMEOUT-05**: Cleanup loop interval is dynamic: timeout/2 when enabled, 60s when disabled
+- [ ] **TIMEOUT-06**: Stale requests receive JSON error {type:error, code:timeout, original_type:<name>} before cleanup
+- [ ] **TIMEOUT-07**: Prometheus errors_total and request_timeouts_total counters increment on timeout
+
 ## Future Requirements
 
 ### Post-v3.1.0
@@ -86,11 +96,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-04 | Phase 999.2 | Complete |
 | ERR-05 | Phase 999.2 | Complete |
 | ERR-06 | Phase 999.2 | Complete |
+| TIMEOUT-01 | Phase 999.3 | Pending |
+| TIMEOUT-02 | Phase 999.3 | Pending |
+| TIMEOUT-03 | Phase 999.3 | Pending |
+| TIMEOUT-04 | Phase 999.3 | Pending |
+| TIMEOUT-05 | Phase 999.3 | Pending |
+| TIMEOUT-06 | Phase 999.3 | Pending |
+| TIMEOUT-07 | Phase 999.3 | Pending |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Backlog requirements: 6 total (Phase 999.2)
-- Mapped to phases: 20
+- Backlog requirements: 13 total (Phase 999.2: 6, Phase 999.3: 7)
+- Mapped to phases: 27
 - Unmapped: 0
 
 ---
