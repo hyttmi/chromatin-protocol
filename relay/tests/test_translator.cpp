@@ -96,16 +96,28 @@ TEST_CASE("json_to_binary: StatsRequest with namespace", "[translator]") {
     }
 }
 
-TEST_CASE("json_to_binary: DeleteRequest", "[translator]") {
+TEST_CASE("json_to_binary: DeleteRequest (FlatBuffer blob)", "[translator]") {
+    // Delete sends a full signed tombstone blob, same as Data
+    auto ns_hex = hex32(0x44);
+    auto pk_bytes = std::vector<uint8_t>(2592, 0x55);
+    auto pk_hex = to_hex(pk_bytes);
+    auto sig = std::vector<uint8_t>(4627, 0x66);
+    auto sig_b64 = base64_encode(sig);
+
     nlohmann::json msg = {
         {"type", "delete"},
-        {"namespace", hex32(0x44)},
-        {"hash", hex32(0x55)}
+        {"namespace", ns_hex},
+        {"pubkey", pk_hex},
+        {"data", base64_encode(std::vector<uint8_t>{})},
+        {"ttl", 0},
+        {"timestamp", "1700000000"},
+        {"signature", sig_b64}
     };
     auto result = json_to_binary(msg);
     REQUIRE(result.has_value());
     REQUIRE(result->wire_type == 17);
-    REQUIRE(result->payload.size() == 64);
+    // FlatBuffer encoded blob (not flat fields)
+    REQUIRE(result->payload.size() > 64);
 }
 
 TEST_CASE("json_to_binary: Data (FlatBuffer blob)", "[translator]") {
@@ -209,15 +221,17 @@ TEST_CASE("json_to_binary: TimeRangeRequest", "[translator]") {
         {"type", "time_range_request"},
         {"namespace", hex32(0x11)},
         {"since", "999"},
+        {"until", "5000"},
         {"limit", 100}
     };
     auto result = json_to_binary(msg);
     REQUIRE(result.has_value());
     REQUIRE(result->wire_type == 57);
-    // namespace(32) + since(8) + limit(4) = 44
-    REQUIRE(result->payload.size() == 44);
+    // namespace(32) + since(8) + until(8) + limit(4) = 52
+    REQUIRE(result->payload.size() == 52);
     REQUIRE(read_u64_be(result->payload.data() + 32) == 999);
-    REQUIRE(read_u32_be(result->payload.data() + 40) == 100);
+    REQUIRE(read_u64_be(result->payload.data() + 40) == 5000);
+    REQUIRE(read_u32_be(result->payload.data() + 48) == 100);
 }
 
 // =============================================================================
@@ -491,18 +505,46 @@ TEST_CASE("roundtrip: ExistsRequest", "[translator]") {
     REQUIRE((*json)["hash"] == hex32(0x22));
 }
 
-TEST_CASE("roundtrip: DeleteRequest", "[translator]") {
+TEST_CASE("json_to_binary: Delete encodes as FlatBuffer blob type 17", "[translator]") {
+    // Delete is encode-only (client->node). Node sends back DeleteAck(18), not Delete(17).
+    auto ns_hex = hex32(0x33);
+    auto pk_bytes = std::vector<uint8_t>(2592, 0x44);
+    auto pk_hex = to_hex(pk_bytes);
+    auto sig = std::vector<uint8_t>(4627, 0x55);
+    auto sig_b64 = base64_encode(sig);
+
     nlohmann::json msg = {
         {"type", "delete"},
-        {"namespace", hex32(0x33)},
-        {"hash", hex32(0x44)}
+        {"namespace", ns_hex},
+        {"pubkey", pk_hex},
+        {"data", base64_encode(std::vector<uint8_t>{})},
+        {"ttl", 0},
+        {"timestamp", "1700000000"},
+        {"signature", sig_b64}
     };
     auto binary = json_to_binary(msg);
     REQUIRE(binary.has_value());
-    auto json = binary_to_json(binary->wire_type, binary->payload);
+    REQUIRE(binary->wire_type == 17);
+    // Verify the FlatBuffer can be decoded back as a blob
+    auto blob = decode_blob(binary->payload);
+    REQUIRE(blob.has_value());
+    REQUIRE(blob->namespace_id == make_bytes32(0x33));
+    REQUIRE(blob->data.empty());
+    REQUIRE(blob->ttl == 0);
+}
+
+TEST_CASE("binary_to_json: DeleteAck (41-byte format)", "[translator]") {
+    // Node sends [hash:32][seq_num:8BE][status:1] = 41 bytes (same as WriteAck)
+    std::vector<uint8_t> payload(41);
+    std::memset(payload.data(), 0xAA, 32);     // hash
+    store_u64_be(payload.data() + 32, 42);     // seq_num
+    payload[40] = 0;                            // status = stored
+    auto json = binary_to_json(18, payload);
     REQUIRE(json.has_value());
-    REQUIRE((*json)["type"] == "delete");
-    REQUIRE((*json)["namespace"] == hex32(0x33));
+    REQUIRE((*json)["type"] == "delete_ack");
+    REQUIRE((*json)["hash"] == hex32(0xAA));
+    REQUIRE((*json)["seq_num"] == "42");
+    REQUIRE((*json)["status"] == 0);
 }
 
 TEST_CASE("json_to_binary: missing type returns nullopt", "[translator]") {

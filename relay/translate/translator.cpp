@@ -240,9 +240,12 @@ std::optional<TranslateResult> json_to_binary(const nlohmann::json& msg) {
     auto schema = schema_for_name(type_str);
     if (!schema) return std::nullopt;
 
-    // FlatBuffer special case: Data (type 8)
-    if (schema->is_flatbuffer && schema->wire_type == 8) {
-        return encode_data_blob(msg);
+    // FlatBuffer special case: Data (type 8) and Delete (type 17)
+    // Both send a full signed blob to the node (node calls decode_blob on payload)
+    if (schema->is_flatbuffer && (schema->wire_type == 8 || schema->wire_type == 17)) {
+        auto result = encode_data_blob(msg);
+        if (result) result->wire_type = schema->wire_type;
+        return result;
     }
 
     // Clients don't send ReadResponse(32) or BatchReadResponse(54).

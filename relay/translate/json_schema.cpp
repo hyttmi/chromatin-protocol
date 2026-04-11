@@ -26,8 +26,8 @@ static const std::array<MessageSchema, TYPE_REGISTRY_SIZE> SCHEMAS = {{
     {"goodbye",                      7, false, false, NO_FIELDS},
     // Data (8) -- FlatBuffer
     {"data",                         8, true,  false, NO_FIELDS},
-    // Delete (17)
-    {"delete",                      17, false, false, fields_of(DELETE_FIELDS)},
+    // Delete (17) -- FlatBuffer blob (same as Data, node calls decode_blob)
+    {"delete",                      17, true,  false, NO_FIELDS},
     // DeleteAck (18)
     {"delete_ack",                  18, false, false, fields_of(DELETE_ACK_FIELDS)},
     // Subscribe (19)

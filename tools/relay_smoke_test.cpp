@@ -45,6 +45,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -357,6 +358,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     record("tcp_connect", true, host + ":" + std::to_string(port));
+
+    // Set socket read timeout to prevent hanging on missing responses
+    struct timeval tv{};
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     // =====================================================================
     // Step 2: WebSocket upgrade handshake
@@ -690,16 +697,24 @@ int main(int argc, char* argv[]) {
     }
 
     // delete(17) -> delete_ack(18)
+    // Delete sends a full signed tombstone blob (same fields as Data but type="delete", TTL=0)
     if (!written_blob_hash.empty()) {
-        json msg = {{"type", "delete"}, {"request_id", 106},
-                    {"namespace", ns_hex}, {"hash", written_blob_hash}};
-        auto resp = send_recv(msg);
+        auto delete_msg = make_data_message(id, 106, {}, 0, static_cast<uint64_t>(std::time(nullptr)));
+        delete_msg["type"] = "delete";
+        auto resp = send_recv(delete_msg);
         bool ok = resp && resp->contains("type") &&
                   (*resp)["type"] == "delete_ack" &&
+                  resp->contains("hash") && resp->contains("seq_num") &&
                   resp->contains("status");
         record("delete", ok,
                ok ? ("status=" + std::to_string((*resp)["status"].get<int>())) :
                      (resp ? resp->dump() : "no response"));
+
+        // Drain tombstone notification (same as after data write)
+        if (ok) {
+            auto notif_frame = ws_recv_frame(fd);
+            // Ignore — just clearing the buffer
+        }
     } else {
         record("delete", false, "skipped -- no blob hash from write");
     }
@@ -804,7 +819,9 @@ int main(int argc, char* argv[]) {
     // time_range_request(57) -> time_range_response(58)
     {
         json msg = {{"type", "time_range_request"}, {"request_id", 201},
-                    {"namespace", ns_hex}, {"since", "0"}, {"limit", 100}};
+                    {"namespace", ns_hex}, {"since", "0"},
+                    {"until", std::to_string(static_cast<uint64_t>(std::time(nullptr)) + 86400)},
+                    {"limit", 100}};
         auto resp = send_recv(msg);
         bool ok = resp && resp->contains("type") &&
                   (*resp)["type"] == "time_range_response";

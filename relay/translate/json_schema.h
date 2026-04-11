@@ -63,8 +63,11 @@ inline constexpr FieldSpec DELETE_FIELDS[] = {
 };
 
 // --- DeleteAck (18) ---
+// Node sends same 41-byte format as WriteAck: [hash:32][seq_num:8BE][status:1]
 inline constexpr FieldSpec DELETE_ACK_FIELDS[] = {
     {"request_id",  FieldEncoding::REQUEST_ID,     true},
+    {"hash",        FieldEncoding::HEX_32},
+    {"seq_num",     FieldEncoding::UINT64_STRING},
     {"status",      FieldEncoding::UINT8_NUMBER},
 };
 
@@ -285,10 +288,12 @@ inline constexpr FieldSpec PEER_INFO_RESPONSE_FIELDS[] = {
 };
 
 // --- TimeRangeRequest (57) ---
+// Node expects 52 bytes: [ns:32][start_ts:8BE][end_ts:8BE][limit:4BE]
 inline constexpr FieldSpec TIME_RANGE_REQUEST_FIELDS[] = {
     {"request_id",  FieldEncoding::REQUEST_ID,     true},
     {"namespace",   FieldEncoding::HEX_32},
     {"since",       FieldEncoding::UINT64_STRING},
+    {"until",       FieldEncoding::UINT64_STRING},
     {"limit",       FieldEncoding::UINT32_NUMBER,   true},
 };
 
