@@ -26,7 +26,11 @@ Fix all bugs found in live relay+node testing, verify every feature works end-to
   1. binary_to_json produces valid JSON for NodeInfoResponse, StatsResponse, NamespaceStatsResponse, StorageStatusResponse, and all other compound response types when fed live node data
   2. Every std::visit call site in relay/ either uses get_if/get branching or is provably safe (no coroutine lambda captures of variant alternatives)
   3. Relay runs clean under ASAN with no stack-use-after-return warnings during a basic request/response cycle
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 106-01-PLAN.md — Fix compound decoder bugs + schema updates + unit tests
+- [ ] 106-02-PLAN.md — Coroutine safety audit (relay fix + db read-only) + documentation
+- [ ] 106-03-PLAN.md — UDS tap tool + WebSocket smoke test + sanitizer validation
 
 ### Phase 107: Message Type Verification
 **Goal**: Every relay-allowed message type is proven to translate correctly through the full relay pipeline against a live node
@@ -79,7 +83,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 106. Bug Fixes | 0/0 | Not started | - |
+| 106. Bug Fixes | 0/3 | Planned | - |
 | 107. Message Type Verification | 0/0 | Not started | - |
 | 108. Live Feature Verification | 0/0 | Not started | - |
 | 109. New Features | 0/0 | Not started | - |
