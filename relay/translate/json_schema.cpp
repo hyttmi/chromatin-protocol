@@ -52,8 +52,8 @@ static const std::array<MessageSchema, TYPE_REGISTRY_SIZE> SCHEMAS = {{
     {"list_response",               34, false, true,  NO_FIELDS},
     // StatsRequest (35)
     {"stats_request",               35, false, false, fields_of(STATS_REQUEST_FIELDS)},
-    // StatsResponse (36)
-    {"stats_response",              36, false, false, fields_of(STATS_RESPONSE_FIELDS)},
+    // StatsResponse (36) -- compound: 24-byte per-namespace format
+    {"stats_response",              36, false, true,  NO_FIELDS},
     // ExistsRequest (37)
     {"exists_request",              37, false, false, fields_of(EXISTS_REQUEST_FIELDS)},
     // ExistsResponse (38)

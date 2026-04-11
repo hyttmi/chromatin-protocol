@@ -130,6 +130,7 @@ inline constexpr FieldSpec LIST_RESPONSE_FIELDS[] = {
 // --- StatsRequest (35) ---
 inline constexpr FieldSpec STATS_REQUEST_FIELDS[] = {
     {"request_id",  FieldEncoding::REQUEST_ID,     true},
+    {"namespace",   FieldEncoding::HEX_32},
 };
 
 // --- StatsResponse (36) ---

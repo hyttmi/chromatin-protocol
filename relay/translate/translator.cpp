@@ -508,7 +508,7 @@ static std::optional<nlohmann::json> decode_batch_exists_response(std::span<cons
     return j;
 }
 
-/// DelegationListResponse (52): [count:u32BE][ [namespace:32][pubkey_hash:32] * count ]
+/// DelegationListResponse (52): [count:u32BE][ [delegate_pk_hash:32][delegation_blob_hash:32] * count ]
 static std::optional<nlohmann::json> decode_delegation_list_response(std::span<const uint8_t> p) {
     if (p.size() < 4) return std::nullopt;
     uint32_t count = util::read_u32_be(p.data());
@@ -519,8 +519,8 @@ static std::optional<nlohmann::json> decode_delegation_list_response(std::span<c
     for (uint32_t i = 0; i < count; ++i) {
         size_t off = 4 + i * 64;
         nlohmann::json entry;
-        entry["namespace"] = util::to_hex(p.subspan(off, 32));
-        entry["pubkey_hash"] = util::to_hex(p.subspan(off + 32, 32));
+        entry["delegate_pk_hash"] = util::to_hex(p.subspan(off, 32));
+        entry["delegation_blob_hash"] = util::to_hex(p.subspan(off + 32, 32));
         delegations.push_back(std::move(entry));
     }
 
@@ -564,26 +564,28 @@ static std::optional<nlohmann::json> decode_peer_info_response(std::span<const u
     return j;
 }
 
-/// TimeRangeResponse (58): [count:u32BE][ [hash:32][timestamp:u64BE] * count ][truncated:u8]
+/// TimeRangeResponse (58): [truncated:u8][count:u32BE][ [hash:32][seq_num:u64BE][timestamp:u64BE] * count ]
 static std::optional<nlohmann::json> decode_time_range_response(std::span<const uint8_t> p) {
-    if (p.size() < 5) return std::nullopt;
-    uint32_t count = util::read_u32_be(p.data());
-    size_t expected = 4 + count * 40 + 1;
+    if (p.size() < 5) return std::nullopt;  // truncated(1) + count(4) minimum
+    bool truncated = (p[0] != 0);
+    uint32_t count = util::read_u32_be(p.data() + 1);
+    size_t expected = 5 + count * 48;  // 48 bytes per entry: hash(32) + seq_num(8) + timestamp(8)
     if (p.size() < expected) return std::nullopt;
 
     auto entries = nlohmann::json::array();
     for (uint32_t i = 0; i < count; ++i) {
-        size_t off = 4 + i * 40;
+        size_t off = 5 + i * 48;
         nlohmann::json entry;
         entry["hash"] = util::to_hex(p.subspan(off, 32));
-        entry["timestamp"] = std::to_string(util::read_u64_be(p.data() + off + 32));
+        entry["seq_num"] = std::to_string(util::read_u64_be(p.data() + off + 32));
+        entry["timestamp"] = std::to_string(util::read_u64_be(p.data() + off + 40));
         entries.push_back(std::move(entry));
     }
 
     nlohmann::json j;
     j["type"] = "time_range_response";
     j["entries"] = std::move(entries);
-    j["truncated"] = (p[expected - 1] != 0);
+    j["truncated"] = truncated;
     return j;
 }
 
@@ -627,24 +629,37 @@ static std::optional<nlohmann::json> decode_storage_status_response(std::span<co
     return j;
 }
 
-/// NodeInfoResponse (40): [version:u16BE+string][git_hash:u16BE+string][uptime:u64BE]
+/// StatsResponse (36): [blob_count:u64BE][storage_bytes:u64BE][quota_bytes_limit:u64BE]
+/// Per-namespace stats — 24 bytes total.
+static std::optional<nlohmann::json> decode_stats_response(std::span<const uint8_t> p) {
+    if (p.size() < 24) return std::nullopt;
+    nlohmann::json j;
+    j["type"] = "stats_response";
+    size_t off = 0;
+    j["blob_count"] = std::to_string(util::read_u64_be(p.data() + off)); off += 8;
+    j["storage_bytes"] = std::to_string(util::read_u64_be(p.data() + off)); off += 8;
+    j["quota_bytes_limit"] = std::to_string(util::read_u64_be(p.data() + off)); off += 8;
+    return j;
+}
+
+/// NodeInfoResponse (40): [version_len:u8][version:N][git_hash_len:u8][git_hash:N][uptime:u64BE]
 ///   [peer_count:u32BE][namespace_count:u32BE][total_blobs:u64BE][storage_used:u64BE]
-///   [storage_max:u64BE][supported_count:u16BE][ [len:u16BE+string] * supported_count ]
+///   [storage_max:u64BE][types_count:u8][type_bytes:types_count raw bytes]
 static std::optional<nlohmann::json> decode_node_info_response(std::span<const uint8_t> p) {
     nlohmann::json j;
     j["type"] = "node_info_response";
     size_t off = 0;
 
-    // version: length-prefixed string
-    if (off + 2 > p.size()) return std::nullopt;
-    uint16_t ver_len = util::read_u16_be(p.data() + off); off += 2;
+    // version: u8 length prefix
+    if (off + 1 > p.size()) return std::nullopt;
+    uint8_t ver_len = p[off++];
     if (off + ver_len > p.size()) return std::nullopt;
     j["version"] = std::string(reinterpret_cast<const char*>(p.data() + off), ver_len);
     off += ver_len;
 
-    // git_hash: length-prefixed string
-    if (off + 2 > p.size()) return std::nullopt;
-    uint16_t gh_len = util::read_u16_be(p.data() + off); off += 2;
+    // git_hash: u8 length prefix
+    if (off + 1 > p.size()) return std::nullopt;
+    uint8_t gh_len = p[off++];
     if (off + gh_len > p.size()) return std::nullopt;
     j["git_hash"] = std::string(reinterpret_cast<const char*>(p.data() + off), gh_len);
     off += gh_len;
@@ -658,17 +673,19 @@ static std::optional<nlohmann::json> decode_node_info_response(std::span<const u
     j["storage_used"] = std::to_string(util::read_u64_be(p.data() + off)); off += 8;
     j["storage_max"] = std::to_string(util::read_u64_be(p.data() + off)); off += 8;
 
-    // supported_types: array of length-prefixed strings
-    if (off + 2 > p.size()) return std::nullopt;
-    uint16_t st_count = util::read_u16_be(p.data() + off); off += 2;
+    // supported_types: u8 count, then raw type bytes translated via type_to_string()
+    if (off + 1 > p.size()) return std::nullopt;
+    uint8_t st_count = p[off++];
+    if (off + st_count > p.size()) return std::nullopt;
     auto supported = nlohmann::json::array();
-    for (uint16_t i = 0; i < st_count; ++i) {
-        if (off + 2 > p.size()) return std::nullopt;
-        uint16_t slen = util::read_u16_be(p.data() + off); off += 2;
-        if (off + slen > p.size()) return std::nullopt;
-        supported.push_back(std::string(
-            reinterpret_cast<const char*>(p.data() + off), slen));
-        off += slen;
+    for (uint8_t i = 0; i < st_count; ++i) {
+        uint8_t type_byte = p[off++];
+        auto name = type_to_string(type_byte);
+        if (name) {
+            supported.push_back(std::string(*name));
+        } else {
+            supported.push_back(std::to_string(type_byte));
+        }
     }
     j["supported_types"] = std::move(supported);
 
@@ -785,6 +802,7 @@ std::optional<nlohmann::json> binary_to_json(uint8_t type,
     if (schema->is_compound) {
         switch (type) {
         case 34: return decode_list_response(payload);
+        case 36: return decode_stats_response(payload);
         case 40: return decode_node_info_response(payload);
         case 42: return decode_namespace_list_response(payload);
         case 44: return decode_storage_status_response(payload);

@@ -81,12 +81,19 @@ TEST_CASE("json_to_binary: ExistsRequest", "[translator]") {
     REQUIRE(result->payload.size() == 64);
 }
 
-TEST_CASE("json_to_binary: StatsRequest (empty payload)", "[translator]") {
-    nlohmann::json msg = {{"type", "stats_request"}};
+TEST_CASE("json_to_binary: StatsRequest with namespace", "[translator]") {
+    nlohmann::json msg = {
+        {"type", "stats_request"},
+        {"namespace", hex32(0xAA)}
+    };
     auto result = json_to_binary(msg);
     REQUIRE(result.has_value());
     REQUIRE(result->wire_type == 35);
-    REQUIRE(result->payload.empty());
+    REQUIRE(result->payload.size() == 32);
+    // Verify namespace bytes
+    for (int i = 0; i < 32; ++i) {
+        REQUIRE(result->payload[i] == 0xAA);
+    }
 }
 
 TEST_CASE("json_to_binary: DeleteRequest", "[translator]") {
@@ -240,23 +247,19 @@ TEST_CASE("binary_to_json: ExistsResponse", "[translator]") {
     REQUIRE((*json)["exists"] == true);
 }
 
-TEST_CASE("binary_to_json: StatsResponse", "[translator]") {
-    // StatsResponse(36): [total_blobs:u64BE][storage_used:u64BE][storage_max:u64BE]
-    //                     [namespace_count:u32BE][peer_count:u32BE][uptime:u64BE]
-    std::vector<uint8_t> payload(48);
-    store_u64_be(payload.data(), 1000);       // total_blobs
-    store_u64_be(payload.data() + 8, 2000);   // storage_used
-    store_u64_be(payload.data() + 16, 5000);  // storage_max
-    store_u32_be(payload.data() + 24, 10);    // namespace_count
-    store_u32_be(payload.data() + 28, 5);     // peer_count
-    store_u64_be(payload.data() + 32, 86400); // uptime
+TEST_CASE("binary_to_json: StatsResponse (compound 24-byte)", "[translator]") {
+    // StatsResponse(36): [blob_count:u64BE][storage_bytes:u64BE][quota_bytes_limit:u64BE]
+    std::vector<uint8_t> payload(24);
+    store_u64_be(payload.data(), 42);         // blob_count
+    store_u64_be(payload.data() + 8, 8192);   // storage_bytes
+    store_u64_be(payload.data() + 16, 1048576); // quota_bytes_limit
 
     auto json = binary_to_json(36, payload);
     REQUIRE(json.has_value());
     REQUIRE((*json)["type"] == "stats_response");
-    REQUIRE((*json)["total_blobs"] == "1000");
-    REQUIRE((*json)["storage_used"] == "2000");
-    REQUIRE((*json)["peer_count"] == 5);
+    REQUIRE((*json)["blob_count"] == "42");
+    REQUIRE((*json)["storage_bytes"] == "8192");
+    REQUIRE((*json)["quota_bytes_limit"] == "1048576");
 }
 
 TEST_CASE("binary_to_json: ReadResponse (FlatBuffer)", "[translator]") {
@@ -397,19 +400,22 @@ TEST_CASE("binary_to_json: PeerInfoResponse trusted format", "[translator]") {
     REQUIRE((*json)["peers"][0]["duration_ms"] == "60000");
 }
 
-TEST_CASE("binary_to_json: TimeRangeResponse", "[translator]") {
+TEST_CASE("binary_to_json: TimeRangeResponse (truncated-first, 48-byte entries)", "[translator]") {
+    // TimeRangeResponse(58): [truncated:u8][count:u32BE][ [hash:32][seq_num:u64BE][timestamp:u64BE] * count ]
     uint32_t count = 1;
-    std::vector<uint8_t> payload(4 + count * 40 + 1);
-    store_u32_be(payload.data(), count);
-    std::memset(payload.data() + 4, 0xEE, 32);
-    store_u64_be(payload.data() + 36, 1234567);
-    payload.back() = 0;  // not truncated
+    std::vector<uint8_t> payload(5 + count * 48);
+    payload[0] = 0;  // not truncated
+    store_u32_be(payload.data() + 1, count);
+    std::memset(payload.data() + 5, 0xEE, 32);        // hash
+    store_u64_be(payload.data() + 37, 42);             // seq_num
+    store_u64_be(payload.data() + 45, 1234567);        // timestamp
 
     auto json = binary_to_json(58, payload);
     REQUIRE(json.has_value());
     REQUIRE((*json)["type"] == "time_range_response");
     REQUIRE((*json)["truncated"] == false);
     REQUIRE((*json)["entries"].size() == 1);
+    REQUIRE((*json)["entries"][0]["seq_num"] == "42");
     REQUIRE((*json)["entries"][0]["timestamp"] == "1234567");
 }
 
