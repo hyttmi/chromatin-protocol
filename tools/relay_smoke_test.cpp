@@ -32,12 +32,15 @@
 //   ./build-tsan/tools/relay_smoke_test --identity /path/to/test.key
 
 #include "relay/identity/relay_identity.h"
+#include "relay/util/base64.h"
 #include "relay/util/hex.h"
+#include "relay/wire/blob_codec.h"
 #include "relay/ws/ws_frame.h"
 #include "relay/ws/ws_handshake.h"
 
 #include <nlohmann/json.hpp>
 #include <openssl/rand.h>
+#include <oqs/sha3.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -45,8 +48,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <iostream>
 #include <random>
 #include <span>
@@ -143,8 +148,12 @@ static bool ws_send_text(int fd, const std::string& text) {
     return send_all(fd, frame.data(), frame.size());
 }
 
-static std::optional<std::string> ws_recv_text(int fd) {
-    // Read frame header (2 bytes minimum)
+struct WsFrame {
+    uint8_t opcode;
+    std::string payload;
+};
+
+static std::optional<WsFrame> ws_recv_frame(int fd) {
     uint8_t hdr[2];
     if (!recv_all(fd, hdr, 2)) return std::nullopt;
 
@@ -160,9 +169,8 @@ static std::optional<std::string> ws_recv_text(int fd) {
         uint8_t ext[8];
         if (!recv_all(fd, ext, 8)) return std::nullopt;
         payload_len = 0;
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < 8; ++i)
             payload_len = (payload_len << 8) | ext[i];
-        }
     }
 
     uint8_t mask_key[4] = {};
@@ -172,18 +180,17 @@ static std::optional<std::string> ws_recv_text(int fd) {
 
     std::vector<uint8_t> payload(static_cast<size_t>(payload_len));
     if (payload_len > 0) {
-        if (!recv_all(fd, payload.data(), static_cast<size_t>(payload_len))) return std::nullopt;
+        if (!recv_all(fd, payload.data(), static_cast<size_t>(payload_len)))
+            return std::nullopt;
     }
 
     if (masked) {
-        for (size_t i = 0; i < payload.size(); ++i) {
+        for (size_t i = 0; i < payload.size(); ++i)
             payload[i] ^= mask_key[i % 4];
-        }
     }
 
-    // Handle control frames: ping -> respond with pong, close -> return nullopt
+    // Handle PING: respond with PONG and recurse
     if (opcode == ws::OPCODE_PING) {
-        // Send pong with same payload (masked, client->server)
         std::vector<uint8_t> pong_frame;
         pong_frame.push_back(0x80 | ws::OPCODE_PONG);
         uint8_t pong_mask[4];
@@ -192,19 +199,69 @@ static std::optional<std::string> ws_recv_text(int fd) {
             pong_frame.push_back(static_cast<uint8_t>(0x80 | payload.size()));
         }
         pong_frame.insert(pong_frame.end(), pong_mask, pong_mask + 4);
-        for (size_t i = 0; i < payload.size(); ++i) {
+        for (size_t i = 0; i < payload.size(); ++i)
             pong_frame.push_back(payload[i] ^ pong_mask[i % 4]);
-        }
         send_all(fd, pong_frame.data(), pong_frame.size());
-        // Recursively receive the actual text frame
-        return ws_recv_text(fd);
+        return ws_recv_frame(fd);
     }
 
-    if (opcode == ws::OPCODE_CLOSE) {
-        return std::nullopt;
-    }
+    if (opcode == ws::OPCODE_CLOSE) return std::nullopt;
 
-    return std::string(payload.begin(), payload.end());
+    return WsFrame{opcode, std::string(payload.begin(), payload.end())};
+}
+
+static std::optional<std::string> ws_recv_text(int fd) {
+    auto frame = ws_recv_frame(fd);
+    if (!frame) return std::nullopt;
+    return frame->payload;
+}
+
+// ---------------------------------------------------------------------------
+// Blob signing helpers (ML-DSA-87 over SHA3-256 digest)
+// ---------------------------------------------------------------------------
+
+static std::array<uint8_t, 32> build_signing_input(
+    std::span<const uint8_t> namespace_id,
+    std::span<const uint8_t> data,
+    uint32_t ttl, uint64_t timestamp)
+{
+    std::array<uint8_t, 32> digest{};
+    OQS_SHA3_sha3_256_inc_ctx ctx;
+    OQS_SHA3_sha3_256_inc_init(&ctx);
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), namespace_id.size());
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
+    // LITTLE-endian for ttl and timestamp (protocol-defined, NOT big-endian)
+    uint8_t ttl_le[4];
+    for (int i = 0; i < 4; ++i) ttl_le[i] = static_cast<uint8_t>(ttl >> (i * 8));
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_le, 4);
+    uint8_t ts_le[8];
+    for (int i = 0; i < 8; ++i) ts_le[i] = static_cast<uint8_t>(timestamp >> (i * 8));
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_le, 8);
+    OQS_SHA3_sha3_256_inc_finalize(digest.data(), &ctx);
+    OQS_SHA3_sha3_256_inc_ctx_release(&ctx);
+    return digest;
+}
+
+static json make_data_message(const identity::RelayIdentity& id,
+                               uint32_t request_id,
+                               const std::vector<uint8_t>& test_data,
+                               uint32_t ttl, uint64_t timestamp)
+{
+    auto ns = id.public_key_hash();
+    auto pk = id.public_key();
+    auto digest = build_signing_input(ns, test_data, ttl, timestamp);
+    auto signature = id.sign(digest);
+    return {
+        {"type", "data"},
+        {"request_id", request_id},
+        {"namespace", util::to_hex(ns)},
+        {"pubkey", util::to_hex(pk)},
+        {"data", util::base64_encode(test_data)},
+        {"ttl", ttl},
+        {"timestamp", std::to_string(timestamp)},
+        {"signature", util::base64_encode(
+            std::span<const uint8_t>(signature.data(), signature.size()))}
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,39 +500,25 @@ int main(int argc, char* argv[]) {
     // =====================================================================
     // Step 4: Exercise key paths
     // =====================================================================
-    std::cout << "\n--- Data path: write + read ---\n";
 
-    // Helper to send JSON and receive JSON response
+    // Helper to send JSON and receive JSON response (text frames)
     auto send_recv = [&](const json& msg) -> std::optional<json> {
         if (!ws_send_text(fd, msg.dump())) return std::nullopt;
-        auto resp = ws_recv_text(fd);
-        if (!resp) return std::nullopt;
-        try {
-            return json::parse(*resp);
-        } catch (...) {
-            return std::nullopt;
-        }
+        auto frame = ws_recv_frame(fd);
+        if (!frame) return std::nullopt;
+        try { return json::parse(frame->payload); }
+        catch (...) { return std::nullopt; }
     };
 
-    // 4a. Write (Data) -- send via FlatBuffer (type="data")
-    // Note: Data(8) is a FlatBuffer type, the relay expects JSON with
-    // specific fields and translates to FlatBuffer internally
-    {
-        // We need a signed blob. For smoke test, we write a minimal data message.
-        // The data type expects FlatBuffer fields but is handled specially by the
-        // translator. In practice, the JSON just needs the right type and fields.
-        //
-        // Actually, Data(8) goes through the FlatBuffer path in the translator.
-        // The JSON schema says: {"type": "data", ...flatbuffer fields...}
-        // This is complex. For the smoke test, we skip the data write and just
-        // test the query paths that exercise the translator compound decoders.
-        // The UDS tap tool already validates binary fixture capture.
-        //
-        // Instead, test a subscribe which is simpler.
-        std::cout << "  (skipping Data write -- FlatBuffer encoding requires signed blob)\n";
-    }
+    // Helper to send JSON and receive raw WsFrame (for binary response detection)
+    auto send_recv_frame = [&](const json& msg) -> std::optional<WsFrame> {
+        if (!ws_send_text(fd, msg.dump())) return std::nullopt;
+        return ws_recv_frame(fd);
+    };
 
-    // 4b. Subscribe
+    // -----------------------------------------------------------------
+    // Subscribe (relay-intercepted, no response expected)
+    // -----------------------------------------------------------------
     {
         json subscribe_msg = {
             {"type", "subscribe"},
@@ -485,16 +528,188 @@ int main(int argc, char* argv[]) {
         if (!ws_send_text(fd, subscribe_msg.dump())) {
             record("subscribe", false, "send failed");
         } else {
-            // Subscribe doesn't produce an immediate response from the node
-            // (it's relay-intercepted). Just verify no error/disconnect.
             record("subscribe", true, "sent successfully");
         }
     }
 
-    // 4c. Compound queries
+    // =================================================================
+    // Data write chain
+    // =================================================================
+    std::cout << "\n--- Data write chain ---\n";
+
+    std::string written_blob_hash;  // captured from write_ack for subsequent tests
+    std::vector<uint8_t> test_data = {'H','e','l','l','o',' ','R','e','l','a','y'};
+    uint32_t test_ttl = 3600;
+    uint64_t test_timestamp = static_cast<uint64_t>(std::time(nullptr));
+
+    // data(8) -> write_ack(30)
+    {
+        auto data_msg = make_data_message(id, 100, test_data, test_ttl, test_timestamp);
+        auto resp = send_recv(data_msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "write_ack" &&
+                  resp->contains("hash") && resp->contains("seq_num");
+        if (ok) {
+            written_blob_hash = (*resp)["hash"].get<std::string>();
+        }
+        record("data_write", ok,
+               ok ? ("hash=" + written_blob_hash) : (resp ? resp->dump() : "no response"));
+    }
+
+    // After writing to a subscribed namespace, we may receive a notification.
+    // Collect it now so it doesn't interfere with subsequent request/response pairs.
+    // The notification may arrive before or after the write_ack was consumed above,
+    // but since we already consumed write_ack, the next frame should be the notification.
+    std::optional<json> notification_json;
+    if (!written_blob_hash.empty()) {
+        auto notif_frame = ws_recv_frame(fd);
+        if (notif_frame) {
+            try {
+                auto j = json::parse(notif_frame->payload);
+                if (j.contains("type") && j["type"] == "notification") {
+                    notification_json = j;
+                }
+            } catch (...) {}
+        }
+    }
+
+    // notification(21) -- validate the captured notification
+    {
+        bool ok = notification_json.has_value() &&
+                  notification_json->contains("type") &&
+                  (*notification_json)["type"] == "notification" &&
+                  notification_json->contains("namespace") &&
+                  (*notification_json)["namespace"] == ns_hex &&
+                  notification_json->contains("hash") &&
+                  (*notification_json)["hash"] == written_blob_hash;
+        record("notification", ok,
+               ok ? ("ns+hash match") : (notification_json ? notification_json->dump() : "no notification"));
+    }
+
+    // read_request(31) -> read_response(32): binary WS frame
+    if (!written_blob_hash.empty()) {
+        json msg = {{"type", "read_request"}, {"request_id", 101},
+                    {"namespace", ns_hex}, {"hash", written_blob_hash}};
+        auto frame = send_recv_frame(msg);
+        bool ok = false;
+        std::string detail = "no response";
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                if (resp.contains("type") && resp["type"] == "read_response" &&
+                    resp.contains("status") && resp["status"] == 1 &&
+                    resp.contains("data")) {
+                    // Verify data matches what we wrote
+                    auto decoded = util::base64_decode(resp["data"].get<std::string>());
+                    if (decoded && *decoded == test_data) {
+                        ok = true;
+                        detail = "opcode=" + std::to_string(frame->opcode) + " data matches";
+                    } else {
+                        detail = "data mismatch";
+                    }
+                } else {
+                    detail = resp.dump();
+                }
+            } catch (...) { detail = "parse error"; }
+        }
+        record("read_request", ok, detail);
+    } else {
+        record("read_request", false, "skipped -- no blob hash from write");
+    }
+
+    // metadata_request(47) -> metadata_response(48): found=true for written blob
+    if (!written_blob_hash.empty()) {
+        json msg = {{"type", "metadata_request"}, {"request_id", 102},
+                    {"namespace", ns_hex}, {"hash", written_blob_hash}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "metadata_response" &&
+                  resp->contains("found") && (*resp)["found"] == true;
+        record("metadata_found", ok,
+               ok ? "found=true" : (resp ? resp->dump() : "no response"));
+    } else {
+        record("metadata_found", false, "skipped -- no blob hash from write");
+    }
+
+    // exists_request(37) -> exists_response(38): exists=true for written blob
+    if (!written_blob_hash.empty()) {
+        json msg = {{"type", "exists_request"}, {"request_id", 103},
+                    {"namespace", ns_hex}, {"hash", written_blob_hash}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "exists_response" &&
+                  resp->contains("exists") && (*resp)["exists"] == true;
+        record("exists_found", ok,
+               ok ? "exists=true" : (resp ? resp->dump() : "no response"));
+    } else {
+        record("exists_found", false, "skipped -- no blob hash from write");
+    }
+
+    // batch_exists_request(49) -> batch_exists_response(50)
+    if (!written_blob_hash.empty()) {
+        std::string zero_hash(64, '0');
+        json msg = {{"type", "batch_exists_request"}, {"request_id", 104},
+                    {"namespace", ns_hex},
+                    {"hashes", json::array({written_blob_hash, zero_hash})}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "batch_exists_response" &&
+                  resp->contains("results") && (*resp)["results"].is_array() &&
+                  (*resp)["results"].size() >= 2;
+        record("batch_exists_request", ok,
+               ok ? ("results=" + (*resp)["results"].dump()) : (resp ? resp->dump() : "no response"));
+    } else {
+        record("batch_exists_request", false, "skipped -- no blob hash from write");
+    }
+
+    // batch_read_request(53) -> batch_read_response(54): binary WS frame
+    if (!written_blob_hash.empty()) {
+        json msg = {{"type", "batch_read_request"}, {"request_id", 105},
+                    {"namespace", ns_hex}, {"max_bytes", 1048576},
+                    {"hashes", json::array({written_blob_hash})}};
+        auto frame = send_recv_frame(msg);
+        bool ok = false;
+        std::string detail = "no response";
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                if (resp.contains("type") && resp["type"] == "batch_read_response" &&
+                    resp.contains("blobs") && resp["blobs"].is_array() &&
+                    resp["blobs"].size() >= 1) {
+                    ok = true;
+                    detail = "opcode=" + std::to_string(frame->opcode) +
+                             " blobs=" + std::to_string(resp["blobs"].size());
+                } else {
+                    detail = resp.dump();
+                }
+            } catch (...) { detail = "parse error"; }
+        }
+        record("batch_read_request", ok, detail);
+    } else {
+        record("batch_read_request", false, "skipped -- no blob hash from write");
+    }
+
+    // delete(17) -> delete_ack(18)
+    if (!written_blob_hash.empty()) {
+        json msg = {{"type", "delete"}, {"request_id", 106},
+                    {"namespace", ns_hex}, {"hash", written_blob_hash}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "delete_ack" &&
+                  resp->contains("status");
+        record("delete", ok,
+               ok ? ("status=" + std::to_string((*resp)["status"].get<int>())) :
+                     (resp ? resp->dump() : "no response"));
+    } else {
+        record("delete", false, "skipped -- no blob hash from write");
+    }
+
+    // =================================================================
+    // Compound queries (existing + new)
+    // =================================================================
     std::cout << "\n--- Compound queries ---\n";
 
-    // node_info_request
+    // node_info_request(39) -> node_info_response(40)
     {
         json msg = {{"type", "node_info_request"}, {"request_id", 10}};
         auto resp = send_recv(msg);
@@ -505,7 +720,7 @@ int main(int argc, char* argv[]) {
                ok ? "has version field" : (resp ? resp->dump() : "no response"));
     }
 
-    // stats_request (use our own namespace)
+    // stats_request(35) -> stats_response(36)
     {
         json msg = {{"type", "stats_request"}, {"request_id", 11}, {"namespace", ns_hex}};
         auto resp = send_recv(msg);
@@ -516,7 +731,7 @@ int main(int argc, char* argv[]) {
                ok ? "has blob_count field" : (resp ? resp->dump() : "no response"));
     }
 
-    // storage_status_request
+    // storage_status_request(43) -> storage_status_response(44)
     {
         json msg = {{"type", "storage_status_request"}, {"request_id", 12}};
         auto resp = send_recv(msg);
@@ -527,7 +742,7 @@ int main(int argc, char* argv[]) {
                ok ? "has used_bytes+capacity_bytes" : (resp ? resp->dump() : "no response"));
     }
 
-    // exists_request (arbitrary hash -- will get exists=false)
+    // exists_request(37) -> exists_response(38): not-found case
     {
         std::string zero_hash(64, '0');
         json msg = {{"type", "exists_request"}, {"request_id", 13},
@@ -540,7 +755,7 @@ int main(int argc, char* argv[]) {
                ok ? "has exists field" : (resp ? resp->dump() : "no response"));
     }
 
-    // list_request
+    // list_request(33) -> list_response(34)
     {
         json msg = {{"type", "list_request"}, {"request_id", 14}, {"namespace", ns_hex}};
         auto resp = send_recv(msg);
@@ -550,7 +765,7 @@ int main(int argc, char* argv[]) {
                ok ? "list_response received" : (resp ? resp->dump() : "no response"));
     }
 
-    // namespace_list_request
+    // namespace_list_request(41) -> namespace_list_response(42)
     {
         json msg = {{"type", "namespace_list_request"}, {"request_id", 15}};
         auto resp = send_recv(msg);
@@ -560,7 +775,7 @@ int main(int argc, char* argv[]) {
                ok ? "namespace_list_response received" : (resp ? resp->dump() : "no response"));
     }
 
-    // peer_info_request
+    // peer_info_request(55) -> peer_info_response(56)
     {
         json msg = {{"type", "peer_info_request"}, {"request_id", 16}};
         auto resp = send_recv(msg);
@@ -570,7 +785,146 @@ int main(int argc, char* argv[]) {
                ok ? "peer_info_response received" : (resp ? resp->dump() : "no response"));
     }
 
-    // Unsubscribe (cleanup)
+    // =================================================================
+    // Remaining queries
+    // =================================================================
+    std::cout << "\n--- Remaining queries ---\n";
+
+    // namespace_stats_request(45) -> namespace_stats_response(46)
+    {
+        json msg = {{"type", "namespace_stats_request"}, {"request_id", 200},
+                    {"namespace", ns_hex}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "namespace_stats_response";
+        record("namespace_stats_request", ok,
+               ok ? "namespace_stats_response received" : (resp ? resp->dump() : "no response"));
+    }
+
+    // time_range_request(57) -> time_range_response(58)
+    {
+        json msg = {{"type", "time_range_request"}, {"request_id", 201},
+                    {"namespace", ns_hex}, {"since", "0"}, {"limit", 100}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "time_range_response";
+        record("time_range_request", ok,
+               ok ? "time_range_response received" : (resp ? resp->dump() : "no response"));
+    }
+
+    // delegation_list_request(51) -> delegation_list_response(52)
+    {
+        json msg = {{"type", "delegation_list_request"}, {"request_id", 202},
+                    {"namespace", ns_hex}};
+        auto resp = send_recv(msg);
+        bool ok = resp && resp->contains("type") &&
+                  (*resp)["type"] == "delegation_list_response";
+        record("delegation_list_request", ok,
+               ok ? "delegation_list_response received" : (resp ? resp->dump() : "no response"));
+    }
+
+    // =================================================================
+    // Fire-and-forget
+    // =================================================================
+    std::cout << "\n--- Fire-and-forget ---\n";
+
+    // ping(5): send, then verify connection alive with a probe request
+    {
+        json ping_msg = {{"type", "ping"}, {"request_id", 210}};
+        ws_send_text(fd, ping_msg.dump());
+        // Verify connection alive by sending a request that produces a response
+        json probe = {{"type", "node_info_request"}, {"request_id", 211}};
+        auto resp = send_recv(probe);
+        bool ok = resp && (*resp)["type"] == "node_info_response";
+        record("ping", ok,
+               ok ? "connection alive after ping" : "connection broken after ping");
+    }
+
+    // pong(6): send, then verify connection alive
+    {
+        json pong_msg = {{"type", "pong"}, {"request_id", 220}};
+        ws_send_text(fd, pong_msg.dump());
+        json probe = {{"type", "node_info_request"}, {"request_id", 221}};
+        auto resp = send_recv(probe);
+        bool ok = resp && (*resp)["type"] == "node_info_response";
+        record("pong", ok,
+               ok ? "connection alive after pong" : "connection broken after pong");
+    }
+
+    // =================================================================
+    // Error paths
+    // =================================================================
+    std::cout << "\n--- Error paths ---\n";
+
+    // Read nonexistent blob -> read_response with status=0 (binary WS frame)
+    {
+        std::string zero_hash(64, '0');
+        json msg = {{"type", "read_request"}, {"request_id", 300},
+                    {"namespace", ns_hex}, {"hash", zero_hash}};
+        auto frame = send_recv_frame(msg);
+        bool ok = false;
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                ok = resp.contains("type") && resp["type"] == "read_response" &&
+                     resp.contains("status") && resp["status"] == 0;
+            } catch (...) {}
+        }
+        record("error_read_nonexistent", ok,
+               ok ? "read_response status=0" : "unexpected response");
+    }
+
+    // Metadata for nonexistent hash -> metadata_response found=false
+    {
+        std::string zero_hash(64, '0');
+        json msg = {{"type", "metadata_request"}, {"request_id", 301},
+                    {"namespace", ns_hex}, {"hash", zero_hash}};
+        auto resp = send_recv(msg);
+        bool ok = resp && (*resp)["type"] == "metadata_response" &&
+                  resp->contains("found") && (*resp)["found"] == false;
+        record("error_metadata_nonexistent", ok,
+               ok ? "metadata_response found=false" : (resp ? resp->dump() : "no response"));
+    }
+
+    // Blocked type -> relay error response
+    {
+        json msg = {{"type", "blob_notify"}, {"request_id", 302}};
+        ws_send_text(fd, msg.dump());
+        auto frame = ws_recv_frame(fd);
+        bool ok = false;
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                ok = resp.contains("type") && resp["type"] == "error" &&
+                     resp.contains("code");
+            } catch (...) {}
+        }
+        record("error_blocked_type", ok,
+               ok ? "error response with type+code" : "unexpected response");
+    }
+
+    // Stats for nonexistent namespace -> stats_response with zeros
+    {
+        std::string fake_ns(64, 'f');
+        json msg = {{"type", "stats_request"}, {"request_id", 303},
+                    {"namespace", fake_ns}};
+        auto resp = send_recv(msg);
+        bool ok = resp && (*resp)["type"] == "stats_response" &&
+                  resp->contains("blob_count");
+        record("error_stats_nonexistent_ns", ok,
+               ok ? "stats_response with blob_count" : (resp ? resp->dump() : "no response"));
+    }
+
+    // =================================================================
+    // Goodbye (last fire-and-forget -- may trigger disconnect)
+    // =================================================================
+    {
+        json goodbye_msg = {{"type", "goodbye"}};
+        bool sent = ws_send_text(fd, goodbye_msg.dump());
+        record("goodbye", sent, sent ? "sent successfully" : "send failed");
+    }
+
+    // Unsubscribe (cleanup -- best effort after goodbye)
     {
         json unsubscribe_msg = {
             {"type", "unsubscribe"},
