@@ -748,6 +748,11 @@ void WsSession::close(uint16_t code, std::string_view reason) {
 // ---------------------------------------------------------------------------
 
 void WsSession::shutdown_socket() {
+    // SAFETY: std::visit is safe here because shutdown_socket() is NOT a coroutine.
+    // The lambda is synchronous (no co_await), so the enclosing stack frame stays
+    // valid for the entire visit call. The coroutine-unsafe pattern only applies
+    // when a lambda returns an awaitable inside a coroutine body.
+    // Audited: Phase 106 (FIX-02)
     std::visit([this](auto& stream) {
         using T = std::decay_t<decltype(stream)>;
         asio::error_code ec;
