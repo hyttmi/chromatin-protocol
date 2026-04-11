@@ -40,8 +40,8 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [ ] **ERR-01**: Node sends ErrorResponse(63) with error_code and original_type for all client-facing request failures instead of silent drop
 - [ ] **ERR-02**: Error codes are categorical (malformed_payload, unknown_type, decode_failed, validation_failed, internal_error) with no internal state leaked
 - [ ] **ERR-03**: NodeInfoRequest supported_types includes type 63 and PROTOCOL.md documents the ErrorResponse wire format
-- [ ] **ERR-04**: Relay translates ErrorResponse(63) binary to JSON with human-readable code and type names
-- [ ] **ERR-05**: Relay type_registry, message_filter, json_schema, and translator all handle ErrorResponse
+- [x] **ERR-04**: Relay translates ErrorResponse(63) binary to JSON with human-readable code and type names
+- [x] **ERR-05**: Relay type_registry, message_filter, json_schema, and translator all handle ErrorResponse
 - [ ] **ERR-06**: Prometheus error_responses_total counter tracks error responses sent by the node
 
 ## Future Requirements
@@ -83,8 +83,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-01 | Phase 999.2 | Pending |
 | ERR-02 | Phase 999.2 | Pending |
 | ERR-03 | Phase 999.2 | Pending |
-| ERR-04 | Phase 999.2 | Pending |
-| ERR-05 | Phase 999.2 | Pending |
+| ERR-04 | Phase 999.2 | Complete |
+| ERR-05 | Phase 999.2 | Complete |
 | ERR-06 | Phase 999.2 | Pending |
 
 **Coverage:**

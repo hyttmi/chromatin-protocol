@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 108-02-PLAN.md
-last_updated: "2026-04-11T14:13:53.077Z"
+stopped_at: Completed 999.2-02-PLAN.md
+last_updated: "2026-04-11T15:22:39.102Z"
 last_activity: 2026-04-11
 progress:
   total_phases: 11
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 9
+  completed_plans: 7
   percent: 100
 ---
 
@@ -38,6 +38,8 @@ Progress: [##########] 100%
 
 - Config restoration guard pattern for tests that mutate relay config via SIGHUP
 - 10-second SO_RCVTIMEO for SIGTERM test to accommodate worst-case shutdown sequence
+- [Phase 999.2]: ErrorResponse uses compound decoder (not flat) for human-readable error code/type names
+- [Phase 999.2]: Alphabetical sort: 'error' < 'exists_request' -- plan's sort position was wrong, corrected
 
 ### Pending Todos
 
@@ -49,5 +51,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-11T13:39:48Z
-Stopped at: Completed 108-02-PLAN.md
+Last session: 2026-04-11T15:22:39.099Z
+Stopped at: Completed 999.2-02-PLAN.md
