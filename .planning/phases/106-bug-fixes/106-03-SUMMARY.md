@@ -56,7 +56,7 @@ completed: 2026-04-11
 - **Duration:** 10 min
 - **Started:** 2026-04-11T04:21:24Z
 - **Completed:** 2026-04-11T04:31:26Z
-- **Tasks:** 2 completed, 1 checkpoint pending (human-verify)
+- **Tasks:** 3 completed (checkpoint approved)
 - **Files modified:** 5
 
 ## Accomplishments
@@ -71,7 +71,7 @@ Each task was committed atomically:
 
 1. **Task 1: UDS tap tool and binary fixture capture** - `67190b3` (feat)
 2. **Task 2: WebSocket smoke test** - `c43de1b` (feat)
-3. **Task 3: Live sanitizer validation** - CHECKPOINT PENDING (human-verify)
+3. **Task 3: Live sanitizer validation** - `c79b3e4` (fix) - APPROVED: tap 11/11, smoke 13/13, ASAN clean (shutdown leaks only)
 
 ## Files Created/Modified
 - `tools/relay_uds_tap.cpp` - Standalone UDS tap: TrustedHello + AEAD handshake, 11 compound request captures
@@ -87,7 +87,11 @@ Each task was committed atomically:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+- ListRequest payload was 32 bytes, node expects 44 (ns + since_seq + limit). Fixed.
+- NamespaceListRequest payload was empty, node expects 36 (after_ns + limit). Fixed.
+- TimeRangeRequest payload was 44 bytes, node expects 52 (ns + start_ts + end_ts + limit). Fixed.
+- Node sends unsolicited SyncNamespaceAnnounce(62) after handshake — tap tool now drains it before sending requests.
+- UBSAN/TSAN builds deferred to Phase 107 (more runtime coverage with full 38-type E2E suite).
 
 ## Issues Encountered
 - CMake configure failed initially because relay_smoke_test.cpp didn't exist yet (tools/CMakeLists.txt references both targets). Created placeholder file to unblock Task 1 build, replaced with full implementation in Task 2.
@@ -96,15 +100,13 @@ None - plan executed exactly as written.
 
 None - no external service configuration required.
 
-## Next Phase Readiness
-- Task 3 (live sanitizer validation) is a checkpoint requiring user to:
-  1. Start chromatindb node and relay
-  2. Run UDS tap tool to capture binary fixtures
-  3. Run smoke test against live relay
-  4. Build and test under ASAN, UBSAN, TSAN
-- Both tools are built and ready for the user to execute
-- After Task 3 approval, Phase 106 is complete and Phase 107 can begin
+## Live Test Results
+
+- **UDS tap:** 11/11 compound response types captured, response types match expected
+- **Smoke test:** 13/13 (TCP connect, WS upgrade, auth, subscribe, 7 compound queries)
+- **ASAN:** No runtime violations. Shutdown leaks only (29KB relay, 176B node — coroutine/OQS state at SIGTERM)
+- **UBSAN/TSAN:** Deferred to Phase 107 for better coverage
 
 ---
 *Phase: 106-bug-fixes*
-*Status: Checkpoint pending (Task 3 human-verify)*
+*Status: Complete*
