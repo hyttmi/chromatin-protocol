@@ -2,13 +2,15 @@
 
 namespace chromatindb::relay::core {
 
-uint32_t RequestRouter::register_request(uint64_t client_id, uint32_t client_rid) {
+uint32_t RequestRouter::register_request(uint64_t client_id, uint32_t client_rid,
+                                         uint8_t original_type) {
     uint32_t rid = next_relay_rid_;
 
     pending_[rid] = PendingRequest{
         .client_session_id = client_id,
         .client_request_id = client_rid,
         .created = std::chrono::steady_clock::now(),
+        .original_type = original_type,
     };
 
     // Advance counter, wrap from UINT32_MAX to 1 (skip 0, per D-07)
@@ -38,12 +40,16 @@ void RequestRouter::remove_client(uint64_t client_id) {
     });
 }
 
-size_t RequestRouter::purge_stale(std::chrono::seconds timeout) {
+size_t RequestRouter::purge_stale(std::chrono::seconds timeout,
+                                  std::function<void(const PendingRequest&)> on_timeout) {
     auto now = std::chrono::steady_clock::now();
     size_t count = 0;
 
     std::erase_if(pending_, [&](const auto& entry) {
         if (now - entry.second.created > timeout) {
+            if (on_timeout) {
+                on_timeout(entry.second);
+            }
             ++count;
             return true;
         }
@@ -51,6 +57,10 @@ size_t RequestRouter::purge_stale(std::chrono::seconds timeout) {
     });
 
     return count;
+}
+
+size_t RequestRouter::purge_stale(std::chrono::seconds timeout) {
+    return purge_stale(timeout, nullptr);
 }
 
 void RequestRouter::bulk_fail_all(

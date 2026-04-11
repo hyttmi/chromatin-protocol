@@ -587,7 +587,7 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
 
     // 4. Register request for response routing (per D-07, D-08)
     uint32_t client_rid = request_id.value_or(0);
-    uint32_t relay_rid = router_->register_request(session_id_, client_rid);
+    uint32_t relay_rid = router_->register_request(session_id_, client_rid, wire_type);
 
     // 5. Encode transport envelope with relay_rid and send to node
     auto transport_msg = wire::TransportCodec::encode(

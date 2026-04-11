@@ -720,6 +720,7 @@ static std::optional<nlohmann::json> decode_error_response(std::span<const uint8
         {3, "decode_failed"},
         {4, "validation_failed"},
         {5, "internal_error"},
+        {6, "timeout"},
     };
     std::string_view code_name = "unknown";
     for (const auto& [c, name] : ERROR_CODES) {

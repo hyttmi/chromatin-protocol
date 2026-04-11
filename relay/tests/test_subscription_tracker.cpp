@@ -230,8 +230,8 @@ TEST_CASE("bulk_fail_all does not affect subscription state", "[uds_reconnect]")
     tracker.subscribe(1, {ns_a, ns_b});
 
     // Register 2 pending requests
-    router.register_request(1, 10);
-    router.register_request(1, 20);
+    router.register_request(1, 10, 8);
+    router.register_request(1, 20, 8);
     REQUIRE(router.pending_count() == 2);
 
     // Bulk-fail all pending requests
