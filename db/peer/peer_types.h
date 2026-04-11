@@ -74,6 +74,7 @@ struct NodeMetrics {
     uint64_t full_resyncs = 0;            // Full resync rounds triggered
     uint64_t quota_rejections = 0;        // Namespace quota exceeded rejections
     uint64_t sync_rejections = 0;          // Sync rate limit rejections (cooldown + session + byte rate)
+    uint64_t error_responses = 0;          // ErrorResponse messages sent to clients
 };
 
 /// Hash functor for 32-byte arrays (first 8 bytes as uint64_t -- sufficient entropy for blob hashes).

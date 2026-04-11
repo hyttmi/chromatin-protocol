@@ -57,7 +57,7 @@ void MetricsCollector::log_metrics_line() {
                  "blobs={} storage={:.1f}MiB "
                  "syncs={} ingests={} rejections={} rate_limited={} "
                  "cursor_hits={} cursor_misses={} full_resyncs={} "
-                 "quota_rejections={} sync_rejections={} uptime={}",
+                 "quota_rejections={} sync_rejections={} error_responses={} uptime={}",
                  peers_->size(),
                  metrics_.peers_connected_total,
                  metrics_.peers_disconnected_total,
@@ -72,6 +72,7 @@ void MetricsCollector::log_metrics_line() {
                  metrics_.full_resyncs,
                  metrics_.quota_rejections,
                  metrics_.sync_rejections,
+                 metrics_.error_responses,
                  uptime);
 }
 
@@ -305,6 +306,11 @@ std::string MetricsCollector::format_prometheus_metrics() {
     out += "# HELP chromatindb_sync_rejections_total Sync rate limit rejections since startup.\n"
            "# TYPE chromatindb_sync_rejections_total counter\n"
            "chromatindb_sync_rejections_total " + std::to_string(metrics_.sync_rejections) + "\n"
+           "\n";
+
+    out += "# HELP chromatindb_error_responses_total ErrorResponse messages sent since startup.\n"
+           "# TYPE chromatindb_error_responses_total counter\n"
+           "chromatindb_error_responses_total " + std::to_string(metrics_.error_responses) + "\n"
            "\n";
 
     // Gauges (5 -- derived current-state values)

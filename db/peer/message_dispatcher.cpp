@@ -1,6 +1,7 @@
 #include "db/peer/message_dispatcher.h"
 #include "db/peer/blob_push_manager.h"
 #include "db/peer/connection_manager.h"
+#include "db/peer/error_codes.h"
 #include "db/peer/peer_manager.h"  // for static encode/decode methods
 #include "db/peer/pex_manager.h"
 #include "db/peer/sync_orchestrator.h"
@@ -54,6 +55,26 @@ bool try_consume_tokens(PeerInfo& peer, uint64_t bytes,
 }
 
 } // anonymous namespace
+
+/// Send ErrorResponse(63) with a 2-byte payload [error_code:1][original_type:1].
+/// Static free function -- safe to call from coroutine lambdas (no this capture needed).
+static asio::awaitable<void> send_error_response(
+    net::Connection::Ptr conn,
+    uint8_t error_code,
+    wire::TransportMsgType original_type,
+    uint32_t request_id,
+    NodeMetrics& metrics)
+{
+    std::array<uint8_t, 2> payload = {
+        error_code,
+        static_cast<uint8_t>(original_type)
+    };
+    co_await conn->send_message(
+        wire::TransportMsgType_ErrorResponse,
+        std::span<const uint8_t>(payload.data(), payload.size()),
+        request_id);
+    ++metrics.error_responses;
+}
 
 MessageDispatcher::MessageDispatcher(
     asio::io_context& ioc,
@@ -305,6 +326,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_Delete) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 auto blob = wire::decode_blob(payload);
                 if (!sync_namespaces_.empty() &&
@@ -338,11 +360,16 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     spdlog::warn("delete rejected from {}: {}",
                                  conn->remote_address(), result.error_detail);
                     record_strike_(conn, result.error_detail);
+                    co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_Delete, request_id, metrics_);
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed delete from {}: {}",
                              conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_Delete, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -366,9 +393,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_ReadRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 64) {
                     record_strike_(conn, "ReadRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_ReadRequest, request_id, metrics_);
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -396,6 +425,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ReadRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_ReadRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -403,9 +436,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_ListRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 44) {
                     record_strike_(conn, "ListRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_ListRequest, request_id, metrics_);
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -436,9 +471,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 uint32_t count = static_cast<uint32_t>(filtered_refs.size());
                 auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{40});
-                if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_return; }
+                if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_ListRequest, request_id, metrics_); co_return; }
                 auto resp_size = chromatindb::util::checked_add(*body_size, size_t{5});
-                if (!resp_size) { record_strike_(conn, "ListResponse overflow"); co_return; }
+                if (!resp_size) { record_strike_(conn, "ListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_ListRequest, request_id, metrics_); co_return; }
                 std::vector<uint8_t> response(*resp_size);
                 chromatindb::util::store_u32_be(response.data(), count);
                 for (uint32_t i = 0; i < count; ++i) {
@@ -453,6 +488,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ListRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_ListRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -460,9 +499,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_StatsRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 32) {
                     record_strike_(conn, "StatsRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_StatsRequest, request_id, metrics_);
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -480,6 +521,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("malformed StatsRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_StatsRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -487,9 +532,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_ExistsRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 64) {
                     record_strike_(conn, "ExistsRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_ExistsRequest, request_id, metrics_);
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -509,6 +556,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("malformed ExistsRequest from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_ExistsRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -516,6 +567,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_NodeInfoRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 std::string version = CHROMATINDB_VERSION;
                 std::string git_hash = CHROMATINDB_GIT_HASH;
@@ -538,7 +590,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     37, 38, 39, 40,
                     41, 42, 43, 44, 45, 46,
                     47, 48, 49, 50, 51, 52,
-                    53, 54, 55, 56, 57, 58
+                    53, 54, 55, 56, 57, 58,
+                    63  // ErrorResponse
                 };
                 uint8_t types_count = static_cast<uint8_t>(sizeof(supported));
 
@@ -583,6 +636,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("NodeInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_INTERNAL;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_NodeInfoRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -590,9 +647,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_NamespaceListRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 36) {
                     record_strike_(conn, "NamespaceListRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_NamespaceListRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -625,9 +684,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 bool has_more = (it != all_ns.end());
 
                 auto body = chromatindb::util::checked_mul(entries.size(), size_t{40});
-                if (!body) { record_strike_(conn, "NamespaceListResponse overflow"); co_return; }
+                if (!body) { record_strike_(conn, "NamespaceListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_NamespaceListRequest, request_id, metrics_); co_return; }
                 auto resp_size_opt = chromatindb::util::checked_add(*body, size_t{5});
-                if (!resp_size_opt) { record_strike_(conn, "NamespaceListResponse overflow"); co_return; }
+                if (!resp_size_opt) { record_strike_(conn, "NamespaceListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_NamespaceListRequest, request_id, metrics_); co_return; }
                 size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
@@ -650,6 +709,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("NamespaceListRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_INTERNAL;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_NamespaceListRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -657,6 +720,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_StorageStatusRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 uint64_t used_data = storage_.used_data_bytes();
                 uint64_t max_storage = config_max_storage_bytes_();
@@ -689,6 +753,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("StorageStatusRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_INTERNAL;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_StorageStatusRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -696,9 +764,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_NamespaceStatsRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 32) {
                     record_strike_(conn, "NamespaceStatsRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_NamespaceStatsRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -740,6 +810,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("NamespaceStatsRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_NamespaceStatsRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -747,9 +821,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_MetadataRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 64) {
                     record_strike_(conn, "MetadataRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_MetadataRequest, request_id, metrics_);
                     co_return;
                 }
                 auto [ns, hash] = chromatindb::util::extract_namespace_hash(std::span{payload});
@@ -815,6 +891,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("MetadataRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_MetadataRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -822,9 +902,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_BatchExistsRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 36) {
                     record_strike_(conn, "BatchExistsRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_BatchExistsRequest, request_id, metrics_);
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -833,12 +915,14 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 if (count == 0 || count > 1024) {
                     record_strike_(conn, "BatchExistsRequest invalid count");
+                    co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_BatchExistsRequest, request_id, metrics_);
                     co_return;
                 }
 
                 size_t expected_size = 36 + static_cast<size_t>(count) * 32;
                 if (payload.size() < expected_size) {
                     record_strike_(conn, "BatchExistsRequest payload too short for count");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_BatchExistsRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -856,6 +940,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("BatchExistsRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_BatchExistsRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -863,9 +951,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_DelegationListRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 32) {
                     record_strike_(conn, "DelegationListRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_DelegationListRequest, request_id, metrics_);
                     co_return;
                 }
                 auto ns = chromatindb::util::extract_namespace(std::span{payload});
@@ -874,9 +964,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 uint32_t entry_count = static_cast<uint32_t>(entries.size());
                 auto body = chromatindb::util::checked_mul(static_cast<size_t>(entry_count), size_t{64});
-                if (!body) { record_strike_(conn, "DelegationListResponse overflow"); co_return; }
+                if (!body) { record_strike_(conn, "DelegationListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_DelegationListRequest, request_id, metrics_); co_return; }
                 auto resp_size_opt = chromatindb::util::checked_add(size_t{4}, *body);
-                if (!resp_size_opt) { record_strike_(conn, "DelegationListResponse overflow"); co_return; }
+                if (!resp_size_opt) { record_strike_(conn, "DelegationListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_DelegationListRequest, request_id, metrics_); co_return; }
                 size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
@@ -896,6 +986,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("DelegationListRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_DelegationListRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -903,9 +997,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_BatchReadRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 40) {
                     record_strike_(conn, "BatchReadRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_BatchReadRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -921,12 +1017,14 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 if (count == 0 || count > 256) {
                     record_strike_(conn, "BatchReadRequest invalid count");
+                    co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_BatchReadRequest, request_id, metrics_);
                     co_return;
                 }
 
                 size_t expected_size = 40 + static_cast<size_t>(count) * 32;
                 if (payload.size() < expected_size) {
                     record_strike_(conn, "BatchReadRequest payload too short for count");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_BatchReadRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -1008,6 +1106,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("BatchReadRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_BatchReadRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -1015,6 +1117,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_PeerInfoRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 bool trusted = conn->is_uds();
                 if (!trusted) {
@@ -1079,6 +1182,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("PeerInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_INTERNAL;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_PeerInfoRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -1086,9 +1193,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_TimeRangeRequest) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 if (payload.size() < 52) {
                     record_strike_(conn, "TimeRangeRequest too short");
+                    co_await send_error_response(conn, ERROR_MALFORMED_PAYLOAD, wire::TransportMsgType_TimeRangeRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -1099,6 +1208,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 if (start_ts > end_ts) {
                     record_strike_(conn, "TimeRangeRequest invalid range (start > end)");
+                    co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_TimeRangeRequest, request_id, metrics_);
                     co_return;
                 }
 
@@ -1145,9 +1255,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 uint32_t result_count = static_cast<uint32_t>(results.size());
                 auto body = chromatindb::util::checked_mul(static_cast<size_t>(result_count), size_t{48});
-                if (!body) { record_strike_(conn, "TimeRangeResponse overflow"); co_return; }
+                if (!body) { record_strike_(conn, "TimeRangeResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_TimeRangeRequest, request_id, metrics_); co_return; }
                 auto resp_size_opt = chromatindb::util::checked_add(size_t{5}, *body);
-                if (!resp_size_opt) { record_strike_(conn, "TimeRangeResponse overflow"); co_return; }
+                if (!resp_size_opt) { record_strike_(conn, "TimeRangeResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_TimeRangeRequest, request_id, metrics_); co_return; }
                 size_t resp_size = *resp_size_opt;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
@@ -1171,6 +1281,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             } catch (const std::exception& e) {
                 spdlog::warn("TimeRangeRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_TimeRangeRequest, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -1178,6 +1292,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_Data) {
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
+            uint8_t catch_error = 0;
             try {
                 auto blob = wire::decode_blob(payload);
                 if (!sync_namespaces_.empty() &&
@@ -1232,12 +1347,17 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                                      conn->remote_address(),
                                      result.error_detail.empty() ? "validation failed" : result.error_detail);
                         record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_Data, request_id, metrics_);
                     }
                 }
             } catch (const std::exception& e) {
                 spdlog::warn("malformed data message from peer {}: {}",
                              conn->remote_address(), e.what());
                 record_strike_(conn, e.what());
+                catch_error = ERROR_DECODE_FAILED;
+            }
+            if (catch_error) {
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_Data, request_id, metrics_);
             }
         }, asio::detached);
         return;
@@ -1247,6 +1367,10 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
     // Log anything else so protocol mismatches don't disappear silently.
     spdlog::debug("unrecognized message type {} from {}",
                   static_cast<int>(type), conn->remote_address());
+    record_strike_(conn, "unrecognized message type");
+    asio::co_spawn(ioc_, [conn, type, request_id, &metrics = metrics_]() -> asio::awaitable<void> {
+        co_await send_error_response(conn, ERROR_UNKNOWN_TYPE, type, request_id, metrics);
+    }, asio::detached);
 }
 
 } // namespace chromatindb::peer

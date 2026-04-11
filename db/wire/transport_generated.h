@@ -84,11 +84,12 @@ enum TransportMsgType : int8_t {
   TransportMsgType_BlobFetch = 60,
   TransportMsgType_BlobFetchResponse = 61,
   TransportMsgType_SyncNamespaceAnnounce = 62,
+  TransportMsgType_ErrorResponse = 63,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_SyncNamespaceAnnounce
+  TransportMsgType_MAX = TransportMsgType_ErrorResponse
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[63] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[64] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -152,13 +153,14 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[63] {
     TransportMsgType_BlobNotify,
     TransportMsgType_BlobFetch,
     TransportMsgType_BlobFetchResponse,
-    TransportMsgType_SyncNamespaceAnnounce
+    TransportMsgType_SyncNamespaceAnnounce,
+    TransportMsgType_ErrorResponse
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[64] = {
+  static const char * const names[65] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -222,13 +224,14 @@ inline const char * const *EnumNamesTransportMsgType() {
     "BlobFetch",
     "BlobFetchResponse",
     "SyncNamespaceAnnounce",
+    "ErrorResponse",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_SyncNamespaceAnnounce)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_ErrorResponse)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }

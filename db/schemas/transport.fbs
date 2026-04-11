@@ -80,7 +80,9 @@ enum TransportMsgType : byte {
     BlobFetch = 60,
     BlobFetchResponse = 61,
     // Phase 86: Namespace filtering
-    SyncNamespaceAnnounce = 62
+    SyncNamespaceAnnounce = 62,
+    // Phase 999.2: Error response for malformed client requests
+    ErrorResponse = 63
 }
 
 table TransportMessage {
