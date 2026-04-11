@@ -1,94 +1,52 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.1.0
+milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 107-01-PLAN.md
-last_updated: "2026-04-11T11:18:42.031Z"
+status: in-progress
+last_updated: "2026-04-11T13:39:48Z"
 last_activity: 2026-04-11
 progress:
-  total_phases: 5
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 5
-  percent: 18
+  total_phases: 18
+  completed_phases: 16
+  total_plans: 33
+  completed_plans: 34
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-10)
+See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 107 — message-type-verification
+**Current focus:** v3.1.0 Relay Live Hardening -- Phase 108 live feature verification in progress.
 
 ## Current Position
 
-Phase: 108
-Plan: 1 of 2
-Status: Plan 01 complete
+Phase: 108-live-feature-verification
+Plan: 02 of 2 (Feature Test Implementation)
+Status: Plan 02 complete
 Last activity: 2026-04-11
 
-Progress: [██░░░░░░░░] 18%
-
-## Performance Metrics
-
-**Velocity:**
-
-- Total plans completed: 2
-- Average duration: 8.5min
-- Total execution time: 0.3 hours
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 106 | 2/3 | 17min | 8.5min |
-
-**Recent Trend (carried from v3.0.0):**
-| Phase 103 P02 | 20min | 2 tasks | 16 files |
-| Phase 104 P01 | 10min | 2 tasks | 14 files |
-| Phase 104 P02 | 5min | 2 tasks | 6 files |
-| Phase 105 P01 | 28min | 3 tasks | 11 files |
-| Phase 105 P02 | 18min | 2 tasks | 10 files |
-| Phase 106 P01 | 11min | 2 tasks | 5 files |
-| Phase 106 P02 | 6min | 2 tasks | 3 files |
-| Phase 106 P03 | 10min | 2/3 tasks | 5 files |
-| Phase 107 P01 | 5min | 3 tasks | 1 files |
-| Phase 108 P01 | 11min | 2 tasks | 4 files |
+Progress: [##########] 100%
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- v3.0.0: Node code (db/) is frozen -- no changes this milestone
-- v3.0.0: Test against local node on dev laptop (UDS), no KVM swarm needed
-- [Phase 103]: 10 compound response types with custom decode helpers -- NodeInfoResponse, NamespaceStatsResponse, StorageStatusResponse need compound decode
-- [Phase 104]: SubscriptionTracker uses u16BE namespace encoding (NOT translator's u32BE HEX_32_ARRAY)
-- [Phase 105]: Token bucket burst equals rate, no separate burst config
-- [Phase 106]: Relay coroutine patterns all safe -- no code fixes needed, only documentation
-- [Phase 106]: StatsResponse field names: blob_count, storage_bytes, quota_bytes_limit (per-namespace semantics)
-- [Phase 106]: NodeInfoResponse: unknown type bytes rendered as numeric strings, not silently dropped
-- [Phase 106]: Blocking POSIX sockets for tools (not Asio) -- deterministic sanitizer testing
-- [Phase 106]: Data(8) write skipped in smoke test -- requires signed blob, covered by UDS tap
-- [Phase 107]: All 38 relay-allowed message types verified in single smoke test binary with ML-DSA-87 signed blob write chain
-- [Phase 108 P01]: Shared test helpers extracted to relay_test_helpers.h, relay_feature_test skeleton with CLI and four test stubs
+- Config restoration guard pattern for tests that mutate relay config via SIGHUP
+- 10-second SO_RCVTIMEO for SIGTERM test to accommodate worst-case shutdown sequence
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-- FIX-01: RESOLVED -- compound decoders rewritten
-- FIX-02: RESOLVED -- coroutine audit clean, no unsafe patterns
+None.
 
-## Session Continuity
+### Session
 
-Last session: 2026-04-11T13:31:21Z
-Stopped at: Completed 108-01-PLAN.md
-Resume file: None
+Last session: 2026-04-11T13:39:48Z
+Stopped at: Completed 108-02-PLAN.md
