@@ -16,6 +16,7 @@
 namespace chromatindb::relay::core {
 
 class SubscriptionTracker;  // Forward declaration (Phase 104)
+struct RelayMetrics;  // Forward declaration (metrics_collector.h)
 
 /// Single multiplexed UDS connection to the local chromatindb node.
 /// Performs TrustedHello + HKDF + AEAD handshake, encrypts all post-handshake
@@ -40,6 +41,12 @@ public:
 
     /// Set subscription tracker for notification fan-out (Phase 104).
     void set_tracker(SubscriptionTracker* t);
+
+    /// Set pointer to relay_main's SIGHUP-reloadable request timeout atomic.
+    void set_request_timeout(const std::atomic<uint32_t>* timeout);
+
+    /// Set pointer to relay-level metrics for counter increments.
+    void set_metrics(RelayMetrics* metrics);
 
 private:
     /// Retry connect with jittered backoff (1s base, 30s cap). Per D-04.
@@ -81,6 +88,9 @@ private:
     /// Bulk-fail all pending requests, sending error JSON to each client (D-13).
     void bulk_fail_pending_requests();
 
+    /// Send timeout ErrorResponse JSON to client for a stale pending request.
+    void send_timeout_error(const PendingRequest& pending);
+
     asio::io_context& ioc_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
@@ -102,6 +112,12 @@ private:
 
     // Subscription tracking (Phase 104)
     SubscriptionTracker* tracker_ = nullptr;
+
+    // Request timeout (SIGHUP-reloadable via relay_main atomic)
+    const std::atomic<uint32_t>* request_timeout_ = nullptr;
+
+    // Relay-level metrics for counter increments
+    RelayMetrics* metrics_ = nullptr;
 };
 
 } // namespace chromatindb::relay::core

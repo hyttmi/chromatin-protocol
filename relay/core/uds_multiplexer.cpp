@@ -1,4 +1,5 @@
 #include "relay/core/uds_multiplexer.h"
+#include "relay/core/metrics_collector.h"
 #include "relay/core/subscription_tracker.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
@@ -65,6 +66,14 @@ bool UdsMultiplexer::is_connected() const {
 
 void UdsMultiplexer::set_tracker(SubscriptionTracker* t) {
     tracker_ = t;
+}
+
+void UdsMultiplexer::set_request_timeout(const std::atomic<uint32_t>* timeout) {
+    request_timeout_ = timeout;
+}
+
+void UdsMultiplexer::set_metrics(RelayMetrics* metrics) {
+    metrics_ = metrics;
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +630,37 @@ void UdsMultiplexer::bulk_fail_pending_requests() {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout error for stale pending requests
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::send_timeout_error(const PendingRequest& pending) {
+    auto session = sessions_.get_session(pending.client_session_id);
+    if (!session) return;  // Session already gone -- graceful no-op
+
+    nlohmann::json err;
+    err["type"] = "error";
+    err["code"] = "timeout";
+
+    auto type_name = translate::type_to_string(pending.original_type);
+    err["original_type"] = type_name
+        ? std::string(*type_name)
+        : std::to_string(pending.original_type);
+
+    if (pending.client_request_id != 0) {
+        err["request_id"] = pending.client_request_id;
+    }
+
+    session->send_json(err);
+
+    // Increment both counters (errors_total for general error tracking,
+    // request_timeouts_total for timeout-specific dashboards)
+    if (metrics_) {
+        metrics_->errors_total.fetch_add(1, std::memory_order_relaxed);
+        metrics_->request_timeouts_total.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Subscription replay after reconnect (D-10)
 // ---------------------------------------------------------------------------
 
@@ -657,14 +697,37 @@ void UdsMultiplexer::replay_subscriptions() {
 
 asio::awaitable<void> UdsMultiplexer::cleanup_loop() {
     while (connected_) {
+        // Read timeout atomically each iteration (SIGHUP may change it)
+        uint32_t timeout_sec = request_timeout_
+            ? request_timeout_->load(std::memory_order_relaxed)
+            : 0;
+        bool timeout_enabled = (timeout_sec > 0);
+
+        // Dynamic interval: timeout/2 (min 1s) when enabled, 60s when disabled
+        uint32_t interval = timeout_enabled
+            ? std::max(timeout_sec / 2, 1u)
+            : 60u;
+
         asio::steady_timer timer(ioc_);
-        timer.expires_after(std::chrono::seconds(60));
+        timer.expires_after(std::chrono::seconds(interval));
         auto [ec] = co_await timer.async_wait(use_nothrow);
         if (ec || !connected_) break;
 
-        auto purged = router_.purge_stale();
-        if (purged > 0) {
-            spdlog::debug("UDS cleanup: purged {} stale requests", purged);
+        auto threshold = std::chrono::seconds(timeout_enabled ? timeout_sec : 60);
+
+        if (timeout_enabled) {
+            auto purged = router_.purge_stale(threshold,
+                [this](const PendingRequest& pending) {
+                    send_timeout_error(pending);
+                });
+            if (purged > 0) {
+                spdlog::info("cleanup: {} request(s) timed out", purged);
+            }
+        } else {
+            auto purged = router_.purge_stale(threshold);
+            if (purged > 0) {
+                spdlog::debug("cleanup: purged {} stale requests", purged);
+            }
         }
     }
 }

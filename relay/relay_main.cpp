@@ -201,6 +201,7 @@ int main(int argc, char* argv[]) {
     // Shared state for graceful shutdown and rate limiting
     std::atomic<bool> stopping{false};
     std::atomic<uint32_t> rate_limit_rate{cfg.rate_limit_messages_per_sec};
+    std::atomic<uint32_t> request_timeout{cfg.request_timeout_seconds};
 
     // Create RequestRouter, SessionManager, SubscriptionTracker
     chromatindb::relay::core::RequestRouter request_router;
@@ -220,10 +221,17 @@ int main(int argc, char* argv[]) {
     } else {
         spdlog::info("  rate_limit: disabled");
     }
+    if (cfg.request_timeout_seconds > 0) {
+        spdlog::info("  request_timeout: {}s", cfg.request_timeout_seconds);
+    } else {
+        spdlog::info("  request_timeout: disabled");
+    }
 
     chromatindb::relay::core::UdsMultiplexer uds_mux(
         ioc, cfg.uds_path, identity, request_router, session_manager);
     uds_mux.set_tracker(&subscription_tracker);
+    uds_mux.set_request_timeout(&request_timeout);
+    uds_mux.set_metrics(&metrics_collector.metrics());
     uds_mux.start();
     spdlog::info("  uds_mux: started (connecting to {})", cfg.uds_path);
 
@@ -347,6 +355,13 @@ int main(int argc, char* argv[]) {
                          new_cfg.rate_limit_messages_per_sec == 0
                              ? std::string("disabled")
                              : std::to_string(new_cfg.rate_limit_messages_per_sec) + " msg/s");
+
+            // Reload request timeout
+            request_timeout.store(new_cfg.request_timeout_seconds, std::memory_order_relaxed);
+            spdlog::info("request_timeout reloaded: {}",
+                         new_cfg.request_timeout_seconds == 0
+                             ? std::string("disabled")
+                             : std::to_string(new_cfg.request_timeout_seconds) + "s");
 
             // Reload metrics_bind (per D-15)
             metrics_collector.set_metrics_bind(new_cfg.metrics_bind);
