@@ -16,6 +16,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 **Phase 106 complete (2026-04-11):** All compound decoder bugs fixed (FIX-01), coroutine safety audit clean (FIX-02). UDS tap + smoke test tools built. ASAN clean.
 
+**Phase 107 complete (2026-04-11):** E2E smoke test extended to 31 tests covering all 38 relay-allowed message types. 3 relay translation bugs found and fixed (Delete FlatBuffer encoding, DeleteAck fields, TimeRange end_ts). Full data write chain verified (write→read→metadata→exists→batch_exists→batch_read→delete→notification).
+
 **Remaining:**
 - Test all 38 message types end-to-end through relay→node→relay
 - Test subscribe/notification fan-out flow live
@@ -387,7 +389,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-10 after Phase 104 (Pub/Sub & UDS Resilience) complete*
+*Last updated: 2026-04-11 after Phase 107 (Message Type Verification) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
