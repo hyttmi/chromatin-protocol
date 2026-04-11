@@ -90,3 +90,35 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 108. Live Feature Verification | 0/0 | Not started | - |
 | 109. New Features | 0/0 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
+
+## Backlog
+
+### Phase 999.1: Tombstone TTL lifecycle management (BACKLOG)
+**Goal:** [Captured for future planning]
+**Requirements:** TBD
+**Plans:** 0 plans
+
+### Phase 999.2: Node silent failure on malformed requests (BACKLOG)
+**Goal:** Node records strikes but sends NO error response on malformed requests — client hangs forever. Every request must guarantee a response. Add error response type for rejected messages.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+### Phase 999.3: Relay request timeout with error feedback (BACKLOG)
+**Goal:** RequestRouter lets requests sit pending 60s before silent cleanup. Add configurable per-request timeout (e.g. 10s) that sends `{"type": "error", "code": "timeout"}` to the client when the node doesn't respond.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+### Phase 999.4: Relay ASAN heap-use-after-free on shutdown (BACKLOG)
+**Goal:** Relay shows heap-use-after-free (not just leaks) during shutdown — likely a coroutine accessing a destroyed session or io_context. Real memory safety bug that needs investigation.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+### Phase 999.5: Binary WS frame inconsistency for JSON responses (BACKLOG)
+**Goal:** ReadResponse/BatchReadResponse sent as binary WS frames (opcode 0x02) but payload is JSON text. Either use text frames for JSON or send actual binary. Current approach forces clients to special-case two types for no benefit.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+### Phase 999.6: Notification echo on own writes (BACKLOG)
+**Goal:** Client writing to a subscribed namespace gets both write_ack AND notification for its own write. Phase 109 (source-exclusion) is planned but currently every client must handle/ignore its own echo.
+**Requirements:** TBD
+**Plans:** 0 plans
