@@ -145,10 +145,11 @@ TEST_CASE("FieldEncoding enum covers expected values", "[json_schema]") {
     REQUIRE(found_hex32);
     REQUIRE(found_request_id);
 
-    auto stats = schema_for_name("stats_response");
-    REQUIRE(stats != nullptr);
+    // StatsResponse is now compound (no FieldSpec entries). Check write_ack for UINT64_STRING.
+    auto write_ack = schema_for_name("write_ack");
+    REQUIRE(write_ack != nullptr);
     bool found_uint64 = false;
-    for (const auto& f : stats->fields) {
+    for (const auto& f : write_ack->fields) {
         if (f.encoding == FieldEncoding::UINT64_STRING) found_uint64 = true;
     }
     REQUIRE(found_uint64);

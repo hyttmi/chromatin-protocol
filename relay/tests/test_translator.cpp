@@ -81,12 +81,19 @@ TEST_CASE("json_to_binary: ExistsRequest", "[translator]") {
     REQUIRE(result->payload.size() == 64);
 }
 
-TEST_CASE("json_to_binary: StatsRequest (empty payload)", "[translator]") {
-    nlohmann::json msg = {{"type", "stats_request"}};
+TEST_CASE("json_to_binary: StatsRequest with namespace", "[translator]") {
+    nlohmann::json msg = {
+        {"type", "stats_request"},
+        {"namespace", hex32(0xAA)}
+    };
     auto result = json_to_binary(msg);
     REQUIRE(result.has_value());
     REQUIRE(result->wire_type == 35);
-    REQUIRE(result->payload.empty());
+    REQUIRE(result->payload.size() == 32);
+    // Verify namespace bytes
+    for (int i = 0; i < 32; ++i) {
+        REQUIRE(result->payload[i] == 0xAA);
+    }
 }
 
 TEST_CASE("json_to_binary: DeleteRequest", "[translator]") {
@@ -240,23 +247,19 @@ TEST_CASE("binary_to_json: ExistsResponse", "[translator]") {
     REQUIRE((*json)["exists"] == true);
 }
 
-TEST_CASE("binary_to_json: StatsResponse", "[translator]") {
-    // StatsResponse(36): [total_blobs:u64BE][storage_used:u64BE][storage_max:u64BE]
-    //                     [namespace_count:u32BE][peer_count:u32BE][uptime:u64BE]
-    std::vector<uint8_t> payload(48);
-    store_u64_be(payload.data(), 1000);       // total_blobs
-    store_u64_be(payload.data() + 8, 2000);   // storage_used
-    store_u64_be(payload.data() + 16, 5000);  // storage_max
-    store_u32_be(payload.data() + 24, 10);    // namespace_count
-    store_u32_be(payload.data() + 28, 5);     // peer_count
-    store_u64_be(payload.data() + 32, 86400); // uptime
+TEST_CASE("binary_to_json: StatsResponse (compound 24-byte)", "[translator]") {
+    // StatsResponse(36): [blob_count:u64BE][storage_bytes:u64BE][quota_bytes_limit:u64BE]
+    std::vector<uint8_t> payload(24);
+    store_u64_be(payload.data(), 42);         // blob_count
+    store_u64_be(payload.data() + 8, 8192);   // storage_bytes
+    store_u64_be(payload.data() + 16, 1048576); // quota_bytes_limit
 
     auto json = binary_to_json(36, payload);
     REQUIRE(json.has_value());
     REQUIRE((*json)["type"] == "stats_response");
-    REQUIRE((*json)["total_blobs"] == "1000");
-    REQUIRE((*json)["storage_used"] == "2000");
-    REQUIRE((*json)["peer_count"] == 5);
+    REQUIRE((*json)["blob_count"] == "42");
+    REQUIRE((*json)["storage_bytes"] == "8192");
+    REQUIRE((*json)["quota_bytes_limit"] == "1048576");
 }
 
 TEST_CASE("binary_to_json: ReadResponse (FlatBuffer)", "[translator]") {
@@ -397,19 +400,22 @@ TEST_CASE("binary_to_json: PeerInfoResponse trusted format", "[translator]") {
     REQUIRE((*json)["peers"][0]["duration_ms"] == "60000");
 }
 
-TEST_CASE("binary_to_json: TimeRangeResponse", "[translator]") {
+TEST_CASE("binary_to_json: TimeRangeResponse (truncated-first, 48-byte entries)", "[translator]") {
+    // TimeRangeResponse(58): [truncated:u8][count:u32BE][ [hash:32][seq_num:u64BE][timestamp:u64BE] * count ]
     uint32_t count = 1;
-    std::vector<uint8_t> payload(4 + count * 40 + 1);
-    store_u32_be(payload.data(), count);
-    std::memset(payload.data() + 4, 0xEE, 32);
-    store_u64_be(payload.data() + 36, 1234567);
-    payload.back() = 0;  // not truncated
+    std::vector<uint8_t> payload(5 + count * 48);
+    payload[0] = 0;  // not truncated
+    store_u32_be(payload.data() + 1, count);
+    std::memset(payload.data() + 5, 0xEE, 32);        // hash
+    store_u64_be(payload.data() + 37, 42);             // seq_num
+    store_u64_be(payload.data() + 45, 1234567);        // timestamp
 
     auto json = binary_to_json(58, payload);
     REQUIRE(json.has_value());
     REQUIRE((*json)["type"] == "time_range_response");
     REQUIRE((*json)["truncated"] == false);
     REQUIRE((*json)["entries"].size() == 1);
+    REQUIRE((*json)["entries"][0]["seq_num"] == "42");
     REQUIRE((*json)["entries"][0]["timestamp"] == "1234567");
 }
 
@@ -543,11 +549,310 @@ TEST_CASE("schema fixes: compound types are marked is_compound", "[translator][s
     // ListResponse(34), NamespaceListResponse(42), MetadataResponse(48),
     // BatchExistsResponse(50), DelegationListResponse(52),
     // PeerInfoResponse(56), TimeRangeResponse(58)
-    uint8_t compound_types[] = {34, 40, 42, 44, 46, 48, 50, 52, 56, 58};
+    uint8_t compound_types[] = {34, 36, 40, 42, 44, 46, 48, 50, 52, 56, 58};
     for (auto wt : compound_types) {
         auto s = schema_for_type(wt);
         INFO("wire_type=" << static_cast<int>(wt));
         REQUIRE(s != nullptr);
         REQUIRE(s->is_compound == true);
     }
+}
+
+// =============================================================================
+// Comprehensive decoder tests for fixed compound types (106-01)
+// =============================================================================
+
+TEST_CASE("decode NodeInfoResponse: u8 string lengths and raw type bytes", "[translator][compound]") {
+    // Build payload matching node's u8-prefixed format:
+    // [ver_len:u8][version][gh_len:u8][git_hash]
+    // [uptime:u64BE][peer_count:u32BE][namespace_count:u32BE]
+    // [total_blobs:u64BE][storage_used:u64BE][storage_max:u64BE]
+    // [types_count:u8][type_bytes...]
+    std::string version = "1.0.0";
+    std::string git_hash = "abc123";
+
+    std::vector<uint8_t> payload;
+    // version: u8 len + string
+    payload.push_back(static_cast<uint8_t>(version.size()));
+    payload.insert(payload.end(), version.begin(), version.end());
+    // git_hash: u8 len + string
+    payload.push_back(static_cast<uint8_t>(git_hash.size()));
+    payload.insert(payload.end(), git_hash.begin(), git_hash.end());
+
+    // Fixed fields
+    size_t fixed_off = payload.size();
+    payload.resize(payload.size() + 8 + 4 + 4 + 8 + 8 + 8);
+    store_u64_be(payload.data() + fixed_off, 1000);       // uptime
+    store_u32_be(payload.data() + fixed_off + 8, 2);      // peer_count
+    store_u32_be(payload.data() + fixed_off + 12, 3);     // namespace_count
+    store_u64_be(payload.data() + fixed_off + 16, 100);   // total_blobs
+    store_u64_be(payload.data() + fixed_off + 24, 5000);  // storage_used
+    store_u64_be(payload.data() + fixed_off + 32, 10000); // storage_max
+
+    // supported_types: u8 count + raw type bytes
+    // Ping=5, Pong=6, Goodbye=7
+    payload.push_back(3);  // types_count
+    payload.push_back(5);  // Ping
+    payload.push_back(6);  // Pong
+    payload.push_back(7);  // Goodbye
+
+    auto json = binary_to_json(40, payload);
+    REQUIRE(json.has_value());
+
+    SECTION("string fields decoded correctly") {
+        REQUIRE((*json)["version"] == "1.0.0");
+        REQUIRE((*json)["git_hash"] == "abc123");
+    }
+
+    SECTION("numeric fields decoded correctly") {
+        REQUIRE((*json)["uptime"] == "1000");
+        REQUIRE((*json)["peer_count"] == 2);
+        REQUIRE((*json)["namespace_count"] == 3);
+        REQUIRE((*json)["total_blobs"] == "100");
+        REQUIRE((*json)["storage_used"] == "5000");
+        REQUIRE((*json)["storage_max"] == "10000");
+    }
+
+    SECTION("supported_types translated via type_to_string") {
+        REQUIRE((*json)["supported_types"].is_array());
+        REQUIRE((*json)["supported_types"].size() == 3);
+        REQUIRE((*json)["supported_types"][0] == "ping");
+        REQUIRE((*json)["supported_types"][1] == "pong");
+        REQUIRE((*json)["supported_types"][2] == "goodbye");
+    }
+}
+
+TEST_CASE("decode NodeInfoResponse: unknown type byte falls back to numeric string", "[translator][compound]") {
+    std::vector<uint8_t> payload;
+    // version: empty string
+    payload.push_back(0);
+    // git_hash: empty string
+    payload.push_back(0);
+    // Fixed fields (all zeros)
+    payload.resize(payload.size() + 8 + 4 + 4 + 8 + 8 + 8, 0);
+    // 1 type with unknown value 255
+    payload.push_back(1);
+    payload.push_back(255);
+
+    auto json = binary_to_json(40, payload);
+    REQUIRE(json.has_value());
+    REQUIRE((*json)["supported_types"].size() == 1);
+    REQUIRE((*json)["supported_types"][0] == "255");
+}
+
+TEST_CASE("decode NodeInfoResponse: truncated input returns nullopt", "[translator][compound]") {
+    SECTION("empty payload") {
+        auto json = binary_to_json(40, std::span<const uint8_t>{});
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("version only, no git_hash") {
+        std::vector<uint8_t> payload = {3, 'a', 'b', 'c'};
+        auto json = binary_to_json(40, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("strings complete but fixed fields too short") {
+        std::vector<uint8_t> payload = {1, 'x', 1, 'y'};
+        // Missing 40 bytes of fixed fields
+        auto json = binary_to_json(40, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("header complete but types section short") {
+        std::vector<uint8_t> payload;
+        payload.push_back(0);  // empty version
+        payload.push_back(0);  // empty git_hash
+        payload.resize(payload.size() + 40, 0);  // fixed fields
+        payload.push_back(3);  // claims 3 types
+        payload.push_back(5);  // but only 1 byte
+        auto json = binary_to_json(40, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+}
+
+TEST_CASE("decode StatsResponse: 24-byte compound format", "[translator][compound]") {
+    std::vector<uint8_t> payload(24);
+    store_u64_be(payload.data(), 42);
+    store_u64_be(payload.data() + 8, 8192);
+    store_u64_be(payload.data() + 16, 1048576);
+
+    auto json = binary_to_json(36, payload);
+    REQUIRE(json.has_value());
+    REQUIRE((*json)["type"] == "stats_response");
+    REQUIRE((*json)["blob_count"] == "42");
+    REQUIRE((*json)["storage_bytes"] == "8192");
+    REQUIRE((*json)["quota_bytes_limit"] == "1048576");
+}
+
+TEST_CASE("decode StatsResponse: truncated input returns nullopt", "[translator][compound]") {
+    SECTION("empty payload") {
+        auto json = binary_to_json(36, std::span<const uint8_t>{});
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("23 bytes (one short)") {
+        std::vector<uint8_t> payload(23, 0);
+        auto json = binary_to_json(36, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+}
+
+TEST_CASE("decode TimeRangeResponse: truncated-first with seq_num", "[translator][compound]") {
+    // [truncated:u8][count:u32BE][ [hash:32][seq_num:u64BE][timestamp:u64BE] * count ]
+    uint32_t count = 2;
+    std::vector<uint8_t> payload(5 + count * 48);
+    payload[0] = 0x01;  // truncated
+    store_u32_be(payload.data() + 1, count);
+
+    // Entry 0: hash=0x00, seq=100, ts=1000
+    std::memset(payload.data() + 5, 0x00, 32);
+    store_u64_be(payload.data() + 37, 100);
+    store_u64_be(payload.data() + 45, 1000);
+
+    // Entry 1: hash=0xFF, seq=200, ts=2000
+    std::memset(payload.data() + 53, 0xFF, 32);
+    store_u64_be(payload.data() + 85, 200);
+    store_u64_be(payload.data() + 93, 2000);
+
+    auto json = binary_to_json(58, payload);
+    REQUIRE(json.has_value());
+
+    SECTION("truncated flag is first byte") {
+        REQUIRE((*json)["truncated"] == true);
+    }
+
+    SECTION("entries have correct count") {
+        REQUIRE((*json)["entries"].size() == 2);
+    }
+
+    SECTION("entry 0 fields") {
+        REQUIRE((*json)["entries"][0]["seq_num"] == "100");
+        REQUIRE((*json)["entries"][0]["timestamp"] == "1000");
+    }
+
+    SECTION("entry 1 fields") {
+        REQUIRE((*json)["entries"][1]["seq_num"] == "200");
+        REQUIRE((*json)["entries"][1]["timestamp"] == "2000");
+    }
+}
+
+TEST_CASE("decode TimeRangeResponse: truncated input returns nullopt", "[translator][compound]") {
+    SECTION("too short for header") {
+        std::vector<uint8_t> payload = {0, 0, 0, 0};  // 4 bytes, need 5
+        auto json = binary_to_json(58, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("header says 2 entries but only 1 present") {
+        std::vector<uint8_t> payload(5 + 48);  // header + 1 entry
+        payload[0] = 0;
+        store_u32_be(payload.data() + 1, 2);  // claims 2 entries
+        auto json = binary_to_json(58, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+}
+
+TEST_CASE("decode DelegationListResponse: correct field names", "[translator][compound]") {
+    uint32_t count = 2;
+    std::vector<uint8_t> payload(4 + count * 64);
+    store_u32_be(payload.data(), count);
+
+    // Entry 0
+    std::memset(payload.data() + 4, 0xAA, 32);     // delegate_pk_hash
+    std::memset(payload.data() + 36, 0xBB, 32);    // delegation_blob_hash
+
+    // Entry 1
+    std::memset(payload.data() + 68, 0xCC, 32);    // delegate_pk_hash
+    std::memset(payload.data() + 100, 0xDD, 32);   // delegation_blob_hash
+
+    auto json = binary_to_json(52, payload);
+    REQUIRE(json.has_value());
+    REQUIRE((*json)["type"] == "delegation_list_response");
+    REQUIRE((*json)["delegations"].size() == 2);
+
+    SECTION("field names are delegate_pk_hash and delegation_blob_hash") {
+        REQUIRE((*json)["delegations"][0].contains("delegate_pk_hash"));
+        REQUIRE((*json)["delegations"][0].contains("delegation_blob_hash"));
+        // Verify old field names are NOT present
+        REQUIRE_FALSE((*json)["delegations"][0].contains("namespace"));
+        REQUIRE_FALSE((*json)["delegations"][0].contains("pubkey_hash"));
+    }
+
+    SECTION("field values are correct hex") {
+        REQUIRE((*json)["delegations"][0]["delegate_pk_hash"] == hex32(0xAA));
+        REQUIRE((*json)["delegations"][0]["delegation_blob_hash"] == hex32(0xBB));
+        REQUIRE((*json)["delegations"][1]["delegate_pk_hash"] == hex32(0xCC));
+        REQUIRE((*json)["delegations"][1]["delegation_blob_hash"] == hex32(0xDD));
+    }
+}
+
+TEST_CASE("decode DelegationListResponse: truncated input returns nullopt", "[translator][compound]") {
+    SECTION("empty payload") {
+        std::vector<uint8_t> payload;
+        auto json = binary_to_json(52, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+
+    SECTION("count says 1 but payload too short") {
+        std::vector<uint8_t> payload(4 + 32);  // count + half an entry
+        store_u32_be(payload.data(), 1);
+        auto json = binary_to_json(52, payload);
+        REQUIRE_FALSE(json.has_value());
+    }
+}
+
+TEST_CASE("json_to_binary: StatsRequest encodes namespace in payload", "[translator][compound]") {
+    nlohmann::json msg = {
+        {"type", "stats_request"},
+        {"namespace", hex32(0x55)}
+    };
+    auto result = json_to_binary(msg);
+    REQUIRE(result.has_value());
+    REQUIRE(result->wire_type == 35);
+    REQUIRE(result->payload.size() == 32);
+    for (int i = 0; i < 32; ++i) {
+        REQUIRE(result->payload[i] == 0x55);
+    }
+}
+
+// =============================================================================
+// Bounds-check regression tests for existing correct compound decoders
+// =============================================================================
+
+TEST_CASE("bounds check: ListResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(34, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
+}
+
+TEST_CASE("bounds check: NamespaceListResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(42, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
+}
+
+TEST_CASE("bounds check: MetadataResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(48, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
+}
+
+TEST_CASE("bounds check: BatchExistsResponse empty payload returns valid empty results", "[translator][bounds]") {
+    // BatchExistsResponse with empty span produces empty results array (not nullopt)
+    auto json = binary_to_json(50, std::span<const uint8_t>{});
+    REQUIRE(json.has_value());
+    REQUIRE((*json)["results"].empty());
+}
+
+TEST_CASE("bounds check: PeerInfoResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(56, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
+}
+
+TEST_CASE("bounds check: NamespaceStatsResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(46, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
+}
+
+TEST_CASE("bounds check: StorageStatusResponse empty payload returns nullopt", "[translator][bounds]") {
+    auto json = binary_to_json(44, std::span<const uint8_t>{});
+    REQUIRE_FALSE(json.has_value());
 }

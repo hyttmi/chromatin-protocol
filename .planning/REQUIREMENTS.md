@@ -9,7 +9,7 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 ### Bug Fixes
 
-- [ ] **FIX-01**: binary_to_json succeeds for all compound response types (NodeInfoResponse, StatsResponse, etc.) against live node data
+- [x] **FIX-01**: binary_to_json succeeds for all compound response types (NodeInfoResponse, StatsResponse, etc.) against live node data
 - [x] **FIX-02**: All std::visit + coroutine lambda patterns in relay/ audited and replaced with get_if/get branching
 
 ### End-to-End Verification
@@ -55,7 +55,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIX-01 | Phase 106 | Pending |
+| FIX-01 | Phase 106 | Complete |
 | FIX-02 | Phase 106 | Complete |
 | E2E-01 | Phase 107 | Pending |
 | E2E-02 | Phase 108 | Pending |

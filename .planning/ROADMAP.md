@@ -28,7 +28,7 @@ Fix all bugs found in live relay+node testing, verify every feature works end-to
   3. Relay runs clean under ASAN with no stack-use-after-return warnings during a basic request/response cycle
 **Plans**: 3 plans
 Plans:
-- [ ] 106-01-PLAN.md — Fix compound decoder bugs + schema updates + unit tests
+- [x] 106-01-PLAN.md — Fix compound decoder bugs + schema updates + unit tests
 - [x] 106-02-PLAN.md — Coroutine safety audit (relay fix + db read-only) + documentation
 - [ ] 106-03-PLAN.md — UDS tap tool + WebSocket smoke test + sanitizer validation
 
@@ -83,7 +83,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 106. Bug Fixes | 1/3 | In Progress|  |
+| 106. Bug Fixes | 2/3 | In Progress|  |
 | 107. Message Type Verification | 0/0 | Not started | - |
 | 108. Live Feature Verification | 0/0 | Not started | - |
 | 109. New Features | 0/0 | Not started | - |

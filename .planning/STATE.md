@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 106-02-PLAN.md
-last_updated: "2026-04-11T04:11:26Z"
-last_activity: 2026-04-11 -- Phase 106 plan 02 complete
+stopped_at: Wave 1 complete (106-01, 106-02)
+last_updated: "2026-04-11T04:18:16Z"
+last_activity: 2026-04-11 -- Phase 106 wave 1 complete
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 7
+  completed_plans: 2
+  percent: 13
 ---
 
 # Project State
@@ -26,25 +26,25 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 106 of 110 (Bug Fixes)
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Executing
-Last activity: 2026-04-11 -- Phase 106 plan 02 complete
+Last activity: 2026-04-11 -- Phase 106 wave 1 complete (106-01, 106-02)
 
-Progress: [#░░░░░░░░░] 7%
+Progress: [██░░░░░░░░] 13%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 2
+- Average duration: 8.5min
+- Total execution time: 0.3 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 106 | 1/3 | 6min | 6min |
+| 106 | 2/3 | 17min | 8.5min |
 
 **Recent Trend (carried from v3.0.0):**
 | Phase 103 P02 | 20min | 2 tasks | 16 files |
@@ -52,6 +52,8 @@ Progress: [#░░░░░░░░░] 7%
 | Phase 104 P02 | 5min | 2 tasks | 6 files |
 | Phase 105 P01 | 28min | 3 tasks | 11 files |
 | Phase 105 P02 | 18min | 2 tasks | 10 files |
+| Phase 106 P01 | 11min | 2 tasks | 5 files |
+| Phase 106 P02 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -66,6 +68,8 @@ Recent decisions affecting current work:
 - [Phase 104]: SubscriptionTracker uses u16BE namespace encoding (NOT translator's u32BE HEX_32_ARRAY)
 - [Phase 105]: Token bucket burst equals rate, no separate burst config
 - [Phase 106]: Relay coroutine patterns all safe -- no code fixes needed, only documentation
+- [Phase 106]: StatsResponse field names: blob_count, storage_bytes, quota_bytes_limit (per-namespace semantics)
+- [Phase 106]: NodeInfoResponse: unknown type bytes rendered as numeric strings, not silently dropped
 
 ### Pending Todos
 
@@ -73,11 +77,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- FIX-01: binary_to_json fails for compound response types (NodeInfoResponse etc.) with live node data
-- FIX-02: std::visit + coroutine lambda patterns flagged as ASAN-unsafe bug class
+- FIX-01: RESOLVED -- compound decoders rewritten
+- FIX-02: RESOLVED -- coroutine audit clean, no unsafe patterns
 
 ## Session Continuity
 
-Last session: 2026-04-11T04:11:26Z
-Stopped at: Completed 106-02-PLAN.md
-Resume file: .planning/phases/106-bug-fixes/106-02-SUMMARY.md
+Last session: 2026-04-11T04:18:16Z
+Stopped at: Wave 1 complete (106-01, 106-02)
+Resume file: .planning/phases/106-bug-fixes/106-01-SUMMARY.md
