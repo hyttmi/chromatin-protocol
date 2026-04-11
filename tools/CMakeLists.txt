@@ -9,3 +9,6 @@ target_link_libraries(relay_uds_tap PRIVATE chromatindb_relay_lib)
 
 add_executable(relay_smoke_test relay_smoke_test.cpp)
 target_link_libraries(relay_smoke_test PRIVATE chromatindb_relay_lib)
+
+add_executable(relay_feature_test relay_feature_test.cpp)
+target_link_libraries(relay_feature_test PRIVATE chromatindb_relay_lib)
