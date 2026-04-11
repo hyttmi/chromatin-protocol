@@ -690,6 +690,114 @@ int main(int argc, char* argv[]) {
                ok ? "stats_response with blob_count" : (resp ? resp->dump() : "no response"));
     }
 
+    // =====================================================================
+    // ErrorResponse (type 63) -- Phase 999.2
+    // Deliberately send malformed requests to verify the node responds with
+    // ErrorResponse instead of silently dropping.
+    // =====================================================================
+    std::cout << "\n--- ErrorResponse (type 63) ---\n";
+
+    // Test 1: BatchExistsRequest with empty hashes -> count=0 -> node validation_failed
+    {
+        json empty_batch = {
+            {"type", "batch_exists_request"},
+            {"request_id", 901},
+            {"namespace", ns_hex},
+            {"hashes", json::array()}  // empty -> count=0 -> node validation_failed
+        };
+        auto frame = send_recv_frame(empty_batch);
+        bool ok = false;
+        std::string detail;
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                if (resp.contains("type") && resp["type"] == "error") {
+                    bool code_ok = resp.contains("code") && resp["code"] == "validation_failed";
+                    bool orig_ok = resp.contains("original_type") && resp["original_type"] == "batch_exists_request";
+                    bool rid_ok = resp.contains("request_id") && resp["request_id"] == 901;
+                    ok = code_ok && orig_ok && rid_ok;
+                    detail = ok ? "code=validation_failed, original_type=batch_exists_request, request_id=901"
+                                : "unexpected error response: " + resp.dump();
+                } else {
+                    detail = "expected error response, got: " + resp.dump();
+                }
+            } catch (...) {
+                detail = "JSON parse error on response";
+            }
+        } else {
+            detail = "no response received";
+        }
+        record("error_response_validation_failed", ok, detail);
+    }
+
+    // Test 2: BatchReadRequest with empty hashes -> count=0 -> node validation_failed
+    {
+        json empty_batch_read = {
+            {"type", "batch_read_request"},
+            {"request_id", 902},
+            {"namespace", ns_hex},
+            {"hashes", json::array()}
+        };
+        auto frame = send_recv_frame(empty_batch_read);
+        bool ok = false;
+        std::string detail;
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                if (resp.contains("type") && resp["type"] == "error") {
+                    bool code_ok = resp.contains("code") && resp["code"] == "validation_failed";
+                    bool orig_ok = resp.contains("original_type") && resp["original_type"] == "batch_read_request";
+                    bool rid_ok = resp.contains("request_id") && resp["request_id"] == 902;
+                    ok = code_ok && orig_ok && rid_ok;
+                    detail = ok ? "code=validation_failed, original_type=batch_read_request, request_id=902"
+                                : "unexpected: " + resp.dump();
+                } else {
+                    detail = "expected error, got: " + resp.dump();
+                }
+            } catch (...) {
+                detail = "JSON parse error on response";
+            }
+        } else {
+            detail = "no response received";
+        }
+        record("error_response_batch_read_empty", ok, detail);
+    }
+
+    // Test 3: TimeRangeRequest with since > until -> node validation_failed
+    {
+        json bad_range = {
+            {"type", "time_range_request"},
+            {"request_id", 903},
+            {"namespace", ns_hex},
+            {"since", "1000000"},
+            {"until", "500000"},   // until < since -> validation_failed
+            {"limit", 10}
+        };
+        auto frame = send_recv_frame(bad_range);
+        bool ok = false;
+        std::string detail;
+        if (frame) {
+            try {
+                auto resp = json::parse(frame->payload);
+                if (resp.contains("type") && resp["type"] == "error") {
+                    bool code_ok = resp.contains("code") && resp["code"] == "validation_failed";
+                    bool orig_ok = resp.contains("original_type") && resp["original_type"] == "time_range_request";
+                    bool rid_ok = resp.contains("request_id") && resp["request_id"] == 903;
+                    ok = code_ok && orig_ok && rid_ok;
+                    detail = ok ? "code=validation_failed, original_type=time_range_request, request_id=903"
+                                : "unexpected: " + resp.dump();
+                } else {
+                    detail = "expected error, got: " + resp.dump();
+                }
+            } catch (...) {
+                detail = "JSON parse error on response";
+            }
+        } else {
+            detail = "no response received";
+        }
+        record("error_response_bad_time_range", ok, detail);
+    }
+
     // =================================================================
     // Goodbye (last fire-and-forget -- may trigger disconnect)
     // =================================================================
