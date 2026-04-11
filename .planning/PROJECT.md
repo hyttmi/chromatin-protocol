@@ -14,9 +14,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 **Goal:** Fix all bugs found in live relay+node testing and verify every feature works end-to-end against a running node.
 
-**Target features:**
-- Fix binary_to_json translation failures (NodeInfoResponse type=40 and other compound types)
-- Audit and fix all std::visit + coroutine lambda patterns in relay/ (ASAN stack-use-after-return bug class)
+**Phase 106 complete (2026-04-11):** All compound decoder bugs fixed (FIX-01), coroutine safety audit clean (FIX-02). UDS tap + smoke test tools built. ASAN clean.
+
+**Remaining:**
 - Test all 38 message types end-to-end through relay→node→relay
 - Test subscribe/notification fan-out flow live
 - Test rate limiting enforcement live
