@@ -519,7 +519,7 @@ Tombstone data format: [0xDE 0xAD 0xBE 0xEF][target_blob_hash: 32 bytes]
 
 The tombstone is signed by the namespace owner and sent as a `TransportMessage` with `type = Delete (17)`. The payload is a FlatBuffers-encoded `Blob` where the `data` field contains the tombstone bytes. The `ttl` field is 0 (permanent).
 
-The node responds with `DeleteAck (18)` (empty payload). Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
+The node responds with `DeleteAck (18)` with the same 41-byte payload as WriteAck: `[blob_hash:32][seq_num:8 BE][status:1]`. Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
 
 ### Namespace Delegation
 
@@ -795,7 +795,7 @@ All message types defined in the `TransportMsgType` enum:
 | 15 | PeerListRequest | PEX: request known peer addresses (empty payload) |
 | 16 | PeerListResponse | PEX: list of known peer addresses |
 | 17 | Delete | Blob deletion: FlatBuffer-encoded tombstone Blob |
-| 18 | DeleteAck | Deletion acknowledgment (empty payload) |
+| 18 | DeleteAck | Deletion acknowledgment: blob_hash + seq_num + status (41 bytes, same as WriteAck) |
 | 19 | Subscribe | Pub/sub: subscribe to namespace notifications |
 | 20 | Unsubscribe | Pub/sub: unsubscribe from namespace notifications |
 | 21 | Notification | Pub/sub: blob ingested/deleted notification (77 bytes) |
