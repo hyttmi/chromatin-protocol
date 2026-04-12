@@ -72,9 +72,9 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 ### Database Layer Chunking (Phase 999.8)
 
-- [ ] **CHUNK-01**: Manifest format encode/decode with CHNK magic prefix (0x43484E4B), BE chunk_count, ordered chunk hashes
-- [ ] **CHUNK-02**: is_manifest() helper detects manifest blobs by magic prefix, following is_tombstone/is_delegation pattern
-- [ ] **CHUNK-03**: store_blobs_atomic() stores N pre-computed blobs in a single MDBX write transaction with dedup, capacity, and quota enforcement
+- [x] **CHUNK-01**: Manifest format encode/decode with CHNK magic prefix (0x43484E4B), BE chunk_count, ordered chunk hashes
+- [x] **CHUNK-02**: is_manifest() helper detects manifest blobs by magic prefix, following is_tombstone/is_delegation pattern
+- [x] **CHUNK-03**: store_blobs_atomic() stores N pre-computed blobs in a single MDBX write transaction with dedup, capacity, and quota enforcement
 - [ ] **CHUNK-04**: store_chunked() engine method splits data into 1 MiB chunks, signs each via callback, creates manifest, stores all atomically, returns manifest blob_hash
 - [ ] **CHUNK-05**: read_chunked() engine method reads manifest, fetches all chunks in order, returns reassembled data or error with chunks_found/chunks_expected
 - [ ] **CHUNK-06**: PROTOCOL.md documents CHNK manifest magic prefix in the magic prefix registry
@@ -138,9 +138,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BE-04 | Phase 999.7 | Complete |
 | BE-05 | Phase 999.7 | Complete |
 | BE-06 | Phase 999.7 | Complete |
-| CHUNK-01 | Phase 999.8 | Pending |
-| CHUNK-02 | Phase 999.8 | Pending |
-| CHUNK-03 | Phase 999.8 | Pending |
+| CHUNK-01 | Phase 999.8 | Complete |
+| CHUNK-02 | Phase 999.8 | Complete |
+| CHUNK-03 | Phase 999.8 | Complete |
 | CHUNK-04 | Phase 999.8 | Pending |
 | CHUNK-05 | Phase 999.8 | Pending |
 | CHUNK-06 | Phase 999.8 | Pending |

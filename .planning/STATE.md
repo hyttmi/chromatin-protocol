@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 
 ## Current Position
 
-Phase: 999.6
-Plan: Not started
-Status: Ready to execute
+Phase: 999.8-database-layer-chunking-for-large-files
+Plan: 1 of 2
+Status: Plan 01 complete
 Last activity: 2026-04-12
 
-Progress: [######----] 67%
+Progress: [#####-----] 50%
 
 ## Accumulated Context
 
@@ -48,6 +48,9 @@ Progress: [######----] 67%
 - [Phase 999.7]: Used chromatindb::util endian.h functions for all BE conversions instead of inline bit shifts
 - [Phase 999.7]: Manual BE push_back pattern retained for relay (no vector-append helper in endian.h)
 - [Phase 999.5]: OPCODE_BINARY constant kept in ws_frame.h for receive-side validation
+- [Phase 999.8]: Manifest magic in engine namespace (not wire/codec) -- chunking is an engine convention
+- [Phase 999.8]: store_blobs_atomic uses per-namespace quota accumulation for batch quota checking
+- [Phase 999.8]: Duplicate blobs in atomic batch get Duplicate status while new blobs still store
 
 ### Pending Todos
 
@@ -59,5 +62,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-12T04:34:44.704Z
-Stopped at: Completed 999.5-01-PLAN.md
+Last session: 2026-04-12T06:45:32Z
+Stopped at: Completed 999.8-01-PLAN.md

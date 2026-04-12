@@ -541,6 +541,232 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
     }
 }
 
+std::vector<StoreResult> Storage::store_blobs_atomic(
+    const std::vector<PrecomputedBlob>& blobs,
+    uint64_t max_storage_bytes,
+    uint64_t quota_byte_limit,
+    uint64_t quota_count_limit) {
+    std::vector<StoreResult> results(blobs.size());
+    if (blobs.empty()) return results;
+
+    try {
+        auto txn = impl_->env.start_write();
+
+        // First pass: check dedup for each blob
+        std::vector<bool> is_dup(blobs.size(), false);
+        uint64_t new_blob_count = 0;
+
+        for (size_t i = 0; i < blobs.size(); ++i) {
+            const auto& pb = blobs[i];
+            auto blob_key = make_blob_key(
+                pb.blob.namespace_id.data(), pb.content_hash.data());
+            auto existing = txn.get(impl_->blobs_map, to_slice(blob_key),
+                                     not_found_sentinel);
+            if (existing.data() != nullptr) {
+                is_dup[i] = true;
+
+                // Find existing seq_num
+                uint64_t existing_seq = 0;
+                auto cursor = txn.open_cursor(impl_->seq_map);
+                auto lower = make_seq_key(pb.blob.namespace_id.data(), 1);
+                auto seek = cursor.lower_bound(to_slice(lower));
+                while (seek.done) {
+                    auto k = cursor.current(false).key;
+                    if (k.length() != 40 ||
+                        std::memcmp(k.data(),
+                                    pb.blob.namespace_id.data(), 32) != 0) {
+                        break;
+                    }
+                    auto v = cursor.current(false).value;
+                    if (v.length() == 32 &&
+                        std::memcmp(v.data(),
+                                    pb.content_hash.data(), 32) == 0) {
+                        existing_seq = chromatindb::util::read_u64_be(
+                            static_cast<const uint8_t*>(k.data()) + 32);
+                        break;
+                    }
+                    seek = cursor.to_next(false);
+                }
+
+                results[i].status = StoreResult::Status::Duplicate;
+                results[i].seq_num = existing_seq;
+                results[i].blob_hash = pb.content_hash;
+            } else {
+                ++new_blob_count;
+            }
+        }
+
+        // If all duplicates, commit (no-op) and return
+        if (new_blob_count == 0) {
+            txn.commit();
+            return results;
+        }
+
+        // Capacity check: if max_storage_bytes > 0, check used_bytes
+        // (tombstones exempt from capacity check)
+        if (max_storage_bytes > 0) {
+            bool has_non_tombstone = false;
+            for (size_t i = 0; i < blobs.size(); ++i) {
+                if (!is_dup[i] && !wire::is_tombstone(blobs[i].blob.data)) {
+                    has_non_tombstone = true;
+                    break;
+                }
+            }
+            if (has_non_tombstone && used_bytes() >= max_storage_bytes) {
+                txn.abort();
+                for (auto& r : results) {
+                    r.status = StoreResult::Status::CapacityExceeded;
+                }
+                return results;
+            }
+        }
+
+        // Quota check: sum encrypted sizes of all non-dup non-tombstone blobs
+        // per namespace, check against limits
+        if (quota_byte_limit > 0 || quota_count_limit > 0) {
+            // Accumulate per-namespace new byte and count totals
+            std::map<std::array<uint8_t, 32>, std::pair<uint64_t, uint64_t>> ns_additions;
+            for (size_t i = 0; i < blobs.size(); ++i) {
+                if (is_dup[i]) continue;
+                if (wire::is_tombstone(blobs[i].blob.data)) continue;
+                auto& [bytes, count] = ns_additions[blobs[i].blob.namespace_id];
+                bytes += blobs[i].encoded.size();
+                count += 1;
+            }
+
+            for (const auto& [ns_id, additions] : ns_additions) {
+                auto ns_slice = mdbx::slice(ns_id.data(), 32);
+                auto existing_quota = txn.get(impl_->quota_map, ns_slice,
+                                               not_found_sentinel);
+                NamespaceQuota current{};
+                if (existing_quota.data() != nullptr &&
+                    existing_quota.length() == QUOTA_VALUE_SIZE) {
+                    current = decode_quota_value(
+                        static_cast<const uint8_t*>(existing_quota.data()));
+                }
+                if (quota_byte_limit > 0 &&
+                    current.total_bytes + additions.first > quota_byte_limit) {
+                    txn.abort();
+                    for (auto& r : results) {
+                        r.status = StoreResult::Status::QuotaExceeded;
+                    }
+                    return results;
+                }
+                if (quota_count_limit > 0 &&
+                    current.blob_count + additions.second > quota_count_limit) {
+                    txn.abort();
+                    for (auto& r : results) {
+                        r.status = StoreResult::Status::QuotaExceeded;
+                    }
+                    return results;
+                }
+            }
+        }
+
+        // Second pass: store each non-duplicate blob
+        // Track per-namespace quota increments for batch update
+        std::map<std::array<uint8_t, 32>, std::pair<uint64_t, uint64_t>> quota_increments;
+
+        for (size_t i = 0; i < blobs.size(); ++i) {
+            if (is_dup[i]) continue;
+
+            const auto& pb = blobs[i];
+            auto blob_key = make_blob_key(
+                pb.blob.namespace_id.data(), pb.content_hash.data());
+
+            // Encrypt the encoded blob (AD = 64-byte mdbx key)
+            auto encrypted = impl_->encrypt_value(
+                pb.encoded,
+                std::span<const uint8_t>(blob_key.data(), blob_key.size()));
+
+            // Store encrypted blob
+            txn.upsert(impl_->blobs_map, to_slice(blob_key),
+                        mdbx::slice(encrypted.data(), encrypted.size()));
+
+            // Assign seq_num
+            uint64_t seq = impl_->next_seq_num(txn, pb.blob.namespace_id.data());
+            auto seq_key = make_seq_key(pb.blob.namespace_id.data(), seq);
+            txn.upsert(impl_->seq_map, to_slice(seq_key),
+                        mdbx::slice(pb.content_hash.data(),
+                                    pb.content_hash.size()));
+
+            // Store expiry entry if TTL > 0
+            if (pb.blob.ttl > 0) {
+                uint64_t expiry_time = wire::saturating_expiry(
+                    pb.blob.timestamp, pb.blob.ttl);
+                auto exp_key = make_expiry_key(expiry_time,
+                                                pb.content_hash.data());
+                txn.upsert(impl_->expiry_map, to_slice(exp_key),
+                            mdbx::slice(pb.blob.namespace_id.data(),
+                                        pb.blob.namespace_id.size()));
+            }
+
+            // Populate delegation index if applicable
+            if (wire::is_delegation(pb.blob.data)) {
+                auto delegate_pubkey = wire::extract_delegate_pubkey(pb.blob.data);
+                auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
+                auto deleg_key = make_blob_key(
+                    pb.blob.namespace_id.data(), delegate_pk_hash.data());
+                txn.upsert(impl_->delegation_map, to_slice(deleg_key),
+                            mdbx::slice(pb.content_hash.data(),
+                                        pb.content_hash.size()));
+            }
+
+            // Populate tombstone index if applicable
+            if (wire::is_tombstone(pb.blob.data)) {
+                auto target_hash = wire::extract_tombstone_target(
+                    std::span<const uint8_t>(pb.blob.data));
+                auto ts_key = make_blob_key(
+                    pb.blob.namespace_id.data(), target_hash.data());
+                txn.upsert(impl_->tombstone_map, to_slice(ts_key),
+                            mdbx::slice());
+            }
+
+            // Accumulate quota increment (tombstones exempt)
+            if (!wire::is_tombstone(pb.blob.data)) {
+                auto& [bytes, count] = quota_increments[pb.blob.namespace_id];
+                bytes += encrypted.size();
+                count += 1;
+            }
+
+            results[i].status = StoreResult::Status::Stored;
+            results[i].seq_num = seq;
+            results[i].blob_hash = pb.content_hash;
+        }
+
+        // Update quota aggregates once per namespace
+        for (const auto& [ns_id, increments] : quota_increments) {
+            auto ns_slice = mdbx::slice(ns_id.data(), 32);
+            auto existing_quota = txn.get(impl_->quota_map, ns_slice,
+                                           not_found_sentinel);
+            NamespaceQuota current{};
+            if (existing_quota.data() != nullptr &&
+                existing_quota.length() == QUOTA_VALUE_SIZE) {
+                current = decode_quota_value(
+                    static_cast<const uint8_t*>(existing_quota.data()));
+            }
+            current.total_bytes += increments.first;
+            current.blob_count += increments.second;
+            auto new_val = encode_quota_value(current);
+            txn.upsert(impl_->quota_map, ns_slice,
+                        mdbx::slice(new_val.data(), new_val.size()));
+        }
+
+        txn.commit();
+        spdlog::debug("Stored {} blobs atomically ({} new, {} dups)",
+                       blobs.size(), new_blob_count,
+                       blobs.size() - new_blob_count);
+        return results;
+
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in store_blobs_atomic: {}", e.what());
+        for (auto& r : results) {
+            r.status = StoreResult::Status::Error;
+        }
+        return results;
+    }
+}
+
 std::optional<wire::BlobData> Storage::get_blob(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> hash) {
