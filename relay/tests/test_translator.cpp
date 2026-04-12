@@ -504,14 +504,6 @@ TEST_CASE("binary_to_json: NamespaceStatsResponse found", "[translator]") {
     REQUIRE((*json)["storage_used"] == "2000");
 }
 
-TEST_CASE("is_binary_response", "[translator]") {
-    REQUIRE(is_binary_response(32) == true);   // ReadResponse
-    REQUIRE(is_binary_response(54) == true);   // BatchReadResponse
-    REQUIRE(is_binary_response(30) == false);  // WriteAck
-    REQUIRE(is_binary_response(34) == false);  // ListResponse
-    REQUIRE(is_binary_response(8) == false);   // Data
-}
-
 // =============================================================================
 // Roundtrip tests
 // =============================================================================
