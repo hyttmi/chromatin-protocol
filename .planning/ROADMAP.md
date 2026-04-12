@@ -142,3 +142,8 @@ Plans:
 Plans:
 - [x] 999.7-01-PLAN.md — Node BE standardization: codec.cpp signing input + auth_helpers.h payload + PROTOCOL.md + db/ test updates
 - [x] 999.7-02-PLAN.md — Relay+tools BE standardization: uds_multiplexer + relay_uds_tap + relay_test_helpers + codebase LE sweep
+
+### Phase 999.8: Database layer chunking for large files (BACKLOG)
+**Goal:** Large blobs may exceed practical limits for single-blob storage and replication. Add chunking support at the database layer — split large files into fixed-size chunks, reassemble on read. Pre-MVP, no backward compat needed.
+**Requirements:** TBD
+**Plans:** 0 plans
