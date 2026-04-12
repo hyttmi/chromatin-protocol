@@ -278,13 +278,13 @@ inline std::array<uint8_t, 32> build_signing_input(
     OQS_SHA3_sha3_256_inc_init(&ctx);
     OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), namespace_id.size());
     OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
-    // LITTLE-endian for ttl and timestamp (protocol-defined, NOT big-endian)
-    uint8_t ttl_le[4];
-    for (int i = 0; i < 4; ++i) ttl_le[i] = static_cast<uint8_t>(ttl >> (i * 8));
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_le, 4);
-    uint8_t ts_le[8];
-    for (int i = 0; i < 8; ++i) ts_le[i] = static_cast<uint8_t>(timestamp >> (i * 8));
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_le, 8);
+    // Big-endian for ttl and timestamp
+    uint8_t ttl_be[4];
+    for (int i = 0; i < 4; ++i) ttl_be[i] = static_cast<uint8_t>(ttl >> ((3 - i) * 8));
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_be, 4);
+    uint8_t ts_be[8];
+    for (int i = 0; i < 8; ++i) ts_be[i] = static_cast<uint8_t>(timestamp >> ((7 - i) * 8));
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_be, 8);
     OQS_SHA3_sha3_256_inc_finalize(digest.data(), &ctx);
     OQS_SHA3_sha3_256_inc_ctx_release(&ctx);
     return digest;
