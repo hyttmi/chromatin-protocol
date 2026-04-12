@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 999.7-02-PLAN.md
-last_updated: "2026-04-12T03:52:40.602Z"
+stopped_at: Completed 999.5-01-PLAN.md
+last_updated: "2026-04-12T04:34:44.707Z"
 last_activity: 2026-04-12
 progress:
   total_phases: 12
-  completed_phases: 6
-  total_plans: 13
-  completed_plans: 13
+  completed_phases: 7
+  total_plans: 14
+  completed_plans: 14
   percent: 67
 ---
 
@@ -47,6 +47,7 @@ Progress: [######----] 67%
 - [Phase 999.3]: Both errors_total and request_timeouts_total counters increment on timeout for general + specific monitoring
 - [Phase 999.7]: Used chromatindb::util endian.h functions for all BE conversions instead of inline bit shifts
 - [Phase 999.7]: Manual BE push_back pattern retained for relay (no vector-append helper in endian.h)
+- [Phase 999.5]: OPCODE_BINARY constant kept in ws_frame.h for receive-side validation
 
 ### Pending Todos
 
@@ -58,5 +59,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-12T03:47:44.343Z
-Stopped at: Completed 999.7-02-PLAN.md
+Last session: 2026-04-12T04:34:44.704Z
+Stopped at: Completed 999.5-01-PLAN.md

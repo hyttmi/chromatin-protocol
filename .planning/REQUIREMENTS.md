@@ -56,10 +56,10 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 ### Binary WS Frame Cleanup (Phase 999.5)
 
-- [ ] **WSTEXT-01**: send_binary() removed from WsSession — no binary WS frame send method exists
-- [ ] **WSTEXT-02**: is_binary_response() removed from translator.h — no binary response type detection exists
-- [ ] **WSTEXT-03**: route_response() in uds_multiplexer.cpp calls send_json() unconditionally for all response types
-- [ ] **WSTEXT-04**: write_frame() in ws_session.cpp uses OPCODE_TEXT directly with no binary marker prefix detection
+- [x] **WSTEXT-01**: send_binary() removed from WsSession — no binary WS frame send method exists
+- [x] **WSTEXT-02**: is_binary_response() removed from translator.h — no binary response type detection exists
+- [x] **WSTEXT-03**: route_response() in uds_multiplexer.cpp calls send_json() unconditionally for all response types
+- [x] **WSTEXT-04**: write_frame() in ws_session.cpp uses OPCODE_TEXT directly with no binary marker prefix detection
 
 ### Endianness Standardization (Phase 999.7)
 
@@ -119,10 +119,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TIMEOUT-05 | Phase 999.3 | Complete |
 | TIMEOUT-06 | Phase 999.3 | Complete |
 | TIMEOUT-07 | Phase 999.3 | Complete |
-| WSTEXT-01 | Phase 999.5 | Pending |
-| WSTEXT-02 | Phase 999.5 | Pending |
-| WSTEXT-03 | Phase 999.5 | Pending |
-| WSTEXT-04 | Phase 999.5 | Pending |
+| WSTEXT-01 | Phase 999.5 | Complete |
+| WSTEXT-02 | Phase 999.5 | Complete |
+| WSTEXT-03 | Phase 999.5 | Complete |
+| WSTEXT-04 | Phase 999.5 | Complete |
 | BE-01 | Phase 999.7 | Complete |
 | BE-02 | Phase 999.7 | Complete |
 | BE-03 | Phase 999.7 | Complete |

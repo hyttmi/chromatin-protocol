@@ -126,9 +126,9 @@ Plans:
 ### Phase 999.5: Binary WS frame inconsistency for JSON responses (BACKLOG)
 **Goal:** Remove binary WS frame send path -- all JSON responses (including ReadResponse/BatchReadResponse) sent as text frames via send_json()
 **Requirements:** WSTEXT-01, WSTEXT-02, WSTEXT-03, WSTEXT-04
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
-- [ ] 999.5-01-PLAN.md — Remove send_binary, is_binary_response, binary marker detection, route_response branching
+- [x] 999.5-01-PLAN.md — Remove send_binary, is_binary_response, binary marker detection, route_response branching
 
 ### Phase 999.6: Notification echo on own writes (BACKLOG)
 **Goal:** Client writing to a subscribed namespace gets both write_ack AND notification for its own write. Phase 109 (source-exclusion) is planned but currently every client must handle/ignore its own echo.
