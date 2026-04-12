@@ -25,19 +25,20 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 
 ## Current Position
 
-Phase: N/A (milestone complete)
-Plan: N/A
-Status: v2.2.0 shipped
-Last activity: 2026-04-09
+Phase: 999.8-database-layer-chunking-for-large-files
+Plan: 1 of 2
+Status: Plan 01 complete
+Last activity: 2026-04-12
 
-Progress: [##########] 100%
+Progress: [#####-----] 50%
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
+- Manifest magic in engine namespace (not wire/codec) -- chunking is an engine convention
+- store_blobs_atomic uses per-namespace quota accumulation for batch quota checking
+- Duplicate blobs in atomic batch get Duplicate status while new blobs still store
 
 ### Pending Todos
 
@@ -46,3 +47,8 @@ None.
 ### Blockers/Concerns
 
 None.
+
+### Session Info
+
+Last session: 2026-04-12T06:45:32Z
+Stopped at: Completed 999.8-01-PLAN.md
