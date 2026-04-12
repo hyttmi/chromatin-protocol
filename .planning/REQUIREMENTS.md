@@ -54,6 +54,13 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **TIMEOUT-06**: Stale requests receive JSON error {type:error, code:timeout, original_type:<name>} before cleanup
 - [x] **TIMEOUT-07**: Prometheus errors_total and request_timeouts_total counters increment on timeout
 
+### Binary WS Frame Cleanup (Phase 999.5)
+
+- [ ] **WSTEXT-01**: send_binary() removed from WsSession — no binary WS frame send method exists
+- [ ] **WSTEXT-02**: is_binary_response() removed from translator.h — no binary response type detection exists
+- [ ] **WSTEXT-03**: route_response() in uds_multiplexer.cpp calls send_json() unconditionally for all response types
+- [ ] **WSTEXT-04**: write_frame() in ws_session.cpp uses OPCODE_TEXT directly with no binary marker prefix detection
+
 ### Endianness Standardization (Phase 999.7)
 
 - [x] **BE-01**: build_signing_input() in db/wire/codec.cpp encodes ttl as BE uint32 and timestamp as BE uint64 using store_u32_be/store_u64_be from db/util/endian.h
@@ -112,6 +119,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TIMEOUT-05 | Phase 999.3 | Complete |
 | TIMEOUT-06 | Phase 999.3 | Complete |
 | TIMEOUT-07 | Phase 999.3 | Complete |
+| WSTEXT-01 | Phase 999.5 | Pending |
+| WSTEXT-02 | Phase 999.5 | Pending |
+| WSTEXT-03 | Phase 999.5 | Pending |
+| WSTEXT-04 | Phase 999.5 | Pending |
 | BE-01 | Phase 999.7 | Complete |
 | BE-02 | Phase 999.7 | Complete |
 | BE-03 | Phase 999.7 | Complete |
@@ -121,11 +132,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Backlog requirements: 19 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.7: 6)
-- Mapped to phases: 33
+- Backlog requirements: 23 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.5: 4, Phase 999.7: 6)
+- Mapped to phases: 37
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
 *Backlog requirements added: 2026-04-11*
 *Endianness requirements added: 2026-04-12*
+*Binary WS frame cleanup requirements added: 2026-04-12*
