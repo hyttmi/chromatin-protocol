@@ -69,7 +69,9 @@ Initiator                              Responder
     |     salt   = (empty)
     |     info1  = "chromatin-init-to-resp-v1"  -->  initiator-to-responder key (32 bytes)
     |     info2  = "chromatin-resp-to-init-v1"  -->  responder-to-initiator key (32 bytes)
-    |     info3  = "chromatin-session-fp-v1"    -->  session fingerprint (32 bytes)
+    |
+    |   Session fingerprint (NOT HKDF -- direct hash):
+    |     SHA3-256(shared_secret || initiator_pubkey || responder_pubkey)  -->  32 bytes
     |                                      |
     |--- [encrypted] AuthSignature ------->|  ML-DSA-87 public key (2592 bytes)
     |                                      |  + ML-DSA-87 signature over session fingerprint
