@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/crypto/signing.h"
+#include "db/util/endian.h"
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -14,8 +15,7 @@ struct AuthPayload {
     std::vector<uint8_t> signature;
 };
 
-/// Encode an auth payload as [pubkey_size (4B LE)][pubkey][signature].
-/// IMPORTANT: Uses little-endian for pubkey_size (protocol-defined).
+/// Encode an auth payload as [pubkey_size (4B BE)][pubkey][signature].
 inline std::vector<uint8_t> encode_auth_payload(
     std::span<const uint8_t> signing_pubkey,
     std::span<const uint8_t> signature) {
@@ -23,12 +23,9 @@ inline std::vector<uint8_t> encode_auth_payload(
     std::vector<uint8_t> payload;
     payload.reserve(4 + signing_pubkey.size() + signature.size());
 
-    // 4-byte LE pubkey size
+    // 4-byte BE pubkey size
     uint32_t pk_size = static_cast<uint32_t>(signing_pubkey.size());
-    payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
+    chromatindb::util::write_u32_be(payload, pk_size);
 
     // Pubkey
     payload.insert(payload.end(), signing_pubkey.begin(), signing_pubkey.end());
@@ -39,15 +36,12 @@ inline std::vector<uint8_t> encode_auth_payload(
     return payload;
 }
 
-/// Decode an auth payload from [pubkey_size (4B LE)][pubkey][signature].
+/// Decode an auth payload from [pubkey_size (4B BE)][pubkey][signature].
 /// Returns std::nullopt if the data is too short or malformed.
 inline std::optional<AuthPayload> decode_auth_payload(std::span<const uint8_t> data) {
     if (data.size() < 4) return std::nullopt;
 
-    uint32_t pk_size = static_cast<uint32_t>(data[0]) |
-                       (static_cast<uint32_t>(data[1]) << 8) |
-                       (static_cast<uint32_t>(data[2]) << 16) |
-                       (static_cast<uint32_t>(data[3]) << 24);
+    uint32_t pk_size = chromatindb::util::read_u32_be(data.subspan(0, 4));
 
     // Step 0: exact pubkey size check (PROTO-02, per D-05)
     if (pk_size != chromatindb::crypto::Signer::PUBLIC_KEY_SIZE) return std::nullopt;

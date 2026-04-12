@@ -69,7 +69,7 @@ std::array<uint8_t, 32> build_signing_input(
     uint32_t ttl,
     uint64_t timestamp) {
 
-    // Incremental SHA3-256: hash namespace || data || ttl_le32 || timestamp_le64
+    // Incremental SHA3-256: hash namespace || data || ttl_be32 || timestamp_be64
     // directly into the sponge -- zero intermediate allocation.
     OQS_SHA3_sha3_256_inc_ctx ctx;
     OQS_SHA3_sha3_256_inc_init(&ctx);
@@ -80,27 +80,15 @@ std::array<uint8_t, 32> build_signing_input(
     // Data (may be up to 100 MiB -- fed directly, no copy)
     OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
 
-    // TTL as little-endian uint32
-    uint8_t ttl_le[4] = {
-        static_cast<uint8_t>(ttl),
-        static_cast<uint8_t>(ttl >> 8),
-        static_cast<uint8_t>(ttl >> 16),
-        static_cast<uint8_t>(ttl >> 24),
-    };
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_le, 4);
+    // TTL as big-endian uint32
+    uint8_t ttl_be[4];
+    chromatindb::util::store_u32_be(ttl_be, ttl);
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ttl_be, 4);
 
-    // Timestamp as little-endian uint64
-    uint8_t ts_le[8] = {
-        static_cast<uint8_t>(timestamp),
-        static_cast<uint8_t>(timestamp >> 8),
-        static_cast<uint8_t>(timestamp >> 16),
-        static_cast<uint8_t>(timestamp >> 24),
-        static_cast<uint8_t>(timestamp >> 32),
-        static_cast<uint8_t>(timestamp >> 40),
-        static_cast<uint8_t>(timestamp >> 48),
-        static_cast<uint8_t>(timestamp >> 56),
-    };
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_le, 8);
+    // Timestamp as big-endian uint64
+    uint8_t ts_be[8];
+    chromatindb::util::store_u64_be(ts_be, timestamp);
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, ts_be, 8);
 
     std::array<uint8_t, 32> hash{};
     OQS_SHA3_sha3_256_inc_finalize(hash.data(), &ctx);
