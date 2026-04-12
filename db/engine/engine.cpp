@@ -11,8 +11,10 @@
 #include "db/crypto/hash.h"
 #include "db/crypto/signing.h"
 #include "db/crypto/thread_pool.h"
+#include "db/engine/chunking.h"
 #include "db/net/framing.h"
 #include "db/storage/storage.h"
+#include "db/util/hex.h"
 #include "db/wire/codec.h"
 
 namespace chromatindb::engine {
@@ -467,6 +469,28 @@ std::optional<wire::BlobData> BlobEngine::get_blob(
 
 std::vector<storage::NamespaceInfo> BlobEngine::list_namespaces() {
     return storage_.list_namespaces();
+}
+
+// =============================================================================
+// Chunked storage API
+// =============================================================================
+
+asio::awaitable<IngestResult> BlobEngine::store_chunked(
+    std::span<const uint8_t, 32> /*namespace_id*/,
+    std::span<const uint8_t> /*pubkey*/,
+    std::span<const uint8_t> /*data*/,
+    uint32_t /*ttl*/,
+    uint64_t /*timestamp*/,
+    SignFn /*signature_fn*/) {
+    // Stub: always reject (TDD RED)
+    co_return IngestResult::rejection(IngestError::storage_error, "not implemented");
+}
+
+ChunkedReadResult BlobEngine::read_chunked(
+    std::span<const uint8_t, 32> /*namespace_id*/,
+    std::span<const uint8_t, 32> /*manifest_hash*/) {
+    // Stub: always fail (TDD RED)
+    return ChunkedReadResult{};
 }
 
 } // namespace chromatindb::engine

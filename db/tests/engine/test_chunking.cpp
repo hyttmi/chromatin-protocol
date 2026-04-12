@@ -2,15 +2,21 @@
 #include <cstring>
 
 #include "db/engine/chunking.h"
+#include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/storage/storage.h"
 #include "db/tests/test_helpers.h"
 #include "db/util/endian.h"
+#include "db/util/hex.h"
 #include "db/wire/codec.h"
 
+using chromatindb::engine::BlobEngine;
 using chromatindb::engine::CHUNK_SIZE;
+using chromatindb::engine::ChunkedReadResult;
+using chromatindb::engine::IngestStatus;
 using chromatindb::engine::MANIFEST_MAGIC;
 using chromatindb::engine::MAX_CHUNK_COUNT;
+using chromatindb::engine::SignFn;
 using chromatindb::engine::is_manifest;
 using chromatindb::engine::make_manifest_data;
 using chromatindb::engine::parse_manifest;
@@ -21,6 +27,7 @@ using chromatindb::storage::StoreResult;
 using chromatindb::test::TempDir;
 using chromatindb::test::current_timestamp;
 using chromatindb::test::make_signed_blob;
+using chromatindb::test::run_async;
 
 // ============================================================================
 // Manifest format tests
@@ -314,4 +321,266 @@ TEST_CASE("store_blobs_atomic creates expiry entries for blobs with TTL", "[chun
     auto earliest = store.get_earliest_expiry();
     REQUIRE(earliest.has_value());
     REQUIRE(*earliest == now + ttl);
+}
+
+// ============================================================================
+// Engine-level integration tests: store_chunked + read_chunked
+// ============================================================================
+
+namespace {
+
+/// Helper: generate random data of given size.
+std::vector<uint8_t> make_random_data(size_t size) {
+    std::vector<uint8_t> data(size);
+    std::mt19937 gen(42);  // Fixed seed for reproducibility
+    std::uniform_int_distribution<int> dist(0, 255);
+    for (auto& b : data) b = static_cast<uint8_t>(dist(gen));
+    return data;
+}
+
+/// Helper: create a SignFn from a NodeIdentity.
+SignFn make_sign_fn(const chromatindb::identity::NodeIdentity& id) {
+    return [&id](std::span<const uint8_t> message) -> std::vector<uint8_t> {
+        return id.sign(message);
+    };
+}
+
+} // anonymous namespace
+
+TEST_CASE("store_chunked splits 2.5 MiB into 3 chunks and read_chunked reassembles", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 2 + CHUNK_SIZE / 2);  // 2.5 MiB
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+
+    REQUIRE(result.accepted);
+    REQUIRE(result.ack.has_value());
+    auto manifest_hash = result.ack->blob_hash;
+
+    // Read back
+    auto read_result = engine.read_chunked(id.namespace_id(), manifest_hash);
+    REQUIRE(read_result.success);
+    REQUIRE(read_result.data == data);
+    REQUIRE(read_result.chunks_expected == 3);
+    REQUIRE(read_result.chunks_found == 3);
+}
+
+TEST_CASE("store_chunked with exactly 1 MiB creates 1 chunk + manifest", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE);  // Exactly 1 MiB
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+
+    REQUIRE(result.accepted);
+
+    auto read_result = engine.read_chunked(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(read_result.success);
+    REQUIRE(read_result.data == data);
+    REQUIRE(read_result.chunks_expected == 1);
+    REQUIRE(read_result.chunks_found == 1);
+}
+
+TEST_CASE("store_chunked with CHUNK_SIZE + 1 bytes creates 2 chunks", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE + 1);
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+
+    REQUIRE(result.accepted);
+
+    auto read_result = engine.read_chunked(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(read_result.success);
+    REQUIRE(read_result.data == data);
+    REQUIRE(read_result.chunks_expected == 2);
+    REQUIRE(read_result.chunks_found == 2);
+}
+
+TEST_CASE("read_chunked with non-existent manifest hash returns error", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    std::array<uint8_t, 32> fake_hash{};
+    fake_hash.fill(0xAB);
+
+    auto read_result = engine.read_chunked(id.namespace_id(), fake_hash);
+    REQUIRE_FALSE(read_result.success);
+    REQUIRE(read_result.error.find("not found") != std::string::npos);
+}
+
+TEST_CASE("read_chunked with non-manifest blob returns error", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+
+    // Store a regular (non-manifest) blob via ingest
+    auto blob = make_signed_blob(id, "regular data, not a manifest");
+    auto ingest_result = run_async(pool, engine.ingest(blob));
+    REQUIRE(ingest_result.accepted);
+
+    // Try to read_chunked using the regular blob's hash
+    auto read_result = engine.read_chunked(id.namespace_id(), ingest_result.ack->blob_hash);
+    REQUIRE_FALSE(read_result.success);
+    REQUIRE(read_result.error.find("not a manifest") != std::string::npos);
+}
+
+TEST_CASE("read_chunked fails with missing chunks when chunk deleted", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 2 + CHUNK_SIZE / 2);  // 2.5 MiB, 3 chunks
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+    REQUIRE(result.accepted);
+
+    // Parse the manifest to get chunk hashes
+    auto manifest_blob = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(manifest_blob.has_value());
+    auto chunk_hashes = parse_manifest(manifest_blob->data);
+    REQUIRE(chunk_hashes.has_value());
+    REQUIRE(chunk_hashes->size() == 3);
+
+    // Delete the second chunk
+    bool deleted = store.delete_blob_data(id.namespace_id(), (*chunk_hashes)[1]);
+    REQUIRE(deleted);
+
+    // Now read_chunked should fail
+    auto read_result = engine.read_chunked(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE_FALSE(read_result.success);
+    REQUIRE(read_result.chunks_expected == 3);
+    REQUIRE(read_result.chunks_found < 3);
+    REQUIRE(read_result.error.find("missing chunk") != std::string::npos);
+}
+
+TEST_CASE("store_chunked signs each chunk independently as valid blobs", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 2 + CHUNK_SIZE / 2);  // 3 chunks
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+    REQUIRE(result.accepted);
+
+    // Parse manifest to get chunk hashes
+    auto manifest_blob = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(manifest_blob.has_value());
+    auto chunk_hashes = parse_manifest(manifest_blob->data);
+    REQUIRE(chunk_hashes.has_value());
+
+    // Each chunk is a valid, independently-storable signed blob
+    for (size_t i = 0; i < chunk_hashes->size(); ++i) {
+        auto chunk_blob = engine.get_blob(id.namespace_id(), (*chunk_hashes)[i]);
+        REQUIRE(chunk_blob.has_value());
+        REQUIRE(std::memcmp(chunk_blob->namespace_id.data(), id.namespace_id().data(), 32) == 0);
+        REQUIRE(chunk_blob->pubkey.size() > 0);
+        REQUIRE(chunk_blob->signature.size() > 0);
+
+        // Check chunk data is the correct slice
+        size_t offset = i * CHUNK_SIZE;
+        size_t len = std::min(CHUNK_SIZE, data.size() - offset);
+        std::vector<uint8_t> expected_slice(data.begin() + offset, data.begin() + offset + len);
+        REQUIRE(chunk_blob->data == expected_slice);
+    }
+}
+
+TEST_CASE("store_chunked respects TTL -- chunks and manifest share same TTL/timestamp", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 2);  // 2 chunks
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 7200;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+    REQUIRE(result.accepted);
+
+    // Check manifest blob
+    auto manifest_blob = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(manifest_blob.has_value());
+    REQUIRE(manifest_blob->ttl == ttl);
+    REQUIRE(manifest_blob->timestamp == ts);
+
+    // Check chunks
+    auto chunk_hashes = parse_manifest(manifest_blob->data);
+    REQUIRE(chunk_hashes.has_value());
+    for (const auto& hash : *chunk_hashes) {
+        auto chunk_blob = engine.get_blob(id.namespace_id(), hash);
+        REQUIRE(chunk_blob.has_value());
+        REQUIRE(chunk_blob->ttl == ttl);
+        REQUIRE(chunk_blob->timestamp == ts);
+    }
+}
+
+TEST_CASE("store_chunked + read_chunked with 10 MiB (10 chunks) round-trips correctly", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 10);  // 10 MiB
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+    REQUIRE(result.accepted);
+
+    auto read_result = engine.read_chunked(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(read_result.success);
+    REQUIRE(read_result.data == data);
+    REQUIRE(read_result.chunks_expected == 10);
+    REQUIRE(read_result.chunks_found == 10);
 }
