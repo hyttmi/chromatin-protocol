@@ -76,6 +76,14 @@ struct BlobRef {
     uint64_t seq_num = 0;
 };
 
+/// Pre-computed blob for atomic multi-blob storage.
+/// Caller has already encoded and hashed the blob.
+struct PrecomputedBlob {
+    wire::BlobData blob;
+    std::array<uint8_t, 32> content_hash;
+    std::vector<uint8_t> encoded;  // FlatBuffer-encoded bytes
+};
+
 /// Persistent blob storage engine backed by libmdbx.
 ///
 /// Manages seven sub-databases:
@@ -302,6 +310,24 @@ public:
     /// Clears the quota sub-database and recomputes from blobs_map.
     /// Called on startup to ensure accuracy.
     void rebuild_quota_aggregates();
+
+    // =========================================================================
+    // Atomic multi-blob storage API
+    // =========================================================================
+
+    /// Store multiple blobs atomically in a single write transaction.
+    /// All-or-nothing: if capacity/quota check fails, none are stored.
+    /// Dedup is per-blob (duplicate blobs get Duplicate status, others still stored).
+    /// @param blobs Pre-computed blobs to store (chunks + manifest).
+    /// @param max_storage_bytes Capacity limit (0 = unlimited).
+    /// @param quota_byte_limit Namespace byte quota (0 = unlimited).
+    /// @param quota_count_limit Namespace blob count quota (0 = unlimited).
+    /// @return Vector of StoreResults (one per blob, same order as input).
+    std::vector<StoreResult> store_blobs_atomic(
+        const std::vector<PrecomputedBlob>& blobs,
+        uint64_t max_storage_bytes = 0,
+        uint64_t quota_byte_limit = 0,
+        uint64_t quota_count_limit = 0);
 
 private:
     struct Impl;

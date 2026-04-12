@@ -541,6 +541,16 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
     }
 }
 
+std::vector<StoreResult> Storage::store_blobs_atomic(
+    const std::vector<PrecomputedBlob>& blobs,
+    uint64_t max_storage_bytes,
+    uint64_t quota_byte_limit,
+    uint64_t quota_count_limit) {
+    // STUB: will be implemented in GREEN phase
+    std::vector<StoreResult> results(blobs.size());
+    return results;
+}
+
 std::optional<wire::BlobData> Storage::get_blob(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> hash) {
