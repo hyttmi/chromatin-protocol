@@ -302,15 +302,14 @@ asio::awaitable<bool> UdsMultiplexer::do_handshake() {
     // Sign session fingerprint
     auto sig = identity_.sign(session_fingerprint);
 
-    // Build auth payload: [pubkey_size:4B LE][pubkey:2592][signature:4627]
-    // CRITICAL: pubkey_size is LITTLE-endian (protocol exception per project memory)
+    // Build auth payload: [pubkey_size:4B BE][pubkey:2592][signature:4627]
     std::vector<uint8_t> auth_payload;
     auth_payload.reserve(4 + signing_pk.size() + sig.size());
     uint32_t pk_size = static_cast<uint32_t>(signing_pk.size());
-    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
     auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
     auth_payload.insert(auth_payload.end(), signing_pk.begin(), signing_pk.end());
     auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
 
@@ -334,16 +333,13 @@ asio::awaitable<bool> UdsMultiplexer::do_handshake() {
         co_return false;
     }
 
-    // Parse auth payload: [pubkey_size:4B LE][pubkey:2592][signature:4627]
+    // Parse auth payload: [pubkey_size:4B BE][pubkey:2592][signature:4627]
     if (resp_transport->payload.size() < 4) {
         spdlog::warn("handshake: auth payload too short");
         co_return false;
     }
-    uint32_t resp_pk_size =
-        static_cast<uint32_t>(resp_transport->payload[0]) |
-        (static_cast<uint32_t>(resp_transport->payload[1]) << 8) |
-        (static_cast<uint32_t>(resp_transport->payload[2]) << 16) |
-        (static_cast<uint32_t>(resp_transport->payload[3]) << 24);
+    uint32_t resp_pk_size = chromatindb::relay::util::read_u32_be(
+        resp_transport->payload.data());
 
     if (resp_pk_size != SIGNING_PK_SIZE) {
         spdlog::warn("handshake: unexpected pubkey size {} in auth", resp_pk_size);

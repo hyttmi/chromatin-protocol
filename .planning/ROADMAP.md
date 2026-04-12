@@ -136,7 +136,7 @@ Plans:
 ### Phase 999.7: Standardize all endianness to big-endian (BACKLOG)
 **Goal:** Eliminate the two remaining LE encoding exceptions (auth payload pubkey_size, canonical signing input ttl/timestamp) plus relay/tools inline LE copies. All wire encoding standardized to BE. PROTOCOL.md updated. Zero LE references in codebase.
 **Requirements:** BE-01, BE-02, BE-03, BE-04, BE-05, BE-06
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 999.7-01-PLAN.md — Node BE standardization: codec.cpp signing input + auth_helpers.h payload + PROTOCOL.md + db/ test updates
-- [ ] 999.7-02-PLAN.md — Relay+tools BE standardization: uds_multiplexer + relay_uds_tap + relay_test_helpers + codebase LE sweep
+- [x] 999.7-02-PLAN.md — Relay+tools BE standardization: uds_multiplexer + relay_uds_tap + relay_test_helpers + codebase LE sweep

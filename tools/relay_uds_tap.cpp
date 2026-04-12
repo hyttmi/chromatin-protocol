@@ -206,15 +206,14 @@ static bool do_handshake(int fd, const identity::RelayIdentity& id, AeadState& s
     // Step 10: Auth exchange (encrypted, consumes counter 0)
     auto sig = id.sign(session_fingerprint);
 
-    // Build auth payload: [pubkey_size:4B LE][pubkey:2592][signature:4627]
-    // CRITICAL: pubkey_size is LITTLE-endian (protocol exception)
+    // Build auth payload: [pubkey_size:4B BE][pubkey:2592][signature:4627]
     std::vector<uint8_t> auth_payload;
     auth_payload.reserve(4 + signing_pk.size() + sig.size());
     uint32_t pk_size = static_cast<uint32_t>(signing_pk.size());
-    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
     auth_payload.push_back(static_cast<uint8_t>((pk_size >> 24) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 16) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>((pk_size >> 8) & 0xFF));
+    auth_payload.push_back(static_cast<uint8_t>(pk_size & 0xFF));
     auth_payload.insert(auth_payload.end(), signing_pk.begin(), signing_pk.end());
     auth_payload.insert(auth_payload.end(), sig.begin(), sig.end());
 
@@ -243,11 +242,8 @@ static bool do_handshake(int fd, const identity::RelayIdentity& id, AeadState& s
         std::cerr << "ERROR: auth payload too short\n";
         return false;
     }
-    uint32_t resp_pk_size =
-        static_cast<uint32_t>(resp_transport->payload[0]) |
-        (static_cast<uint32_t>(resp_transport->payload[1]) << 8) |
-        (static_cast<uint32_t>(resp_transport->payload[2]) << 16) |
-        (static_cast<uint32_t>(resp_transport->payload[3]) << 24);
+    uint32_t resp_pk_size = chromatindb::relay::util::read_u32_be(
+        resp_transport->payload.data());
 
     if (resp_pk_size != SIGNING_PK_SIZE) {
         std::cerr << "ERROR: unexpected pubkey size " << resp_pk_size << " in auth\n";

@@ -60,8 +60,8 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **BE-02**: encode_auth_payload() in db/net/auth_helpers.h writes pubkey_size as BE uint32
 - [x] **BE-03**: decode_auth_payload() in db/net/auth_helpers.h reads pubkey_size as BE uint32
 - [x] **BE-04**: PROTOCOL.md documents all-BE wire format with zero LE references (ttl_be32, timestamp_be64, pubkey_size BE)
-- [ ] **BE-05**: Relay UDS multiplexer and relay_uds_tap tool encode/decode auth payload pubkey_size as BE, matching node
-- [ ] **BE-06**: tools/relay_test_helpers.h build_signing_input() encodes ttl/timestamp as BE, and zero LE references remain in db/, relay/, tools/ source files
+- [x] **BE-05**: Relay UDS multiplexer and relay_uds_tap tool encode/decode auth payload pubkey_size as BE, matching node
+- [x] **BE-06**: tools/relay_test_helpers.h build_signing_input() encodes ttl/timestamp as BE, and zero LE references remain in db/, relay/, tools/ source files
 
 ## Future Requirements
 
@@ -116,8 +116,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BE-02 | Phase 999.7 | Complete |
 | BE-03 | Phase 999.7 | Complete |
 | BE-04 | Phase 999.7 | Complete |
-| BE-05 | Phase 999.7 | Pending |
-| BE-06 | Phase 999.7 | Pending |
+| BE-05 | Phase 999.7 | Complete |
+| BE-06 | Phase 999.7 | Complete |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total

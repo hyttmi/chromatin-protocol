@@ -176,7 +176,7 @@ int cmd_hash_fields(const HashFieldsArgs& args) {
     std::array<uint8_t, 32> ns_array{};
     std::memcpy(ns_array.data(), ns_bytes.data(), 32);
 
-    // Recompute signing digest: SHA3-256(namespace || data || ttl_le32 || timestamp_le64)
+    // Recompute signing digest: SHA3-256(namespace || data || ttl_be32 || timestamp_be64)
     auto signing_digest = chromatindb::wire::build_signing_input(
         ns_array, data_bytes, args.ttl, args.timestamp);
 
