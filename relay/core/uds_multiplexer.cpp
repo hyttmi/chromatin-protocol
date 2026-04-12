@@ -560,13 +560,8 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         (*json_opt)["request_id"] = pending->client_request_id;
     }
 
-    // Send to client: binary WS frame for ReadResponse/BatchReadResponse,
-    // text WS frame for everything else.
-    if (translate::is_binary_response(type)) {
-        session->send_binary(json_opt->dump());
-    } else {
-        session->send_json(*json_opt);
-    }
+    // Send translated JSON to client
+    session->send_json(*json_opt);
 }
 
 // ---------------------------------------------------------------------------

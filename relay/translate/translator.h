@@ -27,10 +27,4 @@ std::optional<TranslateResult> json_to_binary(const nlohmann::json& msg);
 std::optional<nlohmann::json> binary_to_json(uint8_t type,
                                               std::span<const uint8_t> payload);
 
-/// Whether a response type should be sent as binary WS frame.
-/// Per D-20: ReadResponse(32) and BatchReadResponse(54) -> true.
-inline bool is_binary_response(uint8_t type) {
-    return type == 32 || type == 54;
-}
-
 } // namespace chromatindb::relay::translate

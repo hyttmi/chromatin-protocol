@@ -214,23 +214,6 @@ void WsSession::send_json(const nlohmann::json& j) {
         }, asio::detached);
 }
 
-void WsSession::send_binary(const std::string& json_payload) {
-    if (metrics_) metrics_->messages_sent_total.fetch_add(1, std::memory_order_relaxed);
-    // Enqueue with binary marker prefix (0x02).
-    // write_frame() detects this prefix and uses OPCODE_BINARY instead of OPCODE_TEXT.
-    // JSON payloads always start with '{' or '[', never with a byte < 0x20,
-    // so there's no false-positive risk.
-    auto self = shared_from_this();
-    std::string marked;
-    marked.reserve(1 + json_payload.size());
-    marked.push_back(static_cast<char>(OPCODE_BINARY));  // 0x02
-    marked.append(json_payload);
-    asio::co_spawn(executor_,
-        [self, marked = std::move(marked)]() mutable -> asio::awaitable<void> {
-            co_await self->session_.enqueue(std::move(marked));
-        }, asio::detached);
-}
-
 // ---------------------------------------------------------------------------
 // Async I/O helpers (dual-mode: plain TCP / TLS)
 // ---------------------------------------------------------------------------
@@ -274,16 +257,7 @@ asio::awaitable<bool> WsSession::send_raw(const std::string& frame) {
 asio::awaitable<bool> WsSession::write_frame(std::span<const uint8_t> data) {
     if (closing_) co_return false;
 
-    // Check for binary marker prefix (0x02 from send_binary).
-    // JSON text always starts with '{' or '[' (>= 0x5B), never with 0x02.
-    uint8_t opcode = OPCODE_TEXT;
-    auto payload = data;
-    if (!data.empty() && data[0] == OPCODE_BINARY) {
-        opcode = OPCODE_BINARY;
-        payload = data.subspan(1);  // Strip the marker byte
-    }
-
-    auto frame = encode_frame(opcode, payload);
+    auto frame = encode_frame(OPCODE_TEXT, data);
     auto n = co_await async_write(asio::buffer(frame));
     co_return n == frame.size();
 }

@@ -74,9 +74,6 @@ public:
     /// Enqueue JSON text frame via send queue (fire-and-forget).
     void send_json(const nlohmann::json& j);
 
-    /// Send a binary WebSocket frame (opcode 0x2) via send queue.
-    void send_binary(const std::string& json_payload);
-
 private:
     WsSession(Stream stream, SessionManager& manager,
               asio::any_io_executor executor, size_t max_send_queue,
