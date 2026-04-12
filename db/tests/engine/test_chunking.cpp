@@ -562,6 +562,37 @@ TEST_CASE("store_chunked respects TTL -- chunks and manifest share same TTL/time
     }
 }
 
+TEST_CASE("store_chunked creates all chunks and manifest in same namespace (D-08)", "[chunking]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{2};
+    BlobEngine engine(store, pool);
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    auto data = make_random_data(CHUNK_SIZE * 2);  // 2 chunks
+
+    uint64_t ts = current_timestamp();
+    uint32_t ttl = 3600;
+
+    auto result = run_async(pool, engine.store_chunked(
+        id.namespace_id(), id.public_key(), data, ttl, ts, make_sign_fn(id)));
+    REQUIRE(result.accepted);
+
+    // Check manifest namespace
+    auto manifest_blob = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
+    REQUIRE(manifest_blob.has_value());
+    REQUIRE(std::memcmp(manifest_blob->namespace_id.data(), id.namespace_id().data(), 32) == 0);
+
+    // Check all chunks namespace
+    auto chunk_hashes = parse_manifest(manifest_blob->data);
+    REQUIRE(chunk_hashes.has_value());
+    for (const auto& hash : *chunk_hashes) {
+        auto chunk_blob = engine.get_blob(id.namespace_id(), hash);
+        REQUIRE(chunk_blob.has_value());
+        REQUIRE(std::memcmp(chunk_blob->namespace_id.data(), id.namespace_id().data(), 32) == 0);
+    }
+}
+
 TEST_CASE("store_chunked + read_chunked with 10 MiB (10 chunks) round-trips correctly", "[chunking]") {
     TempDir tmp;
     Storage store(tmp.path.string());
