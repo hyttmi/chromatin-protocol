@@ -19,7 +19,7 @@ TEST_CASE("encode_auth_payload round-trips through decode_auth_payload",
     REQUIRE(decoded->signature == signature);
 }
 
-TEST_CASE("encode_auth_payload produces LE pubkey_size + pubkey + signature layout",
+TEST_CASE("encode_auth_payload produces BE pubkey_size + pubkey + signature layout",
           "[auth_helpers]") {
     std::vector<uint8_t> pubkey(10, 0x01);
     std::vector<uint8_t> signature(20, 0x02);
@@ -29,11 +29,11 @@ TEST_CASE("encode_auth_payload produces LE pubkey_size + pubkey + signature layo
     // Total: 4 (size) + 10 (pubkey) + 20 (signature) = 34
     REQUIRE(encoded.size() == 34);
 
-    // First 4 bytes: LE encoding of 10 (0x0A, 0x00, 0x00, 0x00)
-    REQUIRE(encoded[0] == 0x0A);
+    // First 4 bytes: BE encoding of 10 (0x00, 0x00, 0x00, 0x0A)
+    REQUIRE(encoded[0] == 0x00);
     REQUIRE(encoded[1] == 0x00);
     REQUIRE(encoded[2] == 0x00);
-    REQUIRE(encoded[3] == 0x00);
+    REQUIRE(encoded[3] == 0x0A);
 
     // Bytes 4-13: pubkey
     for (size_t i = 0; i < 10; ++i) {
@@ -56,11 +56,11 @@ TEST_CASE("encode_auth_payload with ML-DSA-87 key size encodes correctly",
 
     REQUIRE(encoded.size() == 4 + 2592 + 4627);
 
-    // 2592 = 0x00000A20, LE = [0x20, 0x0A, 0x00, 0x00]
-    REQUIRE(encoded[0] == 0x20);
-    REQUIRE(encoded[1] == 0x0A);
-    REQUIRE(encoded[2] == 0x00);
-    REQUIRE(encoded[3] == 0x00);
+    // 2592 = 0x00000A20, BE = [0x00, 0x00, 0x0A, 0x20]
+    REQUIRE(encoded[0] == 0x00);
+    REQUIRE(encoded[1] == 0x00);
+    REQUIRE(encoded[2] == 0x0A);
+    REQUIRE(encoded[3] == 0x20);
 
     auto decoded = decode_auth_payload(encoded);
     REQUIRE(decoded.has_value());
@@ -84,8 +84,8 @@ TEST_CASE("decode_auth_payload with only 3 bytes returns nullopt",
 
 TEST_CASE("decode_auth_payload with pubkey_size larger than remaining data returns nullopt",
           "[auth_helpers]") {
-    // Claim pubkey_size = 100 (LE: 0x64, 0x00, 0x00, 0x00) but only 5 bytes after header
-    std::vector<uint8_t> data = {0x64, 0x00, 0x00, 0x00,
+    // Claim pubkey_size = 100 (BE: 0x00, 0x00, 0x00, 0x64) but only 5 bytes after header
+    std::vector<uint8_t> data = {0x00, 0x00, 0x00, 0x64,
                                   0x01, 0x02, 0x03, 0x04, 0x05};
     auto result = decode_auth_payload(data);
     REQUIRE_FALSE(result.has_value());
@@ -118,18 +118,18 @@ TEST_CASE("decode_auth_payload accepts correct ML-DSA-87 pubkey size", "[auth_he
     REQUIRE(decoded->pubkey.size() == 2592);
 }
 
-TEST_CASE("encode_auth_payload byte-level LE verification",
+TEST_CASE("encode_auth_payload byte-level BE verification",
           "[auth_helpers]") {
     // pubkey size = 2592 = 0x00000A20
-    // LE encoding: [0x20, 0x0A, 0x00, 0x00]
+    // BE encoding: [0x00, 0x00, 0x0A, 0x20]
     std::vector<uint8_t> pubkey(2592, 0xFF);
     std::vector<uint8_t> signature(100, 0xEE);
 
     auto encoded = encode_auth_payload(pubkey, signature);
 
     uint32_t pk_size = static_cast<uint32_t>(pubkey.size());
-    REQUIRE(encoded[0] == static_cast<uint8_t>(pk_size & 0xFF));
-    REQUIRE(encoded[1] == static_cast<uint8_t>((pk_size >> 8) & 0xFF));
-    REQUIRE(encoded[2] == static_cast<uint8_t>((pk_size >> 16) & 0xFF));
-    REQUIRE(encoded[3] == static_cast<uint8_t>((pk_size >> 24) & 0xFF));
+    REQUIRE(encoded[0] == static_cast<uint8_t>((pk_size >> 24) & 0xFF));
+    REQUIRE(encoded[1] == static_cast<uint8_t>((pk_size >> 16) & 0xFF));
+    REQUIRE(encoded[2] == static_cast<uint8_t>((pk_size >> 8) & 0xFF));
+    REQUIRE(encoded[3] == static_cast<uint8_t>(pk_size & 0xFF));
 }

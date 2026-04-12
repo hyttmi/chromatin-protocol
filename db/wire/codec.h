@@ -25,7 +25,7 @@ std::vector<uint8_t> encode_blob(const BlobData& blob);
 /// @throws std::runtime_error if buffer is invalid.
 BlobData decode_blob(std::span<const uint8_t> buffer);
 
-/// Build canonical signing input: SHA3-256(namespace || data || ttl_le32 || timestamp_le64).
+/// Build canonical signing input: SHA3-256(namespace || data || ttl_be32 || timestamp_be64).
 /// Returns a 32-byte digest that is then signed -- independent of FlatBuffer format.
 /// Uses incremental SHA3-256 hashing internally (zero intermediate allocation).
 std::array<uint8_t, 32> build_signing_input(

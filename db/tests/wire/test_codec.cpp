@@ -92,22 +92,24 @@ TEST_CASE("build_signing_input produces SHA3-256 of canonical concatenation", "[
     REQUIRE(input.size() == 32);
 
     // Build expected: SHA3-256 of the canonical concatenation
-    // namespace(32) || data(var) || ttl_le(4) || timestamp_le(8)
+    // namespace(32) || data(var) || ttl_be(4) || timestamp_be(8)
     std::vector<uint8_t> concat;
     concat.insert(concat.end(), ns.begin(), ns.end());
     concat.insert(concat.end(), data.begin(), data.end());
-    concat.push_back(static_cast<uint8_t>(ttl));
-    concat.push_back(static_cast<uint8_t>(ttl >> 8));
-    concat.push_back(static_cast<uint8_t>(ttl >> 16));
+    // TTL as big-endian uint32: 604800 = 0x00093A80
     concat.push_back(static_cast<uint8_t>(ttl >> 24));
-    concat.push_back(static_cast<uint8_t>(timestamp));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 8));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 16));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 24));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 32));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 40));
-    concat.push_back(static_cast<uint8_t>(timestamp >> 48));
+    concat.push_back(static_cast<uint8_t>(ttl >> 16));
+    concat.push_back(static_cast<uint8_t>(ttl >> 8));
+    concat.push_back(static_cast<uint8_t>(ttl));
+    // Timestamp as big-endian uint64: 1709500000 = 0x0000000065E4A660
     concat.push_back(static_cast<uint8_t>(timestamp >> 56));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 48));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 40));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 32));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 24));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 16));
+    concat.push_back(static_cast<uint8_t>(timestamp >> 8));
+    concat.push_back(static_cast<uint8_t>(timestamp));
 
     auto expected = chromatindb::crypto::sha3_256(concat);
     REQUIRE(input == expected);

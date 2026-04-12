@@ -186,14 +186,14 @@ table Blob {
 Blobs are signed over a canonical byte sequence, NOT over the raw FlatBuffer encoding. This makes signature verification independent of serialization format. The signing input is:
 
 ```
-SHA3-256(namespace_id || data || ttl_le32 || timestamp_le64)
+SHA3-256(namespace_id || data || ttl_be32 || timestamp_be64)
 ```
 
 Where:
 - `namespace_id` -- 32 bytes, the author's namespace
 - `data` -- variable length, the blob's application payload
-- `ttl_le32` -- 4 bytes, TTL in little-endian uint32
-- `timestamp_le64` -- 8 bytes, timestamp in little-endian uint64
+- `ttl_be32` -- 4 bytes, TTL in big-endian uint32
+- `timestamp_be64` -- 8 bytes, timestamp in big-endian uint64
 
 The concatenation is hashed with SHA3-256 to produce a 32-byte digest. This digest is then signed with the author's ML-DSA-87 private key.
 
@@ -1065,11 +1065,11 @@ The node sends Pong responses with `request_id = 0`, regardless of the request_i
 
 ### Wire Format Endianness
 
-The protocol uses mixed endianness:
-- **Big-endian:** Frame length prefix (4 bytes), most wire format fields
-- **Little-endian:** Auth payload `pubkey_size` field (4 bytes), canonical signing input fields `ttl` (4 bytes) and `timestamp` (8 bytes)
+The protocol uses big-endian for all integer fields:
+- Frame length prefix (4 bytes)
+- All wire format fields including TTL, timestamp, pubkey_size, seq_num, etc.
 
-Client implementations must encode/decode each field with the correct byte order.
+All integer fields use big-endian encoding exclusively.
 
 ### FlatBuffers Determinism
 
