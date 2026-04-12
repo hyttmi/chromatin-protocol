@@ -144,6 +144,9 @@ Plans:
 - [x] 999.7-02-PLAN.md — Relay+tools BE standardization: uds_multiplexer + relay_uds_tap + relay_test_helpers + codebase LE sweep
 
 ### Phase 999.8: Database layer chunking for large files (BACKLOG)
-**Goal:** Large blobs may exceed practical limits for single-blob storage and replication. Add chunking support at the database layer — split large files into fixed-size chunks, reassemble on read. Pre-MVP, no backward compat needed.
-**Requirements:** TBD
-**Plans:** 0 plans
+**Goal:** Large blobs may exceed practical limits for single-blob storage and replication. Add chunking support at the database layer -- split large files into fixed-size chunks, reassemble on read. Pre-MVP, no backward compat needed.
+**Requirements:** CHUNK-01, CHUNK-02, CHUNK-03, CHUNK-04, CHUNK-05, CHUNK-06
+**Plans:** 2 plans
+Plans:
+- [ ] 999.8-01-PLAN.md — Manifest format utilities (chunking.h/cpp) + atomic multi-blob storage (store_blobs_atomic)
+- [ ] 999.8-02-PLAN.md — Engine store_chunked/read_chunked API + integration tests + PROTOCOL.md

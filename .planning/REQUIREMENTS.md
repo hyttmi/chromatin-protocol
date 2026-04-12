@@ -70,6 +70,15 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **BE-05**: Relay UDS multiplexer and relay_uds_tap tool encode/decode auth payload pubkey_size as BE, matching node
 - [x] **BE-06**: tools/relay_test_helpers.h build_signing_input() encodes ttl/timestamp as BE, and zero LE references remain in db/, relay/, tools/ source files
 
+### Database Layer Chunking (Phase 999.8)
+
+- [ ] **CHUNK-01**: Manifest format encode/decode with CHNK magic prefix (0x43484E4B), BE chunk_count, ordered chunk hashes
+- [ ] **CHUNK-02**: is_manifest() helper detects manifest blobs by magic prefix, following is_tombstone/is_delegation pattern
+- [ ] **CHUNK-03**: store_blobs_atomic() stores N pre-computed blobs in a single MDBX write transaction with dedup, capacity, and quota enforcement
+- [ ] **CHUNK-04**: store_chunked() engine method splits data into 1 MiB chunks, signs each via callback, creates manifest, stores all atomically, returns manifest blob_hash
+- [ ] **CHUNK-05**: read_chunked() engine method reads manifest, fetches all chunks in order, returns reassembled data or error with chunks_found/chunks_expected
+- [ ] **CHUNK-06**: PROTOCOL.md documents CHNK manifest magic prefix in the magic prefix registry
+
 ## Future Requirements
 
 ### Post-v3.1.0
@@ -129,11 +138,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BE-04 | Phase 999.7 | Complete |
 | BE-05 | Phase 999.7 | Complete |
 | BE-06 | Phase 999.7 | Complete |
+| CHUNK-01 | Phase 999.8 | Pending |
+| CHUNK-02 | Phase 999.8 | Pending |
+| CHUNK-03 | Phase 999.8 | Pending |
+| CHUNK-04 | Phase 999.8 | Pending |
+| CHUNK-05 | Phase 999.8 | Pending |
+| CHUNK-06 | Phase 999.8 | Pending |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Backlog requirements: 23 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.5: 4, Phase 999.7: 6)
-- Mapped to phases: 37
+- Backlog requirements: 29 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.5: 4, Phase 999.7: 6, Phase 999.8: 6)
+- Mapped to phases: 43
 - Unmapped: 0
 
 ---
@@ -141,3 +156,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Backlog requirements added: 2026-04-11*
 *Endianness requirements added: 2026-04-12*
 *Binary WS frame cleanup requirements added: 2026-04-12*
+*Chunking requirements added: 2026-04-12*
