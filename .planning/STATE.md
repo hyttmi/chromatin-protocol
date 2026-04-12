@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.8-database-layer-chunking-for-large-files
-Plan: 1 of 2
-Status: Plan 01 complete
+Plan: 2 of 2
+Status: Plans 01-02 complete
 Last activity: 2026-04-12
 
-Progress: [#####-----] 50%
+Progress: [##########] 100%
 
 ## Accumulated Context
 
@@ -51,10 +51,12 @@ Progress: [#####-----] 50%
 - [Phase 999.8]: Manifest magic in engine namespace (not wire/codec) -- chunking is an engine convention
 - [Phase 999.8]: store_blobs_atomic uses per-namespace quota accumulation for batch quota checking
 - [Phase 999.8]: Duplicate blobs in atomic batch get Duplicate status while new blobs still store
+- [Phase 999.8]: store_chunked uses crypto::offload per-chunk for ML-DSA-87 signing
+- [Phase 999.8]: read_chunked is synchronous (not a coroutine) -- matches get_blob pattern
 
 ### Pending Todos
 
-None.
+- Plan 03: Handler integration (wire chunking into message dispatch)
 
 ### Blockers/Concerns
 

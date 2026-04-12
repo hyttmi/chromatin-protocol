@@ -549,6 +549,25 @@ Once the tombstone is stored, the node removes the delegate from the namespace's
 
 After revocation, `DelegationList` for the namespace no longer includes the revoked delegate's entry. The tombstone is permanent (`ttl=0`) and replicates like any other blob.
 
+### Chunked File (Manifest)
+
+Large files are stored as multiple chunks with a **manifest blob** whose data field uses a 4-byte magic prefix followed by chunk metadata:
+
+```
+Manifest data format: [0x43 0x48 0x4E 0x4B][chunk_count: 4 bytes BE uint32][chunk_hash_1: 32 bytes][chunk_hash_2: 32 bytes]...
+                      "CHNK" magic prefix   (total: 8 + chunk_count * 32 bytes)
+```
+
+A manifest blob is a regular signed blob whose data field contains an ordered list of chunk content hashes. Each chunk is also a regular signed blob containing a portion of the original file data. Chunks are 1 MiB (1,048,576 bytes) except for the last which may be smaller.
+
+All chunks and the manifest share the same namespace, TTL, and timestamp. The manifest's `blob_hash` serves as the handle for the entire chunked file. Chunks and manifest are stored atomically in a single write transaction.
+
+Maximum chunk count: 100,000 (~97.6 GiB files).
+
+**Reading:** Fetch the manifest blob by hash, parse the chunk list, fetch each chunk in order by hash, concatenate the chunk data to reconstruct the original file.
+
+**Replication:** Chunks and manifest replicate independently as regular blobs via the standard sync protocol. All chunks must be present to reassemble the file.
+
 ### Pub/Sub Notifications
 
 Peers subscribe to namespaces to receive real-time notifications when blobs are ingested or deleted.
