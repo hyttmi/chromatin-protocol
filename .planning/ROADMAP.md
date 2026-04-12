@@ -132,3 +132,8 @@ Plans:
 **Goal:** Client writing to a subscribed namespace gets both write_ack AND notification for its own write. Phase 109 (source-exclusion) is planned but currently every client must handle/ignore its own echo.
 **Requirements:** TBD
 **Plans:** 0 plans
+
+### Phase 999.7: Standardize all endianness to big-endian (BACKLOG)
+**Goal:** Auth payload pubkey_size and canonical signing input (ttl/timestamp) use little-endian while everything else uses big-endian. Pre-MVP, no backward compat needed. Standardize all encoding to BE, update PROTOCOL.md, verify consistency.
+**Requirements:** TBD
+**Plans:** 0 plans
