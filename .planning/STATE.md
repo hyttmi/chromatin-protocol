@@ -25,23 +25,24 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 
 ## Current Position
 
-Phase: N/A (milestone complete)
-Plan: N/A
-Status: v2.2.0 shipped
-Last activity: 2026-04-09
+Phase: 999.8-database-layer-chunking-for-large-files
+Plan: 02 of 3 complete
+Status: Plan 02 complete (engine chunking API)
+Last activity: 2026-04-12
 
-Progress: [##########] 100%
+Progress: [######----] 67% (2/3 plans)
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
+- store_chunked uses crypto::offload per-chunk for ML-DSA-87 signing
+- read_chunked is synchronous (not a coroutine) -- matches get_blob pattern
+- CHNK manifest magic prefix documented in PROTOCOL.md
 
 ### Pending Todos
 
-None.
+- Plan 03: Handler integration (wire chunking into message dispatch)
 
 ### Blockers/Concerns
 
