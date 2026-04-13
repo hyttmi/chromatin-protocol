@@ -2,6 +2,7 @@
 #include "relay/http/http_parser.h"
 #include "relay/http/token_store.h"
 #include "relay/core/authenticator.h"
+#include "relay/core/metrics_collector.h"
 #include "relay/util/hex.h"
 
 #include <nlohmann/json.hpp>
@@ -329,6 +330,26 @@ void register_health_route(HttpRouter& router, HealthProvider health_provider) {
                 {"relay", "ok"},
                 {"node", node_str}
             });
+        }, true);
+}
+
+// ---------------------------------------------------------------------------
+// Metrics route registration
+// ---------------------------------------------------------------------------
+
+void register_metrics_route(HttpRouter& router, core::MetricsCollector& metrics) {
+    router.add_route("GET", "/metrics",
+        [&metrics](const HttpRequest&, const std::vector<uint8_t>&, HttpSessionState*) -> HttpResponse {
+            auto body = metrics.format_prometheus();
+            HttpResponse resp;
+            resp.status = 200;
+            resp.status_text = "OK";
+            resp.body.assign(body.begin(), body.end());
+            resp.headers.emplace_back("Content-Type",
+                "text/plain; version=0.0.4; charset=utf-8");
+            resp.headers.emplace_back("Content-Length",
+                std::to_string(resp.body.size()));
+            return resp;
         }, true);
 }
 

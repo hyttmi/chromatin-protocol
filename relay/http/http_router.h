@@ -11,6 +11,7 @@
 
 namespace chromatindb::relay::core {
 class Authenticator;
+class MetricsCollector;
 } // namespace chromatindb::relay::core
 
 namespace chromatindb::relay::http {
@@ -70,5 +71,9 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
 /// Register GET /health route (public, no auth required).
 using HealthProvider = std::function<bool()>;
 void register_health_route(HttpRouter& router, HealthProvider health_provider);
+
+/// Register GET /metrics route (public, no auth required).
+/// Calls MetricsCollector::format_prometheus() on each request.
+void register_metrics_route(HttpRouter& router, core::MetricsCollector& metrics);
 
 } // namespace chromatindb::relay::http

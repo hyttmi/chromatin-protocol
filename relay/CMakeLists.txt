@@ -90,6 +90,8 @@ endif()
 
 # -- liboqs (ML-DSA-87 identity)
 if(NOT TARGET oqs)
+  # Save BUILD_TESTING before liboqs forces it OFF
+  set(_SAVED_BUILD_TESTING ${BUILD_TESTING})
   set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(OQS_ENABLE_SIG_ML_DSA ON CACHE BOOL "" FORCE)
@@ -110,10 +112,12 @@ if(NOT TARGET oqs)
   target_include_directories(oqs PUBLIC
     $<BUILD_INTERFACE:${liboqs_relay_BINARY_DIR}/include>
   )
+  # Restore BUILD_TESTING after liboqs forced it OFF
+  set(BUILD_TESTING ${_SAVED_BUILD_TESTING} CACHE BOOL "" FORCE)
 endif()
 
 # =============================================================================
-# System OpenSSL (TLS termination + SHA-1/Base64 for WebSocket handshake)
+# System OpenSSL (TLS termination)
 # =============================================================================
 find_package(OpenSSL 3.3 REQUIRED)
 

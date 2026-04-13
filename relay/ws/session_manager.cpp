@@ -8,7 +8,7 @@ namespace chromatindb::relay::ws {
 uint64_t SessionManager::add_session(std::shared_ptr<WsSession> session) {
     uint64_t id = next_id_++;
     sessions_.emplace(id, std::move(session));
-    if (metrics_) metrics_->ws_connections_total.fetch_add(1, std::memory_order_relaxed);
+    if (metrics_) metrics_->http_connections_total.fetch_add(1, std::memory_order_relaxed);
     return id;
 }
 
@@ -25,7 +25,7 @@ void SessionManager::remove_session(uint64_t id) {
         write_tracker_->remove_session(id);
     }
     if (sessions_.erase(id) > 0) {
-        if (metrics_) metrics_->ws_disconnections_total.fetch_add(1, std::memory_order_relaxed);
+        if (metrics_) metrics_->http_disconnections_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
