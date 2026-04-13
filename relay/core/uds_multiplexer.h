@@ -1,9 +1,9 @@
 #pragma once
 
 #include "relay/core/request_router.h"
+#include "relay/core/session_dispatch.h"
 #include "relay/core/write_tracker.h"
 #include "relay/identity/relay_identity.h"
-#include "relay/ws/session_manager.h"
 
 #include <asio.hpp>
 #include <asio/local/stream_protocol.hpp>
@@ -28,7 +28,7 @@ public:
                    std::string uds_path,
                    const identity::RelayIdentity& identity,
                    RequestRouter& router,
-                   ws::SessionManager& sessions);
+                   SessionDispatch dispatch);
 
     /// Start async connect loop. Non-blocking, spawns coroutine.
     void start();
@@ -80,7 +80,7 @@ private:
     /// Drain the send queue -- serializes outbound writes over UDS.
     asio::awaitable<void> drain_send_queue();
 
-    /// Route a decoded response from the node to the correct WsSession.
+    /// Route a decoded response from the node to the correct client session.
     void route_response(uint8_t type, std::vector<uint8_t> payload, uint32_t request_id);
 
     /// Handle Notification (type 21) fan-out to subscribed sessions (Phase 104 D-06).
@@ -99,7 +99,7 @@ private:
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
     RequestRouter& router_;
-    ws::SessionManager& sessions_;
+    SessionDispatch dispatch_;
 
     asio::local::stream_protocol::socket socket_;
     bool connected_ = false;

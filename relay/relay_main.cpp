@@ -233,8 +233,21 @@ int main(int argc, char* argv[]) {
         spdlog::info("  max_blob_size: disabled (no limit)");
     }
 
+    // Bridge SessionDispatch to existing ws::SessionManager for WS transport
+    chromatindb::relay::core::SessionDispatch dispatch;
+    dispatch.send_json = [&session_manager](uint64_t id, const nlohmann::json& msg) {
+        auto session = session_manager.get_session(id);
+        if (session) session->send_json(msg);
+    };
+    dispatch.broadcast = [&session_manager](const nlohmann::json& msg) {
+        session_manager.for_each([&msg](uint64_t, const auto& session) {
+            if (session) session->send_json(msg);
+        });
+    };
+    dispatch.send_error = dispatch.send_json;  // Same behavior for WS transport
+
     chromatindb::relay::core::UdsMultiplexer uds_mux(
-        ioc, cfg.uds_path, identity, request_router, session_manager);
+        ioc, cfg.uds_path, identity, request_router, std::move(dispatch));
     uds_mux.set_tracker(&subscription_tracker);
     uds_mux.set_request_timeout(&request_timeout);
     uds_mux.set_metrics(&metrics_collector.metrics());
