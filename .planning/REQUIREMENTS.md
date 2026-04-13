@@ -79,6 +79,40 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **CHUNK-05**: read_chunked() engine method reads manifest, fetches all chunks in order, returns reassembled data or error with chunks_found/chunks_expected
 - [x] **CHUNK-06**: PROTOCOL.md documents CHNK manifest magic prefix in the magic prefix registry
 
+### HTTP Transport (Phase 999.9)
+
+- [ ] **HTTP-01**: HTTP/1.1 request parser handles method, path, query, headers, Content-Length, Connection keep-alive
+- [ ] **HTTP-02**: HttpResponse builder serializes JSON, binary, and error responses with correct Content-Type and Content-Length
+- [ ] **HTTP-03**: Coroutine-based HTTP server accepts TLS/plain connections on configured bind address with connection cap
+- [ ] **HTTP-04**: Session tokens are opaque RAND_bytes(32) hex, stored in TokenStore with create/lookup/remove/reap_idle
+- [ ] **HTTP-05**: Challenge-response auth: POST /auth/challenge returns nonce, POST /auth/verify with ML-DSA-87 signature returns bearer token
+- [ ] **HTTP-06**: Bearer token auth middleware rejects unauthenticated requests with 401
+- [ ] **HTTP-07**: POST /blob accepts raw binary FlatBuffer body (application/octet-stream), returns JSON WriteAck
+- [ ] **HTTP-08**: GET /blob/{namespace}/{hash} returns raw binary FlatBuffer response (application/octet-stream), 404 if not found
+- [ ] **HTTP-09**: DELETE /blob/{namespace}/{hash} accepts raw binary tombstone body, returns JSON DeleteAck
+- [ ] **HTTP-10**: GET /list/{namespace} with query params returns JSON blob list via translator
+- [ ] **HTTP-11**: GET /stats/{namespace} returns JSON namespace statistics via translator
+- [ ] **HTTP-12**: UdsMultiplexer decoupled from ws::SessionManager via SessionDispatch callback interface
+- [ ] **HTTP-13**: ResponsePromise awaitable bridges async UDS responses to synchronous HTTP handler coroutines
+- [ ] **HTTP-14**: POST /batch/read accepts JSON body, returns JSON with base64-encoded blobs via translator
+- [ ] **HTTP-15**: GET /exists/{namespace}/{hash} returns JSON {exists: bool} via translator
+- [ ] **HTTP-16**: GET /node-info returns JSON node info via translator
+- [ ] **HTTP-17**: GET /peer-info returns JSON peer info via translator
+- [ ] **HTTP-18**: GET /storage-status returns JSON storage status via translator
+- [ ] **HTTP-19**: GET /metadata/{namespace}/{hash} returns JSON blob metadata via translator
+- [ ] **HTTP-20**: GET /delegations/{namespace} returns JSON delegation list via translator
+- [ ] **HTTP-21**: GET /time-range/{namespace} with query params returns JSON time range results via translator
+- [ ] **HTTP-22**: POST /subscribe adds namespaces to session subscription set via SubscriptionTracker
+- [ ] **HTTP-23**: POST /unsubscribe removes namespaces from session subscription set
+- [ ] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
+- [ ] **HTTP-25**: SSE heartbeats sent every 30s; disconnect triggers subscription cleanup
+- [ ] **HTTP-26**: relay_main.cpp creates HttpServer + TokenStore instead of WsAcceptor + SessionManager
+- [ ] **HTTP-27**: /metrics and /health served by main HTTP server (MetricsCollector accept loop removed)
+- [ ] **HTTP-28**: SIGHUP reloads TLS, ACL, rate limit, request timeout, max blob size with HTTP transport
+- [ ] **HTTP-29**: All WebSocket code deleted: ws_frame, ws_handshake, ws_session, ws_acceptor, session_manager
+- [ ] **HTTP-30**: No source file in relay/ includes or references any ws/ header or WS class
+- [ ] **HTTP-31**: GET /namespace-stats/{namespace} returns JSON per-namespace stats via translator
+
 ## Future Requirements
 
 ### Post-v3.1.0
@@ -94,6 +128,9 @@ None yet.
 | WebSocket compression | Encrypted payloads are incompressible by design |
 | Docker integration tests | Local node+relay testing is sufficient for this milestone |
 | Python SDK rebuild | Old SDK deleted; any WebSocket client works with relay v2 |
+| HTTP/2 | Not needed pre-MVP, HTTP/1.1 is sufficient |
+| gRPC | Too heavy for this use case |
+| GraphQL | Inappropriate for binary blob operations |
 
 ## Traceability
 
@@ -144,11 +181,42 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHUNK-04 | Phase 999.8 | Complete |
 | CHUNK-05 | Phase 999.8 | Complete |
 | CHUNK-06 | Phase 999.8 | Complete |
+| HTTP-01 | Phase 999.9 | Pending |
+| HTTP-02 | Phase 999.9 | Pending |
+| HTTP-03 | Phase 999.9 | Pending |
+| HTTP-04 | Phase 999.9 | Pending |
+| HTTP-05 | Phase 999.9 | Pending |
+| HTTP-06 | Phase 999.9 | Pending |
+| HTTP-07 | Phase 999.9 | Pending |
+| HTTP-08 | Phase 999.9 | Pending |
+| HTTP-09 | Phase 999.9 | Pending |
+| HTTP-10 | Phase 999.9 | Pending |
+| HTTP-11 | Phase 999.9 | Pending |
+| HTTP-12 | Phase 999.9 | Pending |
+| HTTP-13 | Phase 999.9 | Pending |
+| HTTP-14 | Phase 999.9 | Pending |
+| HTTP-15 | Phase 999.9 | Pending |
+| HTTP-16 | Phase 999.9 | Pending |
+| HTTP-17 | Phase 999.9 | Pending |
+| HTTP-18 | Phase 999.9 | Pending |
+| HTTP-19 | Phase 999.9 | Pending |
+| HTTP-20 | Phase 999.9 | Pending |
+| HTTP-21 | Phase 999.9 | Pending |
+| HTTP-22 | Phase 999.9 | Pending |
+| HTTP-23 | Phase 999.9 | Pending |
+| HTTP-24 | Phase 999.9 | Pending |
+| HTTP-25 | Phase 999.9 | Pending |
+| HTTP-26 | Phase 999.9 | Pending |
+| HTTP-27 | Phase 999.9 | Pending |
+| HTTP-28 | Phase 999.9 | Pending |
+| HTTP-29 | Phase 999.9 | Pending |
+| HTTP-30 | Phase 999.9 | Pending |
+| HTTP-31 | Phase 999.9 | Pending |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
-- Backlog requirements: 29 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.5: 4, Phase 999.7: 6, Phase 999.8: 6)
-- Mapped to phases: 43
+- Backlog requirements: 60 total (Phase 999.2: 6, Phase 999.3: 7, Phase 999.5: 4, Phase 999.7: 6, Phase 999.8: 6, Phase 999.9: 31)
+- Mapped to phases: 74
 - Unmapped: 0
 
 ---
@@ -157,3 +225,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Endianness requirements added: 2026-04-12*
 *Binary WS frame cleanup requirements added: 2026-04-12*
 *Chunking requirements added: 2026-04-12*
+*HTTP transport requirements added: 2026-04-13*

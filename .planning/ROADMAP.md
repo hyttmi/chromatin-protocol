@@ -150,6 +150,26 @@ Plans:
 - [x] 999.8-02-PLAN.md — Engine store_chunked/read_chunked API + integration tests + PROTOCOL.md
 
 ### Phase 999.9: HTTP transport for relay data operations (BACKLOG)
-**Goal:** Replace JSON-over-WebSocket for data operations (write/read/batch) with HTTP endpoints. POST /blob with raw binary body, GET /blob/{ns}/{hash} streaming response. Eliminates base64 overhead and 1 MiB text frame limit. WebSocket kept only for pub/sub notification stream. Unblocks Phase 110 benchmarks.
-**Requirements:** TBD
-**Plans:** 0 plans
+**Goal:** Replace entire WebSocket relay transport with HTTP + SSE. All request/response operations become HTTP endpoints with raw binary bodies for blob data and JSON for queries. Pub/sub notifications use SSE. WebSocket code deleted entirely. Unblocks Phase 110 benchmarks.
+**Depends on**: Phase 109 (uses WriteTracker, health endpoint, blob size limit)
+**Requirements:** HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07, HTTP-08, HTTP-09, HTTP-10, HTTP-11, HTTP-12, HTTP-13, HTTP-14, HTTP-15, HTTP-16, HTTP-17, HTTP-18, HTTP-19, HTTP-20, HTTP-21, HTTP-22, HTTP-23, HTTP-24, HTTP-25, HTTP-26, HTTP-27, HTTP-28, HTTP-29, HTTP-30, HTTP-31
+**Success Criteria** (what must be TRUE):
+  1. Client authenticates via POST /auth/challenge + POST /auth/verify and receives a bearer token
+  2. POST /blob with raw binary body forwards to node and returns JSON WriteAck
+  3. GET /blob/{ns}/{hash} returns raw binary blob data (application/octet-stream)
+  4. All 15 query endpoints return correct JSON via existing translator
+  5. SSE notification stream delivers events for subscribed namespaces
+  6. Source exclusion: writer does not receive its own notification via SSE
+  7. All WebSocket code deleted, relay compiles with only HTTP transport
+  8. SIGHUP and SIGTERM work correctly with HTTP transport
+**Plans**: 9 plans
+Plans:
+- [ ] 999.9-01-PLAN.md — HTTP parser + response builder + token store (standalone units)
+- [ ] 999.9-02-PLAN.md — UdsMultiplexer decoupling from ws::SessionManager
+- [ ] 999.9-03-PLAN.md — HTTP server + router + auth endpoints
+- [ ] 999.9-04-PLAN.md — ResponsePromise awaitable mechanism
+- [ ] 999.9-05-PLAN.md — Data endpoints (blob write/read/delete, batch read)
+- [ ] 999.9-06-PLAN.md — Query endpoints (list, stats, exists, metadata, etc.)
+- [ ] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
+- [ ] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
+- [ ] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
