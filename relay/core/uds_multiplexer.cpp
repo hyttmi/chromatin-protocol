@@ -2,6 +2,7 @@
 #include "relay/core/metrics_collector.h"
 #include "relay/core/subscription_tracker.h"
 #include "relay/core/write_tracker.h"
+#include "relay/http/response_promise.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
 #include "relay/util/endian.h"
@@ -73,6 +74,10 @@ void UdsMultiplexer::set_request_timeout(const std::atomic<uint32_t>* timeout) {
 
 void UdsMultiplexer::set_metrics(RelayMetrics* metrics) {
     metrics_ = metrics;
+}
+
+void UdsMultiplexer::set_response_promises(http::ResponsePromiseMap* promises) {
+    response_promises_ = promises;
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +549,14 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         write_tracker_.record(blob_hash, pending->client_session_id);
     }
 
-    // Translate binary -> JSON
+    // HTTP path: resolve via ResponsePromiseMap (raw type + payload).
+    // HTTP handlers translate binary->JSON themselves.
+    if (response_promises_ && response_promises_->resolve(request_id, type, payload)) {
+        spdlog::debug("UDS: resolved HTTP promise for relay_rid={}", request_id);
+        return;
+    }
+
+    // WS path (legacy): Translate binary -> JSON and send via dispatch.
     auto json_opt = translate::binary_to_json(type, payload);
     if (!json_opt) {
         spdlog::warn("UDS: binary_to_json failed for type={}", type);

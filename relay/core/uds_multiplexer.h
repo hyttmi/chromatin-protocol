@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+namespace chromatindb::relay::http {
+class ResponsePromiseMap;  // Forward declaration (response_promise.h)
+} // namespace chromatindb::relay::http
+
 namespace chromatindb::relay::core {
 
 class SubscriptionTracker;  // Forward declaration (Phase 104)
@@ -51,6 +55,11 @@ public:
 
     /// Set pointer to relay-level metrics for counter increments.
     void set_metrics(RelayMetrics* metrics);
+
+    /// Set pointer to HTTP ResponsePromiseMap for request/response resolution.
+    /// When set, route_response() resolves pending HTTP promises before
+    /// falling through to dispatch_.send_json for notifications.
+    void set_response_promises(http::ResponsePromiseMap* promises);
 
 private:
     /// Retry connect with jittered backoff (1s base, 30s cap). Per D-04.
@@ -125,6 +134,9 @@ private:
 
     // Relay-level metrics for counter increments
     RelayMetrics* metrics_ = nullptr;
+
+    // HTTP ResponsePromiseMap for request/response resolution
+    http::ResponsePromiseMap* response_promises_ = nullptr;
 };
 
 } // namespace chromatindb::relay::core

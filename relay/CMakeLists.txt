@@ -21,16 +21,12 @@ add_library(chromatindb_relay_lib STATIC
   util/base64.cpp
   wire/transport_codec.cpp
   wire/aead.cpp
-  ws/ws_frame.cpp
-  ws/ws_handshake.cpp
-  ws/ws_session.cpp
-  ws/ws_acceptor.cpp
-  ws/session_manager.cpp
   http/http_parser.cpp
   http/token_store.cpp
   http/http_server.cpp
   http/http_connection.cpp
   http/http_router.cpp
+  http/handlers_data.cpp
   http/handlers_query.cpp
   http/handlers_pubsub.cpp
   http/sse_writer.cpp

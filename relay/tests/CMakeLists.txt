@@ -18,8 +18,6 @@ add_executable(chromatindb_relay_tests
   test_relay_config.cpp
   test_type_registry.cpp
   test_write_tracker.cpp
-  test_ws_frame.cpp
-  test_ws_handshake.cpp
   test_base64.cpp
   test_transport_codec.cpp
   test_aead.cpp
@@ -39,7 +37,7 @@ include(Catch)
 catch_discover_tests(chromatindb_relay_tests)
 
 # ===========================================================================
-# HTTP parser tests (standalone target for Plan 999.9-01)
+# HTTP parser tests (Plan 999.9-01)
 # ===========================================================================
 add_executable(test_http_parser
   test_http_parser.cpp
@@ -51,7 +49,7 @@ target_link_libraries(test_http_parser PRIVATE
 catch_discover_tests(test_http_parser)
 
 # ===========================================================================
-# Token store tests (standalone target for Plan 999.9-01)
+# Token store tests (Plan 999.9-01)
 # ===========================================================================
 add_executable(test_token_store
   test_token_store.cpp
@@ -63,7 +61,7 @@ target_link_libraries(test_token_store PRIVATE
 catch_discover_tests(test_token_store)
 
 # ===========================================================================
-# HTTP router tests (standalone target for Plan 999.9-03)
+# HTTP router tests (Plan 999.9-03)
 # ===========================================================================
 add_executable(test_http_router
   test_http_router.cpp
@@ -75,7 +73,19 @@ target_link_libraries(test_http_router PRIVATE
 catch_discover_tests(test_http_router)
 
 # ===========================================================================
-# Query handler tests (standalone target for Plan 999.9-06)
+# Data handler tests (Plan 999.9-05)
+# ===========================================================================
+add_executable(test_handlers_data
+  test_handlers_data.cpp
+)
+target_link_libraries(test_handlers_data PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_handlers_data)
+
+# ===========================================================================
+# Query handler tests (Plan 999.9-06)
 # ===========================================================================
 add_executable(test_handlers_query
   test_handlers_query.cpp
@@ -87,7 +97,7 @@ target_link_libraries(test_handlers_query PRIVATE
 catch_discover_tests(test_handlers_query)
 
 # ===========================================================================
-# Response promise tests (standalone target for Plan 999.9-04)
+# Response promise tests (Plan 999.9-04)
 # ===========================================================================
 add_executable(test_response_promise
   test_response_promise.cpp
@@ -99,7 +109,7 @@ target_link_libraries(test_response_promise PRIVATE
 catch_discover_tests(test_response_promise)
 
 # ===========================================================================
-# SSE writer tests (standalone target for Plan 999.9-07)
+# SSE writer tests (Plan 999.9-07)
 # ===========================================================================
 add_executable(test_sse_writer
   test_sse_writer.cpp
