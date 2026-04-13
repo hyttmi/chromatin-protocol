@@ -81,7 +81,10 @@ Plans:
   2. Latency benchmark measures relay overhead by comparing same-operation timing through relay vs direct UDS, with per-operation overhead percentages recorded
   3. Large blob benchmark demonstrates successful write+read of 1 MiB, 10 MiB, 50 MiB, and 100 MiB blobs through the HTTP relay with MiB/sec throughput recorded
   4. Mixed workload benchmark runs concurrent small metadata queries alongside large blob transfers and reports whether small-message latency degrades under large-blob load
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 110-01-PLAN.md — Build Python HTTP relay benchmark tool (4 workloads)
+- [ ] 110-02-PLAN.md — Run benchmarks against live relay+node and generate report
 
 ## Progress
 
@@ -95,7 +98,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
 | 109. New Features | 3/3 | Complete    | 2026-04-13 |
-| 110. Performance Benchmarking | 0/0 | Not started | - |
+| 110. Performance Benchmarking | 0/2 | Not started | - |
 
 ## Backlog
 
