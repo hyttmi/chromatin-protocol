@@ -162,7 +162,7 @@ Plans:
   6. Source exclusion: writer does not receive its own notification via SSE
   7. All WebSocket code deleted, relay compiles with only HTTP transport
   8. SIGHUP and SIGTERM work correctly with HTTP transport
-**Plans**: 9 plans
+**Plans**: 10 plans
 Plans:
 - [x] 999.9-01-PLAN.md — HTTP parser + response builder + token store (standalone units)
 - [x] 999.9-02-PLAN.md — UdsMultiplexer decoupling from ws::SessionManager
@@ -173,3 +173,4 @@ Plans:
 - [x] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
 - [x] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
 - [x] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
+- [ ] 999.9-10-PLAN.md — Gap closure: wire SSE streaming + subscription cleanup + test fix
