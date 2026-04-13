@@ -1,16 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2.0
-milestone_name: Node Hardening
-status: completed
-stopped_at: Milestone complete
-last_updated: "2026-04-09"
+milestone: v1.0
+milestone_name: milestone
+status: v2.2.0 shipped
+last_updated: "2026-04-13T06:48:12.582Z"
 last_activity: 2026-04-09
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_phases: 18
+  completed_phases: 16
+  total_plans: 33
+  completed_plans: 34
   percent: 100
 ---
 
@@ -38,6 +37,9 @@ Progress: [##########] 100%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
+
+- [Phase 999.9]: HttpRouter extended with AsyncHandler + dispatch_async for coroutine-based data handlers
+- [Phase 999.9]: ReadResponse raw binary pass-through (skip status byte) for application/octet-stream blob data
 
 ### Pending Todos
 
