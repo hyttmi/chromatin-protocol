@@ -202,6 +202,7 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> stopping{false};
     std::atomic<uint32_t> rate_limit_rate{cfg.rate_limit_messages_per_sec};
     std::atomic<uint32_t> request_timeout{cfg.request_timeout_seconds};
+    std::atomic<uint32_t> max_blob_size{cfg.max_blob_size_bytes};
 
     // Create RequestRouter, SessionManager, SubscriptionTracker
     chromatindb::relay::core::RequestRouter request_router;
@@ -225,6 +226,11 @@ int main(int argc, char* argv[]) {
         spdlog::info("  request_timeout: {}s", cfg.request_timeout_seconds);
     } else {
         spdlog::info("  request_timeout: disabled");
+    }
+    if (cfg.max_blob_size_bytes > 0) {
+        spdlog::info("  max_blob_size: {} bytes", cfg.max_blob_size_bytes);
+    } else {
+        spdlog::info("  max_blob_size: disabled (no limit)");
     }
 
     chromatindb::relay::core::UdsMultiplexer uds_mux(
@@ -265,8 +271,12 @@ int main(int argc, char* argv[]) {
     session_manager.set_metrics(&metrics_collector.metrics());
     acceptor.set_metrics(&metrics_collector.metrics());
     acceptor.set_shared_rate(&rate_limit_rate);
+    acceptor.set_max_blob_size(&max_blob_size);
     metrics_collector.set_gauge_provider([&session_manager, &subscription_tracker]() {
         return std::make_pair(session_manager.count(), subscription_tracker.namespace_count());
+    });
+    metrics_collector.set_health_provider([&uds_mux]() {
+        return uds_mux.is_connected();
     });
 
     // Initialize TLS if configured (per D-01)
@@ -355,6 +365,13 @@ int main(int argc, char* argv[]) {
                          new_cfg.rate_limit_messages_per_sec == 0
                              ? std::string("disabled")
                              : std::to_string(new_cfg.rate_limit_messages_per_sec) + " msg/s");
+
+            // Reload max blob size (per FEAT-02)
+            max_blob_size.store(new_cfg.max_blob_size_bytes, std::memory_order_relaxed);
+            spdlog::info("max_blob_size reloaded: {}",
+                         new_cfg.max_blob_size_bytes == 0
+                             ? std::string("disabled (no limit)")
+                             : std::to_string(new_cfg.max_blob_size_bytes) + " bytes");
 
             // Reload request timeout
             request_timeout.store(new_cfg.request_timeout_seconds, std::memory_order_relaxed);

@@ -58,6 +58,17 @@ TEST_CASE("MetricsCollector: uptime seconds", "[metrics_collector]") {
     CHECK(mc.uptime_seconds() >= 0);
 }
 
+TEST_CASE("MetricsCollector: health provider API", "[metrics_collector]") {
+    asio::io_context ioc;
+    std::atomic<bool> stopping{false};
+    MetricsCollector mc(ioc, "", stopping);
+
+    bool called = false;
+    mc.set_health_provider([&called]() { called = true; return true; });
+    // HealthProvider is stored -- not called until /health request arrives
+    CHECK_FALSE(called);
+}
+
 TEST_CASE("MetricsCollector: atomic increments", "[metrics_collector]") {
     asio::io_context ioc;
     std::atomic<bool> stopping{false};
