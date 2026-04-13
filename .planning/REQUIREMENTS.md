@@ -109,8 +109,8 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **HTTP-26**: relay_main.cpp creates HttpServer + TokenStore instead of WsAcceptor + SessionManager
 - [x] **HTTP-27**: /metrics and /health served by main HTTP server (MetricsCollector accept loop removed)
 - [x] **HTTP-28**: SIGHUP reloads TLS, ACL, rate limit, request timeout, max blob size with HTTP transport
-- [ ] **HTTP-29**: All WebSocket code deleted: ws_frame, ws_handshake, ws_session, ws_acceptor, session_manager
-- [ ] **HTTP-30**: No source file in relay/ includes or references any ws/ header or WS class
+- [x] **HTTP-29**: All WebSocket code deleted: ws_frame, ws_handshake, ws_session, ws_acceptor, session_manager
+- [x] **HTTP-30**: No source file in relay/ includes or references any ws/ header or WS class
 - [x] **HTTP-31**: GET /namespace-stats/{namespace} returns JSON per-namespace stats via translator
 
 ## Future Requirements
@@ -209,8 +209,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-26 | Phase 999.9 | Complete |
 | HTTP-27 | Phase 999.9 | Complete |
 | HTTP-28 | Phase 999.9 | Complete |
-| HTTP-29 | Phase 999.9 | Pending |
-| HTTP-30 | Phase 999.9 | Pending |
+| HTTP-29 | Phase 999.9 | Complete |
+| HTTP-30 | Phase 999.9 | Complete |
 | HTTP-31 | Phase 999.9 | Complete |
 
 **Coverage:**

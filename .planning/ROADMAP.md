@@ -172,4 +172,4 @@ Plans:
 - [x] 999.9-06-PLAN.md — Query endpoints (list, stats, exists, metadata, etc.)
 - [x] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
 - [x] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
-- [ ] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
+- [x] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
