@@ -1,39 +1,104 @@
 #include "relay/http/token_store.h"
+#include "relay/util/hex.h"
+
+#include <openssl/rand.h>
 
 namespace chromatindb::relay::http {
 
-std::string TokenStore::create_session(std::vector<uint8_t> /*pubkey*/,
-                                       std::array<uint8_t, 32> /*ns_hash*/,
-                                       uint32_t /*rate_limit*/) {
-    return "";  // Stub -- tests will fail
+std::string TokenStore::create_session(std::vector<uint8_t> pubkey,
+                                       std::array<uint8_t, 32> ns_hash,
+                                       uint32_t rate_limit) {
+    // Generate 32 random bytes -> 64-char hex token
+    std::array<uint8_t, 32> random_bytes{};
+    RAND_bytes(random_bytes.data(), static_cast<int>(random_bytes.size()));
+    std::string token = util::to_hex(random_bytes);
+
+    // Build session state
+    auto id = next_id_++;
+    HttpSessionState state;
+    state.session_id = id;
+    state.client_pubkey = std::move(pubkey);
+    state.client_namespace = ns_hash;
+    state.last_activity = std::chrono::steady_clock::now();
+    if (rate_limit > 0) {
+        state.rate_limiter.set_rate(rate_limit);
+    }
+
+    // Store in both maps
+    id_to_token_[id] = token;
+    tokens_[token] = std::move(state);
+
+    return token;
 }
 
-HttpSessionState* TokenStore::lookup(const std::string& /*token*/) {
-    return nullptr;  // Stub
+HttpSessionState* TokenStore::lookup(const std::string& token) {
+    auto it = tokens_.find(token);
+    if (it == tokens_.end()) {
+        return nullptr;
+    }
+    it->second.last_activity = std::chrono::steady_clock::now();
+    return &it->second;
 }
 
-HttpSessionState* TokenStore::lookup_by_id(uint64_t /*session_id*/) {
-    return nullptr;  // Stub
+HttpSessionState* TokenStore::lookup_by_id(uint64_t session_id) {
+    auto it = id_to_token_.find(session_id);
+    if (it == id_to_token_.end()) {
+        return nullptr;
+    }
+    auto tok_it = tokens_.find(it->second);
+    if (tok_it == tokens_.end()) {
+        return nullptr;
+    }
+    return &tok_it->second;
 }
 
-const std::string* TokenStore::get_token(uint64_t /*session_id*/) const {
-    return nullptr;  // Stub
+const std::string* TokenStore::get_token(uint64_t session_id) const {
+    auto it = id_to_token_.find(session_id);
+    if (it == id_to_token_.end()) {
+        return nullptr;
+    }
+    return &it->second;
 }
 
-void TokenStore::remove_session(uint64_t /*session_id*/) {
-    // Stub
+void TokenStore::remove_session(uint64_t session_id) {
+    auto it = id_to_token_.find(session_id);
+    if (it == id_to_token_.end()) {
+        return;
+    }
+    tokens_.erase(it->second);
+    id_to_token_.erase(it);
 }
 
-void TokenStore::remove_by_token(const std::string& /*token*/) {
-    // Stub
+void TokenStore::remove_by_token(const std::string& token) {
+    auto it = tokens_.find(token);
+    if (it == tokens_.end()) {
+        return;
+    }
+    id_to_token_.erase(it->second.session_id);
+    tokens_.erase(it);
 }
 
-size_t TokenStore::reap_idle(std::chrono::seconds /*timeout*/) {
-    return 0;  // Stub
+size_t TokenStore::reap_idle(std::chrono::seconds timeout) {
+    auto now = std::chrono::steady_clock::now();
+    size_t reaped = 0;
+
+    for (auto it = tokens_.begin(); it != tokens_.end(); ) {
+        auto idle_duration = std::chrono::duration_cast<std::chrono::seconds>(
+            now - it->second.last_activity);
+        if (idle_duration >= timeout) {
+            id_to_token_.erase(it->second.session_id);
+            it = tokens_.erase(it);
+            ++reaped;
+        } else {
+            ++it;
+        }
+    }
+
+    return reaped;
 }
 
 size_t TokenStore::count() const {
-    return 0;  // Stub
+    return tokens_.size();
 }
 
 } // namespace chromatindb::relay::http
