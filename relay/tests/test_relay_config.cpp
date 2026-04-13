@@ -329,3 +329,21 @@ TEST_CASE("Config: request_timeout_seconds 1 is valid (minimum)", "[relay_config
     REQUIRE(cfg.request_timeout_seconds == 1);
     REQUIRE_NOTHROW(validate_relay_config(cfg));
 }
+
+// =============================================================================
+// max_blob_size_bytes tests (Phase 109 FEAT-02)
+// =============================================================================
+
+TEST_CASE("Config: max_blob_size_bytes defaults to 0", "[config]") {
+    TempConfig tc(valid_config());
+    auto cfg = load_relay_config(tc.path());
+    CHECK(cfg.max_blob_size_bytes == 0);
+}
+
+TEST_CASE("Config: max_blob_size_bytes loads from JSON", "[config]") {
+    auto j = valid_config();
+    j["max_blob_size_bytes"] = 1048576;  // 1 MiB
+    TempConfig tc(j);
+    auto cfg = load_relay_config(tc.path());
+    CHECK(cfg.max_blob_size_bytes == 1048576);
+}
