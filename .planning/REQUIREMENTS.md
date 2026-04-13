@@ -83,10 +83,10 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 - [x] **HTTP-01**: HTTP/1.1 request parser handles method, path, query, headers, Content-Length, Connection keep-alive
 - [x] **HTTP-02**: HttpResponse builder serializes JSON, binary, and error responses with correct Content-Type and Content-Length
-- [ ] **HTTP-03**: Coroutine-based HTTP server accepts TLS/plain connections on configured bind address with connection cap
+- [x] **HTTP-03**: Coroutine-based HTTP server accepts TLS/plain connections on configured bind address with connection cap
 - [x] **HTTP-04**: Session tokens are opaque RAND_bytes(32) hex, stored in TokenStore with create/lookup/remove/reap_idle
-- [ ] **HTTP-05**: Challenge-response auth: POST /auth/challenge returns nonce, POST /auth/verify with ML-DSA-87 signature returns bearer token
-- [ ] **HTTP-06**: Bearer token auth middleware rejects unauthenticated requests with 401
+- [x] **HTTP-05**: Challenge-response auth: POST /auth/challenge returns nonce, POST /auth/verify with ML-DSA-87 signature returns bearer token
+- [x] **HTTP-06**: Bearer token auth middleware rejects unauthenticated requests with 401
 - [ ] **HTTP-07**: POST /blob accepts raw binary FlatBuffer body (application/octet-stream), returns JSON WriteAck
 - [ ] **HTTP-08**: GET /blob/{namespace}/{hash} returns raw binary FlatBuffer response (application/octet-stream), 404 if not found
 - [ ] **HTTP-09**: DELETE /blob/{namespace}/{hash} accepts raw binary tombstone body, returns JSON DeleteAck
@@ -183,10 +183,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHUNK-06 | Phase 999.8 | Complete |
 | HTTP-01 | Phase 999.9 | Complete |
 | HTTP-02 | Phase 999.9 | Complete |
-| HTTP-03 | Phase 999.9 | Pending |
+| HTTP-03 | Phase 999.9 | Complete |
 | HTTP-04 | Phase 999.9 | Complete |
-| HTTP-05 | Phase 999.9 | Pending |
-| HTTP-06 | Phase 999.9 | Pending |
+| HTTP-05 | Phase 999.9 | Complete |
+| HTTP-06 | Phase 999.9 | Complete |
 | HTTP-07 | Phase 999.9 | Pending |
 | HTTP-08 | Phase 999.9 | Pending |
 | HTTP-09 | Phase 999.9 | Pending |
