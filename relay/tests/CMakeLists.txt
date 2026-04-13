@@ -49,3 +49,15 @@ target_link_libraries(test_http_parser PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_http_parser)
+
+# ===========================================================================
+# Token store tests (standalone target for Plan 999.9-01)
+# ===========================================================================
+add_executable(test_token_store
+  test_token_store.cpp
+)
+target_link_libraries(test_token_store PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_token_store)

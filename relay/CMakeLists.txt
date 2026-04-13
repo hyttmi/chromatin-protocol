@@ -27,6 +27,7 @@ add_library(chromatindb_relay_lib STATIC
   ws/ws_acceptor.cpp
   ws/session_manager.cpp
   http/http_parser.cpp
+  http/token_store.cpp
 )
 
 target_include_directories(chromatindb_relay_lib PUBLIC
