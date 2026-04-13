@@ -1,4 +1,5 @@
 #include "relay/http/token_store.h"
+#include "relay/http/sse_writer.h"
 #include "relay/util/hex.h"
 
 #include <openssl/rand.h>
@@ -78,23 +79,27 @@ void TokenStore::remove_by_token(const std::string& token) {
     tokens_.erase(it);
 }
 
-size_t TokenStore::reap_idle(std::chrono::seconds timeout) {
+std::vector<uint64_t> TokenStore::reap_idle(std::chrono::seconds timeout) {
     auto now = std::chrono::steady_clock::now();
-    size_t reaped = 0;
+    std::vector<uint64_t> reaped_ids;
 
     for (auto it = tokens_.begin(); it != tokens_.end(); ) {
         auto idle_duration = std::chrono::duration_cast<std::chrono::seconds>(
             now - it->second.last_activity);
         if (idle_duration >= timeout) {
+            // Close SSE writer if active (stops drain loop cleanly).
+            if (it->second.sse_writer) {
+                it->second.sse_writer->close();
+            }
+            reaped_ids.push_back(it->second.session_id);
             id_to_token_.erase(it->second.session_id);
             it = tokens_.erase(it);
-            ++reaped;
         } else {
             ++it;
         }
     }
 
-    return reaped;
+    return reaped_ids;
 }
 
 size_t TokenStore::count() const {

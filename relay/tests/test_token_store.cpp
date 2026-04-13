@@ -190,7 +190,7 @@ TEST_CASE("reap_idle with 0s timeout removes all sessions", "[http][token_store]
     CHECK(store.count() == 3);
 
     auto reaped = store.reap_idle(std::chrono::seconds(0));
-    CHECK(reaped == 3);
+    CHECK(reaped.size() == 3);
     CHECK(store.count() == 0);
 }
 
@@ -200,7 +200,7 @@ TEST_CASE("reap_idle with 1h timeout removes nothing for fresh sessions", "[http
     store.create_session(make_pubkey(0x02), make_namespace(0x02));
 
     auto reaped = store.reap_idle(std::chrono::seconds(3600));
-    CHECK(reaped == 0);
+    CHECK(reaped.empty());
     CHECK(store.count() == 2);
 }
 

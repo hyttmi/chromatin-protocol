@@ -51,8 +51,9 @@ public:
     /// Remove session by token.
     void remove_by_token(const std::string& token);
 
-    /// Reap sessions idle longer than timeout. Returns number reaped.
-    size_t reap_idle(std::chrono::seconds timeout);
+    /// Reap sessions idle longer than timeout. Returns session IDs of reaped sessions.
+    /// If a reaped session has an active SseWriter, it is closed before removal.
+    std::vector<uint64_t> reap_idle(std::chrono::seconds timeout);
 
     /// Number of active sessions.
     size_t count() const;

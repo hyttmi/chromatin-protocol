@@ -398,13 +398,30 @@ int main(int argc, char* argv[]) {
             if (ec || stopping.load(std::memory_order_relaxed)) co_return;
 
             // Reap sessions idle for more than 10 minutes.
-            auto reaped = token_store.reap_idle(std::chrono::seconds(600));
-            if (reaped > 0) {
-                spdlog::info("idle reaper: reaped {} idle session(s)", reaped);
+            auto reaped_ids = token_store.reap_idle(std::chrono::seconds(600));
+            if (!reaped_ids.empty()) {
+                spdlog::info("idle reaper: reaped {} idle session(s)", reaped_ids.size());
                 // Clean up subscriptions for reaped sessions.
-                // Note: reap_idle removes from token_store but doesn't clean subs.
-                // TODO: subscription cleanup on idle reap (when token_store supports
-                // on-remove callback).
+                for (auto sid : reaped_ids) {
+                    auto empty_ns = subscription_tracker.remove_client(sid);
+                    if (!empty_ns.empty() && uds_mux.is_connected()) {
+                        // Forward Unsubscribe for namespaces that dropped to 0 subscribers.
+                        std::vector<uint8_t> payload;
+                        payload.reserve(2 + empty_ns.size() * 32);
+                        uint8_t count_buf[2];
+                        chromatindb::relay::util::store_u16_be(count_buf,
+                            static_cast<uint16_t>(empty_ns.size()));
+                        payload.insert(payload.end(), count_buf, count_buf + 2);
+                        for (const auto& ns : empty_ns) {
+                            payload.insert(payload.end(), ns.begin(), ns.end());
+                        }
+                        auto msg = chromatindb::relay::wire::TransportCodec::encode(
+                            chromatindb::wire::TransportMsgType_Unsubscribe, payload, 0);
+                        uds_mux.send(std::move(msg));
+                        spdlog::debug("idle reaper: forwarded {} unsubscribe(s) to node for reaped session {}",
+                                      empty_ns.size(), sid);
+                    }
+                }
             }
         }
     };
