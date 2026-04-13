@@ -1,16 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2.0
-milestone_name: Node Hardening
-status: completed
-stopped_at: Milestone complete
-last_updated: "2026-04-09"
+milestone: v1.0
+milestone_name: milestone
+status: v2.2.0 shipped
+last_updated: "2026-04-13T16:03:13.835Z"
 last_activity: 2026-04-09
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_phases: 18
+  completed_phases: 16
+  total_plans: 33
+  completed_plans: 34
   percent: 100
 ---
 
@@ -38,6 +37,8 @@ Progress: [##########] 100%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
+
+- [Phase 110]: httpx AsyncClient for benchmark HTTP, FlatBuffer manual vtable construction, UDS baseline deferred
 
 ### Pending Todos
 
