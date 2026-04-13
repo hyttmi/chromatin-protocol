@@ -69,7 +69,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [ ] 109-01-PLAN.md — Node source exclusion fix + WriteTracker class + unit tests
-- [ ] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
+- [x] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
 - [ ] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
 
 ### Phase 110: Performance Benchmarking
@@ -94,7 +94,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
-| 109. New Features | 0/3 | Not started | - |
+| 109. New Features | 1/3 | In Progress|  |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
 ## Backlog
@@ -102,7 +102,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 ### Phase 999.1: Tombstone TTL lifecycle management (BACKLOG)
 **Goal:** [Captured for future planning]
 **Requirements:** TBD
-**Plans:** 2/2 plans complete
+**Plans:** 1/3 plans executed
 
 ### Phase 999.2: Node silent failure on malformed requests (BACKLOG)
 **Goal:** Node records strikes but sends NO error response on malformed requests — client hangs forever. Every request must guarantee a response. Add error response type for rejected messages.
