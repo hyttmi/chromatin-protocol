@@ -59,11 +59,11 @@ Plans:
 - [ ] 108-02-PLAN.md — Implement pub/sub, rate limit, SIGHUP, SIGTERM tests + update run-smoke.sh
 
 ### Phase 109: New Features
-**Goal**: Relay gains source exclusion for notifications, configurable blob size limits, and a health check endpoint
+**Goal**: Source exclusion for notifications (node + relay), configurable blob size limits, and a health check endpoint
 **Depends on**: Phase 106
 **Requirements**: FEAT-01, FEAT-02, FEAT-03
 **Success Criteria** (what must be TRUE):
-  1. When a client writes a blob to a namespace it is subscribed to, that client does NOT receive its own notification -- other subscribers do
+  1. When a client writes a blob to a namespace it is subscribed to, that client does NOT receive its own notification -- other subscribers do. Fix at BOTH layers: node's on_blob_ingested() skips Notification(21) to the originating UDS connection, relay skips forwarding to the originating WebSocket session.
   2. A client attempting to write a blob larger than the configured max_blob_size receives a rejection before the relay forwards it to the node
   3. HTTP GET /health returns 200 with a JSON body indicating relay and UDS connection status; returns 503 when the UDS connection to the node is down
 **Plans**: TBD
