@@ -63,6 +63,8 @@ Progress: [###-------] 33%
 - [Phase 999.9-02]: send_error fallback to send_json when not set -- error paths safe by default
 - [Phase 999.9]: HttpRouter handler receives body as separate vector for zero-copy large blob payloads
 - [Phase 999.9]: ResponsePromise uses asio::steady_timer signal pattern (same as Session drain), template wait() for flexible timeout, non-owning pointer in map
+- [Phase 999.9]: HttpRouter extended with AsyncHandler + dispatch_async for coroutine-based data handlers
+- [Phase 999.9]: ReadResponse raw binary pass-through (skip status byte) for application/octet-stream blob data
 
 ### Pending Todos
 

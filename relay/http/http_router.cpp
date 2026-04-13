@@ -24,64 +24,100 @@ void HttpRouter::add_route(std::string_view method, std::string_view prefix,
         std::string(method),
         std::string(prefix),
         std::move(handler),
-        public_route
+        nullptr,  // no async handler
+        public_route,
+        false     // sync
+    });
+}
+
+void HttpRouter::add_async_route(std::string_view method, std::string_view prefix,
+                                 AsyncHandler handler, bool public_route) {
+    routes_.push_back(Route{
+        std::string(method),
+        std::string(prefix),
+        nullptr,  // no sync handler
+        std::move(handler),
+        public_route,
+        true      // async
     });
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch with auth middleware
+// Helper: prefix matching
+// ---------------------------------------------------------------------------
+
+static bool route_matches(const Route& route, const HttpRequest& req) {
+    return req.path == route.prefix ||
+           (route.prefix.back() == '/' && req.path.size() > route.prefix.size() &&
+            req.path.compare(0, route.prefix.size(), route.prefix) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Helper: auth middleware (shared between sync and async dispatch)
+// ---------------------------------------------------------------------------
+
+static HttpResponse check_auth(const HttpRequest& req, TokenStore& token_store,
+                                HttpSessionState** out_session) {
+    auto it = req.headers.find("authorization");
+    if (it == req.headers.end()) {
+        return HttpResponse::error(401, "unauthorized", "missing Authorization header");
+    }
+
+    const auto& auth_val = it->second;
+    if (auth_val.size() < 8 || auth_val.compare(0, 7, "Bearer ") != 0) {
+        return HttpResponse::error(401, "unauthorized", "invalid Authorization format");
+    }
+    auto token = auth_val.substr(7);
+
+    auto* session = token_store.lookup(token);
+    if (!session) {
+        return HttpResponse::error(401, "unauthorized", "invalid or expired token");
+    }
+
+    if (!session->rate_limiter.try_consume()) {
+        return HttpResponse::error(429, "rate_limited", "rate limit exceeded");
+    }
+
+    *out_session = session;
+    // Return status 0 to indicate success (caller checks status != 0 for error).
+    HttpResponse ok;
+    ok.status = 0;
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous dispatch
 // ---------------------------------------------------------------------------
 
 HttpResponse HttpRouter::dispatch(const HttpRequest& req, const std::vector<uint8_t>& body,
                                   TokenStore& token_store) {
-    // Track whether we found any prefix match (for 405 vs 404 distinction).
     bool prefix_matched = false;
 
     for (const auto& route : routes_) {
-        // Check prefix match first.
-        if (req.path == route.prefix ||
-            (route.prefix.back() == '/' && req.path.size() > route.prefix.size() &&
-             req.path.compare(0, route.prefix.size(), route.prefix) == 0)) {
-
+        if (route_matches(route, req)) {
             prefix_matched = true;
-
-            // Check method.
             if (req.method != route.method) continue;
 
-            // Auth middleware for non-public routes.
             if (!route.public_route) {
-                auto it = req.headers.find("authorization");
-                if (it == req.headers.end()) {
-                    return HttpResponse::error(401, "unauthorized", "missing Authorization header");
+                HttpSessionState* session = nullptr;
+                auto auth_result = check_auth(req, token_store, &session);
+                if (auth_result.status != 0) return auth_result;
+                if (route.is_async) {
+                    // Can't call async handler from sync dispatch.
+                    return HttpResponse::error(500, "internal_error",
+                        "async route called from sync context");
                 }
-
-                // Parse "Bearer <token>".
-                const auto& auth_val = it->second;
-                if (auth_val.size() < 8 || auth_val.compare(0, 7, "Bearer ") != 0) {
-                    return HttpResponse::error(401, "unauthorized", "invalid Authorization format");
-                }
-                auto token = auth_val.substr(7);
-
-                auto* session = token_store.lookup(token);
-                if (!session) {
-                    return HttpResponse::error(401, "unauthorized", "invalid or expired token");
-                }
-
-                // Rate limit check per D-31.
-                if (!session->rate_limiter.try_consume()) {
-                    return HttpResponse::error(429, "rate_limited", "rate limit exceeded");
-                }
-
-                return route.handler(req, body, session);
+                return route.sync_handler(req, body, session);
             }
 
-            // Public route -- no auth needed.
-            return route.handler(req, body, nullptr);
+            if (route.is_async) {
+                return HttpResponse::error(500, "internal_error",
+                    "async route called from sync context");
+            }
+            return route.sync_handler(req, body, nullptr);
         }
     }
 
-    // No prefix match at all -> 404.
-    // If prefix matched but method didn't -> 405.
     if (prefix_matched) {
         HttpResponse resp;
         resp.status = 405;
@@ -95,6 +131,50 @@ HttpResponse HttpRouter::dispatch(const HttpRequest& req, const std::vector<uint
     }
 
     return HttpResponse::not_found();
+}
+
+// ---------------------------------------------------------------------------
+// Async dispatch (for HttpConnection coroutine context)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<HttpResponse> HttpRouter::dispatch_async(
+    const HttpRequest& req, const std::vector<uint8_t>& body,
+    TokenStore& token_store) {
+
+    bool prefix_matched = false;
+
+    for (const auto& route : routes_) {
+        if (route_matches(route, req)) {
+            prefix_matched = true;
+            if (req.method != route.method) continue;
+
+            HttpSessionState* session = nullptr;
+            if (!route.public_route) {
+                auto auth_result = check_auth(req, token_store, &session);
+                if (auth_result.status != 0) co_return auth_result;
+            }
+
+            if (route.is_async) {
+                co_return co_await route.async_handler(req, body, session);
+            } else {
+                co_return route.sync_handler(req, body, session);
+            }
+        }
+    }
+
+    if (prefix_matched) {
+        HttpResponse resp;
+        resp.status = 405;
+        resp.status_text = "Method Not Allowed";
+        auto j = nlohmann::json{{"error", "method_not_allowed"}};
+        auto body_str = j.dump();
+        resp.body.assign(body_str.begin(), body_str.end());
+        resp.headers.emplace_back("Content-Type", "application/json");
+        resp.headers.emplace_back("Content-Length", std::to_string(resp.body.size()));
+        co_return resp;
+    }
+
+    co_return HttpResponse::not_found();
 }
 
 // ---------------------------------------------------------------------------
@@ -153,10 +233,8 @@ private:
 
 void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator,
                           TokenStore& token_store) {
-    // Shared challenge store -- captured by shared_ptr for lambda lifetime safety.
     auto challenges = std::make_shared<ChallengeStore>();
 
-    // POST /auth/challenge: generate a nonce and return it.
     router.add_route("POST", "/auth/challenge",
         [&authenticator, challenges](
             const HttpRequest&, const std::vector<uint8_t>&, HttpSessionState*) -> HttpResponse {
@@ -167,14 +245,12 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
 
             spdlog::debug("auth: challenge issued, nonce={}", nonce_hex);
             return HttpResponse::json(200, {{"nonce", nonce_hex}});
-        }, true);  // Public route.
+        }, true);
 
-    // POST /auth/verify: verify signature against a pending challenge.
     router.add_route("POST", "/auth/verify",
         [&authenticator, &token_store, challenges](
             const HttpRequest&, const std::vector<uint8_t>& body, HttpSessionState*) -> HttpResponse {
 
-            // 1. Parse JSON body.
             nlohmann::json j;
             try {
                 j = nlohmann::json::parse(body.begin(), body.end());
@@ -182,7 +258,6 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
                 return HttpResponse::error(400, "bad_json", "invalid JSON body");
             }
 
-            // 2. Validate required fields.
             if (!j.contains("nonce") || !j["nonce"].is_string() ||
                 !j.contains("public_key") || !j["public_key"].is_string() ||
                 !j.contains("signature") || !j["signature"].is_string()) {
@@ -194,29 +269,24 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
             auto pubkey_hex = j["public_key"].get<std::string>();
             auto sig_hex = j["signature"].get<std::string>();
 
-            // 3. Look up the pending challenge by nonce.
             auto challenge_bytes = challenges->consume(nonce_hex);
             if (!challenge_bytes) {
                 return HttpResponse::error(401, "invalid_nonce",
                     "nonce not found or expired");
             }
 
-            // 4. Decode hex pubkey.
             auto pubkey_bytes = util::from_hex(pubkey_hex);
             if (!pubkey_bytes || pubkey_bytes->size() != 2592) {
                 return HttpResponse::error(401, "bad_pubkey_format",
                     "public key must be 2592 bytes (5184 hex chars)");
             }
 
-            // 5. Decode hex signature.
             auto sig_bytes = util::from_hex(sig_hex);
             if (!sig_bytes) {
                 return HttpResponse::error(401, "bad_signature_format",
                     "invalid hex signature");
             }
 
-            // 6. Verify signature (blocking -- this is synchronous in HTTP context,
-            //    but verify is a few ms for ML-DSA-87).
             auto result = authenticator.verify(*challenge_bytes, *pubkey_bytes, *sig_bytes);
 
             if (!result.success) {
@@ -224,11 +294,10 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
                 return HttpResponse::error(401, "auth_failed", result.error_code);
             }
 
-            // 7. Create session token.
             auto token = token_store.create_session(
                 std::move(result.public_key),
                 result.namespace_hash,
-                0  // Rate limit set later via config.
+                0
             );
 
             auto ns_hex = util::to_hex(result.namespace_hash);
@@ -238,7 +307,7 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
                 {"token", token},
                 {"namespace", ns_hex}
             });
-        }, true);  // Public route (auth is the point of these endpoints).
+        }, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +329,7 @@ void register_health_route(HttpRouter& router, HealthProvider health_provider) {
                 {"relay", "ok"},
                 {"node", node_str}
             });
-        }, true);  // Public route.
+        }, true);
 }
 
 } // namespace chromatindb::relay::http
