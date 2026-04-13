@@ -49,7 +49,6 @@ public:
                                                   const std::vector<uint8_t>& body,
                                                   TokenStore& token_store);
 
-private:
     struct Route {
         std::string method;
         std::string prefix;
@@ -58,6 +57,9 @@ private:
         bool public_route;
         bool is_async;
     };
+
+    static bool route_matches(const Route& route, const HttpRequest& req);
+
     std::vector<Route> routes_;  // Linear scan; ~25 routes max, fast enough.
 };
 

@@ -46,7 +46,7 @@ void HttpRouter::add_async_route(std::string_view method, std::string_view prefi
 // Helper: prefix matching
 // ---------------------------------------------------------------------------
 
-static bool route_matches(const Route& route, const HttpRequest& req) {
+bool HttpRouter::route_matches(const Route& route, const HttpRequest& req) {
     return req.path == route.prefix ||
            (route.prefix.back() == '/' && req.path.size() > route.prefix.size() &&
             req.path.compare(0, route.prefix.size(), route.prefix) == 0);
