@@ -9,6 +9,7 @@
 
 namespace chromatindb::relay::core {
 class SubscriptionTracker;
+class WriteTracker;
 struct RelayMetrics;
 } // namespace chromatindb::relay::core
 
@@ -46,6 +47,9 @@ public:
     /// Set subscription tracker for disconnect cleanup (Phase 104).
     void set_tracker(core::SubscriptionTracker* t);
 
+    /// Set write tracker for disconnect cleanup (FEAT-01 source exclusion).
+    void set_write_tracker(core::WriteTracker* wt) { write_tracker_ = wt; }
+
     /// Set callback for when namespaces become empty after client disconnect.
     /// Used by main() to send Unsubscribe to node via UdsMultiplexer.
     void set_on_namespaces_empty(
@@ -56,6 +60,7 @@ private:
     uint64_t next_id_ = 1;
     core::RelayMetrics* metrics_ = nullptr;
     core::SubscriptionTracker* tracker_ = nullptr;
+    core::WriteTracker* write_tracker_ = nullptr;
     std::function<void(const std::vector<std::array<uint8_t, 32>>&)> on_namespaces_empty_;
 };
 

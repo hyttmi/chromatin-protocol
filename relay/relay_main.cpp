@@ -243,6 +243,8 @@ int main(int argc, char* argv[]) {
 
     // Wire subscription tracker into session manager for disconnect cleanup (D-05)
     session_manager.set_tracker(&subscription_tracker);
+    // FEAT-01: Wire write tracker for source exclusion disconnect cleanup
+    session_manager.set_write_tracker(&uds_mux.write_tracker());
     session_manager.set_on_namespaces_empty(
         [&uds_mux](const std::vector<std::array<uint8_t, 32>>& namespaces) {
             if (namespaces.empty() || !uds_mux.is_connected()) return;
