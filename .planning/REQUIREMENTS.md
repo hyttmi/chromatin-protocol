@@ -93,7 +93,7 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [ ] **HTTP-10**: GET /list/{namespace} with query params returns JSON blob list via translator
 - [ ] **HTTP-11**: GET /stats/{namespace} returns JSON namespace statistics via translator
 - [x] **HTTP-12**: UdsMultiplexer decoupled from ws::SessionManager via SessionDispatch callback interface
-- [ ] **HTTP-13**: ResponsePromise awaitable bridges async UDS responses to synchronous HTTP handler coroutines
+- [x] **HTTP-13**: ResponsePromise awaitable bridges async UDS responses to synchronous HTTP handler coroutines
 - [ ] **HTTP-14**: POST /batch/read accepts JSON body, returns JSON with base64-encoded blobs via translator
 - [ ] **HTTP-15**: GET /exists/{namespace}/{hash} returns JSON {exists: bool} via translator
 - [ ] **HTTP-16**: GET /node-info returns JSON node info via translator
@@ -193,7 +193,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-10 | Phase 999.9 | Pending |
 | HTTP-11 | Phase 999.9 | Pending |
 | HTTP-12 | Phase 999.9 | Complete |
-| HTTP-13 | Phase 999.9 | Pending |
+| HTTP-13 | Phase 999.9 | Complete |
 | HTTP-14 | Phase 999.9 | Pending |
 | HTTP-15 | Phase 999.9 | Pending |
 | HTTP-16 | Phase 999.9 | Pending |

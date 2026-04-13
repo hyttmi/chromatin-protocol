@@ -167,7 +167,7 @@ Plans:
 - [x] 999.9-01-PLAN.md — HTTP parser + response builder + token store (standalone units)
 - [x] 999.9-02-PLAN.md — UdsMultiplexer decoupling from ws::SessionManager
 - [ ] 999.9-03-PLAN.md — HTTP server + router + auth endpoints
-- [ ] 999.9-04-PLAN.md — ResponsePromise awaitable mechanism
+- [x] 999.9-04-PLAN.md — ResponsePromise awaitable mechanism
 - [ ] 999.9-05-PLAN.md — Data endpoints (blob write/read/delete, batch read)
 - [ ] 999.9-06-PLAN.md — Query endpoints (list, stats, exists, metadata, etc.)
 - [ ] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
