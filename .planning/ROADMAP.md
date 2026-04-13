@@ -66,8 +66,11 @@ Plans:
   1. When a client writes a blob to a namespace it is subscribed to, that client does NOT receive its own notification -- other subscribers do. Fix at BOTH layers: node's on_blob_ingested() skips Notification(21) to the originating UDS connection, relay skips forwarding to the originating WebSocket session.
   2. A client attempting to write a blob larger than the configured max_blob_size receives a rejection before the relay forwards it to the node
   3. HTTP GET /health returns 200 with a JSON body indicating relay and UDS connection status; returns 503 when the UDS connection to the node is down
-**Plans**: TBD
-**UI hint**: no
+**Plans**: 3 plans
+Plans:
+- [ ] 109-01-PLAN.md — Node source exclusion fix + WriteTracker class + unit tests
+- [ ] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
+- [ ] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
 
 ### Phase 110: Performance Benchmarking
 **Goal**: Relay performance is measured under realistic workloads to establish baselines and identify bottlenecks
@@ -91,7 +94,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
-| 109. New Features | 0/0 | Not started | - |
+| 109. New Features | 0/3 | Not started | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
 ## Backlog
