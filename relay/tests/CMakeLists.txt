@@ -97,3 +97,15 @@ target_link_libraries(test_response_promise PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_response_promise)
+
+# ===========================================================================
+# SSE writer tests (standalone target for Plan 999.9-07)
+# ===========================================================================
+add_executable(test_sse_writer
+  test_sse_writer.cpp
+)
+target_link_libraries(test_sse_writer PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_sse_writer)
