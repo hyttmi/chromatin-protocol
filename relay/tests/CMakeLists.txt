@@ -75,6 +75,18 @@ target_link_libraries(test_http_router PRIVATE
 catch_discover_tests(test_http_router)
 
 # ===========================================================================
+# Query handler tests (standalone target for Plan 999.9-06)
+# ===========================================================================
+add_executable(test_handlers_query
+  test_handlers_query.cpp
+)
+target_link_libraries(test_handlers_query PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_handlers_query)
+
+# ===========================================================================
 # Response promise tests (standalone target for Plan 999.9-04)
 # ===========================================================================
 add_executable(test_response_promise
