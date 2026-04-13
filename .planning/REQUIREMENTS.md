@@ -90,18 +90,18 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [ ] **HTTP-07**: POST /blob accepts raw binary FlatBuffer body (application/octet-stream), returns JSON WriteAck
 - [ ] **HTTP-08**: GET /blob/{namespace}/{hash} returns raw binary FlatBuffer response (application/octet-stream), 404 if not found
 - [ ] **HTTP-09**: DELETE /blob/{namespace}/{hash} accepts raw binary tombstone body, returns JSON DeleteAck
-- [ ] **HTTP-10**: GET /list/{namespace} with query params returns JSON blob list via translator
-- [ ] **HTTP-11**: GET /stats/{namespace} returns JSON namespace statistics via translator
+- [x] **HTTP-10**: GET /list/{namespace} with query params returns JSON blob list via translator
+- [x] **HTTP-11**: GET /stats/{namespace} returns JSON namespace statistics via translator
 - [x] **HTTP-12**: UdsMultiplexer decoupled from ws::SessionManager via SessionDispatch callback interface
 - [x] **HTTP-13**: ResponsePromise awaitable bridges async UDS responses to synchronous HTTP handler coroutines
 - [ ] **HTTP-14**: POST /batch/read accepts JSON body, returns JSON with base64-encoded blobs via translator
-- [ ] **HTTP-15**: GET /exists/{namespace}/{hash} returns JSON {exists: bool} via translator
-- [ ] **HTTP-16**: GET /node-info returns JSON node info via translator
-- [ ] **HTTP-17**: GET /peer-info returns JSON peer info via translator
-- [ ] **HTTP-18**: GET /storage-status returns JSON storage status via translator
-- [ ] **HTTP-19**: GET /metadata/{namespace}/{hash} returns JSON blob metadata via translator
-- [ ] **HTTP-20**: GET /delegations/{namespace} returns JSON delegation list via translator
-- [ ] **HTTP-21**: GET /time-range/{namespace} with query params returns JSON time range results via translator
+- [x] **HTTP-15**: GET /exists/{namespace}/{hash} returns JSON {exists: bool} via translator
+- [x] **HTTP-16**: GET /node-info returns JSON node info via translator
+- [x] **HTTP-17**: GET /peer-info returns JSON peer info via translator
+- [x] **HTTP-18**: GET /storage-status returns JSON storage status via translator
+- [x] **HTTP-19**: GET /metadata/{namespace}/{hash} returns JSON blob metadata via translator
+- [x] **HTTP-20**: GET /delegations/{namespace} returns JSON delegation list via translator
+- [x] **HTTP-21**: GET /time-range/{namespace} with query params returns JSON time range results via translator
 - [ ] **HTTP-22**: POST /subscribe adds namespaces to session subscription set via SubscriptionTracker
 - [ ] **HTTP-23**: POST /unsubscribe removes namespaces from session subscription set
 - [ ] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
@@ -111,7 +111,7 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [ ] **HTTP-28**: SIGHUP reloads TLS, ACL, rate limit, request timeout, max blob size with HTTP transport
 - [ ] **HTTP-29**: All WebSocket code deleted: ws_frame, ws_handshake, ws_session, ws_acceptor, session_manager
 - [ ] **HTTP-30**: No source file in relay/ includes or references any ws/ header or WS class
-- [ ] **HTTP-31**: GET /namespace-stats/{namespace} returns JSON per-namespace stats via translator
+- [x] **HTTP-31**: GET /namespace-stats/{namespace} returns JSON per-namespace stats via translator
 
 ## Future Requirements
 
@@ -190,18 +190,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-07 | Phase 999.9 | Pending |
 | HTTP-08 | Phase 999.9 | Pending |
 | HTTP-09 | Phase 999.9 | Pending |
-| HTTP-10 | Phase 999.9 | Pending |
-| HTTP-11 | Phase 999.9 | Pending |
+| HTTP-10 | Phase 999.9 | Complete |
+| HTTP-11 | Phase 999.9 | Complete |
 | HTTP-12 | Phase 999.9 | Complete |
 | HTTP-13 | Phase 999.9 | Complete |
 | HTTP-14 | Phase 999.9 | Pending |
-| HTTP-15 | Phase 999.9 | Pending |
-| HTTP-16 | Phase 999.9 | Pending |
-| HTTP-17 | Phase 999.9 | Pending |
-| HTTP-18 | Phase 999.9 | Pending |
-| HTTP-19 | Phase 999.9 | Pending |
-| HTTP-20 | Phase 999.9 | Pending |
-| HTTP-21 | Phase 999.9 | Pending |
+| HTTP-15 | Phase 999.9 | Complete |
+| HTTP-16 | Phase 999.9 | Complete |
+| HTTP-17 | Phase 999.9 | Complete |
+| HTTP-18 | Phase 999.9 | Complete |
+| HTTP-19 | Phase 999.9 | Complete |
+| HTTP-20 | Phase 999.9 | Complete |
+| HTTP-21 | Phase 999.9 | Complete |
 | HTTP-22 | Phase 999.9 | Pending |
 | HTTP-23 | Phase 999.9 | Pending |
 | HTTP-24 | Phase 999.9 | Pending |
@@ -211,7 +211,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-28 | Phase 999.9 | Pending |
 | HTTP-29 | Phase 999.9 | Pending |
 | HTTP-30 | Phase 999.9 | Pending |
-| HTTP-31 | Phase 999.9 | Pending |
+| HTTP-31 | Phase 999.9 | Complete |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total
