@@ -11,6 +11,7 @@
 #include "relay/http/http_router.h"
 #include "relay/http/http_server.h"
 #include "relay/http/response_promise.h"
+#include "relay/http/sse_writer.h"
 #include "relay/http/token_store.h"
 #include "relay/identity/relay_identity.h"
 #include "relay/util/endian.h"
@@ -226,7 +227,7 @@ int main(int argc, char* argv[]) {
     chromatindb::relay::core::RequestRouter request_router;
 
     // =========================================================================
-    // 8. Create TokenStore (replaces SessionManager)
+    // 8. Create TokenStore
     // =========================================================================
     chromatindb::relay::http::TokenStore token_store;
 
@@ -338,7 +339,7 @@ int main(int argc, char* argv[]) {
     chromatindb::relay::http::register_pubsub_routes(router, pubsub_handlers);
 
     // =========================================================================
-    // 17. Create HttpServer (replaces WsAcceptor)
+    // 17. Create HttpServer
     // =========================================================================
     chromatindb::relay::http::HttpServer http_server(
         ioc, router, token_store,

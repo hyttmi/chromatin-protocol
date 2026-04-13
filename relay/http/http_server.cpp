@@ -34,7 +34,7 @@ HttpServer::HttpServer(asio::io_context& ioc, HttpRouter& router, TokenStore& to
 }
 
 // ---------------------------------------------------------------------------
-// TLS context management (same pattern as WsAcceptor)
+// TLS context management
 // ---------------------------------------------------------------------------
 
 bool HttpServer::init_tls(const std::string& cert_path, const std::string& key_path) {

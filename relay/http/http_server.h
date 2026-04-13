@@ -15,7 +15,7 @@ class HttpRouter;
 class TokenStore;
 
 /// HTTP/1.1 server with optional TLS, coroutine-per-connection model.
-/// Accept loop pattern follows MetricsCollector; TLS dual-mode follows WsAcceptor.
+/// Accept loop pattern follows MetricsCollector; TLS dual-mode with SIGHUP reload.
 /// Per D-03, D-35, D-36, D-37, D-38.
 class HttpServer {
 public:
@@ -55,7 +55,7 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     const std::atomic<bool>& stopping_;
 
-    // TLS context: shared_ptr + mutex for SIGHUP reload (same pattern as WsAcceptor).
+    // TLS context: shared_ptr + mutex for SIGHUP reload.
     mutable std::mutex tls_mutex_;
     std::shared_ptr<asio::ssl::context> tls_ctx_;
 

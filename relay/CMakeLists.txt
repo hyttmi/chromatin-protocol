@@ -10,7 +10,6 @@ add_library(chromatindb_relay_lib STATIC
   core/message_filter.cpp
   core/metrics_collector.cpp
   core/request_router.cpp
-  core/session.cpp
   core/subscription_tracker.cpp
   core/uds_multiplexer.cpp
   wire/blob_codec.cpp

@@ -96,7 +96,7 @@ HttpResponse PubSubHandlers::handle_subscribe(const HttpRequest& /*req*/,
                                    "Body must contain {\"namespaces\": [\"hex64\", ...]}");
     }
 
-    // Cap check: 256 per session (same as WsSession)
+    // Cap check: 256 per session
     size_t current = tracker_.client_subscription_count(session->session_id);
     if (current + namespaces.size() > 256) {
         return HttpResponse::error(400, "subscription_limit",

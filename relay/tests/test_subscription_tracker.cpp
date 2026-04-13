@@ -408,7 +408,7 @@ TEST_CASE("broadcast: subscription tracker only tracks per-namespace subscribers
     auto subs_none = tracker.get_subscribers(ns_unsubscribed);
     REQUIRE(subs_none.empty());
 
-    // StorageFull/QuotaExceeded broadcast uses SessionManager::for_each, not tracker
+    // StorageFull/QuotaExceeded broadcast uses TokenStore iteration, not tracker.
     // This test documents that separation: tracker only knows per-namespace subscribers.
 }
 
