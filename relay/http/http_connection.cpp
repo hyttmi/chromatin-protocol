@@ -2,7 +2,13 @@
 #include "relay/http/http_parser.h"
 #include "relay/http/http_response.h"
 #include "relay/http/http_router.h"
+#include "relay/http/sse_writer.h"
 #include "relay/http/token_store.h"
+#include "relay/core/subscription_tracker.h"
+#include "relay/core/uds_multiplexer.h"
+#include "relay/util/endian.h"
+#include "relay/wire/transport_codec.h"
+#include "relay/wire/transport_generated.h"
 
 #include <spdlog/spdlog.h>
 
@@ -18,10 +24,13 @@ static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 // ---------------------------------------------------------------------------
 
 HttpConnection::HttpConnection(Stream stream, HttpRouter& router, TokenStore& token_store,
+                               core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
                                asio::io_context& ioc, std::atomic<uint32_t>& active_connections)
     : stream_(std::move(stream))
     , router_(router)
     , token_store_(token_store)
+    , tracker_(tracker)
+    , uds_(uds)
     , ioc_(ioc)
     , active_connections_(active_connections) {}
 
@@ -210,6 +219,30 @@ asio::awaitable<void> HttpConnection::handle() {
         // 5. Dispatch to router (async to support coroutine query handlers).
         auto response = co_await router_.dispatch_async(req, body, token_store_);
 
+        // 5b. Check for SSE mode signal (X-SSE-Session-Id header from /events handler).
+        std::string sse_session_id_str;
+        for (const auto& [key, val] : response.headers) {
+            if (key == "X-SSE-Session-Id") {
+                sse_session_id_str = val;
+                break;
+            }
+        }
+
+        if (!sse_session_id_str.empty()) {
+            uint64_t sse_sid = std::stoull(sse_session_id_str);
+            // Send the SSE response headers (no body, connection stays open).
+            auto serialized = response.serialize();
+            auto [wec, _] = co_await async_write(serialized);
+            if (wec) {
+                shutdown_socket();
+                co_return;
+            }
+            // Enter SSE mode -- this blocks until the SseWriter closes.
+            co_await run_sse_mode(sse_sid);
+            shutdown_socket();
+            co_return;
+        }
+
         // 6. Serialize and send response.
         auto serialized = response.serialize();
         auto [wec, _] = co_await async_write(serialized);
@@ -223,6 +256,64 @@ asio::awaitable<void> HttpConnection::handle() {
             shutdown_socket();
             co_return;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SSE streaming mode
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> HttpConnection::run_sse_mode(uint64_t session_id) {
+    // Look up session in token_store.
+    auto* session = token_store_.lookup_by_id(session_id);
+    if (!session) {
+        co_return;  // Session gone already
+    }
+
+    // Create WriteFn that writes to the stream (TLS or plain).
+    SseWriter::WriteFn write_fn = [this](std::string_view data) -> asio::awaitable<bool> {
+        std::string s(data);
+        auto [ec, n] = co_await async_write(s);
+        co_return !ec;
+    };
+
+    // Create SseWriter on the coroutine stack.
+    SseWriter writer(ioc_.get_executor(), std::move(write_fn));
+
+    // Set the sse_writer pointer on the session so notifications can be pushed.
+    session->sse_writer = &writer;
+
+    spdlog::info("SSE stream started for session {}", session_id);
+
+    // Run the drain loop -- blocks until writer is closed.
+    co_await writer.run();
+
+    spdlog::info("SSE stream ended for session {}", session_id);
+
+    // Cleanup: clear sse_writer pointer.
+    // Re-lookup session (it may have been reaped during the long SSE session).
+    auto* s = token_store_.lookup_by_id(session_id);
+    if (s) {
+        s->sse_writer = nullptr;
+    }
+
+    // Cleanup subscriptions (SSE close path).
+    auto empty_namespaces = tracker_.remove_client(session_id);
+    if (!empty_namespaces.empty() && uds_.is_connected()) {
+        // Forward Unsubscribe to node for namespaces that dropped to 0 subscribers.
+        std::vector<uint8_t> payload;
+        payload.reserve(2 + empty_namespaces.size() * 32);
+        uint8_t count_buf[2];
+        util::store_u16_be(count_buf, static_cast<uint16_t>(empty_namespaces.size()));
+        payload.insert(payload.end(), count_buf, count_buf + 2);
+        for (const auto& ns : empty_namespaces) {
+            payload.insert(payload.end(), ns.begin(), ns.end());
+        }
+        auto msg = wire::TransportCodec::encode(
+            chromatindb::wire::TransportMsgType_Unsubscribe, payload, 0);
+        uds_.send(std::move(msg));
+        spdlog::debug("SSE close: forwarded {} unsubscribe(s) to node for session {}",
+                      empty_namespaces.size(), session_id);
     }
 }
 

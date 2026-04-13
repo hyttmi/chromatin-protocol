@@ -14,11 +14,14 @@ static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 // ---------------------------------------------------------------------------
 
 HttpServer::HttpServer(asio::io_context& ioc, HttpRouter& router, TokenStore& token_store,
+                       core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
                        const std::string& bind_address, uint16_t bind_port,
                        uint32_t max_connections, const std::atomic<bool>& stopping)
     : ioc_(ioc)
     , router_(router)
     , token_store_(token_store)
+    , tracker_(tracker)
+    , uds_(uds)
     , acceptor_(ioc)
     , stopping_(stopping)
     , max_connections_(max_connections) {
@@ -165,7 +168,7 @@ asio::awaitable<void> HttpServer::handle_new_connection(asio::ip::tcp::socket so
 
             HttpConnection conn(
                 HttpConnection::Stream(std::move(tls_stream)),
-                router_, token_store_, ioc_, active_connections_);
+                router_, token_store_, tracker_, uds_, ioc_, active_connections_);
             co_await conn.handle();
         } catch (const std::exception& e) {
             spdlog::debug("HTTP TLS connection error: {}", e.what());
@@ -174,7 +177,7 @@ asio::awaitable<void> HttpServer::handle_new_connection(asio::ip::tcp::socket so
         // Plain HTTP mode.
         HttpConnection conn(
             HttpConnection::Stream(std::move(socket)),
-            router_, token_store_, ioc_, active_connections_);
+            router_, token_store_, tracker_, uds_, ioc_, active_connections_);
         co_await conn.handle();
     }
 }

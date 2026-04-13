@@ -342,7 +342,7 @@ int main(int argc, char* argv[]) {
     // 17. Create HttpServer
     // =========================================================================
     chromatindb::relay::http::HttpServer http_server(
-        ioc, router, token_store,
+        ioc, router, token_store, subscription_tracker, uds_mux,
         cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
         cfg.max_connections, stopping);
 

@@ -10,6 +10,11 @@
 #include <variant>
 #include <vector>
 
+namespace chromatindb::relay::core {
+class SubscriptionTracker;  // Forward declaration
+class UdsMultiplexer;       // Forward declaration
+} // namespace chromatindb::relay::core
+
 namespace chromatindb::relay::http {
 
 class HttpRouter;
@@ -26,6 +31,7 @@ public:
     using Stream = std::variant<asio::ip::tcp::socket, TlsStream>;
 
     HttpConnection(Stream stream, HttpRouter& router, TokenStore& token_store,
+                   core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
                    asio::io_context& ioc, std::atomic<uint32_t>& active_connections);
 
     /// Main coroutine: keep-alive request loop.
@@ -47,12 +53,17 @@ private:
     /// Read exactly content_length bytes of body.
     asio::awaitable<bool> read_body(size_t content_length, std::vector<uint8_t>& body);
 
+    /// Enter SSE streaming mode: create SseWriter, run drain loop, cleanup on close.
+    asio::awaitable<void> run_sse_mode(uint64_t session_id);
+
     /// Shutdown the underlying socket cleanly.
     void shutdown_socket();
 
     Stream stream_;
     HttpRouter& router_;
     TokenStore& token_store_;
+    core::SubscriptionTracker& tracker_;
+    core::UdsMultiplexer& uds_;
     asio::io_context& ioc_;
     std::atomic<uint32_t>& active_connections_;
 

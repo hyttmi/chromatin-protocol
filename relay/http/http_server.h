@@ -9,6 +9,11 @@
 #include <mutex>
 #include <string>
 
+namespace chromatindb::relay::core {
+class SubscriptionTracker;  // Forward declaration
+class UdsMultiplexer;       // Forward declaration
+} // namespace chromatindb::relay::core
+
 namespace chromatindb::relay::http {
 
 class HttpRouter;
@@ -20,6 +25,7 @@ class TokenStore;
 class HttpServer {
 public:
     HttpServer(asio::io_context& ioc, HttpRouter& router, TokenStore& token_store,
+               core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
                const std::string& bind_address, uint16_t bind_port,
                uint32_t max_connections, const std::atomic<bool>& stopping);
 
@@ -52,6 +58,8 @@ private:
     asio::io_context& ioc_;
     HttpRouter& router_;
     TokenStore& token_store_;
+    core::SubscriptionTracker& tracker_;
+    core::UdsMultiplexer& uds_;
     asio::ip::tcp::acceptor acceptor_;
     const std::atomic<bool>& stopping_;
 
