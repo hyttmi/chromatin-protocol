@@ -68,7 +68,7 @@ Plans:
   3. HTTP GET /health returns 200 with a JSON body indicating relay and UDS connection status; returns 503 when the UDS connection to the node is down
 **Plans**: 3 plans
 Plans:
-- [ ] 109-01-PLAN.md — Node source exclusion fix + WriteTracker class + unit tests
+- [x] 109-01-PLAN.md — Node source exclusion fix + WriteTracker class + unit tests
 - [ ] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
 - [ ] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
 
@@ -94,7 +94,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
-| 109. New Features | 0/3 | Not started | - |
+| 109. New Features | 1/3 | In progress | - |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
 ## Backlog
