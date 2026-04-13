@@ -37,3 +37,15 @@ target_link_libraries(chromatindb_relay_tests PRIVATE
 list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(chromatindb_relay_tests)
+
+# ===========================================================================
+# HTTP parser tests (standalone target for Plan 999.9-01)
+# ===========================================================================
+add_executable(test_http_parser
+  test_http_parser.cpp
+)
+target_link_libraries(test_http_parser PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_http_parser)
