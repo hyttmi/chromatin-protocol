@@ -116,10 +116,9 @@ Plans:
 - [x] 999.3-01-PLAN.md — Error code + PendingRequest extension + callback purge_stale + config field + unit tests
 - [x] 999.3-02-PLAN.md — UdsMultiplexer timeout wiring + relay_main SIGHUP + metrics counter
 
-### Phase 999.4: Relay ASAN heap-use-after-free on shutdown (BACKLOG)
-**Goal:** Relay shows heap-use-after-free (not just leaks) during shutdown — likely a coroutine accessing a destroyed session or io_context. Real memory safety bug that needs investigation.
-**Requirements:** TBD
-**Plans:** 0 plans
+### Phase 999.4: Relay ASAN heap-use-after-free on shutdown (DELETED)
+**Goal:** DELETED — was specific to WebSocket transport coroutines. WS code deleted in Phase 999.9. If ASAN issues recur with HTTP transport, create a new backlog item.
+**Plans:** N/A
 
 ### Phase 999.5: Binary WS frame inconsistency for JSON responses (BACKLOG)
 **Goal:** Remove binary WS frame send path -- all JSON responses (including ReadResponse/BatchReadResponse) sent as text frames via send_json()
@@ -128,10 +127,9 @@ Plans:
 Plans:
 - [x] 999.5-01-PLAN.md — Remove send_binary, is_binary_response, binary marker detection, route_response branching
 
-### Phase 999.6: Notification echo on own writes (BACKLOG)
-**Goal:** Client writing to a subscribed namespace gets both write_ack AND notification for its own write. Phase 109 (source-exclusion) is planned but currently every client must handle/ignore its own echo.
-**Requirements:** TBD
-**Plans:** 0 plans
+### Phase 999.6: Notification echo on own writes (CLOSED — fixed in Phase 109)
+**Goal:** Fixed by Phase 109 source exclusion (node + relay). WriteTracker prevents echo via SSE.
+**Plans:** N/A
 
 ### Phase 999.7: Standardize all endianness to big-endian (BACKLOG)
 **Goal:** Eliminate the two remaining LE encoding exceptions (auth payload pubkey_size, canonical signing input ttl/timestamp) plus relay/tools inline LE copies. All wire encoding standardized to BE. PROTOCOL.md updated. Zero LE references in codebase.
