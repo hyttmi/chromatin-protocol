@@ -61,3 +61,15 @@ target_link_libraries(test_token_store PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_token_store)
+
+# ===========================================================================
+# HTTP router tests (standalone target for Plan 999.9-03)
+# ===========================================================================
+add_executable(test_http_router
+  test_http_router.cpp
+)
+target_link_libraries(test_http_router PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_http_router)

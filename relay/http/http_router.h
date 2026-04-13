@@ -8,6 +8,10 @@
 #include <string_view>
 #include <vector>
 
+namespace chromatindb::relay::core {
+class Authenticator;
+} // namespace chromatindb::relay::core
+
 namespace chromatindb::relay::http {
 
 struct HttpRequest;
@@ -40,5 +44,16 @@ private:
     };
     std::vector<Route> routes_;  // Linear scan; ~25 routes max, fast enough.
 };
+
+/// Register POST /auth/challenge and POST /auth/verify routes (public, no auth required).
+/// Manages pending challenges internally (challenge nonce -> bytes map with 30s expiry).
+/// Per D-04, D-05, D-06.
+void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator,
+                          TokenStore& token_store);
+
+/// Register GET /health route (public, no auth required).
+/// health_provider returns true if node UDS is connected.
+using HealthProvider = std::function<bool()>;
+void register_health_route(HttpRouter& router, HealthProvider health_provider);
 
 } // namespace chromatindb::relay::http
