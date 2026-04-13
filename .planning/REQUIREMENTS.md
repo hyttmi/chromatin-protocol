@@ -87,14 +87,14 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **HTTP-04**: Session tokens are opaque RAND_bytes(32) hex, stored in TokenStore with create/lookup/remove/reap_idle
 - [x] **HTTP-05**: Challenge-response auth: POST /auth/challenge returns nonce, POST /auth/verify with ML-DSA-87 signature returns bearer token
 - [x] **HTTP-06**: Bearer token auth middleware rejects unauthenticated requests with 401
-- [ ] **HTTP-07**: POST /blob accepts raw binary FlatBuffer body (application/octet-stream), returns JSON WriteAck
-- [ ] **HTTP-08**: GET /blob/{namespace}/{hash} returns raw binary FlatBuffer response (application/octet-stream), 404 if not found
-- [ ] **HTTP-09**: DELETE /blob/{namespace}/{hash} accepts raw binary tombstone body, returns JSON DeleteAck
+- [x] **HTTP-07**: POST /blob accepts raw binary FlatBuffer body (application/octet-stream), returns JSON WriteAck
+- [x] **HTTP-08**: GET /blob/{namespace}/{hash} returns raw binary FlatBuffer response (application/octet-stream), 404 if not found
+- [x] **HTTP-09**: DELETE /blob/{namespace}/{hash} accepts raw binary tombstone body, returns JSON DeleteAck
 - [x] **HTTP-10**: GET /list/{namespace} with query params returns JSON blob list via translator
 - [x] **HTTP-11**: GET /stats/{namespace} returns JSON namespace statistics via translator
 - [x] **HTTP-12**: UdsMultiplexer decoupled from ws::SessionManager via SessionDispatch callback interface
 - [x] **HTTP-13**: ResponsePromise awaitable bridges async UDS responses to synchronous HTTP handler coroutines
-- [ ] **HTTP-14**: POST /batch/read accepts JSON body, returns JSON with base64-encoded blobs via translator
+- [x] **HTTP-14**: POST /batch/read accepts JSON body, returns JSON with base64-encoded blobs via translator
 - [x] **HTTP-15**: GET /exists/{namespace}/{hash} returns JSON {exists: bool} via translator
 - [x] **HTTP-16**: GET /node-info returns JSON node info via translator
 - [x] **HTTP-17**: GET /peer-info returns JSON peer info via translator
@@ -104,8 +104,8 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **HTTP-21**: GET /time-range/{namespace} with query params returns JSON time range results via translator
 - [x] **HTTP-22**: POST /subscribe adds namespaces to session subscription set via SubscriptionTracker
 - [x] **HTTP-23**: POST /unsubscribe removes namespaces from session subscription set
-- [x] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
-- [x] **HTTP-25**: SSE heartbeats sent every 30s; disconnect triggers subscription cleanup
+- [ ] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
+- [ ] **HTTP-25**: SSE heartbeats sent every 30s; disconnect triggers subscription cleanup
 - [x] **HTTP-26**: relay_main.cpp creates HttpServer + TokenStore instead of WsAcceptor + SessionManager
 - [x] **HTTP-27**: /metrics and /health served by main HTTP server (MetricsCollector accept loop removed)
 - [x] **HTTP-28**: SIGHUP reloads TLS, ACL, rate limit, request timeout, max blob size with HTTP transport
@@ -187,14 +187,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-04 | Phase 999.9 | Complete |
 | HTTP-05 | Phase 999.9 | Complete |
 | HTTP-06 | Phase 999.9 | Complete |
-| HTTP-07 | Phase 999.9 | Pending |
-| HTTP-08 | Phase 999.9 | Pending |
-| HTTP-09 | Phase 999.9 | Pending |
+| HTTP-07 | Phase 999.9 | Complete |
+| HTTP-08 | Phase 999.9 | Complete |
+| HTTP-09 | Phase 999.9 | Complete |
 | HTTP-10 | Phase 999.9 | Complete |
 | HTTP-11 | Phase 999.9 | Complete |
 | HTTP-12 | Phase 999.9 | Complete |
 | HTTP-13 | Phase 999.9 | Complete |
-| HTTP-14 | Phase 999.9 | Pending |
+| HTTP-14 | Phase 999.9 | Complete |
 | HTTP-15 | Phase 999.9 | Complete |
 | HTTP-16 | Phase 999.9 | Complete |
 | HTTP-17 | Phase 999.9 | Complete |
@@ -204,8 +204,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-21 | Phase 999.9 | Complete |
 | HTTP-22 | Phase 999.9 | Complete |
 | HTTP-23 | Phase 999.9 | Complete |
-| HTTP-24 | Phase 999.9 | Complete |
-| HTTP-25 | Phase 999.9 | Complete |
+| HTTP-24 | Phase 999.9 | Pending |
+| HTTP-25 | Phase 999.9 | Pending |
 | HTTP-26 | Phase 999.9 | Complete |
 | HTTP-27 | Phase 999.9 | Complete |
 | HTTP-28 | Phase 999.9 | Complete |

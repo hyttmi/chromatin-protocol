@@ -49,7 +49,7 @@ TEST_CASE("extract_blob_path_params: valid 64-char hex namespace and hash", "[ht
 }
 
 TEST_CASE("extract_blob_path_params: mixed-case hex is accepted", "[http][data][path]") {
-    std::string ns_hex = "aAbBcCdDeEfF0011223344556677889900aAbBcCdDeEfF00112233445566778899";
+    std::string ns_hex = "aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899";
     std::string hash_hex = "0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789ABCDEF";
     std::string path = "/blob/" + ns_hex + "/" + hash_hex;
 
