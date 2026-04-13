@@ -80,6 +80,7 @@ void BlobPushManager::on_blob_ingested(
 
     // Notification (type 21) to subscribed clients -- existing pub/sub behavior
     for (auto& peer : peers_) {
+        if (peer->connection == source) continue;  // FEAT-01: source exclusion for notifications
         if (peer->subscribed_namespaces.count(namespace_id)) {
             auto conn = peer->connection;
             auto payload_copy = payload;

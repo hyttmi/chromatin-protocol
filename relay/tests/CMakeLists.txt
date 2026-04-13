@@ -17,6 +17,7 @@ add_executable(chromatindb_relay_tests
   test_session.cpp
   test_relay_config.cpp
   test_type_registry.cpp
+  test_write_tracker.cpp
   test_ws_frame.cpp
   test_ws_handshake.cpp
   test_base64.cpp
