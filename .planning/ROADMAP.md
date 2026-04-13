@@ -170,6 +170,6 @@ Plans:
 - [x] 999.9-04-PLAN.md — ResponsePromise awaitable mechanism
 - [x] 999.9-05-PLAN.md — Data endpoints (blob write/read/delete, batch read)
 - [x] 999.9-06-PLAN.md — Query endpoints (list, stats, exists, metadata, etc.)
-- [ ] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
+- [x] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
 - [ ] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
 - [ ] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
