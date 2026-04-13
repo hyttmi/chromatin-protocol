@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 999.9-01-PLAN.md
-last_updated: "2026-04-13T04:30:00Z"
+stopped_at: Completed 999.9-02-PLAN.md
+last_updated: "2026-04-13T04:46:00Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 13
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.9
-Plan: 01 of 09 complete
-Status: Executing
+Plan: 02 of 9
+Status: Wave 1 complete (plans 01-02)
 Last activity: 2026-04-13
 
 Progress: [###-------] 33%
@@ -59,6 +59,8 @@ Progress: [###-------] 33%
 - [Phase 999.9-01]: HttpResponse is header-only with inline static builders (no .cpp needed)
 - [Phase 999.9-01]: TokenStore dual-map for O(1) lookup by both token and session_id
 - [Phase 999.9-01]: relay/http/ namespace (chromatindb::relay::http) for all HTTP transport components
+- [Phase 999.9-02]: SessionDispatch uses std::function callbacks rather than virtual base class for transport abstraction
+- [Phase 999.9-02]: send_error fallback to send_json when not set -- error paths safe by default
 
 ### Pending Todos
 
@@ -70,5 +72,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-13T04:30:00Z
-Stopped at: Completed 999.9-01-PLAN.md
+Last session: 2026-04-13T04:46:00Z
+Stopped at: Completed 999.9-02-PLAN.md

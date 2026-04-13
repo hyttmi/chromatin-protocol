@@ -9,8 +9,6 @@
 #include "relay/wire/aead.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
-#include "relay/ws/ws_frame.h"
-#include "relay/ws/ws_session.h"
 
 #include <nlohmann/json.hpp>
 #include <oqs/oqs.h>
@@ -45,12 +43,12 @@ UdsMultiplexer::UdsMultiplexer(asio::io_context& ioc,
                                std::string uds_path,
                                const identity::RelayIdentity& identity,
                                RequestRouter& router,
-                               ws::SessionManager& sessions)
+                               SessionDispatch dispatch)
     : ioc_(ioc)
     , uds_path_(std::move(uds_path))
     , identity_(identity)
     , router_(router)
-    , sessions_(sessions)
+    , dispatch_(std::move(dispatch))
     , socket_(ioc) {}
 
 void UdsMultiplexer::start() {
@@ -521,11 +519,7 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
                 return;
             }
             spdlog::debug("UDS: broadcasting type={} to all sessions", type);
-            sessions_.for_each([&json_opt](uint64_t /*id*/, const auto& session) {
-                if (session) {
-                    session->send_json(*json_opt);
-                }
-            });
+            dispatch_.broadcast(*json_opt);
             return;
         }
 
@@ -550,13 +544,6 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         write_tracker_.record(blob_hash, pending->client_session_id);
     }
 
-    auto session = sessions_.get_session(pending->client_session_id);
-    if (!session) {
-        spdlog::debug("UDS: session {} gone for relay_rid={}",
-                      pending->client_session_id, request_id);
-        return;
-    }
-
     // Translate binary -> JSON
     auto json_opt = translate::binary_to_json(type, payload);
     if (!json_opt) {
@@ -569,8 +556,8 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         (*json_opt)["request_id"] = pending->client_request_id;
     }
 
-    // Send translated JSON to client
-    session->send_json(*json_opt);
+    // Send translated JSON to client via transport-agnostic dispatch
+    dispatch_.send_json(pending->client_session_id, *json_opt);
 }
 
 // ---------------------------------------------------------------------------
@@ -611,10 +598,7 @@ void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> 
             spdlog::debug("notification: source exclusion skipped session {}", sid);
             continue;  // FEAT-01: don't echo notification to writer
         }
-        auto session = sessions_.get_session(sid);
-        if (session) {
-            session->send_json(*json_opt);
-        }
+        dispatch_.send_json(sid, *json_opt);
     }
 }
 
@@ -627,16 +611,18 @@ void UdsMultiplexer::bulk_fail_pending_requests() {
     if (count == 0) return;
 
     router_.bulk_fail_all([this](uint64_t session_id, uint32_t client_rid) {
-        auto session = sessions_.get_session(session_id);
-        if (!session) return;  // Session already gone (Pitfall 3)
-
         nlohmann::json err = {
             {"type", "error"},
             {"code", "node_disconnected"},
             {"message", "Node connection lost"}
         };
         if (client_rid != 0) err["request_id"] = client_rid;
-        session->send_json(err);
+
+        if (dispatch_.send_error) {
+            dispatch_.send_error(session_id, err);
+        } else {
+            dispatch_.send_json(session_id, err);
+        }
     });
     spdlog::info("UDS: bulk-failed {} pending request(s)", count);
 }
@@ -646,9 +632,6 @@ void UdsMultiplexer::bulk_fail_pending_requests() {
 // ---------------------------------------------------------------------------
 
 void UdsMultiplexer::send_timeout_error(const PendingRequest& pending) {
-    auto session = sessions_.get_session(pending.client_session_id);
-    if (!session) return;  // Session already gone -- graceful no-op
-
     nlohmann::json err;
     err["type"] = "error";
     err["code"] = "timeout";
@@ -662,7 +645,11 @@ void UdsMultiplexer::send_timeout_error(const PendingRequest& pending) {
         err["request_id"] = pending.client_request_id;
     }
 
-    session->send_json(err);
+    if (dispatch_.send_error) {
+        dispatch_.send_error(pending.client_session_id, err);
+    } else {
+        dispatch_.send_json(pending.client_session_id, err);
+    }
 
     // Increment both counters (errors_total for general error tracking,
     // request_timeouts_total for timeout-specific dashboards)
