@@ -173,4 +173,4 @@ Plans:
 - [x] 999.9-07-PLAN.md — SSE notification stream + subscribe/unsubscribe
 - [x] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
 - [x] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
-- [ ] 999.9-10-PLAN.md — Gap closure: wire SSE streaming + subscription cleanup + test fix
+- [x] 999.9-10-PLAN.md — Gap closure: wire SSE streaming + subscription cleanup + test fix

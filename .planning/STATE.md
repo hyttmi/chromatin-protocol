@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 999.9-09-PLAN.md
-last_updated: "2026-04-13T10:43:49.912Z"
+stopped_at: Completed 999.9-10-PLAN.md
+last_updated: "2026-04-13T12:07:45.535Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 14
   completed_phases: 10
-  total_plans: 28
-  completed_plans: 28
+  total_plans: 29
+  completed_plans: 29
   percent: 33
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.9
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-04-13
 
@@ -70,6 +70,7 @@ Progress: [###-------] 33%
 - [Phase 999.9]: UdsMultiplexer route_response checks ResponsePromiseMap before WS dispatch for HTTP request/response
 - [Phase 999.9]: Deleted all WebSocket code (4595 lines) - HTTP-only relay transport
 - [Phase 999.9]: Deleted core::Session send queue (replaced by HTTP direct-response + SseWriter)
+- [Phase 999.9]: SseWriter on coroutine stack with pointer in HttpSessionState; TokenStore::reap_idle returns reaped IDs for caller cleanup
 
 ### Pending Todos
 
@@ -81,5 +82,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-13T10:43:49.908Z
-Stopped at: Completed 999.9-09-PLAN.md
+Last session: 2026-04-13T12:07:45.532Z
+Stopped at: Completed 999.9-10-PLAN.md

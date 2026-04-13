@@ -104,8 +104,8 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **HTTP-21**: GET /time-range/{namespace} with query params returns JSON time range results via translator
 - [x] **HTTP-22**: POST /subscribe adds namespaces to session subscription set via SubscriptionTracker
 - [x] **HTTP-23**: POST /unsubscribe removes namespaces from session subscription set
-- [ ] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
-- [ ] **HTTP-25**: SSE heartbeats sent every 30s; disconnect triggers subscription cleanup
+- [x] **HTTP-24**: GET /events?token=<token> returns SSE text/event-stream with notification events
+- [x] **HTTP-25**: SSE heartbeats sent every 30s; disconnect triggers subscription cleanup
 - [x] **HTTP-26**: relay_main.cpp creates HttpServer + TokenStore instead of WsAcceptor + SessionManager
 - [x] **HTTP-27**: /metrics and /health served by main HTTP server (MetricsCollector accept loop removed)
 - [x] **HTTP-28**: SIGHUP reloads TLS, ACL, rate limit, request timeout, max blob size with HTTP transport
@@ -204,8 +204,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-21 | Phase 999.9 | Complete |
 | HTTP-22 | Phase 999.9 | Complete |
 | HTTP-23 | Phase 999.9 | Complete |
-| HTTP-24 | Phase 999.9 | Pending |
-| HTTP-25 | Phase 999.9 | Pending |
+| HTTP-24 | Phase 999.9 | Complete |
+| HTTP-25 | Phase 999.9 | Complete |
 | HTTP-26 | Phase 999.9 | Complete |
 | HTTP-27 | Phase 999.9 | Complete |
 | HTTP-28 | Phase 999.9 | Complete |
