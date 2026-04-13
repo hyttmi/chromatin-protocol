@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 999.9-04-PLAN.md
-last_updated: "2026-04-13T06:18:24.140Z"
+stopped_at: Completed 999.9-06-PLAN.md
+last_updated: "2026-04-13T06:49:46.262Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 28
-  completed_plans: 22
+  completed_plans: 24
   percent: 33
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.9
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-04-13
 
@@ -63,6 +63,7 @@ Progress: [###-------] 33%
 - [Phase 999.9-02]: send_error fallback to send_json when not set -- error paths safe by default
 - [Phase 999.9]: HttpRouter handler receives body as separate vector for zero-copy large blob payloads
 - [Phase 999.9]: ResponsePromise uses asio::steady_timer signal pattern (same as Session drain), template wait() for flexible timeout, non-owning pointer in map
+- [Phase 999.9]: Extended HttpRouter with AsyncHandler variant for coroutine query handlers
 
 ### Pending Todos
 
@@ -74,5 +75,5 @@ None.
 
 ### Session
 
-Last session: 2026-04-13T06:18:24.136Z
-Stopped at: Completed 999.9-04-PLAN.md
+Last session: 2026-04-13T06:49:46.258Z
+Stopped at: Completed 999.9-06-PLAN.md
