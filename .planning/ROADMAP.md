@@ -14,7 +14,7 @@ Fix all bugs found in live relay+node testing, verify every feature works end-to
 - [x] **Phase 107: Message Type Verification** - Verify all 38 relay-allowed message types translate correctly through relay with live node (completed 2026-04-11)
 - [x] **Phase 108: Live Feature Verification** - Verify pub/sub, rate limiting, SIGHUP reload, and graceful shutdown end-to-end (completed 2026-04-11)
 - [x] **Phase 109: New Features** - Source exclusion for notifications, relay-side blob size limit, and /health endpoint (completed 2026-04-13)
-- ~~**Phase 110: Performance Benchmarking**~~ - Deferred: relay needs HTTP transport for large blobs before benchmarking is meaningful
+- [ ] **Phase 110: Performance Benchmarking** - Throughput, latency, large blob, and mixed workload benchmarks (unblocked by 999.9 HTTP transport)
 
 ## Phase Details
 
@@ -72,11 +72,16 @@ Plans:
 - [x] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
 - [x] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
 
-### Phase 110: Performance Benchmarking (DEFERRED)
-**Goal**: Deferred — relay's 1 MiB text frame limit + base64 overhead makes large blob benchmarks meaningless. Need HTTP transport for data operations first.
-**Depends on**: HTTP relay transport (see backlog 999.9)
+### Phase 110: Performance Benchmarking
+**Goal**: Relay performance is measured under realistic workloads to establish baselines and identify bottlenecks. HTTP transport enables raw binary blob benchmarks without base64 overhead.
+**Depends on**: Phase 109, Phase 999.9
 **Requirements**: PERF-01, PERF-02, PERF-03, PERF-04
-**Plans**: Deferred
+**Success Criteria** (what must be TRUE):
+  1. Throughput benchmark produces messages/sec numbers at 1, 10, and 100 concurrent HTTP clients with results recorded in a benchmark report
+  2. Latency benchmark measures relay overhead by comparing same-operation timing through relay vs direct UDS, with per-operation overhead percentages recorded
+  3. Large blob benchmark demonstrates successful write+read of 1 MiB, 10 MiB, 50 MiB, and 100 MiB blobs through the HTTP relay with MiB/sec throughput recorded
+  4. Mixed workload benchmark runs concurrent small metadata queries alongside large blob transfers and reports whether small-message latency degrades under large-blob load
+**Plans**: TBD
 
 ## Progress
 
@@ -90,7 +95,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
 | 109. New Features | 3/3 | Complete    | 2026-04-13 |
-| 110. Performance Benchmarking | 0/0 | Deferred | - |
+| 110. Performance Benchmarking | 0/0 | Not started | - |
 
 ## Backlog
 
