@@ -1,5 +1,6 @@
 #include "relay/http/handlers_data.h"
 #include "relay/http/http_parser.h"
+#include "relay/http/http_router.h"
 #include "relay/http/token_store.h"
 #include "relay/core/request_router.h"
 #include "relay/core/uds_multiplexer.h"
@@ -358,6 +359,40 @@ asio::awaitable<HttpResponse> DataHandlers::handle_batch_read(
     }
 
     co_return HttpResponse::json(200, *json_opt);
+}
+
+// ---------------------------------------------------------------------------
+// Route registration
+// ---------------------------------------------------------------------------
+
+void register_data_routes(HttpRouter& router, DataHandlers& handlers) {
+    // POST /blob -- blob write (auth required, exact match).
+    router.add_async_route("POST", "/blob",
+        [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_blob_write(req, body, session);
+        });
+
+    // GET /blob/{ns}/{hash} -- blob read (auth required, prefix match).
+    router.add_async_route("GET", "/blob/",
+        [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_blob_read(req, body, session);
+        });
+
+    // DELETE /blob/{ns}/{hash} -- blob delete (auth required, prefix match).
+    router.add_async_route("DELETE", "/blob/",
+        [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_blob_delete(req, body, session);
+        });
+
+    // POST /batch/read -- batch blob read (auth required, exact match).
+    router.add_async_route("POST", "/batch/read",
+        [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_batch_read(req, body, session);
+        });
 }
 
 }  // namespace chromatindb::relay::http

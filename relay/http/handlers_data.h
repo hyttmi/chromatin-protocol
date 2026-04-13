@@ -84,4 +84,15 @@ private:
     const std::atomic<uint32_t>& request_timeout_;
 };
 
+class HttpRouter;
+
+/// Register data operation routes on the HTTP router.
+/// Uses add_async_route() for coroutine-based handlers.
+/// Routes:
+///   POST   /blob       -> handle_blob_write (auth required)
+///   GET    /blob/      -> handle_blob_read  (auth required, prefix match)
+///   DELETE /blob/      -> handle_blob_delete (auth required, prefix match)
+///   POST   /batch/read -> handle_batch_read (auth required)
+void register_data_routes(HttpRouter& router, DataHandlers& handlers);
+
 }  // namespace chromatindb::relay::http
