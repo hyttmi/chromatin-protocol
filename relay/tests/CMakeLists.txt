@@ -61,3 +61,15 @@ target_link_libraries(test_token_store PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_token_store)
+
+# ===========================================================================
+# Response promise tests (standalone target for Plan 999.9-04)
+# ===========================================================================
+add_executable(test_response_promise
+  test_response_promise.cpp
+)
+target_link_libraries(test_response_promise PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_response_promise)
