@@ -164,7 +164,7 @@ Plans:
   8. SIGHUP and SIGTERM work correctly with HTTP transport
 **Plans**: 9 plans
 Plans:
-- [ ] 999.9-01-PLAN.md — HTTP parser + response builder + token store (standalone units)
+- [x] 999.9-01-PLAN.md — HTTP parser + response builder + token store (standalone units)
 - [ ] 999.9-02-PLAN.md — UdsMultiplexer decoupling from ws::SessionManager
 - [ ] 999.9-03-PLAN.md — HTTP server + router + auth endpoints
 - [ ] 999.9-04-PLAN.md — ResponsePromise awaitable mechanism
