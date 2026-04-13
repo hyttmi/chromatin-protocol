@@ -29,7 +29,7 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 ### New Features
 
-- [ ] **FEAT-01**: Source exclusion for notifications — relay tracks which client wrote a blob, suppresses echo notification to that client
+- [x] **FEAT-01**: Source exclusion for notifications — relay tracks which client wrote a blob, suppresses echo notification to that client
 - [x] **FEAT-02**: Relay-side max blob size limit (configurable, separate from node's 100 MiB)
 - [x] **FEAT-03**: Health check endpoint (HTTP GET /health returns 200 when relay+UDS connected)
 
@@ -112,7 +112,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-02 | Phase 110 | Pending |
 | PERF-03 | Phase 110 | Pending |
 | PERF-04 | Phase 110 | Pending |
-| FEAT-01 | Phase 109 | Pending |
+| FEAT-01 | Phase 109 | Complete |
 | FEAT-02 | Phase 109 | Complete |
 | FEAT-03 | Phase 109 | Complete |
 | ERR-01 | Phase 999.2 | Complete |

@@ -13,7 +13,7 @@ Fix all bugs found in live relay+node testing, verify every feature works end-to
 - [x] **Phase 106: Bug Fixes** - Fix compound type translation failures and audit all std::visit + coroutine lambda patterns for ASAN safety (completed 2026-04-11)
 - [x] **Phase 107: Message Type Verification** - Verify all 38 relay-allowed message types translate correctly through relay with live node (completed 2026-04-11)
 - [x] **Phase 108: Live Feature Verification** - Verify pub/sub, rate limiting, SIGHUP reload, and graceful shutdown end-to-end (completed 2026-04-11)
-- [ ] **Phase 109: New Features** - Source exclusion for notifications, relay-side blob size limit, and /health endpoint
+- [x] **Phase 109: New Features** - Source exclusion for notifications, relay-side blob size limit, and /health endpoint (completed 2026-04-13)
 - [ ] **Phase 110: Performance Benchmarking** - Throughput, latency, large blob, and mixed workload benchmarks
 
 ## Phase Details
@@ -70,7 +70,7 @@ Plans:
 Plans:
 - [x] 109-01-PLAN.md — Node source exclusion fix + WriteTracker class + unit tests
 - [x] 109-02-PLAN.md — Blob size limit config + health endpoint + SIGHUP wiring
-- [ ] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
+- [x] 109-03-PLAN.md — Wire WriteTracker into UdsMultiplexer notification fan-out + session cleanup
 
 ### Phase 110: Performance Benchmarking
 **Goal**: Relay performance is measured under realistic workloads to establish baselines and identify bottlenecks
@@ -94,7 +94,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 | 106. Bug Fixes | 3/3 | Complete    | 2026-04-11 |
 | 107. Message Type Verification | 1/1 | Complete    | 2026-04-11 |
 | 108. Live Feature Verification | 1/2 | Complete    | 2026-04-11 |
-| 109. New Features | 2/3 | In progress | - |
+| 109. New Features | 3/3 | Complete   | 2026-04-13 |
 | 110. Performance Benchmarking | 0/0 | Not started | - |
 
 ## Backlog
@@ -102,7 +102,7 @@ Phases execute in numeric order: 106 -> 107 -> 108 -> 109 -> 110
 ### Phase 999.1: Tombstone TTL lifecycle management (BACKLOG)
 **Goal:** [Captured for future planning]
 **Requirements:** TBD
-**Plans:** 1/3 plans executed
+**Plans:** 3/3 plans complete
 
 ### Phase 999.2: Node silent failure on malformed requests (BACKLOG)
 **Goal:** Node records strikes but sends NO error response on malformed requests — client hangs forever. Every request must guarantee a response. Add error response type for rejected messages.
