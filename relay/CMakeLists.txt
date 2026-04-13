@@ -31,6 +31,7 @@ add_library(chromatindb_relay_lib STATIC
   http/http_server.cpp
   http/http_connection.cpp
   http/http_router.cpp
+  http/handlers_query.cpp
 )
 
 target_include_directories(chromatindb_relay_lib PUBLIC

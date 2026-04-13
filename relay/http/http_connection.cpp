@@ -207,8 +207,8 @@ asio::awaitable<void> HttpConnection::handle() {
             }
         }
 
-        // 5. Dispatch to router.
-        auto response = router_.dispatch(req, body, token_store_);
+        // 5. Dispatch to router (async to support coroutine query handlers).
+        auto response = co_await router_.dispatch_async(req, body, token_store_);
 
         // 6. Serialize and send response.
         auto serialized = response.serialize();
