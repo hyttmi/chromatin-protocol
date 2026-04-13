@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v3.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 999.9-03-PLAN.md
+stopped_at: Completed 999.9-04-PLAN.md
 last_updated: "2026-04-13T06:18:24.140Z"
 last_activity: 2026-04-13
 progress:
@@ -62,6 +62,7 @@ Progress: [###-------] 33%
 - [Phase 999.9-02]: SessionDispatch uses std::function callbacks rather than virtual base class for transport abstraction
 - [Phase 999.9-02]: send_error fallback to send_json when not set -- error paths safe by default
 - [Phase 999.9]: HttpRouter handler receives body as separate vector for zero-copy large blob payloads
+- [Phase 999.9]: ResponsePromise uses asio::steady_timer signal pattern (same as Session drain), template wait() for flexible timeout, non-owning pointer in map
 
 ### Pending Todos
 
@@ -74,4 +75,4 @@ None.
 ### Session
 
 Last session: 2026-04-13T06:18:24.136Z
-Stopped at: Completed 999.9-03-PLAN.md
+Stopped at: Completed 999.9-04-PLAN.md

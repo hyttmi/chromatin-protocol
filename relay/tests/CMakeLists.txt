@@ -73,3 +73,15 @@ target_link_libraries(test_http_router PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_http_router)
+
+# ===========================================================================
+# Response promise tests (standalone target for Plan 999.9-04)
+# ===========================================================================
+add_executable(test_response_promise
+  test_response_promise.cpp
+)
+target_link_libraries(test_response_promise PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_response_promise)
