@@ -1,6 +1,7 @@
 #include "relay/core/uds_multiplexer.h"
 #include "relay/core/metrics_collector.h"
 #include "relay/core/subscription_tracker.h"
+#include "relay/core/write_tracker.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
 #include "relay/util/endian.h"
@@ -541,6 +542,14 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
         return;
     }
 
+    // FEAT-01: Record writer session for source exclusion on subsequent Notification
+    // WriteAck(30) and DeleteAck(18) both have blob_hash at offset 0, 32 bytes
+    if ((type == 30 || type == 18) && payload.size() >= 32) {
+        BlobHash32 blob_hash{};
+        std::memcpy(blob_hash.data(), payload.data(), 32);
+        write_tracker_.record(blob_hash, pending->client_session_id);
+    }
+
     auto session = sessions_.get_session(pending->client_session_id);
     if (!session) {
         spdlog::debug("UDS: session {} gone for relay_rid={}",
@@ -581,6 +590,14 @@ void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> 
     auto session_ids = tracker_->get_subscribers(ns);
     if (session_ids.empty()) return;
 
+    // FEAT-01: Source exclusion -- skip the session that wrote this blob
+    std::optional<uint64_t> writer_session;
+    if (payload.size() >= 64) {
+        BlobHash32 blob_hash{};
+        std::memcpy(blob_hash.data(), payload.data() + 32, 32);  // blob_hash at offset 32 in Notification
+        writer_session = write_tracker_.lookup_and_remove(blob_hash);
+    }
+
     // Translate ONCE (D-06 optimization)
     auto json_opt = translate::binary_to_json(type, payload);
     if (!json_opt) return;
@@ -590,6 +607,10 @@ void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> 
 
     // Fan-out to all subscribers (D-07: text frames via send_json)
     for (uint64_t sid : session_ids) {
+        if (writer_session && sid == *writer_session) {
+            spdlog::debug("notification: source exclusion skipped session {}", sid);
+            continue;  // FEAT-01: don't echo notification to writer
+        }
         auto session = sessions_.get_session(sid);
         if (session) {
             session->send_json(*json_opt);

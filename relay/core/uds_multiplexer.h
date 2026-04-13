@@ -1,6 +1,7 @@
 #pragma once
 
 #include "relay/core/request_router.h"
+#include "relay/core/write_tracker.h"
 #include "relay/identity/relay_identity.h"
 #include "relay/ws/session_manager.h"
 
@@ -41,6 +42,9 @@ public:
 
     /// Set subscription tracker for notification fan-out (Phase 104).
     void set_tracker(SubscriptionTracker* t);
+
+    /// Access the owned WriteTracker (for session disconnect cleanup wiring).
+    WriteTracker& write_tracker() { return write_tracker_; }
 
     /// Set pointer to relay_main's SIGHUP-reloadable request timeout atomic.
     void set_request_timeout(const std::atomic<uint32_t>* timeout);
@@ -112,6 +116,9 @@ private:
 
     // Subscription tracking (Phase 104)
     SubscriptionTracker* tracker_ = nullptr;
+
+    // FEAT-01: tracks blob_hash -> writer session for source exclusion
+    WriteTracker write_tracker_;
 
     // Request timeout (SIGHUP-reloadable via relay_main atomic)
     const std::atomic<uint32_t>* request_timeout_ = nullptr;
