@@ -53,6 +53,12 @@ public:
     /// Set gauge provider for live data at scrape time.
     void set_gauge_provider(GaugeProvider provider) { gauge_provider_ = std::move(provider); }
 
+    /// Health provider callback: returns true if node UDS is connected.
+    using HealthProvider = std::function<bool()>;
+
+    /// Set health provider for /health endpoint.
+    void set_health_provider(HealthProvider provider) { health_provider_ = std::move(provider); }
+
     /// Uptime in seconds since construction.
     uint64_t uptime_seconds() const;
 
@@ -72,6 +78,7 @@ private:
     std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
     std::string metrics_bind_;
     GaugeProvider gauge_provider_;
+    HealthProvider health_provider_;
 };
 
 } // namespace chromatindb::relay::core

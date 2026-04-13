@@ -58,7 +58,8 @@ public:
         core::RequestRouter* router = nullptr,
         core::SubscriptionTracker* tracker = nullptr,
         core::RelayMetrics* metrics = nullptr,
-        const std::atomic<uint32_t>* shared_rate = nullptr);
+        const std::atomic<uint32_t>* shared_rate = nullptr,
+        const std::atomic<uint32_t>* max_blob_size = nullptr);
 
     /// Start the session lifecycle (read loop + drain + ping + auth challenge).
     void start(uint64_t session_id);
@@ -80,7 +81,8 @@ private:
               core::Authenticator& authenticator, asio::io_context& ioc,
               core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
               core::SubscriptionTracker* tracker,
-              core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate);
+              core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate,
+              const std::atomic<uint32_t>* max_blob_size);
 
     /// Parse "namespaces" array of hex strings from JSON into Namespace32 vector.
     static std::vector<std::array<uint8_t, 32>> parse_namespace_list(const nlohmann::json& j);
@@ -153,6 +155,7 @@ private:
     core::RateLimiter rate_limiter_;
     core::RelayMetrics* metrics_ = nullptr;
     const std::atomic<uint32_t>* shared_rate_ = nullptr;
+    const std::atomic<uint32_t>* max_blob_size_ = nullptr;
     static constexpr uint32_t RATE_LIMIT_DISCONNECT_THRESHOLD = 10;
 
     // Read buffer (persistent across reads)

@@ -53,6 +53,7 @@ RelayConfig load_relay_config(const std::filesystem::path& path) {
     cfg.metrics_bind = j.value("metrics_bind", cfg.metrics_bind);
     cfg.rate_limit_messages_per_sec = j.value("rate_limit_messages_per_sec", cfg.rate_limit_messages_per_sec);
     cfg.request_timeout_seconds = j.value("request_timeout_seconds", cfg.request_timeout_seconds);
+    cfg.max_blob_size_bytes = j.value("max_blob_size_bytes", cfg.max_blob_size_bytes);
 
     return cfg;
 }

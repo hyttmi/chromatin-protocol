@@ -139,6 +139,18 @@ asio::awaitable<void> MetricsCollector::handle_connection(asio::ip::tcp::socket 
                    "Content-Length: " + std::to_string(body.size()) + "\r\n"
                    "Connection: close\r\n"
                    "\r\n" + body;
+    } else if (first_line.find("GET /health") != std::string::npos) {
+        bool node_connected = health_provider_ ? health_provider_() : false;
+        std::string status_str = node_connected ? "healthy" : "degraded";
+        std::string node_str = node_connected ? "connected" : "disconnected";
+        std::string http_status = node_connected ? "200 OK" : "503 Service Unavailable";
+        std::string body = "{\"status\":\"" + status_str +
+                           "\",\"relay\":\"ok\",\"node\":\"" + node_str + "\"}";
+        response = "HTTP/1.1 " + http_status + "\r\n"
+                   "Content-Type: application/json\r\n"
+                   "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                   "Connection: close\r\n"
+                   "\r\n" + body;
     } else {
         response = "HTTP/1.1 404 Not Found\r\n"
                    "Content-Length: 0\r\n"

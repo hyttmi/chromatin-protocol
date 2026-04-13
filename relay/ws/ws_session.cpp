@@ -71,7 +71,8 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
                      core::Authenticator& authenticator, asio::io_context& ioc,
                      core::UdsMultiplexer* uds_mux, core::RequestRouter* router,
                      core::SubscriptionTracker* tracker,
-                     core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate)
+                     core::RelayMetrics* metrics, const std::atomic<uint32_t>* shared_rate,
+                     const std::atomic<uint32_t>* max_blob_size)
     : stream_(std::move(stream))
     , session_(executor, max_send_queue)
     , manager_(manager)
@@ -84,7 +85,8 @@ WsSession::WsSession(Stream stream, SessionManager& manager,
     , router_(router)
     , tracker_(tracker)
     , metrics_(metrics)
-    , shared_rate_(shared_rate) {
+    , shared_rate_(shared_rate)
+    , max_blob_size_(max_blob_size) {
     last_pong_ = std::chrono::steady_clock::now();
     // Initialize rate limiter from shared rate atomic if available.
     if (shared_rate_) {
@@ -103,12 +105,13 @@ std::shared_ptr<WsSession> WsSession::create(
     core::RequestRouter* router,
     core::SubscriptionTracker* tracker,
     core::RelayMetrics* metrics,
-    const std::atomic<uint32_t>* shared_rate) {
+    const std::atomic<uint32_t>* shared_rate,
+    const std::atomic<uint32_t>* max_blob_size) {
     // Cannot use make_shared due to private constructor.
     return std::shared_ptr<WsSession>(
         new WsSession(std::move(stream), manager, executor, max_send_queue,
                        authenticator, ioc, uds_mux, router, tracker,
-                       metrics, shared_rate));
+                       metrics, shared_rate, max_blob_size));
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +490,22 @@ asio::awaitable<void> WsSession::on_message(uint8_t opcode, std::vector<uint8_t>
 
     // Type is allowed -- count as received message.
     if (metrics_) metrics_->messages_received_total.fetch_add(1, std::memory_order_relaxed);
+
+    // FEAT-02: Blob size limit (per D-07) -- check BEFORE translation to avoid memory waste
+    if (type_str == "data" && max_blob_size_) {
+        uint32_t limit = max_blob_size_->load(std::memory_order_relaxed);
+        if (limit > 0 && j.contains("data") && j["data"].is_string()) {
+            size_t b64_len = j["data"].get_ref<const std::string&>().size();
+            size_t decoded_upper = (b64_len * 3) / 4;  // Upper bound, no padding inspection
+            if (decoded_upper > limit) {
+                nlohmann::json err = {{"type", "error"}, {"code", "blob_too_large"},
+                                      {"max_size", limit}};
+                if (request_id) err["request_id"] = *request_id;
+                send_json(err);
+                co_return;
+            }
+        }
+    }
 
     // Translate JSON -> binary and forward to node via UDS.
     spdlog::debug("session {}: accepted '{}'{}", session_id_, type_str,
