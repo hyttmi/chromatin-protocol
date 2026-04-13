@@ -32,6 +32,7 @@ add_library(chromatindb_relay_lib STATIC
   http/http_connection.cpp
   http/http_router.cpp
   http/handlers_query.cpp
+  http/handlers_pubsub.cpp
   http/sse_writer.cpp
 )
 

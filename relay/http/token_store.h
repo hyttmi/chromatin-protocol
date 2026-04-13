@@ -11,13 +11,20 @@
 
 namespace chromatindb::relay::http {
 
+class SseWriter;  // Forward declaration (sse_writer.h)
+
 struct HttpSessionState {
     uint64_t session_id = 0;
     std::vector<uint8_t> client_pubkey;
     std::array<uint8_t, 32> client_namespace{};
     core::RateLimiter rate_limiter;
     std::chrono::steady_clock::time_point last_activity;
-    // SSE writer pointer set later (Plan 07)
+
+    /// Non-owning pointer to the SSE writer for this session's event stream.
+    /// Set when GET /events establishes an SSE connection.
+    /// Null when no SSE stream is active. The SseWriter lives on the
+    /// HttpConnection's coroutine stack.
+    SseWriter* sse_writer = nullptr;
 };
 
 /// Maps opaque hex tokens to HTTP session state.
