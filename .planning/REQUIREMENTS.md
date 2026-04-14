@@ -33,6 +33,17 @@
 - [x] **OFF-03**: All json_to_binary() and binary_to_json() call sites in HTTP handlers (handlers_query.cpp, handlers_data.cpp) wrapped with offload_if_large() using payload size as threshold input
 - [x] **OFF-04**: UDS AEAD encrypt/decrypt offloaded with counter-by-value capture (D-10), notification/broadcast binary_to_json pre-translated in read_loop() coroutine before synchronous dispatch
 
+### Chunked Streaming for Large Blobs
+
+- [ ] **CHUNK-01**: UDS chunked sub-frame protocol for payloads >= 1 MiB — large payloads broken into 1 MiB sub-frames within a single logical message, small messages use existing single-frame format
+- [ ] **CHUNK-02**: Per-chunk AEAD authentication with shared monotonic nonce counter — each 1 MiB sub-frame encrypted/decrypted independently with sequential nonces from the same counter
+- [ ] **CHUNK-03**: MAX_BLOB_DATA_SIZE raised from 100 MiB to 500 MiB in node (db/net/framing.h) and relay (http_connection.h MAX_BODY_SIZE, uds_multiplexer.h MAX_FRAME_SIZE)
+- [ ] **CHUNK-04**: Bounded backpressure queue (4-chunk depth) between UDS producer and HTTP consumer — producer pauses when queue is full, prevents OOM
+- [ ] **CHUNK-05**: HTTP upload streaming — relay reads HTTP body in 1 MiB chunks and forwards each to UDS incrementally via chunked sub-frames, for blobs >= 1 MiB
+- [ ] **CHUNK-06**: HTTP download streaming — relay streams UDS sub-frame chunks to HTTP client using chunked transfer encoding (Transfer-Encoding: chunked), for blobs >= 1 MiB
+- [ ] **CHUNK-07**: HttpResponse scatter-gather writes using Asio buffer sequences for all responses — eliminates header+body string concatenation
+- [ ] **CHUNK-08**: Small blobs under 1 MiB handled inline with existing full-buffer path — no streaming overhead for common case
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -41,7 +52,9 @@
 | Strand confinement | Proved insufficient (Phase 999.10 abandoned) |
 | HTTP/2 | Not needed pre-MVP |
 | WebSocket fallback | Deleted in Phase 999.9 |
-| Binary blob transfer (multipart HTTP) | Deferred to Phase 115 — fix starvation first |
+| Client-side chunked transfer encoding for uploads | Content-Length streaming sufficient pre-MVP |
+| Zero-copy splice/sendfile | OS-level optimization, complex — future |
+| Streaming FlatBuffer parsing | Raw blob data bypasses FlatBuffer |
 
 ## Traceability
 
@@ -59,11 +72,19 @@
 | PERF-02 | Phase 113 | Complete |
 | PERF-03 | Phase 113 | Complete |
 | PERF-04 | Phase 113 | Complete |
-| OFF-01 | Phase 114 | Planned |
-| OFF-02 | Phase 114 | Planned |
-| OFF-03 | Phase 114 | Planned |
-| OFF-04 | Phase 114 | Planned |
+| OFF-01 | Phase 114 | Complete |
+| OFF-02 | Phase 114 | Complete |
+| OFF-03 | Phase 114 | Complete |
+| OFF-04 | Phase 114 | Complete |
+| CHUNK-01 | Phase 115 | Planned |
+| CHUNK-02 | Phase 115 | Planned |
+| CHUNK-03 | Phase 115 | Planned |
+| CHUNK-04 | Phase 115 | Planned |
+| CHUNK-05 | Phase 115 | Planned |
+| CHUNK-06 | Phase 115 | Planned |
+| CHUNK-07 | Phase 115 | Planned |
+| CHUNK-08 | Phase 115 | Planned |
 
 **Coverage:**
-- v4.0.0 requirements: 16 total
-- Mapped to phases: 16/16 (100%)
+- v4.0.0 requirements: 24 total
+- Mapped to phases: 24/24 (100%)
