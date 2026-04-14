@@ -54,6 +54,9 @@ bool is_valid_hex32(std::string_view s);
 // Query handlers registration
 // =============================================================================
 
+/// Strand type alias for query handler strand confinement.
+using Strand = asio::strand<asio::io_context::executor_type>;
+
 /// Configuration for query handler dependencies.
 struct QueryHandlerDeps {
     core::UdsMultiplexer& uds_mux;
@@ -61,6 +64,7 @@ struct QueryHandlerDeps {
     ResponsePromiseMap& promises;
     asio::io_context& ioc;
     const std::atomic<uint32_t>* request_timeout = nullptr;  // SIGHUP-reloadable
+    Strand* strand = nullptr;  // Required: global strand for shared state serialization
 };
 
 /// Register all query endpoint routes on the router.

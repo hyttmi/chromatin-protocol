@@ -326,12 +326,12 @@ int main(int argc, char* argv[]) {
     // DataHandlers (blob write/read/delete, batch read) -- D-07, D-08, D-09, D-14
     chromatindb::relay::http::DataHandlers data_handlers(
         uds_mux, request_router, promise_map, uds_mux.write_tracker(),
-        max_blob_size, request_timeout);
+        max_blob_size, request_timeout, strand);
     chromatindb::relay::http::register_data_routes(router, data_handlers);
 
     // QueryHandlers (all query endpoints) -- D-10 through D-21
     chromatindb::relay::http::QueryHandlerDeps query_deps{
-        uds_mux, request_router, promise_map, ioc, &request_timeout};
+        uds_mux, request_router, promise_map, ioc, &request_timeout, &strand};
     chromatindb::relay::http::register_query_routes(router, query_deps);
 
     // PubSubHandlers (subscribe, unsubscribe, SSE events) -- D-22, D-23, D-24

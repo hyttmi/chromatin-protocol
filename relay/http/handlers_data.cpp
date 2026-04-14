@@ -63,13 +63,15 @@ DataHandlers::DataHandlers(core::UdsMultiplexer& uds_mux,
                            ResponsePromiseMap& promises,
                            core::WriteTracker& write_tracker,
                            const std::atomic<uint32_t>& max_blob_size,
-                           const std::atomic<uint32_t>& request_timeout)
+                           const std::atomic<uint32_t>& request_timeout,
+                           Strand& strand)
     : uds_mux_(uds_mux)
     , router_(router)
     , promises_(promises)
     , write_tracker_(write_tracker)
     , max_blob_size_(max_blob_size)
-    , request_timeout_(request_timeout) {}
+    , request_timeout_(request_timeout)
+    , strand_(strand) {}
 
 // ---------------------------------------------------------------------------
 // Common: send transport message and co_await UDS response
@@ -78,8 +80,9 @@ DataHandlers::DataHandlers(core::UdsMultiplexer& uds_mux,
 asio::awaitable<std::optional<ResponseData>> DataHandlers::send_and_await(
     std::vector<uint8_t> transport_msg, uint32_t relay_rid) {
 
-    auto executor = co_await asio::this_coro::executor;
-    auto promise = promises_.create_promise(relay_rid, executor);
+    // Caller must already be on the strand when entering this method.
+    // Use strand_ as executor for the promise timer so co_await resumes on strand.
+    auto promise = promises_.create_promise(relay_rid, strand_);
 
     // Send via UDS.
     bool sent = uds_mux_.send(std::move(transport_msg));
@@ -111,12 +114,16 @@ asio::awaitable<HttpResponse> DataHandlers::handle_blob_write(
         co_return HttpResponse::error(400, "empty_body", "request body required");
     }
 
-    // 2. Size limit check (FEAT-02).
+    // 2. Size limit check (FEAT-02). Atomic load is thread-safe, stays off-strand.
     auto max_size = max_blob_size_.load(std::memory_order_relaxed);
     if (max_size > 0 && body.size() > max_size) {
         co_return HttpResponse::error(413, "payload_too_large",
             "body size " + std::to_string(body.size()) + " exceeds limit " + std::to_string(max_size));
     }
+
+    // Enter strand for shared state access (RequestRouter, ResponsePromiseMap,
+    // UdsMultiplexer::send, WriteTracker).
+    co_await asio::post(strand_, asio::use_awaitable);
 
     // 3. Register request with RequestRouter.
     //    client_rid=0 (HTTP has no client-side request ID), type=8 (Data).
@@ -177,10 +184,13 @@ asio::awaitable<HttpResponse> DataHandlers::handle_blob_read(
     }
 
     // 2. Build ReadRequest binary: [namespace:32][hash:32] = 64 bytes.
-    //    Wire type = 31 (ReadRequest).
+    //    Wire type = 31 (ReadRequest). Off-strand: no shared state touched.
     std::vector<uint8_t> payload(64);
     std::memcpy(payload.data(), params->namespace_bytes.data(), 32);
     std::memcpy(payload.data() + 32, params->hash_bytes.data(), 32);
+
+    // Enter strand for shared state access.
+    co_await asio::post(strand_, asio::use_awaitable);
 
     // 3. Register request.
     uint32_t relay_rid = router_.register_request(
@@ -242,6 +252,9 @@ asio::awaitable<HttpResponse> DataHandlers::handle_blob_delete(
         co_return HttpResponse::error(400, "empty_body",
             "tombstone blob body required");
     }
+
+    // Enter strand for shared state access.
+    co_await asio::post(strand_, asio::use_awaitable);
 
     // 3. Register request. Wire type = 17 (Delete).
     uint32_t relay_rid = router_.register_request(
@@ -319,12 +332,15 @@ asio::awaitable<HttpResponse> DataHandlers::handle_batch_read(
         translate_input["max_bytes"] = request_json["cap_bytes"];
     }
 
-    // 4. Translate JSON -> binary via translator.
+    // 4. Translate JSON -> binary via translator. Off-strand: CPU-heavy work per D-16.
     auto tr = translate::json_to_binary(translate_input);
     if (!tr) {
         co_return HttpResponse::error(400, "translate_error",
             "failed to encode batch read request");
     }
+
+    // Enter strand for shared state access.
+    co_await asio::post(strand_, asio::use_awaitable);
 
     // 5. Register request.
     uint32_t relay_rid = router_.register_request(
