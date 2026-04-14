@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 113-02-PLAN.md
-last_updated: "2026-04-14T09:23:53.343Z"
+stopped_at: Phase 114 context gathered
+last_updated: "2026-04-14T09:52:25.401Z"
 last_activity: 2026-04-14
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
   total_plans: 6
   completed_plans: 6
@@ -87,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-14T09:23:53.340Z
-Stopped at: Completed 113-02-PLAN.md
-Resume file: None
+Last session: 2026-04-14T09:52:25.398Z
+Stopped at: Phase 114 context gathered
+Resume file: .planning/phases/114-relay-thread-pool-offload/114-CONTEXT.md
