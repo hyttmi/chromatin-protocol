@@ -89,16 +89,21 @@ void UdsMultiplexer::set_response_promises(http::ResponsePromiseMap* promises) {
 bool UdsMultiplexer::send(std::vector<uint8_t> transport_msg) {
     if (!connected_) return false;
 
-    send_queue_.push_back(std::move(transport_msg));
+    // Post to strand to serialize access to send_queue_ and draining_ flag.
+    // This is safe to call from any thread.
+    asio::post(strand_, [this, msg = std::move(transport_msg)]() mutable {
+        if (!connected_) return;
+        send_queue_.push_back(std::move(msg));
 
-    if (!draining_) {
-        draining_ = true;
-        auto self_ptr = this;
-        asio::co_spawn(strand_,
-            [self_ptr]() -> asio::awaitable<void> {
-                co_await self_ptr->drain_send_queue();
-            }, asio::detached);
-    }
+        if (!draining_) {
+            draining_ = true;
+            auto self_ptr = this;
+            asio::co_spawn(strand_,
+                [self_ptr]() -> asio::awaitable<void> {
+                    co_await self_ptr->drain_send_queue();
+                }, asio::detached);
+        }
+    });
     return true;
 }
 
