@@ -59,7 +59,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 112-01-PLAN.md — LSAN suppression file + ASAN test harness + run verification
+- [ ] 113-01-PLAN.md — Benchmark orchestration script + run all 4 PERF workloads
 
 ## Progress
 
@@ -70,4 +70,4 @@ Phases execute in numeric order: 111 -> 112 -> 113
 |-------|----------------|--------|-----------|
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
-| 113. Performance Benchmarking | 0/TBD | Not started | - |
+| 113. Performance Benchmarking | 0/1 | Not started | - |
