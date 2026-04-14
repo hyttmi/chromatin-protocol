@@ -42,7 +42,10 @@ Plans:
   2. Relay benchmark tool completes full auth flow (challenge + verify + bearer token) and data operations without crashes under ASAN
   3. SIGHUP config reload works correctly under single-threaded model (rate limit change observed, TLS cert swap, no crash)
   4. SIGTERM graceful shutdown drains active connections and exits cleanly under ASAN with no leak reports beyond accepted shutdown leaks
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 112-01-PLAN.md — LSAN suppression file + ASAN test harness + run verification
 
 ### Phase 113: Performance Benchmarking
 **Goal**: Relay performance baselines are measured and recorded under four workload types
@@ -53,7 +56,10 @@ Plans:
   2. Latency benchmark measures per-operation round-trip time (p50/p95/p99) through HTTP relay with results recorded
   3. Large blob benchmark demonstrates successful write+read at 1 MiB, 10 MiB, 50 MiB, and 100 MiB with MiB/sec throughput recorded
   4. Mixed workload benchmark runs concurrent small metadata queries alongside large blob transfers and reports small-query latency degradation under load
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 112-01-PLAN.md — LSAN suppression file + ASAN test harness + run verification
 
 ## Progress
 
@@ -62,6 +68,6 @@ Phases execute in numeric order: 111 -> 112 -> 113
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 111. Single-Threaded Rewrite | 3/3 | Complete   | 2026-04-14 |
-| 112. ASAN Verification | 0/TBD | Not started | - |
+| 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
+| 112. ASAN Verification | 0/1 | Not started | - |
 | 113. Performance Benchmarking | 0/TBD | Not started | - |
