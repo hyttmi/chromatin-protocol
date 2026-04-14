@@ -441,7 +441,12 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> UdsMultiplexer::recv_raw() 
 // ---------------------------------------------------------------------------
 
 asio::awaitable<bool> UdsMultiplexer::send_encrypted(std::span<const uint8_t> plaintext) {
-    auto ct = wire::aead_encrypt(plaintext, send_key_, send_counter_++);
+    // D-10: Increment counter on event loop BEFORE offload. Capture by value.
+    auto counter = send_counter_++;
+    auto ct = co_await util::offload_if_large(pool_, ioc_, plaintext.size(),
+        [plaintext, key = std::span<const uint8_t>(send_key_), counter] {
+            return wire::aead_encrypt(plaintext, key, counter);
+        });
     co_return co_await send_raw(ct);
 }
 
@@ -449,9 +454,15 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> UdsMultiplexer::recv_encryp
     auto raw = co_await recv_raw();
     if (!raw) co_return std::nullopt;
 
-    auto pt = wire::aead_decrypt(*raw, recv_key_, recv_counter_++);
+    // D-10: Increment counter on event loop BEFORE offload. Capture by value.
+    auto counter = recv_counter_++;
+    auto pt = co_await util::offload_if_large(pool_, ioc_, raw->size(),
+        [&raw, key = std::span<const uint8_t>(recv_key_), counter]()
+            -> std::optional<std::vector<uint8_t>> {
+            return wire::aead_decrypt(*raw, key, counter);
+        });
     if (!pt) {
-        spdlog::error("UDS AEAD decrypt failed at recv_counter={}", recv_counter_ - 1);
+        spdlog::error("UDS AEAD decrypt failed at recv_counter={}", counter);
         co_return std::nullopt;
     }
     co_return pt;
@@ -501,9 +512,43 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
             continue;
         }
 
-        route_response(static_cast<uint8_t>(decoded->type),
-                       std::move(decoded->payload),
-                       decoded->request_id);
+        uint8_t type = static_cast<uint8_t>(decoded->type);
+
+        if (decoded->request_id == 0) {
+            // Server-initiated (notifications, broadcasts): pre-translate if large.
+            // route_response/handle_notification are sync void -- can't co_await inside them.
+            if (type == 21) {
+                // Notification fan-out
+                auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+                    decoded->payload.size(),
+                    [type, payload = std::span<const uint8_t>(decoded->payload)] {
+                        return translate::binary_to_json(type, payload);
+                    });
+                if (json_opt) {
+                    handle_notification_pretranslated(
+                        std::span<const uint8_t>(decoded->payload), *json_opt);
+                }
+            } else if (type == 22 || type == 25) {
+                // StorageFull / QuotaExceeded broadcast
+                auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+                    decoded->payload.size(),
+                    [type, payload = std::span<const uint8_t>(decoded->payload)] {
+                        return translate::binary_to_json(type, payload);
+                    });
+                if (json_opt) {
+                    route_broadcast_pretranslated(type, *json_opt);
+                } else {
+                    spdlog::warn("UDS: binary_to_json failed for broadcast type={}", type);
+                }
+            } else {
+                auto type_name = translate::type_to_string(type);
+                spdlog::debug("UDS: unhandled server-initiated message type={} ({})",
+                              type, type_name.value_or("unknown"));
+            }
+        } else {
+            // Client response: pass raw to route_response (HTTP handlers translate themselves).
+            route_response(type, std::move(decoded->payload), decoded->request_id);
+        }
     }
 }
 
@@ -513,31 +558,9 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
 
 void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
                                      uint32_t request_id) {
-    if (request_id == 0) {
-        // Server-initiated messages (Phase 104)
-        if (type == 21) {
-            // Notification: fan-out to subscribed sessions (D-06)
-            handle_notification(type, payload);
-            return;
-        }
-
-        if (type == 22 || type == 25) {
-            // StorageFull(22) / QuotaExceeded(25): broadcast to ALL sessions (D-08)
-            auto json_opt = translate::binary_to_json(type, payload);
-            if (!json_opt) {
-                spdlog::warn("UDS: binary_to_json failed for broadcast type={}", type);
-                return;
-            }
-            spdlog::debug("UDS: broadcasting type={} to all sessions", type);
-            dispatch_.broadcast(*json_opt);
-            return;
-        }
-
-        auto type_name = translate::type_to_string(type);
-        spdlog::debug("UDS: unhandled server-initiated message type={} ({})",
-                      type, type_name.value_or("unknown"));
-        return;
-    }
+    // request_id==0 (server-initiated) is now handled directly in read_loop()
+    // with pre-translated JSON via offload_if_large(). This path only handles
+    // client responses (request_id != 0).
 
     // Look up which client this response belongs to.
     auto pending = router_.resolve_response(request_id);
@@ -578,7 +601,52 @@ void UdsMultiplexer::route_response(uint8_t type, std::vector<uint8_t> payload,
 }
 
 // ---------------------------------------------------------------------------
-// Notification fan-out (Phase 104 D-06)
+// Pre-translated broadcast (Phase 114 -- offloaded binary_to_json in read_loop)
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::route_broadcast_pretranslated(uint8_t type, const nlohmann::json& json) {
+    spdlog::debug("UDS: broadcasting type={} to all sessions", type);
+    dispatch_.broadcast(json);
+}
+
+// ---------------------------------------------------------------------------
+// Pre-translated notification fan-out (Phase 114 -- offloaded binary_to_json in read_loop)
+// ---------------------------------------------------------------------------
+
+void UdsMultiplexer::handle_notification_pretranslated(
+    std::span<const uint8_t> payload, const nlohmann::json& json) {
+    if (payload.size() < 32) return;
+
+    std::array<uint8_t, 32> ns{};
+    std::memcpy(ns.data(), payload.data(), 32);
+
+    if (!tracker_) return;
+
+    auto session_ids = tracker_->get_subscribers(ns);
+    if (session_ids.empty()) return;
+
+    // FEAT-01: Source exclusion
+    std::optional<uint64_t> writer_session;
+    if (payload.size() >= 64) {
+        BlobHash32 blob_hash{};
+        std::memcpy(blob_hash.data(), payload.data() + 32, 32);
+        writer_session = write_tracker_.lookup_and_remove(blob_hash);
+    }
+
+    spdlog::debug("notification: fan-out to {} subscribers for namespace {}",
+                  session_ids.size(), util::to_hex(ns));
+
+    for (uint64_t sid : session_ids) {
+        if (writer_session && sid == *writer_session) {
+            spdlog::debug("notification: source exclusion skipped session {}", sid);
+            continue;
+        }
+        dispatch_.send_json(sid, json);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Notification fan-out (Phase 104 D-06) -- kept for non-offloaded callers
 // ---------------------------------------------------------------------------
 
 void UdsMultiplexer::handle_notification(uint8_t type, std::span<const uint8_t> payload) {

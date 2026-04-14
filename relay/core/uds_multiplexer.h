@@ -7,6 +7,7 @@
 
 #include <asio.hpp>
 #include <asio/local/stream_protocol.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
 #include <deque>
@@ -96,6 +97,13 @@ private:
 
     /// Handle Notification (type 21) fan-out to subscribed sessions (Phase 104 D-06).
     void handle_notification(uint8_t type, std::span<const uint8_t> payload);
+
+    /// Route a server-initiated response with pre-translated JSON (Phase 114).
+    /// Used when read_loop() has already offloaded binary_to_json().
+    void route_broadcast_pretranslated(uint8_t type, const nlohmann::json& json);
+
+    /// Handle notification with pre-translated JSON (Phase 114).
+    void handle_notification_pretranslated(std::span<const uint8_t> payload, const nlohmann::json& json);
 
     /// Replay all active subscriptions as a batched Subscribe to the node (D-10).
     void replay_subscriptions();
