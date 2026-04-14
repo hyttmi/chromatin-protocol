@@ -14,6 +14,8 @@ std::string TokenStore::create_session(std::vector<uint8_t> pubkey,
     RAND_bytes(random_bytes.data(), static_cast<int>(random_bytes.size()));
     std::string token = util::to_hex(random_bytes);
 
+    std::lock_guard lock(mu_);
+
     // Build session state
     auto id = next_id_++;
     HttpSessionState state;
@@ -33,6 +35,7 @@ std::string TokenStore::create_session(std::vector<uint8_t> pubkey,
 }
 
 HttpSessionState* TokenStore::lookup(const std::string& token) {
+    std::lock_guard lock(mu_);
     auto it = tokens_.find(token);
     if (it == tokens_.end()) {
         return nullptr;
@@ -42,6 +45,7 @@ HttpSessionState* TokenStore::lookup(const std::string& token) {
 }
 
 HttpSessionState* TokenStore::lookup_by_id(uint64_t session_id) {
+    std::lock_guard lock(mu_);
     auto it = id_to_token_.find(session_id);
     if (it == id_to_token_.end()) {
         return nullptr;
@@ -54,6 +58,7 @@ HttpSessionState* TokenStore::lookup_by_id(uint64_t session_id) {
 }
 
 const std::string* TokenStore::get_token(uint64_t session_id) const {
+    std::lock_guard lock(mu_);
     auto it = id_to_token_.find(session_id);
     if (it == id_to_token_.end()) {
         return nullptr;
@@ -62,6 +67,7 @@ const std::string* TokenStore::get_token(uint64_t session_id) const {
 }
 
 void TokenStore::remove_session(uint64_t session_id) {
+    std::lock_guard lock(mu_);
     auto it = id_to_token_.find(session_id);
     if (it == id_to_token_.end()) {
         return;
@@ -71,6 +77,7 @@ void TokenStore::remove_session(uint64_t session_id) {
 }
 
 void TokenStore::remove_by_token(const std::string& token) {
+    std::lock_guard lock(mu_);
     auto it = tokens_.find(token);
     if (it == tokens_.end()) {
         return;
@@ -80,6 +87,7 @@ void TokenStore::remove_by_token(const std::string& token) {
 }
 
 std::vector<uint64_t> TokenStore::reap_idle(std::chrono::seconds timeout) {
+    std::lock_guard lock(mu_);
     auto now = std::chrono::steady_clock::now();
     std::vector<uint64_t> reaped_ids;
 
@@ -103,6 +111,7 @@ std::vector<uint64_t> TokenStore::reap_idle(std::chrono::seconds timeout) {
 }
 
 size_t TokenStore::count() const {
+    std::lock_guard lock(mu_);
     return tokens_.size();
 }
 

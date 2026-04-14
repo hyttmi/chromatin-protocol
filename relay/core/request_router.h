@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 
@@ -19,7 +20,8 @@ struct PendingRequest {
 /// Maps relay-scoped request_ids to client sessions and their original request_ids.
 /// Used for multiplexing multiple client requests through a single UDS connection.
 ///
-/// NOT thread-safe -- all access must be on the same strand/thread.
+/// Thread-safe via mutex -- accessed from multiple io_context threads
+/// (HTTP handler coroutines register, UDS read_loop resolves).
 class RequestRouter {
 public:
     /// Register a client request. Returns relay-scoped request_id.
@@ -52,6 +54,7 @@ public:
     void set_next_relay_rid(uint32_t val) { next_relay_rid_ = val; }
 
 private:
+    mutable std::mutex mu_;
     uint32_t next_relay_rid_ = 1;  // Per D-07
     std::unordered_map<uint32_t, PendingRequest> pending_;  // Per D-08
 };

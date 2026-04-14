@@ -28,7 +28,7 @@ struct HttpSessionState {
 };
 
 /// Maps opaque hex tokens to HTTP session state.
-/// NOT thread-safe -- accessed from a single strand.
+/// Thread-safe via mutex -- accessed from multiple io_context threads.
 class TokenStore {
 public:
     /// Create a new session. Returns hex token (64 chars).
@@ -74,7 +74,11 @@ public:
         }
     }
 
+    /// Expose mutex for callers that need to hold the lock across multiple operations.
+    std::mutex& mutex() { return mu_; }
+
 private:
+    mutable std::mutex mu_;
     std::unordered_map<std::string, HttpSessionState> tokens_;       // token -> state
     std::unordered_map<uint64_t, std::string> id_to_token_;          // session_id -> token
     uint64_t next_id_ = 1;
