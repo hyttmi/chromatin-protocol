@@ -16,7 +16,7 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 **Target features:**
 - Single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers)
-- Thread pool for CPU-heavy work (TLS handshake, ML-DSA-87 verify, large JSON) via crypto::offload() pattern
+- Thread pool for CPU-heavy work (ML-DSA-87 verify) via crypto::offload() pattern
 - All shared state accessed from single event loop thread — zero races, zero mutexes, zero strands
 - Remove broken multi-threaded strand/mutex code from v3.1.0 Phase 999.10
 - ASAN-clean under benchmark at 100 concurrent clients
@@ -25,6 +25,8 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 **Architecture:** Same pattern as the node's PeerManager — single-threaded event loop for I/O, thread pool for crypto. Proven in this codebase.
 
 **Context:** v3.1.0 shipped HTTP+SSE transport (Phase 999.9) replacing WebSocket. Transport layer is correct. The multi-threaded io_context (hardware_concurrency threads) caused systemic ASAN heap-use-after-free under concurrent load. Strand confinement (Phase 999.10) failed — strands don't survive co_await on promise timers.
+
+**Phase 111 complete (2026-04-14):** Single-threaded rewrite done. 1 ioc.run() thread + asio::thread_pool offload. All strands/mutexes removed from relay code. ML-DSA-87 verify offloads via offload() with transfer-back. 377 relay tests pass. TLS and JSON stay inline (D-03/D-04/D-05).
 
 ## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
 
