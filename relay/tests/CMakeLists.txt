@@ -118,3 +118,15 @@ target_link_libraries(test_sse_writer PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_sse_writer)
+
+# ===========================================================================
+# Offload threshold tests (Phase 114)
+# ===========================================================================
+add_executable(test_offload_if_large
+  test_offload_if_large.cpp
+)
+target_link_libraries(test_offload_if_large PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_offload_if_large)
