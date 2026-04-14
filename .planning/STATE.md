@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-14)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 112 — asan-verification
+**Current focus:** Phase 113 — performance-benchmarking
 
 ## Current Position
 
-Phase: 113
-Plan: Not started
-Status: Executing Phase 112
-Last activity: 2026-04-14
+Phase: 113 (performance-benchmarking) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 113
+Last activity: 2026-04-14 -- Phase 113 execution started
 
 Progress: [----------] 0%
 
