@@ -12,7 +12,7 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
 
 - [x] **Phase 111: Single-Threaded Rewrite** - Change relay to 1 io_context thread + thread pool, remove all strand/mutex code, simplify handlers (completed 2026-04-14)
 - [x] **Phase 112: ASAN Verification** - Run relay under ASAN at 1/10/100 concurrent clients, fix any issues, verify signal handling (completed 2026-04-14)
-- [x] **Phase 113: Performance Benchmarking** - Run all 4 benchmark workloads, generate baseline report (completed 2026-04-14)
+- [ ] **Phase 113: Performance Benchmarking** - Run all 4 benchmark workloads, generate baseline report
 
 ## Phase Details
 
@@ -56,10 +56,11 @@ Plans:
   2. Latency benchmark measures per-operation round-trip time (p50/p95/p99) through HTTP relay with results recorded
   3. Large blob benchmark demonstrates successful write+read at 1 MiB, 10 MiB, 50 MiB, and 100 MiB with MiB/sec throughput recorded
   4. Mixed workload benchmark runs concurrent small metadata queries alongside large blob transfers and reports small-query latency degradation under load
-**Plans**: 1 plan
+**Plans**: 2 plans
 
 Plans:
-- [x] 113-01-PLAN.md — Benchmark orchestration script + run all 4 PERF workloads
+- [x] 113-01-PLAN.md — Benchmark orchestration script (tooling creation)
+- [ ] 113-02-PLAN.md — Execute benchmark and produce baseline report (gap closure)
 
 ## Progress
 
@@ -70,4 +71,4 @@ Phases execute in numeric order: 111 -> 112 -> 113
 |-------|----------------|--------|-----------|
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
-| 113. Performance Benchmarking | 1/1 | Complete   | 2026-04-14 |
+| 113. Performance Benchmarking | 1/2 | Gap Closure | - |
