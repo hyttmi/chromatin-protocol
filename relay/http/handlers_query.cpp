@@ -126,7 +126,9 @@ asio::awaitable<HttpResponse> forward_query(
     asio::thread_pool* pool) {
 
     // 1. Translate JSON -> binary.
-    auto result = translate::json_to_binary(query_json);
+    // Query JSON is always small (sub-KB) -- size 0 ensures inline per D-08.
+    auto result = co_await util::offload_if_large(*pool, ioc, 0,
+        [&] { return translate::json_to_binary(query_json); });
     if (!result) {
         co_return HttpResponse::error(400, "translation_error", "failed to translate request");
     }
@@ -165,8 +167,10 @@ asio::awaitable<HttpResponse> forward_query(
     }
 
     // 7. Translate response binary -> JSON.
-    auto response_json = translate::binary_to_json(
-        response->type, std::span<const uint8_t>(response->payload));
+    auto response_json = co_await util::offload_if_large(*pool, ioc,
+        response->payload.size(),
+        [&] { return translate::binary_to_json(
+            response->type, std::span<const uint8_t>(response->payload)); });
     if (!response_json) {
         co_return HttpResponse::error(502, "translation_error",
                                       "failed to translate node response");

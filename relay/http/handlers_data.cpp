@@ -155,8 +155,10 @@ asio::awaitable<HttpResponse> DataHandlers::handle_blob_write(
     }
 
     // 8. Translate WriteAck binary -> JSON.
-    auto json_opt = translate::binary_to_json(result->type,
-        std::span<const uint8_t>(result->payload));
+    auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+        result->payload.size(),
+        [&] { return translate::binary_to_json(result->type,
+            std::span<const uint8_t>(result->payload)); });
     if (!json_opt) {
         co_return HttpResponse::error(502, "decode_error",
             "failed to decode WriteAck response");
@@ -279,8 +281,10 @@ asio::awaitable<HttpResponse> DataHandlers::handle_blob_delete(
     }
 
     // 8. Translate DeleteAck binary -> JSON.
-    auto json_opt = translate::binary_to_json(result->type,
-        std::span<const uint8_t>(result->payload));
+    auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+        result->payload.size(),
+        [&] { return translate::binary_to_json(result->type,
+            std::span<const uint8_t>(result->payload)); });
     if (!json_opt) {
         co_return HttpResponse::error(502, "decode_error",
             "failed to decode DeleteAck response");
@@ -324,7 +328,8 @@ asio::awaitable<HttpResponse> DataHandlers::handle_batch_read(
     }
 
     // 4. Translate JSON -> binary via translator.
-    auto tr = translate::json_to_binary(translate_input);
+    auto tr = co_await util::offload_if_large(pool_, ioc_, body.size(),
+        [&] { return translate::json_to_binary(translate_input); });
     if (!tr) {
         co_return HttpResponse::error(400, "translate_error",
             "failed to encode batch read request");
@@ -354,8 +359,10 @@ asio::awaitable<HttpResponse> DataHandlers::handle_batch_read(
 
     // 8. Translate BatchReadResponse binary -> JSON.
     //    Translator produces JSON with base64-encoded blobs.
-    auto json_opt = translate::binary_to_json(result->type,
-        std::span<const uint8_t>(result->payload));
+    auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+        result->payload.size(),
+        [&] { return translate::binary_to_json(result->type,
+            std::span<const uint8_t>(result->payload)); });
     if (!json_opt) {
         co_return HttpResponse::error(502, "decode_error",
             "failed to decode BatchReadResponse");
