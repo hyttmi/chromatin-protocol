@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 114-02-PLAN.md
-last_updated: "2026-04-14T10:34:57.635Z"
+stopped_at: Phase 115 context gathered
+last_updated: "2026-04-14T11:46:12.314Z"
 last_activity: 2026-04-14
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
   total_plans: 8
   completed_plans: 8
@@ -63,6 +63,7 @@ Progress: [----------] 0%
 ### Roadmap Evolution
 
 - Phase 114 added: Relay Thread Pool Offload — fix event loop starvation by offloading CPU-heavy work to thread pool
+- Phase 115 added: Chunked Streaming for Large Blobs — eliminate full-blob buffering, implement chunked I/O through relay
 
 ### Decisions
 
@@ -91,6 +92,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-14T10:34:57.632Z
-Stopped at: Completed 114-02-PLAN.md
-Resume file: None
+Last session: 2026-04-14T11:46:12.310Z
+Stopped at: Phase 115 context gathered
+Resume file: .planning/phases/115-chunked-streaming-for-large-blobs/115-CONTEXT.md
