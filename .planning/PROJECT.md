@@ -393,7 +393,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-11 after Phase 107 (Message Type Verification) complete*
+*Last updated: 2026-04-14 after Phase 112 (ASAN Verification) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
