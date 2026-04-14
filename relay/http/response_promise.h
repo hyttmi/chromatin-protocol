@@ -2,6 +2,7 @@
 
 #include <asio.hpp>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -81,20 +82,25 @@ private:
 ///
 /// Thread-safe via mutex -- accessed from multiple io_context threads
 /// (HTTP handler coroutines register/remove, UDS read_loop resolves).
-/// The map stores non-owning pointers. Each ResponsePromise is stack-allocated
-/// by the HTTP handler coroutine, whose lifetime spans the full request.
+///
+/// Promises are shared_ptr-owned by both the map and the handler coroutine.
+/// This prevents use-after-free when the handler coroutine ends (timeout/disconnect)
+/// while the UDS thread is resolving the same promise.
 class ResponsePromiseMap {
 public:
-    /// Register a promise for a relay request ID.
-    void register_promise(uint32_t relay_rid, ResponsePromise* promise) {
+    /// Create and register a promise for a relay request ID.
+    /// Returns shared_ptr that the handler coroutine must hold.
+    std::shared_ptr<ResponsePromise> create_promise(uint32_t relay_rid, asio::any_io_executor executor) {
+        auto promise = std::make_shared<ResponsePromise>(executor);
         std::lock_guard lock(mu_);
         promises_[relay_rid] = promise;
+        return promise;
     }
 
     /// Resolve a promise by relay_rid. Returns true if found and resolved.
     /// Removes the entry from the map after resolution.
     bool resolve(uint32_t relay_rid, uint8_t type, std::vector<uint8_t> payload) {
-        ResponsePromise* p = nullptr;
+        std::shared_ptr<ResponsePromise> p;
         {
             std::lock_guard lock(mu_);
             auto it = promises_.find(relay_rid);
@@ -102,7 +108,7 @@ public:
             p = it->second;
             promises_.erase(it);
         }
-        // Resolve outside lock -- timer cancel is thread-safe in Asio
+        // Resolve outside lock -- shared_ptr keeps promise alive
         p->resolve(type, std::move(payload));
         return true;
     }
@@ -130,7 +136,7 @@ public:
 
 private:
     mutable std::mutex mu_;
-    std::unordered_map<uint32_t, ResponsePromise*> promises_;
+    std::unordered_map<uint32_t, std::shared_ptr<ResponsePromise>> promises_;
 };
 
 } // namespace chromatindb::relay::http

@@ -173,19 +173,17 @@ TEST_CASE("Multiple promises wake independently", "[response_promise]") {
 // ResponsePromiseMap tests
 // =============================================================================
 
-TEST_CASE("ResponsePromiseMap register and resolve", "[response_promise_map]") {
+TEST_CASE("ResponsePromiseMap create and resolve", "[response_promise_map]") {
     asio::io_context ioc;
-
-    ResponsePromise promise(ioc.get_executor());
     ResponsePromiseMap map;
 
-    map.register_promise(100, &promise);
+    auto promise = map.create_promise(100, ioc.get_executor());
     REQUIRE(map.size() == 1);
 
     bool resolved = map.resolve(100, 8, {0xDE, 0xAD});
     REQUIRE(resolved);
-    REQUIRE(map.size() == 0);  // Removed after resolve
-    REQUIRE(promise.is_resolved());
+    REQUIRE(map.size() == 0);
+    REQUIRE(promise->is_resolved());
 }
 
 TEST_CASE("ResponsePromiseMap resolve unknown rid returns false", "[response_promise_map]") {
@@ -197,11 +195,9 @@ TEST_CASE("ResponsePromiseMap resolve unknown rid returns false", "[response_pro
 
 TEST_CASE("ResponsePromiseMap remove", "[response_promise_map]") {
     asio::io_context ioc;
-
-    ResponsePromise promise(ioc.get_executor());
     ResponsePromiseMap map;
 
-    map.register_promise(42, &promise);
+    auto promise = map.create_promise(42, ioc.get_executor());
     REQUIRE(map.size() == 1);
 
     map.remove(42);
@@ -214,28 +210,24 @@ TEST_CASE("ResponsePromiseMap remove", "[response_promise_map]") {
 
 TEST_CASE("ResponsePromiseMap cancel_all", "[response_promise_map]") {
     asio::io_context ioc;
-
-    ResponsePromise p1(ioc.get_executor());
-    ResponsePromise p2(ioc.get_executor());
-    ResponsePromise p3(ioc.get_executor());
-
     ResponsePromiseMap map;
-    map.register_promise(1, &p1);
-    map.register_promise(2, &p2);
-    map.register_promise(3, &p3);
+
+    auto p1 = map.create_promise(1, ioc.get_executor());
+    auto p2 = map.create_promise(2, ioc.get_executor());
+    auto p3 = map.create_promise(3, ioc.get_executor());
 
     REQUIRE(map.size() == 3);
 
     // Start waiting on all promises
     std::optional<ResponseData> r1, r2, r3;
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
-        r1 = co_await p1.wait(std::chrono::seconds(60));
+        r1 = co_await p1->wait(std::chrono::seconds(60));
     }, asio::detached);
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
-        r2 = co_await p2.wait(std::chrono::seconds(60));
+        r2 = co_await p2->wait(std::chrono::seconds(60));
     }, asio::detached);
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
-        r3 = co_await p3.wait(std::chrono::seconds(60));
+        r3 = co_await p3->wait(std::chrono::seconds(60));
     }, asio::detached);
 
     ioc.poll();
@@ -254,17 +246,13 @@ TEST_CASE("ResponsePromiseMap cancel_all", "[response_promise_map]") {
 
 TEST_CASE("ResponsePromiseMap size tracks state", "[response_promise_map]") {
     asio::io_context ioc;
-
-    ResponsePromise p1(ioc.get_executor());
-    ResponsePromise p2(ioc.get_executor());
-
     ResponsePromiseMap map;
     REQUIRE(map.size() == 0);
 
-    map.register_promise(1, &p1);
+    auto p1 = map.create_promise(1, ioc.get_executor());
     REQUIRE(map.size() == 1);
 
-    map.register_promise(2, &p2);
+    auto p2 = map.create_promise(2, ioc.get_executor());
     REQUIRE(map.size() == 2);
 
     map.resolve(1, 8, {});
@@ -276,10 +264,9 @@ TEST_CASE("ResponsePromiseMap size tracks state", "[response_promise_map]") {
 
 TEST_CASE("ResponsePromiseMap resolve passes data through to promise", "[response_promise_map]") {
     asio::io_context ioc;
-
-    ResponsePromise promise(ioc.get_executor());
     ResponsePromiseMap map;
-    map.register_promise(77, &promise);
+
+    auto promise = map.create_promise(77, ioc.get_executor());
 
     std::vector<uint8_t> big_payload(1024, 0xCC);
     map.resolve(77, 12, big_payload);
@@ -287,7 +274,7 @@ TEST_CASE("ResponsePromiseMap resolve passes data through to promise", "[respons
     // Verify the promise got the data by co_awaiting
     std::optional<ResponseData> result;
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
-        result = co_await promise.wait(std::chrono::seconds(1));
+        result = co_await promise->wait(std::chrono::seconds(1));
     }, asio::detached);
 
     ioc.run();

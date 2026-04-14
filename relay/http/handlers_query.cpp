@@ -135,9 +135,8 @@ asio::awaitable<HttpResponse> forward_query(
     // 3. Register request for response routing.
     uint32_t relay_rid = router.register_request(session_id, 0, result->wire_type);
 
-    // 4. Create ResponsePromise and register it.
-    ResponsePromise promise(ioc.get_executor());
-    promises.register_promise(relay_rid, &promise);
+    // 4. Create ResponsePromise and register it (shared_ptr for thread safety).
+    auto promise = promises.create_promise(relay_rid, ioc.get_executor());
 
     // 5. Encode transport envelope and send to node.
     auto transport_msg = wire::TransportCodec::encode(
@@ -155,7 +154,7 @@ asio::awaitable<HttpResponse> forward_query(
         : DEFAULT_REQUEST_TIMEOUT_SECS;
     if (timeout_secs == 0) timeout_secs = DEFAULT_REQUEST_TIMEOUT_SECS;
 
-    auto response = co_await promise.wait(std::chrono::seconds(timeout_secs));
+    auto response = co_await promise->wait(std::chrono::seconds(timeout_secs));
     if (!response) {
         promises.remove(relay_rid);  // Clean up if still registered
         co_return HttpResponse::error(504, "timeout", "node did not respond in time");

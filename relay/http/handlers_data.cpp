@@ -79,8 +79,7 @@ asio::awaitable<std::optional<ResponseData>> DataHandlers::send_and_await(
     std::vector<uint8_t> transport_msg, uint32_t relay_rid) {
 
     auto executor = co_await asio::this_coro::executor;
-    ResponsePromise promise(executor);
-    promises_.register_promise(relay_rid, &promise);
+    auto promise = promises_.create_promise(relay_rid, executor);
 
     // Send via UDS.
     bool sent = uds_mux_.send(std::move(transport_msg));
@@ -92,7 +91,7 @@ asio::awaitable<std::optional<ResponseData>> DataHandlers::send_and_await(
     // Await response with timeout.
     auto timeout_sec = request_timeout_.load(std::memory_order_relaxed);
     if (timeout_sec == 0) timeout_sec = 10;  // Default fallback.
-    auto result = co_await promise.wait(std::chrono::seconds(timeout_sec));
+    auto result = co_await promise->wait(std::chrono::seconds(timeout_sec));
 
     // Cleanup: promise may not have been removed if it timed out.
     promises_.remove(relay_rid);
