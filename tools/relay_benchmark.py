@@ -424,7 +424,7 @@ async def run_latency_benchmark(
             if resp.status_code == 200:
                 if i >= warmup:
                     write_lats.append(ns_to_ms(t1 - t0))
-                blob_hash = resp.json().get("blob_hash", "")
+                blob_hash = resp.json().get("hash", "")
                 if blob_hash:
                     blob_hashes.append(blob_hash)
 
@@ -596,7 +596,7 @@ async def run_large_blob_benchmark(
                     )
                     continue
 
-                blob_hash = resp.json().get("blob_hash", "")
+                blob_hash = resp.json().get("hash", "")
                 write_mib_sec = size_mib / write_time if write_time > 0 else 0
                 print(f"    Write: {write_time:.2f}s ({write_mib_sec:.1f} MiB/s)")
             except Exception as exc:
@@ -752,7 +752,7 @@ async def run_mixed_workload_benchmark(
                 "Content-Type": "application/octet-stream",
             },
         )
-        blob_hash = resp.json().get("blob_hash", "0" * 64)
+        blob_hash = resp.json().get("hash", "0" * 64)
 
     # -- Baseline: small queries only --
     print(f"  PERF-04: Baseline (small queries only, {small_clients} clients, {duration_s}s)...")
