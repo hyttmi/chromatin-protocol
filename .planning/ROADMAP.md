@@ -11,7 +11,7 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
 - v4.0.0 starts at Phase 111
 
 - [x] **Phase 111: Single-Threaded Rewrite** - Change relay to 1 io_context thread + thread pool, remove all strand/mutex code, simplify handlers (completed 2026-04-14)
-- [ ] **Phase 112: ASAN Verification** - Run relay under ASAN at 1/10/100 concurrent clients, fix any issues, verify signal handling
+- [x] **Phase 112: ASAN Verification** - Run relay under ASAN at 1/10/100 concurrent clients, fix any issues, verify signal handling (completed 2026-04-14)
 - [ ] **Phase 113: Performance Benchmarking** - Run all 4 benchmark workloads, generate baseline report
 
 ## Phase Details
@@ -45,7 +45,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 112-01-PLAN.md — LSAN suppression file + ASAN test harness + run verification
+- [x] 112-01-PLAN.md — LSAN suppression file + ASAN test harness + run verification
 
 ### Phase 113: Performance Benchmarking
 **Goal**: Relay performance baselines are measured and recorded under four workload types
@@ -69,5 +69,5 @@ Phases execute in numeric order: 111 -> 112 -> 113
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
-| 112. ASAN Verification | 0/1 | Not started | - |
+| 112. ASAN Verification | 1/1 | Complete   | 2026-04-14 |
 | 113. Performance Benchmarking | 0/TBD | Not started | - |

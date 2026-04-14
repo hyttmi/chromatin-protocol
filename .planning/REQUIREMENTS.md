@@ -16,8 +16,8 @@
 ### Verification
 
 - [x] **VER-01**: Relay compiles and all unit tests pass with single-threaded model
-- [ ] **VER-02**: Relay runs ASAN-clean under benchmark tool at 1, 10, and 100 concurrent HTTP clients with zero heap-use-after-free or data race reports
-- [ ] **VER-03**: Relay handles SIGHUP config reload and SIGTERM graceful shutdown correctly under single-threaded model
+- [x] **VER-02**: Relay runs ASAN-clean under benchmark tool at 1, 10, and 100 concurrent HTTP clients with zero heap-use-after-free or data race reports
+- [x] **VER-03**: Relay handles SIGHUP config reload and SIGTERM graceful shutdown correctly under single-threaded model
 
 ### Performance Benchmarking
 
@@ -45,8 +45,8 @@
 | CONC-04 | Phase 111 | Complete |
 | CONC-05 | Phase 111 | Complete |
 | VER-01 | Phase 111 | Complete |
-| VER-02 | Phase 112 | Pending |
-| VER-03 | Phase 112 | Pending |
+| VER-02 | Phase 112 | Complete |
+| VER-03 | Phase 112 | Complete |
 | PERF-01 | Phase 113 | Pending |
 | PERF-02 | Phase 113 | Pending |
 | PERF-03 | Phase 113 | Pending |
