@@ -115,13 +115,13 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 
 ### Thread Safety Overhaul (Phase 999.10)
 
-- [ ] **STRAND-01**: Single global asio::strand created in relay_main.cpp via asio::make_strand(ioc)
-- [ ] **STRAND-02**: UdsMultiplexer accepts strand reference; connect_loop, read_loop, cleanup_loop, and drain_send_queue all co_spawn on the strand
-- [ ] **STRAND-03**: No co_spawn(ioc_, ...) remains in uds_multiplexer.cpp -- all coroutine spawning uses strand_
-- [ ] **STRAND-04**: std::mutex removed from RequestRouter -- no lock_guard, no #include <mutex>
-- [ ] **STRAND-05**: std::mutex removed from WriteTracker, SubscriptionTracker, TokenStore, ResponsePromiseMap -- no lock_guard, no #include <mutex> in any of these files
-- [ ] **STRAND-06**: ResponsePromiseMap retains shared_ptr ownership of ResponsePromise (lifetime fix independent of threading)
-- [ ] **STRAND-07**: Idle reaper coroutine in relay_main.cpp co_spawns on the strand
+- [x] **STRAND-01**: Single global asio::strand created in relay_main.cpp via asio::make_strand(ioc)
+- [x] **STRAND-02**: UdsMultiplexer accepts strand reference; connect_loop, read_loop, cleanup_loop, and drain_send_queue all co_spawn on the strand
+- [x] **STRAND-03**: No co_spawn(ioc_, ...) remains in uds_multiplexer.cpp -- all coroutine spawning uses strand_
+- [x] **STRAND-04**: std::mutex removed from RequestRouter -- no lock_guard, no #include <mutex>
+- [x] **STRAND-05**: std::mutex removed from WriteTracker, SubscriptionTracker, TokenStore, ResponsePromiseMap -- no lock_guard, no #include <mutex> in any of these files
+- [x] **STRAND-06**: ResponsePromiseMap retains shared_ptr ownership of ResponsePromise (lifetime fix independent of threading)
+- [x] **STRAND-07**: Idle reaper coroutine in relay_main.cpp co_spawns on the strand
 - [ ] **STRAND-08**: HTTP data handlers (blob write/read/delete/batch_read) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap, WriteTracker
 - [ ] **STRAND-09**: HTTP query handlers (forward_query) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap
 - [ ] **STRAND-10**: HTTP pubsub handlers (subscribe/unsubscribe) converted to async coroutines and co_await asio::post(strand) before touching SubscriptionTracker and UdsMultiplexer::send
@@ -227,13 +227,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HTTP-29 | Phase 999.9 | Complete |
 | HTTP-30 | Phase 999.9 | Complete |
 | HTTP-31 | Phase 999.9 | Complete |
-| STRAND-01 | Phase 999.10 | Pending |
-| STRAND-02 | Phase 999.10 | Pending |
-| STRAND-03 | Phase 999.10 | Pending |
-| STRAND-04 | Phase 999.10 | Pending |
-| STRAND-05 | Phase 999.10 | Pending |
-| STRAND-06 | Phase 999.10 | Pending |
-| STRAND-07 | Phase 999.10 | Pending |
+| STRAND-01 | Phase 999.10 | Complete |
+| STRAND-02 | Phase 999.10 | Complete |
+| STRAND-03 | Phase 999.10 | Complete |
+| STRAND-04 | Phase 999.10 | Complete |
+| STRAND-05 | Phase 999.10 | Complete |
+| STRAND-06 | Phase 999.10 | Complete |
+| STRAND-07 | Phase 999.10 | Complete |
 | STRAND-08 | Phase 999.10 | Pending |
 | STRAND-09 | Phase 999.10 | Pending |
 | STRAND-10 | Phase 999.10 | Pending |

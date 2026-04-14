@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: v2.2.0 shipped
-last_updated: "2026-04-13T16:03:13.835Z"
-last_activity: 2026-04-09
+status: in_progress
+last_updated: "2026-04-14T02:56:39Z"
+last_activity: 2026-04-14
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 33
-  completed_plans: 34
+  completed_plans: 35
   percent: 100
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** v2.2.0 milestone complete. Planning next milestone.
+**Current focus:** v3.1.0 Relay Live Hardening -- thread-safety overhaul for multi-threaded HTTP.
 
 ## Current Position
 
-Phase: N/A (milestone complete)
-Plan: N/A
-Status: v2.2.0 shipped
-Last activity: 2026-04-09
+Phase: 999.10-relay-thread-safety-overhaul-for-multi-threaded-http
+Plan: 01 of 02 complete
+Status: Plan 01 complete, Plan 02 pending
+Last activity: 2026-04-14
 
-Progress: [##########] 100%
+Progress: [#####-----] 50%
 
 ## Accumulated Context
 
@@ -39,6 +39,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
 
 - [Phase 110]: httpx AsyncClient for benchmark HTTP, FlatBuffer manual vtable construction, UDS baseline deferred
+- [Phase 999.10-01]: Global strand via asio::make_strand(ioc), strand passed by reference to UdsMultiplexer, shared_ptr preserved in ResponsePromiseMap (lifetime fix)
 
 ### Pending Todos
 

@@ -192,5 +192,5 @@ Plans:
   4. Relay runs ASAN-clean under benchmark at 100 concurrent clients
 **Plans**: 2 plans
 Plans:
-- [ ] 999.10-01-PLAN.md — Create strand in relay_main, bind UDS coroutines to strand, remove all mutexes from 5 shared data structures
+- [x] 999.10-01-PLAN.md — Create strand in relay_main, bind UDS coroutines to strand, remove all mutexes from 5 shared data structures
 - [ ] 999.10-02-PLAN.md — Wire strand into HTTP data/query/pubsub/auth handlers with post-to-strand pattern
