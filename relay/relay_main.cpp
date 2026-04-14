@@ -15,6 +15,7 @@
 #include "relay/http/token_store.h"
 #include "relay/identity/relay_identity.h"
 #include "relay/util/endian.h"
+#include "relay/util/thread_pool.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
 
@@ -209,18 +210,19 @@ int main(int argc, char* argv[]) {
                      : std::to_string(cfg.allowed_client_keys.size()) + " keys");
 
     // =========================================================================
-    // 5. Create io_context + global strand for shared state serialization
+    // 5. Create io_context + offload thread pool
     // =========================================================================
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
+    asio::thread_pool offload_pool(std::thread::hardware_concurrency() > 0
+                                       ? std::thread::hardware_concurrency() : 2);
 
     // =========================================================================
     // 6. Shared atomics for SIGHUP-reloadable settings
     // =========================================================================
     std::atomic<bool> stopping{false};
-    std::atomic<uint32_t> rate_limit_rate{cfg.rate_limit_messages_per_sec};
-    std::atomic<uint32_t> request_timeout{cfg.request_timeout_seconds};
-    std::atomic<uint32_t> max_blob_size{cfg.max_blob_size_bytes};
+    uint32_t rate_limit_rate = cfg.rate_limit_messages_per_sec;
+    uint32_t request_timeout = cfg.request_timeout_seconds;
+    uint32_t max_blob_size = cfg.max_blob_size_bytes;
 
     // =========================================================================
     // 7. Create RequestRouter
@@ -272,13 +274,11 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     // Auth routes (public, no auth required) -- D-04, D-05, D-06
     // Strand passed for ChallengeStore/TokenStore access serialization.
-    chromatindb::relay::http::register_auth_routes(router, authenticator, token_store, strand);
+    chromatindb::relay::http::register_auth_routes(router, authenticator, token_store, offload_pool, ioc);
 
     // Metrics route (public, no auth required) -- D-30
     chromatindb::relay::http::register_metrics_route(router, metrics_collector);
 
-    // Set strand on router for auth middleware in dispatch_async.
-    router.set_strand(&strand);
 
     // =========================================================================
     // 14. Create SessionDispatch, UdsMultiplexer, then handlers
@@ -294,9 +294,8 @@ int main(int argc, char* argv[]) {
             // Notification: push to SSE stream.
             // Use a session-local counter -- but SseWriter manages its own ID tracking.
             // We use 0 as event_id; SseWriter format_event uses it.
-            static std::atomic<uint64_t> notification_counter{0};
-            session->sse_writer->push_event(msg,
-                notification_counter.fetch_add(1, std::memory_order_relaxed) + 1);
+            static uint64_t notification_counter{0};
+            session->sse_writer->push_event(msg, ++notification_counter);
         }
         // If no SSE writer, notification is dropped (client hasn't connected SSE yet)
     };
@@ -313,7 +312,7 @@ int main(int argc, char* argv[]) {
 
     // Create UdsMultiplexer with SessionDispatch (per D-25)
     chromatindb::relay::core::UdsMultiplexer uds_mux(
-        ioc, strand, cfg.uds_path, identity, request_router, std::move(dispatch));
+        ioc, cfg.uds_path, identity, request_router, std::move(dispatch));
     uds_mux.set_tracker(&subscription_tracker);
     uds_mux.set_request_timeout(&request_timeout);
     uds_mux.set_metrics(&metrics_collector.metrics());
@@ -330,18 +329,18 @@ int main(int argc, char* argv[]) {
     // DataHandlers (blob write/read/delete, batch read) -- D-07, D-08, D-09, D-14
     chromatindb::relay::http::DataHandlers data_handlers(
         uds_mux, request_router, promise_map, uds_mux.write_tracker(),
-        max_blob_size, request_timeout, strand);
+        max_blob_size, request_timeout, ioc);
     chromatindb::relay::http::register_data_routes(router, data_handlers);
 
     // QueryHandlers (all query endpoints) -- D-10 through D-21
     chromatindb::relay::http::QueryHandlerDeps query_deps{
-        uds_mux, request_router, promise_map, ioc, &request_timeout, &strand};
+        uds_mux, request_router, promise_map, ioc, &request_timeout};
     chromatindb::relay::http::register_query_routes(router, query_deps);
 
     // PubSubHandlers (subscribe, unsubscribe, SSE events) -- D-22, D-23, D-24
     // Strand passed for SubscriptionTracker/UdsMultiplexer/TokenStore access.
     chromatindb::relay::http::PubSubHandlers pubsub_handlers(
-        subscription_tracker, uds_mux, token_store, strand);
+        subscription_tracker, uds_mux, token_store, ioc);
     chromatindb::relay::http::register_pubsub_routes(router, pubsub_handlers);
 
     // =========================================================================
@@ -397,7 +396,7 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     auto idle_reaper = [&]() -> asio::awaitable<void> {
         while (!stopping.load(std::memory_order_relaxed)) {
-            asio::steady_timer timer(strand);
+            asio::steady_timer timer(ioc);
             timer.expires_after(std::chrono::seconds(60));
             auto [ec] = co_await timer.async_wait(
                 asio::as_tuple(asio::use_awaitable));
@@ -431,7 +430,7 @@ int main(int argc, char* argv[]) {
             }
         }
     };
-    asio::co_spawn(strand, idle_reaper(), asio::detached);
+    asio::co_spawn(ioc, idle_reaper(), asio::detached);
 
     // =========================================================================
     // SIGTERM/SIGINT graceful shutdown
@@ -490,21 +489,21 @@ int main(int argc, char* argv[]) {
             http_server.set_max_connections(new_cfg.max_connections);
 
             // Reload rate limit
-            rate_limit_rate.store(new_cfg.rate_limit_messages_per_sec, std::memory_order_relaxed);
+            rate_limit_rate = new_cfg.rate_limit_messages_per_sec;
             spdlog::info("rate_limit reloaded: {}",
                          new_cfg.rate_limit_messages_per_sec == 0
                              ? std::string("disabled")
                              : std::to_string(new_cfg.rate_limit_messages_per_sec) + " msg/s");
 
             // Reload max blob size
-            max_blob_size.store(new_cfg.max_blob_size_bytes, std::memory_order_relaxed);
+            max_blob_size = new_cfg.max_blob_size_bytes;
             spdlog::info("max_blob_size reloaded: {}",
                          new_cfg.max_blob_size_bytes == 0
                              ? std::string("disabled (no limit)")
                              : std::to_string(new_cfg.max_blob_size_bytes) + " bytes");
 
             // Reload request timeout
-            request_timeout.store(new_cfg.request_timeout_seconds, std::memory_order_relaxed);
+            request_timeout = new_cfg.request_timeout_seconds;
             spdlog::info("request_timeout reloaded: {}",
                          new_cfg.request_timeout_seconds == 0
                              ? std::string("disabled")
@@ -525,26 +524,18 @@ int main(int argc, char* argv[]) {
     hup_signal.async_wait(hup_handler);
 
     // =========================================================================
-    // Thread pool (per D-21): hardware_concurrency() threads running ioc.run()
+    // Event loop: single thread (per D-01) + offload pool (per D-02)
     // =========================================================================
-    auto thread_count = std::thread::hardware_concurrency();
-    if (thread_count == 0) thread_count = 2;  // Fallback
-    spdlog::info("  threads: {}", thread_count);
+    auto hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 2;
+    spdlog::info("  event_loop: 1 thread");
+    spdlog::info("  offload_pool: {} threads", hw);
 
     spdlog::info("relay listening on {}:{}{}",
                 cfg.bind_address, cfg.bind_port,
                 cfg.tls_enabled() ? " (HTTPS)" : " (HTTP)");
 
-    std::vector<std::thread> threads;
-    threads.reserve(thread_count - 1);
-    for (unsigned i = 1; i < thread_count; ++i) {
-        threads.emplace_back([&ioc]() { ioc.run(); });
-    }
-    ioc.run();  // Main thread also runs
-
-    for (auto& t : threads) {
-        t.join();
-    }
+    ioc.run();  // Single thread, blocks until stop
 
     spdlog::info("relay stopped");
     return 0;
