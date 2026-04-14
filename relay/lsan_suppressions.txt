@@ -1,0 +1,24 @@
+# relay/lsan_suppressions.txt
+# Relay-specific LeakSanitizer suppressions for accepted shutdown leaks.
+# Usage: LSAN_OPTIONS=suppressions=relay/lsan_suppressions.txt
+#
+# Policy (D-06/D-07): Only suppress third-party library cleanup.
+# Any new leaks from relay/ code are bugs and must be fixed.
+
+# liboqs: ML-DSA-87 signature context allocated once, not freed at exit.
+leak:OQS_SIG_new
+leak:OQS_MEM_malloc
+
+# OpenSSL: global SSL library state and TLS contexts.
+leak:OPENSSL_init_ssl
+leak:SSL_CTX_new
+leak:OPENSSL_init_crypto
+
+# Asio: coroutine frame allocations from in-flight coroutines at shutdown.
+# SIGTERM triggers ioc.stop() after 2s drain, some coroutines may be suspended.
+leak:awaitable_handler
+leak:awaitable_frame
+
+# Asio: resolver results for UDS reconnect coroutines.
+leak:basic_resolver_results
+leak:resolve_query_op
