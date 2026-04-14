@@ -28,7 +28,10 @@ struct RelayMetrics;  // Forward declaration (metrics_collector.h)
 /// messages, and routes node responses to the correct WebSocket client.
 class UdsMultiplexer {
 public:
+    using Strand = asio::strand<asio::io_context::executor_type>;
+
     UdsMultiplexer(asio::io_context& ioc,
+                   Strand& strand,
                    std::string uds_path,
                    const identity::RelayIdentity& identity,
                    RequestRouter& router,
@@ -105,6 +108,7 @@ private:
     void send_timeout_error(const PendingRequest& pending);
 
     asio::io_context& ioc_;
+    Strand& strand_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
     RequestRouter& router_;

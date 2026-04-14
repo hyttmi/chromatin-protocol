@@ -209,9 +209,10 @@ int main(int argc, char* argv[]) {
                      : std::to_string(cfg.allowed_client_keys.size()) + " keys");
 
     // =========================================================================
-    // 5. Create io_context
+    // 5. Create io_context + global strand for shared state serialization
     // =========================================================================
     asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
 
     // =========================================================================
     // 6. Shared atomics for SIGHUP-reloadable settings
@@ -308,7 +309,7 @@ int main(int argc, char* argv[]) {
 
     // Create UdsMultiplexer with SessionDispatch (per D-25)
     chromatindb::relay::core::UdsMultiplexer uds_mux(
-        ioc, cfg.uds_path, identity, request_router, std::move(dispatch));
+        ioc, strand, cfg.uds_path, identity, request_router, std::move(dispatch));
     uds_mux.set_tracker(&subscription_tracker);
     uds_mux.set_request_timeout(&request_timeout);
     uds_mux.set_metrics(&metrics_collector.metrics());
@@ -391,7 +392,7 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     auto idle_reaper = [&]() -> asio::awaitable<void> {
         while (!stopping.load(std::memory_order_relaxed)) {
-            asio::steady_timer timer(ioc);
+            asio::steady_timer timer(strand);
             timer.expires_after(std::chrono::seconds(60));
             auto [ec] = co_await timer.async_wait(
                 asio::as_tuple(asio::use_awaitable));
@@ -425,7 +426,7 @@ int main(int argc, char* argv[]) {
             }
         }
     };
-    asio::co_spawn(ioc, idle_reaper(), asio::detached);
+    asio::co_spawn(strand, idle_reaper(), asio::detached);
 
     // =========================================================================
     // SIGTERM/SIGINT graceful shutdown

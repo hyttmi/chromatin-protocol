@@ -41,20 +41,22 @@ static constexpr size_t SIGNATURE_SIZE = 4627;
 // ---------------------------------------------------------------------------
 
 UdsMultiplexer::UdsMultiplexer(asio::io_context& ioc,
+                               Strand& strand,
                                std::string uds_path,
                                const identity::RelayIdentity& identity,
                                RequestRouter& router,
                                SessionDispatch dispatch)
     : ioc_(ioc)
+    , strand_(strand)
     , uds_path_(std::move(uds_path))
     , identity_(identity)
     , router_(router)
     , dispatch_(std::move(dispatch))
-    , socket_(ioc) {}
+    , socket_(strand_) {}
 
 void UdsMultiplexer::start() {
     auto self_ptr = this;
-    asio::co_spawn(ioc_,
+    asio::co_spawn(strand_,
         [self_ptr]() -> asio::awaitable<void> {
             co_await self_ptr->connect_loop();
         }, asio::detached);
@@ -92,7 +94,7 @@ bool UdsMultiplexer::send(std::vector<uint8_t> transport_msg) {
     if (!draining_) {
         draining_ = true;
         auto self_ptr = this;
-        asio::co_spawn(ioc_,
+        asio::co_spawn(strand_,
             [self_ptr]() -> asio::awaitable<void> {
                 co_await self_ptr->drain_send_queue();
             }, asio::detached);
@@ -129,7 +131,7 @@ asio::awaitable<void> UdsMultiplexer::drain_send_queue() {
 
         spdlog::info("UDS: send failure -- starting reconnect loop");
         auto self_ptr = this;
-        asio::co_spawn(ioc_,
+        asio::co_spawn(strand_,
             [self_ptr]() -> asio::awaitable<void> {
                 co_await self_ptr->connect_loop();
             }, asio::detached);
@@ -151,7 +153,7 @@ asio::awaitable<void> UdsMultiplexer::connect_loop() {
             // Close any previously-open socket.
             asio::error_code ignore_ec;
             socket_.close(ignore_ec);
-            socket_ = asio::local::stream_protocol::socket(ioc_);
+            socket_ = asio::local::stream_protocol::socket(strand_);
 
             asio::local::stream_protocol::endpoint ep(uds_path_);
             auto [ec] = co_await socket_.async_connect(ep, use_nothrow);
@@ -178,11 +180,11 @@ asio::awaitable<void> UdsMultiplexer::connect_loop() {
             // Spawn read loop and cleanup loop
             {
                 auto self_ptr = this;
-                asio::co_spawn(ioc_,
+                asio::co_spawn(strand_,
                     [self_ptr]() -> asio::awaitable<void> {
                         co_await self_ptr->read_loop();
                     }, asio::detached);
-                asio::co_spawn(ioc_,
+                asio::co_spawn(strand_,
                     [self_ptr]() -> asio::awaitable<void> {
                         co_await self_ptr->cleanup_loop();
                     }, asio::detached);
@@ -201,7 +203,7 @@ retry:
 
         spdlog::info("UDS reconnecting in {:.1f}s (attempt {})", jittered, attempt + 1);
 
-        asio::steady_timer timer(ioc_);
+        asio::steady_timer timer(strand_);
         timer.expires_after(std::chrono::milliseconds(
             static_cast<int64_t>(jittered * 1000)));
         co_await timer.async_wait(asio::use_awaitable);
@@ -483,7 +485,7 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
             // Re-enter connect_loop (infinite reconnect per D-09)
             spdlog::info("UDS: starting reconnect loop");
             auto self_ptr = this;
-            asio::co_spawn(ioc_,
+            asio::co_spawn(strand_,
                 [self_ptr]() -> asio::awaitable<void> {
                     co_await self_ptr->connect_loop();
                 }, asio::detached);
@@ -719,7 +721,7 @@ asio::awaitable<void> UdsMultiplexer::cleanup_loop() {
             ? std::max(timeout_sec / 2, 1u)
             : 60u;
 
-        asio::steady_timer timer(ioc_);
+        asio::steady_timer timer(strand_);
         timer.expires_after(std::chrono::seconds(interval));
         auto [ec] = co_await timer.async_wait(use_nothrow);
         if (ec || !connected_) break;
