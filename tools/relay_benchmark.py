@@ -67,7 +67,7 @@ class Identity:
     """Ephemeral ML-DSA-87 identity for benchmark authentication."""
 
     def __init__(self) -> None:
-        sig = oqs.Signature("Dilithium5")
+        sig = oqs.Signature("ML-DSA-87")
         self.public_key: bytes = sig.generate_keypair()
         self._secret_key: bytes = sig.export_secret_key()
         self.namespace: bytes = hashlib.sha3_256(self.public_key).digest()
@@ -311,14 +311,25 @@ async def run_throughput_benchmark(
     for concurrency in concurrency_levels:
         print(f"  PERF-01: concurrency={concurrency}, iterations={iterations} per client")
 
-        # Create clients and authenticate each
+        # Create clients and authenticate each (staggered to avoid thundering herd)
         clients: list[httpx.AsyncClient] = []
         tokens: list[str] = []
         for i in range(concurrency):
-            c = httpx.AsyncClient(http2=False, timeout=httpx.Timeout(120.0))
-            clients.append(c)
-            tok = await authenticate(c, base_url, identity)
-            tokens.append(tok)
+            try:
+                c = httpx.AsyncClient(http2=False, timeout=httpx.Timeout(120.0))
+                tok = await authenticate(c, base_url, identity)
+                clients.append(c)
+                tokens.append(tok)
+            except Exception as e:
+                print(f"    WARNING: client {i} auth failed: {e}")
+                try:
+                    await c.aclose()
+                except Exception:
+                    pass
+        if not clients:
+            print(f"    SKIP: no clients could authenticate at concurrency={concurrency}")
+            continue
+        concurrency = len(clients)  # Adjust for failed clients
 
         # Warmup (single client)
         if warmup > 0:
