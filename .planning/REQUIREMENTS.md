@@ -7,11 +7,11 @@
 
 ### Concurrency Model
 
-- [ ] **CONC-01**: Relay runs a single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers) — no multi-threaded ioc.run()
+- [x] **CONC-01**: Relay runs a single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers) — no multi-threaded ioc.run()
 - [ ] **CONC-02**: CPU-heavy operations (TLS handshake, ML-DSA-87 signature verify, large JSON parse/serialize) offload to a thread pool via crypto::offload() pattern, resuming on the event loop thread after completion
 - [ ] **CONC-03**: All shared data structures (UdsMultiplexer, RequestRouter, SubscriptionTracker, WriteTracker, TokenStore, ResponsePromiseMap) accessed only from the single event loop thread — no mutexes, no strands
 - [ ] **CONC-04**: Remove all std::mutex and asio::strand code added in Phase 999.10 — clean single-threaded design
-- [ ] **CONC-05**: relay_main.cpp creates one thread running ioc.run(), plus a configurable thread pool for offload work
+- [x] **CONC-05**: relay_main.cpp creates one thread running ioc.run(), plus a configurable thread pool for offload work
 
 ### Verification
 
@@ -39,11 +39,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONC-01 | Phase 111 | Pending |
+| CONC-01 | Phase 111 | Complete |
 | CONC-02 | Phase 111 | Pending |
 | CONC-03 | Phase 111 | Pending |
 | CONC-04 | Phase 111 | Pending |
-| CONC-05 | Phase 111 | Pending |
+| CONC-05 | Phase 111 | Complete |
 | VER-01 | Phase 111 | Pending |
 | VER-02 | Phase 112 | Pending |
 | VER-03 | Phase 112 | Pending |

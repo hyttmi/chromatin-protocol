@@ -26,10 +26,10 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
   3. TLS handshake, ML-DSA-87 verify, and large JSON parse/serialize execute on the thread pool via crypto::offload() and resume on the event loop thread
   4. HTTP handlers access shared state (UdsMultiplexer, RequestRouter, SubscriptionTracker, WriteTracker, TokenStore, ResponsePromiseMap) directly without strand posting or mutex locking
   5. All existing relay unit tests compile and pass under the single-threaded model
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 111-01-PLAN.md -- Thread pool infrastructure + relay_main.cpp single-threaded rewrite
+- [x] 111-01-PLAN.md -- Thread pool infrastructure + relay_main.cpp single-threaded rewrite
 - [ ] 111-02-PLAN.md -- Strip strands/mutexes from all relay components + wire ML-DSA-87 offload
 - [ ] 111-03-PLAN.md -- Test adaptation + full test suite verification + grep audit
 
@@ -62,6 +62,6 @@ Phases execute in numeric order: 111 -> 112 -> 113
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 111. Single-Threaded Rewrite | 0/3 | Not started | - |
+| 111. Single-Threaded Rewrite | 1/3 | In Progress|  |
 | 112. ASAN Verification | 0/TBD | Not started | - |
 | 113. Performance Benchmarking | 0/TBD | Not started | - |
