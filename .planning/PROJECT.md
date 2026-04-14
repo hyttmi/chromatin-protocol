@@ -10,23 +10,25 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v3.1.0 Relay Live Hardening
+## Current Milestone: v4.0.0 Relay Architecture v3
 
-**Goal:** Fix all bugs found in live relay+node testing and verify every feature works end-to-end against a running node.
+**Goal:** Rewrite the relay's concurrency model to single-threaded event loop with thread pool offload, fixing all ASAN concurrency bugs. Then benchmark performance.
 
-**Phase 106 complete (2026-04-11):** All compound decoder bugs fixed (FIX-01), coroutine safety audit clean (FIX-02). UDS tap + smoke test tools built. ASAN clean.
+**Target features:**
+- Single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers)
+- Thread pool for CPU-heavy work (TLS handshake, ML-DSA-87 verify, large JSON) via crypto::offload() pattern
+- All shared state accessed from single event loop thread — zero races, zero mutexes, zero strands
+- Remove broken multi-threaded strand/mutex code from v3.1.0 Phase 999.10
+- ASAN-clean under benchmark at 100 concurrent clients
+- Performance benchmarking (throughput, latency, large blob, mixed workload)
 
-**Phase 107 complete (2026-04-11):** E2E smoke test extended to 31 tests covering all 38 relay-allowed message types. 3 relay translation bugs found and fixed (Delete FlatBuffer encoding, DeleteAck fields, TimeRange end_ts). Full data write chain verified (write→read→metadata→exists→batch_exists→batch_read→delete→notification).
+**Architecture:** Same pattern as the node's PeerManager — single-threaded event loop for I/O, thread pool for crypto. Proven in this codebase.
 
-**Remaining:**
-- Test all 38 message types end-to-end through relay→node→relay
-- Test subscribe/notification fan-out flow live
-- Test rate limiting enforcement live
-- Test SIGHUP config reload live
-- Test graceful SIGTERM shutdown live
-- Performance testing: throughput (messages/sec), latency (relay overhead vs direct UDS), concurrent client load
-- Source exclusion for notifications (FUTURE-01)
-- Relay-side max blob size limit (FUTURE-02)
+**Context:** v3.1.0 shipped HTTP+SSE transport (Phase 999.9) replacing WebSocket. Transport layer is correct. The multi-threaded io_context (hardware_concurrency threads) caused systemic ASAN heap-use-after-free under concurrent load. Strand confinement (Phase 999.10) failed — strands don't survive co_await on promise timers.
+
+## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
+
+**Delivered:** Phases 106-109 complete. Bug fixes, E2E message verification, source exclusion, blob size limits, /health endpoint. Backlog: ErrorResponse type 63 (43 silent paths fixed), request timeouts, all-BE endianness, binary WS frame cleanup, database chunking, HTTP+SSE transport (full WS replacement, 4607 lines deleted). Strand concurrency attempt abandoned (999.10). 242+ relay tests.
 - Health check endpoint /health (FUTURE-03)
 
 ## Previous Milestone: v3.0.0 Relay v2 (SHIPPED 2026-04-10)

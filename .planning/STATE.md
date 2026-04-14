@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.1.0
-milestone_name: milestone
-status: executing
-last_updated: "2026-04-14T03:19:33.954Z"
+milestone: v4.0.0
+milestone_name: relay-architecture-v3
+status: defining-requirements
+last_updated: "2026-04-14"
 last_activity: 2026-04-14
 progress:
-  total_phases: 15
-  completed_phases: 11
-  total_plans: 33
-  completed_plans: 32
-  percent: 50
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
