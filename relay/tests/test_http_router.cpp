@@ -6,11 +6,13 @@
 #include "relay/http/token_store.h"
 #include "relay/core/authenticator.h"
 
+#include <asio.hpp>
 #include <nlohmann/json.hpp>
 
 using namespace chromatindb::relay::http;
 namespace core = chromatindb::relay::core;
 using json = nlohmann::json;
+using Strand = asio::strand<asio::io_context::executor_type>;
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal HttpRequest
@@ -242,15 +244,32 @@ TEST_CASE("HttpRouter passes body to handler", "[http][router]") {
 // Auth challenge endpoint
 // ===========================================================================
 
+/// Helper: run an async dispatch in a test context with ioc + strand.
+static HttpResponse run_async_dispatch(HttpRouter& router, const HttpRequest& req,
+                                        const std::vector<uint8_t>& body, TokenStore& store) {
+    asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
+    router.set_strand(&strand);
+
+    HttpResponse result;
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        result = co_await router.dispatch_async(req, body, store);
+    }, asio::detached);
+    ioc.run();
+    return result;
+}
+
 TEST_CASE("POST /auth/challenge returns 200 with nonce", "[http][router][auth-endpoint]") {
     HttpRouter router;
     core::Authenticator authenticator;
     TokenStore store;
+    asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
 
-    register_auth_routes(router, authenticator, store);
+    register_auth_routes(router, authenticator, store, strand);
 
     auto req = make_request("POST", "/auth/challenge");
-    auto resp = router.dispatch(req, {}, store);
+    auto resp = run_async_dispatch(router, req, {}, store);
     REQUIRE(resp.status == 200);
 
     // Parse response body as JSON.
@@ -266,8 +285,10 @@ TEST_CASE("POST /auth/verify with invalid nonce returns 401", "[http][router][au
     HttpRouter router;
     core::Authenticator authenticator;
     TokenStore store;
+    asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
 
-    register_auth_routes(router, authenticator, store);
+    register_auth_routes(router, authenticator, store, strand);
 
     // Try to verify with a nonce that was never issued.
     json body_json = {
@@ -280,7 +301,7 @@ TEST_CASE("POST /auth/verify with invalid nonce returns 401", "[http][router][au
 
     auto req = make_request("POST", "/auth/verify");
     req.content_length = body.size();
-    auto resp = router.dispatch(req, body, store);
+    auto resp = run_async_dispatch(router, req, body, store);
     REQUIRE(resp.status == 401);
 }
 
@@ -288,14 +309,16 @@ TEST_CASE("POST /auth/verify with bad JSON returns 400", "[http][router][auth-en
     HttpRouter router;
     core::Authenticator authenticator;
     TokenStore store;
+    asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
 
-    register_auth_routes(router, authenticator, store);
+    register_auth_routes(router, authenticator, store, strand);
 
     std::vector<uint8_t> body = {'n', 'o', 't', ' ', 'j', 's', 'o', 'n'};
 
     auto req = make_request("POST", "/auth/verify");
     req.content_length = body.size();
-    auto resp = router.dispatch(req, body, store);
+    auto resp = run_async_dispatch(router, req, body, store);
     REQUIRE(resp.status == 400);
 }
 
@@ -303,8 +326,10 @@ TEST_CASE("POST /auth/verify with missing fields returns 400", "[http][router][a
     HttpRouter router;
     core::Authenticator authenticator;
     TokenStore store;
+    asio::io_context ioc;
+    auto strand = asio::make_strand(ioc);
 
-    register_auth_routes(router, authenticator, store);
+    register_auth_routes(router, authenticator, store, strand);
 
     json body_json = {{"nonce", "abc"}};  // Missing public_key and signature.
     auto body_str = body_json.dump();
@@ -312,7 +337,7 @@ TEST_CASE("POST /auth/verify with missing fields returns 400", "[http][router][a
 
     auto req = make_request("POST", "/auth/verify");
     req.content_length = body.size();
-    auto resp = router.dispatch(req, body, store);
+    auto resp = run_async_dispatch(router, req, body, store);
     REQUIRE(resp.status == 400);
 }
 

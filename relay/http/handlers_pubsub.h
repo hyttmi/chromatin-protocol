@@ -29,33 +29,35 @@ class TokenStore;
 ///
 /// Subscribe/unsubscribe forward to the node via UDS when a namespace's
 /// reference count transitions (0->1 for subscribe, 1->0 for unsubscribe).
+///
+/// All handlers post to strand_ before accessing shared state
+/// (SubscriptionTracker, UdsMultiplexer::send, TokenStore).
 class PubSubHandlers {
 public:
+    using Strand = asio::strand<asio::io_context::executor_type>;
+
     PubSubHandlers(core::SubscriptionTracker& tracker,
                    core::UdsMultiplexer& uds,
-                   TokenStore& token_store);
+                   TokenStore& token_store,
+                   Strand& strand);
 
     /// POST /subscribe: parse JSON body, add to tracker, forward new to node.
-    HttpResponse handle_subscribe(const HttpRequest& req,
-                                  const std::vector<uint8_t>& body,
-                                  HttpSessionState* session);
+    /// Async: posts to strand before SubscriptionTracker/UdsMultiplexer access.
+    asio::awaitable<HttpResponse> handle_subscribe(const HttpRequest& req,
+                                                    const std::vector<uint8_t>& body,
+                                                    HttpSessionState* session);
 
     /// POST /unsubscribe: parse JSON body, remove from tracker, forward empty to node.
-    HttpResponse handle_unsubscribe(const HttpRequest& req,
-                                    const std::vector<uint8_t>& body,
-                                    HttpSessionState* session);
+    /// Async: posts to strand before SubscriptionTracker/UdsMultiplexer access.
+    asio::awaitable<HttpResponse> handle_unsubscribe(const HttpRequest& req,
+                                                      const std::vector<uint8_t>& body,
+                                                      HttpSessionState* session);
 
     /// GET /events?token=<token>: SSE event stream (long-lived connection).
-    /// NOTE: This is NOT a normal handler -- it returns a special response that
-    /// indicates the connection should switch to SSE mode. The actual SSE logic
-    /// runs via SseWriter in the connection's coroutine.
-    ///
-    /// The handler validates the token and returns a JSON response with the
-    /// session info. HttpConnection is responsible for detecting this is an SSE
-    /// request and switching to long-lived mode.
-    HttpResponse handle_events_auth(const HttpRequest& req,
-                                    const std::vector<uint8_t>& body,
-                                    HttpSessionState* session);
+    /// Async: posts to strand before TokenStore::lookup.
+    asio::awaitable<HttpResponse> handle_events_auth(const HttpRequest& req,
+                                                      const std::vector<uint8_t>& body,
+                                                      HttpSessionState* session);
 
 private:
     /// Encode namespace list as u16BE for node Subscribe/Unsubscribe wire format.
@@ -71,6 +73,7 @@ private:
     core::SubscriptionTracker& tracker_;
     core::UdsMultiplexer& uds_;
     TokenStore& token_store_;
+    Strand& strand_;
 };
 
 /// Register pub/sub routes on the HTTP router.

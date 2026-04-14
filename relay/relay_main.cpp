@@ -271,10 +271,14 @@ int main(int argc, char* argv[]) {
     // 13. Register auth + metrics routes (health registered after uds_mux creation)
     // =========================================================================
     // Auth routes (public, no auth required) -- D-04, D-05, D-06
-    chromatindb::relay::http::register_auth_routes(router, authenticator, token_store);
+    // Strand passed for ChallengeStore/TokenStore access serialization.
+    chromatindb::relay::http::register_auth_routes(router, authenticator, token_store, strand);
 
     // Metrics route (public, no auth required) -- D-30
     chromatindb::relay::http::register_metrics_route(router, metrics_collector);
+
+    // Set strand on router for auth middleware in dispatch_async.
+    router.set_strand(&strand);
 
     // =========================================================================
     // 14. Create SessionDispatch, UdsMultiplexer, then handlers
@@ -335,8 +339,9 @@ int main(int argc, char* argv[]) {
     chromatindb::relay::http::register_query_routes(router, query_deps);
 
     // PubSubHandlers (subscribe, unsubscribe, SSE events) -- D-22, D-23, D-24
+    // Strand passed for SubscriptionTracker/UdsMultiplexer/TokenStore access.
     chromatindb::relay::http::PubSubHandlers pubsub_handlers(
-        subscription_tracker, uds_mux, token_store);
+        subscription_tracker, uds_mux, token_store, strand);
     chromatindb::relay::http::register_pubsub_routes(router, pubsub_handlers);
 
     // =========================================================================

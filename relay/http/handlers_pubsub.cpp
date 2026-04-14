@@ -22,10 +22,12 @@ namespace chromatindb::relay::http {
 
 PubSubHandlers::PubSubHandlers(core::SubscriptionTracker& tracker,
                                core::UdsMultiplexer& uds,
-                               TokenStore& token_store)
+                               TokenStore& token_store,
+                               Strand& strand)
     : tracker_(tracker)
     , uds_(uds)
-    , token_store_(token_store) {}
+    , token_store_(token_store)
+    , strand_(strand) {}
 
 // ---------------------------------------------------------------------------
 // Namespace list parsing (JSON -> Namespace32 array)
@@ -83,24 +85,29 @@ std::vector<uint8_t> PubSubHandlers::encode_namespace_list_u16be(
 // POST /subscribe (D-22)
 // ---------------------------------------------------------------------------
 
-HttpResponse PubSubHandlers::handle_subscribe(const HttpRequest& /*req*/,
-                                               const std::vector<uint8_t>& body,
-                                               HttpSessionState* session) {
+asio::awaitable<HttpResponse> PubSubHandlers::handle_subscribe(
+    const HttpRequest& /*req*/,
+    const std::vector<uint8_t>& body,
+    HttpSessionState* session) {
     if (!session) {
-        return HttpResponse::error(401, "unauthorized", "Authentication required");
+        co_return HttpResponse::error(401, "unauthorized", "Authentication required");
     }
 
+    // Off-strand: parse namespace list (CPU work per D-16).
     auto namespaces = parse_namespace_list(body);
     if (namespaces.empty()) {
-        return HttpResponse::error(400, "bad_request",
-                                   "Body must contain {\"namespaces\": [\"hex64\", ...]}");
+        co_return HttpResponse::error(400, "bad_request",
+                                      "Body must contain {\"namespaces\": [\"hex64\", ...]}");
     }
+
+    // Enter strand for shared state access (SubscriptionTracker, UdsMultiplexer::send).
+    co_await asio::post(strand_, asio::use_awaitable);
 
     // Cap check: 256 per session
     size_t current = tracker_.client_subscription_count(session->session_id);
     if (current + namespaces.size() > 256) {
-        return HttpResponse::error(400, "subscription_limit",
-                                   "Maximum 256 subscriptions per client");
+        co_return HttpResponse::error(400, "subscription_limit",
+                                      "Maximum 256 subscriptions per client");
     }
 
     auto sub_result = tracker_.subscribe(session->session_id, namespaces);
@@ -119,25 +126,30 @@ HttpResponse PubSubHandlers::handle_subscribe(const HttpRequest& /*req*/,
         {"status", "ok"},
         {"subscribed", namespaces.size()}
     };
-    return HttpResponse::json(200, resp);
+    co_return HttpResponse::json(200, resp);
 }
 
 // ---------------------------------------------------------------------------
 // POST /unsubscribe (D-23)
 // ---------------------------------------------------------------------------
 
-HttpResponse PubSubHandlers::handle_unsubscribe(const HttpRequest& /*req*/,
-                                                 const std::vector<uint8_t>& body,
-                                                 HttpSessionState* session) {
+asio::awaitable<HttpResponse> PubSubHandlers::handle_unsubscribe(
+    const HttpRequest& /*req*/,
+    const std::vector<uint8_t>& body,
+    HttpSessionState* session) {
     if (!session) {
-        return HttpResponse::error(401, "unauthorized", "Authentication required");
+        co_return HttpResponse::error(401, "unauthorized", "Authentication required");
     }
 
+    // Off-strand: parse namespace list (CPU work per D-16).
     auto namespaces = parse_namespace_list(body);
     if (namespaces.empty()) {
-        return HttpResponse::error(400, "bad_request",
-                                   "Body must contain {\"namespaces\": [\"hex64\", ...]}");
+        co_return HttpResponse::error(400, "bad_request",
+                                      "Body must contain {\"namespaces\": [\"hex64\", ...]}");
     }
+
+    // Enter strand for shared state access (SubscriptionTracker, UdsMultiplexer::send).
+    co_await asio::post(strand_, asio::use_awaitable);
 
     auto unsub_result = tracker_.unsubscribe(session->session_id, namespaces);
 
@@ -155,26 +167,30 @@ HttpResponse PubSubHandlers::handle_unsubscribe(const HttpRequest& /*req*/,
         {"status", "ok"},
         {"unsubscribed", namespaces.size()}
     };
-    return HttpResponse::json(200, resp);
+    co_return HttpResponse::json(200, resp);
 }
 
 // ---------------------------------------------------------------------------
 // GET /events?token=<token> auth check (D-24)
 // ---------------------------------------------------------------------------
 
-HttpResponse PubSubHandlers::handle_events_auth(const HttpRequest& req,
-                                                 const std::vector<uint8_t>& /*body*/,
-                                                 HttpSessionState* /*session*/) {
+asio::awaitable<HttpResponse> PubSubHandlers::handle_events_auth(
+    const HttpRequest& req,
+    const std::vector<uint8_t>& /*body*/,
+    HttpSessionState* /*session*/) {
     // SSE endpoint uses token in query param, not Bearer header.
     // The router marks this as a public route, so session will be nullptr.
     auto token_opt = parse_query_param(req.query, "token");
     if (!token_opt || token_opt->empty()) {
-        return HttpResponse::error(401, "unauthorized", "Missing token query parameter");
+        co_return HttpResponse::error(401, "unauthorized", "Missing token query parameter");
     }
+
+    // Enter strand for TokenStore::lookup (shared state).
+    co_await asio::post(strand_, asio::use_awaitable);
 
     auto* sse_session = token_store_.lookup(*token_opt);
     if (!sse_session) {
-        return HttpResponse::error(401, "unauthorized", "Invalid or expired token");
+        co_return HttpResponse::error(401, "unauthorized", "Invalid or expired token");
     }
 
     // Return a special 200 response that signals "this is an SSE session".
@@ -192,7 +208,7 @@ HttpResponse PubSubHandlers::handle_events_auth(const HttpRequest& req,
     resp.headers.emplace_back("Cache-Control", "no-cache");
     resp.headers.emplace_back("Connection", "keep-alive");
     resp.headers.emplace_back("X-SSE-Session-Id", std::to_string(sse_session->session_id));
-    return resp;
+    co_return resp;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,25 +216,25 @@ HttpResponse PubSubHandlers::handle_events_auth(const HttpRequest& req,
 // ---------------------------------------------------------------------------
 
 void register_pubsub_routes(HttpRouter& router, PubSubHandlers& handlers) {
-    // POST /subscribe -- authenticated
-    router.add_route("POST", "/subscribe",
+    // POST /subscribe -- authenticated, async (strand posting)
+    router.add_async_route("POST", "/subscribe",
         [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
-                    HttpSessionState* session) -> HttpResponse {
-            return handlers.handle_subscribe(req, body, session);
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_subscribe(req, body, session);
         });
 
-    // POST /unsubscribe -- authenticated
-    router.add_route("POST", "/unsubscribe",
+    // POST /unsubscribe -- authenticated, async (strand posting)
+    router.add_async_route("POST", "/unsubscribe",
         [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
-                    HttpSessionState* session) -> HttpResponse {
-            return handlers.handle_unsubscribe(req, body, session);
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_unsubscribe(req, body, session);
         });
 
-    // GET /events -- public (auth via query param, not Bearer header)
-    router.add_route("GET", "/events",
+    // GET /events -- public (auth via query param, not Bearer header), async (strand posting)
+    router.add_async_route("GET", "/events",
         [&handlers](const HttpRequest& req, const std::vector<uint8_t>& body,
-                    HttpSessionState* session) -> HttpResponse {
-            return handlers.handle_events_auth(req, body, session);
+                    HttpSessionState* session) -> asio::awaitable<HttpResponse> {
+            co_return co_await handlers.handle_events_auth(req, body, session);
         }, /*public_route=*/true);
 }
 

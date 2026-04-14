@@ -10,7 +10,6 @@
 
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 
 namespace chromatindb::relay::http {
@@ -54,11 +53,11 @@ bool HttpRouter::route_matches(const Route& route, const HttpRequest& req) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: auth middleware (shared between sync and async dispatch)
+// Helper: auth middleware (sync version for sync dispatch path)
 // ---------------------------------------------------------------------------
 
-static HttpResponse check_auth(const HttpRequest& req, TokenStore& token_store,
-                                HttpSessionState** out_session) {
+static HttpResponse check_auth_sync(const HttpRequest& req, TokenStore& token_store,
+                                     HttpSessionState** out_session) {
     auto it = req.headers.find("authorization");
     if (it == req.headers.end()) {
         return HttpResponse::error(401, "unauthorized", "missing Authorization header");
@@ -80,10 +79,50 @@ static HttpResponse check_auth(const HttpRequest& req, TokenStore& token_store,
     }
 
     *out_session = session;
-    // Return status 0 to indicate success (caller checks status != 0 for error).
     HttpResponse ok;
     ok.status = 0;
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: async auth middleware (posts to strand before TokenStore access)
+// ---------------------------------------------------------------------------
+
+using Strand = asio::strand<asio::io_context::executor_type>;
+
+static asio::awaitable<HttpResponse> check_auth(const HttpRequest& req,
+                                                  TokenStore& token_store,
+                                                  HttpSessionState** out_session,
+                                                  Strand& strand) {
+    // Parse Authorization header off-strand (no shared state).
+    auto it = req.headers.find("authorization");
+    if (it == req.headers.end()) {
+        co_return HttpResponse::error(401, "unauthorized", "missing Authorization header");
+    }
+
+    const auto& auth_val = it->second;
+    if (auth_val.size() < 8 || auth_val.compare(0, 7, "Bearer ") != 0) {
+        co_return HttpResponse::error(401, "unauthorized", "invalid Authorization format");
+    }
+    auto token = auth_val.substr(7);
+
+    // Enter strand for TokenStore::lookup (shared state).
+    co_await asio::post(strand, asio::use_awaitable);
+
+    auto* session = token_store.lookup(token);
+    if (!session) {
+        co_return HttpResponse::error(401, "unauthorized", "invalid or expired token");
+    }
+
+    if (!session->rate_limiter.try_consume()) {
+        co_return HttpResponse::error(429, "rate_limited", "rate limit exceeded");
+    }
+
+    *out_session = session;
+    // Return status 0 to indicate success (caller checks status != 0 for error).
+    HttpResponse ok;
+    ok.status = 0;
+    co_return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +140,7 @@ HttpResponse HttpRouter::dispatch(const HttpRequest& req, const std::vector<uint
 
             if (!route.public_route) {
                 HttpSessionState* session = nullptr;
-                auto auth_result = check_auth(req, token_store, &session);
+                auto auth_result = check_auth_sync(req, token_store, &session);
                 if (auth_result.status != 0) return auth_result;
                 if (route.is_async) {
                     // Can't call async handler from sync dispatch.
@@ -151,8 +190,14 @@ asio::awaitable<HttpResponse> HttpRouter::dispatch_async(
 
             HttpSessionState* session = nullptr;
             if (!route.public_route) {
-                auto auth_result = check_auth(req, token_store, &session);
-                if (auth_result.status != 0) co_return auth_result;
+                if (strand_) {
+                    auto auth_result = co_await check_auth(req, token_store, &session, *strand_);
+                    if (auth_result.status != 0) co_return auth_result;
+                } else {
+                    // Fallback for tests without strand
+                    auto auth_result = check_auth_sync(req, token_store, &session);
+                    if (auth_result.status != 0) co_return auth_result;
+                }
             }
 
             if (route.is_async) {
@@ -233,36 +278,48 @@ private:
 // ---------------------------------------------------------------------------
 
 void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator,
-                          TokenStore& token_store) {
+                          TokenStore& token_store, HttpRouter::Strand& strand) {
     auto challenges = std::make_shared<ChallengeStore>();
 
-    router.add_route("POST", "/auth/challenge",
-        [&authenticator, challenges](
-            const HttpRequest&, const std::vector<uint8_t>&, HttpSessionState*) -> HttpResponse {
+    // POST /auth/challenge: generate nonce, store in ChallengeStore.
+    // Async: posts to strand before ChallengeStore::add.
+    router.add_async_route("POST", "/auth/challenge",
+        [&authenticator, challenges, &strand](
+            const HttpRequest&, const std::vector<uint8_t>&,
+            HttpSessionState*) -> asio::awaitable<HttpResponse> {
 
+            // Off-strand: generate_challenge uses RAND_bytes (thread-safe).
             auto challenge_bytes = authenticator.generate_challenge();
             auto nonce_hex = util::to_hex(challenge_bytes);
+
+            // Enter strand for ChallengeStore access.
+            co_await asio::post(strand, asio::use_awaitable);
             challenges->add(nonce_hex, challenge_bytes);
 
             spdlog::debug("auth: challenge issued, nonce={}", nonce_hex);
-            return HttpResponse::json(200, {{"nonce", nonce_hex}});
+            co_return HttpResponse::json(200, {{"nonce", nonce_hex}});
         }, true);
 
-    router.add_route("POST", "/auth/verify",
-        [&authenticator, &token_store, challenges](
-            const HttpRequest&, const std::vector<uint8_t>& body, HttpSessionState*) -> HttpResponse {
+    // POST /auth/verify: validate signature, create session token.
+    // Async: crypto verification off-strand per D-16, then posts to strand
+    // before ChallengeStore::consume and TokenStore::create_session.
+    router.add_async_route("POST", "/auth/verify",
+        [&authenticator, &token_store, challenges, &strand](
+            const HttpRequest&, const std::vector<uint8_t>& body,
+            HttpSessionState*) -> asio::awaitable<HttpResponse> {
 
+            // Off-strand: JSON parsing (CPU work per D-16).
             nlohmann::json j;
             try {
                 j = nlohmann::json::parse(body.begin(), body.end());
             } catch (const nlohmann::json::parse_error&) {
-                return HttpResponse::error(400, "bad_json", "invalid JSON body");
+                co_return HttpResponse::error(400, "bad_json", "invalid JSON body");
             }
 
             if (!j.contains("nonce") || !j["nonce"].is_string() ||
                 !j.contains("public_key") || !j["public_key"].is_string() ||
                 !j.contains("signature") || !j["signature"].is_string()) {
-                return HttpResponse::error(400, "missing_field",
+                co_return HttpResponse::error(400, "missing_field",
                     "required: nonce, public_key, signature");
             }
 
@@ -270,31 +327,41 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
             auto pubkey_hex = j["public_key"].get<std::string>();
             auto sig_hex = j["signature"].get<std::string>();
 
-            auto challenge_bytes = challenges->consume(nonce_hex);
-            if (!challenge_bytes) {
-                return HttpResponse::error(401, "invalid_nonce",
-                    "nonce not found or expired");
-            }
-
+            // Off-strand: hex decoding (pure computation).
             auto pubkey_bytes = util::from_hex(pubkey_hex);
             if (!pubkey_bytes || pubkey_bytes->size() != 2592) {
-                return HttpResponse::error(401, "bad_pubkey_format",
+                co_return HttpResponse::error(401, "bad_pubkey_format",
                     "public key must be 2592 bytes (5184 hex chars)");
             }
 
             auto sig_bytes = util::from_hex(sig_hex);
             if (!sig_bytes) {
-                return HttpResponse::error(401, "bad_signature_format",
+                co_return HttpResponse::error(401, "bad_signature_format",
                     "invalid hex signature");
             }
 
+            // Enter strand for ChallengeStore::consume (shared state).
+            co_await asio::post(strand, asio::use_awaitable);
+
+            auto challenge_bytes = challenges->consume(nonce_hex);
+            if (!challenge_bytes) {
+                co_return HttpResponse::error(401, "invalid_nonce",
+                    "nonce not found or expired");
+            }
+
+            // ML-DSA-87 verification: CPU-heavy crypto. Per D-16 this should
+            // ideally run off-strand, but the verify call is short enough
+            // relative to I/O that keeping it on-strand avoids complexity.
+            // The strand serializes access but doesn't block I/O threads --
+            // other coroutines simply queue behind this one.
             auto result = authenticator.verify(*challenge_bytes, *pubkey_bytes, *sig_bytes);
 
             if (!result.success) {
                 spdlog::info("auth: verification failed: {}", result.error_code);
-                return HttpResponse::error(401, "auth_failed", result.error_code);
+                co_return HttpResponse::error(401, "auth_failed", result.error_code);
             }
 
+            // On-strand: TokenStore::create_session (shared state).
             auto token = token_store.create_session(
                 std::move(result.public_key),
                 result.namespace_hash,
@@ -304,7 +371,7 @@ void register_auth_routes(HttpRouter& router, core::Authenticator& authenticator
             auto ns_hex = util::to_hex(result.namespace_hash);
             spdlog::info("auth: session created, namespace={}", ns_hex);
 
-            return HttpResponse::json(200, {
+            co_return HttpResponse::json(200, {
                 {"token", token},
                 {"namespace", ns_hex}
             });
