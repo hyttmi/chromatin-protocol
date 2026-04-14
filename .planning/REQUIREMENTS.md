@@ -122,11 +122,11 @@ Requirements for Relay Live Hardening. Each maps to roadmap phases.
 - [x] **STRAND-05**: std::mutex removed from WriteTracker, SubscriptionTracker, TokenStore, ResponsePromiseMap -- no lock_guard, no #include <mutex> in any of these files
 - [x] **STRAND-06**: ResponsePromiseMap retains shared_ptr ownership of ResponsePromise (lifetime fix independent of threading)
 - [x] **STRAND-07**: Idle reaper coroutine in relay_main.cpp co_spawns on the strand
-- [ ] **STRAND-08**: HTTP data handlers (blob write/read/delete/batch_read) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap, WriteTracker
-- [ ] **STRAND-09**: HTTP query handlers (forward_query) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap
-- [ ] **STRAND-10**: HTTP pubsub handlers (subscribe/unsubscribe) converted to async coroutines and co_await asio::post(strand) before touching SubscriptionTracker and UdsMultiplexer::send
-- [ ] **STRAND-11**: HTTP auth handlers (challenge/verify) converted to async and co_await asio::post(strand) before touching ChallengeStore and TokenStore
-- [ ] **STRAND-12**: Auth middleware (check_auth) co_await asio::post(strand) before TokenStore::lookup -- relay ASAN-clean at 100 concurrent benchmark clients
+- [x] **STRAND-08**: HTTP data handlers (blob write/read/delete/batch_read) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap, WriteTracker
+- [x] **STRAND-09**: HTTP query handlers (forward_query) co_await asio::post(strand) before touching RequestRouter, UdsMultiplexer::send, ResponsePromiseMap
+- [x] **STRAND-10**: HTTP pubsub handlers (subscribe/unsubscribe) converted to async coroutines and co_await asio::post(strand) before touching SubscriptionTracker and UdsMultiplexer::send
+- [x] **STRAND-11**: HTTP auth handlers (challenge/verify) converted to async and co_await asio::post(strand) before touching ChallengeStore and TokenStore
+- [x] **STRAND-12**: Auth middleware (check_auth) co_await asio::post(strand) before TokenStore::lookup -- relay ASAN-clean at 100 concurrent benchmark clients
 
 ## Future Requirements
 
@@ -234,11 +234,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STRAND-05 | Phase 999.10 | Complete |
 | STRAND-06 | Phase 999.10 | Complete |
 | STRAND-07 | Phase 999.10 | Complete |
-| STRAND-08 | Phase 999.10 | Pending |
-| STRAND-09 | Phase 999.10 | Pending |
-| STRAND-10 | Phase 999.10 | Pending |
-| STRAND-11 | Phase 999.10 | Pending |
-| STRAND-12 | Phase 999.10 | Pending |
+| STRAND-08 | Phase 999.10 | Complete |
+| STRAND-09 | Phase 999.10 | Complete |
+| STRAND-10 | Phase 999.10 | Complete |
+| STRAND-11 | Phase 999.10 | Complete |
+| STRAND-12 | Phase 999.10 | Complete |
 
 **Coverage:**
 - v3.1.0 requirements: 14 total

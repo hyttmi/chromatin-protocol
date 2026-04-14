@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
+milestone: v3.1.0
 milestone_name: milestone
-status: in_progress
-last_updated: "2026-04-14T02:56:39Z"
+status: executing
+last_updated: "2026-04-14T03:19:33.954Z"
 last_activity: 2026-04-14
 progress:
-  total_phases: 18
-  completed_phases: 16
+  total_phases: 15
+  completed_phases: 11
   total_plans: 33
-  completed_plans: 35
-  percent: 100
+  completed_plans: 32
+  percent: 50
 ---
 
 # Project State
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-04-09)
 ## Current Position
 
 Phase: 999.10-relay-thread-safety-overhaul-for-multi-threaded-http
-Plan: 01 of 02 complete
-Status: Plan 01 complete, Plan 02 pending
+Plan: 2 of 02 complete
+Status: Ready to execute
 Last activity: 2026-04-14
 
 Progress: [#####-----] 50%
@@ -40,6 +40,7 @@ Previous milestone decisions archived to milestones/v2.2.0-ROADMAP.md.
 
 - [Phase 110]: httpx AsyncClient for benchmark HTTP, FlatBuffer manual vtable construction, UDS baseline deferred
 - [Phase 999.10-01]: Global strand via asio::make_strand(ioc), strand passed by reference to UdsMultiplexer, shared_ptr preserved in ResponsePromiseMap (lifetime fix)
+- [Phase 999.10]: All HTTP handlers post to strand before shared state access; heavy work stays off-strand per D-16
 
 ### Pending Todos
 

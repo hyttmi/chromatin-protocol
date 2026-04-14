@@ -193,4 +193,4 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 999.10-01-PLAN.md — Create strand in relay_main, bind UDS coroutines to strand, remove all mutexes from 5 shared data structures
-- [ ] 999.10-02-PLAN.md — Wire strand into HTTP data/query/pubsub/auth handlers with post-to-strand pattern
+- [x] 999.10-02-PLAN.md — Wire strand into HTTP data/query/pubsub/auth handlers with post-to-strand pattern
