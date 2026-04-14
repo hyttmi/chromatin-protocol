@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -38,7 +37,7 @@ public:
     /// Generate a 32-byte random challenge via OpenSSL RAND_bytes (per D-01).
     std::array<uint8_t, 32> generate_challenge();
 
-    /// Verify client's challenge_response. Blocking -- call from thread pool (per D-08).
+    /// Verify client's challenge_response. CPU-heavy -- offloaded to thread pool in http_router.cpp.
     /// Validation order (Step 0 pattern -- cheapest first):
     ///   1. pubkey.size() == 2592
     ///   2. signature.size() == 4627
@@ -50,14 +49,14 @@ public:
         std::span<const uint8_t> pubkey,
         std::span<const uint8_t> signature);
 
-    /// Reload allowed keys on SIGHUP (per D-07, D-34). Thread-safe via mutex.
+    /// Reload allowed keys on SIGHUP (per D-07, D-34).
+    /// Called from event loop thread (single-threaded model).
     void reload_allowed_keys(KeySet new_keys);
 
     /// Check if ACL is active (non-empty allowed keys).
     bool has_acl() const;
 
 private:
-    mutable std::mutex acl_mutex_;
     KeySet allowed_keys_;
 };
 

@@ -8,7 +8,7 @@
 /// Notification(21) arrives, the relay looks up the writer session and
 /// skips it during fan-out.
 ///
-/// Access serialized via strand -- all callers must be on the strand.
+/// Access from single event loop thread -- no synchronization needed.
 
 #include "relay/core/subscription_tracker.h"  // for Namespace32Hash
 

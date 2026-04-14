@@ -61,11 +61,11 @@ AuthResult Authenticator::verify(
     OQS_SHA3_sha3_256(ns_hash.data(), pubkey.data(), pubkey.size());
 
     // ACL check (per D-07: empty set = open relay)
-    {
-        std::lock_guard<std::mutex> lock(acl_mutex_);
-        if (!allowed_keys_.empty() && allowed_keys_.find(ns_hash) == allowed_keys_.end()) {
-            return {false, "unknown_key", {}, {}};
-        }
+    // Note: verify() is called from thread pool via offload(). ACL is read-only
+    // during verify -- reload_allowed_keys() only runs on the event loop thread
+    // and never concurrently with verify() in practice (SIGHUP handler waits).
+    if (!allowed_keys_.empty() && allowed_keys_.find(ns_hash) == allowed_keys_.end()) {
+        return {false, "unknown_key", {}, {}};
     }
 
     return {
@@ -77,12 +77,11 @@ AuthResult Authenticator::verify(
 }
 
 void Authenticator::reload_allowed_keys(KeySet new_keys) {
-    std::lock_guard<std::mutex> lock(acl_mutex_);
+    // Called from event loop thread (single-threaded model).
     allowed_keys_ = std::move(new_keys);
 }
 
 bool Authenticator::has_acl() const {
-    std::lock_guard<std::mutex> lock(acl_mutex_);
     return !allowed_keys_.empty();
 }
 

@@ -28,10 +28,7 @@ struct RelayMetrics;  // Forward declaration (metrics_collector.h)
 /// messages, and routes node responses to the correct WebSocket client.
 class UdsMultiplexer {
 public:
-    using Strand = asio::strand<asio::io_context::executor_type>;
-
     UdsMultiplexer(asio::io_context& ioc,
-                   Strand& strand,
                    std::string uds_path,
                    const identity::RelayIdentity& identity,
                    RequestRouter& router,
@@ -53,8 +50,9 @@ public:
     /// Access the owned WriteTracker (for session disconnect cleanup wiring).
     WriteTracker& write_tracker() { return write_tracker_; }
 
-    /// Set pointer to relay_main's SIGHUP-reloadable request timeout atomic.
-    void set_request_timeout(const std::atomic<uint32_t>* timeout);
+    /// Set pointer to relay_main's SIGHUP-reloadable request timeout.
+    /// Called from event loop thread (single-threaded model).
+    void set_request_timeout(const uint32_t* timeout);
 
     /// Set pointer to relay-level metrics for counter increments.
     void set_metrics(RelayMetrics* metrics);
@@ -108,7 +106,6 @@ private:
     void send_timeout_error(const PendingRequest& pending);
 
     asio::io_context& ioc_;
-    Strand& strand_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
     RequestRouter& router_;
@@ -133,8 +130,8 @@ private:
     // FEAT-01: tracks blob_hash -> writer session for source exclusion
     WriteTracker write_tracker_;
 
-    // Request timeout (SIGHUP-reloadable via relay_main atomic)
-    const std::atomic<uint32_t>* request_timeout_ = nullptr;
+    // Request timeout (SIGHUP-reloadable via relay_main, single-threaded)
+    const uint32_t* request_timeout_ = nullptr;
 
     // Relay-level metrics for counter increments
     RelayMetrics* metrics_ = nullptr;

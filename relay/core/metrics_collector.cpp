@@ -42,42 +42,42 @@ std::string MetricsCollector::format_prometheus(size_t active_connections,
     out += "# HELP chromatindb_relay_http_connections_total Total HTTP connections since startup.\n"
            "# TYPE chromatindb_relay_http_connections_total counter\n"
            "chromatindb_relay_http_connections_total " +
-           std::to_string(metrics_.http_connections_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.http_connections_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_http_disconnections_total Total HTTP disconnections since startup.\n"
            "# TYPE chromatindb_relay_http_disconnections_total counter\n"
            "chromatindb_relay_http_disconnections_total " +
-           std::to_string(metrics_.http_disconnections_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.http_disconnections_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_messages_received_total Total messages received since startup.\n"
            "# TYPE chromatindb_relay_messages_received_total counter\n"
            "chromatindb_relay_messages_received_total " +
-           std::to_string(metrics_.messages_received_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.messages_received_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_messages_sent_total Total messages sent since startup.\n"
            "# TYPE chromatindb_relay_messages_sent_total counter\n"
            "chromatindb_relay_messages_sent_total " +
-           std::to_string(metrics_.messages_sent_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.messages_sent_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_auth_failures_total Total authentication failures since startup.\n"
            "# TYPE chromatindb_relay_auth_failures_total counter\n"
            "chromatindb_relay_auth_failures_total " +
-           std::to_string(metrics_.auth_failures_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.auth_failures_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_rate_limited_total Total rate-limited messages since startup.\n"
            "# TYPE chromatindb_relay_rate_limited_total counter\n"
            "chromatindb_relay_rate_limited_total " +
-           std::to_string(metrics_.rate_limited_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.rate_limited_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_errors_total Total errors since startup.\n"
            "# TYPE chromatindb_relay_errors_total counter\n"
            "chromatindb_relay_errors_total " +
-           std::to_string(metrics_.errors_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.errors_total) + "\n\n";
 
     out += "# HELP chromatindb_relay_request_timeouts_total Total request timeouts since startup.\n"
            "# TYPE chromatindb_relay_request_timeouts_total counter\n"
            "chromatindb_relay_request_timeouts_total " +
-           std::to_string(metrics_.request_timeouts_total.load(std::memory_order_relaxed)) + "\n\n";
+           std::to_string(metrics_.request_timeouts_total) + "\n\n";
 
     // Gauges (3 -- per D-05)
     out += "# HELP chromatindb_relay_http_connections_active Current active HTTP connections.\n"

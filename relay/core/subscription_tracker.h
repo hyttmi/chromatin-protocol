@@ -40,7 +40,7 @@ struct UnsubscribeResult {
 /// the node sees exactly one Subscribe per namespace (first subscriber)
 /// and one Unsubscribe (last subscriber leaves).
 ///
-/// Access serialized via strand -- all callers must be on the strand.
+/// Access from single event loop thread -- no synchronization needed.
 class SubscriptionTracker {
 public:
     /// Subscribe a client session to one or more namespaces.

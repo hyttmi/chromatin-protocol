@@ -19,7 +19,7 @@ struct PendingRequest {
 /// Maps relay-scoped request_ids to client sessions and their original request_ids.
 /// Used for multiplexing multiple client requests through a single UDS connection.
 ///
-/// Access serialized via strand -- all callers must be on the strand.
+/// Access from single event loop thread -- no synchronization needed.
 class RequestRouter {
 public:
     /// Register a client request. Returns relay-scoped request_id.

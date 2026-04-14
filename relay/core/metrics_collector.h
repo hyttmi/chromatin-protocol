@@ -9,18 +9,18 @@
 
 namespace chromatindb::relay::core {
 
-/// Atomic counters for relay-level metrics (per D-04).
-/// All fields are atomic for safe concurrent access from multiple sessions.
+/// Counters for relay-level metrics (per D-04).
+/// All fields accessed from single event loop thread. No synchronization needed.
 /// Renamed from ws_ to http_ where transport-specific (Plan 08, D-28).
 struct RelayMetrics {
-    std::atomic<uint64_t> http_connections_total{0};
-    std::atomic<uint64_t> http_disconnections_total{0};
-    std::atomic<uint64_t> messages_received_total{0};
-    std::atomic<uint64_t> messages_sent_total{0};
-    std::atomic<uint64_t> auth_failures_total{0};
-    std::atomic<uint64_t> rate_limited_total{0};
-    std::atomic<uint64_t> errors_total{0};
-    std::atomic<uint64_t> request_timeouts_total{0};
+    uint64_t http_connections_total{0};
+    uint64_t http_disconnections_total{0};
+    uint64_t messages_received_total{0};
+    uint64_t messages_sent_total{0};
+    uint64_t auth_failures_total{0};
+    uint64_t rate_limited_total{0};
+    uint64_t errors_total{0};
+    uint64_t request_timeouts_total{0};
 };
 
 /// Pure metrics formatting class. No longer owns an HTTP accept loop --
