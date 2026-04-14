@@ -2,6 +2,7 @@
 
 #include <asio.hpp>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -78,33 +79,43 @@ private:
 
 /// Registry mapping relay_rid -> ResponsePromise for pending HTTP requests.
 ///
-/// NOT thread-safe -- accessed from io_context strand only.
+/// Thread-safe via mutex -- accessed from multiple io_context threads
+/// (HTTP handler coroutines register/remove, UDS read_loop resolves).
 /// The map stores non-owning pointers. Each ResponsePromise is stack-allocated
 /// by the HTTP handler coroutine, whose lifetime spans the full request.
 class ResponsePromiseMap {
 public:
     /// Register a promise for a relay request ID.
     void register_promise(uint32_t relay_rid, ResponsePromise* promise) {
+        std::lock_guard lock(mu_);
         promises_[relay_rid] = promise;
     }
 
     /// Resolve a promise by relay_rid. Returns true if found and resolved.
     /// Removes the entry from the map after resolution.
     bool resolve(uint32_t relay_rid, uint8_t type, std::vector<uint8_t> payload) {
-        auto it = promises_.find(relay_rid);
-        if (it == promises_.end()) return false;
-        it->second->resolve(type, std::move(payload));
-        promises_.erase(it);
+        ResponsePromise* p = nullptr;
+        {
+            std::lock_guard lock(mu_);
+            auto it = promises_.find(relay_rid);
+            if (it == promises_.end()) return false;
+            p = it->second;
+            promises_.erase(it);
+        }
+        // Resolve outside lock -- timer cancel is thread-safe in Asio
+        p->resolve(type, std::move(payload));
         return true;
     }
 
     /// Remove a promise without resolving (on timeout or client disconnect).
     void remove(uint32_t relay_rid) {
+        std::lock_guard lock(mu_);
         promises_.erase(relay_rid);
     }
 
     /// Cancel all promises and clear the map (for shutdown cleanup).
     void cancel_all() {
+        std::lock_guard lock(mu_);
         for (auto& [rid, promise] : promises_) {
             promise->cancel();
         }
@@ -112,9 +123,13 @@ public:
     }
 
     /// Number of pending promises (for metrics/debugging).
-    size_t size() const { return promises_.size(); }
+    size_t size() const {
+        std::lock_guard lock(mu_);
+        return promises_.size();
+    }
 
 private:
+    mutable std::mutex mu_;
     std::unordered_map<uint32_t, ResponsePromise*> promises_;
 };
 
