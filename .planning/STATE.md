@@ -59,6 +59,10 @@ Progress: [----------] 0%
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 114 added: Relay Thread Pool Offload — fix event loop starvation by offloading CPU-heavy work to thread pool
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
@@ -70,6 +74,8 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 111]: No deviations needed -- Plan 02 changes were clean, tests adapted mechanically
 - [Phase 113]: Port 4280/4281 for perf harness, no pass/fail thresholds (baseline only), all relay_benchmark.py defaults
 - [Phase 113]: WriteAck JSON field is 'hash' not 'blob_hash' -- benchmark script fixed (Rule 1 bug)
+- [Phase 113]: Benchmark results: 14 MiB/s large blob, 952 blobs/sec peak, +5250% p99 degradation under mixed load — single-threaded event loop is the bottleneck
+- [Phase 114]: Binary blob transfer (multipart HTTP) deferred to Phase 115 — fix starvation first, then eliminate base64
 
 ### Pending Todos
 

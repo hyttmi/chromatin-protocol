@@ -13,6 +13,7 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
 - [x] **Phase 111: Single-Threaded Rewrite** - Change relay to 1 io_context thread + thread pool, remove all strand/mutex code, simplify handlers (completed 2026-04-14)
 - [x] **Phase 112: ASAN Verification** - Run relay under ASAN at 1/10/100 concurrent clients, fix any issues, verify signal handling (completed 2026-04-14)
 - [x] **Phase 113: Performance Benchmarking** - Run all 4 benchmark workloads, generate baseline report (completed 2026-04-14)
+- [ ] **Phase 114: Relay Thread Pool Offload** - Fix event loop starvation by offloading CPU-heavy work to thread pool
 
 ## Phase Details
 
@@ -72,3 +73,14 @@ Phases execute in numeric order: 111 -> 112 -> 113
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
 | 113. Performance Benchmarking | 2/2 | Complete   | 2026-04-14 |
+| 114. Relay Thread Pool Offload | 0/0 | Not Started | - |
+
+### Phase 114: Relay Thread Pool Offload
+
+**Goal:** Fix event loop starvation by offloading CPU-heavy work (JSON parse, base64 encode/decode, FlatBuffer build, AEAD encrypt/decrypt) to the existing thread pool. Event loop stays single-threaded for I/O coordination. One client's large blob operation must not block other clients.
+**Requirements**: TBD
+**Depends on:** Phase 113
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 114 to break down)
