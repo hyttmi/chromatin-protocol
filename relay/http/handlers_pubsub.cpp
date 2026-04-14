@@ -23,11 +23,11 @@ namespace chromatindb::relay::http {
 PubSubHandlers::PubSubHandlers(core::SubscriptionTracker& tracker,
                                core::UdsMultiplexer& uds,
                                TokenStore& token_store,
-                               Strand& strand)
+                               asio::io_context& ioc)
     : tracker_(tracker)
     , uds_(uds)
     , token_store_(token_store)
-    , strand_(strand) {}
+    , ioc_(ioc) {}
 
 // ---------------------------------------------------------------------------
 // Namespace list parsing (JSON -> Namespace32 array)
@@ -93,15 +93,12 @@ asio::awaitable<HttpResponse> PubSubHandlers::handle_subscribe(
         co_return HttpResponse::error(401, "unauthorized", "Authentication required");
     }
 
-    // Off-strand: parse namespace list (CPU work per D-16).
+    // Parse namespace list.
     auto namespaces = parse_namespace_list(body);
     if (namespaces.empty()) {
         co_return HttpResponse::error(400, "bad_request",
                                       "Body must contain {\"namespaces\": [\"hex64\", ...]}");
     }
-
-    // Enter strand for shared state access (SubscriptionTracker, UdsMultiplexer::send).
-    co_await asio::post(strand_, asio::use_awaitable);
 
     // Cap check: 256 per session
     size_t current = tracker_.client_subscription_count(session->session_id);
@@ -141,15 +138,12 @@ asio::awaitable<HttpResponse> PubSubHandlers::handle_unsubscribe(
         co_return HttpResponse::error(401, "unauthorized", "Authentication required");
     }
 
-    // Off-strand: parse namespace list (CPU work per D-16).
+    // Parse namespace list.
     auto namespaces = parse_namespace_list(body);
     if (namespaces.empty()) {
         co_return HttpResponse::error(400, "bad_request",
                                       "Body must contain {\"namespaces\": [\"hex64\", ...]}");
     }
-
-    // Enter strand for shared state access (SubscriptionTracker, UdsMultiplexer::send).
-    co_await asio::post(strand_, asio::use_awaitable);
 
     auto unsub_result = tracker_.unsubscribe(session->session_id, namespaces);
 
@@ -185,9 +179,7 @@ asio::awaitable<HttpResponse> PubSubHandlers::handle_events_auth(
         co_return HttpResponse::error(401, "unauthorized", "Missing token query parameter");
     }
 
-    // Enter strand for TokenStore::lookup (shared state).
-    co_await asio::post(strand_, asio::use_awaitable);
-
+    // Single-threaded: TokenStore access directly on event loop.
     auto* sse_session = token_store_.lookup(*token_opt);
     if (!sse_session) {
         co_return HttpResponse::error(401, "unauthorized", "Invalid or expired token");

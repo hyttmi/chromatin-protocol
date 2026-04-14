@@ -3,7 +3,6 @@
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 #include <tuple>
@@ -32,7 +31,7 @@ public:
 
     HttpConnection(Stream stream, HttpRouter& router, TokenStore& token_store,
                    core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
-                   asio::io_context& ioc, std::atomic<uint32_t>& active_connections);
+                   asio::io_context& ioc, uint32_t& active_connections);
 
     /// Main coroutine: keep-alive request loop.
     /// Reads headers, optional body, dispatches via router, sends response.
@@ -65,7 +64,7 @@ private:
     core::SubscriptionTracker& tracker_;
     core::UdsMultiplexer& uds_;
     asio::io_context& ioc_;
-    std::atomic<uint32_t>& active_connections_;
+    uint32_t& active_connections_;
 
     // Read buffer (persistent across reads within a connection)
     static constexpr size_t READ_BUF_SIZE = 8192;
@@ -76,20 +75,21 @@ private:
     std::vector<uint8_t> pending_;
 };
 
-/// RAII guard that decrements an atomic counter on destruction.
+/// RAII guard that increments/decrements a connection counter.
+/// Single-threaded model: plain uint32_t, no atomic needed.
 class ConnectionGuard {
 public:
-    explicit ConnectionGuard(std::atomic<uint32_t>& counter) : counter_(counter) {
-        counter_.fetch_add(1, std::memory_order_relaxed);
+    explicit ConnectionGuard(uint32_t& counter) : counter_(counter) {
+        ++counter_;
     }
     ~ConnectionGuard() {
-        counter_.fetch_sub(1, std::memory_order_relaxed);
+        --counter_;
     }
     ConnectionGuard(const ConnectionGuard&) = delete;
     ConnectionGuard& operator=(const ConnectionGuard&) = delete;
 
 private:
-    std::atomic<uint32_t>& counter_;
+    uint32_t& counter_;
 };
 
 } // namespace chromatindb::relay::http

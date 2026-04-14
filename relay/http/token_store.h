@@ -28,7 +28,7 @@ struct HttpSessionState {
 };
 
 /// Maps opaque hex tokens to HTTP session state.
-/// Access serialized via strand -- all callers must be on the strand.
+/// Access from single event loop thread -- no synchronization needed.
 class TokenStore {
 public:
     /// Create a new session. Returns hex token (64 chars).

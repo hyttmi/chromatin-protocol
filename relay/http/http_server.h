@@ -6,7 +6,6 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
 
 namespace chromatindb::relay::core {
@@ -63,12 +62,11 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     const std::atomic<bool>& stopping_;
 
-    // TLS context: shared_ptr + mutex for SIGHUP reload.
-    mutable std::mutex tls_mutex_;
+    // TLS context: shared_ptr, SIGHUP reload on event loop thread.
     std::shared_ptr<asio::ssl::context> tls_ctx_;
 
-    std::atomic<uint32_t> max_connections_;
-    std::atomic<uint32_t> active_connections_{0};
+    uint32_t max_connections_;
+    uint32_t active_connections_{0};
 
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);
 };

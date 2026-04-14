@@ -30,31 +30,25 @@ class TokenStore;
 /// Subscribe/unsubscribe forward to the node via UDS when a namespace's
 /// reference count transitions (0->1 for subscribe, 1->0 for unsubscribe).
 ///
-/// All handlers post to strand_ before accessing shared state
-/// (SubscriptionTracker, UdsMultiplexer::send, TokenStore).
+/// All handlers execute on the single event loop thread.
 class PubSubHandlers {
 public:
-    using Strand = asio::strand<asio::io_context::executor_type>;
-
     PubSubHandlers(core::SubscriptionTracker& tracker,
                    core::UdsMultiplexer& uds,
                    TokenStore& token_store,
-                   Strand& strand);
+                   asio::io_context& ioc);
 
     /// POST /subscribe: parse JSON body, add to tracker, forward new to node.
-    /// Async: posts to strand before SubscriptionTracker/UdsMultiplexer access.
     asio::awaitable<HttpResponse> handle_subscribe(const HttpRequest& req,
                                                     const std::vector<uint8_t>& body,
                                                     HttpSessionState* session);
 
     /// POST /unsubscribe: parse JSON body, remove from tracker, forward empty to node.
-    /// Async: posts to strand before SubscriptionTracker/UdsMultiplexer access.
     asio::awaitable<HttpResponse> handle_unsubscribe(const HttpRequest& req,
                                                       const std::vector<uint8_t>& body,
                                                       HttpSessionState* session);
 
     /// GET /events?token=<token>: SSE event stream (long-lived connection).
-    /// Async: posts to strand before TokenStore::lookup.
     asio::awaitable<HttpResponse> handle_events_auth(const HttpRequest& req,
                                                       const std::vector<uint8_t>& body,
                                                       HttpSessionState* session);
@@ -73,7 +67,7 @@ private:
     core::SubscriptionTracker& tracker_;
     core::UdsMultiplexer& uds_;
     TokenStore& token_store_;
-    Strand& strand_;
+    asio::io_context& ioc_;
 };
 
 /// Register pub/sub routes on the HTTP router.

@@ -47,7 +47,7 @@ bool HttpServer::init_tls(const std::string& cert_path, const std::string& key_p
         ctx->use_certificate_chain_file(cert_path);
         ctx->use_private_key_file(key_path, asio::ssl::context::pem);
 
-        std::lock_guard<std::mutex> lock(tls_mutex_);
+        // Single-threaded: no mutex needed for TLS context swap.
         tls_ctx_ = std::move(ctx);
         return true;
     } catch (const std::exception& e) {
@@ -63,7 +63,7 @@ bool HttpServer::reload_tls(const std::string& cert_path, const std::string& key
         ctx->use_certificate_chain_file(cert_path);
         ctx->use_private_key_file(key_path, asio::ssl::context::pem);
 
-        std::lock_guard<std::mutex> lock(tls_mutex_);
+        // Single-threaded: no mutex needed for TLS context swap.
         tls_ctx_ = std::move(ctx);
         spdlog::info("HTTP TLS context reloaded");
         return true;
@@ -74,7 +74,6 @@ bool HttpServer::reload_tls(const std::string& cert_path, const std::string& key
 }
 
 bool HttpServer::is_tls_enabled() const {
-    std::lock_guard<std::mutex> lock(tls_mutex_);
     return tls_ctx_ != nullptr;
 }
 
@@ -94,10 +93,9 @@ asio::awaitable<void> HttpServer::accept_loop() {
         }
 
         // Enforce connection cap.
-        if (active_connections_.load(std::memory_order_relaxed) >=
-            max_connections_.load(std::memory_order_relaxed)) {
+        if (active_connections_ >= max_connections_) {
             spdlog::warn("HTTP connection rejected: max connections ({}) reached",
-                        max_connections_.load(std::memory_order_relaxed));
+                        max_connections_);
             asio::error_code close_ec;
             socket.close(close_ec);
             continue;
@@ -117,15 +115,15 @@ void HttpServer::stop() {
 }
 
 void HttpServer::set_max_connections(uint32_t max) {
-    auto old = max_connections_.load(std::memory_order_relaxed);
-    max_connections_.store(max, std::memory_order_relaxed);
+    auto old = max_connections_;
+    max_connections_ = max;
     if (old != max) {
         spdlog::info("HTTP max_connections updated: {} -> {}", old, max);
     }
 }
 
 size_t HttpServer::active_connections() const {
-    return active_connections_.load(std::memory_order_relaxed);
+    return active_connections_;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,11 +131,8 @@ size_t HttpServer::active_connections() const {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> HttpServer::handle_new_connection(asio::ip::tcp::socket socket) {
-    std::shared_ptr<asio::ssl::context> ctx;
-    {
-        std::lock_guard<std::mutex> lock(tls_mutex_);
-        ctx = tls_ctx_;
-    }
+    // Single-threaded: no mutex needed for TLS context access.
+    auto ctx = tls_ctx_;
 
     if (ctx) {
         // HTTPS mode: TLS handshake with timeout.

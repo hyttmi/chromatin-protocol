@@ -5,7 +5,6 @@
 
 #include <asio.hpp>
 #include <cstdint>
-#include <atomic>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -40,22 +39,19 @@ std::optional<BlobPathParams> extract_blob_path_params(std::string_view path,
 /// Raw binary pass-through for blob data -- no JSON wrapping for write/read bodies.
 /// WriteAck/DeleteAck translated to JSON via binary_to_json for responses.
 ///
-/// All handlers post to strand_ before accessing shared state (RequestRouter,
-/// ResponsePromiseMap, UdsMultiplexer, WriteTracker). Heavy work (validation,
-/// JSON parsing, FlatBuffer encoding) stays off-strand per D-16.
+/// All handlers execute on the single event loop thread.
+/// Heavy work (validation, JSON parsing, FlatBuffer encoding) stays inline per D-05.
 ///
 /// Per D-07, D-08, D-09, D-14, D-26.
 class DataHandlers {
 public:
-    using Strand = asio::strand<asio::io_context::executor_type>;
-
     DataHandlers(core::UdsMultiplexer& uds_mux,
                  core::RequestRouter& router,
                  ResponsePromiseMap& promises,
                  core::WriteTracker& write_tracker,
-                 const std::atomic<uint32_t>& max_blob_size,
-                 const std::atomic<uint32_t>& request_timeout,
-                 Strand& strand);
+                 const uint32_t& max_blob_size,
+                 const uint32_t& request_timeout,
+                 asio::io_context& ioc);
 
     /// POST /blob -- raw FlatBuffer body, returns JSON WriteAck.
     asio::awaitable<HttpResponse> handle_blob_write(
@@ -87,9 +83,9 @@ private:
     core::RequestRouter& router_;
     ResponsePromiseMap& promises_;
     core::WriteTracker& write_tracker_;
-    const std::atomic<uint32_t>& max_blob_size_;
-    const std::atomic<uint32_t>& request_timeout_;
-    Strand& strand_;
+    const uint32_t& max_blob_size_;
+    const uint32_t& request_timeout_;
+    asio::io_context& ioc_;
 };
 
 class HttpRouter;

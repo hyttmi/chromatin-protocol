@@ -25,7 +25,7 @@ static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 
 HttpConnection::HttpConnection(Stream stream, HttpRouter& router, TokenStore& token_store,
                                core::SubscriptionTracker& tracker, core::UdsMultiplexer& uds,
-                               asio::io_context& ioc, std::atomic<uint32_t>& active_connections)
+                               asio::io_context& ioc, uint32_t& active_connections)
     : stream_(std::move(stream))
     , router_(router)
     , token_store_(token_store)

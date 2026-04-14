@@ -79,7 +79,7 @@ private:
 
 /// Registry mapping relay_rid -> ResponsePromise for pending HTTP requests.
 ///
-/// Access serialized via strand -- all callers must be on the strand.
+/// Access from single event loop thread -- no synchronization needed.
 ///
 /// Promises are shared_ptr-owned by both the map and the handler coroutine.
 /// This prevents use-after-free when the handler coroutine ends (timeout/disconnect)
