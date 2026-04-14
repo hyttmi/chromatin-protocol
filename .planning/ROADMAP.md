@@ -10,7 +10,7 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
 - Continues from v3.1.0 (Phases 106-110, backlog 999.x)
 - v4.0.0 starts at Phase 111
 
-- [ ] **Phase 111: Single-Threaded Rewrite** - Change relay to 1 io_context thread + thread pool, remove all strand/mutex code, simplify handlers
+- [x] **Phase 111: Single-Threaded Rewrite** - Change relay to 1 io_context thread + thread pool, remove all strand/mutex code, simplify handlers (completed 2026-04-14)
 - [ ] **Phase 112: ASAN Verification** - Run relay under ASAN at 1/10/100 concurrent clients, fix any issues, verify signal handling
 - [ ] **Phase 113: Performance Benchmarking** - Run all 4 benchmark workloads, generate baseline report
 
@@ -26,12 +26,12 @@ Rewrite the relay's concurrency model from multi-threaded io_context to single-t
   3. TLS handshake, ML-DSA-87 verify, and large JSON parse/serialize execute on the thread pool via crypto::offload() and resume on the event loop thread
   4. HTTP handlers access shared state (UdsMultiplexer, RequestRouter, SubscriptionTracker, WriteTracker, TokenStore, ResponsePromiseMap) directly without strand posting or mutex locking
   5. All existing relay unit tests compile and pass under the single-threaded model
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 111-01-PLAN.md -- Thread pool infrastructure + relay_main.cpp single-threaded rewrite
 - [x] 111-02-PLAN.md -- Strip strands/mutexes from all relay components + wire ML-DSA-87 offload
-- [ ] 111-03-PLAN.md -- Test adaptation + full test suite verification + grep audit
+- [x] 111-03-PLAN.md -- Test adaptation + full test suite verification + grep audit
 
 ### Phase 112: ASAN Verification
 **Goal**: Relay is proven free of memory safety and concurrency bugs under realistic concurrent load and signal handling
@@ -62,6 +62,6 @@ Phases execute in numeric order: 111 -> 112 -> 113
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 111. Single-Threaded Rewrite | 2/3 | In Progress|  |
+| 111. Single-Threaded Rewrite | 3/3 | Complete   | 2026-04-14 |
 | 112. ASAN Verification | 0/TBD | Not started | - |
 | 113. Performance Benchmarking | 0/TBD | Not started | - |
