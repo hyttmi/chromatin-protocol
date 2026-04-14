@@ -344,7 +344,7 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
     // GET /node-info
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/node-info",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, strand_ptr](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -358,7 +358,7 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
     // GET /peer-info
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/peer-info",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, strand_ptr](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -372,7 +372,7 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
     // GET /storage-status
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/storage-status",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, strand_ptr](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
