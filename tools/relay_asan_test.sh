@@ -103,10 +103,10 @@ fi
 # =============================================================================
 log "Generating test configs..."
 
-# Node config (ephemeral port, UDS in temp dir)
+# Node config (high port to avoid conflicts, UDS in temp dir)
 cat > "$WORK_DIR/node.json" <<NODEEOF
 {
-  "bind_address": "127.0.0.1:0",
+  "bind_address": "127.0.0.1:4290",
   "uds_path": "$WORK_DIR/chromatindb.sock",
   "log_level": "info"
 }
@@ -141,7 +141,7 @@ export LSAN_OPTIONS="suppressions=$REPO_ROOT/sanitizers/lsan.supp"
 "$BUILD_DIR/chromatindb" run \
     --config "$WORK_DIR/node.json" \
     --data-dir "$WORK_DIR/node_data" \
-    2>"$WORK_DIR/node_stderr.log" &
+    >"$WORK_DIR/node_stderr.log" 2>&1 &
 NODE_PID=$!
 log "Node PID: $NODE_PID"
 
@@ -177,7 +177,7 @@ export LSAN_OPTIONS="suppressions=$REPO_ROOT/relay/lsan_suppressions.txt"
 
 "$BUILD_DIR/chromatindb_relay" \
     --config "$WORK_DIR/relay.json" \
-    2>"$WORK_DIR/relay_stderr.log" &
+    >"$WORK_DIR/relay_stderr.log" 2>&1 &
 RELAY_PID=$!
 log "Relay PID: $RELAY_PID"
 
@@ -271,7 +271,7 @@ if ! kill -0 "$RELAY_PID" 2>/dev/null; then
     fail "SIGHUP: relay crashed"
 else
     # Check for rate_limit reload confirmation in stderr
-    if grep -q "rate_limit reloaded: 999" "$WORK_DIR/relay_stderr.log"; then
+    if grep -q "rate_limit reloaded: 999 msg/s" "$WORK_DIR/relay_stderr.log"; then
         pass "SIGHUP: rate_limit reloaded to 999"
     else
         log "Relay stderr (last 20 lines):"
