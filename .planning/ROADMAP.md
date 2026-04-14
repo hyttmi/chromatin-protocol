@@ -181,16 +181,6 @@ Plans:
 - [x] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
 - [x] 999.9-10-PLAN.md — Gap closure: wire SSE streaming + subscription cleanup + test fix
 
-### Phase 999.10: Relay thread-safety overhaul for multi-threaded HTTP (BACKLOG)
-**Goal:** Replace partial mutex fixes with single global asio::strand for all shared relay state. Strand-confine UDS coroutines, HTTP handlers post to strand for shared state access. Remove all mutexes from RequestRouter, WriteTracker, SubscriptionTracker, TokenStore, ResponsePromiseMap. ASAN-clean at 100 concurrent clients.
-**Depends on**: Phase 999.9 (HTTP transport)
-**Requirements:** STRAND-01, STRAND-02, STRAND-03, STRAND-04, STRAND-05, STRAND-06, STRAND-07, STRAND-08, STRAND-09, STRAND-10, STRAND-11, STRAND-12
-**Success Criteria** (what must be TRUE):
-  1. A single global asio::strand serializes all shared state access -- no std::mutex in any of the 5 shared data structures
-  2. UDS coroutines (connect_loop, read_loop, cleanup_loop, drain_send_queue) all run on the strand
-  3. HTTP data/query/pubsub/auth handlers co_await post(strand) before touching shared state; heavy work (JSON parse, crypto) stays off-strand
-  4. Relay runs ASAN-clean under benchmark at 100 concurrent clients
-**Plans**: 2 plans
-Plans:
-- [x] 999.10-01-PLAN.md — Create strand in relay_main, bind UDS coroutines to strand, remove all mutexes from 5 shared data structures
-- [x] 999.10-02-PLAN.md — Wire strand into HTTP data/query/pubsub/auth handlers with post-to-strand pattern
+### Phase 999.10: Relay thread-safety overhaul (ABANDONED)
+**Goal:** ABANDONED — strand confinement approach proved insufficient for the relay's single-owner UdsMultiplexer design. Need full concurrency model redesign in new milestone.
+**Plans**: Approach failed under ASAN benchmark testing
