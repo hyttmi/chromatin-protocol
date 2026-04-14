@@ -61,6 +61,7 @@ struct QueryHandlerDeps {
     ResponsePromiseMap& promises;
     asio::io_context& ioc;
     const uint32_t* request_timeout = nullptr;  // SIGHUP-reloadable
+    asio::thread_pool* pool = nullptr;
 };
 
 /// Register all query endpoint routes on the router.

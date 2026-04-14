@@ -7,6 +7,7 @@
 #include "relay/core/write_tracker.h"
 #include "relay/translate/translator.h"
 #include "relay/util/hex.h"
+#include "relay/util/offload_if_large.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
 
@@ -64,14 +65,16 @@ DataHandlers::DataHandlers(core::UdsMultiplexer& uds_mux,
                            core::WriteTracker& write_tracker,
                            const uint32_t& max_blob_size,
                            const uint32_t& request_timeout,
-                           asio::io_context& ioc)
+                           asio::io_context& ioc,
+                           asio::thread_pool& pool)
     : uds_mux_(uds_mux)
     , router_(router)
     , promises_(promises)
     , write_tracker_(write_tracker)
     , max_blob_size_(max_blob_size)
     , request_timeout_(request_timeout)
-    , ioc_(ioc) {}
+    , ioc_(ioc)
+    , pool_(pool) {}
 
 // ---------------------------------------------------------------------------
 // Common: send transport message and co_await UDS response

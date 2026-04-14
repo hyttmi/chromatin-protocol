@@ -51,7 +51,8 @@ public:
                  core::WriteTracker& write_tracker,
                  const uint32_t& max_blob_size,
                  const uint32_t& request_timeout,
-                 asio::io_context& ioc);
+                 asio::io_context& ioc,
+                 asio::thread_pool& pool);
 
     /// POST /blob -- raw FlatBuffer body, returns JSON WriteAck.
     asio::awaitable<HttpResponse> handle_blob_write(
@@ -86,6 +87,7 @@ private:
     const uint32_t& max_blob_size_;
     const uint32_t& request_timeout_;
     asio::io_context& ioc_;
+    asio::thread_pool& pool_;
 };
 
 class HttpRouter;

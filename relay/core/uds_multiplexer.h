@@ -32,7 +32,8 @@ public:
                    std::string uds_path,
                    const identity::RelayIdentity& identity,
                    RequestRouter& router,
-                   SessionDispatch dispatch);
+                   SessionDispatch dispatch,
+                   asio::thread_pool& pool);
 
     /// Start async connect loop. Non-blocking, spawns coroutine.
     void start();
@@ -106,6 +107,7 @@ private:
     void send_timeout_error(const PendingRequest& pending);
 
     asio::io_context& ioc_;
+    asio::thread_pool& pool_;
     std::string uds_path_;
     const identity::RelayIdentity& identity_;
     RequestRouter& router_;

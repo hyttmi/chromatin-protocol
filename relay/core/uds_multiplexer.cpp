@@ -7,6 +7,7 @@
 #include "relay/translate/type_registry.h"
 #include "relay/util/endian.h"
 #include "relay/util/hex.h"
+#include "relay/util/offload_if_large.h"
 #include "relay/wire/aead.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
@@ -44,8 +45,10 @@ UdsMultiplexer::UdsMultiplexer(asio::io_context& ioc,
                                std::string uds_path,
                                const identity::RelayIdentity& identity,
                                RequestRouter& router,
-                               SessionDispatch dispatch)
+                               SessionDispatch dispatch,
+                               asio::thread_pool& pool)
     : ioc_(ioc)
+    , pool_(pool)
     , uds_path_(std::move(uds_path))
     , identity_(identity)
     , router_(router)

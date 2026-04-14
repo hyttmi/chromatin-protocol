@@ -6,6 +6,7 @@
 #include "relay/core/uds_multiplexer.h"
 #include "relay/translate/translator.h"
 #include "relay/translate/type_registry.h"
+#include "relay/util/offload_if_large.h"
 #include "relay/wire/transport_codec.h"
 #include "relay/wire/transport_generated.h"
 
@@ -121,7 +122,8 @@ asio::awaitable<HttpResponse> forward_query(
     core::RequestRouter& router,
     ResponsePromiseMap& promises,
     asio::io_context& ioc,
-    const uint32_t* request_timeout) {
+    const uint32_t* request_timeout,
+    asio::thread_pool* pool) {
 
     // 1. Translate JSON -> binary.
     auto result = translate::json_to_binary(query_json);
@@ -211,12 +213,13 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
     auto& promises = deps.promises;
     auto& ioc = deps.ioc;
     auto* timeout = deps.request_timeout;
+    auto* pool = deps.pool;
 
     // -------------------------------------------------------------------------
     // GET /list/{namespace}?since_seq=N&limit=N
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/list/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -237,14 +240,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /stats/{namespace} (D-11, alias for namespace stats)
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/stats/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -260,14 +263,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /exists/{namespace}/{hash}
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/exists/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -288,14 +291,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // POST /batch/exists
     // -------------------------------------------------------------------------
     router.add_async_route("POST", "/batch/exists",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest&, const std::vector<uint8_t>& body,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -328,56 +331,56 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(query, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /node-info
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/node-info",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
             nlohmann::json j = {{"type", "node_info_request"}};
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /peer-info
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/peer-info",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
             nlohmann::json j = {{"type", "peer_info_request"}};
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /storage-status
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/storage-status",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest&, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
             nlohmann::json j = {{"type", "storage_status_request"}};
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /namespace-stats/{namespace} (D-18)
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/namespace-stats/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -393,14 +396,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /metadata/{namespace}/{hash}
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/metadata/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -421,14 +424,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /delegations/{namespace}
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/delegations/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -444,14 +447,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /time-range/{namespace}?start=N&end=N&limit=N
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/time-range/",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -474,14 +477,14 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             };
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 
     // -------------------------------------------------------------------------
     // GET /namespace-list?after=HEX&limit=N
     // -------------------------------------------------------------------------
     router.add_async_route("GET", "/namespace-list",
-        [&uds_mux, &req_router, &promises, &ioc, timeout](
+        [&uds_mux, &req_router, &promises, &ioc, timeout, pool](
             const HttpRequest& req, const std::vector<uint8_t>&,
             HttpSessionState* session) -> asio::awaitable<HttpResponse> {
 
@@ -496,7 +499,7 @@ void register_query_routes(HttpRouter& router, QueryHandlerDeps deps) {
             j["limit"] = limit;
 
             co_return co_await forward_query(j, session->session_id,
-                uds_mux, req_router, promises, ioc, timeout);
+                uds_mux, req_router, promises, ioc, timeout, pool);
         });
 }
 
