@@ -68,10 +68,10 @@ Plans:
 **Goal:** Fix event loop starvation by offloading CPU-heavy work (JSON parse, base64 encode/decode, FlatBuffer build, AEAD encrypt/decrypt) to the existing thread pool. Event loop stays single-threaded for I/O coordination. One client's large blob operation must not block other clients.
 **Requirements**: OFF-01, OFF-02, OFF-03, OFF-04
 **Depends on:** Phase 113
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 114-01-PLAN.md — offload_if_large() helper + thread pool DI wiring + unit tests
+- [x] 114-01-PLAN.md — offload_if_large() helper + thread pool DI wiring + unit tests
 - [ ] 114-02-PLAN.md — Wrap all 11 translation and AEAD call sites with conditional offload
 
 ## Progress
@@ -84,4 +84,4 @@ Phases execute in numeric order: 111 -> 112 -> 113 -> 114
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
 | 113. Performance Benchmarking | 2/2 | Complete   | 2026-04-14 |
-| 114. Relay Thread Pool Offload | 0/2 | Not Started | - |
+| 114. Relay Thread Pool Offload | 1/2 | In Progress|  |
