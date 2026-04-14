@@ -21,10 +21,10 @@
 
 ### Performance Benchmarking
 
-- [ ] **PERF-01**: Throughput benchmark produces blobs/sec at 1, 10, and 100 concurrent HTTP clients recorded in benchmark report
-- [ ] **PERF-02**: Latency benchmark measures per-operation round-trip time (p50/p95/p99) through HTTP relay recorded in benchmark report
-- [ ] **PERF-03**: Large blob benchmark measures write+read throughput at 1 MiB, 10 MiB, 50 MiB, 100 MiB with MiB/sec recorded
-- [ ] **PERF-04**: Mixed workload benchmark measures small-query latency degradation under concurrent large-blob load
+- [x] **PERF-01**: Throughput benchmark produces blobs/sec at 1, 10, and 100 concurrent HTTP clients recorded in benchmark report
+- [x] **PERF-02**: Latency benchmark measures per-operation round-trip time (p50/p95/p99) through HTTP relay recorded in benchmark report
+- [x] **PERF-03**: Large blob benchmark measures write+read throughput at 1 MiB, 10 MiB, 50 MiB, 100 MiB with MiB/sec recorded
+- [x] **PERF-04**: Mixed workload benchmark measures small-query latency degradation under concurrent large-blob load
 
 ## Out of Scope
 
@@ -47,10 +47,10 @@
 | VER-01 | Phase 111 | Complete |
 | VER-02 | Phase 112 | Complete |
 | VER-03 | Phase 112 | Complete |
-| PERF-01 | Phase 113 | Pending |
-| PERF-02 | Phase 113 | Pending |
-| PERF-03 | Phase 113 | Pending |
-| PERF-04 | Phase 113 | Pending |
+| PERF-01 | Phase 113 | Complete |
+| PERF-02 | Phase 113 | Complete |
+| PERF-03 | Phase 113 | Complete |
+| PERF-04 | Phase 113 | Complete |
 
 **Coverage:**
 - v4.0.0 requirements: 12 total
