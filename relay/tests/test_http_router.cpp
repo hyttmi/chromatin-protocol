@@ -12,7 +12,7 @@
 using namespace chromatindb::relay::http;
 namespace core = chromatindb::relay::core;
 using json = nlohmann::json;
-using Strand = asio::strand<asio::io_context::executor_type>;
+// Single-threaded model: no strand needed.
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal HttpRequest
@@ -244,13 +244,10 @@ TEST_CASE("HttpRouter passes body to handler", "[http][router]") {
 // Auth challenge endpoint
 // ===========================================================================
 
-/// Helper: run an async dispatch in a test context with ioc + strand.
+/// Helper: run an async dispatch in a test context (single-threaded, no strand).
 static HttpResponse run_async_dispatch(HttpRouter& router, const HttpRequest& req,
                                         const std::vector<uint8_t>& body, TokenStore& store) {
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
-    router.set_strand(&strand);
-
     HttpResponse result;
     asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
         result = co_await router.dispatch_async(req, body, store);
@@ -264,9 +261,9 @@ TEST_CASE("POST /auth/challenge returns 200 with nonce", "[http][router][auth-en
     core::Authenticator authenticator;
     TokenStore store;
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
+    asio::thread_pool pool(1);
 
-    register_auth_routes(router, authenticator, store, strand);
+    register_auth_routes(router, authenticator, store, pool, ioc);
 
     auto req = make_request("POST", "/auth/challenge");
     auto resp = run_async_dispatch(router, req, {}, store);
@@ -286,9 +283,9 @@ TEST_CASE("POST /auth/verify with invalid nonce returns 401", "[http][router][au
     core::Authenticator authenticator;
     TokenStore store;
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
+    asio::thread_pool pool(1);
 
-    register_auth_routes(router, authenticator, store, strand);
+    register_auth_routes(router, authenticator, store, pool, ioc);
 
     // Try to verify with a nonce that was never issued.
     json body_json = {
@@ -310,9 +307,9 @@ TEST_CASE("POST /auth/verify with bad JSON returns 400", "[http][router][auth-en
     core::Authenticator authenticator;
     TokenStore store;
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
+    asio::thread_pool pool(1);
 
-    register_auth_routes(router, authenticator, store, strand);
+    register_auth_routes(router, authenticator, store, pool, ioc);
 
     std::vector<uint8_t> body = {'n', 'o', 't', ' ', 'j', 's', 'o', 'n'};
 
@@ -327,9 +324,9 @@ TEST_CASE("POST /auth/verify with missing fields returns 400", "[http][router][a
     core::Authenticator authenticator;
     TokenStore store;
     asio::io_context ioc;
-    auto strand = asio::make_strand(ioc);
+    asio::thread_pool pool(1);
 
-    register_auth_routes(router, authenticator, store, strand);
+    register_auth_routes(router, authenticator, store, pool, ioc);
 
     json body_json = {{"nonce", "abc"}};  // Missing public_key and signature.
     auto body_str = body_json.dump();

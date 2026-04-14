@@ -12,13 +12,13 @@ TEST_CASE("MetricsCollector: format prometheus counters", "[metrics_collector]")
     std::atomic<bool> stopping{false};
     MetricsCollector mc(stopping);
 
-    mc.metrics().http_connections_total.store(42, std::memory_order_relaxed);
-    mc.metrics().http_disconnections_total.store(7, std::memory_order_relaxed);
-    mc.metrics().messages_received_total.store(1000, std::memory_order_relaxed);
-    mc.metrics().messages_sent_total.store(800, std::memory_order_relaxed);
-    mc.metrics().auth_failures_total.store(3, std::memory_order_relaxed);
-    mc.metrics().rate_limited_total.store(15, std::memory_order_relaxed);
-    mc.metrics().errors_total.store(2, std::memory_order_relaxed);
+    mc.metrics().http_connections_total = 42;
+    mc.metrics().http_disconnections_total = 7;
+    mc.metrics().messages_received_total = 1000;
+    mc.metrics().messages_sent_total = 800;
+    mc.metrics().auth_failures_total = 3;
+    mc.metrics().rate_limited_total = 15;
+    mc.metrics().errors_total = 2;
 
     auto text = mc.format_prometheus(0, 0);
 
@@ -70,9 +70,9 @@ TEST_CASE("MetricsCollector: atomic increments", "[metrics_collector]") {
     MetricsCollector mc(stopping);
 
     for (int i = 0; i < 100; ++i) {
-        mc.metrics().messages_received_total.fetch_add(1, std::memory_order_relaxed);
+        ++mc.metrics().messages_received_total;
     }
-    CHECK(mc.metrics().messages_received_total.load(std::memory_order_relaxed) == 100);
+    CHECK(mc.metrics().messages_received_total == 100);
 }
 
 TEST_CASE("MetricsCollector: format_prometheus no-arg uses gauge_provider", "[metrics_collector]") {
