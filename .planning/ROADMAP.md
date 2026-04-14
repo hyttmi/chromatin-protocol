@@ -63,24 +63,25 @@ Plans:
 - [x] 113-01-PLAN.md — Benchmark orchestration script (tooling creation)
 - [x] 113-02-PLAN.md — Execute benchmark and produce baseline report (gap closure)
 
+### Phase 114: Relay Thread Pool Offload
+
+**Goal:** Fix event loop starvation by offloading CPU-heavy work (JSON parse, base64 encode/decode, FlatBuffer build, AEAD encrypt/decrypt) to the existing thread pool. Event loop stays single-threaded for I/O coordination. One client's large blob operation must not block other clients.
+**Requirements**: OFF-01, OFF-02, OFF-03, OFF-04
+**Depends on:** Phase 113
+**Plans:** 2 plans
+
+Plans:
+- [ ] 114-01-PLAN.md — offload_if_large() helper + thread pool DI wiring + unit tests
+- [ ] 114-02-PLAN.md — Wrap all 11 translation and AEAD call sites with conditional offload
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 111 -> 112 -> 113
+Phases execute in numeric order: 111 -> 112 -> 113 -> 114
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 111. Single-Threaded Rewrite | 3/3 | Complete    | 2026-04-14 |
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
 | 113. Performance Benchmarking | 2/2 | Complete   | 2026-04-14 |
-| 114. Relay Thread Pool Offload | 0/0 | Not Started | - |
-
-### Phase 114: Relay Thread Pool Offload
-
-**Goal:** Fix event loop starvation by offloading CPU-heavy work (JSON parse, base64 encode/decode, FlatBuffer build, AEAD encrypt/decrypt) to the existing thread pool. Event loop stays single-threaded for I/O coordination. One client's large blob operation must not block other clients.
-**Requirements**: TBD
-**Depends on:** Phase 113
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd:plan-phase 114 to break down)
+| 114. Relay Thread Pool Offload | 0/2 | Not Started | - |

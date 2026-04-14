@@ -26,6 +26,13 @@
 - [x] **PERF-03**: Large blob benchmark measures write+read throughput at 1 MiB, 10 MiB, 50 MiB, 100 MiB with MiB/sec recorded
 - [x] **PERF-04**: Mixed workload benchmark measures small-query latency degradation under concurrent large-blob load
 
+### Thread Pool Offload
+
+- [ ] **OFF-01**: offload_if_large() helper exists with 64 KB threshold (65536 bytes), conditionally dispatches CPU-heavy callables to the thread pool and transfers back to event loop
+- [ ] **OFF-02**: asio::thread_pool& reference injected into DataHandlers, QueryHandlerDeps, and UdsMultiplexer via constructor, wired from relay_main.cpp offload_pool
+- [ ] **OFF-03**: All json_to_binary() and binary_to_json() call sites in HTTP handlers (handlers_query.cpp, handlers_data.cpp) wrapped with offload_if_large() using payload size as threshold input
+- [ ] **OFF-04**: UDS AEAD encrypt/decrypt offloaded with counter-by-value capture (D-10), notification/broadcast binary_to_json pre-translated in read_loop() coroutine before synchronous dispatch
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -34,6 +41,7 @@
 | Strand confinement | Proved insufficient (Phase 999.10 abandoned) |
 | HTTP/2 | Not needed pre-MVP |
 | WebSocket fallback | Deleted in Phase 999.9 |
+| Binary blob transfer (multipart HTTP) | Deferred to Phase 115 — fix starvation first |
 
 ## Traceability
 
@@ -51,7 +59,11 @@
 | PERF-02 | Phase 113 | Complete |
 | PERF-03 | Phase 113 | Complete |
 | PERF-04 | Phase 113 | Complete |
+| OFF-01 | Phase 114 | Planned |
+| OFF-02 | Phase 114 | Planned |
+| OFF-03 | Phase 114 | Planned |
+| OFF-04 | Phase 114 | Planned |
 
 **Coverage:**
-- v4.0.0 requirements: 12 total
-- Mapped to phases: 12/12 (100%)
+- v4.0.0 requirements: 16 total
+- Mapped to phases: 16/16 (100%)
