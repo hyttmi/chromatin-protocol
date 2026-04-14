@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 114 context gathered
-last_updated: "2026-04-14T10:09:59.810Z"
-last_activity: 2026-04-14 -- Phase 114 execution started
+stopped_at: Completed 114-02-PLAN.md
+last_updated: "2026-04-14T10:34:57.635Z"
+last_activity: 2026-04-14
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 8
   percent: 0
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 ## Current Position
 
 Phase: 114 (relay-thread-pool-offload) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 114
-Last activity: 2026-04-14 -- Phase 114 execution started
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-04-14
 
 Progress: [----------] 0%
 
@@ -56,6 +56,7 @@ Progress: [----------] 0%
 | Phase 111 P03 | 10min | 2 tasks | 2 files |
 | Phase 113 P01 | 1min | 2 tasks | 1 files |
 | Phase 113 P02 | 10min | 2 tasks | 2 files |
+| Phase 114 P02 | 10min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 113]: WriteAck JSON field is 'hash' not 'blob_hash' -- benchmark script fixed (Rule 1 bug)
 - [Phase 113]: Benchmark results: 14 MiB/s large blob, 952 blobs/sec peak, +5250% p99 degradation under mixed load — single-threaded event loop is the bottleneck
 - [Phase 114]: Binary blob transfer (multipart HTTP) deferred to Phase 115 — fix starvation first, then eliminate base64
+- [Phase 114]: AEAD counters captured by value on event loop before offload lambda (D-10 correctness)
+- [Phase 114]: Notification/broadcast pre-translated in coroutine read_loop(), dispatched to sync handlers
+- [Phase 114]: Query json_to_binary stays inline (size=0) -- payloads always sub-KB
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-14T09:52:25.398Z
-Stopped at: Phase 114 context gathered
-Resume file: .planning/phases/114-relay-thread-pool-offload/114-CONTEXT.md
+Last session: 2026-04-14T10:34:57.632Z
+Stopped at: Completed 114-02-PLAN.md
+Resume file: None

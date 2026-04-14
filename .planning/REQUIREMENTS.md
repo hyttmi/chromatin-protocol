@@ -30,8 +30,8 @@
 
 - [x] **OFF-01**: offload_if_large() helper exists with 64 KB threshold (65536 bytes), conditionally dispatches CPU-heavy callables to the thread pool and transfers back to event loop
 - [x] **OFF-02**: asio::thread_pool& reference injected into DataHandlers, QueryHandlerDeps, and UdsMultiplexer via constructor, wired from relay_main.cpp offload_pool
-- [ ] **OFF-03**: All json_to_binary() and binary_to_json() call sites in HTTP handlers (handlers_query.cpp, handlers_data.cpp) wrapped with offload_if_large() using payload size as threshold input
-- [ ] **OFF-04**: UDS AEAD encrypt/decrypt offloaded with counter-by-value capture (D-10), notification/broadcast binary_to_json pre-translated in read_loop() coroutine before synchronous dispatch
+- [x] **OFF-03**: All json_to_binary() and binary_to_json() call sites in HTTP handlers (handlers_query.cpp, handlers_data.cpp) wrapped with offload_if_large() using payload size as threshold input
+- [x] **OFF-04**: UDS AEAD encrypt/decrypt offloaded with counter-by-value capture (D-10), notification/broadcast binary_to_json pre-translated in read_loop() coroutine before synchronous dispatch
 
 ## Out of Scope
 
