@@ -39,19 +39,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONC-01 | TBD | Pending |
-| CONC-02 | TBD | Pending |
-| CONC-03 | TBD | Pending |
-| CONC-04 | TBD | Pending |
-| CONC-05 | TBD | Pending |
-| VER-01 | TBD | Pending |
-| VER-02 | TBD | Pending |
-| VER-03 | TBD | Pending |
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| PERF-03 | TBD | Pending |
-| PERF-04 | TBD | Pending |
+| CONC-01 | Phase 111 | Pending |
+| CONC-02 | Phase 111 | Pending |
+| CONC-03 | Phase 111 | Pending |
+| CONC-04 | Phase 111 | Pending |
+| CONC-05 | Phase 111 | Pending |
+| VER-01 | Phase 111 | Pending |
+| VER-02 | Phase 112 | Pending |
+| VER-03 | Phase 112 | Pending |
+| PERF-01 | Phase 113 | Pending |
+| PERF-02 | Phase 113 | Pending |
+| PERF-03 | Phase 113 | Pending |
+| PERF-04 | Phase 113 | Pending |
 
 **Coverage:**
 - v4.0.0 requirements: 12 total
-- Mapped to phases: 0 (roadmap pending)
+- Mapped to phases: 12/12 (100%)
