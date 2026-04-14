@@ -74,7 +74,7 @@ Plans:
 
 ### Phase 110: Performance Benchmarking
 **Goal**: Relay performance is measured under realistic workloads to establish baselines and identify bottlenecks. HTTP transport enables raw binary blob benchmarks without base64 overhead.
-**Depends on**: Phase 109, Phase 999.9
+**Depends on**: Phase 109, Phase 999.9, Phase 999.10 (thread-safety)
 **Requirements**: PERF-01, PERF-02, PERF-03, PERF-04
 **Success Criteria** (what must be TRUE):
   1. Throughput benchmark produces messages/sec numbers at 1, 10, and 100 concurrent HTTP clients with results recorded in a benchmark report
@@ -180,3 +180,8 @@ Plans:
 - [x] 999.9-08-PLAN.md — relay_main rewire + MetricsCollector merge + integration
 - [x] 999.9-09-PLAN.md — WebSocket code deletion + cleanup + verification
 - [x] 999.9-10-PLAN.md — Gap closure: wire SSE streaming + subscription cleanup + test fix
+
+### Phase 999.10: Relay thread-safety overhaul for multi-threaded HTTP (BACKLOG)
+**Goal:** Relay was designed for single-threaded WS. With HTTP transport and hardware_concurrency() threads, UdsMultiplexer send_queue_, RequestRouter, WriteTracker, SubscriptionTracker, TokenStore all have concurrent access. ASAN crashes confirmed under benchmark load. Need systematic fix: strand-confine all shared state or add proper synchronization throughout. Blocks Phase 110 benchmarks.
+**Requirements:** TBD
+**Plans:** 0 plans
