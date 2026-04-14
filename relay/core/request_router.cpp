@@ -4,7 +4,7 @@ namespace chromatindb::relay::core {
 
 uint32_t RequestRouter::register_request(uint64_t client_id, uint32_t client_rid,
                                          uint8_t original_type) {
-    std::lock_guard lock(mu_);
+
     uint32_t rid = next_relay_rid_;
 
     pending_[rid] = PendingRequest{
@@ -25,7 +25,7 @@ uint32_t RequestRouter::register_request(uint64_t client_id, uint32_t client_rid
 }
 
 std::optional<PendingRequest> RequestRouter::resolve_response(uint32_t relay_rid) {
-    std::lock_guard lock(mu_);
+
     auto it = pending_.find(relay_rid);
     if (it == pending_.end()) {
         return std::nullopt;
@@ -37,7 +37,7 @@ std::optional<PendingRequest> RequestRouter::resolve_response(uint32_t relay_rid
 }
 
 void RequestRouter::remove_client(uint64_t client_id) {
-    std::lock_guard lock(mu_);
+
     std::erase_if(pending_, [client_id](const auto& entry) {
         return entry.second.client_session_id == client_id;
     });
@@ -45,7 +45,7 @@ void RequestRouter::remove_client(uint64_t client_id) {
 
 size_t RequestRouter::purge_stale(std::chrono::seconds timeout,
                                   std::function<void(const PendingRequest&)> on_timeout) {
-    std::lock_guard lock(mu_);
+
     auto now = std::chrono::steady_clock::now();
     size_t count = 0;
 
@@ -69,7 +69,7 @@ size_t RequestRouter::purge_stale(std::chrono::seconds timeout) {
 
 void RequestRouter::bulk_fail_all(
     std::function<void(uint64_t session_id, uint32_t client_rid)> on_fail) {
-    std::lock_guard lock(mu_);
+
     for (const auto& [relay_rid, pending] : pending_) {
         on_fail(pending.client_session_id, pending.client_request_id);
     }
@@ -77,7 +77,7 @@ void RequestRouter::bulk_fail_all(
 }
 
 size_t RequestRouter::pending_count() const {
-    std::lock_guard lock(mu_);
+
     return pending_.size();
 }
 

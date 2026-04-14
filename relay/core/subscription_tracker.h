@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -41,7 +40,7 @@ struct UnsubscribeResult {
 /// the node sees exactly one Subscribe per namespace (first subscriber)
 /// and one Unsubscribe (last subscriber leaves).
 ///
-/// Thread-safe via mutex -- accessed from HTTP handler threads and UDS read_loop.
+/// Access serialized via strand -- all callers must be on the strand.
 class SubscriptionTracker {
 public:
     /// Subscribe a client session to one or more namespaces.
@@ -67,16 +66,10 @@ public:
 
     /// Return total number of tracked namespaces (for gauge computation).
     size_t namespace_count() const {
-        std::lock_guard lock(mu_);
         return subs_.size();
     }
 
-    /// Lock for thread-safe access.
-    std::mutex& mutex() { return mu_; }
-
 private:
-    mutable std::mutex mu_;
-
     /// Namespace -> set of subscribed session IDs (per D-02)
     std::unordered_map<Namespace32, std::unordered_set<uint64_t>, Namespace32Hash> subs_;
 

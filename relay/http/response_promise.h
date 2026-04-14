@@ -3,7 +3,6 @@
 #include <asio.hpp>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -80,8 +79,7 @@ private:
 
 /// Registry mapping relay_rid -> ResponsePromise for pending HTTP requests.
 ///
-/// Thread-safe via mutex -- accessed from multiple io_context threads
-/// (HTTP handler coroutines register/remove, UDS read_loop resolves).
+/// Access serialized via strand -- all callers must be on the strand.
 ///
 /// Promises are shared_ptr-owned by both the map and the handler coroutine.
 /// This prevents use-after-free when the handler coroutine ends (timeout/disconnect)
@@ -92,7 +90,6 @@ public:
     /// Returns shared_ptr that the handler coroutine must hold.
     std::shared_ptr<ResponsePromise> create_promise(uint32_t relay_rid, asio::any_io_executor executor) {
         auto promise = std::make_shared<ResponsePromise>(executor);
-        std::lock_guard lock(mu_);
         promises_[relay_rid] = promise;
         return promise;
     }
@@ -100,28 +97,22 @@ public:
     /// Resolve a promise by relay_rid. Returns true if found and resolved.
     /// Removes the entry from the map after resolution.
     bool resolve(uint32_t relay_rid, uint8_t type, std::vector<uint8_t> payload) {
-        std::shared_ptr<ResponsePromise> p;
-        {
-            std::lock_guard lock(mu_);
-            auto it = promises_.find(relay_rid);
-            if (it == promises_.end()) return false;
-            p = it->second;
-            promises_.erase(it);
-        }
-        // Resolve outside lock -- shared_ptr keeps promise alive
+        auto it = promises_.find(relay_rid);
+        if (it == promises_.end()) return false;
+        auto p = it->second;
+        promises_.erase(it);
+        // shared_ptr keeps promise alive after map removal
         p->resolve(type, std::move(payload));
         return true;
     }
 
     /// Remove a promise without resolving (on timeout or client disconnect).
     void remove(uint32_t relay_rid) {
-        std::lock_guard lock(mu_);
         promises_.erase(relay_rid);
     }
 
     /// Cancel all promises and clear the map (for shutdown cleanup).
     void cancel_all() {
-        std::lock_guard lock(mu_);
         for (auto& [rid, promise] : promises_) {
             promise->cancel();
         }
@@ -130,12 +121,10 @@ public:
 
     /// Number of pending promises (for metrics/debugging).
     size_t size() const {
-        std::lock_guard lock(mu_);
         return promises_.size();
     }
 
 private:
-    mutable std::mutex mu_;
     std::unordered_map<uint32_t, std::shared_ptr<ResponsePromise>> promises_;
 };
 

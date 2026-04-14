@@ -6,7 +6,7 @@ namespace chromatindb::relay::core {
 
 SubscribeResult SubscriptionTracker::subscribe(uint64_t session_id,
                                                 const std::vector<Namespace32>& namespaces) {
-    std::lock_guard lock(mu_);
+
     SubscribeResult result{false, {}};
 
     for (const auto& ns : namespaces) {
@@ -30,7 +30,7 @@ SubscribeResult SubscriptionTracker::subscribe(uint64_t session_id,
 
 UnsubscribeResult SubscriptionTracker::unsubscribe(uint64_t session_id,
                                                     const std::vector<Namespace32>& namespaces) {
-    std::lock_guard lock(mu_);
+
     UnsubscribeResult result{false, {}};
 
     for (const auto& ns : namespaces) {
@@ -67,7 +67,7 @@ UnsubscribeResult SubscriptionTracker::unsubscribe(uint64_t session_id,
 }
 
 std::vector<Namespace32> SubscriptionTracker::remove_client(uint64_t session_id) {
-    std::lock_guard lock(mu_);
+
     auto client_it = client_subs_.find(session_id);
     if (client_it == client_subs_.end()) {
         return {};
@@ -99,7 +99,7 @@ std::vector<Namespace32> SubscriptionTracker::remove_client(uint64_t session_id)
 }
 
 std::vector<Namespace32> SubscriptionTracker::get_all_namespaces() const {
-    std::lock_guard lock(mu_);
+
     std::vector<Namespace32> result;
     result.reserve(subs_.size());
     for (const auto& [ns, _] : subs_) {
@@ -109,7 +109,7 @@ std::vector<Namespace32> SubscriptionTracker::get_all_namespaces() const {
 }
 
 std::unordered_set<uint64_t> SubscriptionTracker::get_subscribers(const Namespace32& ns) const {
-    std::lock_guard lock(mu_);
+
     auto it = subs_.find(ns);
     if (it == subs_.end()) {
         return {};
@@ -118,7 +118,7 @@ std::unordered_set<uint64_t> SubscriptionTracker::get_subscribers(const Namespac
 }
 
 size_t SubscriptionTracker::client_subscription_count(uint64_t session_id) const {
-    std::lock_guard lock(mu_);
+
     auto it = client_subs_.find(session_id);
     if (it == client_subs_.end()) {
         return 0;
