@@ -569,9 +569,43 @@ bool Connection::send(MsgType type, std::span<const uint8_t> payload,
                       uint32_t request_id) {
     if (!connected_) return false;
 
+    // Use chunked framing for large payloads
+    static constexpr size_t STREAMING_THRESHOLD = 1048576;  // 1 MiB
+    if (payload.size() >= STREAMING_THRESHOLD) {
+        return send_chunked(type, payload, request_id);
+    }
+
     auto transport_bytes = encode_transport(static_cast<uint8_t>(type),
                                             payload, request_id);
     return send_encrypted(transport_bytes);
+}
+
+bool Connection::send_chunked(MsgType type, std::span<const uint8_t> payload,
+                               uint32_t request_id) {
+    static constexpr size_t CHUNK_SIZE = 1048576;  // 1 MiB
+
+    // 1. Build and send chunked header: [0x01][type:1][request_id:4BE][total_size:8BE]
+    std::vector<uint8_t> header(14);
+    header[0] = 0x01;  // CHUNKED_BEGIN
+    header[1] = static_cast<uint8_t>(type);
+    store_u32_be(header.data() + 2, request_id);
+    store_u64_be(header.data() + 6, payload.size());
+
+    if (!send_encrypted(header)) return false;
+
+    // 2. Send data sub-frames (1 MiB each)
+    size_t offset = 0;
+    while (offset < payload.size()) {
+        size_t chunk_len = std::min(CHUNK_SIZE, payload.size() - offset);
+        auto chunk = payload.subspan(offset, chunk_len);
+        if (!send_encrypted(chunk)) return false;
+        offset += chunk_len;
+    }
+
+    // 3. Send zero-length sentinel
+    if (!send_encrypted(std::span<const uint8_t>{})) return false;
+
+    return true;
 }
 
 std::optional<DecodedTransport> Connection::recv() {
@@ -579,6 +613,35 @@ std::optional<DecodedTransport> Connection::recv() {
 
     auto pt = recv_encrypted();
     if (!pt) return std::nullopt;
+
+    // Check for chunked framing (first byte == 0x01)
+    if (!pt->empty() && (*pt)[0] == 0x01 && pt->size() >= 14) {
+        // Parse chunked header
+        uint8_t type = (*pt)[1];
+        uint32_t request_id = load_u32_be(pt->data() + 2);
+        uint64_t total_size = load_u64_be(pt->data() + 6);
+
+        // Collect extra metadata from header (bytes after 14)
+        std::vector<uint8_t> payload;
+        payload.reserve(static_cast<size_t>(total_size));
+        if (pt->size() > 14) {
+            payload.insert(payload.end(), pt->begin() + 14, pt->end());
+        }
+
+        // Read data sub-frames until zero-length sentinel
+        while (true) {
+            auto chunk = recv_encrypted();
+            if (!chunk) return std::nullopt;
+            if (chunk->empty()) break;  // Sentinel
+            payload.insert(payload.end(), chunk->begin(), chunk->end());
+        }
+
+        DecodedTransport msg;
+        msg.type = type;
+        msg.request_id = request_id;
+        msg.payload = std::move(payload);
+        return msg;
+    }
 
     return decode_transport(*pt);
 }

@@ -23,6 +23,7 @@ public:
                  const std::string& uds_path);
 
     /// Send a transport message (AEAD-encrypted).
+    /// Automatically uses chunked framing for payloads >= 1 MiB.
     bool send(MsgType type, std::span<const uint8_t> payload,
               uint32_t request_id = 1);
 
@@ -54,6 +55,10 @@ private:
     // Encrypted framed I/O (AEAD + counter nonce)
     bool send_encrypted(std::span<const uint8_t> plaintext);
     std::optional<std::vector<uint8_t>> recv_encrypted();
+
+    // Chunked send for large payloads (>= STREAMING_THRESHOLD)
+    bool send_chunked(MsgType type, std::span<const uint8_t> payload,
+                      uint32_t request_id);
 
     // Write/read helpers that dispatch to the active socket
     bool write_bytes(const uint8_t* data, size_t len);
