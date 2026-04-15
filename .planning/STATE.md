@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v4.0.0
-milestone_name: milestone
-status: verifying
-stopped_at: Completed 115-04-PLAN.md
-last_updated: "2026-04-15T05:03:17.858Z"
+milestone: v4.1.0
+milestone_name: CLI Polish
+status: defining-requirements
+stopped_at: null
+last_updated: "2026-04-15T12:00:00.000Z"
 last_activity: 2026-04-15
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
   percent: 0
 ---
 
@@ -18,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-14)
+See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 114 — relay-thread-pool-offload
+**Current focus:** Defining requirements for v4.1.0 CLI Polish
 
 ## Current Position
 
-Phase: 115
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-04-15
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-15 — Milestone v4.1.0 started
 
 Progress: [----------] 0%
 

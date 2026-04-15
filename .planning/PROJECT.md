@@ -10,23 +10,16 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v4.0.0 Relay Architecture v3
+## Current Milestone: v4.1.0 CLI Polish
 
-**Goal:** Rewrite the relay's concurrency model to single-threaded event loop with thread pool offload, fixing all ASAN concurrency bugs. Then benchmark performance.
+**Goal:** Make the CLI better for real-world secure file sharing
 
 **Target features:**
-- Single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers)
-- Thread pool for CPU-heavy work (ML-DSA-87 verify) via crypto::offload() pattern
-- All shared state accessed from single event loop thread — zero races, zero mutexes, zero strands
-- Remove broken multi-threaded strand/mutex code from v3.1.0 Phase 999.10
-- ASAN-clean under benchmark at 100 concurrent clients
-- Performance benchmarking (throughput, latency, large blob, mixed workload)
-
-**Architecture:** Same pattern as the node's PeerManager — single-threaded event loop for I/O, thread pool for crypto. Proven in this codebase.
-
-**Context:** v3.1.0 shipped HTTP+SSE transport (Phase 999.9) replacing WebSocket. Transport layer is correct. The multi-threaded io_context (hardware_concurrency threads) caused systemic ASAN heap-use-after-free under concurrent load. Strand confinement (Phase 999.10) failed — strands don't survive co_await on promise timers.
-
-**Phase 111 complete (2026-04-14):** Single-threaded rewrite done. 1 ioc.run() thread + asio::thread_pool offload. All strands/mutexes removed from relay code. ML-DSA-87 verify offloads via offload() with transfer-back. 377 relay tests pass. TLS and JSON stay inline (D-03/D-04/D-05).
+- Rename executable to `cdb` (drop `chromatindb-cli` as primary name)
+- Contact groups — `cdb put --share @team` instead of per-person flags
+- Chunked large files — >500 MiB without full memory buffering
+- Request pipelining — parallel downloads for multiple files
+- Configurable node constants — 10 hardcoded sync/peer values move to config.json with SIGHUP reload
 
 ## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
 
@@ -224,19 +217,23 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 ### Active
 
-- [ ] Relay live hardening: fix translation bugs, end-to-end testing, source exclusion, /health — v3.1.0
+- [ ] Rename CLI executable to `cdb` — v4.1.0
+- [ ] Contact groups for batch sharing — v4.1.0
+- [ ] Chunked large file support (>500 MiB without full memory buffering) — v4.1.0
+- [ ] Request pipelining (parallel downloads) — v4.1.0
+- [ ] Configurable node sync/peer constants (10 hardcoded values to config.json) — v4.1.0
 
 ### Future
 
-- CLI tool for admin operations (quota check, list blobs, etc.)
+- Mobile client (iOS/Android) for secure file sharing
 - C/C++/Rust/JS SDKs under sdk/ subdirectories
-- Performance benchmarks for Relay layer
 - Re-encryption on revocation (if compliance use case demands it)
-- Streaming encryption for blobs >10 MiB
 
 ## Context
 
-Database layer (db/) production-grade at ~34,300 LOC C++20. 647 unit tests, 49 Docker integration tests. ASAN/TSAN/UBSAN clean. Node code is frozen for v3.0.0.
+Database layer (db/) production-grade at ~34,300 LOC C++20. 699 unit tests. ASAN/TSAN/UBSAN clean. Node code is frozen MVP as of 2026-04-15. Relay and Python SDK permanently deleted.
+
+CLI client (cli/) shipped 2026-04-15. Standalone C++20, connects via UDS or TCP with full PQ handshake. All data envelope-encrypted client-side (node never sees plaintext). 16 commands, 31 unit tests. Live node at 192.168.1.73.
 
 Old relay/ and sdk/python/ deleted in Phase 100 (clean break). Relay v2 scaffold in place — standalone CMake, Session send queue, config, identity, spdlog. Phase 101 delivered hand-rolled RFC 6455 WebSocket transport with TLS 1.3. Phase 102 added ML-DSA-87 challenge-response auth over WebSocket and JSON schema definitions for all 38 client-allowed types. Phase 103 completed the core data path: single multiplexed UDS connection to node with TrustedHello + HKDF + AEAD handshake, table-driven JSON-to-FlatBuffers translation for all 38 types, relay-scoped request_id multiplexing for response routing, and binary WebSocket frames for large payloads. 161 relay tests, 1136 assertions.
 
