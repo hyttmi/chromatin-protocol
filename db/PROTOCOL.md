@@ -1208,29 +1208,43 @@ An envelope is a self-contained binary blob stored as the data payload of a stan
 | 32 | 1568 | kem_ciphertext | ML-KEM-1024 encapsulation ciphertext |
 | 1600 | 48 | wrapped_dek | AEAD-encrypted DEK (32-byte key + 16-byte Poly1305 tag) |
 
-**Data payload (variable):**
+**Data payload (segmented):**
 
-| Offset | Size | Field | Description |
-|--------|------|-------|-------------|
-| 20 + N*1648 | variable | ciphertext | ChaCha20-Poly1305 encrypted data + 16-byte tag |
+The plaintext is split into 1 MiB (1,048,576 byte) segments. Each segment is independently AEAD-encrypted:
 
-Total envelope size: `20 + (N * 1648) + len(plaintext) + 16` bytes
+```
+[segment_0: ciphertext + 16-byte tag]   (up to 1 MiB plaintext)
+[segment_1: ciphertext + 16-byte tag]   (up to 1 MiB plaintext)
+...
+[segment_K: ciphertext + 16-byte tag]   (last segment, may be smaller)
+```
+
+Each encrypted segment is `min(1048576, remaining) + 16` bytes. The segment count is implicit from the total ciphertext region size: `ciphertext_region = envelope_size - 20 - (N * 1648)`.
+
+Total envelope size: `20 + (N * 1648) + len(plaintext) + (segment_count * 16)` bytes
 
 Per-recipient overhead: 1648 bytes (32 hash + 1568 KEM ciphertext + 48 wrapped DEK)
 
+For files under 1 MiB, there is exactly one segment — the format is byte-identical to a non-segmented envelope.
+
 ### AEAD Parameters
 
-#### Data Encryption
+#### Data Encryption (Segmented)
+
+Each segment is encrypted independently:
 
 | Parameter | Value |
 |-----------|-------|
 | Algorithm | ChaCha20-Poly1305 (IETF, RFC 8439) |
-| Key | Random 32-byte DEK (`secrets.token_bytes(32)`) |
-| Nonce | Random 12 bytes (`secrets.token_bytes(12)`) -- NOT counter-based |
+| Key | Random 32-byte DEK (same for all segments) |
+| Nonce | `data_nonce XOR segment_index` — 12-byte base nonce with last 4 bytes XOR'd with big-endian segment index |
 | Associated data | Full envelope header: fixed header (20 bytes) + all recipient stanzas (N * 1648 bytes) |
-| Tag | 16 bytes (appended to ciphertext) |
+| Tag | 16 bytes (appended to each segment's ciphertext) |
+| Segment size | 1 MiB (1,048,576 bytes) plaintext, last segment may be smaller |
 
-The data nonce is random, in contrast to transport AEAD nonces which use a counter (4 zero bytes + 8-byte big-endian counter). Random nonces are correct here because each envelope uses a fresh random DEK -- the same key is never used twice.
+The base `data_nonce` is random (12 bytes). For segment `i`, the nonce is computed by XOR'ing the last 4 bytes of `data_nonce` with `i` as a big-endian uint32. This ensures each segment uses a unique nonce with the same DEK. Segment index 0 XOR is identity, so single-segment envelopes use `data_nonce` unchanged.
+
+The AD is the same for all segments — header + all stanzas. Segment ordering is enforced by the nonce: decrypting segment data with the wrong index produces an authentication failure.
 
 #### DEK Wrapping
 
@@ -1263,16 +1277,18 @@ The session fingerprint shown in the handshake diagram (`chromatin-session-fp-v1
 
 To decrypt an envelope:
 
-1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01 or 0x02
+1. Parse fixed header: validate magic `CENV` (0x43454E56), version 0x01, suite 0x01
 2. Build a key ring map: `{SHA3-256(kem_pk): kem_secret_key}` for all KEM keypairs held by the recipient (current key and any retained historical keys from prior rotations)
 3. Scan recipient stanzas sequentially, checking each stanza's `kem_pk_hash` against the key ring map
 4. If no stanza matches any key in the ring, reject with NotARecipientError
 5. Decapsulate `kem_ciphertext` with the matched KEM secret key to recover the shared secret
 6. Derive KEK: `HKDF-SHA256(ikm=shared_secret, salt=empty, info="chromatindb-envelope-kek-v1")` producing 32 bytes
 7. Decrypt `wrapped_dek` with KEK and zero nonce to recover the 32-byte DEK
-8. If suite is 0x02: decrypt data ciphertext, then Brotli-decompress the plaintext (100 MiB decompression limit)
-   If suite is 0x01: decrypt data ciphertext directly
-   Associated data for the data AEAD is the full header (fixed header + all recipient stanzas)
+8. Compute AD = full header (fixed 20 bytes + all recipient stanzas)
+9. Decrypt data segments sequentially:
+   - Compute ciphertext region size: `envelope_size - 20 - (recipient_count * 1648)`
+   - For each segment `i` (0-indexed): read up to `1048576 + 16` bytes, compute nonce = `data_nonce XOR (i as 4-byte BE at offset 8)`, AEAD-decrypt with DEK + nonce + AD
+   - Concatenate all decrypted segment plaintexts
 
 #### Key Ring Fallback
 

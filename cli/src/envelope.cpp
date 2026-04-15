@@ -32,6 +32,20 @@ static constexpr uint8_t VERSION          = 0x01;
 static constexpr uint8_t SUITE            = 0x01;
 
 static constexpr char HKDF_LABEL[] = "chromatindb-envelope-kek-v1";
+static constexpr size_t SEGMENT_SIZE = 1048576;  // 1 MiB
+
+/// Compute per-segment nonce: base_nonce with last 4 bytes XOR'd with segment index (BE).
+static std::array<uint8_t, NONCE_SIZE> segment_nonce(
+    const uint8_t* base_nonce, uint32_t segment_index) {
+    std::array<uint8_t, NONCE_SIZE> nonce{};
+    std::memcpy(nonce.data(), base_nonce, NONCE_SIZE);
+    // XOR last 4 bytes with segment index (big-endian)
+    nonce[8]  ^= static_cast<uint8_t>((segment_index >> 24) & 0xFF);
+    nonce[9]  ^= static_cast<uint8_t>((segment_index >> 16) & 0xFF);
+    nonce[10] ^= static_cast<uint8_t>((segment_index >> 8)  & 0xFF);
+    nonce[11] ^= static_cast<uint8_t>( segment_index        & 0xFF);
+    return nonce;
+}
 
 // =============================================================================
 // Internal: SHA3-256 hash
@@ -192,24 +206,15 @@ std::vector<uint8_t> encrypt(
         data_ad.insert(data_ad.end(), wrapped_deks[i].begin(), wrapped_deks[i].end());
     }
 
-    // Encrypt plaintext with DEK
-    std::vector<uint8_t> ciphertext(plaintext.size() + AEAD_TAG_SIZE);
-    unsigned long long ct_len = 0;
-    if (crypto_aead_chacha20poly1305_ietf_encrypt(
-            ciphertext.data(), &ct_len,
-            plaintext.data(), plaintext.size(),
-            data_ad.data(), data_ad.size(),
-            nullptr, data_nonce.data(), dek.data()) != 0) {
-        sodium_memzero(dek.data(), dek.size());
-        throw std::runtime_error("envelope::encrypt: data encryption failed");
-    }
-    ciphertext.resize(static_cast<size_t>(ct_len));
+    // Segmented encryption: 1 MiB segments, each independently AEAD-encrypted
+    uint32_t segment_count = static_cast<uint32_t>(
+        (plaintext.size() + SEGMENT_SIZE - 1) / SEGMENT_SIZE);
+    if (segment_count == 0) segment_count = 1;  // Empty plaintext = one empty segment
 
-    sodium_memzero(dek.data(), dek.size());
-
-    // Assemble final envelope
+    // Assemble envelope: header + stanzas + segments
     std::vector<uint8_t> envelope;
-    envelope.reserve(HEADER_SIZE + stanzas.size() * STANZA_SIZE + ciphertext.size());
+    size_t total_ct_size = plaintext.size() + segment_count * AEAD_TAG_SIZE;
+    envelope.reserve(HEADER_SIZE + stanzas.size() * STANZA_SIZE + total_ct_size);
 
     // Header
     envelope.insert(envelope.end(), header.begin(), header.end());
@@ -221,9 +226,27 @@ std::vector<uint8_t> encrypt(
         envelope.insert(envelope.end(), wrapped_deks[i].begin(), wrapped_deks[i].end());
     }
 
-    // Ciphertext + tag
-    envelope.insert(envelope.end(), ciphertext.begin(), ciphertext.end());
+    // Encrypt each segment
+    size_t offset = 0;
+    for (uint32_t seg = 0; seg < segment_count; ++seg) {
+        size_t seg_len = std::min(SEGMENT_SIZE, plaintext.size() - offset);
+        auto nonce = segment_nonce(data_nonce.data(), seg);
 
+        std::vector<uint8_t> seg_ct(seg_len + AEAD_TAG_SIZE);
+        unsigned long long ct_len = 0;
+        if (crypto_aead_chacha20poly1305_ietf_encrypt(
+                seg_ct.data(), &ct_len,
+                plaintext.data() + offset, seg_len,
+                data_ad.data(), data_ad.size(),
+                nullptr, nonce.data(), dek.data()) != 0) {
+            sodium_memzero(dek.data(), dek.size());
+            throw std::runtime_error("envelope::encrypt: segment encryption failed");
+        }
+        envelope.insert(envelope.end(), seg_ct.begin(), seg_ct.begin() + static_cast<size_t>(ct_len));
+        offset += seg_len;
+    }
+
+    sodium_memzero(dek.data(), dek.size());
     return envelope;
 }
 
@@ -348,30 +371,51 @@ std::optional<std::vector<uint8_t>> decrypt(
     data_ad.insert(data_ad.end(), envelope_data.data(), envelope_data.data() + HEADER_SIZE);
     data_ad.insert(data_ad.end(), stanzas_start, stanzas_start + stanza_total);
 
-    // Decrypt ciphertext
-    const uint8_t* ciphertext = stanzas_start + stanza_total;
-    size_t ciphertext_len = envelope_data.size() - HEADER_SIZE - stanza_total;
+    // Segmented decryption
+    const uint8_t* ct_region = stanzas_start + stanza_total;
+    size_t ct_region_len = envelope_data.size() - HEADER_SIZE - stanza_total;
 
-    if (ciphertext_len < AEAD_TAG_SIZE) {
+    if (ct_region_len < AEAD_TAG_SIZE) {
         sodium_memzero(dek.data(), dek.size());
         return std::nullopt;
     }
 
-    std::vector<uint8_t> decrypted(ciphertext_len - AEAD_TAG_SIZE);
-    unsigned long long pt_len = 0;
+    // Decrypt segments: each is up to SEGMENT_SIZE + TAG_SIZE bytes
+    static constexpr size_t MAX_SEG_CT = SEGMENT_SIZE + AEAD_TAG_SIZE;
+    std::vector<uint8_t> decrypted;
+    size_t ct_offset = 0;
+    uint32_t seg_idx = 0;
 
-    if (crypto_aead_chacha20poly1305_ietf_decrypt(
-            decrypted.data(), &pt_len,
-            nullptr,
-            ciphertext, ciphertext_len,
-            data_ad.data(), data_ad.size(),
-            data_nonce, dek.data()) != 0) {
-        sodium_memzero(dek.data(), dek.size());
-        return std::nullopt;
+    while (ct_offset < ct_region_len) {
+        size_t remaining = ct_region_len - ct_offset;
+        size_t seg_ct_len = std::min(MAX_SEG_CT, remaining);
+
+        if (seg_ct_len < AEAD_TAG_SIZE) {
+            sodium_memzero(dek.data(), dek.size());
+            return std::nullopt;
+        }
+
+        auto nonce = segment_nonce(data_nonce, seg_idx);
+        size_t seg_pt_len = seg_ct_len - AEAD_TAG_SIZE;
+        size_t prev_size = decrypted.size();
+        decrypted.resize(prev_size + seg_pt_len);
+
+        unsigned long long pt_len = 0;
+        if (crypto_aead_chacha20poly1305_ietf_decrypt(
+                decrypted.data() + prev_size, &pt_len,
+                nullptr,
+                ct_region + ct_offset, seg_ct_len,
+                data_ad.data(), data_ad.size(),
+                nonce.data(), dek.data()) != 0) {
+            sodium_memzero(dek.data(), dek.size());
+            return std::nullopt;
+        }
+        decrypted.resize(prev_size + static_cast<size_t>(pt_len));
+        ct_offset += seg_ct_len;
+        ++seg_idx;
     }
+
     sodium_memzero(dek.data(), dek.size());
-
-    decrypted.resize(static_cast<size_t>(pt_len));
     return decrypted;
 }
 
