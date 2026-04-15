@@ -3,7 +3,10 @@
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
+#include <array>
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -52,8 +55,41 @@ private:
     /// Read exactly content_length bytes of body.
     asio::awaitable<bool> read_body(size_t content_length, std::vector<uint8_t>& body);
 
+    /// Read HTTP body incrementally in chunks of chunk_size bytes.
+    /// Calls chunk_cb for each chunk read. Final chunk may be smaller.
+    /// Returns false on read error.
+    using ChunkCallback = std::function<asio::awaitable<bool>(std::span<const uint8_t>)>;
+    asio::awaitable<bool> read_body_chunked(size_t content_length, size_t chunk_size,
+                                             ChunkCallback chunk_cb);
+
+    /// Start a chunked transfer encoding response.
+    /// Writes status line + headers including Transfer-Encoding: chunked.
+    /// After this, call write_chunked_te_chunk() for each data chunk,
+    /// then write_chunked_te_end() to terminate.
+    asio::awaitable<bool> write_chunked_te_start(uint16_t status, std::string_view content_type);
+
+    /// Write one HTTP chunk in chunked-TE format: "{hex_size}\r\n{data}\r\n".
+    asio::awaitable<bool> write_chunked_te_chunk(std::span<const uint8_t> data);
+
+    /// Write the terminating chunk "0\r\n\r\n" to end chunked transfer encoding.
+    asio::awaitable<bool> write_chunked_te_end();
+
     /// Enter SSE streaming mode: create SseWriter, run drain loop, cleanup on close.
     asio::awaitable<void> run_sse_mode(uint64_t session_id);
+
+    /// Write a buffer sequence to the stream (scatter-gather).
+    /// Handles TLS/plain branching via get_if.
+    template<typename BufferSequence>
+    asio::awaitable<std::tuple<asio::error_code, size_t>> async_write_buffers(
+        const BufferSequence& bufs) {
+        // Defined in same use_nothrow pattern as async_write.
+        static constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
+        if (auto* tls = std::get_if<TlsStream>(&stream_)) {
+            co_return co_await asio::async_write(*tls, bufs, use_nothrow);
+        }
+        auto* tcp = std::get_if<asio::ip::tcp::socket>(&stream_);
+        co_return co_await asio::async_write(*tcp, bufs, use_nothrow);
+    }
 
     /// Shutdown the underlying socket cleanly.
     void shutdown_socket();
