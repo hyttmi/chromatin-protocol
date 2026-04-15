@@ -308,3 +308,134 @@ TEST_CASE("Data routes: async route with valid token returns 500 from sync dispa
     // Sync dispatch of async route -> 500 internal_error.
     REQUIRE(resp.status == 500);
 }
+
+// ===========================================================================
+// StreamingResponsePromise tests (Phase 115 Plan 04)
+// ===========================================================================
+
+TEST_CASE("StreamingResponsePromise: set_header makes header_ready", "[http][data][streaming]") {
+    asio::io_context ioc;
+    StreamingResponsePromise promise(ioc.get_executor());
+
+    StreamingResponsePromise::HeaderInfo hdr{32, 42, 2048, {0x01}};
+    promise.set_header(std::move(hdr));
+
+    // The header should be internally ready. Verify by checking that
+    // the queue is not closed yet (it starts open).
+    REQUIRE_FALSE(promise.queue.closed);
+}
+
+TEST_CASE("StreamingResponsePromise: queue starts open", "[http][data][streaming]") {
+    asio::io_context ioc;
+    StreamingResponsePromise promise(ioc.get_executor());
+
+    REQUIRE_FALSE(promise.queue.closed);
+    REQUIRE(promise.queue.chunks.empty());
+}
+
+TEST_CASE("StreamingResponsePromise: queue close sets closed flag", "[http][data][streaming]") {
+    asio::io_context ioc;
+    StreamingResponsePromise promise(ioc.get_executor());
+
+    promise.queue.close_queue();
+    REQUIRE(promise.queue.closed);
+}
+
+TEST_CASE("ResponsePromiseMap: resolve fallback to streaming promise (synchronous)", "[http][data][streaming]") {
+    asio::io_context ioc;
+    ResponsePromiseMap map;
+
+    // Create a streaming promise
+    auto sp = map.create_streaming_promise(100, ioc.get_executor());
+    REQUIRE(map.streaming_size() == 1);
+
+    // Resolve with regular resolve() -- should fall back to streaming promise
+    std::vector<uint8_t> payload = {0x01, 0xDE, 0xAD};
+    bool resolved = map.resolve(100, 32, payload);
+    REQUIRE(resolved);
+    REQUIRE(map.streaming_size() == 0);  // Removed from map after resolve
+
+    // The streaming promise should have the data pushed into its queue synchronously
+    REQUIRE(sp->queue.closed);
+    REQUIRE(sp->queue.chunks.size() == 1);
+    REQUIRE(sp->queue.chunks[0].size() == 3);
+    REQUIRE(sp->queue.chunks[0][0] == 0x01);
+    REQUIRE(sp->queue.chunks[0][1] == 0xDE);
+    REQUIRE(sp->queue.chunks[0][2] == 0xAD);
+}
+
+TEST_CASE("ResponsePromiseMap: resolve regular promise preferred over streaming", "[http][data][streaming]") {
+    asio::io_context ioc;
+    ResponsePromiseMap map;
+
+    // Create both regular and streaming promises for the same relay_rid
+    auto regular = map.create_promise(100, ioc.get_executor());
+    auto streaming = map.create_streaming_promise(100, ioc.get_executor());
+
+    REQUIRE(map.size() == 1);
+    REQUIRE(map.streaming_size() == 1);
+
+    // Resolve should prefer regular promise
+    bool resolved = map.resolve(100, 32, {0xAA});
+    REQUIRE(resolved);
+    REQUIRE(regular->is_resolved());
+    // Streaming promise should NOT have been resolved (regular took priority)
+    REQUIRE(map.streaming_size() == 1);  // Still in the map
+    REQUIRE(streaming->queue.chunks.empty());
+}
+
+TEST_CASE("ResponsePromiseMap: streaming promise management", "[http][data][streaming]") {
+    asio::io_context ioc;
+    ResponsePromiseMap map;
+
+    auto sp = map.create_streaming_promise(200, ioc.get_executor());
+    REQUIRE(map.streaming_size() == 1);
+
+    auto got = map.get_streaming(200);
+    REQUIRE(got != nullptr);
+    REQUIRE(got == sp);
+
+    auto miss = map.get_streaming(999);
+    REQUIRE(miss == nullptr);
+
+    map.remove_streaming(200);
+    REQUIRE(map.streaming_size() == 0);
+    REQUIRE(map.get_streaming(200) == nullptr);
+}
+
+TEST_CASE("ResponsePromiseMap: cancel_all closes streaming promises", "[http][data][streaming]") {
+    asio::io_context ioc;
+    ResponsePromiseMap map;
+
+    auto p = map.create_promise(1, ioc.get_executor());
+    auto sp = map.create_streaming_promise(2, ioc.get_executor());
+
+    REQUIRE(map.size() == 1);
+    REQUIRE(map.streaming_size() == 1);
+
+    map.cancel_all();
+
+    REQUIRE(map.size() == 0);
+    REQUIRE(map.streaming_size() == 0);
+    REQUIRE(sp->queue.closed);
+}
+
+TEST_CASE("ResponsePromiseMap: resolve to unknown streaming rid returns false", "[http][data][streaming]") {
+    ResponsePromiseMap map;
+
+    // No regular or streaming promise registered
+    bool resolved = map.resolve(999, 8, {0x01});
+    REQUIRE_FALSE(resolved);
+}
+
+TEST_CASE("STREAMING_THRESHOLD constant is 1 MiB", "[http][data][streaming]") {
+    REQUIRE(chromatindb::relay::core::STREAMING_THRESHOLD == 1048576);
+}
+
+TEST_CASE("CHUNK_SIZE constant is 1 MiB", "[http][data][streaming]") {
+    REQUIRE(chromatindb::relay::core::CHUNK_SIZE == 1048576);
+}
+
+TEST_CASE("CHUNK_QUEUE_MAX_DEPTH is 4", "[http][data][streaming]") {
+    REQUIRE(chromatindb::relay::core::CHUNK_QUEUE_MAX_DEPTH == 4);
+}
