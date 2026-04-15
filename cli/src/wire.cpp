@@ -289,28 +289,4 @@ std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
     return result;
 }
 
-std::vector<uint8_t> make_manifest_data(const std::vector<std::array<uint8_t, 32>>& chunk_hashes) {
-    std::vector<uint8_t> data;
-    data.reserve(8 + chunk_hashes.size() * 32);
-    data.insert(data.end(), MANIFEST_MAGIC.begin(), MANIFEST_MAGIC.end());
-    uint8_t count_be[4];
-    store_u32_be(count_be, static_cast<uint32_t>(chunk_hashes.size()));
-    data.insert(data.end(), count_be, count_be + 4);
-    for (const auto& h : chunk_hashes) {
-        data.insert(data.end(), h.begin(), h.end());
-    }
-    return data;
-}
-
-std::vector<std::array<uint8_t, 32>> parse_manifest_data(std::span<const uint8_t> data) {
-    if (data.size() < 8 || !is_manifest(data)) return {};
-    uint32_t count = load_u32_be(data.data() + 4);
-    if (data.size() < 8 + count * 32) return {};
-    std::vector<std::array<uint8_t, 32>> hashes(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        std::memcpy(hashes[i].data(), data.data() + 8 + i * 32, 32);
-    }
-    return hashes;
-}
-
 } // namespace chromatindb::cli

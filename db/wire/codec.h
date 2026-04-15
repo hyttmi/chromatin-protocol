@@ -104,19 +104,6 @@ std::vector<uint8_t> extract_delegate_pubkey(std::span<const uint8_t> data);
 std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubkey);
 
 // =============================================================================
-// Chunk detection (for list filtering)
-// =============================================================================
-
-/// Check if blob data is a chunk part: [CPAR magic:4][envelope data].
-/// Chunk parts are filtered from ListResponse — only the manifest is visible.
-inline constexpr std::array<uint8_t, 4> CHUNK_PART_MAGIC = {0x43, 0x50, 0x41, 0x52};  // "CPAR"
-
-inline bool is_chunk_part(std::span<const uint8_t> data) {
-    return data.size() > 4 &&
-           data[0] == 0x43 && data[1] == 0x50 && data[2] == 0x41 && data[3] == 0x52;
-}
-
-// =============================================================================
 // Public key blob utilities
 // =============================================================================
 
