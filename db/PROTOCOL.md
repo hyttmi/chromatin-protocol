@@ -289,8 +289,8 @@ as not-found:
 | ExistsRequest | Returns 0x00 (not-found) |
 | BatchExistsRequest | Returns 0x00 per expired entry |
 | BatchReadRequest | Returns status 0x00 per expired entry |
-| ListRequest | Excludes expired blobs from ref list |
-| TimeRangeRequest | Excludes expired blobs from results |
+| ListRequest | Excludes expired blobs, tombstones, and delegations from ref list |
+| TimeRangeRequest | Excludes expired blobs, tombstones, and delegations from results |
 | MetadataRequest | Returns 0x00 (not-found) |
 | StatsRequest | No filtering (reports storage reality) |
 | NamespaceStatsRequest | No filtering (reports storage reality) |
@@ -724,6 +724,20 @@ In addition to sync rejection, per-connection token bucket rate limiting applies
 
 Client protocol operations allow authenticated connections to read, list, and query blobs without participating in the sync protocol. These operations are available on all connection types (TCP with PQ handshake, trusted TCP, and UDS).
 
+### TCP Client Connections
+
+The node distinguishes clients from peers on TCP connections. A TCP connection whose authenticated public key matches `allowed_client_keys` (or any key when `allowed_client_keys` is empty) is treated as a client:
+
+- **No connection dedup** -- multiple client connections from the same identity are allowed
+- **No SyncNamespaceAnnounce** -- clients don't participate in replication
+- **No keepalive** -- the node doesn't ping clients or disconnect them for silence
+- **No PEX tracking** -- client addresses are not added to the peer address book
+- **Separate connection limit** -- `max_clients` (default 128) is independent of `max_peers`
+
+A TCP connection that does not match `allowed_client_keys` falls through to `allowed_peer_keys` and is treated as a replication peer with full sync, dedup, and keepalive behavior.
+
+The `max_clients` field is SIGHUP-reloadable.
+
 ### WriteAck (type 30)
 
 After a successful `Data (8)` ingest, the node sends a WriteAck back to the connection that submitted the blob. The ack is sent for both new blobs (stored) and duplicates.
@@ -777,6 +791,8 @@ List blobs in a namespace with cursor-based pagination.
 | has_more | 4 + count*40 | 1 | uint8 | 1 = more entries available |
 
 To paginate: set `since_seq` to the last `seq_num` in the response. Repeat until `has_more = 0`. Use ReadRequest to fetch full blob data.
+
+The node filters internal blobs from ListResponse: expired blobs, tombstones (0xDEADBEEF magic), and delegation blobs (0xDE1E6A7E magic) are excluded. Clients see only user data blobs. The same filtering applies to TimeRangeResponse.
 
 ### StatsRequest / StatsResponse (types 35-36)
 
