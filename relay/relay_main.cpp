@@ -331,7 +331,6 @@ int main(int argc, char* argv[]) {
         uds_mux, request_router, promise_map, uds_mux.write_tracker(),
         max_blob_size, request_timeout, ioc, offload_pool);
     chromatindb::relay::http::register_data_routes(router, data_handlers);
-    http_server.set_data_handlers(&data_handlers);
 
     // QueryHandlers (all query endpoints) -- D-10 through D-21
     chromatindb::relay::http::QueryHandlerDeps query_deps{
@@ -351,6 +350,7 @@ int main(int argc, char* argv[]) {
         ioc, router, token_store, subscription_tracker, uds_mux,
         cfg.bind_address, static_cast<uint16_t>(cfg.bind_port),
         cfg.max_connections, stopping);
+    http_server.set_data_handlers(&data_handlers);
 
     // =========================================================================
     // 18. Init TLS on HttpServer
