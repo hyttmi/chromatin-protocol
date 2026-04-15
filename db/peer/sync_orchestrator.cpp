@@ -1172,10 +1172,7 @@ asio::awaitable<void> SyncOrchestrator::expiry_scan_loop() {
         if (stopping_) break;
         if (ec) continue;
 
-        auto purged = storage_.run_expiry_scan();
-        if (purged > 0) {
-            spdlog::info("expiry scan: purged {} blobs", purged);
-        }
+        storage_.run_expiry_scan();
 
         auto next = storage_.get_earliest_expiry();
         if (next.has_value()) {
