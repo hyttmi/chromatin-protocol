@@ -128,6 +128,8 @@ static std::vector<uint8_t> build_put_payload(
 /// Parse the payload produced by build_put_payload.
 struct ParsedPayload {
     std::string name;
+    uint64_t size = 0;
+    uint32_t chunks = 0;    // > 0 means this is a manifest
     std::vector<uint8_t> file_data;
 };
 
@@ -153,6 +155,12 @@ static ParsedPayload parse_put_payload(std::span<const uint8_t> plaintext) {
     ParsedPayload result;
     if (meta_json.contains("name") && meta_json["name"].is_string()) {
         result.name = meta_json["name"].get<std::string>();
+    }
+    if (meta_json.contains("size") && meta_json["size"].is_number_unsigned()) {
+        result.size = meta_json["size"].get<uint64_t>();
+    }
+    if (meta_json.contains("chunks") && meta_json["chunks"].is_number_unsigned()) {
+        result.chunks = meta_json["chunks"].get<uint32_t>();
     }
 
     size_t data_offset = 4 + meta_len;
@@ -269,9 +277,44 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     struct FileEntry { std::string path; std::string name; std::vector<uint8_t> data; };
     std::vector<FileEntry> files;
 
-    // Client-side guard: read_file_bytes + envelope + FlatBuffer = ~3x file size in memory.
-    // Node enforces MAX_BLOB_DATA_SIZE (default 500 MiB) on its side.
-    static constexpr size_t MAX_FILE_SIZE = 500ULL * 1024 * 1024;
+    // Chunked upload supports very large files (100 GB = ~100k chunks).
+    // Memory usage is O(1 MiB) per chunk. Node enforces per-blob limits.
+    static constexpr size_t MAX_FILE_SIZE = 100ULL * 1024 * 1024 * 1024;
+
+    // Helper: sign + encode + send a blob, return blob_hash on success.
+    auto send_blob = [&](std::vector<uint8_t> blob_data, uint32_t blob_ttl,
+                         uint64_t blob_ts, const char* label)
+        -> std::optional<std::array<uint8_t, 32>> {
+
+        auto signing_input = build_signing_input(ns, blob_data, blob_ttl, blob_ts);
+        auto signature = id.sign(signing_input);
+
+        BlobData blob{};
+        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+        blob.data = std::move(blob_data);
+        blob.ttl = blob_ttl;
+        blob.timestamp = blob_ts;
+        blob.signature = std::move(signature);
+
+        auto flatbuf = encode_blob(blob);
+
+        if (!conn.send(MsgType::Data, flatbuf, rid++)) {
+            std::fprintf(stderr, "Error: failed to send %s\n", label);
+            return std::nullopt;
+        }
+
+        auto resp = conn.recv();
+        if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+            resp->payload.size() < 41) {
+            std::fprintf(stderr, "Error: bad response for %s\n", label);
+            return std::nullopt;
+        }
+
+        std::array<uint8_t, 32> hash{};
+        std::memcpy(hash.data(), resp->payload.data(), 32);
+        return hash;
+    };
 
     if (from_stdin) {
         files.push_back({"", "", read_stdin_bytes()});
@@ -279,49 +322,131 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         for (const auto& fp : file_paths) {
             auto fsize = fs::file_size(fp);
             if (fsize > MAX_FILE_SIZE) {
-                std::fprintf(stderr, "Error: %s too large (%zu MiB, max ~500 MiB)\n",
-                             fp.c_str(), static_cast<size_t>(fsize / (1024 * 1024)));
+                std::fprintf(stderr, "Error: %s too large (%zu GiB, max 100 GiB)\n",
+                             fp.c_str(), static_cast<size_t>(fsize / (1024 * 1024 * 1024)));
                 return 1;
             }
             auto fname = fs::path(fp).filename().string();
-            files.push_back({fp, fname, read_file_bytes(fp)});
+            if (fsize > FILE_CHUNK_SIZE) {
+                // Chunked upload: don't load the whole file
+                files.push_back({fp, fname, {}});
+            } else {
+                files.push_back({fp, fname, read_file_bytes(fp)});
+            }
         }
     }
 
+    // Shared timestamp for all chunks + manifests
+    auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+
     for (auto& f : files) {
+        auto total_size = f.data.empty() && !f.path.empty()
+            ? static_cast<size_t>(fs::file_size(f.path)) : f.data.size();
+
+        // --- Chunked path: file > FILE_CHUNK_SIZE ---
+        if (total_size > FILE_CHUNK_SIZE && !f.path.empty()) {
+            std::ifstream ifs(f.path, std::ios::binary);
+            if (!ifs) {
+                std::fprintf(stderr, "Error: cannot open %s\n", f.path.c_str());
+                ++errors;
+                continue;
+            }
+
+            std::vector<std::array<uint8_t, 32>> chunk_hashes;
+            std::vector<char> chunk_buf(FILE_CHUNK_SIZE);
+            size_t chunk_index = 0;
+            bool chunk_error = false;
+
+            while (ifs) {
+                ifs.read(chunk_buf.data(), static_cast<std::streamsize>(FILE_CHUNK_SIZE));
+                auto bytes_read = static_cast<size_t>(ifs.gcount());
+                if (bytes_read == 0) break;
+
+                std::vector<uint8_t> chunk_data(
+                    reinterpret_cast<const uint8_t*>(chunk_buf.data()),
+                    reinterpret_cast<const uint8_t*>(chunk_buf.data()) + bytes_read);
+
+                // Build chunk payload: metadata + chunk data
+                auto chunk_payload = build_put_payload("", chunk_data);
+
+                // Envelope encrypt the chunk payload
+                auto envelope_data = envelope::encrypt(chunk_payload, recipient_spans);
+
+                // Wrap with CPAR prefix: [CPAR:4][envelope_data]
+                std::vector<uint8_t> cpar_data;
+                cpar_data.reserve(4 + envelope_data.size());
+                cpar_data.insert(cpar_data.end(),
+                    CHUNK_PART_MAGIC.begin(), CHUNK_PART_MAGIC.end());
+                cpar_data.insert(cpar_data.end(),
+                    envelope_data.begin(), envelope_data.end());
+
+                auto label = f.name + " chunk " + std::to_string(chunk_index);
+                auto hash = send_blob(std::move(cpar_data), ttl, timestamp,
+                                      label.c_str());
+                if (!hash) {
+                    chunk_error = true;
+                    break;
+                }
+                chunk_hashes.push_back(*hash);
+                ++chunk_index;
+            }
+
+            if (chunk_error) {
+                ++errors;
+                continue;
+            }
+
+            // Build manifest
+            auto manifest_data = make_manifest_data(chunk_hashes);
+
+            // Build manifest payload with metadata
+            nlohmann::json manifest_meta;
+            manifest_meta["name"] = f.name;
+            manifest_meta["size"] = total_size;
+            manifest_meta["chunks"] = chunk_hashes.size();
+            auto meta_str = manifest_meta.dump();
+
+            std::vector<uint8_t> manifest_payload;
+            manifest_payload.reserve(4 + meta_str.size() + manifest_data.size());
+            uint8_t len_be[4];
+            store_u32_be(len_be, static_cast<uint32_t>(meta_str.size()));
+            manifest_payload.insert(manifest_payload.end(), len_be, len_be + 4);
+            manifest_payload.insert(manifest_payload.end(),
+                reinterpret_cast<const uint8_t*>(meta_str.data()),
+                reinterpret_cast<const uint8_t*>(meta_str.data()) + meta_str.size());
+            manifest_payload.insert(manifest_payload.end(),
+                manifest_data.begin(), manifest_data.end());
+
+            // Envelope encrypt the manifest payload
+            auto manifest_envelope = envelope::encrypt(manifest_payload, recipient_spans);
+
+            auto manifest_hash = send_blob(std::move(manifest_envelope), ttl, timestamp,
+                                           f.name.c_str());
+            if (!manifest_hash) {
+                ++errors;
+                continue;
+            }
+
+            auto hash_hex = to_hex(*manifest_hash);
+            if (!opts.quiet && !f.name.empty() && files.size() > 1) {
+                std::printf("%s  %s\n", hash_hex.c_str(), f.name.c_str());
+            } else {
+                std::printf("%s\n", hash_hex.c_str());
+            }
+            continue;
+        }
+
+        // --- Single-blob path: file <= FILE_CHUNK_SIZE (or stdin) ---
         auto payload = build_put_payload(f.name, f.data);
         auto envelope_data = envelope::encrypt(payload, recipient_spans);
 
-        auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-        auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
-        auto signature = id.sign(signing_input);
-
-        BlobData blob{};
-        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
-        blob.data = std::move(envelope_data);
-        blob.ttl = ttl;
-        blob.timestamp = timestamp;
-        blob.signature = std::move(signature);
-
-        auto flatbuf = encode_blob(blob);
-
-        if (!conn.send(MsgType::Data, flatbuf, rid++)) {
-            std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
+        auto hash = send_blob(std::move(envelope_data), ttl, timestamp, f.name.c_str());
+        if (!hash) {
             ++errors;
             continue;
         }
 
-        auto resp = conn.recv();
-        if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
-            resp->payload.size() < 41) {
-            std::fprintf(stderr, "Error: bad response for %s\n", f.name.c_str());
-            ++errors;
-            continue;
-        }
-
-        auto hash_span = std::span<const uint8_t>(resp->payload.data(), 32);
-        auto hash_hex = to_hex(hash_span);
+        auto hash_hex = to_hex(*hash);
         if (!opts.quiet && !f.name.empty() && files.size() > 1) {
             std::printf("%s  %s\n", hash_hex.c_str(), f.name.c_str());
         } else {
@@ -410,6 +535,147 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
             ++errors;
             continue;
         }
+
+        // --- Manifest: chunked file download ---
+        if (parsed.chunks > 0) {
+            auto chunk_hashes = parse_manifest_data(parsed.file_data);
+            if (chunk_hashes.size() != parsed.chunks) {
+                std::fprintf(stderr, "%s: manifest chunk count mismatch (meta=%u, data=%zu)\n",
+                             hash_hex.c_str(), parsed.chunks, chunk_hashes.size());
+                ++errors;
+                continue;
+            }
+
+            std::string out_filename = parsed.name.empty() ? hash_hex : parsed.name;
+            bool chunk_error = false;
+
+            if (to_stdout) {
+                // Stream chunks directly to stdout
+                for (size_t ci = 0; ci < chunk_hashes.size(); ++ci) {
+                    // Fetch chunk: ReadRequest [namespace:32][hash:32]
+                    std::vector<uint8_t> chunk_req(64);
+                    std::memcpy(chunk_req.data(), ns.data(), 32);
+                    std::memcpy(chunk_req.data() + 32, chunk_hashes[ci].data(), 32);
+
+                    if (!conn.send(MsgType::ReadRequest, chunk_req, rid++)) {
+                        std::fprintf(stderr, "Error: failed to fetch chunk %zu\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto cresp = conn.recv();
+                    if (!cresp || cresp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+                        cresp->payload.empty() || cresp->payload[0] != 0x01) {
+                        std::fprintf(stderr, "Error: chunk %zu not found\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto cblob_bytes = std::span<const uint8_t>(
+                        cresp->payload.data() + 1, cresp->payload.size() - 1);
+                    auto cblob = decode_blob(cblob_bytes);
+                    if (!cblob) {
+                        std::fprintf(stderr, "Error: chunk %zu decode failed\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    // Strip CPAR prefix, decrypt envelope
+                    if (!is_chunk_part(cblob->data)) {
+                        std::fprintf(stderr, "Error: chunk %zu missing CPAR prefix\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto chunk_envelope = std::span<const uint8_t>(
+                        cblob->data.data() + 4, cblob->data.size() - 4);
+                    auto chunk_plain = envelope::decrypt(chunk_envelope, id.kem_seckey(), id.kem_pubkey());
+                    if (!chunk_plain) {
+                        std::fprintf(stderr, "Error: chunk %zu decrypt failed\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto chunk_parsed = parse_put_payload(*chunk_plain);
+                    std::cout.write(reinterpret_cast<const char*>(chunk_parsed.file_data.data()),
+                                    static_cast<std::streamsize>(chunk_parsed.file_data.size()));
+                }
+                if (!chunk_error) std::cout.flush();
+            } else {
+                auto out_path = output_dir.empty() ? out_filename
+                    : output_dir + "/" + out_filename;
+
+                if (!force_overwrite && fs::exists(out_path)) {
+                    std::fprintf(stderr, "skip: %s already exists (use --force to overwrite)\n",
+                                 out_path.c_str());
+                    continue;
+                }
+
+                std::ofstream outf(out_path, std::ios::binary);
+                if (!outf) {
+                    std::fprintf(stderr, "Error: cannot write to %s\n", out_path.c_str());
+                    ++errors;
+                    continue;
+                }
+
+                for (size_t ci = 0; ci < chunk_hashes.size(); ++ci) {
+                    std::vector<uint8_t> chunk_req(64);
+                    std::memcpy(chunk_req.data(), ns.data(), 32);
+                    std::memcpy(chunk_req.data() + 32, chunk_hashes[ci].data(), 32);
+
+                    if (!conn.send(MsgType::ReadRequest, chunk_req, rid++)) {
+                        std::fprintf(stderr, "Error: failed to fetch chunk %zu\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto cresp = conn.recv();
+                    if (!cresp || cresp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+                        cresp->payload.empty() || cresp->payload[0] != 0x01) {
+                        std::fprintf(stderr, "Error: chunk %zu not found\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto cblob_bytes = std::span<const uint8_t>(
+                        cresp->payload.data() + 1, cresp->payload.size() - 1);
+                    auto cblob = decode_blob(cblob_bytes);
+                    if (!cblob) {
+                        std::fprintf(stderr, "Error: chunk %zu decode failed\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    if (!is_chunk_part(cblob->data)) {
+                        std::fprintf(stderr, "Error: chunk %zu missing CPAR prefix\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto chunk_envelope = std::span<const uint8_t>(
+                        cblob->data.data() + 4, cblob->data.size() - 4);
+                    auto chunk_plain = envelope::decrypt(chunk_envelope, id.kem_seckey(), id.kem_pubkey());
+                    if (!chunk_plain) {
+                        std::fprintf(stderr, "Error: chunk %zu decrypt failed\n", ci);
+                        chunk_error = true;
+                        break;
+                    }
+
+                    auto chunk_parsed = parse_put_payload(*chunk_plain);
+                    outf.write(reinterpret_cast<const char*>(chunk_parsed.file_data.data()),
+                               static_cast<std::streamsize>(chunk_parsed.file_data.size()));
+                }
+
+                if (!chunk_error && !opts.quiet) {
+                    std::fprintf(stderr, "saved: %s (%u chunks)\n", out_path.c_str(), parsed.chunks);
+                }
+            }
+
+            if (chunk_error) ++errors;
+            continue;
+        }
+
+        // --- Single blob download ---
         std::string out_filename = parsed.name.empty() ? hash_hex : parsed.name;
 
         if (to_stdout) {
