@@ -195,112 +195,89 @@ int export_key(const std::string& identity_dir) {
 // put
 // =============================================================================
 
-int put(const std::string& identity_dir, const std::string& file_path,
+int put(const std::string& identity_dir, const std::vector<std::string>& file_paths,
         const std::vector<std::string>& share_pubkey_files,
         uint32_t ttl, bool from_stdin, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
 
-    // 1. Read file data
-    std::vector<uint8_t> file_data;
-    std::string filename;
-    if (from_stdin) {
-        file_data = read_stdin_bytes();
-        filename = "";
-    } else {
-        file_data = read_file_bytes(file_path);
-        filename = fs::path(file_path).filename().string();
-    }
-
-    // 2. Build payload
-    auto payload = build_put_payload(filename, file_data);
-
-    // 3. Load recipient KEM pubkeys (always include self)
+    // Load recipient KEM pubkeys once (always include self)
     std::vector<std::span<const uint8_t>> recipient_spans;
     auto external_pks = load_recipient_kem_pubkeys(share_pubkey_files);
-
-    // Self
     auto self_kem_pk = id.kem_pubkey();
     recipient_spans.emplace_back(self_kem_pk);
-
-    // External recipients
     for (auto& pk : external_pks) {
         recipient_spans.emplace_back(std::span<const uint8_t>(pk));
     }
 
-    // 4. Envelope encrypt
-    auto envelope_data = envelope::encrypt(payload, recipient_spans);
-
-    // 5. Build signing input and sign
     auto ns = id.namespace_id();
-    auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-    auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
-    auto signature = id.sign(signing_input);
 
-    // 6. Build BlobData and encode
-    BlobData blob{};
-    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
-    blob.data = std::move(envelope_data);
-    blob.ttl = ttl;
-    blob.timestamp = timestamp;
-    blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(blob);
-
-    // 7. Connect and send Data(8)
+    // One connection for all files
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
         std::fprintf(stderr, "Error: failed to connect\n");
         return 1;
     }
 
-    if (!conn.send(MsgType::Data, flatbuf, 1)) {
-        std::fprintf(stderr, "Error: failed to send Data\n");
-        conn.close();
-        return 1;
-    }
+    uint32_t rid = 1;
+    int errors = 0;
 
-    // 8. Receive WriteAck(30)
-    auto resp = conn.recv();
-    conn.close();
+    // Build list of files to upload
+    struct FileEntry { std::string path; std::string name; std::vector<uint8_t> data; };
+    std::vector<FileEntry> files;
 
-    if (!resp) {
-        std::fprintf(stderr, "Error: no response\n");
-        return 1;
-    }
-
-    if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
-        return 1;
-    }
-
-    if (resp->type != static_cast<uint8_t>(MsgType::WriteAck)) {
-        std::fprintf(stderr, "Error: unexpected response type %u\n", resp->type);
-        return 1;
-    }
-
-    // Parse WriteAck: [blob_hash:32][seq_num:8BE][status:1] = 41 bytes
-    if (resp->payload.size() < 41) {
-        std::fprintf(stderr, "Error: invalid WriteAck payload (%zu bytes)\n",
-                      resp->payload.size());
-        return 1;
-    }
-
-    auto hash_span = std::span<const uint8_t>(resp->payload.data(), 32);
-    uint8_t status = resp->payload[40];
-
-    std::printf("%s\n", to_hex(hash_span).c_str());
-
-    if (!opts.quiet) {
-        if (status == 0) {
-            std::fprintf(stderr, "stored (new)\n");
-        } else if (status == 1) {
-            std::fprintf(stderr, "stored (duplicate)\n");
+    if (from_stdin) {
+        files.push_back({"", "", read_stdin_bytes()});
+    } else {
+        for (const auto& fp : file_paths) {
+            auto fname = fs::path(fp).filename().string();
+            files.push_back({fp, fname, read_file_bytes(fp)});
         }
     }
 
-    return 0;
+    for (auto& f : files) {
+        auto payload = build_put_payload(f.name, f.data);
+        auto envelope_data = envelope::encrypt(payload, recipient_spans);
+
+        auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+        auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
+        auto signature = id.sign(signing_input);
+
+        BlobData blob{};
+        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+        blob.data = std::move(envelope_data);
+        blob.ttl = ttl;
+        blob.timestamp = timestamp;
+        blob.signature = std::move(signature);
+
+        auto flatbuf = encode_blob(blob);
+
+        if (!conn.send(MsgType::Data, flatbuf, rid++)) {
+            std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
+            ++errors;
+            continue;
+        }
+
+        auto resp = conn.recv();
+        if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+            resp->payload.size() < 41) {
+            std::fprintf(stderr, "Error: bad response for %s\n", f.name.c_str());
+            ++errors;
+            continue;
+        }
+
+        auto hash_span = std::span<const uint8_t>(resp->payload.data(), 32);
+        auto hash_hex = to_hex(hash_span);
+        if (!opts.quiet && !f.name.empty() && files.size() > 1) {
+            std::printf("%s  %s\n", hash_hex.c_str(), f.name.c_str());
+        } else {
+            std::printf("%s\n", hash_hex.c_str());
+        }
+    }
+
+    conn.close();
+    return errors > 0 ? 1 : 0;
 }
 
 // =============================================================================

@@ -17,7 +17,7 @@ int keygen(const std::string& identity_dir, bool force);
 int whoami(const std::string& identity_dir);
 int export_key(const std::string& identity_dir);
 
-int put(const std::string& identity_dir, const std::string& file_path,
+int put(const std::string& identity_dir, const std::vector<std::string>& file_paths,
         const std::vector<std::string>& share_pubkey_files,
         uint32_t ttl, bool from_stdin, const ConnectOpts& opts);
 

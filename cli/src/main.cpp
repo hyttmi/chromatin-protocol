@@ -176,17 +176,19 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // put <file> [host[:port]]
+        // put <file>... [host[:port]]
         //   --share <pubkey_file> (repeatable)
-        //   --ttl <seconds>
+        //   --ttl <seconds|Ns|Nm|Nh|Nd>
         //   --stdin
         // =====================================================================
         if (command == "put") {
-            std::string file_path;
+            std::vector<std::string> file_paths;
             std::vector<std::string> share_files;
             uint32_t ttl = 0;
             bool from_stdin = false;
 
+            // Collect all args, defer host[:port] detection
+            std::vector<std::string> positionals;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--share") == 0) {
@@ -206,12 +208,8 @@ int main(int argc, char* argv[]) {
                 } else if (std::strcmp(a, "--stdin") == 0) {
                     from_stdin = true;
                     ++arg_idx;
-                } else if (a[0] != '-' && file_path.empty()) {
-                    file_path = a;
-                    ++arg_idx;
                 } else if (a[0] != '-') {
-                    // Positional: host[:port]
-                    parse_host_port(a, opts.host, opts.port);
+                    positionals.push_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown put option: %s\n", a);
@@ -219,12 +217,27 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (!from_stdin && file_path.empty()) {
-                std::fprintf(stderr, "Error: put requires a file path or --stdin\n");
+            // Last positional that looks like host[:port] (contains : or no . in path)
+            // is the target. Everything else is a file path.
+            for (size_t i = 0; i < positionals.size(); ++i) {
+                // If it's an existing file, it's a file path
+                if (fs::exists(positionals[i])) {
+                    file_paths.push_back(positionals[i]);
+                } else if (i == positionals.size() - 1) {
+                    // Last non-file positional = host[:port]
+                    parse_host_port(positionals[i].c_str(), opts.host, opts.port);
+                } else {
+                    std::fprintf(stderr, "Error: file not found: %s\n", positionals[i].c_str());
+                    return 1;
+                }
+            }
+
+            if (!from_stdin && file_paths.empty()) {
+                std::fprintf(stderr, "Error: put requires file path(s) or --stdin\n");
                 return 1;
             }
 
-            return cmd::put(identity_dir_str, file_path, share_files,
+            return cmd::put(identity_dir_str, file_paths, share_files,
                            ttl, from_stdin, opts);
         }
 
