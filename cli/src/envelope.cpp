@@ -2,7 +2,6 @@
 #include "cli/src/wire.h"
 
 #include <oqs/oqs.h>
-#include <oqs/sha3.h>
 #include <sodium.h>
 
 #include <algorithm>
@@ -38,11 +37,7 @@ static constexpr char HKDF_LABEL[] = "chromatindb-envelope-kek-v1";
 // Internal: SHA3-256 hash
 // =============================================================================
 
-static std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data) {
-    std::array<uint8_t, 32> out{};
-    OQS_SHA3_sha3_256(out.data(), data.data(), data.size());
-    return out;
-}
+
 
 // =============================================================================
 // Internal: HKDF-SHA256 (extract + expand) via libsodium

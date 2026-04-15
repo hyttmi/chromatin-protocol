@@ -923,4 +923,222 @@ int stats(const std::string& identity_dir, const ConnectOpts& opts) {
     return 0;
 }
 
+// =============================================================================
+// delegate — grant write access to another identity
+// =============================================================================
+
+int delegate(const std::string& identity_dir, const std::string& pubkey_file,
+             const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+
+    // Load delegate's exported public keys and extract signing pubkey
+    auto exported = read_file_bytes(pubkey_file);
+    auto [delegate_signing_pk, delegate_kem_pk] = Identity::load_public_keys(exported);
+
+    // Build delegation data: [0xDE1E6A7E][delegate_signing_pubkey:2592]
+    auto delegation_data = make_delegation_data(delegate_signing_pk);
+
+    // Sign as a regular blob in our namespace
+    auto ns = id.namespace_id();
+    auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+    auto signing_input = build_signing_input(ns, delegation_data, 0, timestamp);
+    auto signature = id.sign(signing_input);
+
+    BlobData blob{};
+    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    blob.data = std::move(delegation_data);
+    blob.ttl = 0;  // Permanent
+    blob.timestamp = timestamp;
+    blob.signature = std::move(signature);
+
+    auto flatbuf = encode_blob(blob);
+
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    if (!conn.send(MsgType::Data, flatbuf, 1)) {
+        std::fprintf(stderr, "Error: failed to send delegation\n");
+        conn.close();
+        return 1;
+    }
+
+    auto resp = conn.recv();
+    conn.close();
+
+    if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+        resp->payload.size() < 41) {
+        std::fprintf(stderr, "Error: bad response\n");
+        return 1;
+    }
+
+    auto hash_span = std::span<const uint8_t>(resp->payload.data(), 32);
+    auto delegate_ns = sha3_256(delegate_signing_pk);
+
+    if (!opts.quiet) {
+        std::fprintf(stderr, "delegated write access to %s\n",
+                     to_hex(std::span<const uint8_t>(delegate_ns.data(), 32)).c_str());
+    }
+    std::printf("%s\n", to_hex(hash_span).c_str());
+
+    return 0;
+}
+
+// =============================================================================
+// revoke — revoke write access by tombstoning delegation blob
+// =============================================================================
+
+int revoke(const std::string& identity_dir, const std::string& pubkey_file,
+           const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+
+    // Load delegate's signing pubkey to find their delegation
+    auto exported = read_file_bytes(pubkey_file);
+    auto [delegate_signing_pk, delegate_kem_pk] = Identity::load_public_keys(exported);
+    auto delegate_pk_hash = sha3_256(delegate_signing_pk);
+
+    auto ns = id.namespace_id();
+
+    // Query DelegationList to find the delegation blob hash
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    std::vector<uint8_t> list_payload(ns.data(), ns.data() + 32);
+    if (!conn.send(MsgType::DelegationListRequest, list_payload, 1)) {
+        std::fprintf(stderr, "Error: failed to send DelegationListRequest\n");
+        conn.close();
+        return 1;
+    }
+
+    auto list_resp = conn.recv();
+    if (!list_resp || list_resp->type != static_cast<uint8_t>(MsgType::DelegationListResponse) ||
+        list_resp->payload.size() < 4) {
+        std::fprintf(stderr, "Error: bad DelegationListResponse\n");
+        conn.close();
+        return 1;
+    }
+
+    uint32_t count = load_u32_be(list_resp->payload.data());
+    if (list_resp->payload.size() < 4 + count * 64) {
+        std::fprintf(stderr, "Error: truncated DelegationListResponse\n");
+        conn.close();
+        return 1;
+    }
+
+    // Find matching delegation by delegate_pk_hash
+    std::array<uint8_t, 32> delegation_blob_hash{};
+    bool found = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        size_t off = 4 + i * 64;
+        auto pk_hash = std::span<const uint8_t>(list_resp->payload.data() + off, 32);
+        if (std::equal(pk_hash.begin(), pk_hash.end(), delegate_pk_hash.data())) {
+            std::memcpy(delegation_blob_hash.data(),
+                        list_resp->payload.data() + off + 32, 32);
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        std::fprintf(stderr, "Error: no delegation found for that key\n");
+        conn.close();
+        return 1;
+    }
+
+    // Tombstone the delegation blob
+    auto tombstone_data = make_tombstone_data(
+        std::span<const uint8_t, 32>(delegation_blob_hash.data(), 32));
+
+    auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+    auto signing_input = build_signing_input(ns, tombstone_data, 0, timestamp);
+    auto signature = id.sign(signing_input);
+
+    BlobData blob{};
+    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    blob.data = std::move(tombstone_data);
+    blob.ttl = 0;
+    blob.timestamp = timestamp;
+    blob.signature = std::move(signature);
+
+    auto flatbuf = encode_blob(blob);
+
+    if (!conn.send(MsgType::Delete, flatbuf, 2)) {
+        std::fprintf(stderr, "Error: failed to send Delete\n");
+        conn.close();
+        return 1;
+    }
+
+    auto del_resp = conn.recv();
+    conn.close();
+
+    if (!del_resp || del_resp->type != static_cast<uint8_t>(MsgType::DeleteAck)) {
+        std::fprintf(stderr, "Error: bad DeleteAck\n");
+        return 1;
+    }
+
+    if (!opts.quiet) {
+        std::fprintf(stderr, "revoked delegation for %s\n",
+                     to_hex(std::span<const uint8_t>(delegate_pk_hash.data(), 32)).c_str());
+    }
+
+    return 0;
+}
+
+// =============================================================================
+// delegations — list active delegations
+// =============================================================================
+
+int delegations(const std::string& identity_dir, const std::string& namespace_hex,
+                const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+    auto ns = resolve_namespace(id, namespace_hex);
+
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    std::vector<uint8_t> payload(ns.data(), ns.data() + 32);
+    if (!conn.send(MsgType::DelegationListRequest, payload, 1)) {
+        std::fprintf(stderr, "Error: failed to send DelegationListRequest\n");
+        conn.close();
+        return 1;
+    }
+
+    auto resp = conn.recv();
+    conn.close();
+
+    if (!resp || resp->type != static_cast<uint8_t>(MsgType::DelegationListResponse) ||
+        resp->payload.size() < 4) {
+        std::fprintf(stderr, "Error: bad response\n");
+        return 1;
+    }
+
+    uint32_t count = load_u32_be(resp->payload.data());
+    if (count == 0) {
+        if (!opts.quiet) std::fprintf(stderr, "no delegations\n");
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        size_t off = 4 + i * 64;
+        auto pk_hash = std::span<const uint8_t>(resp->payload.data() + off, 32);
+        auto blob_hash = std::span<const uint8_t>(resp->payload.data() + off + 32, 32);
+        std::printf("%s  %s\n", to_hex(pk_hash).c_str(), to_hex(blob_hash).c_str());
+    }
+
+    return 0;
+}
+
 } // namespace chromatindb::cli::cmd

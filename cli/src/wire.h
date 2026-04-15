@@ -79,6 +79,8 @@ enum class MsgType : uint8_t {
     ExistsResponse        = 38,
     NodeInfoRequest       = 39,
     NodeInfoResponse      = 40,
+    DelegationListRequest = 51,
+    DelegationListResponse = 52,
     SyncNamespaceAnnounce = 62,
     ErrorResponse         = 63,
 };
@@ -157,8 +159,26 @@ std::array<uint8_t, 32> build_signing_input(
 // Tombstone
 // =============================================================================
 
+// =============================================================================
+// SHA3-256
+// =============================================================================
+
+/// SHA3-256 hash.
+std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data);
+
+// =============================================================================
+// Tombstone
+// =============================================================================
+
 /// Create tombstone data: [0xDE,0xAD,0xBE,0xEF][target_hash:32] = 36 bytes.
 std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_hash);
+
+// =============================================================================
+// Delegation
+// =============================================================================
+
+/// Create delegation data: [0xDE,0x1E,0x6A,0x7E][delegate_signing_pubkey:2592] = 2596 bytes.
+std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_signing_pubkey);
 
 // =============================================================================
 // Hex utilities

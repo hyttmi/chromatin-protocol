@@ -251,6 +251,12 @@ std::array<uint8_t, 32> build_signing_input(
 // Tombstone
 // =============================================================================
 
+std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data) {
+    std::array<uint8_t, 32> out{};
+    OQS_SHA3_sha3_256(out.data(), data.data(), data.size());
+    return out;
+}
+
 std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_hash) {
     std::vector<uint8_t> result;
     result.reserve(36);
@@ -259,6 +265,17 @@ std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_has
     result.push_back(0xBE);
     result.push_back(0xEF);
     result.insert(result.end(), target_hash.begin(), target_hash.end());
+    return result;
+}
+
+std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_signing_pubkey) {
+    std::vector<uint8_t> result;
+    result.reserve(2596);
+    result.push_back(0xDE);
+    result.push_back(0x1E);
+    result.push_back(0x6A);
+    result.push_back(0x7E);
+    result.insert(result.end(), delegate_signing_pubkey.begin(), delegate_signing_pubkey.end());
     return result;
 }
 

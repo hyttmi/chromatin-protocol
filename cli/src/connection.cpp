@@ -1,7 +1,7 @@
 #include "cli/src/connection.h"
+#include "cli/src/wire.h"
 
 #include <oqs/oqs.h>
-#include <oqs/sha3.h>
 #include <sodium.h>
 #include <spdlog/spdlog.h>
 
@@ -32,11 +32,7 @@ static constexpr size_t NONCE_SIZE      = 32;
 // SHA3-256 helper
 // =============================================================================
 
-static std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data) {
-    std::array<uint8_t, 32> hash{};
-    OQS_SHA3_sha3_256(hash.data(), data.data(), data.size());
-    return hash;
-}
+
 
 // =============================================================================
 // Auth payload encode/decode (matching db/net/auth_helpers.h)

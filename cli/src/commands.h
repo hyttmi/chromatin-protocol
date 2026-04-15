@@ -42,4 +42,11 @@ int exists(const std::string& identity_dir, const std::string& hash_hex,
 int info(const std::string& identity_dir, const ConnectOpts& opts);
 int stats(const std::string& identity_dir, const ConnectOpts& opts);
 
+int delegate(const std::string& identity_dir, const std::string& pubkey_file,
+             const ConnectOpts& opts);
+int revoke(const std::string& identity_dir, const std::string& pubkey_file,
+           const ConnectOpts& opts);
+int delegations(const std::string& identity_dir, const std::string& namespace_hex,
+                const ConnectOpts& opts);
+
 } // namespace chromatindb::cli::cmd

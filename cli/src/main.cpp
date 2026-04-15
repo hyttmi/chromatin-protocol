@@ -59,6 +59,9 @@ static void usage() {
         "  exists       Check if blob exists\n"
         "  info         Node information\n"
         "  stats        Namespace statistics\n"
+        "  delegate     Grant write access to another identity\n"
+        "  revoke       Revoke write access\n"
+        "  delegations  List active delegations\n"
         "  version      Print version\n"
         "\n"
         "Global options:\n"
@@ -500,6 +503,82 @@ int main(int argc, char* argv[]) {
                 }
             }
             return cmd::stats(identity_dir_str, opts);
+        }
+
+        // =====================================================================
+        // delegate <pubkey_file> [host[:port]]
+        // =====================================================================
+        if (command == "delegate") {
+            std::string pubkey_file;
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (a[0] != '-' && pubkey_file.empty()) {
+                    pubkey_file = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown delegate option: %s\n", a);
+                    return 1;
+                }
+            }
+            if (pubkey_file.empty()) {
+                std::fprintf(stderr, "Error: delegate requires a pubkey file\n");
+                return 1;
+            }
+            return cmd::delegate(identity_dir_str, pubkey_file, opts);
+        }
+
+        // =====================================================================
+        // revoke <pubkey_file> [host[:port]]
+        // =====================================================================
+        if (command == "revoke") {
+            std::string pubkey_file;
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (a[0] != '-' && pubkey_file.empty()) {
+                    pubkey_file = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown revoke option: %s\n", a);
+                    return 1;
+                }
+            }
+            if (pubkey_file.empty()) {
+                std::fprintf(stderr, "Error: revoke requires a pubkey file\n");
+                return 1;
+            }
+            return cmd::revoke(identity_dir_str, pubkey_file, opts);
+        }
+
+        // =====================================================================
+        // delegations [host[:port]]
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "delegations") {
+            std::string namespace_hex;
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown delegations option: %s\n", a);
+                    return 1;
+                }
+            }
+            return cmd::delegations(identity_dir_str, namespace_hex, opts);
         }
 
         // =====================================================================
