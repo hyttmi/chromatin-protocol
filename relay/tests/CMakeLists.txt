@@ -130,3 +130,15 @@ target_link_libraries(test_offload_if_large PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_offload_if_large)
+
+# ===========================================================================
+# Chunked stream tests (Phase 115)
+# ===========================================================================
+add_executable(test_chunked_stream
+  test_chunked_stream.cpp
+)
+target_link_libraries(test_chunked_stream PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_chunked_stream)

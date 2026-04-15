@@ -1,5 +1,6 @@
 #pragma once
 
+#include "relay/core/chunked_stream.h"
 #include "relay/core/request_router.h"
 #include "relay/core/session_dispatch.h"
 #include "relay/core/write_tracker.h"
@@ -104,6 +105,18 @@ private:
 
     /// Handle notification with pre-translated JSON (Phase 114).
     void handle_notification_pretranslated(std::span<const uint8_t> payload, const nlohmann::json& json);
+
+    /// Send a large payload as chunked sub-frames over encrypted UDS.
+    /// Caller must ensure this is called within drain_send_queue context.
+    asio::awaitable<bool> send_chunked(uint8_t type, uint32_t request_id,
+                                        std::span<const uint8_t> payload,
+                                        std::span<const uint8_t> extra_metadata = {});
+
+    /// Receive a chunked sequence from UDS. Called after detecting CHUNKED_BEGIN flag
+    /// in a received sub-frame. Reads subsequent data sub-frames until zero-length sentinel.
+    /// Reassembles into a complete payload. Returns decoded ChunkedHeader + reassembled payload.
+    asio::awaitable<std::optional<std::pair<ChunkedHeader, std::vector<uint8_t>>>> recv_chunked_reassemble(
+        std::span<const uint8_t> first_frame_data);
 
     /// Replay all active subscriptions as a batched Subscribe to the node (D-10).
     void replay_subscriptions();

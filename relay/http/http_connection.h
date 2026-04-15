@@ -69,7 +69,7 @@ private:
     // Read buffer (persistent across reads within a connection)
     static constexpr size_t READ_BUF_SIZE = 8192;
     static constexpr size_t MAX_HEADER_SIZE = 16384;   // 16 KiB max headers
-    static constexpr size_t MAX_BODY_SIZE = 110 * 1024 * 1024;  // 110 MiB max body
+    static constexpr size_t MAX_BODY_SIZE = 510 * 1024 * 1024;  // 510 MiB max body (500 MiB blob + 10 MiB overhead)
 
     // Carry-over buffer for data read past header boundary
     std::vector<uint8_t> pending_;
