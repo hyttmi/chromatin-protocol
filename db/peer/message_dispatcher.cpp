@@ -463,7 +463,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 for (const auto& ref : refs) {
                     auto blob = storage_.get_blob(ns, ref.blob_hash);
                     if (!blob || wire::is_blob_expired(*blob, now)) {
-                        spdlog::debug("filtered expired blob in ListRequest");
+                        continue;
+                    }
+                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) {
                         continue;
                     }
                     filtered_refs.push_back(ref);
@@ -1236,10 +1238,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     auto blob = storage_.get_blob(ns, ref.blob_hash);
                     if (!blob) continue;
 
-                    if (wire::is_blob_expired(*blob, now)) {
-                        spdlog::debug("filtered expired blob in TimeRangeRequest");
-                        continue;
-                    }
+                    if (wire::is_blob_expired(*blob, now)) continue;
+                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) continue;
 
                     if (blob->timestamp >= start_ts && blob->timestamp <= end_ts) {
                         results.push_back({ref.blob_hash, ref.seq_num, blob->timestamp});
