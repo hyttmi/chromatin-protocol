@@ -51,7 +51,12 @@ ConnectionManager::ConnectionManager(
 // =============================================================================
 
 bool ConnectionManager::should_accept_connection() const {
-    return peers_.size() < max_peers_;
+    // Only count peer connections against max_peers, not clients
+    size_t peer_count = 0;
+    for (const auto& p : peers_) {
+        if (!p->is_client) ++peer_count;
+    }
+    return peer_count < max_peers_;
 }
 
 void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
@@ -172,8 +177,11 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     peers_.back()->sync_inbox.clear();
     ++metrics_.peers_connected_total;
 
-    // Notify facade for cross-component actions (PEX known_addresses, persisted peer update, etc.)
-    on_connect_(conn, addr);
+    // Notify facade for cross-component actions (PEX tracking, persisted peers)
+    // Skip for clients — they shouldn't be added to PEX or reconnect lists.
+    if (!peers_.back()->is_client) {
+        on_connect_(conn, addr);
+    }
 
     // Phase 82 MAINT-04/MAINT-05: Check cursor grace period for reconnecting peers
     {
@@ -206,11 +214,19 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
 void ConnectionManager::on_peer_disconnected(net::Connection::Ptr conn) {
     auto ns_hex = to_hex(conn->peer_pubkey(), 8);
     bool graceful = conn->received_goodbye();
-    spdlog::info("Peer {} disconnected ({})", ns_hex,
+
+    // Find PeerInfo to check if client
+    bool was_client = false;
+    for (const auto& p : peers_) {
+        if (p->connection == conn) { was_client = p->is_client; break; }
+    }
+
+    spdlog::info("{} {} disconnected ({})",
+                 was_client ? "Client" : "Peer", ns_hex,
                  graceful ? "graceful" : "timeout");
 
-    // Phase 82 MAINT-04: Record disconnect time for cursor grace period
-    {
+    // Cursor grace period only for peers, not clients
+    if (!was_client) {
         auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
         auto now_ms = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
