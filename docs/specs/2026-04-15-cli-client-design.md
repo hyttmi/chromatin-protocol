@@ -1,13 +1,24 @@
 # chromatindb-cli Design Spec
 
 **Date:** 2026-04-15
-**Status:** Draft
+**Status:** Approved
 
 ## Overview
 
-Standalone C++ CLI client that speaks the node's native PQ-encrypted wire protocol directly. SCP/SSH-like UX for encrypted file storage and retrieval. Links against `chromatindb_lib` — same PQ crypto, same Connection class, same codecs. No new dependencies.
+Standalone C++ CLI client that speaks the node's native PQ-encrypted wire protocol. SCP/SSH-like UX for encrypted file storage. Completely independent of the node codebase — uses the same crypto libraries directly (liboqs, libsodium) and implements the wire protocol from PROTOCOL.md. Designed to live in its own private repo.
 
 All data is envelope-encrypted client-side. The node is a zero-knowledge store. Always.
+
+## Dependencies
+
+- **liboqs** — ML-DSA-87 (signing), ML-KEM-1024 (key exchange + envelope), SHA3-256
+- **libsodium** — ChaCha20-Poly1305 (AEAD), HKDF-SHA256
+- **FlatBuffers** — Blob wire encoding
+- **Standalone Asio** — TCP + UDS networking, C++20 coroutines
+- **spdlog** — Logging
+- **nlohmann/json** — Metadata JSON
+
+All fetched via CMake FetchContent. No dependency on chromatindb node code.
 
 ## Commands
 
@@ -23,12 +34,12 @@ chromatindb-cli export-key                 # Export KEM + signing pubkeys (share
 
 ```
 chromatindb-cli put <file> [host[:port]]                  # Encrypt + upload, print hash
-chromatindb-cli put --stdin [host[:port]]                  # Encrypt + upload from stdin
+chromatindb-cli put --stdin [host[:port]]                  # Encrypt from stdin + upload
 chromatindb-cli put <file> --share <pubkey>... [host[:port]]  # Encrypt for self + recipients
 chromatindb-cli get <hash> [host[:port]]                   # Fetch + decrypt, restore filename
 chromatindb-cli get <hash> --stdout [host[:port]]          # Fetch + decrypt to stdout
 chromatindb-cli rm <hash> [host[:port]]                    # Tombstone
-chromatindb-cli reshare <hash> --share <pubkey>... [host[:port]]  # Re-encrypt for new recipients, tombstone old
+chromatindb-cli reshare <hash> --share <pubkey>... [host[:port]]  # Re-encrypt + reupload + tombstone old
 ```
 
 ### Query
@@ -57,7 +68,7 @@ chromatindb-cli stats [host[:port]]                 # Own namespace stats (count
 3. After handshake, drain `SyncNamespaceAnnounce(62)` silently
 4. Send request, receive response, disconnect
 
-UDS uses TrustedHello (nonce + pubkey exchange, no KEM). TCP uses full PQ handshake. Both result in AEAD-encrypted sessions. The CLI is always a client (initiator), never a peer.
+UDS uses TrustedHello (nonce + pubkey exchange, no KEM). TCP uses full PQ handshake. Both result in AEAD-encrypted sessions.
 
 ## Identity
 
@@ -82,16 +93,16 @@ Every blob uploaded by the CLI is envelope-encrypted. No exceptions.
 
 ### Envelope Format
 
-Uses the existing envelope format from PROTOCOL.md:
+Per PROTOCOL.md:
 
 ```
-[magic:4][version:1][suite:1][recipient_count:2 BE]
+[magic:4 "CENV"][version:1][suite:1][recipient_count:2 BE]
 [data_nonce:12]
 [N x (kem_pk_hash:32 + kem_ct:1568 + wrapped_dek:48)]
 [ciphertext + tag]
 ```
 
-Suite `0x01` (ML-KEM-ChaCha) by default.
+Suite `0x01` (ML-KEM-ChaCha). Stanzas sorted by `kem_pk_hash`.
 
 ### Put Flow
 
@@ -102,8 +113,8 @@ Suite `0x01` (ML-KEM-ChaCha) by default.
 5. For each recipient (always includes self):
    - ML-KEM-1024 encapsulate with recipient's KEM pubkey -> shared secret
    - HKDF-SHA256(shared_secret, "chromatindb-envelope-kek-v1") -> KEK
-   - Wrap DEK with KEK (ChaCha20-Poly1305)
-6. AEAD-encrypt payload with DEK
+   - Wrap DEK with KEK (ChaCha20-Poly1305, zero nonce)
+6. AEAD-encrypt payload with DEK (random nonce, AD = header + stanzas)
 7. Build envelope blob data (magic + stanzas + ciphertext)
 8. Sign: SHA3-256(namespace || envelope_data || ttl_be32 || timestamp_be64)
 9. Build FlatBuffer Blob, send as Data(8) message
@@ -113,7 +124,7 @@ Suite `0x01` (ML-KEM-ChaCha) by default.
 
 1. Send ReadRequest(31) with namespace + hash
 2. Receive ReadResponse(32)
-3. Check envelope magic bytes at start of blob data
+3. Check envelope magic bytes `CENV` at start of blob data
 4. Find our KEM stanza by matching `kem_pk_hash` against our KEM pubkey hash
 5. ML-KEM-1024 decapsulate -> shared secret -> KEK -> unwrap DEK
 6. AEAD-decrypt ciphertext with DEK
@@ -158,36 +169,26 @@ All through AEAD-encrypted frames. request_id is always 1 (single request per co
 
 ```
 cli/
-  cli_main.cpp           # Arg parsing, command dispatch
-  commands/
-    keygen.cpp           # Identity generation (signing + KEM)
-    put.cpp              # Envelope encrypt + upload
-    get.cpp              # Fetch + envelope decrypt
-    rm.cpp               # Tombstone
-    reshare.cpp          # Fetch + decrypt + re-encrypt + upload + tombstone
-    ls.cpp               # List blobs
-    info.cpp             # Node info + namespace stats + exists
-  client_connection.cpp  # UDS-first -> TCP fallback, handshake, drain announce
-  client_connection.h
-  envelope.cpp           # Envelope encrypt/decrypt (ML-KEM + ChaCha20-Poly1305)
-  envelope.h
-  metadata.cpp           # Payload metadata encode/decode
-  metadata.h
-CMakeLists.txt           # Builds chromatindb-cli, links chromatindb_lib
-```
-
-Top-level `CMakeLists.txt` gets:
-```cmake
-add_subdirectory(cli)
-add_executable(chromatindb-cli cli/cli_main.cpp)
-target_link_libraries(chromatindb-cli PRIVATE chromatindb_lib)
+  CMakeLists.txt          # Standalone build, FetchContent for all deps
+  src/
+    main.cpp              # Arg parsing, command dispatch
+    identity.h/cpp        # ML-DSA-87 + ML-KEM-1024 keypair management
+    connection.h/cpp      # UDS/TCP connect, PQ handshake, AEAD framing, drain announce
+    envelope.h/cpp        # Envelope encrypt/decrypt per PROTOCOL.md
+    wire.h/cpp            # TransportMessage encode/decode, FlatBuffer blob codec
+    commands.h/cpp        # All command implementations
+  tests/
+    CMakeLists.txt
+    test_envelope.cpp     # Envelope encrypt/decrypt roundtrip
+    test_wire.cpp         # Wire format encode/decode
+    test_identity.cpp     # Keygen, load, export
 ```
 
 ## What It Doesn't Do
 
 - No subscriptions or push notifications (future client)
 - No interactive/shell mode
-- No chunked file manifests (single blobs up to 500 MiB)
+- No chunked transport framing (single-frame up to 500 MiB, optimize later)
 - No key rotation or key ring management
 - No group encryption
 - No directory/key discovery service
