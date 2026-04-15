@@ -142,3 +142,15 @@ target_link_libraries(test_chunked_stream PRIVATE
   Catch2::Catch2WithMain
 )
 catch_discover_tests(test_chunked_stream)
+
+# ===========================================================================
+# UDS chunked send/recv tests (Phase 115, Plan 02)
+# ===========================================================================
+add_executable(test_uds_chunked
+  test_uds_chunked.cpp
+)
+target_link_libraries(test_uds_chunked PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_uds_chunked)
