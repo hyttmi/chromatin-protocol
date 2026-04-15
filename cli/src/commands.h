@@ -21,8 +21,9 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         const std::vector<std::string>& share_pubkey_files,
         uint32_t ttl, bool from_stdin, const ConnectOpts& opts);
 
-int get(const std::string& identity_dir, const std::string& hash_hex,
-        const std::string& namespace_hex, bool to_stdout, const ConnectOpts& opts);
+int get(const std::string& identity_dir, const std::vector<std::string>& hash_hexes,
+        const std::string& namespace_hex, bool to_stdout,
+        const std::string& output_dir, const ConnectOpts& opts);
 
 int rm(const std::string& identity_dir, const std::string& hash_hex,
        const std::string& namespace_hex, const ConnectOpts& opts);

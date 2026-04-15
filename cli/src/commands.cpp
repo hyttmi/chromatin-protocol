@@ -284,17 +284,12 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
 // get
 // =============================================================================
 
-int get(const std::string& identity_dir, const std::string& hash_hex,
-        const std::string& namespace_hex, bool to_stdout, const ConnectOpts& opts) {
+int get(const std::string& identity_dir, const std::vector<std::string>& hash_hexes,
+        const std::string& namespace_hex, bool to_stdout,
+        const std::string& output_dir, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
     auto ns = resolve_namespace(id, namespace_hex);
-    auto hash = parse_hash(hash_hex);
-
-    // Build ReadRequest payload: [namespace:32][hash:32] = 64 bytes
-    std::vector<uint8_t> payload(64);
-    std::memcpy(payload.data(), ns.data(), 32);
-    std::memcpy(payload.data() + 32, hash.data(), 32);
 
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
@@ -302,91 +297,91 @@ int get(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
-    if (!conn.send(MsgType::ReadRequest, payload, 1)) {
-        std::fprintf(stderr, "Error: failed to send ReadRequest\n");
-        conn.close();
-        return 1;
+    uint32_t rid = 1;
+    int errors = 0;
+
+    for (const auto& hash_hex : hash_hexes) {
+        auto hash = parse_hash(hash_hex);
+
+        std::vector<uint8_t> payload(64);
+        std::memcpy(payload.data(), ns.data(), 32);
+        std::memcpy(payload.data() + 32, hash.data(), 32);
+
+        if (!conn.send(MsgType::ReadRequest, payload, rid++)) {
+            std::fprintf(stderr, "Error: failed to send ReadRequest for %s\n", hash_hex.c_str());
+            ++errors;
+            continue;
+        }
+
+        auto resp = conn.recv();
+        if (!resp || resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+            resp->payload.empty()) {
+            std::fprintf(stderr, "Error: bad response for %s\n", hash_hex.c_str());
+            ++errors;
+            continue;
+        }
+
+        if (resp->payload[0] != 0x01) {
+            std::fprintf(stderr, "%s: not found\n", hash_hex.c_str());
+            ++errors;
+            continue;
+        }
+
+        auto blob_bytes = std::span<const uint8_t>(
+            resp->payload.data() + 1, resp->payload.size() - 1);
+        auto blob = decode_blob(blob_bytes);
+        if (!blob) {
+            std::fprintf(stderr, "%s: failed to decode blob\n", hash_hex.c_str());
+            ++errors;
+            continue;
+        }
+
+        std::vector<uint8_t> plaintext;
+        if (envelope::is_envelope(blob->data)) {
+            auto decrypted = envelope::decrypt(blob->data, id.kem_seckey(), id.kem_pubkey());
+            if (!decrypted) {
+                std::fprintf(stderr, "%s: cannot decrypt (not a recipient)\n", hash_hex.c_str());
+                ++errors;
+                continue;
+            }
+            plaintext = std::move(*decrypted);
+        } else {
+            plaintext = blob->data;
+        }
+
+        ParsedPayload parsed;
+        try {
+            parsed = parse_put_payload(plaintext);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "%s: %s\n", hash_hex.c_str(), e.what());
+            ++errors;
+            continue;
+        }
+        std::string out_filename = parsed.name.empty() ? hash_hex : parsed.name;
+
+        if (to_stdout) {
+            std::cout.write(reinterpret_cast<const char*>(parsed.file_data.data()),
+                            static_cast<std::streamsize>(parsed.file_data.size()));
+            std::cout.flush();
+        } else {
+            auto out_path = output_dir.empty() ? out_filename
+                : output_dir + "/" + out_filename;
+            std::ofstream f(out_path, std::ios::binary);
+            if (!f) {
+                std::fprintf(stderr, "Error: cannot write to %s\n", out_path.c_str());
+                ++errors;
+                continue;
+            }
+            f.write(reinterpret_cast<const char*>(parsed.file_data.data()),
+                    static_cast<std::streamsize>(parsed.file_data.size()));
+            if (!opts.quiet) {
+                std::fprintf(stderr, "saved: %s\n", out_path.c_str());
+            }
+        }
     }
 
-    auto resp = conn.recv();
     conn.close();
-
-    if (!resp) {
-        std::fprintf(stderr, "Error: no response\n");
-        return 1;
-    }
-
-    if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
-        return 1;
-    }
-
-    if (resp->type != static_cast<uint8_t>(MsgType::ReadResponse)) {
-        std::fprintf(stderr, "Error: unexpected response type %u\n", resp->type);
-        return 1;
-    }
-
-    // Parse ReadResponse: [status:1][flatbuffer_blob...]
-    if (resp->payload.empty()) {
-        std::fprintf(stderr, "Error: empty ReadResponse\n");
-        return 1;
-    }
-
-    uint8_t status = resp->payload[0];
-    if (status != 0x01) {
-        std::fprintf(stderr, "not found\n");
-        return 1;
-    }
-
-    if (resp->payload.size() < 2) {
-        std::fprintf(stderr, "Error: ReadResponse has no blob data\n");
-        return 1;
-    }
-
-    auto blob_bytes = std::span<const uint8_t>(
-        resp->payload.data() + 1, resp->payload.size() - 1);
-
-    auto blob = decode_blob(blob_bytes);
-    if (!blob) {
-        std::fprintf(stderr, "Error: failed to decode blob\n");
-        return 1;
-    }
-
-    // Attempt envelope decryption
-    std::vector<uint8_t> plaintext;
-    if (envelope::is_envelope(blob->data)) {
-        auto decrypted = envelope::decrypt(blob->data, id.kem_seckey(), id.kem_pubkey());
-        if (!decrypted) {
-            std::fprintf(stderr, "Error: cannot decrypt (not a recipient)\n");
-            return 1;
-        }
-        plaintext = std::move(*decrypted);
-    } else {
-        plaintext = blob->data;
-    }
-
-    // Parse payload to extract filename and file data
-    auto parsed = parse_put_payload(plaintext);
-    std::string out_filename = parsed.name.empty() ? hash_hex : parsed.name;
-
-    if (to_stdout) {
-        std::cout.write(reinterpret_cast<const char*>(parsed.file_data.data()),
-                        static_cast<std::streamsize>(parsed.file_data.size()));
-        std::cout.flush();
-    } else {
-        std::ofstream f(out_filename, std::ios::binary);
-        if (!f) {
-            std::fprintf(stderr, "Error: cannot write to %s\n", out_filename.c_str());
-            return 1;
-        }
-        f.write(reinterpret_cast<const char*>(parsed.file_data.data()),
-                static_cast<std::streamsize>(parsed.file_data.size()));
-        if (!opts.quiet) {
-            std::fprintf(stderr, "saved: %s\n", out_filename.c_str());
-        }
-    }
-
-    return 0;
+    return errors > 0 ? 1 : 0;
 }
 
 // =============================================================================

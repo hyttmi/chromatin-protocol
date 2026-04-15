@@ -1,5 +1,8 @@
 #include "cli/src/commands.h"
 
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/ansicolor_sink.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -84,6 +87,10 @@ static void parse_host_port(const std::string& arg,
 }
 
 int main(int argc, char* argv[]) {
+    // All log output to stderr so stdout is clean for data/hashes
+    auto stderr_sink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
+    spdlog::set_default_logger(std::make_shared<spdlog::logger>("cli", stderr_sink));
+
     namespace cmd = chromatindb::cli::cmd;
 
     std::string identity_dir_str;
@@ -242,15 +249,17 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // get <hash> [host[:port]]
+        // get <hash>... [host[:port]]
         //   --stdout
         //   --namespace <hex>
+        //   -o, --output-dir <dir>
         // =====================================================================
         if (command == "get") {
-            std::string hash_hex;
             std::string namespace_hex;
+            std::string output_dir;
             bool to_stdout = false;
 
+            std::vector<std::string> positionals;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--stdout") == 0) {
@@ -263,11 +272,15 @@ int main(int argc, char* argv[]) {
                     }
                     namespace_hex = argv[++arg_idx];
                     ++arg_idx;
-                } else if (a[0] != '-' && hash_hex.empty()) {
-                    hash_hex = a;
+                } else if (std::strcmp(a, "--output-dir") == 0 || std::strcmp(a, "-o") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --output-dir requires a path\n");
+                        return 1;
+                    }
+                    output_dir = argv[++arg_idx];
                     ++arg_idx;
                 } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
+                    positionals.push_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown get option: %s\n", a);
@@ -275,13 +288,26 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (hash_hex.empty()) {
-                std::fprintf(stderr, "Error: get requires a blob hash\n");
+            // Hashes are 64 hex chars. Last positional that isn't a hash = host[:port]
+            std::vector<std::string> hash_hexes;
+            for (size_t i = 0; i < positionals.size(); ++i) {
+                if (positionals[i].size() == 64) {
+                    hash_hexes.push_back(positionals[i]);
+                } else if (i == positionals.size() - 1) {
+                    parse_host_port(positionals[i].c_str(), opts.host, opts.port);
+                } else {
+                    std::fprintf(stderr, "Error: invalid hash: %s\n", positionals[i].c_str());
+                    return 1;
+                }
+            }
+
+            if (hash_hexes.empty()) {
+                std::fprintf(stderr, "Error: get requires at least one blob hash\n");
                 return 1;
             }
 
-            return cmd::get(identity_dir_str, hash_hex, namespace_hex,
-                           to_stdout, opts);
+            return cmd::get(identity_dir_str, hash_hexes, namespace_hex,
+                           to_stdout, output_dir, opts);
         }
 
         // =====================================================================
