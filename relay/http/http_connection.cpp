@@ -13,6 +13,7 @@
 #include <spdlog/spdlog.h>
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 
 namespace chromatindb::relay::http {
@@ -135,6 +136,104 @@ asio::awaitable<bool> HttpConnection::read_body(size_t content_length, std::vect
 }
 
 // ---------------------------------------------------------------------------
+// Chunked body reading (incremental)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<bool> HttpConnection::read_body_chunked(
+    size_t content_length, size_t chunk_size, ChunkCallback chunk_cb) {
+
+    size_t total_read = 0;
+    std::vector<uint8_t> chunk_buf;
+    chunk_buf.reserve(chunk_size);
+
+    // First consume any pending bytes from header read
+    if (!pending_.empty()) {
+        size_t to_take = std::min(pending_.size(), content_length);
+        chunk_buf.insert(chunk_buf.end(), pending_.begin(),
+                        pending_.begin() + static_cast<std::ptrdiff_t>(to_take));
+        if (to_take < pending_.size()) {
+            pending_.erase(pending_.begin(),
+                          pending_.begin() + static_cast<std::ptrdiff_t>(to_take));
+        } else {
+            pending_.clear();
+        }
+        total_read += chunk_buf.size();
+
+        // Emit full chunks
+        while (chunk_buf.size() >= chunk_size) {
+            std::span<const uint8_t> chunk_span(chunk_buf.data(), chunk_size);
+            if (!co_await chunk_cb(chunk_span)) co_return false;
+            chunk_buf.erase(chunk_buf.begin(),
+                           chunk_buf.begin() + static_cast<std::ptrdiff_t>(chunk_size));
+        }
+    }
+
+    std::array<uint8_t, READ_BUF_SIZE> read_buf{};
+    while (total_read < content_length) {
+        size_t want = std::min(static_cast<size_t>(READ_BUF_SIZE),
+                               content_length - total_read);
+        auto [ec, n] = co_await async_read_some(asio::buffer(read_buf.data(), want));
+        if (ec || n == 0) co_return false;
+
+        chunk_buf.insert(chunk_buf.end(), read_buf.data(), read_buf.data() + n);
+        total_read += n;
+
+        // Emit full chunks
+        while (chunk_buf.size() >= chunk_size) {
+            std::span<const uint8_t> chunk_span(chunk_buf.data(), chunk_size);
+            if (!co_await chunk_cb(chunk_span)) co_return false;
+            chunk_buf.erase(chunk_buf.begin(),
+                           chunk_buf.begin() + static_cast<std::ptrdiff_t>(chunk_size));
+        }
+    }
+
+    // Emit final partial chunk if any
+    if (!chunk_buf.empty()) {
+        if (!co_await chunk_cb(chunk_buf)) co_return false;
+    }
+
+    co_return true;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP chunked transfer encoding writer
+// ---------------------------------------------------------------------------
+
+asio::awaitable<bool> HttpConnection::write_chunked_te_start(
+    uint16_t status, std::string_view content_type) {
+    HttpResponse resp;
+    resp.status = status;
+    resp.status_text = HttpResponse::status_text_for_public(status);
+    resp.headers.emplace_back("Content-Type", std::string(content_type));
+    resp.headers.emplace_back("Transfer-Encoding", "chunked");
+    auto header_str = resp.serialize_header();
+    auto [ec, _] = co_await async_write(header_str);
+    co_return !ec;
+}
+
+asio::awaitable<bool> HttpConnection::write_chunked_te_chunk(
+    std::span<const uint8_t> data) {
+    // Format: "{hex_size}\r\n{data}\r\n"
+    char hex_buf[32];
+    int hex_len = std::snprintf(hex_buf, sizeof(hex_buf), "%zx\r\n", data.size());
+    static constexpr std::string_view CRLF = "\r\n";
+
+    std::array<asio::const_buffer, 3> bufs = {
+        asio::buffer(hex_buf, static_cast<size_t>(hex_len)),
+        asio::buffer(data.data(), data.size()),
+        asio::buffer(CRLF.data(), CRLF.size())
+    };
+    auto [ec, _] = co_await async_write_buffers(bufs);
+    co_return !ec;
+}
+
+asio::awaitable<bool> HttpConnection::write_chunked_te_end() {
+    static constexpr std::string_view TERMINATOR = "0\r\n\r\n";
+    auto [ec, _] = co_await async_write(std::string(TERMINATOR));
+    co_return !ec;
+}
+
+// ---------------------------------------------------------------------------
 // Socket shutdown
 // ---------------------------------------------------------------------------
 
@@ -181,7 +280,12 @@ asio::awaitable<void> HttpConnection::handle() {
         if (!parse_request_line(lines_start.substr(0, first_end), req)) {
             // Malformed request line -- send 400.
             auto resp = HttpResponse::error(400, "bad_request", "malformed request line");
-            auto [wec, _] = co_await async_write(resp.serialize());
+            auto header_str = resp.serialize_header();
+            std::array<asio::const_buffer, 2> bufs = {
+                asio::buffer(header_str),
+                asio::buffer(resp.body.data(), resp.body.size())
+            };
+            auto [wec, _] = co_await async_write_buffers(bufs);
             shutdown_socket();
             co_return;
         }
@@ -200,8 +304,13 @@ asio::awaitable<void> HttpConnection::handle() {
 
         // 3. If Content-Length > max body, respond 413 immediately.
         if (req.content_length > MAX_BODY_SIZE) {
-            auto resp = HttpResponse::error(413, "payload_too_large", "body exceeds 110 MiB limit");
-            auto [wec, _] = co_await async_write(resp.serialize());
+            auto resp = HttpResponse::error(413, "payload_too_large", "body exceeds 510 MiB limit");
+            auto header_str = resp.serialize_header();
+            std::array<asio::const_buffer, 2> bufs = {
+                asio::buffer(header_str),
+                asio::buffer(resp.body.data(), resp.body.size())
+            };
+            auto [wec, _] = co_await async_write_buffers(bufs);
             shutdown_socket();
             co_return;
         }
@@ -231,8 +340,8 @@ asio::awaitable<void> HttpConnection::handle() {
         if (!sse_session_id_str.empty()) {
             uint64_t sse_sid = std::stoull(sse_session_id_str);
             // Send the SSE response headers (no body, connection stays open).
-            auto serialized = response.serialize();
-            auto [wec, _] = co_await async_write(serialized);
+            auto header_str = response.serialize_header();
+            auto [wec, _] = co_await async_write(header_str);
             if (wec) {
                 shutdown_socket();
                 co_return;
@@ -243,12 +352,20 @@ asio::awaitable<void> HttpConnection::handle() {
             co_return;
         }
 
-        // 6. Serialize and send response.
-        auto serialized = response.serialize();
-        auto [wec, _] = co_await async_write(serialized);
-        if (wec) {
-            shutdown_socket();
-            co_return;
+        // 6. Serialize and send response (scatter-gather: header + body).
+        auto header_str = response.serialize_header();
+        if (response.body.empty()) {
+            // Header-only response (204 No Content, etc.)
+            auto [wec, _] = co_await async_write(header_str);
+            if (wec) { shutdown_socket(); co_return; }
+        } else {
+            // Scatter-gather: header + body in one async_write call
+            std::array<asio::const_buffer, 2> bufs = {
+                asio::buffer(header_str),
+                asio::buffer(response.body.data(), response.body.size())
+            };
+            auto [wec, _] = co_await async_write_buffers(bufs);
+            if (wec) { shutdown_socket(); co_return; }
         }
 
         // 7. Check keep-alive.

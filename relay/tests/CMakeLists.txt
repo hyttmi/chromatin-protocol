@@ -132,6 +132,18 @@ target_link_libraries(test_offload_if_large PRIVATE
 catch_discover_tests(test_offload_if_large)
 
 # ===========================================================================
+# HTTP response tests (Phase 115 Plan 03)
+# ===========================================================================
+add_executable(test_http_response
+  test_http_response.cpp
+)
+target_link_libraries(test_http_response PRIVATE
+  chromatindb_relay_lib
+  Catch2::Catch2WithMain
+)
+catch_discover_tests(test_http_response)
+
+# ===========================================================================
 # Chunked stream tests (Phase 115)
 # ===========================================================================
 add_executable(test_chunked_stream

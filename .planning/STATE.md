@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 115-02-PLAN.md
+stopped_at: Completed 115-02-PLAN.md and 115-03-PLAN.md (Wave 2)
 last_updated: "2026-04-15T04:19:43.397Z"
 last_activity: 2026-04-15
 progress:
@@ -59,6 +59,7 @@ Progress: [----------] 0%
 | Phase 114 P02 | 10min | 2 tasks | 4 files |
 | Phase 115 P01 | 108min | 2 tasks | 9 files |
 | Phase 115 P02 | 13min | 2 tasks | 4 files |
+| Phase 115 P03 | 8min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,8 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 115]: MAX_FRAME_SIZE unchanged at 110 MiB (per-frame). Only MAX_BLOB_DATA_SIZE raised to 500 MiB (logical blob size)
 - [Phase 115]: ChunkQueue uses steady_timer signal pattern with bounded depth of 4 chunks (4 MiB)
 - [Phase 115]: SendItem variant (std::variant<vector, ChunkedSendJob>) for send queue -- enables atomic chunked send without separate drain path
+- [Phase 115]: serialize() reimplemented on top of serialize_header() for DRY header construction
+- [Phase 115]: ChunkCallback uses std::function<awaitable<bool>(span)> for coroutine-aware per-chunk processing
 
 ### Pending Todos
 
@@ -99,5 +102,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-15T04:19:43.393Z
-Stopped at: Completed 115-02-PLAN.md
+Stopped at: Completed 115-02-PLAN.md and 115-03-PLAN.md (Wave 2)
 Resume file: None

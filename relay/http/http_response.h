@@ -62,16 +62,17 @@ struct HttpResponse {
         return resp;
     }
 
-    /// Serialize to full HTTP/1.1 response string.
-    std::string serialize() const {
+    /// Serialize only the HTTP/1.1 status line + headers + trailing CRLF.
+    /// Does NOT include the body. Used for scatter-gather writes where body
+    /// is written separately via buffer sequence.
+    std::string serialize_header() const {
         std::string result;
-        // Status line
+        result.reserve(256);
         result += "HTTP/1.1 ";
         result += std::to_string(status);
         result += ' ';
         result += status_text;
         result += "\r\n";
-        // Headers
         for (const auto& [key, val] : headers) {
             result += key;
             result += ": ";
@@ -79,9 +80,20 @@ struct HttpResponse {
             result += "\r\n";
         }
         result += "\r\n";
+        return result;
+    }
+
+    /// Serialize to full HTTP/1.1 response string.
+    std::string serialize() const {
+        std::string result = serialize_header();
         // Body
         result.append(reinterpret_cast<const char*>(body.data()), body.size());
         return result;
+    }
+
+    /// Public access to status text lookup (for streaming response builders).
+    static const char* status_text_for_public(uint16_t code) {
+        return status_text_for(code);
     }
 
 private:

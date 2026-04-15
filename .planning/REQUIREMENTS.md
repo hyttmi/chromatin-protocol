@@ -40,8 +40,8 @@
 - [x] **CHUNK-03**: MAX_BLOB_DATA_SIZE raised from 100 MiB to 500 MiB in node (db/net/framing.h) and relay (http_connection.h MAX_BODY_SIZE, uds_multiplexer.h MAX_FRAME_SIZE)
 - [x] **CHUNK-04**: Bounded backpressure queue (4-chunk depth) between UDS producer and HTTP consumer — producer pauses when queue is full, prevents OOM
 - [ ] **CHUNK-05**: HTTP upload streaming — relay reads HTTP body in 1 MiB chunks and forwards each to UDS incrementally via chunked sub-frames, for blobs >= 1 MiB
-- [ ] **CHUNK-06**: HTTP download streaming — relay streams UDS sub-frame chunks to HTTP client using chunked transfer encoding (Transfer-Encoding: chunked), for blobs >= 1 MiB
-- [ ] **CHUNK-07**: HttpResponse scatter-gather writes using Asio buffer sequences for all responses — eliminates header+body string concatenation
+- [x] **CHUNK-06**: HTTP download streaming — relay streams UDS sub-frame chunks to HTTP client using chunked transfer encoding (Transfer-Encoding: chunked), for blobs >= 1 MiB
+- [x] **CHUNK-07**: HttpResponse scatter-gather writes using Asio buffer sequences for all responses — eliminates header+body string concatenation
 - [x] **CHUNK-08**: Small blobs under 1 MiB handled inline with existing full-buffer path — no streaming overhead for common case
 
 ## Out of Scope

@@ -84,7 +84,7 @@ Plans:
 Plans:
 - [x] 115-01-PLAN.md — UDS chunked sub-frame protocol + size limits + ChunkQueue + node-side chunked reassembly
 - [x] 115-02-PLAN.md — Relay UDS multiplexer chunked send/recv + per-chunk AEAD
-- [ ] 115-03-PLAN.md — HttpResponse scatter-gather + HTTP chunked-TE writer + incremental body reader
+- [x] 115-03-PLAN.md — HttpResponse scatter-gather + HTTP chunked-TE writer + incremental body reader
 - [ ] 115-04-PLAN.md — Streaming blob write/read handlers wiring + integration
 
 ## Progress
