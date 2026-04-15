@@ -14,6 +14,7 @@
 #include <deque>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace chromatindb::relay::http {
@@ -40,9 +41,27 @@ public:
     /// Start async connect loop. Non-blocking, spawns coroutine.
     void start();
 
+    /// A large payload to be sent as chunked sub-frames via drain_send_queue.
+    struct ChunkedSendJob {
+        uint8_t type;
+        uint32_t request_id;
+        std::vector<uint8_t> payload;
+        std::vector<uint8_t> extra_metadata;
+    };
+
+    /// Send queue item: either a pre-encoded TransportMessage or a chunked job.
+    using SendItem = std::variant<std::vector<uint8_t>, ChunkedSendJob>;
+
     /// Send an already-encoded TransportMessage to the node over encrypted UDS.
     /// Returns false if not connected.
     bool send(std::vector<uint8_t> transport_msg);
+
+    /// Send a large payload as chunked sub-frames over encrypted UDS.
+    /// The chunked header carries type + request_id (replacing TransportCodec's envelope).
+    /// Returns false if not connected.
+    bool send_chunked_msg(uint8_t type, uint32_t request_id,
+                           std::vector<uint8_t> payload,
+                           std::vector<uint8_t> extra_metadata = {});
 
     /// Whether UDS is connected and handshake complete.
     bool is_connected() const;
@@ -144,7 +163,7 @@ private:
     uint64_t recv_counter_ = 0;
 
     // Send serialization (only one send at a time on UDS)
-    std::deque<std::vector<uint8_t>> send_queue_;
+    std::deque<SendItem> send_queue_;
     bool draining_ = false;
 
     // Subscription tracking (Phase 104)

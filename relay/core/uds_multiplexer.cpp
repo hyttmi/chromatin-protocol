@@ -92,7 +92,26 @@ bool UdsMultiplexer::send(std::vector<uint8_t> transport_msg) {
 
     // Single-threaded: all callers are on the event loop thread.
     // Access send_queue_ and draining_ directly.
-    send_queue_.push_back(std::move(transport_msg));
+    send_queue_.push_back(SendItem{std::move(transport_msg)});
+
+    if (!draining_) {
+        draining_ = true;
+        auto self_ptr = this;
+        asio::co_spawn(ioc_,
+            [self_ptr]() -> asio::awaitable<void> {
+                co_await self_ptr->drain_send_queue();
+            }, asio::detached);
+    }
+    return true;
+}
+
+bool UdsMultiplexer::send_chunked_msg(uint8_t type, uint32_t request_id,
+                                        std::vector<uint8_t> payload,
+                                        std::vector<uint8_t> extra_metadata) {
+    if (!connected_) return false;
+
+    ChunkedSendJob job{type, request_id, std::move(payload), std::move(extra_metadata)};
+    send_queue_.push_back(SendItem{std::move(job)});
 
     if (!draining_) {
         draining_ = true;
@@ -111,11 +130,19 @@ bool UdsMultiplexer::send(std::vector<uint8_t> transport_msg) {
 
 asio::awaitable<void> UdsMultiplexer::drain_send_queue() {
     while (!send_queue_.empty() && connected_) {
-        auto msg = std::move(send_queue_.front());
+        auto item = std::move(send_queue_.front());
         send_queue_.pop_front();
 
-        if (!co_await send_encrypted(msg)) {
-            spdlog::error("UDS send_encrypted failed -- disconnecting");
+        bool ok = false;
+        if (auto* raw = std::get_if<std::vector<uint8_t>>(&item)) {
+            ok = co_await send_encrypted(*raw);
+        } else if (auto* job = std::get_if<ChunkedSendJob>(&item)) {
+            ok = co_await send_chunked(job->type, job->request_id,
+                                        job->payload, job->extra_metadata);
+        }
+
+        if (!ok) {
+            spdlog::error("UDS send failed -- disconnecting");
             connected_ = false;
             break;
         }
@@ -469,6 +496,82 @@ asio::awaitable<std::optional<std::vector<uint8_t>>> UdsMultiplexer::recv_encryp
 }
 
 // ---------------------------------------------------------------------------
+// Chunked send: header + data sub-frames + zero-length sentinel
+// ---------------------------------------------------------------------------
+
+asio::awaitable<bool> UdsMultiplexer::send_chunked(
+    uint8_t type, uint32_t request_id,
+    std::span<const uint8_t> payload,
+    std::span<const uint8_t> extra_metadata) {
+
+    // 1. Send chunked header sub-frame
+    auto header = core::encode_chunked_header(type, request_id,
+                                               static_cast<uint64_t>(payload.size()),
+                                               extra_metadata);
+    if (!co_await send_encrypted(header)) co_return false;
+
+    // 2. Send data sub-frames (CHUNK_SIZE each)
+    size_t offset = 0;
+    while (offset < payload.size()) {
+        size_t chunk_len = std::min(core::CHUNK_SIZE, payload.size() - offset);
+        auto chunk_span = payload.subspan(offset, chunk_len);
+        if (!co_await send_encrypted(chunk_span)) co_return false;
+        offset += chunk_len;
+    }
+
+    // 3. Send zero-length end sentinel
+    if (!co_await send_encrypted(std::span<const uint8_t>{})) co_return false;
+
+    co_return true;
+}
+
+// ---------------------------------------------------------------------------
+// Chunked receive: reassemble sub-frames until zero-length sentinel
+// ---------------------------------------------------------------------------
+
+asio::awaitable<std::optional<std::pair<ChunkedHeader, std::vector<uint8_t>>>>
+UdsMultiplexer::recv_chunked_reassemble(std::span<const uint8_t> first_frame_data) {
+    // 1. Parse chunked header from first_frame_data
+    auto header = core::decode_chunked_header(first_frame_data);
+    if (!header) {
+        spdlog::error("UDS: invalid chunked header");
+        co_return std::nullopt;
+    }
+
+    // 2. Validate total size against MAX_BLOB_DATA_SIZE (500 MiB)
+    constexpr uint64_t MAX_CHUNKED_PAYLOAD = 500ULL * 1024 * 1024;
+    if (header->total_payload_size > MAX_CHUNKED_PAYLOAD) {
+        spdlog::error("UDS: chunked payload too large: {} bytes", header->total_payload_size);
+        co_return std::nullopt;
+    }
+
+    // 3. Reassemble data sub-frames
+    std::vector<uint8_t> payload;
+    payload.reserve(static_cast<size_t>(header->total_payload_size));
+
+    while (true) {
+        auto chunk = co_await recv_encrypted();
+        if (!chunk) {
+            spdlog::error("UDS: chunked recv failed mid-sequence");
+            co_return std::nullopt;
+        }
+
+        // Zero-length sentinel = end of chunked sequence
+        if (chunk->empty()) break;
+
+        payload.insert(payload.end(), chunk->begin(), chunk->end());
+
+        // Safety: accumulated exceeds declared size (with small tolerance for rounding)
+        if (payload.size() > static_cast<size_t>(header->total_payload_size) + 64) {
+            spdlog::error("UDS: chunked reassembly exceeded declared size");
+            co_return std::nullopt;
+        }
+    }
+
+    co_return std::make_pair(std::move(*header), std::move(payload));
+}
+
+// ---------------------------------------------------------------------------
 // Read loop: receive + decode + route
 // ---------------------------------------------------------------------------
 
@@ -506,6 +609,73 @@ asio::awaitable<void> UdsMultiplexer::read_loop() {
             co_return;
         }
 
+        // Check for chunked sub-frame (first byte == CHUNKED_BEGIN).
+        // FlatBuffer messages never start with 0x01 (FlatBuffers start with root table offset).
+        if (!msg->empty() && (*msg)[0] == core::CHUNKED_BEGIN) {
+            auto reassembled = co_await recv_chunked_reassemble(*msg);
+            if (!reassembled) {
+                spdlog::warn("UDS: chunked reassembly failed -- disconnecting");
+                connected_ = false;
+
+                bulk_fail_pending_requests();
+                send_key_.clear();
+                recv_key_.clear();
+                send_counter_ = 0;
+                recv_counter_ = 0;
+                asio::error_code ec;
+                socket_.close(ec);
+                send_queue_.clear();
+                draining_ = false;
+
+                spdlog::info("UDS: starting reconnect loop after chunked failure");
+                auto self_ptr = this;
+                asio::co_spawn(ioc_,
+                    [self_ptr]() -> asio::awaitable<void> {
+                        co_await self_ptr->connect_loop();
+                    }, asio::detached);
+                co_return;
+            }
+
+            auto& [hdr, payload] = *reassembled;
+            uint8_t type = hdr.type;
+            uint32_t request_id = hdr.request_id;
+
+            if (request_id == 0) {
+                // Server-initiated: pre-translate and dispatch
+                if (type == 21) {
+                    auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+                        payload.size(),
+                        [type, payload_span = std::span<const uint8_t>(payload)] {
+                            return translate::binary_to_json(type, payload_span);
+                        });
+                    if (json_opt) {
+                        handle_notification_pretranslated(
+                            std::span<const uint8_t>(payload), *json_opt);
+                    }
+                } else if (type == 22 || type == 25) {
+                    auto json_opt = co_await util::offload_if_large(pool_, ioc_,
+                        payload.size(),
+                        [type, payload_span = std::span<const uint8_t>(payload)] {
+                            return translate::binary_to_json(type, payload_span);
+                        });
+                    if (json_opt) {
+                        route_broadcast_pretranslated(type, *json_opt);
+                    } else {
+                        spdlog::warn("UDS: binary_to_json failed for chunked broadcast type={}", type);
+                    }
+                } else {
+                    auto type_name = translate::type_to_string(type);
+                    spdlog::debug("UDS: unhandled chunked server-initiated message type={} ({})",
+                                  type, type_name.value_or("unknown"));
+                }
+            } else {
+                // Client response: resolve via ResponsePromiseMap or WS dispatch
+                route_response(type, std::move(payload), request_id);
+            }
+            continue;
+        }
+
+        // Non-chunked: existing TransportCodec path
         auto decoded = wire::TransportCodec::decode(*msg);
         if (!decoded) {
             spdlog::warn("UDS: invalid TransportMessage from node");
