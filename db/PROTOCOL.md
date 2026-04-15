@@ -135,16 +135,24 @@ Connections from localhost (127.0.0.1, ::1) or addresses listed in `trusted_peer
 ```
 Initiator                              Responder
     |                                      |
-    |--- [raw] TrustedHello ------------->|  ML-DSA-87 pubkey (2592 bytes) + signature
+    |--- [raw] TrustedHello ------------->|  nonce (32 bytes) + ML-DSA-87 pubkey (2592 bytes)
     |                                      |  Responder checks trust list
-    |<-- [raw] TrustedHello --------------|  ML-DSA-87 pubkey (2592 bytes) + signature
+    |<-- [raw] TrustedHello --------------|  nonce (32 bytes) + ML-DSA-87 pubkey (2592 bytes)
     |                                      |
     |   Both derive session keys via HKDF-SHA256:
-    |     ikm    = SHA3-256(initiator_pubkey || responder_pubkey)
+    |     ikm    = initiator_nonce || responder_nonce  (64 bytes)
+    |     salt   = initiator_signing_pk || responder_signing_pk  (5184 bytes)
     |     info1  = "chromatin-init-to-resp-v1"  -->  initiator-to-responder key
     |     info2  = "chromatin-resp-to-init-v1"  -->  responder-to-initiator key
+    |     fingerprint = SHA3-256(ikm || salt)
     |                                      |
-    |   Session established (AEAD-encrypted from here).
+    |   AEAD-encrypted from here:
+    |                                      |
+    |--- [enc] AuthSignature ------------>|  ML-DSA-87 pubkey + signature(fingerprint)
+    |<-- [enc] AuthSignature -------------|  ML-DSA-87 pubkey + signature(fingerprint)
+    |                                      |
+    |   Both verify: AuthSignature pubkey matches TrustedHello pubkey.
+    |   Session established.
 ```
 
 If the responder does not recognize the initiator as trusted, it replies with `PQRequired (24)` instead of `TrustedHello`. The initiator then falls back to the full PQ handshake starting from KemPubkey.
@@ -157,7 +165,7 @@ UDS is an alternative transport for local process communication, enabling applic
 
 **Wire protocol:** UDS connections use the same length-prefixed AEAD-encrypted frame format as TCP. All message types, payload formats, and protocol phases are identical.
 
-**Handshake:** UDS connections always use the TrustedHello path (local connections are inherently trusted). The full PQ key exchange is skipped. Session keys are derived via HKDF from the exchanged signing public keys, identical to the trusted TCP peer handshake.
+**Handshake:** UDS connections always use the TrustedHello path (local connections are inherently trusted). The full PQ key exchange is skipped. Session keys are derived via HKDF from exchanged nonces and signing public keys, identical to the trusted TCP peer handshake.
 
 **Enforcement:** UDS connections receive the same enforcement as TCP peers:
 - ACL gating (allowed_client_keys checked for UDS, allowed_peer_keys for TCP connections after handshake)
@@ -421,6 +429,7 @@ Total payload: 2 bytes. The transport envelope's `request_id` field carries the 
 | 0x03 | decode_failed | Exception during payload decoding (FlatBuffer or binary) |
 | 0x04 | validation_failed | Payload decoded but values are invalid (e.g., count=0, start_ts > end_ts) |
 | 0x05 | internal_error | Server-side processing error (e.g., arithmetic overflow computing response) |
+| 0x06 | timeout | Request processing timed out |
 
 **Semantics:**
 
