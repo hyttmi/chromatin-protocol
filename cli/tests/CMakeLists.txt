@@ -3,7 +3,9 @@
 
 add_executable(cli_tests
   test_identity.cpp
+  test_wire.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/identity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/wire.cpp
 )
 
 target_include_directories(cli_tests PRIVATE
