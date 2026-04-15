@@ -15,7 +15,6 @@
 #include <asio/thread_pool.hpp>
 
 #include "db/crypto/thread_pool.h"
-#include "db/engine/chunking.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -62,19 +61,6 @@ struct IngestResult {
 
     /// Create a rejection result.
     static IngestResult rejection(IngestError err, std::string detail = "");
-};
-
-/// Signature callback type for chunk signing.
-/// Called once per chunk + once for the manifest.
-using SignFn = std::function<std::vector<uint8_t>(std::span<const uint8_t> message)>;
-
-/// Result of a chunked read operation.
-struct ChunkedReadResult {
-    bool success = false;
-    std::vector<uint8_t> data;           // Reassembled data (empty if !success)
-    std::string error;                   // Error message if !success
-    uint32_t chunks_found = 0;           // How many chunks were available
-    uint32_t chunks_expected = 0;        // From manifest chunk_count
 };
 
 /// Blob validation and ingestion engine.
@@ -165,34 +151,6 @@ public:
     /// Returns {byte_limit, count_limit} where 0 = unlimited.
     std::pair<uint64_t, uint64_t> effective_quota(
         std::span<const uint8_t, 32> namespace_id) const;
-
-    /// Split large data into 1 MiB chunks, sign each, create manifest, store atomically.
-    /// Per D-11: Returns IngestResult with manifest blob_hash on success.
-    /// Per D-06/D-07: Each chunk and manifest is a regular signed blob.
-    /// Per D-05: All chunks inherit the same TTL and timestamp.
-    /// Per D-08: All blobs signed by the same key (same namespace).
-    /// @param namespace_id 32-byte namespace for all chunks and manifest.
-    /// @param pubkey Signer's ML-DSA-87 public key.
-    /// @param data Raw file data to chunk (any size).
-    /// @param ttl TTL for all chunks and manifest.
-    /// @param timestamp Timestamp for all chunks and manifest.
-    /// @param signature_fn Callback invoked with signing_input, returns ML-DSA-87 signature.
-    asio::awaitable<IngestResult> store_chunked(
-        std::span<const uint8_t, 32> namespace_id,
-        std::span<const uint8_t> pubkey,
-        std::span<const uint8_t> data,
-        uint32_t ttl,
-        uint64_t timestamp,
-        SignFn signature_fn);
-
-    /// Read a chunked file by manifest hash. Per D-12.
-    /// Reads manifest blob, parses chunk list, fetches each chunk in order, concatenates.
-    /// Fails if manifest not found, not a manifest blob, corrupt format, or any chunk missing.
-    /// @param namespace_id Namespace containing the manifest and chunks.
-    /// @param manifest_hash Content hash of the manifest blob.
-    ChunkedReadResult read_chunked(
-        std::span<const uint8_t, 32> namespace_id,
-        std::span<const uint8_t, 32> manifest_hash);
 
 private:
     storage::Storage& storage_;

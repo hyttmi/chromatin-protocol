@@ -164,7 +164,6 @@ add_library(chromatindb_lib STATIC
   identity/identity.cpp
   storage/storage.cpp
   engine/engine.cpp
-  engine/chunking.cpp
   net/framing.cpp
   net/protocol.cpp
   net/handshake.cpp
@@ -228,7 +227,6 @@ if(BUILD_TESTING)
     tests/crypto/test_master_key.cpp
     tests/crypto/test_signing.cpp
     tests/engine/test_engine.cpp
-    tests/engine/test_chunking.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
