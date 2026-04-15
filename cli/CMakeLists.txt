@@ -86,6 +86,7 @@ add_executable(chromatindb-cli
   src/main.cpp
   src/identity.cpp
   src/wire.cpp
+  src/connection.cpp
 )
 
 target_include_directories(chromatindb-cli PRIVATE
