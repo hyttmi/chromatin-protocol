@@ -269,9 +269,9 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     struct FileEntry { std::string path; std::string name; std::vector<uint8_t> data; };
     std::vector<FileEntry> files;
 
-    // Max blob data = 500 MiB. Envelope adds ~1700 bytes per recipient + 16 tag.
-    // Metadata adds ~100 bytes. Reject files that would clearly exceed the limit.
-    static constexpr size_t MAX_FILE_SIZE = 500ULL * 1024 * 1024 - 8192;  // conservative margin
+    // Safety limit to prevent OOM — envelope encryption buffers the full file.
+    // The node enforces its own MAX_BLOB_DATA_SIZE (default 500 MiB, configurable).
+    static constexpr size_t MAX_FILE_SIZE = 2ULL * 1024 * 1024 * 1024;  // 2 GiB client-side guard
 
     if (from_stdin) {
         files.push_back({"", "", read_stdin_bytes()});
