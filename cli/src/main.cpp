@@ -270,7 +270,7 @@ int main(int argc, char* argv[]) {
                 if (std::strcmp(a, "--stdout") == 0) {
                     to_stdout = true;
                     ++arg_idx;
-                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;
@@ -325,7 +325,7 @@ int main(int argc, char* argv[]) {
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;
@@ -380,7 +380,7 @@ int main(int argc, char* argv[]) {
                     }
                     ttl = parse_ttl(argv[++arg_idx]);
                     ++arg_idx;
-                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;
@@ -417,7 +417,7 @@ int main(int argc, char* argv[]) {
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;
@@ -446,7 +446,7 @@ int main(int argc, char* argv[]) {
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;
@@ -565,7 +565,7 @@ int main(int argc, char* argv[]) {
             std::string namespace_hex;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
                         std::fprintf(stderr, "Error: --namespace requires a hex value\n");
                         return 1;

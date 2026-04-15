@@ -40,16 +40,45 @@ static std::vector<uint8_t> read_stdin_bytes() {
 
 /// Resolve namespace: if hex provided, parse it; otherwise use identity's own.
 static std::array<uint8_t, 32> resolve_namespace(
-    const Identity& id, const std::string& namespace_hex) {
+    const Identity& id, const std::string& namespace_or_name,
+    const std::string& identity_dir = "") {
 
-    if (namespace_hex.empty()) {
+    if (namespace_or_name.empty()) {
         std::array<uint8_t, 32> ns{};
         auto span = id.namespace_id();
         std::memcpy(ns.data(), span.data(), 32);
         return ns;
     }
 
-    auto bytes = from_hex(namespace_hex);
+    // If it's 64 hex chars, treat as namespace hex
+    if (namespace_or_name.size() == 64) {
+        auto bytes = from_hex(namespace_or_name);
+        if (bytes && bytes->size() == 32) {
+            std::array<uint8_t, 32> ns{};
+            std::memcpy(ns.data(), bytes->data(), 32);
+            return ns;
+        }
+    }
+
+    // Try contact name lookup
+    if (!identity_dir.empty()) {
+        auto db_path = identity_dir + "/contacts.db";
+        if (fs::exists(db_path)) {
+            ContactDB db(db_path);
+            auto contact = db.get(namespace_or_name);
+            if (contact) {
+                auto bytes = from_hex(contact->namespace_hex);
+                if (bytes && bytes->size() == 32) {
+                    std::array<uint8_t, 32> ns{};
+                    std::memcpy(ns.data(), bytes->data(), 32);
+                    return ns;
+                }
+            }
+        }
+    }
+
+    // Fall back to treating as hex
+    auto bytes = from_hex(namespace_or_name);
     if (!bytes || bytes->size() != 32) {
         throw std::runtime_error("Invalid namespace hex (expected 64 hex chars)");
     }
@@ -136,15 +165,28 @@ static ParsedPayload parse_put_payload(std::span<const uint8_t> plaintext) {
 
 /// Load recipient KEM pubkeys from files. Returns vector of (signing_pk, kem_pk) pairs.
 static std::vector<std::vector<uint8_t>> load_recipient_kem_pubkeys(
-    const std::vector<std::string>& pubkey_files) {
+    const std::vector<std::string>& share_args,
+    const std::string& identity_dir) {
 
     std::vector<std::vector<uint8_t>> kem_pks;
-    kem_pks.reserve(pubkey_files.size());
+    kem_pks.reserve(share_args.size());
 
-    for (auto& path : pubkey_files) {
-        auto data = read_file_bytes(path);
-        auto [signing_pk, kem_pk] = Identity::load_public_keys(data);
-        kem_pks.push_back(std::move(kem_pk));
+    for (const auto& arg : share_args) {
+        if (fs::exists(arg)) {
+            // It's a file path — load pubkey from file
+            auto data = read_file_bytes(arg);
+            auto [signing_pk, kem_pk] = Identity::load_public_keys(data);
+            kem_pks.push_back(std::move(kem_pk));
+        } else {
+            // Treat as contact name — look up in contacts db
+            auto db_path = identity_dir + "/contacts.db";
+            ContactDB db(db_path);
+            auto contact = db.get(arg);
+            if (!contact) {
+                throw std::runtime_error("Unknown contact or file: " + arg);
+            }
+            kem_pks.push_back(contact->kem_pk);
+        }
     }
     return kem_pks;
 }
@@ -204,7 +246,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
 
     // Load recipient KEM pubkeys once (always include self)
     std::vector<std::span<const uint8_t>> recipient_spans;
-    auto external_pks = load_recipient_kem_pubkeys(share_pubkey_files);
+    auto external_pks = load_recipient_kem_pubkeys(share_pubkey_files, identity_dir);
     auto self_kem_pk = id.kem_pubkey();
     recipient_spans.emplace_back(self_kem_pk);
     for (auto& pk : external_pks) {
@@ -290,7 +332,7 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
         const std::string& output_dir, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
 
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
@@ -393,7 +435,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
        const std::string& namespace_hex, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
     auto target_hash = parse_hash(hash_hex);
 
     // Build tombstone
@@ -471,7 +513,7 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
 
     // Step 1: Fetch and decrypt the original blob
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
     auto hash = parse_hash(hash_hex);
 
     // -- GET --
@@ -528,7 +570,7 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
 
     // Step 2: Re-encrypt with new recipients
     std::vector<std::span<const uint8_t>> recipient_spans;
-    auto external_pks = load_recipient_kem_pubkeys(share_pubkey_files);
+    auto external_pks = load_recipient_kem_pubkeys(share_pubkey_files, identity_dir);
 
     auto self_kem_pk = id.kem_pubkey();
     recipient_spans.emplace_back(self_kem_pk);
@@ -634,7 +676,7 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
        const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
 
     uint64_t since_seq = 0;
 
@@ -716,7 +758,7 @@ int exists(const std::string& identity_dir, const std::string& hash_hex,
            const std::string& namespace_hex, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
     auto hash = parse_hash(hash_hex);
 
     // ExistsRequest: [namespace:32][hash:32] = 64 bytes
@@ -1102,7 +1144,7 @@ int delegations(const std::string& identity_dir, const std::string& namespace_he
                 const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto ns = resolve_namespace(id, namespace_hex);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
 
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
