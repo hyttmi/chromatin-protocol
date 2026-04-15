@@ -1,6 +1,0 @@
-{
-  "bind_address": "0.0.0.0:4200",
-  "log_level": "debug",
-  "safety_net_interval_seconds": 5,
-  "trusted_peers": ["172.28.0.3"]
-}

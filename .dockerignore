@@ -1,7 +1,0 @@
-build/
-.planning/
-.git/
-.claude/
-*.md
-.gitignore
-tests/

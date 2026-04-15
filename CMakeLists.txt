@@ -165,19 +165,3 @@ add_subdirectory(db)
 add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
-# =============================================================================
-# Load generator binary
-# =============================================================================
-add_executable(chromatindb_loadgen loadgen/loadgen_main.cpp)
-target_link_libraries(chromatindb_loadgen PRIVATE chromatindb_lib)
-
-# =============================================================================
-# Crypto verification tool (integration tests)
-# =============================================================================
-add_executable(chromatindb_verify tools/verify_main.cpp)
-target_link_libraries(chromatindb_verify PRIVATE chromatindb_lib)
-
-# =============================================================================
-# Tools
-# =============================================================================
-add_subdirectory(tools)
