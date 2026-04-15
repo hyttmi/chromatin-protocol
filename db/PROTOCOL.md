@@ -46,6 +46,36 @@ Server-initiated messages (Notification, BlobNotify) always carry `request_id = 
 
 The node may process requests concurrently and responses may arrive in a different order than requests were sent. Clients must use `request_id` to correlate responses, not assume ordering.
 
+### Chunked Transport Framing
+
+Payloads >= 1 MiB (the streaming threshold) use chunked sub-frame encoding instead of a single TransportMessage. This allows large blobs (up to 500 MiB) to be sent without allocating the full payload as a single AEAD frame.
+
+A chunked sequence consists of three parts:
+
+**1. Header sub-frame** (14+ bytes, first byte is `0x01`):
+
+```
+[0x01: flags byte (CHUNKED_BEGIN)]
+[type: 1 byte (TransportMsgType)]
+[request_id: 4 bytes big-endian uint32]
+[total_payload_size: 8 bytes big-endian uint64]
+[extra_metadata: 0+ bytes (optional, e.g. status byte for ReadResponse)]
+```
+
+**2. Data sub-frames** (1 MiB each, last may be smaller):
+
+Each data sub-frame contains raw payload bytes (no TransportMessage wrapper). Sub-frames are sent sequentially until the entire payload is transmitted.
+
+**3. Zero-length sentinel**:
+
+An empty frame (0 bytes of plaintext) signals the end of the chunked sequence.
+
+Each sub-frame (header, data chunks, and sentinel) is independently AEAD-encrypted with the connection's shared nonce counter. Each sub-frame consumes exactly one nonce. The receiver detects chunked mode by checking if the first byte of a decrypted frame is `0x01` -- FlatBuffer messages never start with this byte.
+
+Payloads below the streaming threshold continue to use the standard single-frame TransportMessage encoding.
+
+The sender must ensure the entire chunked sequence is sent atomically -- no other messages may be interleaved between the header and the sentinel on the same connection.
+
 ## Connection Lifecycle
 
 ### Step 1: TCP Connect
@@ -176,7 +206,7 @@ The blob wire format is a FlatBuffers table with six fields:
 table Blob {
     namespace_id: [ubyte];   // 32 bytes: SHA3-256(author's signing pubkey)
     pubkey: [ubyte];         // 2592 bytes: ML-DSA-87 signing public key
-    data: [ubyte];           // variable length: application payload (max 100 MiB)
+    data: [ubyte];           // variable length: application payload (max 500 MiB)
     ttl: uint32;             // seconds until expiry (writer-controlled, per-blob), 0 = permanent
     timestamp: uint64;       // author's Unix timestamp in seconds
     signature: [ubyte];      // up to 4627 bytes: ML-DSA-87 signature
@@ -290,7 +320,7 @@ When a blob is ingested -- whether from a client write or from peer sync -- the 
 
 **Namespace filtering:** BlobNotify is only sent to peers whose announced namespace set (via SyncNamespaceAnnounce, type 62) includes the blob's namespace. Peers with an empty announced set (replicate-all) receive all notifications. This filtering is evaluated per-peer on every ingest event.
 
-**Client notifications:** UDS clients and relay-connected clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
+**Client notifications:** Clients do NOT receive BlobNotify. They receive Notification (type 21) if they have active subscriptions for the blob's namespace.
 
 **BlobNotify (type 59) -- 77-byte payload:**
 
@@ -363,13 +393,13 @@ After the PQ handshake completes, both peers exchange SyncNamespaceAnnounce mess
 - **Non-empty set:** Peer only replicates the listed namespaces. BlobNotify for namespaces not in the set is suppressed. Reconciliation (Phase A/B/C) is scoped to the intersection of both peers' announced sets.
 - **Inline dispatch:** SyncNamespaceAnnounce is processed immediately (not queued to the sync inbox). The announced set is stored per-peer and takes effect for the next BlobNotify or sync round.
 - **SIGHUP re-announce:** When the operator reloads `sync_namespaces` via SIGHUP, the node re-sends SyncNamespaceAnnounce to all connected TCP peers with the updated set.
-- **Relay blocking:** The relay blocks type 62 from clients. SyncNamespaceAnnounce is a peer-internal protocol message.
+- **Peer-internal:** SyncNamespaceAnnounce is a peer-internal protocol message. Clients should ignore it if received.
 
 **Example:** A node configured with `sync_namespaces: ["a1b2..."]` sends `[0x00, 0x01, <32 bytes of a1b2...>]` after handshake. A node with empty `sync_namespaces` sends `[0x00, 0x00]` (replicate all).
 
 ### ErrorResponse (Type 63)
 
-When a client-facing request fails validation, decoding, or processing, the node sends an ErrorResponse instead of silently dropping the request. The response echoes the client's `request_id` so the relay (or direct client) can match it to the pending request.
+When a client-facing request fails validation, decoding, or processing, the node sends an ErrorResponse instead of silently dropping the request. The response echoes the client's `request_id` so the client can match it to the pending request.
 
 **Direction:** Node -> Client (response to malformed/invalid client requests)
 
@@ -790,7 +820,7 @@ Query node version, state, and supported message types for client capability dis
 | types_count | +8 | 1 | uint8 | Number of supported message types |
 | supported_types | +1 | types_count | uint8[] | List of supported TransportMsgType values |
 
-The `supported_types` list contains only client-facing message types (types that the relay allows through). Internal protocol types (handshake, sync, PEX) are excluded. Clients use this list for feature detection -- if a type value is present, the node supports that operation.
+The `supported_types` list contains only client-facing message types. Internal protocol types (handshake, sync, PEX) are excluded. Clients use this list for feature detection -- if a type value is present, the node supports that operation.
 
 ## Message Type Reference
 
@@ -860,12 +890,12 @@ All message types defined in the `TransportMsgType` enum:
 | 59 | BlobNotify | Push notification: namespace + hash + seq_num + size + tombstone (77 bytes, peer-internal) |
 | 60 | BlobFetch | Targeted blob fetch: namespace + hash (64 bytes, peer-internal) |
 | 61 | BlobFetchResponse | Targeted blob fetch response: status + optional blob (peer-internal) |
-| 62 | SyncNamespaceAnnounce | Namespace replication scope announcement: count + namespace IDs (peer-internal, blocked by relay) |
+| 62 | SyncNamespaceAnnounce | Namespace replication scope announcement: count + namespace IDs (peer-internal) |
 | 63 | ErrorResponse | Error response for malformed/invalid client requests: error_code + original_type (2 bytes) |
 
 ## Query Extensions
 
-These 10 request/response pairs (types 41-58) use the coroutine-IO dispatch model, echo `request_id`, and are allowed through the relay message filter.
+These 10 request/response pairs (types 41-58) use the coroutine-IO dispatch model and echo `request_id`.
 
 ### NamespaceListRequest (Type 41) / NamespaceListResponse (Type 42)
 
@@ -1074,7 +1104,7 @@ Implementation scans the namespace's sequence map (up to 10,000 entries) and fil
 
 ## Client Implementation Notes
 
-Implementation details for developers connecting to chromatindb via relay.
+Implementation details for developers building a chromatindb client.
 
 ### AEAD Nonce Counters
 

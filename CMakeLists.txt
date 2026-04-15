@@ -166,17 +166,6 @@ add_executable(chromatindb db/main.cpp)
 target_link_libraries(chromatindb PRIVATE chromatindb_lib)
 
 # =============================================================================
-# Relay component
-# =============================================================================
-add_subdirectory(relay)
-
-# =============================================================================
-# Relay binary
-# =============================================================================
-add_executable(chromatindb_relay relay/relay_main.cpp)
-target_link_libraries(chromatindb_relay PRIVATE chromatindb_relay_lib)
-
-# =============================================================================
 # Load generator binary
 # =============================================================================
 add_executable(chromatindb_loadgen loadgen/loadgen_main.cpp)
@@ -189,12 +178,6 @@ add_executable(chromatindb_verify tools/verify_main.cpp)
 target_link_libraries(chromatindb_verify PRIVATE chromatindb_lib)
 
 # =============================================================================
-# Test vector generator (cross-language crypto vectors for SDK)
-# =============================================================================
-add_executable(chromatindb_test_vectors tools/test_vector_generator.cpp)
-target_link_libraries(chromatindb_test_vectors PRIVATE chromatindb_lib)
-
-# =============================================================================
-# Relay tools (UDS tap, smoke test -- linked against relay library)
+# Tools
 # =============================================================================
 add_subdirectory(tools)
