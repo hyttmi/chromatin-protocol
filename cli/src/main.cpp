@@ -1,100 +1,121 @@
-#include "cli/src/identity.h"
+#include "cli/src/commands.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
 static const char* VERSION = "0.1.0";
 
-static std::string to_hex(std::span<const uint8_t> data) {
-    static constexpr char hex_chars[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(data.size() * 2);
-    for (uint8_t b : data) {
-        out.push_back(hex_chars[b >> 4]);
-        out.push_back(hex_chars[b & 0x0f]);
-    }
-    return out;
-}
-
 static fs::path default_identity_dir() {
     const char* home = std::getenv("HOME");
     if (!home) {
-        throw std::runtime_error("HOME environment variable not set");
+        std::fprintf(stderr, "Error: HOME environment variable not set\n");
+        std::exit(1);
     }
     return fs::path(home) / ".chromatindb";
 }
 
 static void usage() {
     std::fprintf(stderr,
-        "Usage: chromatindb-cli [--identity <path>] <command>\n"
+        "Usage: chromatindb-cli <command> [options]\n"
         "\n"
         "Commands:\n"
-        "  keygen      Generate a new identity\n"
-        "  whoami      Print namespace of current identity\n"
-        "  export-key  Write public keys to stdout\n"
-        "  version     Print version\n"
+        "  keygen       Generate identity keypair\n"
+        "  whoami       Print namespace\n"
+        "  export-key   Export public keys\n"
+        "  put          Upload encrypted file\n"
+        "  get          Download and decrypt file\n"
+        "  rm           Delete (tombstone)\n"
+        "  reshare      Re-encrypt for new recipients\n"
+        "  ls           List blobs in namespace\n"
+        "  exists       Check if blob exists\n"
+        "  info         Node information\n"
+        "  stats        Namespace statistics\n"
+        "  version      Print version\n"
         "\n"
-        "Options:\n"
-        "  --identity <path>  Identity directory (default: ~/.chromatindb/)\n"
+        "Global options:\n"
+        "  --identity <path>   Identity directory (default: ~/.chromatindb/)\n"
+        "  --uds <path>        UDS socket path\n"
+        "  -p, --port <port>   Port (default: 4200)\n"
+        "  -q, --quiet         Minimal output\n"
     );
 }
 
-static int cmd_keygen(const fs::path& identity_dir) {
-    if (fs::exists(identity_dir / "identity.key")) {
-        std::fprintf(stderr, "Identity already exists at %s\n", identity_dir.c_str());
-        std::fprintf(stderr, "Remove it first if you want to regenerate.\n");
-        return 1;
+/// Parse "host:port" or just "host" (default port 4200).
+static void parse_host_port(const std::string& arg,
+                            std::string& host, uint16_t& port) {
+    auto colon = arg.rfind(':');
+    if (colon != std::string::npos) {
+        host = arg.substr(0, colon);
+        int p = std::atoi(arg.substr(colon + 1).c_str());
+        if (p <= 0 || p > 65535) {
+            std::fprintf(stderr, "Error: invalid port in '%s'\n", arg.c_str());
+            std::exit(1);
+        }
+        port = static_cast<uint16_t>(p);
+    } else {
+        host = arg;
     }
-
-    auto id = chromatindb::cli::Identity::generate();
-    id.save_to(identity_dir);
-
-    std::printf("%s\n", to_hex(id.namespace_id()).c_str());
-    return 0;
-}
-
-static int cmd_whoami(const fs::path& identity_dir) {
-    auto id = chromatindb::cli::Identity::load_from(identity_dir);
-    std::printf("%s\n", to_hex(id.namespace_id()).c_str());
-    return 0;
-}
-
-static int cmd_export_key(const fs::path& identity_dir) {
-    auto id = chromatindb::cli::Identity::load_from(identity_dir);
-    auto keys = id.export_public_keys();
-    std::cout.write(reinterpret_cast<const char*>(keys.data()),
-                    static_cast<std::streamsize>(keys.size()));
-    std::cout.flush();
-    return 0;
 }
 
 int main(int argc, char* argv[]) {
-    fs::path identity_dir;
+    namespace cmd = chromatindb::cli::cmd;
+
+    std::string identity_dir_str;
+    cmd::ConnectOpts opts;
+    bool force = false;
     int arg_idx = 1;
 
-    // Parse global options
+    // Parse global options (before command)
     while (arg_idx < argc && argv[arg_idx][0] == '-') {
-        if (std::strcmp(argv[arg_idx], "--identity") == 0) {
+        const char* arg = argv[arg_idx];
+
+        if (std::strcmp(arg, "--identity") == 0) {
             if (arg_idx + 1 >= argc) {
-                std::fprintf(stderr, "Error: --identity requires a path argument\n");
+                std::fprintf(stderr, "Error: --identity requires a path\n");
                 return 1;
             }
-            identity_dir = argv[arg_idx + 1];
-            arg_idx += 2;
+            identity_dir_str = argv[++arg_idx];
+            ++arg_idx;
+        } else if (std::strcmp(arg, "--uds") == 0) {
+            if (arg_idx + 1 >= argc) {
+                std::fprintf(stderr, "Error: --uds requires a path\n");
+                return 1;
+            }
+            opts.uds_path = argv[++arg_idx];
+            ++arg_idx;
+        } else if (std::strcmp(arg, "-p") == 0 || std::strcmp(arg, "--port") == 0) {
+            if (arg_idx + 1 >= argc) {
+                std::fprintf(stderr, "Error: %s requires a port number\n", arg);
+                return 1;
+            }
+            int p = std::atoi(argv[++arg_idx]);
+            if (p <= 0 || p > 65535) {
+                std::fprintf(stderr, "Error: invalid port\n");
+                return 1;
+            }
+            opts.port = static_cast<uint16_t>(p);
+            ++arg_idx;
+        } else if (std::strcmp(arg, "-q") == 0 || std::strcmp(arg, "--quiet") == 0) {
+            opts.quiet = true;
+            ++arg_idx;
+        } else if (std::strcmp(arg, "--force") == 0) {
+            force = true;
+            ++arg_idx;
         } else {
-            std::fprintf(stderr, "Unknown option: %s\n", argv[arg_idx]);
+            std::fprintf(stderr, "Unknown option: %s\n", arg);
             usage();
             return 1;
         }
     }
 
-    if (identity_dir.empty()) {
-        identity_dir = default_identity_dir();
+    if (identity_dir_str.empty()) {
+        identity_dir_str = default_identity_dir().string();
     }
 
     if (arg_idx >= argc) {
@@ -102,23 +123,333 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const std::string command = argv[arg_idx];
+    const std::string command = argv[arg_idx++];
 
     try {
-        if (command == "keygen") {
-            return cmd_keygen(identity_dir);
-        } else if (command == "whoami") {
-            return cmd_whoami(identity_dir);
-        } else if (command == "export-key") {
-            return cmd_export_key(identity_dir);
-        } else if (command == "version") {
+        // =====================================================================
+        // version (no identity needed)
+        // =====================================================================
+        if (command == "version") {
             std::printf("chromatindb-cli %s\n", VERSION);
             return 0;
-        } else {
-            std::fprintf(stderr, "Unknown command: %s\n", command.c_str());
-            usage();
-            return 1;
         }
+
+        // =====================================================================
+        // keygen
+        // =====================================================================
+        if (command == "keygen") {
+            return cmd::keygen(identity_dir_str, force);
+        }
+
+        // =====================================================================
+        // whoami
+        // =====================================================================
+        if (command == "whoami") {
+            return cmd::whoami(identity_dir_str);
+        }
+
+        // =====================================================================
+        // export-key
+        // =====================================================================
+        if (command == "export-key") {
+            return cmd::export_key(identity_dir_str);
+        }
+
+        // =====================================================================
+        // put <file> [host[:port]]
+        //   --share <pubkey_file> (repeatable)
+        //   --ttl <seconds>
+        //   --stdin
+        // =====================================================================
+        if (command == "put") {
+            std::string file_path;
+            std::vector<std::string> share_files;
+            uint32_t ttl = 0;
+            bool from_stdin = false;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--share") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --share requires a file path\n");
+                        return 1;
+                    }
+                    share_files.push_back(argv[++arg_idx]);
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--ttl") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --ttl requires a value\n");
+                        return 1;
+                    }
+                    ttl = static_cast<uint32_t>(std::atol(argv[++arg_idx]));
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--stdin") == 0) {
+                    from_stdin = true;
+                    ++arg_idx;
+                } else if (a[0] != '-' && file_path.empty()) {
+                    file_path = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    // Positional: host[:port]
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown put option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            if (!from_stdin && file_path.empty()) {
+                std::fprintf(stderr, "Error: put requires a file path or --stdin\n");
+                return 1;
+            }
+
+            return cmd::put(identity_dir_str, file_path, share_files,
+                           ttl, from_stdin, opts);
+        }
+
+        // =====================================================================
+        // get <hash> [host[:port]]
+        //   --stdout
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "get") {
+            std::string hash_hex;
+            std::string namespace_hex;
+            bool to_stdout = false;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--stdout") == 0) {
+                    to_stdout = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-' && hash_hex.empty()) {
+                    hash_hex = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown get option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            if (hash_hex.empty()) {
+                std::fprintf(stderr, "Error: get requires a blob hash\n");
+                return 1;
+            }
+
+            return cmd::get(identity_dir_str, hash_hex, namespace_hex,
+                           to_stdout, opts);
+        }
+
+        // =====================================================================
+        // rm <hash> [host[:port]]
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "rm") {
+            std::string hash_hex;
+            std::string namespace_hex;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-' && hash_hex.empty()) {
+                    hash_hex = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown rm option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            if (hash_hex.empty()) {
+                std::fprintf(stderr, "Error: rm requires a blob hash\n");
+                return 1;
+            }
+
+            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, opts);
+        }
+
+        // =====================================================================
+        // reshare <hash> [host[:port]]
+        //   --share <pubkey_file> (repeatable)
+        //   --ttl <seconds>
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "reshare") {
+            std::string hash_hex;
+            std::string namespace_hex;
+            std::vector<std::string> share_files;
+            uint32_t ttl = 0;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--share") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --share requires a file path\n");
+                        return 1;
+                    }
+                    share_files.push_back(argv[++arg_idx]);
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--ttl") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --ttl requires a value\n");
+                        return 1;
+                    }
+                    ttl = static_cast<uint32_t>(std::atol(argv[++arg_idx]));
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-' && hash_hex.empty()) {
+                    hash_hex = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown reshare option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            if (hash_hex.empty()) {
+                std::fprintf(stderr, "Error: reshare requires a blob hash\n");
+                return 1;
+            }
+
+            return cmd::reshare(identity_dir_str, hash_hex, namespace_hex,
+                               share_files, ttl, opts);
+        }
+
+        // =====================================================================
+        // ls [host[:port]]
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "ls") {
+            std::string namespace_hex;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown ls option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            return cmd::ls(identity_dir_str, namespace_hex, opts);
+        }
+
+        // =====================================================================
+        // exists <hash> [host[:port]]
+        //   --namespace <hex>
+        // =====================================================================
+        if (command == "exists") {
+            std::string hash_hex;
+            std::string namespace_hex;
+
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        return 1;
+                    }
+                    namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (a[0] != '-' && hash_hex.empty()) {
+                    hash_hex = a;
+                    ++arg_idx;
+                } else if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown exists option: %s\n", a);
+                    return 1;
+                }
+            }
+
+            if (hash_hex.empty()) {
+                std::fprintf(stderr, "Error: exists requires a blob hash\n");
+                return 1;
+            }
+
+            return cmd::exists(identity_dir_str, hash_hex, namespace_hex, opts);
+        }
+
+        // =====================================================================
+        // info [host[:port]]
+        // =====================================================================
+        if (command == "info") {
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown info option: %s\n", a);
+                    return 1;
+                }
+            }
+            return cmd::info(identity_dir_str, opts);
+        }
+
+        // =====================================================================
+        // stats [host[:port]]
+        // =====================================================================
+        if (command == "stats") {
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown stats option: %s\n", a);
+                    return 1;
+                }
+            }
+            return cmd::stats(identity_dir_str, opts);
+        }
+
+        // =====================================================================
+        // Unknown
+        // =====================================================================
+        std::fprintf(stderr, "Unknown command: %s\n", command.c_str());
+        usage();
+        return 1;
+
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Error: %s\n", e.what());
         return 1;

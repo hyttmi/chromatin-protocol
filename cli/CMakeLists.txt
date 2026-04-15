@@ -84,6 +84,7 @@ target_include_directories(oqs PUBLIC
 # =============================================================================
 add_executable(chromatindb-cli
   src/main.cpp
+  src/commands.cpp
   src/identity.cpp
   src/wire.cpp
   src/connection.cpp
