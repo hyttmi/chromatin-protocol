@@ -181,6 +181,26 @@ std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_has
 std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_signing_pubkey);
 
 // =============================================================================
+// Public key blob
+// =============================================================================
+
+/// PUBK magic: 0x50 0x55 0x42 0x4B
+inline constexpr std::array<uint8_t, 4> PUBKEY_MAGIC = {0x50, 0x55, 0x42, 0x4B};
+
+/// PUBK data size: 4 magic + 2592 signing pk + 1568 KEM pk = 4164 bytes.
+inline constexpr size_t PUBKEY_DATA_SIZE = 4 + 2592 + 1568;
+
+/// Create pubkey blob data: [PUBK magic][signing_pk][kem_pk]
+std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
+                                       std::span<const uint8_t> kem_pk);
+
+/// Check if blob data is a published pubkey.
+inline bool is_pubkey_blob(std::span<const uint8_t> data) {
+    return data.size() == PUBKEY_DATA_SIZE &&
+           data[0] == 0x50 && data[1] == 0x55 && data[2] == 0x42 && data[3] == 0x4B;
+}
+
+// =============================================================================
 // Hex utilities
 // =============================================================================
 

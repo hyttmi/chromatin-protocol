@@ -279,4 +279,14 @@ std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_sign
     return result;
 }
 
+std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
+                                       std::span<const uint8_t> kem_pk) {
+    std::vector<uint8_t> result;
+    result.reserve(PUBKEY_DATA_SIZE);
+    result.insert(result.end(), PUBKEY_MAGIC.begin(), PUBKEY_MAGIC.end());
+    result.insert(result.end(), signing_pk.begin(), signing_pk.end());
+    result.insert(result.end(), kem_pk.begin(), kem_pk.end());
+    return result;
+}
+
 } // namespace chromatindb::cli

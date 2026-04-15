@@ -59,6 +59,8 @@ static void usage() {
         "  exists       Check if blob exists\n"
         "  info         Node information\n"
         "  stats        Namespace statistics\n"
+        "  publish      Publish pubkey to node\n"
+        "  contact      Manage contacts (add/rm/list)\n"
         "  delegate     Grant write access to another identity\n"
         "  revoke       Revoke write access\n"
         "  delegations  List active delegations\n"
@@ -579,6 +581,64 @@ int main(int argc, char* argv[]) {
                 }
             }
             return cmd::delegations(identity_dir_str, namespace_hex, opts);
+        }
+
+        // =====================================================================
+        // publish [host[:port]]
+        // =====================================================================
+        if (command == "publish") {
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (a[0] != '-') {
+                    parse_host_port(a, opts.host, opts.port);
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown publish option: %s\n", a);
+                    return 1;
+                }
+            }
+            return cmd::publish(identity_dir_str, opts);
+        }
+
+        // =====================================================================
+        // contact add <name> <namespace_hex> [host[:port]]
+        // contact rm <name>
+        // contact list
+        // =====================================================================
+        if (command == "contact") {
+            if (arg_idx >= argc) {
+                std::fprintf(stderr, "Usage: contact <add|rm|list> ...\n");
+                return 1;
+            }
+            std::string subcmd = argv[arg_idx++];
+
+            if (subcmd == "add") {
+                if (arg_idx + 1 >= argc) {
+                    std::fprintf(stderr, "Usage: contact add <name> <namespace_hex> [host[:port]]\n");
+                    return 1;
+                }
+                std::string name = argv[arg_idx++];
+                std::string ns_hex = argv[arg_idx++];
+                while (arg_idx < argc) {
+                    parse_host_port(argv[arg_idx++], opts.host, opts.port);
+                }
+                return cmd::contact_add(identity_dir_str, name, ns_hex, opts);
+            }
+
+            if (subcmd == "rm") {
+                if (arg_idx >= argc) {
+                    std::fprintf(stderr, "Usage: contact rm <name>\n");
+                    return 1;
+                }
+                return cmd::contact_rm(identity_dir_str, argv[arg_idx]);
+            }
+
+            if (subcmd == "list") {
+                return cmd::contact_list(identity_dir_str);
+            }
+
+            std::fprintf(stderr, "Unknown contact subcommand: %s\n", subcmd.c_str());
+            return 1;
         }
 
         // =====================================================================

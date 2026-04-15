@@ -36,9 +36,10 @@ FetchContent_Declare(liboqs
   GIT_SHALLOW    TRUE
 )
 
-# -- libsodium (system, via pkg-config)
+# -- libsodium + sqlite3 (system, via pkg-config)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(sodium REQUIRED IMPORTED_TARGET libsodium)
+pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET sqlite3)
 
 # -- FlatBuffers 25.2.10
 set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -89,6 +90,7 @@ add_executable(chromatindb-cli
   src/wire.cpp
   src/connection.cpp
   src/envelope.cpp
+  src/contacts.cpp
 )
 
 target_include_directories(chromatindb-cli PRIVATE
@@ -100,6 +102,7 @@ target_compile_features(chromatindb-cli PUBLIC cxx_std_20)
 target_link_libraries(chromatindb-cli PRIVATE
   oqs
   PkgConfig::sodium
+  PkgConfig::sqlite3
   flatbuffers
   asio::asio
   spdlog::spdlog

@@ -42,6 +42,12 @@ int exists(const std::string& identity_dir, const std::string& hash_hex,
 int info(const std::string& identity_dir, const ConnectOpts& opts);
 int stats(const std::string& identity_dir, const ConnectOpts& opts);
 
+int publish(const std::string& identity_dir, const ConnectOpts& opts);
+int contact_add(const std::string& identity_dir, const std::string& name,
+                const std::string& namespace_hex, const ConnectOpts& opts);
+int contact_rm(const std::string& identity_dir, const std::string& name);
+int contact_list(const std::string& identity_dir);
+
 int delegate(const std::string& identity_dir, const std::string& pubkey_file,
              const ConnectOpts& opts);
 int revoke(const std::string& identity_dir, const std::string& pubkey_file,

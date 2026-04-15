@@ -1,5 +1,6 @@
 #include "cli/src/commands.h"
 #include "cli/src/connection.h"
+#include "cli/src/contacts.h"
 #include "cli/src/envelope.h"
 #include "cli/src/identity.h"
 #include "cli/src/wire.h"
@@ -1138,6 +1139,188 @@ int delegations(const std::string& identity_dir, const std::string& namespace_he
         std::printf("%s  %s\n", to_hex(pk_hash).c_str(), to_hex(blob_hash).c_str());
     }
 
+    return 0;
+}
+
+// =============================================================================
+// publish — store our pubkey blob on the node
+// =============================================================================
+
+int publish(const std::string& identity_dir, const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+
+    // Build PUBK blob: [magic:4][signing_pk:2592][kem_pk:1568]
+    auto pubkey_data = make_pubkey_data(id.signing_pubkey(), id.kem_pubkey());
+
+    // Sign as permanent blob in our namespace
+    auto ns = id.namespace_id();
+    auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+    auto signing_input = build_signing_input(ns, pubkey_data, 0, timestamp);
+    auto signature = id.sign(signing_input);
+
+    BlobData blob{};
+    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    blob.data = std::move(pubkey_data);
+    blob.ttl = 0;
+    blob.timestamp = timestamp;
+    blob.signature = std::move(signature);
+
+    auto flatbuf = encode_blob(blob);
+
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    if (!conn.send(MsgType::Data, flatbuf, 1)) {
+        std::fprintf(stderr, "Error: failed to send\n");
+        conn.close();
+        return 1;
+    }
+
+    auto resp = conn.recv();
+    conn.close();
+
+    if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+        resp->payload.size() < 41) {
+        std::fprintf(stderr, "Error: bad response\n");
+        return 1;
+    }
+
+    auto ns_hex = to_hex(ns);
+    if (!opts.quiet) {
+        std::fprintf(stderr, "published: %s\n", ns_hex.c_str());
+    }
+    std::printf("%s\n", ns_hex.c_str());
+
+    return 0;
+}
+
+// =============================================================================
+// contact add — fetch pubkey from node by namespace, save to contacts db
+// =============================================================================
+
+int contact_add(const std::string& identity_dir, const std::string& name,
+                const std::string& namespace_hex, const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+    auto target_ns = *from_hex(namespace_hex);
+    if (target_ns.size() != 32) {
+        std::fprintf(stderr, "Error: namespace must be 64 hex chars\n");
+        return 1;
+    }
+
+    // Fetch blob list from target namespace to find PUBK blob
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    // ListRequest: [namespace:32][since_seq:8BE=0][limit:4BE=100]
+    std::vector<uint8_t> list_payload(44, 0);
+    std::memcpy(list_payload.data(), target_ns.data(), 32);
+    store_u32_be(list_payload.data() + 40, 100);
+
+    if (!conn.send(MsgType::ListRequest, list_payload, 1)) {
+        std::fprintf(stderr, "Error: failed to list namespace\n");
+        conn.close();
+        return 1;
+    }
+
+    auto list_resp = conn.recv();
+    if (!list_resp || list_resp->type != static_cast<uint8_t>(MsgType::ListResponse) ||
+        list_resp->payload.size() < 5) {
+        std::fprintf(stderr, "Error: bad ListResponse\n");
+        conn.close();
+        return 1;
+    }
+
+    uint32_t count = load_u32_be(list_resp->payload.data());
+
+    // Try each hash — fetch blob, check for PUBK magic
+    uint32_t rid = 2;
+    for (uint32_t i = 0; i < count; ++i) {
+        size_t off = 4 + i * 40;
+        auto hash = std::span<const uint8_t>(list_resp->payload.data() + off, 32);
+
+        // ReadRequest: [namespace:32][hash:32]
+        std::vector<uint8_t> read_payload(64);
+        std::memcpy(read_payload.data(), target_ns.data(), 32);
+        std::memcpy(read_payload.data() + 32, hash.data(), 32);
+
+        if (!conn.send(MsgType::ReadRequest, read_payload, rid++)) continue;
+
+        auto read_resp = conn.recv();
+        if (!read_resp || read_resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+            read_resp->payload.empty() || read_resp->payload[0] != 0x01) {
+            continue;
+        }
+
+        auto blob_bytes = std::span<const uint8_t>(
+            read_resp->payload.data() + 1, read_resp->payload.size() - 1);
+        auto blob = decode_blob(blob_bytes);
+        if (!blob) continue;
+
+        if (is_pubkey_blob(blob->data)) {
+            // Found it! Extract signing_pk and kem_pk
+            std::vector<uint8_t> signing_pk(blob->data.begin() + 4, blob->data.begin() + 4 + 2592);
+            std::vector<uint8_t> kem_pk(blob->data.begin() + 4 + 2592, blob->data.end());
+
+            conn.close();
+
+            // Save to contacts db
+            auto db_path = identity_dir + "/contacts.db";
+            ContactDB db(db_path);
+            db.add(name, signing_pk, kem_pk);
+
+            auto ns_hex = to_hex(std::span<const uint8_t>(target_ns.data(), 32));
+            if (!opts.quiet) {
+                std::fprintf(stderr, "added contact: %s (%s)\n", name.c_str(), ns_hex.c_str());
+            }
+            return 0;
+        }
+    }
+
+    conn.close();
+    std::fprintf(stderr, "Error: no published pubkey found in namespace %s\n",
+                 namespace_hex.c_str());
+    return 1;
+}
+
+// =============================================================================
+// contact rm
+// =============================================================================
+
+int contact_rm(const std::string& identity_dir, const std::string& name) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    if (db.remove(name)) {
+        std::fprintf(stderr, "removed: %s\n", name.c_str());
+        return 0;
+    }
+    std::fprintf(stderr, "Error: contact not found: %s\n", name.c_str());
+    return 1;
+}
+
+// =============================================================================
+// contact list
+// =============================================================================
+
+int contact_list(const std::string& identity_dir) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    auto contacts = db.list();
+    if (contacts.empty()) {
+        std::fprintf(stderr, "no contacts\n");
+        return 0;
+    }
+    for (const auto& c : contacts) {
+        std::printf("%-20s %s\n", c.name.c_str(), c.namespace_hex.c_str());
+    }
     return 0;
 }
 

@@ -103,4 +103,21 @@ std::vector<uint8_t> extract_delegate_pubkey(std::span<const uint8_t> data);
 /// Create delegation data: magic prefix + delegate public key.
 std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubkey);
 
+// =============================================================================
+// Public key blob utilities
+// =============================================================================
+
+/// 4-byte magic prefix identifying a published public key blob.
+inline constexpr std::array<uint8_t, 4> PUBKEY_MAGIC = {0x50, 0x55, 0x42, 0x4B}; // "PUBK"
+
+/// Published pubkey data size: 4-byte magic + 2592-byte signing pk + 1568-byte KEM pk.
+inline constexpr size_t PUBKEY_DATA_SIZE = 4 + 2592 + 1568;
+
+/// Check if blob data is a published public key.
+inline bool is_pubkey_blob(std::span<const uint8_t> data) {
+    return data.size() == PUBKEY_DATA_SIZE &&
+           data[0] == PUBKEY_MAGIC[0] && data[1] == PUBKEY_MAGIC[1] &&
+           data[2] == PUBKEY_MAGIC[2] && data[3] == PUBKEY_MAGIC[3];
+}
+
 } // namespace chromatindb::wire
