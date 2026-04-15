@@ -20,6 +20,26 @@ static fs::path default_identity_dir() {
     return fs::path(home) / ".chromatindb";
 }
 
+/// Parse TTL string: plain seconds, or suffix with s/m/h/d.
+/// Examples: "3600", "1h", "30m", "7d", "90s"
+static uint32_t parse_ttl(const char* s) {
+    char* end = nullptr;
+    long val = std::strtol(s, &end, 10);
+    if (val < 0) val = 0;
+    if (end && *end) {
+        switch (*end) {
+            case 's': break;
+            case 'm': val *= 60; break;
+            case 'h': val *= 3600; break;
+            case 'd': val *= 86400; break;
+            default:
+                std::fprintf(stderr, "Error: invalid TTL suffix '%c' (use s/m/h/d)\n", *end);
+                std::exit(1);
+        }
+    }
+    return static_cast<uint32_t>(val);
+}
+
 static void usage() {
     std::fprintf(stderr,
         "Usage: chromatindb-cli <command> [options]\n"
@@ -181,7 +201,7 @@ int main(int argc, char* argv[]) {
                         std::fprintf(stderr, "Error: --ttl requires a value\n");
                         return 1;
                     }
-                    ttl = static_cast<uint32_t>(std::atol(argv[++arg_idx]));
+                    ttl = parse_ttl(argv[++arg_idx]);
                     ++arg_idx;
                 } else if (std::strcmp(a, "--stdin") == 0) {
                     from_stdin = true;
@@ -314,7 +334,7 @@ int main(int argc, char* argv[]) {
                         std::fprintf(stderr, "Error: --ttl requires a value\n");
                         return 1;
                     }
-                    ttl = static_cast<uint32_t>(std::atol(argv[++arg_idx]));
+                    ttl = parse_ttl(argv[++arg_idx]);
                     ++arg_idx;
                 } else if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0) {
                     if (arg_idx + 1 >= argc) {
