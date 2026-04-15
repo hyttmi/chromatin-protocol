@@ -757,14 +757,36 @@ asio::awaitable<void> Connection::message_loop() {
             break;
         }
 
+        // Update last-recv time for keepalive (any decoded message resets silence)
+        last_recv_time_ = std::chrono::steady_clock::now();
+
+        // Check for chunked sub-frame mode (first byte == 0x01).
+        // FlatBuffer messages never start with 0x01 (they start with a 4-byte
+        // size prefix followed by the root table offset), so this is unambiguous.
+        if (!msg->empty() && (*msg)[0] == 0x01) {
+            auto reassembled = co_await recv_chunked(*msg);
+            if (!reassembled) {
+                spdlog::warn("chunked reassembly failed");
+                break;
+            }
+            if (!authenticated_) {
+                spdlog::error("received chunked message before auth from {}", remote_addr_);
+                break;
+            }
+            if (message_cb_) {
+                message_cb_(shared_from_this(),
+                            static_cast<wire::TransportMsgType>(reassembled->type),
+                            std::move(reassembled->payload),
+                            reassembled->request_id);
+            }
+            continue;
+        }
+
         auto decoded = TransportCodec::decode(*msg);
         if (!decoded) {
             spdlog::warn("received invalid transport message");
             continue;
         }
-
-        // Update last-recv time for keepalive (any decoded message resets silence)
-        last_recv_time_ = std::chrono::steady_clock::now();
 
         if (!authenticated_) {
             spdlog::error("received message before authentication from {}", remote_addr_);
@@ -794,6 +816,114 @@ asio::awaitable<void> Connection::message_loop() {
                 break;
         }
     }
+}
+
+// =============================================================================
+// Chunked sub-frame support (Phase 115)
+// =============================================================================
+
+asio::awaitable<std::optional<Connection::ReassembledChunked>> Connection::recv_chunked(
+    const std::vector<uint8_t>& first_frame) {
+    // Parse chunked header: [flags:1][type:1][request_id:4BE][total_size:8BE][extra...]
+    constexpr size_t CHUNKED_HEADER_SIZE = 14;
+    if (first_frame.size() < CHUNKED_HEADER_SIZE) {
+        spdlog::warn("chunked header too short: {} bytes", first_frame.size());
+        co_return std::nullopt;
+    }
+    if (first_frame[0] != 0x01) {
+        spdlog::warn("chunked header: invalid flags byte 0x{:02x}", first_frame[0]);
+        co_return std::nullopt;
+    }
+
+    uint8_t type = first_frame[1];
+    uint32_t request_id = chromatindb::util::read_u32_be(first_frame.data() + 2);
+    uint64_t total_payload_size = chromatindb::util::read_u64_be(first_frame.data() + 6);
+
+    // Validate total size against MAX_BLOB_DATA_SIZE
+    if (total_payload_size > MAX_BLOB_DATA_SIZE) {
+        spdlog::error("chunked reassembly: declared size {} exceeds MAX_BLOB_DATA_SIZE {}",
+                      total_payload_size, MAX_BLOB_DATA_SIZE);
+        co_return std::nullopt;
+    }
+
+    // Pre-allocate payload and copy any extra metadata from the header
+    std::vector<uint8_t> payload;
+    payload.reserve(static_cast<size_t>(total_payload_size));
+    if (first_frame.size() > CHUNKED_HEADER_SIZE) {
+        payload.insert(payload.end(),
+                       first_frame.begin() + CHUNKED_HEADER_SIZE,
+                       first_frame.end());
+    }
+
+    // Read data sub-frames until zero-length sentinel
+    while (true) {
+        auto chunk = co_await recv_encrypted();
+        if (!chunk) {
+            spdlog::warn("chunked reassembly: connection lost mid-stream");
+            co_return std::nullopt;
+        }
+        last_recv_time_ = std::chrono::steady_clock::now();
+
+        // Zero-length sentinel = end of chunked sequence
+        if (chunk->empty()) break;
+
+        payload.insert(payload.end(), chunk->begin(), chunk->end());
+
+        // Safety check: accumulated > total_payload_size (with small tolerance for metadata)
+        if (payload.size() > static_cast<size_t>(total_payload_size) + 64) {
+            spdlog::error("chunked reassembly: exceeded declared size ({} > {})",
+                          payload.size(), total_payload_size);
+            co_return std::nullopt;
+        }
+    }
+
+    co_return ReassembledChunked{type, request_id, std::move(payload)};
+}
+
+asio::awaitable<bool> Connection::send_message_chunked(
+    wire::TransportMsgType type,
+    std::span<const uint8_t> payload,
+    uint32_t request_id,
+    std::span<const uint8_t> extra_metadata) {
+    if (closed_ || closing_) co_return false;
+    if (send_queue_.size() >= MAX_SEND_QUEUE) {
+        spdlog::warn("send queue full ({} messages), disconnecting {}",
+                     MAX_SEND_QUEUE, remote_addr_);
+        close();
+        co_return false;
+    }
+
+    // Build 14-byte chunked header: [0x01][type][request_id 4BE][total_size 8BE] + extra_metadata
+    constexpr size_t CHUNKED_HEADER_SIZE = 14;
+    std::vector<uint8_t> header(CHUNKED_HEADER_SIZE + extra_metadata.size());
+    header[0] = 0x01;  // CHUNKED_BEGIN
+    header[1] = static_cast<uint8_t>(type);
+    chromatindb::util::store_u32_be(header.data() + 2, request_id);
+    chromatindb::util::store_u64_be(header.data() + 6, payload.size());
+    if (!extra_metadata.empty()) {
+        std::copy(extra_metadata.begin(), extra_metadata.end(),
+                  header.begin() + CHUNKED_HEADER_SIZE);
+    }
+
+    // Enqueue as a single PendingMessage with is_chunked=true.
+    // drain_send_queue will atomically send: header + chunks + sentinel.
+    // This prevents interleaving with other messages (Pitfall 1 from research).
+    bool result = false;
+    asio::steady_timer completion(socket_.get_executor());
+    completion.expires_after(std::chrono::hours(24));
+
+    PendingMessage pm;
+    pm.encoded = std::move(header);
+    pm.completion = &completion;
+    pm.result_ptr = &result;
+    pm.is_chunked = true;
+    pm.chunked_payload.assign(payload.begin(), payload.end());
+
+    send_queue_.push_back(std::move(pm));
+    send_signal_.cancel();
+
+    auto [ec] = co_await completion.async_wait(use_nothrow);
+    co_return result;
 }
 
 // =============================================================================
@@ -827,6 +957,10 @@ asio::awaitable<bool> Connection::run() {
 asio::awaitable<bool> Connection::send_message(wire::TransportMsgType type,
                                                 std::span<const uint8_t> payload,
                                                 uint32_t request_id) {
+    // Automatically use chunked mode for large payloads (Phase 115)
+    if (payload.size() >= STREAMING_THRESHOLD) {
+        co_return co_await send_message_chunked(type, payload, request_id);
+    }
     auto msg = TransportCodec::encode(type, payload, request_id);
     co_return co_await enqueue_send(std::move(msg));
 }
@@ -860,7 +994,32 @@ asio::awaitable<void> Connection::drain_send_queue() {
             auto msg = std::move(send_queue_.front());
             send_queue_.pop_front();
 
-            bool ok = co_await send_encrypted(msg.encoded);
+            bool ok;
+            if (msg.is_chunked) {
+                // Phase 115: Atomic chunked send — header + data chunks + sentinel.
+                // All sub-frames are sent sequentially without interleaving other
+                // messages (prevents AEAD nonce desync per Pitfall 1).
+                ok = co_await send_encrypted(msg.encoded);  // Chunked header
+                if (ok) {
+                    // Send data sub-frames in STREAMING_THRESHOLD-sized chunks
+                    size_t offset = 0;
+                    while (ok && offset < msg.chunked_payload.size()) {
+                        size_t len = std::min(static_cast<size_t>(STREAMING_THRESHOLD),
+                                              msg.chunked_payload.size() - offset);
+                        std::span<const uint8_t> chunk(
+                            msg.chunked_payload.data() + offset, len);
+                        ok = co_await send_encrypted(chunk);
+                        offset += len;
+                    }
+                    if (ok) {
+                        // Send zero-length sentinel
+                        std::span<const uint8_t> empty{};
+                        ok = co_await send_encrypted(empty);
+                    }
+                }
+            } else {
+                ok = co_await send_encrypted(msg.encoded);
+            }
 
             // Signal the waiting caller
             if (msg.result_ptr) *msg.result_ptr = ok;

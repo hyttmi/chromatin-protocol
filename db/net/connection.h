@@ -58,10 +58,18 @@ public:
 
     ~Connection();
 
+    /// Result of reassembling a chunked sub-frame sequence.
+    struct ReassembledChunked {
+        uint8_t type;
+        uint32_t request_id;
+        std::vector<uint8_t> payload;
+    };
+
     /// Run the connection lifecycle: handshake -> message loop -> cleanup.
     asio::awaitable<bool> run();
 
-    /// Send a transport message (encrypted).
+    /// Send a transport message (encrypted). Automatically uses chunked mode
+    /// for payloads >= STREAMING_THRESHOLD.
     asio::awaitable<bool> send_message(wire::TransportMsgType type,
                                         std::span<const uint8_t> payload,
                                         uint32_t request_id = 0);
@@ -139,6 +147,18 @@ private:
     /// Run the message read loop after handshake.
     asio::awaitable<void> message_loop();
 
+    /// Reassemble a chunked sub-frame sequence into a single message.
+    /// Called when message_loop detects CHUNKED_BEGIN (0x01) flag byte.
+    asio::awaitable<std::optional<ReassembledChunked>> recv_chunked(
+        const std::vector<uint8_t>& first_frame);
+
+    /// Send a large message as chunked sub-frames.
+    /// Used for payloads >= STREAMING_THRESHOLD.
+    asio::awaitable<bool> send_message_chunked(wire::TransportMsgType type,
+                                                std::span<const uint8_t> payload,
+                                                uint32_t request_id = 0,
+                                                std::span<const uint8_t> extra_metadata = {});
+
     /// Enqueue an encoded message and wait for the drain coroutine to send it.
     asio::awaitable<bool> enqueue_send(std::vector<uint8_t> encoded);
 
@@ -169,9 +189,11 @@ private:
 
     // Send queue (Phase 79 PUSH-04)
     struct PendingMessage {
-        std::vector<uint8_t> encoded;     // TransportCodec::encode() result
+        std::vector<uint8_t> encoded;     // TransportCodec::encode() result (or chunked header)
         asio::steady_timer* completion;   // Owned by enqueue_send coroutine's stack
         bool* result_ptr;                 // Points to local in enqueue_send
+        bool is_chunked = false;          // Phase 115: if true, chunked_payload has data chunks
+        std::vector<uint8_t> chunked_payload;  // Phase 115: full payload split into chunks by drain
     };
     std::deque<PendingMessage> send_queue_;
     asio::steady_timer send_signal_{socket_.get_executor()};

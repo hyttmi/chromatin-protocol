@@ -184,18 +184,23 @@ TEST_CASE("read_frame rejects invalid frames", "[framing]") {
 }
 
 TEST_CASE("Protocol constants for larger blob support", "[framing]") {
-    SECTION("MAX_BLOB_DATA_SIZE is 100 MiB") {
-        REQUIRE(MAX_BLOB_DATA_SIZE == 100ULL * 1024 * 1024);
-        REQUIRE(MAX_BLOB_DATA_SIZE == 104857600ULL);
+    SECTION("MAX_BLOB_DATA_SIZE is 500 MiB (Phase 115)") {
+        REQUIRE(MAX_BLOB_DATA_SIZE == 500ULL * 1024 * 1024);
+        REQUIRE(MAX_BLOB_DATA_SIZE == 524288000ULL);
     }
 
-    SECTION("MAX_FRAME_SIZE is 110 MiB") {
+    SECTION("MAX_FRAME_SIZE is 110 MiB (per-frame limit)") {
         REQUIRE(MAX_FRAME_SIZE == 110u * 1024 * 1024);
         REQUIRE(MAX_FRAME_SIZE == 115343360u);
     }
 
-    SECTION("MAX_FRAME_SIZE > MAX_BLOB_DATA_SIZE") {
-        REQUIRE(MAX_FRAME_SIZE > MAX_BLOB_DATA_SIZE);
+    SECTION("STREAMING_THRESHOLD is 1 MiB") {
+        REQUIRE(STREAMING_THRESHOLD == 1048576);
+    }
+
+    SECTION("MAX_FRAME_SIZE > STREAMING_THRESHOLD") {
+        // In chunked mode, per-frame limit applies per sub-frame (1 MiB each)
+        REQUIRE(MAX_FRAME_SIZE > STREAMING_THRESHOLD);
     }
 }
 
