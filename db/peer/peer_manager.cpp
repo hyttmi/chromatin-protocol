@@ -604,8 +604,9 @@ void PeerManager::reload_config() {
                      reset_count);
     }
 
-    // Reload max_storage_bytes
+    // Reload max_storage_bytes + max_ttl
     engine_.set_max_storage_bytes(new_cfg.max_storage_bytes);
+    engine_.set_max_ttl_seconds(new_cfg.max_ttl_seconds);
     if (new_cfg.max_storage_bytes > 0) {
         spdlog::info("config reload: max_storage_bytes={}", new_cfg.max_storage_bytes);
     } else {

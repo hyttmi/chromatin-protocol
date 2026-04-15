@@ -211,7 +211,8 @@ int cmd_run(int argc, char* argv[]) {
 
     chromatindb::engine::BlobEngine engine(storage, pool, config.max_storage_bytes,
                                            config.namespace_quota_bytes,
-                                           config.namespace_quota_count);
+                                           config.namespace_quota_count,
+                                           config.max_ttl_seconds);
     if (!config.namespace_quotas.empty()) {
         engine.set_quota_config(config.namespace_quota_bytes,
                                 config.namespace_quota_count,

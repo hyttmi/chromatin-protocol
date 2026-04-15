@@ -19,6 +19,7 @@ struct Config {
     std::string log_level = "info";
     uint32_t max_peers = 32;
     uint32_t max_clients = 128;                      // Max concurrent TCP client connections (0 = unlimited)
+    uint64_t max_ttl_seconds = 0;                    // Max TTL for blobs (0 = unlimited, rejects permanent blobs when set)
     uint32_t max_subscriptions_per_connection = 256; // Per-connection subscription limit (0 = unlimited, D-07)
     uint32_t safety_net_interval_seconds = 600;
     uint64_t max_storage_bytes = 0;                 // 0 = unlimited (no capacity limit)

@@ -704,6 +704,18 @@ Timestamp validation applies to:
 
 Blobs rejected for timestamp validation return `IngestError::timestamp_rejected` with an actionable detail string indicating whether the timestamp was too far in the future or too far in the past.
 
+### Maximum TTL Enforcement
+
+Nodes can enforce a maximum TTL via the `max_ttl_seconds` configuration field (0 = unlimited, default). When set:
+
+- Blobs with `ttl = 0` (permanent) are **rejected** with `IngestError::invalid_ttl`
+- Blobs with `ttl > max_ttl_seconds` are **rejected** with `IngestError::invalid_ttl`
+- **Tombstones are exempt** — they must be permanent (`ttl = 0`) for correct deletion semantics
+
+This is a per-node policy. Different nodes in a replication group may have different `max_ttl_seconds` values. A blob accepted by one node may be rejected by another with a stricter limit during sync — this is expected behavior. Nodes do not propagate their TTL policy.
+
+The `max_ttl_seconds` field is SIGHUP-reloadable. Existing blobs are not retroactively checked — only new ingests are validated.
+
 ### Rate Limiting
 
 In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (17) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.

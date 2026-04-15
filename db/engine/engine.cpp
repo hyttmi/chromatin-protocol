@@ -61,12 +61,14 @@ BlobEngine::BlobEngine(storage::Storage& store,
                        asio::thread_pool& pool,
                        uint64_t max_storage_bytes,
                        uint64_t namespace_quota_bytes,
-                       uint64_t namespace_quota_count)
+                       uint64_t namespace_quota_count,
+                       uint64_t max_ttl_seconds)
     : storage_(store)
     , pool_(pool)
     , max_storage_bytes_(max_storage_bytes)
     , namespace_quota_bytes_(namespace_quota_bytes)
-    , namespace_quota_count_(namespace_quota_count) {}
+    , namespace_quota_count_(namespace_quota_count)
+    , max_ttl_seconds_(max_ttl_seconds) {}
 
 void BlobEngine::set_max_storage_bytes(uint64_t max_storage_bytes) {
     max_storage_bytes_ = max_storage_bytes;
@@ -152,6 +154,20 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             spdlog::warn("Ingest rejected: blob already expired");
             co_return IngestResult::rejection(IngestError::timestamp_rejected,
                 "blob already expired");
+        }
+    }
+
+    // Step 0e: Max TTL enforcement (tombstones exempt — must be permanent)
+    if (max_ttl_seconds_ > 0 && !wire::is_tombstone(blob.data)) {
+        if (blob.ttl == 0) {
+            co_return IngestResult::rejection(IngestError::invalid_ttl,
+                "permanent blobs not allowed (max_ttl_seconds=" +
+                std::to_string(max_ttl_seconds_) + ")");
+        }
+        if (blob.ttl > max_ttl_seconds_) {
+            co_return IngestResult::rejection(IngestError::invalid_ttl,
+                "TTL " + std::to_string(blob.ttl) +
+                " exceeds max " + std::to_string(max_ttl_seconds_));
         }
     }
 

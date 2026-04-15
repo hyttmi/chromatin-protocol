@@ -95,10 +95,14 @@ public:
                         asio::thread_pool& pool,
                         uint64_t max_storage_bytes = 0,
                         uint64_t namespace_quota_bytes = 0,
-                        uint64_t namespace_quota_count = 0);
+                        uint64_t namespace_quota_count = 0,
+                        uint64_t max_ttl_seconds = 0);
 
     /// Update storage capacity limit (called on SIGHUP config reload).
     void set_max_storage_bytes(uint64_t max_storage_bytes);
+
+    /// Update max TTL (called on SIGHUP config reload).
+    void set_max_ttl_seconds(uint64_t max_ttl) { max_ttl_seconds_ = max_ttl; }
 
     /// Update quota configuration (called on SIGHUP config reload).
     void set_quota_config(uint64_t quota_bytes, uint64_t quota_count,
@@ -196,6 +200,7 @@ private:
     uint64_t max_storage_bytes_ = 0;
     uint64_t namespace_quota_bytes_ = 0;
     uint64_t namespace_quota_count_ = 0;
+    uint64_t max_ttl_seconds_ = 0;
     // Per-namespace overrides: key is raw 32-byte namespace hash
     // Value: {optional max_bytes, optional max_count}
     std::map<std::array<uint8_t, 32>, std::pair<std::optional<uint64_t>,
