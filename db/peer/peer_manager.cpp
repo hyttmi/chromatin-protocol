@@ -582,7 +582,7 @@ void PeerManager::reload_config() {
             sync_namespaces_.begin(), sync_namespaces_.end());
         auto announce_payload = encode_namespace_list(ns_list);
         for (auto& peer : conn_mgr_.peers()) {
-            if (peer->connection->is_uds()) continue;
+            if (peer->is_client) continue;
             auto conn = peer->connection;
             auto payload_copy = announce_payload;
             asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
@@ -590,9 +590,9 @@ void PeerManager::reload_config() {
                                              std::span<const uint8_t>(p));
             }, asio::detached);
         }
-        spdlog::info("config reload: re-announced sync_namespaces to {} TCP peers",
+        spdlog::info("config reload: re-announced sync_namespaces to {} peers",
                      std::count_if(conn_mgr_.peers().begin(), conn_mgr_.peers().end(),
-                                   [](const std::unique_ptr<PeerInfo>& p) { return !p->connection->is_uds(); }));
+                                   [](const std::unique_ptr<PeerInfo>& p) { return !p->is_client; }));
     }
 
     // Reload cursor config -> sync_

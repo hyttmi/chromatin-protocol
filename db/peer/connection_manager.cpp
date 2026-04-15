@@ -60,21 +60,32 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     // Must happen BEFORE adding to peers_ so unauthorized peers never see data.
     auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
 
-    bool allowed = conn->is_uds()
-        ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
-        : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
+    // ACL: UDS is always client. TCP checks client list first, then peer list.
+    bool is_client_conn = conn->is_uds();
+    bool allowed = false;
+
+    if (conn->is_uds()) {
+        allowed = acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns));
+    } else {
+        // TCP: check client ACL first (allows remote CLI access)
+        if (acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))) {
+            allowed = true;
+            is_client_conn = true;
+        } else {
+            allowed = acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
+        }
+    }
 
     if (!allowed) {
         auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
         spdlog::warn("access denied ({}): namespace={} ip={}",
-                     conn->is_uds() ? "client" : "peer",
+                     is_client_conn ? "client" : "peer",
                      full_hex, conn->remote_address());
-        // Signal ACL rejection to Server for backoff tracking (outbound only)
         if (!conn->connect_address().empty()) {
             server_.notify_acl_rejected(conn->connect_address());
         }
         ++metrics_.peers_disconnected_total;
-        conn->close();  // Silent close, no goodbye
+        conn->close();
         return;
     }
 
@@ -82,6 +93,7 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     info.connection = conn;
     info.address = conn->remote_address();
     info.is_bootstrap = false;
+    info.is_client = is_client_conn;
     info.strike_count = 0;
     info.syncing = false;
 
@@ -105,8 +117,8 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
 
     auto ns_hex = to_hex(conn->peer_pubkey(), 8);
 
-    // Connection dedup: skip for UDS (relay opens separate UDS per client session)
-    if (!conn->is_uds()) {
+    // Connection dedup: skip for clients (UDS or TCP client connections)
+    if (!is_client_conn) {
         for (auto it = peers_.begin(); it != peers_.end(); ++it) {
             auto existing_ns = crypto::sha3_256((*it)->connection->peer_pubkey());
             if (existing_ns == peer_ns) {
@@ -144,9 +156,10 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
                 break;
             }
         }
-    }  // !conn->is_uds()
+    }  // !is_client_conn
 
-    spdlog::info("Connected to peer {}@{}", ns_hex, info.address);
+    spdlog::info("Connected {} {}@{}",
+                 is_client_conn ? "client" : "peer", ns_hex, info.address);
 
     // Set up message routing -- delegate to on_message_ callback
     conn->on_message([this](net::Connection::Ptr c, wire::TransportMsgType type,
@@ -182,9 +195,12 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     }
 
     // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync
-    asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
-        co_await announce_and_sync(conn);
-    }, asio::detached);
+    // Skip for client connections — they don't participate in replication.
+    if (!peers_.back()->is_client) {
+        asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
+            co_await announce_and_sync(conn);
+        }, asio::detached);
+    }
 }
 
 void ConnectionManager::on_peer_disconnected(net::Connection::Ptr conn) {
@@ -331,7 +347,7 @@ void ConnectionManager::disconnect_unauthorized_peers() {
 
     for (const auto& peer : peers_) {
         auto peer_ns = crypto::sha3_256(peer->connection->peer_pubkey());
-        bool peer_allowed = peer->connection->is_uds()
+        bool peer_allowed = peer->is_client
             ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
             : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
         if (!peer_allowed) {
@@ -370,9 +386,10 @@ asio::awaitable<void> ConnectionManager::keepalive_loop() {
         auto now = std::chrono::steady_clock::now();
 
         // Snapshot connections -- peers_ may change across co_await points
+        // Only keepalive for peers, not client connections
         std::vector<net::Connection::Ptr> tcp_peers;
         for (const auto& peer : peers_) {
-            if (!peer->connection->is_uds()) {
+            if (!peer->is_client) {
                 tcp_peers.push_back(peer->connection);
             }
         }

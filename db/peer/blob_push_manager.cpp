@@ -63,7 +63,7 @@ void BlobPushManager::on_blob_ingested(
     // BlobNotify (type 59) to all TCP peers except source (PUSH-01, PUSH-07, PUSH-08)
     for (auto& peer : peers_) {
         if (peer->connection == source) continue;  // Source exclusion (D-06, D-09)
-        if (peer->connection->is_uds()) continue;  // UDS = client, not peer
+        if (peer->is_client) continue;  // Clients don't receive BlobNotify
 
         // Phase 86: Namespace filtering (D-05, D-07)
         // Empty announced set = replicate all (no filter applied)

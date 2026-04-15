@@ -116,24 +116,19 @@ bool Connection::connect(const std::string& host, uint16_t port,
         if (connect_uds(uds_path)) {
             spdlog::debug("connected via UDS: {}", uds_path);
             if (handshake_trusted()) {
-                if (drain_announce()) {
-                    connected_ = true;
-                    return true;
-                }
+                connected_ = true;
+                return true;
             }
-            // UDS handshake failed — close and fall through to TCP
             close();
         }
     }
 
-    // Fall back to TCP
+    // Fall back to TCP with full PQ handshake
     if (connect_tcp(host, port)) {
         spdlog::debug("connected via TCP: {}:{}", host, port);
         if (handshake_pq()) {
-            if (drain_announce()) {
-                connected_ = true;
-                return true;
-            }
+            connected_ = true;
+            return true;
         }
         close();
     }
