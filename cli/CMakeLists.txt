@@ -109,6 +109,11 @@ target_link_libraries(chromatindb-cli PRIVATE
   nlohmann_json::nlohmann_json
 )
 
+# Also install as 'cdb' for convenience
+add_custom_command(TARGET chromatindb-cli POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink chromatindb-cli ${CMAKE_BINARY_DIR}/cdb
+)
+
 # =============================================================================
 # Tests
 # =============================================================================

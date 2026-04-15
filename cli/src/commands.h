@@ -23,7 +23,12 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
 
 int get(const std::string& identity_dir, const std::vector<std::string>& hash_hexes,
         const std::string& namespace_hex, bool to_stdout,
-        const std::string& output_dir, const ConnectOpts& opts);
+        const std::string& output_dir, bool force_overwrite, const ConnectOpts& opts);
+
+/// List all blob hashes in a namespace. Returns vector of hex strings.
+std::vector<std::string> list_hashes(const std::string& identity_dir,
+                                      const std::string& namespace_hex,
+                                      const ConnectOpts& opts);
 
 int rm(const std::string& identity_dir, const std::string& hash_hex,
        const std::string& namespace_hex, const ConnectOpts& opts);

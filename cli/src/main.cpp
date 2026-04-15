@@ -1,5 +1,6 @@
 #include "cli/src/commands.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/ansicolor_sink.h>
 
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -70,8 +72,15 @@ static void usage() {
         "  --identity <path>   Identity directory (default: ~/.chromatindb/)\n"
         "  --uds <path>        UDS socket path\n"
         "  -p, --port <port>   Port (default: 4200)\n"
+        "  -v, --verbose       Show info-level log output\n"
         "  -q, --quiet         Minimal output\n"
     );
+}
+
+/// Check if argv[idx] is --help or -h.
+static bool is_help_flag(int argc, char* argv[], int idx) {
+    if (idx >= argc) return false;
+    return std::strcmp(argv[idx], "--help") == 0 || std::strcmp(argv[idx], "-h") == 0;
 }
 
 /// Parse "host:port" or just "host" (default port 4200).
@@ -95,12 +104,15 @@ int main(int argc, char* argv[]) {
     // All log output to stderr so stdout is clean for data/hashes
     auto stderr_sink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
     spdlog::set_default_logger(std::make_shared<spdlog::logger>("cli", stderr_sink));
+    spdlog::set_level(spdlog::level::warn);
 
     namespace cmd = chromatindb::cli::cmd;
 
     std::string identity_dir_str;
     cmd::ConnectOpts opts;
     bool force = false;
+    bool cli_host_set = false;
+    bool cli_port_set = false;
     int arg_idx = 1;
 
     // Parse global options (before command)
@@ -132,6 +144,10 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             opts.port = static_cast<uint16_t>(p);
+            cli_port_set = true;
+            ++arg_idx;
+        } else if (std::strcmp(arg, "-v") == 0 || std::strcmp(arg, "--verbose") == 0) {
+            spdlog::set_level(spdlog::level::info);
             ++arg_idx;
         } else if (std::strcmp(arg, "-q") == 0 || std::strcmp(arg, "--quiet") == 0) {
             opts.quiet = true;
@@ -148,6 +164,27 @@ int main(int argc, char* argv[]) {
 
     if (identity_dir_str.empty()) {
         identity_dir_str = default_identity_dir().string();
+    }
+
+    // Load config.json defaults (CLI flags override)
+    {
+        auto config_path = fs::path(identity_dir_str) / "config.json";
+        if (fs::exists(config_path)) {
+            try {
+                std::ifstream cf(config_path);
+                auto cfg = nlohmann::json::parse(cf, nullptr, false);
+                if (!cfg.is_discarded() && cfg.is_object()) {
+                    if (!cli_host_set && cfg.contains("host") && cfg["host"].is_string()) {
+                        opts.host = cfg["host"].get<std::string>();
+                    }
+                    if (!cli_port_set && cfg.contains("port") && cfg["port"].is_number_unsigned()) {
+                        opts.port = static_cast<uint16_t>(cfg["port"].get<unsigned>());
+                    }
+                }
+            } catch (...) {
+                // Silently ignore malformed config
+            }
+        }
     }
 
     if (arg_idx >= argc) {
@@ -170,6 +207,10 @@ int main(int argc, char* argv[]) {
         // keygen
         // =====================================================================
         if (command == "keygen") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli keygen [--force]\n");
+                return 0;
+            }
             while (arg_idx < argc) {
                 if (std::strcmp(argv[arg_idx], "--force") == 0) {
                     force = true;
@@ -186,6 +227,10 @@ int main(int argc, char* argv[]) {
         // whoami
         // =====================================================================
         if (command == "whoami") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli whoami\n");
+                return 0;
+            }
             return cmd::whoami(identity_dir_str);
         }
 
@@ -193,6 +238,10 @@ int main(int argc, char* argv[]) {
         // export-key
         // =====================================================================
         if (command == "export-key") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli export-key\n");
+                return 0;
+            }
             return cmd::export_key(identity_dir_str);
         }
 
@@ -203,6 +252,10 @@ int main(int argc, char* argv[]) {
         //   --stdin
         // =====================================================================
         if (command == "put") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli put <file>... [host[:port]] [--share <name|file>...] [--ttl <duration>] [--stdin]\n");
+                return 0;
+            }
             std::vector<std::string> file_paths;
             std::vector<std::string> share_files;
             uint32_t ttl = 0;
@@ -269,9 +322,15 @@ int main(int argc, char* argv[]) {
         //   -o, --output-dir <dir>
         // =====================================================================
         if (command == "get") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli get <hash>... [host[:port]] [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
+                return 0;
+            }
             std::string namespace_hex;
             std::string output_dir;
             bool to_stdout = false;
+            bool get_all = false;
+            bool get_force = false;
 
             std::vector<std::string> positionals;
             while (arg_idx < argc) {
@@ -293,6 +352,12 @@ int main(int argc, char* argv[]) {
                     }
                     output_dir = argv[++arg_idx];
                     ++arg_idx;
+                } else if (std::strcmp(a, "--all") == 0) {
+                    get_all = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--force") == 0) {
+                    get_force = true;
+                    ++arg_idx;
                 } else if (a[0] != '-') {
                     positionals.push_back(a);
                     ++arg_idx;
@@ -309,19 +374,39 @@ int main(int argc, char* argv[]) {
                     hash_hexes.push_back(positionals[i]);
                 } else if (i == positionals.size() - 1) {
                     parse_host_port(positionals[i].c_str(), opts.host, opts.port);
+                    cli_host_set = true;
                 } else {
                     std::fprintf(stderr, "Error: invalid hash: %s\n", positionals[i].c_str());
                     return 1;
                 }
             }
 
+            if (get_all) {
+                if (namespace_hex.empty()) {
+                    std::fprintf(stderr, "Error: --all requires --from <name|namespace>\n");
+                    return 1;
+                }
+                // List the namespace, collect all hashes, then get them
+                auto all_hashes = cmd::list_hashes(identity_dir_str, namespace_hex, opts);
+                if (all_hashes.empty()) {
+                    std::fprintf(stderr, "No blobs in namespace\n");
+                    return 0;
+                }
+                // Merge with any explicitly provided hashes
+                for (auto& h : hash_hexes) {
+                    all_hashes.push_back(std::move(h));
+                }
+                return cmd::get(identity_dir_str, all_hashes, namespace_hex,
+                               to_stdout, output_dir, get_force, opts);
+            }
+
             if (hash_hexes.empty()) {
-                std::fprintf(stderr, "Error: get requires at least one blob hash\n");
+                std::fprintf(stderr, "Error: get requires at least one blob hash (or use --all --from <ns>)\n");
                 return 1;
             }
 
             return cmd::get(identity_dir_str, hash_hexes, namespace_hex,
-                           to_stdout, output_dir, opts);
+                           to_stdout, output_dir, get_force, opts);
         }
 
         // =====================================================================
@@ -329,8 +414,13 @@ int main(int argc, char* argv[]) {
         //   --namespace <hex>
         // =====================================================================
         if (command == "rm") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli rm <hash> [host[:port]] [--namespace <hex>] [-y]\n");
+                return 0;
+            }
             std::string hash_hex;
             std::string namespace_hex;
+            bool skip_confirm = false;
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -340,6 +430,9 @@ int main(int argc, char* argv[]) {
                         return 1;
                     }
                     namespace_hex = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (std::strcmp(a, "-y") == 0 || std::strcmp(a, "--yes") == 0) {
+                    skip_confirm = true;
                     ++arg_idx;
                 } else if (a[0] != '-' && hash_hex.empty()) {
                     hash_hex = a;
@@ -358,6 +451,15 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
+            if (!skip_confirm) {
+                std::fprintf(stderr, "Delete blob %s? [y/N] ", hash_hex.c_str());
+                int ch = std::fgetc(stdin);
+                if (ch != 'y' && ch != 'Y') {
+                    std::fprintf(stderr, "Aborted.\n");
+                    return 0;
+                }
+            }
+
             return cmd::rm(identity_dir_str, hash_hex, namespace_hex, opts);
         }
 
@@ -368,6 +470,10 @@ int main(int argc, char* argv[]) {
         //   --namespace <hex>
         // =====================================================================
         if (command == "reshare") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli reshare <hash> [host[:port]] [--share <name|file>...] [--ttl <duration>] [--namespace <hex>]\n");
+                return 0;
+            }
             std::string hash_hex;
             std::string namespace_hex;
             std::vector<std::string> share_files;
@@ -422,6 +528,10 @@ int main(int argc, char* argv[]) {
         //   --namespace <hex>
         // =====================================================================
         if (command == "ls") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli ls [host[:port]] [--namespace <hex>]\n");
+                return 0;
+            }
             std::string namespace_hex;
 
             while (arg_idx < argc) {
@@ -450,6 +560,10 @@ int main(int argc, char* argv[]) {
         //   --namespace <hex>
         // =====================================================================
         if (command == "exists") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli exists <hash> [host[:port]] [--namespace <hex>]\n");
+                return 0;
+            }
             std::string hash_hex;
             std::string namespace_hex;
 
@@ -486,6 +600,10 @@ int main(int argc, char* argv[]) {
         // info [host[:port]]
         // =====================================================================
         if (command == "info") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli info [host[:port]]\n");
+                return 0;
+            }
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (a[0] != '-') {
@@ -503,6 +621,10 @@ int main(int argc, char* argv[]) {
         // stats [host[:port]]
         // =====================================================================
         if (command == "stats") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli stats [host[:port]]\n");
+                return 0;
+            }
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (a[0] != '-') {
@@ -520,6 +642,10 @@ int main(int argc, char* argv[]) {
         // delegate <pubkey_file> [host[:port]]
         // =====================================================================
         if (command == "delegate") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli delegate <pubkey_file> [host[:port]]\n");
+                return 0;
+            }
             std::string pubkey_file;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -545,10 +671,18 @@ int main(int argc, char* argv[]) {
         // revoke <pubkey_file> [host[:port]]
         // =====================================================================
         if (command == "revoke") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli revoke <pubkey_file> [host[:port]] [-y]\n");
+                return 0;
+            }
             std::string pubkey_file;
+            bool skip_confirm = false;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (a[0] != '-' && pubkey_file.empty()) {
+                if (std::strcmp(a, "-y") == 0 || std::strcmp(a, "--yes") == 0) {
+                    skip_confirm = true;
+                    ++arg_idx;
+                } else if (a[0] != '-' && pubkey_file.empty()) {
                     pubkey_file = a;
                     ++arg_idx;
                 } else if (a[0] != '-') {
@@ -563,6 +697,16 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "Error: revoke requires a pubkey file\n");
                 return 1;
             }
+
+            if (!skip_confirm) {
+                std::fprintf(stderr, "Revoke delegation for %s? [y/N] ", pubkey_file.c_str());
+                int ch = std::fgetc(stdin);
+                if (ch != 'y' && ch != 'Y') {
+                    std::fprintf(stderr, "Aborted.\n");
+                    return 0;
+                }
+            }
+
             return cmd::revoke(identity_dir_str, pubkey_file, opts);
         }
 
@@ -571,6 +715,10 @@ int main(int argc, char* argv[]) {
         //   --namespace <hex>
         // =====================================================================
         if (command == "delegations") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli delegations [host[:port]] [--namespace <hex>]\n");
+                return 0;
+            }
             std::string namespace_hex;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -596,6 +744,10 @@ int main(int argc, char* argv[]) {
         // publish [host[:port]]
         // =====================================================================
         if (command == "publish") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli publish [host[:port]]\n");
+                return 0;
+            }
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (a[0] != '-') {
@@ -615,6 +767,12 @@ int main(int argc, char* argv[]) {
         // contact list
         // =====================================================================
         if (command == "contact") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: chromatindb-cli contact add <name> <namespace> [host[:port]]\n"
+                             "       chromatindb-cli contact rm <name>\n"
+                             "       chromatindb-cli contact list\n");
+                return 0;
+            }
             if (arg_idx >= argc) {
                 std::fprintf(stderr, "Usage: contact <add|rm|list> ...\n");
                 return 1;

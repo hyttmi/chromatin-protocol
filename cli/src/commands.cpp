@@ -329,7 +329,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
 
 int get(const std::string& identity_dir, const std::vector<std::string>& hash_hexes,
         const std::string& namespace_hex, bool to_stdout,
-        const std::string& output_dir, const ConnectOpts& opts) {
+        const std::string& output_dir, bool force_overwrite, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
     auto ns = resolve_namespace(id, namespace_hex, identity_dir);
@@ -409,6 +409,13 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
         } else {
             auto out_path = output_dir.empty() ? out_filename
                 : output_dir + "/" + out_filename;
+
+            if (!force_overwrite && fs::exists(out_path)) {
+                std::fprintf(stderr, "skip: %s already exists (use --force to overwrite)\n",
+                             out_path.c_str());
+                continue;
+            }
+
             std::ofstream f(out_path, std::ios::binary);
             if (!f) {
                 std::fprintf(stderr, "Error: cannot write to %s\n", out_path.c_str());
@@ -748,6 +755,64 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
     }
 
     return 0;
+}
+
+// =============================================================================
+// list_hashes — return all blob hashes in a namespace
+// =============================================================================
+
+std::vector<std::string> list_hashes(const std::string& identity_dir,
+                                      const std::string& namespace_hex,
+                                      const ConnectOpts& opts) {
+
+    auto id = Identity::load_from(identity_dir);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
+
+    std::vector<std::string> hashes;
+    uint64_t since_seq = 0;
+
+    for (;;) {
+        std::vector<uint8_t> payload(44);
+        std::memcpy(payload.data(), ns.data(), 32);
+        store_u64_be(payload.data() + 32, since_seq);
+        store_u32_be(payload.data() + 40, 100);
+
+        Connection conn(id);
+        if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+            return hashes;
+        }
+
+        if (!conn.send(MsgType::ListRequest, payload, 1)) {
+            conn.close();
+            return hashes;
+        }
+
+        auto resp = conn.recv();
+        conn.close();
+
+        if (!resp || resp->type != static_cast<uint8_t>(MsgType::ListResponse) ||
+            resp->payload.size() < 5) {
+            return hashes;
+        }
+
+        auto& p = resp->payload;
+        uint32_t count = load_u32_be(p.data());
+        size_t entries_size = static_cast<size_t>(count) * 40;
+        if (p.size() < 4 + entries_size + 1) return hashes;
+
+        const uint8_t* entries = p.data() + 4;
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t* entry = entries + static_cast<size_t>(i) * 40;
+            auto hash_span = std::span<const uint8_t>(entry, 32);
+            hashes.push_back(to_hex(hash_span));
+            since_seq = load_u64_be(entry + 32);
+        }
+
+        uint8_t has_more = p[4 + entries_size];
+        if (has_more == 0 || count == 0) break;
+    }
+
+    return hashes;
 }
 
 // =============================================================================
@@ -1191,12 +1256,65 @@ int delegations(const std::string& identity_dir, const std::string& namespace_he
 int publish(const std::string& identity_dir, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
+    auto ns = id.namespace_id();
+    auto ns_hex = to_hex(ns);
+
+    // Check if already published: list own namespace, look for PUBK blob
+    {
+        Connection check_conn(id);
+        if (check_conn.connect(opts.host, opts.port, opts.uds_path)) {
+            // ListRequest: [namespace:32][since_seq:8BE=0][limit:4BE=100]
+            std::vector<uint8_t> list_payload(44, 0);
+            std::memcpy(list_payload.data(), ns.data(), 32);
+            store_u32_be(list_payload.data() + 40, 100);
+
+            if (check_conn.send(MsgType::ListRequest, list_payload, 1)) {
+                auto list_resp = check_conn.recv();
+                if (list_resp && list_resp->type == static_cast<uint8_t>(MsgType::ListResponse) &&
+                    list_resp->payload.size() >= 5) {
+
+                    uint32_t count = load_u32_be(list_resp->payload.data());
+                    uint32_t rid = 2;
+                    for (uint32_t i = 0; i < count; ++i) {
+                        size_t off = 4 + i * 40;
+                        auto hash = std::span<const uint8_t>(list_resp->payload.data() + off, 32);
+
+                        std::vector<uint8_t> read_payload(64);
+                        std::memcpy(read_payload.data(), ns.data(), 32);
+                        std::memcpy(read_payload.data() + 32, hash.data(), 32);
+
+                        if (!check_conn.send(MsgType::ReadRequest, read_payload, rid++))
+                            continue;
+
+                        auto read_resp = check_conn.recv();
+                        if (!read_resp || read_resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+                            read_resp->payload.empty() || read_resp->payload[0] != 0x01)
+                            continue;
+
+                        auto blob_bytes = std::span<const uint8_t>(
+                            read_resp->payload.data() + 1, read_resp->payload.size() - 1);
+                        auto blob = decode_blob(blob_bytes);
+                        if (!blob) continue;
+
+                        if (is_pubkey_blob(blob->data)) {
+                            check_conn.close();
+                            if (!opts.quiet) {
+                                std::fprintf(stderr, "already published: %s\n", ns_hex.c_str());
+                            }
+                            std::printf("%s\n", ns_hex.c_str());
+                            return 0;
+                        }
+                    }
+                }
+            }
+            check_conn.close();
+        }
+    }
 
     // Build PUBK blob: [magic:4][signing_pk:2592][kem_pk:1568]
     auto pubkey_data = make_pubkey_data(id.signing_pubkey(), id.kem_pubkey());
 
     // Sign as permanent blob in our namespace
-    auto ns = id.namespace_id();
     auto timestamp = static_cast<uint64_t>(std::time(nullptr));
     auto signing_input = build_signing_input(ns, pubkey_data, 0, timestamp);
     auto signature = id.sign(signing_input);
@@ -1232,7 +1350,6 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
         return 1;
     }
 
-    auto ns_hex = to_hex(ns);
     if (!opts.quiet) {
         std::fprintf(stderr, "published: %s\n", ns_hex.c_str());
     }
