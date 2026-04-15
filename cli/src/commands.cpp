@@ -269,8 +269,8 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     struct FileEntry { std::string path; std::string name; std::vector<uint8_t> data; };
     std::vector<FileEntry> files;
 
-    // Envelope encryption buffers the full file in memory (~3x file size).
-    // For files larger than this, use the chunked file manifest (future work).
+    // Client-side guard: read_file_bytes + envelope + FlatBuffer = ~3x file size in memory.
+    // Node enforces MAX_BLOB_DATA_SIZE (default 500 MiB) on its side.
     static constexpr size_t MAX_FILE_SIZE = 500ULL * 1024 * 1024;
 
     if (from_stdin) {
