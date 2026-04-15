@@ -42,6 +42,7 @@ public:
                       const std::set<std::array<uint8_t, 32>>& sync_namespaces,
                       uint64_t rate_limit_burst,
                       uint32_t max_peers,
+                      uint32_t max_clients,
                       MessageCallback on_message,
                       SyncTrigger sync_trigger,
                       ConnectCallback on_connect,
@@ -87,6 +88,7 @@ public:
 
     // Config reload
     void set_max_peers(uint32_t max_peers) { max_peers_ = max_peers; }
+    void set_max_clients(uint32_t max_clients) { max_clients_ = max_clients; }
     void set_trusted_peers(std::set<std::string> peers) { trusted_peers_ = std::move(peers); }
 
 private:
@@ -115,6 +117,7 @@ private:
 
     asio::steady_timer* keepalive_timer_ = nullptr;
     uint32_t max_peers_;
+    uint32_t max_clients_ = 128;
 };
 
 } // namespace chromatindb::peer

@@ -46,7 +46,7 @@ PeerManager::PeerManager(const config::Config& config,
     , config_path_(config_path)
     , metrics_collector_(storage, ioc, config.metrics_bind, stopping_)
     , conn_mgr_(identity, acl, metrics_collector_.node_metrics(), server_, ioc,
-                stopping_, sync_namespaces_, config.rate_limit_burst, config.max_peers,
+                stopping_, sync_namespaces_, config.rate_limit_burst, config.max_peers, config.max_clients,
                 // MessageCallback: route to dispatcher
                 [this](net::Connection::Ptr c, wire::TransportMsgType type,
                        std::vector<uint8_t> payload, uint32_t rid) {
@@ -550,6 +550,7 @@ void PeerManager::reload_config() {
 
     // Reload max_peers -> conn_mgr_ + pex_
     conn_mgr_.set_max_peers(new_cfg.max_peers);
+    conn_mgr_.set_max_clients(new_cfg.max_clients);
     pex_.set_max_peers(new_cfg.max_peers);
     if (conn_mgr_.peer_count() > new_cfg.max_peers) {
         spdlog::warn("config reload: max_peers={} but {} peers connected "

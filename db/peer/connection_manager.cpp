@@ -28,6 +28,7 @@ ConnectionManager::ConnectionManager(
     const std::set<std::array<uint8_t, 32>>& sync_namespaces,
     uint64_t rate_limit_burst,
     uint32_t max_peers,
+    uint32_t max_clients,
     MessageCallback on_message,
     SyncTrigger sync_trigger,
     ConnectCallback on_connect,
@@ -44,19 +45,21 @@ ConnectionManager::ConnectionManager(
     , on_connect_(std::move(on_connect))
     , on_disconnect_(std::move(on_disconnect))
     , rate_limit_burst_(rate_limit_burst)
-    , max_peers_(max_peers) {}
+    , max_peers_(max_peers)
+    , max_clients_(max_clients) {}
 
 // =============================================================================
 // Connection lifecycle
 // =============================================================================
 
 bool ConnectionManager::should_accept_connection() const {
-    // Only count peer connections against max_peers, not clients
     size_t peer_count = 0;
+    size_t client_count = 0;
     for (const auto& p : peers_) {
-        if (!p->is_client) ++peer_count;
+        if (p->is_client) ++client_count;
+        else ++peer_count;
     }
-    return peer_count < max_peers_;
+    return peer_count < max_peers_ && client_count < max_clients_;
 }
 
 void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
