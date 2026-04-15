@@ -164,6 +164,7 @@ asio::awaitable<void> HttpServer::handle_new_connection(asio::ip::tcp::socket so
             HttpConnection conn(
                 HttpConnection::Stream(std::move(tls_stream)),
                 router_, token_store_, tracker_, uds_, ioc_, active_connections_);
+            conn.set_data_handlers(data_handlers_);
             co_await conn.handle();
         } catch (const std::exception& e) {
             spdlog::debug("HTTP TLS connection error: {}", e.what());
@@ -173,6 +174,7 @@ asio::awaitable<void> HttpServer::handle_new_connection(asio::ip::tcp::socket so
         HttpConnection conn(
             HttpConnection::Stream(std::move(socket)),
             router_, token_store_, tracker_, uds_, ioc_, active_connections_);
+        conn.set_data_handlers(data_handlers_);
         co_await conn.handle();
     }
 }

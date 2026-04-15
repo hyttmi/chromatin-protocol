@@ -20,6 +20,7 @@ namespace chromatindb::relay::http {
 
 struct HttpRequest;
 struct HttpSessionState;
+class HttpConnection;
 
 /// Parsed path parameters from /blob/{namespace}/{hash} URLs.
 struct BlobPathParams {
@@ -73,6 +74,20 @@ public:
     asio::awaitable<HttpResponse> handle_batch_read(
         const HttpRequest& req, const std::vector<uint8_t>& body,
         HttpSessionState* session);
+
+    /// POST /blob streaming variant -- reads HTTP body in 1 MiB chunks and forwards
+    /// each to UDS incrementally via ChunkedStreamJob. Relay holds at most 1 chunk
+    /// (1 MiB) of blob data in memory at any time. For blobs >= STREAMING_THRESHOLD only.
+    asio::awaitable<HttpResponse> handle_blob_write_streaming(
+        const HttpRequest& req, HttpConnection& conn, HttpSessionState* session);
+
+    /// GET /blob/{ns}/{hash} streaming variant -- for large ReadResponse payloads.
+    /// Creates StreamingResponsePromise so read_loop pushes chunks to ChunkQueue.
+    /// Handler consumes queue and writes HTTP chunked-TE.
+    /// Returns nullopt when response was already written via chunked-TE.
+    /// Returns HttpResponse for errors (404, 502, etc.) or small blobs.
+    asio::awaitable<std::optional<HttpResponse>> handle_blob_read_streaming(
+        const HttpRequest& req, HttpConnection& conn, HttpSessionState* session);
 
 private:
     /// Send encoded message via UDS and co_await response with timeout.

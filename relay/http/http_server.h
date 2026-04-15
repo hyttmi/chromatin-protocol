@@ -15,6 +15,7 @@ class UdsMultiplexer;       // Forward declaration
 
 namespace chromatindb::relay::http {
 
+class DataHandlers;
 class HttpRouter;
 class TokenStore;
 
@@ -44,6 +45,10 @@ public:
     /// Update max connections on SIGHUP.
     void set_max_connections(uint32_t max);
 
+    /// Set DataHandlers for streaming blob I/O dispatch.
+    /// Called once after DataHandlers construction in relay_main.
+    void set_data_handlers(DataHandlers* handlers) { data_handlers_ = handlers; }
+
     /// Current active connection count.
     size_t active_connections() const;
 
@@ -67,6 +72,7 @@ private:
 
     uint32_t max_connections_;
     uint32_t active_connections_{0};
+    DataHandlers* data_handlers_ = nullptr;
 
     static constexpr auto HANDSHAKE_TIMEOUT = std::chrono::seconds(5);
 };

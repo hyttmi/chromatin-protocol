@@ -1,5 +1,7 @@
 #pragma once
 
+#include "relay/core/chunked_stream.h"
+
 #include <asio.hpp>
 #include <cstdint>
 #include <memory>
@@ -77,6 +79,48 @@ private:
     bool resolved_ = false;
 };
 
+/// Streaming response for large blob reads.
+/// read_loop() pushes UDS chunks directly to the ChunkQueue.
+/// The handler coroutine consumes from the queue and writes HTTP chunked-TE.
+/// This avoids reassembling the full blob in relay memory.
+struct StreamingResponsePromise {
+    explicit StreamingResponsePromise(asio::any_io_executor executor)
+        : header_timer_(executor), queue(executor) {}
+
+    /// Header info delivered before data chunks.
+    struct HeaderInfo {
+        uint8_t type;
+        uint32_t request_id;
+        uint64_t total_size;
+        std::vector<uint8_t> extra_metadata;  // e.g., status byte for ReadResponse
+    };
+
+    /// Called by read_loop when chunked header is received.
+    void set_header(HeaderInfo info) {
+        header_ = std::move(info);
+        header_ready_ = true;
+        header_timer_.cancel();
+    }
+
+    /// Wait for header info. Returns nullopt on timeout.
+    template<typename Duration>
+    asio::awaitable<std::optional<HeaderInfo>> wait_header(Duration timeout) {
+        if (header_ready_) co_return std::move(header_);
+        header_timer_.expires_after(timeout);
+        auto [ec] = co_await header_timer_.async_wait(asio::as_tuple(asio::use_awaitable));
+        if (header_ready_) co_return std::move(header_);
+        co_return std::nullopt;
+    }
+
+    /// Chunk queue for incremental delivery (backpressure-aware).
+    core::ChunkQueue queue;
+
+private:
+    asio::steady_timer header_timer_;
+    std::optional<HeaderInfo> header_;
+    bool header_ready_ = false;
+};
+
 /// Registry mapping relay_rid -> ResponsePromise for pending HTTP requests.
 ///
 /// Access from single event loop thread -- no synchronization needed.
@@ -96,19 +140,57 @@ public:
 
     /// Resolve a promise by relay_rid. Returns true if found and resolved.
     /// Removes the entry from the map after resolution.
+    /// Falls back to streaming promises if no regular promise is found --
+    /// this handles the case where a small blob response arrives for a
+    /// handler that registered a streaming promise (non-chunked ReadResponse).
     bool resolve(uint32_t relay_rid, uint8_t type, std::vector<uint8_t> payload) {
         auto it = promises_.find(relay_rid);
-        if (it == promises_.end()) return false;
-        auto p = it->second;
-        promises_.erase(it);
-        // shared_ptr keeps promise alive after map removal
-        p->resolve(type, std::move(payload));
-        return true;
+        if (it != promises_.end()) {
+            auto p = it->second;
+            promises_.erase(it);
+            // shared_ptr keeps promise alive after map removal
+            p->resolve(type, std::move(payload));
+            return true;
+        }
+        // Fallback: check streaming promises (non-chunked response to streaming handler)
+        auto sit = streaming_promises_.find(relay_rid);
+        if (sit != streaming_promises_.end()) {
+            auto sp = sit->second;
+            streaming_promises_.erase(sit);
+            // Deliver as: header with total_size = payload.size, then one chunk, then close.
+            // set_header and close are synchronous. Push directly into the deque
+            // (queue is empty, won't exceed MAX_DEPTH).
+            sp->set_header({type, relay_rid, static_cast<uint64_t>(payload.size()), {}});
+            sp->queue.chunks.push_back(std::move(payload));
+            sp->queue.close_queue();
+            return true;
+        }
+        return false;
     }
 
     /// Remove a promise without resolving (on timeout or client disconnect).
     void remove(uint32_t relay_rid) {
         promises_.erase(relay_rid);
+    }
+
+    /// Create a streaming promise for chunked responses (large blob reads).
+    std::shared_ptr<StreamingResponsePromise> create_streaming_promise(
+        uint32_t relay_rid, asio::any_io_executor executor) {
+        auto promise = std::make_shared<StreamingResponsePromise>(executor);
+        streaming_promises_[relay_rid] = promise;
+        return promise;
+    }
+
+    /// Get streaming promise by relay_rid (for read_loop to push chunks).
+    std::shared_ptr<StreamingResponsePromise> get_streaming(uint32_t relay_rid) {
+        auto it = streaming_promises_.find(relay_rid);
+        if (it == streaming_promises_.end()) return nullptr;
+        return it->second;
+    }
+
+    /// Remove streaming promise.
+    void remove_streaming(uint32_t relay_rid) {
+        streaming_promises_.erase(relay_rid);
     }
 
     /// Cancel all promises and clear the map (for shutdown cleanup).
@@ -117,6 +199,10 @@ public:
             promise->cancel();
         }
         promises_.clear();
+        for (auto& [rid, sp] : streaming_promises_) {
+            sp->queue.close_queue();
+        }
+        streaming_promises_.clear();
     }
 
     /// Number of pending promises (for metrics/debugging).
@@ -124,8 +210,14 @@ public:
         return promises_.size();
     }
 
+    /// Number of pending streaming promises (for metrics/debugging).
+    size_t streaming_size() const {
+        return streaming_promises_.size();
+    }
+
 private:
     std::unordered_map<uint32_t, std::shared_ptr<ResponsePromise>> promises_;
+    std::unordered_map<uint32_t, std::shared_ptr<StreamingResponsePromise>> streaming_promises_;
 };
 
 } // namespace chromatindb::relay::http

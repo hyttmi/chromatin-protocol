@@ -19,6 +19,7 @@ class UdsMultiplexer;       // Forward declaration
 
 namespace chromatindb::relay::http {
 
+class DataHandlers;  // Forward declaration for streaming dispatch
 class HttpRouter;
 class TokenStore;
 struct HttpRequest;
@@ -40,17 +41,11 @@ public:
     /// Reads headers, optional body, dispatches via router, sends response.
     asio::awaitable<void> handle();
 
-private:
-    /// Read bytes from stream (TLS or plain) using get_if branching.
-    asio::awaitable<std::tuple<asio::error_code, size_t>> async_read_some(
-        asio::mutable_buffer buf);
+    /// Set DataHandlers for streaming dispatch (upload/download of large blobs).
+    /// Called once after construction by relay_main or http_server.
+    void set_data_handlers(DataHandlers* handlers) { data_handlers_ = handlers; }
 
-    /// Write bytes to stream (TLS or plain) using get_if branching.
-    asio::awaitable<std::tuple<asio::error_code, size_t>> async_write(
-        const std::string& data);
-
-    /// Read until \r\n\r\n header end sentinel or buffer overflow.
-    asio::awaitable<bool> read_headers(std::string& header_buf);
+    // --- Public streaming API (used by DataHandlers for large blob I/O) ---
 
     /// Read exactly content_length bytes of body.
     asio::awaitable<bool> read_body(size_t content_length, std::vector<uint8_t>& body);
@@ -63,16 +58,25 @@ private:
                                              ChunkCallback chunk_cb);
 
     /// Start a chunked transfer encoding response.
-    /// Writes status line + headers including Transfer-Encoding: chunked.
-    /// After this, call write_chunked_te_chunk() for each data chunk,
-    /// then write_chunked_te_end() to terminate.
     asio::awaitable<bool> write_chunked_te_start(uint16_t status, std::string_view content_type);
 
-    /// Write one HTTP chunk in chunked-TE format: "{hex_size}\r\n{data}\r\n".
+    /// Write one HTTP chunk in chunked-TE format.
     asio::awaitable<bool> write_chunked_te_chunk(std::span<const uint8_t> data);
 
-    /// Write the terminating chunk "0\r\n\r\n" to end chunked transfer encoding.
+    /// Write the terminating chunk to end chunked transfer encoding.
     asio::awaitable<bool> write_chunked_te_end();
+
+private:
+    /// Read bytes from stream (TLS or plain) using get_if branching.
+    asio::awaitable<std::tuple<asio::error_code, size_t>> async_read_some(
+        asio::mutable_buffer buf);
+
+    /// Write bytes to stream (TLS or plain) using get_if branching.
+    asio::awaitable<std::tuple<asio::error_code, size_t>> async_write(
+        const std::string& data);
+
+    /// Read until \r\n\r\n header end sentinel or buffer overflow.
+    asio::awaitable<bool> read_headers(std::string& header_buf);
 
     /// Enter SSE streaming mode: create SseWriter, run drain loop, cleanup on close.
     asio::awaitable<void> run_sse_mode(uint64_t session_id);
@@ -101,6 +105,7 @@ private:
     core::UdsMultiplexer& uds_;
     asio::io_context& ioc_;
     uint32_t& active_connections_;
+    DataHandlers* data_handlers_ = nullptr;
 
     // Read buffer (persistent across reads within a connection)
     static constexpr size_t READ_BUF_SIZE = 8192;

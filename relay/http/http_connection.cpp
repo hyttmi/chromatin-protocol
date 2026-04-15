@@ -1,9 +1,11 @@
 #include "relay/http/http_connection.h"
+#include "relay/http/handlers_data.h"
 #include "relay/http/http_parser.h"
 #include "relay/http/http_response.h"
 #include "relay/http/http_router.h"
 #include "relay/http/sse_writer.h"
 #include "relay/http/token_store.h"
+#include "relay/core/chunked_stream.h"
 #include "relay/core/subscription_tracker.h"
 #include "relay/core/uds_multiplexer.h"
 #include "relay/util/endian.h"
@@ -313,6 +315,132 @@ asio::awaitable<void> HttpConnection::handle() {
             auto [wec, _] = co_await async_write_buffers(bufs);
             shutdown_socket();
             co_return;
+        }
+
+        // 3b. Streaming upload check: POST /blob with body >= STREAMING_THRESHOLD.
+        // Must be checked before read_body() to avoid buffering the full body.
+        if (data_handlers_ && req.content_length >= core::STREAMING_THRESHOLD &&
+            req.method == "POST" && req.path == "/blob") {
+
+            // Inline auth check (same logic as HttpRouter uses)
+            HttpSessionState* session = nullptr;
+            auto auth_it = req.headers.find("authorization");
+            if (auth_it != req.headers.end()) {
+                auto token = auth_it->second;
+                if (token.size() > 7 && token.compare(0, 7, "Bearer ") == 0) {
+                    token = token.substr(7);
+                }
+                session = token_store_.lookup(token);
+            }
+
+            if (!session) {
+                // Must drain body to keep connection clean for keep-alive
+                std::vector<uint8_t> discard;
+                co_await read_body(req.content_length, discard);
+                auto resp = HttpResponse::error(401, "unauthorized", "bearer token required");
+                auto hdr = resp.serialize_header();
+                std::array<asio::const_buffer, 2> bufs = {
+                    asio::buffer(hdr),
+                    asio::buffer(resp.body.data(), resp.body.size())
+                };
+                auto [wec, _] = co_await async_write_buffers(bufs);
+                if (wec) { shutdown_socket(); co_return; }
+                if (!req.keep_alive) { shutdown_socket(); co_return; }
+                continue;  // Next request in keep-alive loop
+            }
+
+            if (!session->rate_limiter.try_consume()) {
+                std::vector<uint8_t> discard;
+                co_await read_body(req.content_length, discard);
+                auto resp = HttpResponse::error(429, "rate_limited", "rate limit exceeded");
+                auto hdr = resp.serialize_header();
+                std::array<asio::const_buffer, 2> bufs = {
+                    asio::buffer(hdr),
+                    asio::buffer(resp.body.data(), resp.body.size())
+                };
+                auto [wec, _] = co_await async_write_buffers(bufs);
+                if (wec) { shutdown_socket(); co_return; }
+                if (!req.keep_alive) { shutdown_socket(); co_return; }
+                continue;
+            }
+
+            // Dispatch to streaming write handler (handler reads body incrementally)
+            auto response = co_await data_handlers_->handle_blob_write_streaming(
+                req, *this, session);
+            auto hdr = response.serialize_header();
+            if (response.body.empty()) {
+                auto [wec, _] = co_await async_write(hdr);
+                if (wec) { shutdown_socket(); co_return; }
+            } else {
+                std::array<asio::const_buffer, 2> bufs = {
+                    asio::buffer(hdr),
+                    asio::buffer(response.body.data(), response.body.size())
+                };
+                auto [wec, _] = co_await async_write_buffers(bufs);
+                if (wec) { shutdown_socket(); co_return; }
+            }
+            if (!req.keep_alive) { shutdown_socket(); co_return; }
+            continue;  // Next request in keep-alive loop
+        }
+
+        // 3c. Streaming blob read check: GET /blob/{ns}/{hash} with data_handlers_ set.
+        if (data_handlers_ && req.method == "GET" &&
+            req.path.starts_with("/blob/") && req.path.size() > 6) {
+
+            // Inline auth check (same as upload path)
+            HttpSessionState* session = nullptr;
+            auto auth_it = req.headers.find("authorization");
+            if (auth_it != req.headers.end()) {
+                auto token = auth_it->second;
+                if (token.size() > 7 && token.compare(0, 7, "Bearer ") == 0) {
+                    token = token.substr(7);
+                }
+                session = token_store_.lookup(token);
+            }
+            if (!session) {
+                auto resp = HttpResponse::error(401, "unauthorized", "bearer token required");
+                auto hdr = resp.serialize_header();
+                std::array<asio::const_buffer, 2> bufs = {
+                    asio::buffer(hdr), asio::buffer(resp.body.data(), resp.body.size())
+                };
+                auto [wec, _] = co_await async_write_buffers(bufs);
+                if (wec) { shutdown_socket(); co_return; }
+                if (!req.keep_alive) { shutdown_socket(); co_return; }
+                continue;
+            }
+
+            if (!session->rate_limiter.try_consume()) {
+                auto resp = HttpResponse::error(429, "rate_limited", "rate limit exceeded");
+                auto hdr = resp.serialize_header();
+                std::array<asio::const_buffer, 2> bufs = {
+                    asio::buffer(hdr), asio::buffer(resp.body.data(), resp.body.size())
+                };
+                auto [wec, _] = co_await async_write_buffers(bufs);
+                if (wec) { shutdown_socket(); co_return; }
+                if (!req.keep_alive) { shutdown_socket(); co_return; }
+                continue;
+            }
+
+            auto response = co_await data_handlers_->handle_blob_read_streaming(
+                req, *this, session);
+            if (response) {
+                // Error response or small blob -- send normally
+                auto hdr = response->serialize_header();
+                if (response->body.empty()) {
+                    auto [wec, _] = co_await async_write(hdr);
+                    if (wec) { shutdown_socket(); co_return; }
+                } else {
+                    std::array<asio::const_buffer, 2> bufs = {
+                        asio::buffer(hdr),
+                        asio::buffer(response->body.data(), response->body.size())
+                    };
+                    auto [wec, _] = co_await async_write_buffers(bufs);
+                    if (wec) { shutdown_socket(); co_return; }
+                }
+            }
+            // If nullopt, response already written via chunked-TE
+            if (!req.keep_alive) { shutdown_socket(); co_return; }
+            continue;
         }
 
         // 4. Read body if Content-Length > 0.

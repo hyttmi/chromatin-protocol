@@ -49,8 +49,19 @@ public:
         std::vector<uint8_t> extra_metadata;
     };
 
-    /// Send queue item: either a pre-encoded TransportMessage or a chunked job.
-    using SendItem = std::variant<std::vector<uint8_t>, ChunkedSendJob>;
+    /// A streaming chunked send: reads chunks from a ChunkQueue (producer pushes).
+    /// drain_send_queue reads from source_queue and sends each chunk as a sub-frame.
+    /// The entire sequence (header + chunks + sentinel) is atomic in drain queue.
+    struct ChunkedStreamJob {
+        uint8_t type;
+        uint32_t request_id;
+        uint64_t total_payload_size;
+        std::vector<uint8_t> extra_metadata;
+        std::shared_ptr<core::ChunkQueue> source_queue;
+    };
+
+    /// Send queue item: pre-encoded message, bulk chunked job, or streaming chunked job.
+    using SendItem = std::variant<std::vector<uint8_t>, ChunkedSendJob, ChunkedStreamJob>;
 
     /// Send an already-encoded TransportMessage to the node over encrypted UDS.
     /// Returns false if not connected.
@@ -62,6 +73,15 @@ public:
     bool send_chunked_msg(uint8_t type, uint32_t request_id,
                            std::vector<uint8_t> payload,
                            std::vector<uint8_t> extra_metadata = {});
+
+    /// Begin a streaming chunked send. Returns a ChunkQueue that the caller pushes
+    /// chunks to. drain_send_queue will read from the queue and send each chunk as
+    /// a sub-frame. The entire sequence (header + chunks + sentinel) is atomic in
+    /// the drain queue -- no other messages interleave.
+    /// Returns nullptr if not connected.
+    std::shared_ptr<core::ChunkQueue> send_chunked_stream(
+        uint8_t type, uint32_t request_id, uint64_t total_payload_size,
+        std::vector<uint8_t> extra_metadata = {});
 
     /// Whether UDS is connected and handshake complete.
     bool is_connected() const;
