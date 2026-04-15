@@ -194,6 +194,37 @@ inline constexpr size_t PUBKEY_DATA_SIZE = 4 + 2592 + 1568;
 std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
                                        std::span<const uint8_t> kem_pk);
 
+// =============================================================================
+// Chunked file parts + manifest
+// =============================================================================
+
+/// CPAR magic: chunk part wrapper.
+inline constexpr std::array<uint8_t, 4> CHUNK_PART_MAGIC = {0x43, 0x50, 0x41, 0x52};
+
+/// CHNK magic: manifest.
+inline constexpr std::array<uint8_t, 4> MANIFEST_MAGIC = {0x43, 0x48, 0x4E, 0x4B};
+
+/// File chunk size: 1 MiB.
+inline constexpr size_t FILE_CHUNK_SIZE = 1048576;
+
+/// Check if data is a chunk part.
+inline bool is_chunk_part(std::span<const uint8_t> data) {
+    return data.size() > 4 &&
+           data[0] == 0x43 && data[1] == 0x50 && data[2] == 0x41 && data[3] == 0x52;
+}
+
+/// Check if data is a manifest.
+inline bool is_manifest(std::span<const uint8_t> data) {
+    return data.size() >= 8 &&
+           data[0] == 0x43 && data[1] == 0x48 && data[2] == 0x4E && data[3] == 0x4B;
+}
+
+/// Build manifest: [CHNK:4][count:4BE][hash1:32][hash2:32]...
+std::vector<uint8_t> make_manifest_data(const std::vector<std::array<uint8_t, 32>>& chunk_hashes);
+
+/// Parse manifest: returns chunk hashes.
+std::vector<std::array<uint8_t, 32>> parse_manifest_data(std::span<const uint8_t> data);
+
 /// Check if blob data is a published pubkey.
 inline bool is_pubkey_blob(std::span<const uint8_t> data) {
     return data.size() == PUBKEY_DATA_SIZE &&

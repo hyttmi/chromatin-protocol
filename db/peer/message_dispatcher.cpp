@@ -465,7 +465,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     if (!blob || wire::is_blob_expired(*blob, now)) {
                         continue;
                     }
-                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) {
+                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data) ||
+                        wire::is_chunk_part(blob->data)) {
                         continue;
                     }
                     filtered_refs.push_back(ref);
@@ -1239,7 +1240,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     if (!blob) continue;
 
                     if (wire::is_blob_expired(*blob, now)) continue;
-                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) continue;
+                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data) ||
+                        wire::is_chunk_part(blob->data)) continue;
 
                     if (blob->timestamp >= start_ts && blob->timestamp <= end_ts) {
                         results.push_back({ref.blob_hash, ref.seq_num, blob->timestamp});
