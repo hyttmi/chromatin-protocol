@@ -170,6 +170,15 @@ int main(int argc, char* argv[]) {
         // keygen
         // =====================================================================
         if (command == "keygen") {
+            while (arg_idx < argc) {
+                if (std::strcmp(argv[arg_idx], "--force") == 0) {
+                    force = true;
+                } else {
+                    std::fprintf(stderr, "Unknown keygen option: %s\n", argv[arg_idx]);
+                    return 1;
+                }
+                ++arg_idx;
+            }
             return cmd::keygen(identity_dir_str, force);
         }
 
