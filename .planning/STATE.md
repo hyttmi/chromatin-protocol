@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 115 context gathered
-last_updated: "2026-04-14T11:46:12.314Z"
-last_activity: 2026-04-14
+status: verifying
+stopped_at: Completed 115-01-PLAN.md
+last_updated: "2026-04-15T04:02:24.194Z"
+last_activity: 2026-04-15
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 12
+  completed_plans: 9
   percent: 0
 ---
 
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-04-14)
 
 Phase: 114 (relay-thread-pool-offload) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
-Last activity: 2026-04-14
+Status: Phase complete — ready for verification
+Last activity: 2026-04-15
 
 Progress: [----------] 0%
 
@@ -57,6 +57,7 @@ Progress: [----------] 0%
 | Phase 113 P01 | 1min | 2 tasks | 1 files |
 | Phase 113 P02 | 10min | 2 tasks | 2 files |
 | Phase 114 P02 | 10min | 2 tasks | 4 files |
+| Phase 115 P01 | 108min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 114]: AEAD counters captured by value on event loop before offload lambda (D-10 correctness)
 - [Phase 114]: Notification/broadcast pre-translated in coroutine read_loop(), dispatched to sync handlers
 - [Phase 114]: Query json_to_binary stays inline (size=0) -- payloads always sub-KB
+- [Phase 115]: Atomic chunked drain: PendingMessage::is_chunked flag prevents message interleaving in drain_send_queue
+- [Phase 115]: MAX_FRAME_SIZE unchanged at 110 MiB (per-frame). Only MAX_BLOB_DATA_SIZE raised to 500 MiB (logical blob size)
+- [Phase 115]: ChunkQueue uses steady_timer signal pattern with bounded depth of 4 chunks (4 MiB)
 
 ### Pending Todos
 
@@ -92,6 +96,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-14T11:46:12.310Z
-Stopped at: Phase 115 context gathered
-Resume file: .planning/phases/115-chunked-streaming-for-large-blobs/115-CONTEXT.md
+Last session: 2026-04-15T04:02:24.190Z
+Stopped at: Completed 115-01-PLAN.md
+Resume file: None
