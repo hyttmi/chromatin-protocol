@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 115-02-PLAN.md and 115-03-PLAN.md (Wave 2)
-last_updated: "2026-04-15T04:19:43.397Z"
+stopped_at: Completed 115-04-PLAN.md
+last_updated: "2026-04-15T04:51:47.232Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 12
-  completed_plans: 10
+  completed_plans: 12
   percent: 0
 ---
 
@@ -60,6 +60,7 @@ Progress: [----------] 0%
 | Phase 115 P01 | 108min | 2 tasks | 9 files |
 | Phase 115 P02 | 13min | 2 tasks | 4 files |
 | Phase 115 P03 | 8min | 1 tasks | 5 files |
+| Phase 115 P04 | 26min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,9 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 115]: SendItem variant (std::variant<vector, ChunkedSendJob>) for send queue -- enables atomic chunked send without separate drain path
 - [Phase 115]: serialize() reimplemented on top of serialize_header() for DRY header construction
 - [Phase 115]: ChunkCallback uses std::function<awaitable<bool>(span)> for coroutine-aware per-chunk processing
+- [Phase 115]: StreamingResponsePromise wraps ChunkQueue + header timer for incremental download delivery
+- [Phase 115]: ChunkedStreamJob variant in drain_send_queue for atomic producer-driven chunked upload
+- [Phase 115]: resolve() fallback to streaming promise handles small blob responses to streaming handlers
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-15T04:19:43.393Z
-Stopped at: Completed 115-02-PLAN.md and 115-03-PLAN.md (Wave 2)
+Last session: 2026-04-15T04:51:47.228Z
+Stopped at: Completed 115-04-PLAN.md
 Resume file: None
