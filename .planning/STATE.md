@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v4.0.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 115-01-PLAN.md
-last_updated: "2026-04-15T04:02:24.194Z"
+stopped_at: Completed 115-03-PLAN.md
+last_updated: "2026-04-15T04:13:41.337Z"
 last_activity: 2026-04-15
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 12
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -58,6 +58,7 @@ Progress: [----------] 0%
 | Phase 113 P02 | 10min | 2 tasks | 2 files |
 | Phase 114 P02 | 10min | 2 tasks | 4 files |
 | Phase 115 P01 | 108min | 2 tasks | 9 files |
+| Phase 115 P03 | 8min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Previous milestone decisions archived to milestones/v3.1.0-ROADMAP.md.
 - [Phase 115]: Atomic chunked drain: PendingMessage::is_chunked flag prevents message interleaving in drain_send_queue
 - [Phase 115]: MAX_FRAME_SIZE unchanged at 110 MiB (per-frame). Only MAX_BLOB_DATA_SIZE raised to 500 MiB (logical blob size)
 - [Phase 115]: ChunkQueue uses steady_timer signal pattern with bounded depth of 4 chunks (4 MiB)
+- [Phase 115]: serialize() reimplemented on top of serialize_header() for DRY header construction
+- [Phase 115]: ChunkCallback uses std::function<awaitable<bool>(span)> for coroutine-aware per-chunk processing
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-15T04:02:24.190Z
-Stopped at: Completed 115-01-PLAN.md
+Last session: 2026-04-15T04:13:41.333Z
+Stopped at: Completed 115-03-PLAN.md
 Resume file: None

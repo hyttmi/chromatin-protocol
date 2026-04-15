@@ -79,12 +79,12 @@ Plans:
 **Goal:** Eliminate full-blob buffering in the relay by implementing chunked streaming I/O for large blobs. Both upload (HTTP->UDS) and download (UDS->HTTP) paths stream in 1 MiB chunks. Blobs under 1 MiB use existing full-buffer path. MAX_BLOB_DATA_SIZE raised from 100 MiB to 500 MiB. Per-chunk AEAD authentication with shared nonce counter.
 **Requirements**: CHUNK-01, CHUNK-02, CHUNK-03, CHUNK-04, CHUNK-05, CHUNK-06, CHUNK-07, CHUNK-08
 **Depends on:** Phase 114
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [x] 115-01-PLAN.md — UDS chunked sub-frame protocol + size limits + ChunkQueue + node-side chunked reassembly
 - [ ] 115-02-PLAN.md — Relay UDS multiplexer chunked send/recv + per-chunk AEAD
-- [ ] 115-03-PLAN.md — HttpResponse scatter-gather + HTTP chunked-TE writer + incremental body reader
+- [x] 115-03-PLAN.md — HttpResponse scatter-gather + HTTP chunked-TE writer + incremental body reader
 - [ ] 115-04-PLAN.md — Streaming blob write/read handlers wiring + integration
 
 ## Progress
@@ -98,4 +98,4 @@ Phases execute in numeric order: 111 -> 112 -> 113 -> 114 -> 115
 | 112. ASAN Verification | 1/1 | Complete    | 2026-04-14 |
 | 113. Performance Benchmarking | 2/2 | Complete   | 2026-04-14 |
 | 114. Relay Thread Pool Offload | 2/2 | Complete   | 2026-04-14 |
-| 115. Chunked Streaming for Large Blobs | 1/4 | In Progress|  |
+| 115. Chunked Streaming for Large Blobs | 2/4 | In Progress|  |
