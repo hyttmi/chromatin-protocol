@@ -11,7 +11,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - v4.1.0 starts at Phase 116
 
 - [x] **Phase 116: CLI Rename + Contact Groups** - Rename executable to `cdb`, implement contact group CRUD with SQLite schema versioning (completed 2026-04-16)
-- [ ] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs
+- [x] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs (completed 2026-04-16)
 - [ ] **Phase 118: Configurable Constants + Peer Management** - Move 10 hardcoded constants to config.json with SIGHUP reload, add peer management CLI
 - [ ] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention
 - [ ] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection
@@ -47,7 +47,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 117-01-PLAN.md — Node-side type indexing: storage, wire protocol, dispatcher, tests
-- [ ] 117-02-PLAN.md — CLI ls filtering: type labels, hide list, --raw/--type flags
+- [x] 117-02-PLAN.md — CLI ls filtering: type labels, hide list, --raw/--type flags
 
 ### Phase 118: Configurable Constants + Peer Management
 **Goal**: Operators can tune node behavior via config.json and manage peers from the command line without editing config files manually
@@ -129,7 +129,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
-| 117. Blob Type Indexing + ls Filtering | 1/2 | In Progress|  |
+| 117. Blob Type Indexing + ls Filtering | 2/2 | Complete   | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 0/0 | Not started | - |
 | 119. Chunked Large Files | 0/0 | Not started | - |
 | 120. Request Pipelining | 0/0 | Not started | - |
