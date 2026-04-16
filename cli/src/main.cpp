@@ -71,6 +71,7 @@ static void usage() {
         "\n"
         "Global options:\n"
         "  --identity <path>   Identity directory (default: ~/.cdb/)\n"
+        "  --node <name>       Use named node from config.json\n"
         "  --uds <path>        UDS socket path\n"
         "  -p, --port <port>   Port (default: 4200)\n"
         "  -v, --verbose       Show info-level log output\n"
@@ -110,6 +111,7 @@ int main(int argc, char* argv[]) {
     namespace cmd = chromatindb::cli::cmd;
 
     std::string identity_dir_str;
+    std::string node_name;
     cmd::ConnectOpts opts;
     bool force = false;
     bool cli_host_set = false;
@@ -126,6 +128,13 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             identity_dir_str = argv[++arg_idx];
+            ++arg_idx;
+        } else if (std::strcmp(arg, "--node") == 0) {
+            if (arg_idx + 1 >= argc) {
+                std::fprintf(stderr, "Error: --node requires a name\n");
+                return 1;
+            }
+            node_name = argv[++arg_idx];
             ++arg_idx;
         } else if (std::strcmp(arg, "--uds") == 0) {
             if (arg_idx + 1 >= argc) {
@@ -175,6 +184,24 @@ int main(int argc, char* argv[]) {
                 std::ifstream cf(config_path);
                 auto cfg = nlohmann::json::parse(cf, nullptr, false);
                 if (!cfg.is_discarded() && cfg.is_object()) {
+                    // Resolve named node: --node flag > default_node > legacy host/port
+                    std::string resolve = node_name;
+                    if (resolve.empty() && !cli_host_set &&
+                        cfg.contains("default_node") && cfg["default_node"].is_string()) {
+                        resolve = cfg["default_node"].get<std::string>();
+                    }
+                    if (!resolve.empty() && cfg.contains("nodes") && cfg["nodes"].is_object()) {
+                        auto& nodes = cfg["nodes"];
+                        if (nodes.contains(resolve) && nodes[resolve].is_string()) {
+                            parse_host_port(nodes[resolve].get<std::string>(),
+                                            opts.host, opts.port);
+                            cli_host_set = true;
+                        } else {
+                            std::fprintf(stderr, "Error: unknown node '%s'\n", resolve.c_str());
+                            return 1;
+                        }
+                    }
+                    // Legacy flat host/port fallback
                     if (!cli_host_set && cfg.contains("host") && cfg["host"].is_string()) {
                         opts.host = cfg["host"].get<std::string>();
                     }
@@ -185,6 +212,10 @@ int main(int argc, char* argv[]) {
             } catch (...) {
                 // Silently ignore malformed config
             }
+        } else if (!node_name.empty()) {
+            std::fprintf(stderr, "Error: --node requires config.json at %s\n",
+                         (fs::path(identity_dir_str) / "config.json").c_str());
+            return 1;
         }
     }
 
