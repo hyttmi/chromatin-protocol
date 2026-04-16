@@ -30,7 +30,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   3. User can share a file with all members of a group using `cdb put --share @groupname file`
   4. User can bulk-import contacts from a JSON file with `cdb contact import team.json`
   5. SQLite database has a `schema_version` table that tracks the current schema version for future migrations
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 117: Blob Type Indexing + ls Filtering
 **Goal**: Users can filter blob listings by type, and `cdb ls` presents a clean view by hiding infrastructure blobs (CDAT chunks, PUBK, delegations)
@@ -41,7 +44,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   2. `cdb ls` output hides infrastructure blobs (CDAT, PUBK, delegation types) by default, showing only user data
   3. `cdb ls --raw` shows all blobs including infrastructure types with their 4-byte type prefix visible
   4. ListRequest accepts an optional type filter and ListResponse includes the 4-byte type per entry
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 118: Configurable Constants + Peer Management
 **Goal**: Operators can tune node behavior via config.json and manage peers from the command line without editing config files manually
@@ -53,7 +59,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   3. Invalid config values are rejected with clear error messages and range check details
   4. Operator can add, remove, and list peers using `chromatindb add-peer`, `remove-peer`, and `list-peers` subcommands
   5. `add-peer` and `remove-peer` modify config.json and trigger SIGHUP automatically
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 119: Chunked Large Files
 **Goal**: Users can upload and download files larger than 500 MiB without full memory buffering, with automatic chunk management and truncation prevention
@@ -65,7 +74,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   3. Download of a CPAR manifest automatically reassembles all referenced chunks into the original file
   4. `cdb rm` of a manifest blob deletes the manifest and all associated CDAT chunk blobs
   5. Envelope format v2 includes segment count, preventing a truncation attack where an attacker drops trailing chunks
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 120: Request Pipelining
 **Goal**: Multi-blob downloads complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
@@ -75,7 +87,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   1. Downloading multiple blobs uses pipelined requests over a single PQ-encrypted connection (no new handshake per blob)
   2. Single reader thread invariant is maintained -- no concurrent recv on the same connection (AEAD nonce desync prevention)
   3. Pipeline depth is configurable with a sensible default of 8 in-flight requests
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 121: Documentation
 **Goal**: All v4.1.0 features are documented in PROTOCOL.md, README.md, and cli/README.md so operators and users have accurate reference material
@@ -86,7 +101,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   2. PROTOCOL.md documents the new ListRequest/ListResponse format with type filtering
   3. README.md documents all new node config fields (10 constants) and peer management CLI subcommands
   4. cli/README.md documents contact groups, contact import, chunked file upload/download, request pipelining, and ls filtering
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 122: Verification
 **Goal**: All new functionality is proven correct through unit tests and a full end-to-end workflow against the live production node
@@ -96,7 +114,10 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   1. All new node features (blob type indexing, configurable constants, peer management) have Catch2 unit tests that pass
   2. All new CLI features (groups, import, chunking, pipelining, ls filtering) have unit tests that pass
   3. E2E verification against live node at 192.168.1.73 completes full workflow: put chunked file with group sharing, pipelined get, ls filtering, peer management
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ## Progress
 
