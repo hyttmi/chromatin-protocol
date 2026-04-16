@@ -10,16 +10,28 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v4.1.0 CLI Polish
+## Current Milestone: v4.1.0 CLI Polish + Node Improvements
 
-**Goal:** Make the CLI better for real-world secure file sharing
+**Goal:** Make chromatindb practical for enterprise secure file sharing across sites
 
 **Target features:**
-- Rename executable to `cdb` (drop `chromatindb-cli` as primary name)
-- Contact groups — `cdb put --share @team` instead of per-person flags
-- Chunked large files — >500 MiB without full memory buffering
-- Request pipelining — parallel downloads for multiple files
-- Configurable node constants — 10 hardcoded sync/peer values move to config.json with SIGHUP reload
+
+CLI:
+- Rename executable to `cdb` (primary name)
+- Contact groups — `cdb put --share @team`
+- Contact import — `cdb contact import team.json` for bulk onboarding
+- Chunked large files — >500 MiB via CDAT/CPAR multi-blob split
+- Request pipelining — parallel downloads over single PQ connection
+
+Node:
+- Generic blob type indexing — index first 4 bytes on ingest, ListRequest filter, ListResponse includes type
+- Configurable sync/peer constants — 10 hardcoded values to config.json with SIGHUP reload
+- Peer management CLI — `chromatindb add-peer/remove-peer/list-peers`
+
+Documentation:
+- PROTOCOL.md fully updated with blob type indexing, new ListRequest/ListResponse, configurable constants
+- README.md updated with new node features and config fields
+- cli/README.md updated with new CLI commands and features
 
 ## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
 
@@ -219,9 +231,13 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 
 - [ ] Rename CLI executable to `cdb` — v4.1.0
 - [ ] Contact groups for batch sharing — v4.1.0
-- [ ] Chunked large file support (>500 MiB without full memory buffering) — v4.1.0
+- [ ] Contact import for bulk onboarding — v4.1.0
+- [ ] Chunked large file support (>500 MiB via CDAT/CPAR multi-blob) — v4.1.0
 - [ ] Request pipelining (parallel downloads) — v4.1.0
+- [ ] Generic blob type indexing (first 4 bytes, ListRequest filter) — v4.1.0
 - [ ] Configurable node sync/peer constants (10 hardcoded values to config.json) — v4.1.0
+- [ ] Node peer management CLI (add-peer/remove-peer/list-peers) — v4.1.0
+- [ ] PROTOCOL.md + README.md fully updated — v4.1.0
 
 ### Future
 

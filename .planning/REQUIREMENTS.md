@@ -1,90 +1,139 @@
-# Requirements: chromatindb v4.0.0 Relay Architecture v3
+# Requirements: chromatindb v4.1.0
 
-**Defined:** 2026-04-14
+**Defined:** 2026-04-16
 **Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## v4.0.0 Requirements
+## v4.1.0 Requirements
 
-### Concurrency Model
+Requirements for CLI Polish + Node Improvements. Enterprise secure file sharing across sites.
 
-- [x] **CONC-01**: Relay runs a single io_context thread for all I/O (HTTP accept, connections, UDS, SSE, timers) — no multi-threaded ioc.run()
-- [x] **CONC-02**: CPU-heavy operations (TLS handshake, ML-DSA-87 signature verify, large JSON parse/serialize) offload to a thread pool via crypto::offload() pattern, resuming on the event loop thread after completion
-- [x] **CONC-03**: All shared data structures (UdsMultiplexer, RequestRouter, SubscriptionTracker, WriteTracker, TokenStore, ResponsePromiseMap) accessed only from the single event loop thread — no mutexes, no strands
-- [x] **CONC-04**: Remove all std::mutex and asio::strand code added in Phase 999.10 — clean single-threaded design
-- [x] **CONC-05**: relay_main.cpp creates one thread running ioc.run(), plus a configurable thread pool for offload work
+### CLI Ergonomics
+
+- [ ] **ERGO-01**: CLI executable is `cdb` as primary name (not symlink)
+- [ ] **ERGO-02**: `cdb ls` hides infrastructure blobs (CDAT chunks, PUBK, delegations) by default
+- [ ] **ERGO-03**: `cdb ls --raw` shows all blobs including infrastructure types
+
+### Contact Management
+
+- [ ] **CONT-01**: User can create named contact groups (`cdb group create engineering`)
+- [ ] **CONT-02**: User can add/remove contacts from groups (`cdb group add engineering alice bob`)
+- [ ] **CONT-03**: User can share with a group in one flag (`cdb put --share @engineering file.pdf`)
+- [ ] **CONT-04**: User can import contacts from a JSON file (`cdb contact import team.json`)
+- [ ] **CONT-05**: SQLite schema versioning (`schema_version` table) for future migrations
+
+### Chunked Large Files
+
+- [ ] **CHUNK-01**: User can upload files >500 MiB without full memory buffering
+- [ ] **CHUNK-02**: Upload splits into CDAT chunk blobs + CPAR manifest blob
+- [ ] **CHUNK-03**: Download detects CPAR manifest and reassembles chunks automatically
+- [ ] **CHUNK-04**: `cdb rm` of a manifest deletes all associated chunks
+- [ ] **CHUNK-05**: Envelope format v2 includes segment count to prevent truncation attack
+
+### Request Pipelining
+
+- [ ] **PIPE-01**: Multi-blob downloads use pipelined requests over single PQ connection
+- [ ] **PIPE-02**: Single reader thread invariant maintained (no concurrent recv)
+- [ ] **PIPE-03**: Pipeline depth configurable (default 8)
+
+### Node — Blob Type Indexing
+
+- [ ] **TYPE-01**: Node indexes first 4 bytes of blob data as `blob_type` on ingest
+- [ ] **TYPE-02**: ListResponse includes 4-byte type per entry
+- [ ] **TYPE-03**: ListRequest supports optional type filter
+- [ ] **TYPE-04**: Extensible — any 4-byte prefix works without node changes
+
+### Node — Configurable Constants
+
+- [ ] **CONF-01**: 10 hardcoded sync/peer constants moved to config.json with sensible defaults
+- [ ] **CONF-02**: All new config fields SIGHUP-reloadable where safe
+- [ ] **CONF-03**: Validation with range checks (reject bad values)
+
+### Node — Peer Management
+
+- [ ] **PEER-01**: `chromatindb add-peer <addr>` adds peer to config and triggers SIGHUP
+- [ ] **PEER-02**: `chromatindb remove-peer <addr>` removes peer from config and triggers SIGHUP
+- [ ] **PEER-03**: `chromatindb list-peers` shows configured and connected peers
+
+### Documentation
+
+- [ ] **DOCS-01**: PROTOCOL.md updated with blob type indexing wire format
+- [ ] **DOCS-02**: PROTOCOL.md updated with new ListRequest/ListResponse format
+- [ ] **DOCS-03**: README.md updated with all new node config fields and peer management
+- [ ] **DOCS-04**: cli/README.md updated with groups, import, chunking, pipelining
 
 ### Verification
 
-- [x] **VER-01**: Relay compiles and all unit tests pass with single-threaded model
-- [x] **VER-02**: Relay runs ASAN-clean under benchmark tool at 1, 10, and 100 concurrent HTTP clients with zero heap-use-after-free or data race reports
-- [x] **VER-03**: Relay handles SIGHUP config reload and SIGTERM graceful shutdown correctly under single-threaded model
+- [ ] **VERI-01**: All new node features tested with unit tests (Catch2)
+- [ ] **VERI-02**: All new CLI features tested with unit tests
+- [ ] **VERI-03**: E2E verification against live node at 192.168.1.73 — full workflow: put chunked file with group sharing, pipelined get, ls filtering, peer management
 
-### Performance Benchmarking
+## Future Requirements
 
-- [x] **PERF-01**: Throughput benchmark produces blobs/sec at 1, 10, and 100 concurrent HTTP clients recorded in benchmark report
-- [x] **PERF-02**: Latency benchmark measures per-operation round-trip time (p50/p95/p99) through HTTP relay recorded in benchmark report
-- [x] **PERF-03**: Large blob benchmark measures write+read throughput at 1 MiB, 10 MiB, 50 MiB, 100 MiB with MiB/sec recorded
-- [x] **PERF-04**: Mixed workload benchmark measures small-query latency degradation under concurrent large-blob load
+Deferred to future release.
 
-### Thread Pool Offload
+### Mobile Client
+- **MOB-01**: iOS/Android client for secure file retrieval
+- **MOB-02**: PQ handshake over TCP from mobile device
 
-- [x] **OFF-01**: offload_if_large() helper exists with 64 KB threshold (65536 bytes), conditionally dispatches CPU-heavy callables to the thread pool and transfers back to event loop
-- [x] **OFF-02**: asio::thread_pool& reference injected into DataHandlers, QueryHandlerDeps, and UdsMultiplexer via constructor, wired from relay_main.cpp offload_pool
-- [x] **OFF-03**: All json_to_binary() and binary_to_json() call sites in HTTP handlers (handlers_query.cpp, handlers_data.cpp) wrapped with offload_if_large() using payload size as threshold input
-- [x] **OFF-04**: UDS AEAD encrypt/decrypt offloaded with counter-by-value capture (D-10), notification/broadcast binary_to_json pre-translated in read_loop() coroutine before synchronous dispatch
-
-### Chunked Streaming for Large Blobs
-
-- [x] **CHUNK-01**: UDS chunked sub-frame protocol for payloads >= 1 MiB — large payloads broken into 1 MiB sub-frames within a single logical message, small messages use existing single-frame format
-- [x] **CHUNK-02**: Per-chunk AEAD authentication with shared monotonic nonce counter — each 1 MiB sub-frame encrypted/decrypted independently with sequential nonces from the same counter
-- [x] **CHUNK-03**: MAX_BLOB_DATA_SIZE raised from 100 MiB to 500 MiB in node (db/net/framing.h) and relay (http_connection.h MAX_BODY_SIZE, uds_multiplexer.h MAX_FRAME_SIZE)
-- [x] **CHUNK-04**: Bounded backpressure queue (4-chunk depth) between UDS producer and HTTP consumer — producer pauses when queue is full, prevents OOM
-- [x] **CHUNK-05**: HTTP upload streaming — relay reads HTTP body in 1 MiB chunks and forwards each to UDS incrementally via chunked sub-frames, for blobs >= 1 MiB
-- [x] **CHUNK-06**: HTTP download streaming — relay streams UDS sub-frame chunks to HTTP client using chunked transfer encoding (Transfer-Encoding: chunked), for blobs >= 1 MiB
-- [x] **CHUNK-07**: HttpResponse scatter-gather writes using Asio buffer sequences for all responses — eliminates header+body string concatenation
-- [x] **CHUNK-08**: Small blobs under 1 MiB handled inline with existing full-buffer path — no streaming overhead for common case
+### Advanced Delegation
+- **DELEG-01**: `cdb put --to <contact>` for delegated cross-namespace writes
+- **DELEG-02**: Optional plaintext mode for trusted-node deployments
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Multi-threaded io_context | Root cause of all ASAN bugs — single-threaded is the fix |
-| Strand confinement | Proved insufficient (Phase 999.10 abandoned) |
-| HTTP/2 | Not needed pre-MVP |
-| WebSocket fallback | Deleted in Phase 999.9 |
-| Client-side chunked transfer encoding for uploads | Content-Length streaming sufficient pre-MVP |
-| Zero-copy splice/sendfile | OS-level optimization, complex — future |
-| Streaming FlatBuffer parsing | Raw blob data bypasses FlatBuffer |
+| Backward compatibility | Single local network deployment, not needed |
+| CDC dedup chunking | ML-DSA-87 is non-deterministic, same plaintext produces different blob_hash |
+| Parallel multi-file upload | CPU-bottlenecked on crypto, not I/O |
+| Recursive directory upload | Scope creep — use tar pipe |
+| Compression | Users can zstd before put |
+| Multi-connection pipelining | Each PQ handshake costs ~50ms, single connection mux is better |
+| pub/sub watch command | Not needed for file sharing use case |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONC-01 | Phase 111 | Complete |
-| CONC-02 | Phase 111 | Complete |
-| CONC-03 | Phase 111 | Complete |
-| CONC-04 | Phase 111 | Complete |
-| CONC-05 | Phase 111 | Complete |
-| VER-01 | Phase 111 | Complete |
-| VER-02 | Phase 112 | Complete |
-| VER-03 | Phase 112 | Complete |
-| PERF-01 | Phase 113 | Complete |
-| PERF-02 | Phase 113 | Complete |
-| PERF-03 | Phase 113 | Complete |
-| PERF-04 | Phase 113 | Complete |
-| OFF-01 | Phase 114 | Complete |
-| OFF-02 | Phase 114 | Complete |
-| OFF-03 | Phase 114 | Complete |
-| OFF-04 | Phase 114 | Complete |
-| CHUNK-01 | Phase 115 | Planned |
-| CHUNK-02 | Phase 115 | Planned |
-| CHUNK-03 | Phase 115 | Planned |
-| CHUNK-04 | Phase 115 | Planned |
-| CHUNK-05 | Phase 115 | Planned |
-| CHUNK-06 | Phase 115 | Planned |
-| CHUNK-07 | Phase 115 | Planned |
-| CHUNK-08 | Phase 115 | Planned |
+| ERGO-01 | — | Pending |
+| ERGO-02 | — | Pending |
+| ERGO-03 | — | Pending |
+| CONT-01 | — | Pending |
+| CONT-02 | — | Pending |
+| CONT-03 | — | Pending |
+| CONT-04 | — | Pending |
+| CONT-05 | — | Pending |
+| CHUNK-01 | — | Pending |
+| CHUNK-02 | — | Pending |
+| CHUNK-03 | — | Pending |
+| CHUNK-04 | — | Pending |
+| CHUNK-05 | — | Pending |
+| PIPE-01 | — | Pending |
+| PIPE-02 | — | Pending |
+| PIPE-03 | — | Pending |
+| TYPE-01 | — | Pending |
+| TYPE-02 | — | Pending |
+| TYPE-03 | — | Pending |
+| TYPE-04 | — | Pending |
+| CONF-01 | — | Pending |
+| CONF-02 | — | Pending |
+| CONF-03 | — | Pending |
+| PEER-01 | — | Pending |
+| PEER-02 | — | Pending |
+| PEER-03 | — | Pending |
+| DOCS-01 | — | Pending |
+| DOCS-02 | — | Pending |
+| DOCS-03 | — | Pending |
+| DOCS-04 | — | Pending |
+| VERI-01 | — | Pending |
+| VERI-02 | — | Pending |
+| VERI-03 | — | Pending |
 
 **Coverage:**
-- v4.0.0 requirements: 24 total
-- Mapped to phases: 24/24 (100%)
+- v4.1.0 requirements: 33 total
+- Mapped to phases: 0
+- Unmapped: 33
+
+---
+*Requirements defined: 2026-04-16*
+*Last updated: 2026-04-16 after initial definition*
