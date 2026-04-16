@@ -32,7 +32,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
   5. SQLite database has a `schema_version` table that tracks the current schema version for future migrations
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [x] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
 - [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 117: Blob Type Indexing + ls Filtering
@@ -128,7 +128,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 116. CLI Rename + Contact Groups | 0/0 | Not started | - |
+| 116. CLI Rename + Contact Groups | 1/2 | In Progress|  |
 | 117. Blob Type Indexing + ls Filtering | 0/0 | Not started | - |
 | 118. Configurable Constants + Peer Management | 0/0 | Not started | - |
 | 119. Chunked Large Files | 0/0 | Not started | - |
