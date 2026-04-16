@@ -755,25 +755,27 @@ The blob portion uses the same FlatBuffer Blob encoding as Data (8) messages.
 
 List blobs in a namespace with cursor-based pagination.
 
-**ListRequest payload:** 44 bytes
+**ListRequest payload:** 44-49 bytes
 
 | Field | Offset | Size | Encoding | Description |
 |-------|--------|------|----------|-------------|
 | namespace_id | 0 | 32 | raw bytes | Target namespace |
 | since_seq | 32 | 8 | big-endian uint64 | Return blobs with seq > this (0 = from start) |
 | limit | 40 | 4 | big-endian uint32 | Max entries (0 or >100 = server default 100) |
+| flags | 44 | 1 | uint8 (optional) | Bit 0: include_all (skip tombstone/delegation/expired filtering). Bit 1: type_filter present. Absent if payload is 44 bytes (backward compatible). |
+| type_filter | 45 | 4 | raw bytes (optional) | 4-byte type prefix filter. Only present when flags bit 1 is set. |
 
-**ListResponse payload:** 4 + (count * 40) + 1 bytes
+**ListResponse payload:** 4 + (count * 44) + 1 bytes
 
 | Field | Offset | Size | Encoding | Description |
 |-------|--------|------|----------|-------------|
 | count | 0 | 4 | big-endian uint32 | Number of entries |
-| entries | 4 | count * 40 | {hash:32, seq_be:8} | Blob hash + sequence number pairs |
-| has_more | 4 + count*40 | 1 | uint8 | 1 = more entries available |
+| entries | 4 | count * 44 | {hash:32, seq_be:8, type:4} | Blob hash + sequence number + type prefix |
+| has_more | 4 + count*44 | 1 | uint8 | 1 = more entries available |
 
 To paginate: set `since_seq` to the last `seq_num` in the response. Repeat until `has_more = 0`. Use ReadRequest to fetch full blob data.
 
-The node filters internal blobs from ListResponse: expired blobs, tombstones (0xDEADBEEF magic), and delegation blobs (0xDE1E6A7E magic) are excluded. Clients see only user data blobs. The same filtering applies to TimeRangeResponse.
+By default, ListResponse excludes tombstones (0xDEADBEEF prefix), delegations (0xDE1E6A7E prefix), and expired blobs. Set the include_all flag (bit 0) to return all blobs including filtered types. The same default filtering applies to TimeRangeResponse.
 
 ### StatsRequest / StatsResponse (types 35-36)
 

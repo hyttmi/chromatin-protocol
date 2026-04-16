@@ -447,6 +447,21 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 uint64_t since_seq = chromatindb::util::read_u64_be(payload.data() + 32);
                 uint32_t limit = chromatindb::util::read_u32_be(payload.data() + 40);
 
+                // Optional flags byte at offset 44 (length-based detection)
+                uint8_t flags = 0;
+                std::array<uint8_t, 4> type_filter{};
+                bool has_type_filter = false;
+                bool include_all = false;
+
+                if (payload.size() >= 45) {
+                    flags = payload[44];
+                    include_all = (flags & 0x01) != 0;  // bit 0: include_all
+                }
+                if (payload.size() >= 49 && (flags & 0x02) != 0) {
+                    std::memcpy(type_filter.data(), payload.data() + 45, 4);
+                    has_type_filter = true;  // bit 1: type_filter present
+                }
+
                 constexpr uint32_t MAX_LIST_LIMIT = 100;
                 if (limit == 0 || limit > MAX_LIST_LIMIT)
                     limit = MAX_LIST_LIMIT;
@@ -456,32 +471,51 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 if (has_more)
                     refs.resize(limit);
 
-                // Filter expired blobs (D-09)
+                // Filter using type prefix from BlobRef (no full blob load for
+                // tombstone/delegation checks)
                 uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 std::vector<storage::BlobRef> filtered_refs;
                 filtered_refs.reserve(refs.size());
                 for (const auto& ref : refs) {
-                    auto blob = storage_.get_blob(ns, ref.blob_hash);
-                    if (!blob || wire::is_blob_expired(*blob, now)) {
-                        continue;
+                    if (!include_all) {
+                        // Skip tombstones using type prefix
+                        if (std::memcmp(ref.blob_type.data(),
+                                        wire::TOMBSTONE_MAGIC.data(), 4) == 0) {
+                            continue;
+                        }
+                        // Skip delegations using type prefix
+                        if (std::memcmp(ref.blob_type.data(),
+                                        wire::DELEGATION_MAGIC.data(), 4) == 0) {
+                            continue;
+                        }
+                        // Expiry check still needs blob metadata for TTL
+                        auto blob = storage_.get_blob(ns, ref.blob_hash);
+                        if (!blob || wire::is_blob_expired(*blob, now)) {
+                            continue;
+                        }
                     }
-                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) {
-                        continue;
+                    // Apply type filter if requested
+                    if (has_type_filter) {
+                        if (std::memcmp(ref.blob_type.data(), type_filter.data(), 4) != 0) {
+                            continue;
+                        }
                     }
                     filtered_refs.push_back(ref);
                 }
 
+                constexpr size_t LIST_ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
                 uint32_t count = static_cast<uint32_t>(filtered_refs.size());
-                auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), size_t{40});
+                auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), LIST_ENTRY_SIZE);
                 if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_ListRequest, request_id, metrics_); co_return; }
                 auto resp_size = chromatindb::util::checked_add(*body_size, size_t{5});
                 if (!resp_size) { record_strike_(conn, "ListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_ListRequest, request_id, metrics_); co_return; }
                 std::vector<uint8_t> response(*resp_size);
                 chromatindb::util::store_u32_be(response.data(), count);
                 for (uint32_t i = 0; i < count; ++i) {
-                    size_t off = 4 + i * 40;
+                    size_t off = 4 + i * LIST_ENTRY_SIZE;
                     std::memcpy(response.data() + off, filtered_refs[i].blob_hash.data(), 32);
                     chromatindb::util::store_u64_be(response.data() + off + 32, filtered_refs[i].seq_num);
+                    std::memcpy(response.data() + off + 40, filtered_refs[i].blob_type.data(), 4);
                 }
                 response[*resp_size - 1] = has_more ? 1 : 0;
 
@@ -1235,11 +1269,14 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 for (const auto& ref : refs) {
+                    // Skip tombstones and delegations using type prefix
+                    if (std::memcmp(ref.blob_type.data(), wire::TOMBSTONE_MAGIC.data(), 4) == 0) continue;
+                    if (std::memcmp(ref.blob_type.data(), wire::DELEGATION_MAGIC.data(), 4) == 0) continue;
+
                     auto blob = storage_.get_blob(ns, ref.blob_hash);
                     if (!blob) continue;
 
                     if (wire::is_blob_expired(*blob, now)) continue;
-                    if (wire::is_tombstone(blob->data) || wire::is_delegation(blob->data)) continue;
 
                     if (blob->timestamp >= start_ts && blob->timestamp <= end_ts) {
                         results.push_back({ref.blob_hash, ref.seq_num, blob->timestamp});
