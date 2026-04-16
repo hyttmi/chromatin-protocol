@@ -74,14 +74,14 @@ public:
 
     /// Sync constants (public for testing).
     static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;
-    static constexpr auto BLOB_TRANSFER_TIMEOUT = std::chrono::seconds(120);
+    static constexpr auto BLOB_TRANSFER_TIMEOUT_DEFAULT = std::chrono::seconds(600);
 
-    /// Strike threshold (public for testing).
-    static constexpr uint32_t STRIKE_THRESHOLD = 10;
-    static constexpr uint32_t STRIKE_COOLDOWN_SEC = 300;
+    /// Strike defaults (public for testing).
+    static constexpr uint32_t STRIKE_THRESHOLD_DEFAULT = 10;
+    static constexpr uint32_t STRIKE_COOLDOWN_SEC_DEFAULT = 300;
 
-    /// PEX constants (public for testing).
-    static constexpr uint32_t PEX_INTERVAL_SEC = 300;
+    /// PEX defaults (public for testing).
+    static constexpr uint32_t PEX_INTERVAL_SEC_DEFAULT = 300;
     static constexpr uint32_t MAX_PEERS_PER_EXCHANGE = 8;
     static constexpr uint32_t MAX_DISCOVERED_PER_ROUND = 3;
     static constexpr uint32_t MAX_PERSISTED_PEERS = 100;

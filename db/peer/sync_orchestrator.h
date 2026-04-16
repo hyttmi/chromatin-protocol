@@ -47,7 +47,9 @@ public:
                      OnBlobIngestedCallback on_blob_ingested,
                      StrikeCallback record_strike,
                      PexRequestCallback pex_request,
-                     PexRespondCallback pex_respond);
+                     PexRespondCallback pex_respond,
+                     uint32_t blob_transfer_timeout,
+                     uint32_t sync_timeout);
 
     // Sync protocol (D-03)
     asio::awaitable<void> run_sync_with_peer(net::Connection::Ptr conn);
@@ -81,6 +83,12 @@ public:
     void set_rate_limit(uint64_t bytes_per_sec);
     void set_compaction_interval(uint32_t hours);
     void set_cursor_config(uint32_t full_resync_interval, uint64_t stale_seconds);
+    void set_blob_transfer_timeout(uint32_t seconds) {
+        blob_transfer_timeout_ = std::chrono::seconds(seconds);
+    }
+    void set_sync_timeout(uint32_t seconds) {
+        sync_timeout_ = std::chrono::seconds(seconds);
+    }
 
     // Public for testing
     enum class FullResyncReason { None, Periodic, TimeGap };
@@ -93,7 +101,6 @@ public:
 
     // Sync constants (public for testing)
     static constexpr uint32_t MAX_HASHES_PER_REQUEST = 64;
-    static constexpr auto BLOB_TRANSFER_TIMEOUT = std::chrono::seconds(120);
 
     // State access for facade (dump_extra callback)
     uint64_t last_compaction_time() const { return last_compaction_time_; }
@@ -142,6 +149,8 @@ private:
     uint64_t rate_limit_bytes_per_sec_ = 0;
     uint64_t last_compaction_time_ = 0;
     uint64_t compaction_count_ = 0;
+    std::chrono::seconds blob_transfer_timeout_{std::chrono::seconds(600)};
+    std::chrono::seconds sync_timeout_{std::chrono::seconds(30)};
 };
 
 } // namespace chromatindb::peer

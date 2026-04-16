@@ -29,6 +29,7 @@ ConnectionManager::ConnectionManager(
     uint64_t rate_limit_burst,
     uint32_t max_peers,
     uint32_t max_clients,
+    uint32_t strike_threshold,
     MessageCallback on_message,
     SyncTrigger sync_trigger,
     ConnectCallback on_connect,
@@ -46,7 +47,8 @@ ConnectionManager::ConnectionManager(
     , on_disconnect_(std::move(on_disconnect))
     , rate_limit_burst_(rate_limit_burst)
     , max_peers_(max_peers)
-    , max_clients_(max_clients) {}
+    , max_clients_(max_clients)
+    , strike_threshold_(strike_threshold) {}
 
 // =============================================================================
 // Connection lifecycle
@@ -337,10 +339,10 @@ void ConnectionManager::record_strike(net::Connection::Ptr conn, const std::stri
 
     peer->strike_count++;
     spdlog::warn("strike {}/{} for peer {} ({})",
-                 peer->strike_count, STRIKE_THRESHOLD,
+                 peer->strike_count, strike_threshold_,
                  conn->remote_address(), reason);
 
-    if (peer->strike_count >= STRIKE_THRESHOLD) {
+    if (peer->strike_count >= strike_threshold_) {
         spdlog::warn("disconnecting peer {}: {} validation failures",
                      conn->remote_address(), peer->strike_count);
         asio::co_spawn(ioc_, conn->close_gracefully(), asio::detached);

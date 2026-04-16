@@ -36,7 +36,9 @@ SyncOrchestrator::SyncOrchestrator(
     OnBlobIngestedCallback on_blob_ingested,
     StrikeCallback record_strike,
     PexRequestCallback pex_request,
-    PexRespondCallback pex_respond)
+    PexRespondCallback pex_respond,
+    uint32_t blob_transfer_timeout,
+    uint32_t sync_timeout)
     : ioc_(ioc)
     , pool_(pool)
     , engine_(engine)
@@ -56,7 +58,9 @@ SyncOrchestrator::SyncOrchestrator(
     , max_sync_sessions_(1)
     , full_resync_interval_(10)
     , cursor_stale_seconds_(3600)
-    , compaction_interval_hours_(6) {
+    , compaction_interval_hours_(6)
+    , blob_transfer_timeout_(std::chrono::seconds(blob_transfer_timeout))
+    , sync_timeout_(std::chrono::seconds(sync_timeout)) {
 }
 
 PeerInfo* SyncOrchestrator::find_peer(const net::Connection::Ptr& conn) {
@@ -140,7 +144,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
     peer->sync_inbox.clear();  // Fresh sync session -- set up BEFORE sending
 
     sync::SyncStats total_stats;
-    constexpr auto SYNC_TIMEOUT = std::chrono::seconds(30);
+
 
     // Send SyncRequest
     std::span<const uint8_t> empty{};
@@ -190,7 +194,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
     }
 
     // Phase A (continued): Receive peer's NamespaceList
-    auto ns_msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+    auto ns_msg = co_await recv_sync_msg(conn, sync_timeout_);
     peer = find_peer(conn);
     if (!peer) co_return;
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
@@ -320,7 +324,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
         std::vector<sync::Hash32> peer_items;
 
         for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
-            auto msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+            auto msg = co_await recv_sync_msg(conn, sync_timeout_);
             peer = find_peer(conn);
             if (!peer) co_return;
             if (!msg) {
@@ -460,7 +464,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
             uint32_t expected = static_cast<uint32_t>(batch.size());
             uint32_t received = 0;
             while (received < expected) {
-                auto msg = co_await recv_sync_msg(conn, BLOB_TRANSFER_TIMEOUT);
+                auto msg = co_await recv_sync_msg(conn, blob_transfer_timeout_);
                 peer = find_peer(conn);
                 if (!peer) co_return;
                 if (!msg) {
@@ -613,7 +617,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
     peer->syncing = true;
 
     sync::SyncStats total_stats;
-    constexpr auto SYNC_TIMEOUT = std::chrono::seconds(30);
+
 
     // Send SyncAccept
     std::span<const uint8_t> empty{};
@@ -649,7 +653,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
     }
 
     // Phase A (continued): Receive peer's NamespaceList
-    auto ns_msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+    auto ns_msg = co_await recv_sync_msg(conn, sync_timeout_);
     peer = find_peer(conn);
     if (!peer) co_return;
     if (!ns_msg || ns_msg->type != wire::TransportMsgType_NamespaceList) {
@@ -726,7 +730,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
             co_return;
         }
 
-        auto msg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+        auto msg = co_await recv_sync_msg(conn, sync_timeout_);
         peer = find_peer(conn);
         if (!peer) co_return;
         if (!msg) {
@@ -807,7 +811,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
 
                 // Multi-round loop within this namespace
                 for (uint32_t round = 0; round < sync::MAX_RECONCILE_ROUNDS; ++round) {
-                    auto rmsg = co_await recv_sync_msg(conn, SYNC_TIMEOUT);
+                    auto rmsg = co_await recv_sync_msg(conn, sync_timeout_);
                     peer = find_peer(conn);
                     if (!peer) co_return;
                     if (!rmsg) {
@@ -941,7 +945,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
             uint32_t expected = static_cast<uint32_t>(batch.size());
             uint32_t received = 0;
             while (received < expected) {
-                auto msg = co_await recv_sync_msg(conn, BLOB_TRANSFER_TIMEOUT);
+                auto msg = co_await recv_sync_msg(conn, blob_transfer_timeout_);
                 peer = find_peer(conn);
                 if (!peer) co_return;
                 if (!msg) {

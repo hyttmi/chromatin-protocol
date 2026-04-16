@@ -20,7 +20,6 @@ namespace chromatindb::peer {
 class PexManager {
 public:
     /// PEX constants.
-    static constexpr uint32_t PEX_INTERVAL_SEC = 300;        // 5 minutes
     static constexpr uint32_t MAX_PEERS_PER_EXCHANGE = 8;    // Max peers to share per response
     static constexpr uint32_t MAX_DISCOVERED_PER_ROUND = 3;  // Max new peers to connect per round
     static constexpr uint32_t MAX_PERSISTED_PEERS = 100;     // Max entries in peers.json
@@ -38,6 +37,7 @@ public:
                const std::string& bind_address,
                const std::string& data_dir,
                uint32_t max_peers,
+               uint32_t pex_interval,
                const std::set<std::string>& bootstrap_addresses,
                EncodeCallback encode_peer_list,
                DecodeCallback decode_peer_list);
@@ -64,6 +64,7 @@ public:
 
     void cancel_timers();
     void set_max_peers(uint32_t max_peers) { max_peers_ = max_peers; }
+    void set_pex_interval(uint32_t seconds) { pex_interval_sec_ = seconds; }
 
     // Public for inline PEX after sync (used by SyncOrchestrator / PeerManager)
     std::vector<std::string> build_peer_list_response(const std::string& exclude_address);
@@ -89,6 +90,7 @@ private:
     asio::steady_timer* pex_timer_ = nullptr;
     asio::steady_timer* flush_timer_ = nullptr;
     uint32_t max_peers_;
+    uint32_t pex_interval_sec_;
 
     EncodeCallback encode_peer_list_;
     DecodeCallback decode_peer_list_;

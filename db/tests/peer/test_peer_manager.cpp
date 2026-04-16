@@ -104,10 +104,10 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     ioc.run_for(std::chrono::seconds(1));
 }
 
-TEST_CASE("PeerManager strike threshold", "[peer]") {
-    // Verify the constant
-    REQUIRE(PeerManager::STRIKE_THRESHOLD == 10);
-    REQUIRE(PeerManager::STRIKE_COOLDOWN_SEC == 300);
+TEST_CASE("PeerManager strike threshold defaults", "[peer]") {
+    // Verify the default constants
+    REQUIRE(PeerManager::STRIKE_THRESHOLD_DEFAULT == 10);
+    REQUIRE(PeerManager::STRIKE_COOLDOWN_SEC_DEFAULT == 300);
 }
 
 // ============================================================================
@@ -147,7 +147,7 @@ TEST_CASE("PEX decode truncated payload", "[peer][pex]") {
 }
 
 TEST_CASE("PEX constants", "[peer][pex]") {
-    REQUIRE(PeerManager::PEX_INTERVAL_SEC == 300);
+    REQUIRE(PeerManager::PEX_INTERVAL_SEC_DEFAULT == 300);
     REQUIRE(PeerManager::MAX_PEERS_PER_EXCHANGE == 8);
     REQUIRE(PeerManager::MAX_DISCOVERED_PER_ROUND == 3);
     REQUIRE(PeerManager::MAX_PERSISTED_PEERS == 100);
@@ -553,8 +553,8 @@ TEST_CASE("PeerManager sync constants", "[peer]") {
         REQUIRE(PM::MAX_HASHES_PER_REQUEST == 64);
     }
 
-    SECTION("BLOB_TRANSFER_TIMEOUT is 120 seconds") {
-        REQUIRE(PM::BLOB_TRANSFER_TIMEOUT == std::chrono::seconds(120));
+    SECTION("BLOB_TRANSFER_TIMEOUT_DEFAULT is 600 seconds") {
+        REQUIRE(PM::BLOB_TRANSFER_TIMEOUT_DEFAULT == std::chrono::seconds(600));
     }
 }
 

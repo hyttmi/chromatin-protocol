@@ -13,6 +13,7 @@
 #include <spdlog/spdlog.h>
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <span>
 #include <string>
@@ -190,6 +191,11 @@ int cmd_run(int argc, char* argv[]) {
     } else {
         spdlog::info("uds: disabled");
     }
+    spdlog::info("blob_transfer_timeout: {}s", config.blob_transfer_timeout);
+    spdlog::info("sync_timeout: {}s", config.sync_timeout);
+    spdlog::info("pex_interval: {}s", config.pex_interval);
+    spdlog::info("strike_threshold: {}", config.strike_threshold);
+    spdlog::info("strike_cooldown: {}s", config.strike_cooldown);
 
     // Resolve and create thread pool for crypto offload
     uint32_t hw = std::thread::hardware_concurrency();
@@ -226,8 +232,18 @@ int cmd_run(int argc, char* argv[]) {
 
     spdlog::info("daemon started");
 
+    // Write pidfile for peer management subcommands (Phase 118)
+    auto pidfile = std::filesystem::path(config.data_dir) / "chromatindb.pid";
+    {
+        std::ofstream pf(pidfile);
+        pf << getpid();
+    }
+
     // Run event loop (expiry scanning now lives in PeerManager)
     ioc.run();
+
+    // Clean up pidfile
+    std::filesystem::remove(pidfile);
 
     // Wait for in-flight crypto operations to complete
     pool.join();

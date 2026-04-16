@@ -47,6 +47,7 @@ PeerManager::PeerManager(const config::Config& config,
     , metrics_collector_(storage, ioc, config.metrics_bind, stopping_)
     , conn_mgr_(identity, acl, metrics_collector_.node_metrics(), server_, ioc,
                 stopping_, sync_namespaces_, config.rate_limit_burst, config.max_peers, config.max_clients,
+                config.strike_threshold,
                 // MessageCallback: route to dispatcher
                 [this](net::Connection::Ptr c, wire::TransportMsgType type,
                        std::vector<uint8_t> payload, uint32_t rid) {
@@ -108,9 +109,10 @@ PeerManager::PeerManager(const config::Config& config,
                     co_await conn->send_message(wire::TransportMsgType_PeerListResponse,
                                                  std::span<const uint8_t>(payload));
                 }
-            })
+            },
+            config.blob_transfer_timeout, config.sync_timeout)
     , pex_(ioc, stopping_, conn_mgr_.peers(), server_, acl,
-           config.bind_address, config.data_dir, config.max_peers,
+           config.bind_address, config.data_dir, config.max_peers, config.pex_interval,
            conn_mgr_.bootstrap_addresses(),
            [](const std::vector<std::string>& addrs) { return PeerManager::encode_peer_list(addrs); },
            [](std::span<const uint8_t> payload) { return PeerManager::decode_peer_list(payload); })
@@ -665,6 +667,14 @@ void PeerManager::reload_config() {
     if (old_compaction == 0 && new_cfg.compaction_interval_hours > 0) {
         asio::co_spawn(ioc_, sync_.compaction_loop(), asio::detached);
     }
+
+    // Reload 3 SIGHUP-reloadable constants (D-04)
+    sync_.set_blob_transfer_timeout(new_cfg.blob_transfer_timeout);
+    sync_.set_sync_timeout(new_cfg.sync_timeout);
+    pex_.set_pex_interval(new_cfg.pex_interval);
+    spdlog::info("config reload: blob_transfer_timeout={}s sync_timeout={}s pex_interval={}s",
+                 new_cfg.blob_transfer_timeout, new_cfg.sync_timeout, new_cfg.pex_interval);
+    // NOTE: strike_threshold and strike_cooldown are NOT reloaded (D-05: restart required)
 
     // Reload metrics_bind
     metrics_collector_.set_metrics_bind(new_cfg.metrics_bind);

@@ -43,6 +43,7 @@ public:
                       uint64_t rate_limit_burst,
                       uint32_t max_peers,
                       uint32_t max_clients,
+                      uint32_t strike_threshold,
                       MessageCallback on_message,
                       SyncTrigger sync_trigger,
                       ConnectCallback on_connect,
@@ -76,8 +77,8 @@ public:
     // Strike system
     void record_strike(net::Connection::Ptr conn, const std::string& reason);
 
-    // Strike threshold (public for testing)
-    static constexpr uint32_t STRIKE_THRESHOLD = 10;
+    // Strike threshold accessor
+    uint32_t strike_threshold() const { return strike_threshold_; }
 
     // Disconnect unauthorized (called from reload_config)
     void disconnect_unauthorized_peers();
@@ -118,6 +119,7 @@ private:
     asio::steady_timer* keepalive_timer_ = nullptr;
     uint32_t max_peers_;
     uint32_t max_clients_ = 128;
+    uint32_t strike_threshold_;
 };
 
 } // namespace chromatindb::peer

@@ -26,6 +26,7 @@ PexManager::PexManager(asio::io_context& ioc,
                        const std::string& bind_address,
                        const std::string& data_dir,
                        uint32_t max_peers,
+                       uint32_t pex_interval,
                        const std::set<std::string>& bootstrap_addresses,
                        EncodeCallback encode_peer_list,
                        DecodeCallback decode_peer_list)
@@ -38,6 +39,7 @@ PexManager::PexManager(asio::io_context& ioc,
     , data_dir_(data_dir)
     , bootstrap_addresses_(bootstrap_addresses)
     , max_peers_(max_peers)
+    , pex_interval_sec_(pex_interval)
     , encode_peer_list_(std::move(encode_peer_list))
     , decode_peer_list_(std::move(decode_peer_list)) {
 }
@@ -152,7 +154,7 @@ asio::awaitable<void> PexManager::pex_timer_loop() {
     while (!stopping_) {
         asio::steady_timer timer(ioc_);
         pex_timer_ = &timer;
-        timer.expires_after(std::chrono::seconds(PEX_INTERVAL_SEC));
+        timer.expires_after(std::chrono::seconds(pex_interval_sec_));
         auto [ec] = co_await timer.async_wait(
             asio::as_tuple(asio::use_awaitable));
         pex_timer_ = nullptr;
