@@ -17,9 +17,9 @@ Any node can receive a signed blob, verify its ownership via cryptographic proof
 **Target features:**
 
 CLI:
-- Rename executable to `cdb` (primary name)
-- Contact groups — `cdb put --share @team`
-- Contact import — `cdb contact import team.json` for bulk onboarding
+- ~~Rename executable to `cdb` (primary name)~~ — Validated in Phase 116
+- ~~Contact groups — `cdb put --share @team`~~ — Validated in Phase 116
+- ~~Contact import — `cdb contact import team.json` for bulk onboarding~~ — Validated in Phase 116
 - Chunked large files — >500 MiB via CDAT/CPAR multi-blob split
 - Request pipelining — parallel downloads over single PQ connection
 
