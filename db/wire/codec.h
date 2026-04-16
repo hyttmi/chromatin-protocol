@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -118,6 +119,20 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
     return data.size() == PUBKEY_DATA_SIZE &&
            data[0] == PUBKEY_MAGIC[0] && data[1] == PUBKEY_MAGIC[1] &&
            data[2] == PUBKEY_MAGIC[2] && data[3] == PUBKEY_MAGIC[3];
+}
+
+// =============================================================================
+// Generic blob type extraction
+// =============================================================================
+
+/// Extract the first 4 bytes of blob data as a type prefix.
+/// Returns {0,0,0,0} for data shorter than 4 bytes.
+inline std::array<uint8_t, 4> extract_blob_type(std::span<const uint8_t> data) {
+    std::array<uint8_t, 4> type{};
+    if (data.size() >= 4) {
+        std::memcpy(type.data(), data.data(), 4);
+    }
+    return type;
 }
 
 } // namespace chromatindb::wire

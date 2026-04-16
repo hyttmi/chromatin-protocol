@@ -74,6 +74,7 @@ struct DelegationEntry {
 struct BlobRef {
     std::array<uint8_t, 32> blob_hash{};
     uint64_t seq_num = 0;
+    std::array<uint8_t, 4> blob_type{};  // First 4 bytes of blob data (type prefix)
 };
 
 /// Pre-computed blob for atomic multi-blob storage.
