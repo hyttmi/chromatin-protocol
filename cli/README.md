@@ -49,6 +49,49 @@ cdb get --all --from alice -o ~/downloads
 cdb contact list
 ```
 
+## Contact Groups
+
+```bash
+# Create a group
+cdb group create engineering
+
+# Add contacts to a group
+cdb group add engineering alice bob charlie
+
+# Share a file with all group members
+cdb put secret.pdf --share @engineering
+
+# List all groups
+cdb group list
+
+# List members of a group
+cdb group list engineering
+
+# Remove a contact from a group
+cdb group rm engineering charlie
+
+# Delete a group entirely
+cdb group rm engineering
+```
+
+## Bulk Import/Export
+
+```bash
+# Export contacts to JSON
+cdb contact export > team.json
+
+# Import contacts from JSON (fetches pubkeys from node)
+cdb contact import team.json 192.168.1.73
+```
+
+Import format (JSON array):
+```json
+[
+  {"name": "alice", "namespace": "c8afff59...64hex..."},
+  {"name": "bob", "namespace": "a1b2c3d4...64hex..."}
+]
+```
+
 ## Commands
 
 | Command | Description |
