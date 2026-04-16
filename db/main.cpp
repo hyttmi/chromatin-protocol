@@ -1,20 +1,33 @@
 #include "db/version.h"
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
+#include "db/crypto/hash.h"
 #include "db/crypto/thread_pool.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/logging/logging.h"
+#include "db/net/auth_helpers.h"
+#include "db/net/protocol.h"
 #include "db/peer/peer_manager.h"
 #include "db/storage/storage.h"
+#include "db/util/endian.h"
 #include "db/util/hex.h"
 
 #include <asio.hpp>
+#include <asio/local/stream_protocol.hpp>
+#include <nlohmann/json.hpp>
+#include <oqs/oqs.h>
+#include <sodium.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <set>
+#include <signal.h>
 #include <span>
 #include <string>
 #include <thread>
@@ -28,11 +41,14 @@ void print_usage(const char* prog) {
     std::cerr << "chromatindb " << VERSION << "\n\n"
               << "Usage: " << prog << " <command> [options]\n\n"
               << "Commands:\n"
-              << "  run        Start the daemon\n"
-              << "  keygen     Generate identity keypair\n"
-              << "  show-key   Print namespace (public key hash)\n"
-              << "  backup     Create a live database backup\n"
-              << "  version    Print version\n\n"
+              << "  run          Start the daemon\n"
+              << "  keygen       Generate identity keypair\n"
+              << "  show-key     Print namespace (public key hash)\n"
+              << "  backup       Create a live database backup\n"
+              << "  add-peer     Add a bootstrap peer to config\n"
+              << "  remove-peer  Remove a bootstrap peer from config\n"
+              << "  list-peers   Show configured and connected peers\n"
+              << "  version      Print version\n\n"
               << "Run options:\n"
               << "  --config <path>     JSON config file\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n"
@@ -41,6 +57,9 @@ void print_usage(const char* prog) {
               << "  --data-dir <path>   Data directory (default: ./data)\n"
               << "  --force             Overwrite existing identity\n\n"
               << "Show-key options:\n"
+              << "  --data-dir <path>   Data directory (default: ./data)\n\n"
+              << "Peer management options:\n"
+              << "  --config <path>     Config file to edit (default: <data-dir>/config.json)\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n";
 }
 
@@ -137,6 +156,173 @@ int cmd_backup(int argc, char* argv[]) {
         return 1;
     }
 }
+
+int cmd_add_peer(int argc, char* argv[]) {
+    std::string data_dir = "./data";
+    std::string config_path;
+    std::string address;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--data-dir" && i + 1 < argc) {
+            data_dir = argv[++i];
+        } else if (arg == "--config" && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (address.empty() && arg[0] != '-') {
+            address = arg;
+        }
+    }
+
+    if (address.empty()) {
+        std::cerr << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        return 1;
+    }
+
+    // Resolve config path
+    if (config_path.empty()) {
+        config_path = (std::filesystem::path(data_dir) / "config.json").string();
+    }
+
+    try {
+        // Read existing config as raw JSON (preserves all fields)
+        nlohmann::json j;
+        {
+            std::ifstream f(config_path);
+            if (f.is_open()) {
+                j = nlohmann::json::parse(f);
+            }
+        }
+
+        // Ensure bootstrap_peers is an array
+        if (!j.contains("bootstrap_peers") || !j["bootstrap_peers"].is_array()) {
+            j["bootstrap_peers"] = nlohmann::json::array();
+        }
+
+        // Check for duplicates
+        for (const auto& peer : j["bootstrap_peers"]) {
+            if (peer.get<std::string>() == address) {
+                std::cerr << "Peer " << address << " already in bootstrap_peers" << std::endl;
+                return 1;
+            }
+        }
+
+        // Add the peer
+        j["bootstrap_peers"].push_back(address);
+
+        // Write back with indentation
+        {
+            std::ofstream f(config_path);
+            if (!f.is_open()) {
+                std::cerr << "Error: cannot write " << config_path << std::endl;
+                return 1;
+            }
+            f << j.dump(4) << std::endl;
+        }
+
+        std::cout << "Added peer " << address << " to " << config_path << std::endl;
+
+        // Send SIGHUP to running node if pidfile exists (D-10)
+        auto pidfile = std::filesystem::path(data_dir) / "chromatindb.pid";
+        if (std::filesystem::exists(pidfile)) {
+            std::ifstream pf(pidfile);
+            pid_t pid;
+            if (pf >> pid && kill(pid, 0) == 0) {
+                kill(pid, SIGHUP);
+                std::cout << "Sent SIGHUP to node (PID " << pid << ")" << std::endl;
+            }
+        }
+
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+int cmd_remove_peer(int argc, char* argv[]) {
+    std::string data_dir = "./data";
+    std::string config_path;
+    std::string address;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--data-dir" && i + 1 < argc) {
+            data_dir = argv[++i];
+        } else if (arg == "--config" && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (address.empty() && arg[0] != '-') {
+            address = arg;
+        }
+    }
+
+    if (address.empty()) {
+        std::cerr << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        return 1;
+    }
+
+    // Resolve config path
+    if (config_path.empty()) {
+        config_path = (std::filesystem::path(data_dir) / "config.json").string();
+    }
+
+    try {
+        // Read existing config as raw JSON
+        nlohmann::json j;
+        {
+            std::ifstream f(config_path);
+            if (!f.is_open()) {
+                std::cerr << "Error: cannot read " << config_path << std::endl;
+                return 1;
+            }
+            j = nlohmann::json::parse(f);
+        }
+
+        if (!j.contains("bootstrap_peers") || !j["bootstrap_peers"].is_array()) {
+            std::cerr << "No bootstrap_peers array in " << config_path << std::endl;
+            return 1;
+        }
+
+        // Find and remove the peer
+        auto& peers = j["bootstrap_peers"];
+        auto it = std::find(peers.begin(), peers.end(), address);
+        if (it == peers.end()) {
+            std::cerr << "Peer " << address << " not found in bootstrap_peers" << std::endl;
+            return 1;
+        }
+        peers.erase(it);
+
+        // Write back
+        {
+            std::ofstream f(config_path);
+            if (!f.is_open()) {
+                std::cerr << "Error: cannot write " << config_path << std::endl;
+                return 1;
+            }
+            f << j.dump(4) << std::endl;
+        }
+
+        std::cout << "Removed peer " << address << " from " << config_path << std::endl;
+
+        // Send SIGHUP to running node if pidfile exists (D-10)
+        auto pidfile = std::filesystem::path(data_dir) / "chromatindb.pid";
+        if (std::filesystem::exists(pidfile)) {
+            std::ifstream pf(pidfile);
+            pid_t pid;
+            if (pf >> pid && kill(pid, 0) == 0) {
+                kill(pid, SIGHUP);
+                std::cout << "Sent SIGHUP to node (PID " << pid << ")" << std::endl;
+            }
+        }
+
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+// Forward declaration -- implemented in Task 2
+int cmd_list_peers(int argc, char* argv[]);
 
 int cmd_run(int argc, char* argv[]) {
     // Parse args
@@ -251,6 +437,14 @@ int cmd_run(int argc, char* argv[]) {
     return pm.exit_code();
 }
 
+// Stub -- full implementation in Task 2
+int cmd_list_peers(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    std::cerr << "list-peers: not yet implemented\n";
+    return 1;
+}
+
 } // anonymous namespace
 
 int main(int argc, char* argv[]) {
@@ -265,6 +459,9 @@ int main(int argc, char* argv[]) {
     if (cmd == "keygen") return cmd_keygen(argc - 1, argv + 1);
     if (cmd == "show-key") return cmd_show_key(argc - 1, argv + 1);
     if (cmd == "backup") return cmd_backup(argc - 1, argv + 1);
+    if (cmd == "add-peer") return cmd_add_peer(argc - 1, argv + 1);
+    if (cmd == "remove-peer") return cmd_remove_peer(argc - 1, argv + 1);
+    if (cmd == "list-peers") return cmd_list_peers(argc - 1, argv + 1);
     if (cmd == "version" || cmd == "--version" || cmd == "-v") return cmd_version();
     if (cmd == "help" || cmd == "--help" || cmd == "-h") { print_usage(argv[0]); return 0; }
 

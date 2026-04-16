@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "db/config/config.h"
+#include <nlohmann/json.hpp>
+#include <algorithm>
 #include <fstream>
 #include <filesystem>
 
@@ -1568,6 +1570,126 @@ TEST_CASE("Phase 118 keys are known config keys", "[config]") {
 
     // Should not produce "unknown config key" warnings
     REQUIRE_NOTHROW(load_config(tmp));
+
+    std::filesystem::remove(tmp);
+}
+
+// =============================================================================
+// Peer command JSON editing tests (Phase 118-02)
+// =============================================================================
+
+TEST_CASE("add-peer: adds to bootstrap_peers in config JSON", "[peer_cmd]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_addpeer.json";
+
+    // Start with empty config
+    {
+        std::ofstream f(tmp);
+        f << R"({})";
+    }
+
+    // Simulate add-peer JSON logic
+    {
+        nlohmann::json j;
+        { std::ifstream f(tmp); j = nlohmann::json::parse(f); }
+        if (!j.contains("bootstrap_peers") || !j["bootstrap_peers"].is_array()) {
+            j["bootstrap_peers"] = nlohmann::json::array();
+        }
+        j["bootstrap_peers"].push_back("192.168.1.100:4200");
+        { std::ofstream f(tmp); f << j.dump(4) << std::endl; }
+    }
+
+    // Verify
+    {
+        std::ifstream f(tmp);
+        auto j = nlohmann::json::parse(f);
+        REQUIRE(j["bootstrap_peers"].is_array());
+        REQUIRE(j["bootstrap_peers"].size() == 1);
+        REQUIRE(j["bootstrap_peers"][0].get<std::string>() == "192.168.1.100:4200");
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("add-peer: preserves existing config fields", "[peer_cmd]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_addpeer_preserve.json";
+
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:5000", "max_peers": 64, "bootstrap_peers": ["10.0.0.1:4200"]})";
+    }
+
+    {
+        nlohmann::json j;
+        { std::ifstream f(tmp); j = nlohmann::json::parse(f); }
+        j["bootstrap_peers"].push_back("10.0.0.2:4200");
+        { std::ofstream f(tmp); f << j.dump(4) << std::endl; }
+    }
+
+    {
+        std::ifstream f(tmp);
+        auto j = nlohmann::json::parse(f);
+        REQUIRE(j["bind_address"] == "0.0.0.0:5000");
+        REQUIRE(j["max_peers"] == 64);
+        REQUIRE(j["bootstrap_peers"].size() == 2);
+        REQUIRE(j["bootstrap_peers"][0] == "10.0.0.1:4200");
+        REQUIRE(j["bootstrap_peers"][1] == "10.0.0.2:4200");
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("remove-peer: removes from bootstrap_peers in config JSON", "[peer_cmd]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_rmpeer.json";
+
+    {
+        std::ofstream f(tmp);
+        f << R"({"bootstrap_peers": ["10.0.0.1:4200", "10.0.0.2:4200", "10.0.0.3:4200"]})";
+    }
+
+    {
+        nlohmann::json j;
+        { std::ifstream f(tmp); j = nlohmann::json::parse(f); }
+        auto& peers = j["bootstrap_peers"];
+        auto it = std::find(peers.begin(), peers.end(), "10.0.0.2:4200");
+        REQUIRE(it != peers.end());
+        peers.erase(it);
+        { std::ofstream f(tmp); f << j.dump(4) << std::endl; }
+    }
+
+    {
+        std::ifstream f(tmp);
+        auto j = nlohmann::json::parse(f);
+        REQUIRE(j["bootstrap_peers"].size() == 2);
+        REQUIRE(j["bootstrap_peers"][0] == "10.0.0.1:4200");
+        REQUIRE(j["bootstrap_peers"][1] == "10.0.0.3:4200");
+    }
+
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("remove-peer: preserves other config fields", "[peer_cmd]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_rmpeer_preserve.json";
+
+    {
+        std::ofstream f(tmp);
+        f << R"({"bind_address": "0.0.0.0:5000", "bootstrap_peers": ["10.0.0.1:4200"], "max_peers": 64})";
+    }
+
+    {
+        nlohmann::json j;
+        { std::ifstream f(tmp); j = nlohmann::json::parse(f); }
+        auto& peers = j["bootstrap_peers"];
+        peers.erase(std::find(peers.begin(), peers.end(), "10.0.0.1:4200"));
+        { std::ofstream f(tmp); f << j.dump(4) << std::endl; }
+    }
+
+    {
+        std::ifstream f(tmp);
+        auto j = nlohmann::json::parse(f);
+        REQUIRE(j["bind_address"] == "0.0.0.0:5000");
+        REQUIRE(j["max_peers"] == 64);
+        REQUIRE(j["bootstrap_peers"].size() == 0);
+    }
 
     std::filesystem::remove(tmp);
 }
