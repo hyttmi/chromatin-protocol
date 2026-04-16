@@ -708,7 +708,7 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
 // =============================================================================
 
 int ls(const std::string& identity_dir, const std::string& namespace_hex,
-       const ConnectOpts& opts) {
+       const ConnectOpts& opts, bool raw, const std::string& type_filter) {
 
     auto id = Identity::load_from(identity_dir);
     auto ns = resolve_namespace(id, namespace_hex, identity_dir);
@@ -716,11 +716,46 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
     uint64_t since_seq = 0;
 
     for (;;) {
-        // Build ListRequest: [namespace:32][since_seq:8BE][limit:4BE] = 44 bytes
-        std::vector<uint8_t> payload(44);
+        // Determine ListRequest payload size based on flags needed
+        // Per D-07: 44 bytes = no flags, 45 = flags, 49 = flags + type_filter
+        bool send_type_filter = !type_filter.empty();
+        size_t payload_size = 44;
+        uint8_t flags = 0;
+
+        if (raw) {
+            flags |= 0x01;  // bit 0: include_all (per D-08)
+            payload_size = 45;
+        }
+        if (send_type_filter) {
+            flags |= 0x02;  // bit 1: type_filter present (per D-09)
+            payload_size = 49;
+        } else if (raw) {
+            payload_size = 45;
+        }
+
+        std::vector<uint8_t> payload(payload_size);
         std::memcpy(payload.data(), ns.data(), 32);
         store_u64_be(payload.data() + 32, since_seq);
         store_u32_be(payload.data() + 40, 100);
+
+        if (payload_size >= 45) {
+            payload[44] = flags;
+        }
+        if (send_type_filter) {
+            // Map type label string back to magic bytes for server-side filter
+            std::array<uint8_t, 4> filter_bytes{};
+            if (type_filter == "CENV") filter_bytes = CENV_MAGIC;
+            else if (type_filter == "PUBK") filter_bytes = PUBKEY_MAGIC;
+            else if (type_filter == "TOMB") filter_bytes = TOMBSTONE_MAGIC_CLI;
+            else if (type_filter == "DLGT") filter_bytes = DELEGATION_MAGIC_CLI;
+            else if (type_filter == "CDAT") filter_bytes = CDAT_MAGIC;
+            else {
+                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT\n",
+                             type_filter.c_str());
+                return 1;
+            }
+            std::memcpy(payload.data() + 45, filter_bytes.data(), 4);
+        }
 
         Connection conn(id);
         if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
@@ -752,15 +787,17 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             return 1;
         }
 
-        // Parse ListResponse: [count:4BE][entries: N * (hash:32 + seq_num:8BE)][has_more:1]
+        // Parse ListResponse: [count:4BE][entries: N * (hash:32 + seq:8BE + type:4)][has_more:1]
         auto& p = resp->payload;
         if (p.size() < 5) {  // at least count(4) + has_more(1)
             std::fprintf(stderr, "Error: ListResponse too short\n");
             return 1;
         }
 
+        constexpr size_t ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
+
         uint32_t count = load_u32_be(p.data());
-        size_t entries_size = static_cast<size_t>(count) * 40;  // 32 + 8 per entry
+        size_t entries_size = static_cast<size_t>(count) * ENTRY_SIZE;
         if (p.size() < 4 + entries_size + 1) {
             std::fprintf(stderr, "Error: ListResponse truncated\n");
             return 1;
@@ -768,11 +805,21 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
 
         const uint8_t* entries = p.data() + 4;
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = entries + static_cast<size_t>(i) * 40;
+            const uint8_t* entry = entries + static_cast<size_t>(i) * ENTRY_SIZE;
             auto hash_span = std::span<const uint8_t>(entry, 32);
-            std::printf("%s\n", to_hex(hash_span).c_str());
+            const uint8_t* type_ptr = entry + 40;
 
-            // Track last seq_num for pagination
+            // Per D-21: --type bypasses hide list
+            // Per D-13/D-22: default mode hides PUBK, CDAT, DLGT
+            if (!raw && type_filter.empty() && is_hidden_type(type_ptr)) {
+                // Track seq for pagination even when skipping
+                since_seq = load_u64_be(entry + 32);
+                continue;
+            }
+
+            // Per D-12/D-18: hash + type label per line
+            std::printf("%s  %s\n", to_hex(hash_span).c_str(), type_label(type_ptr));
+
             since_seq = load_u64_be(entry + 32);
         }
 
@@ -824,13 +871,15 @@ std::vector<std::string> list_hashes(const std::string& identity_dir,
         }
 
         auto& p = resp->payload;
+        constexpr size_t ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
+
         uint32_t count = load_u32_be(p.data());
-        size_t entries_size = static_cast<size_t>(count) * 40;
+        size_t entries_size = static_cast<size_t>(count) * ENTRY_SIZE;
         if (p.size() < 4 + entries_size + 1) return hashes;
 
         const uint8_t* entries = p.data() + 4;
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = entries + static_cast<size_t>(i) * 40;
+            const uint8_t* entry = entries + static_cast<size_t>(i) * ENTRY_SIZE;
             auto hash_span = std::span<const uint8_t>(entry, 32);
             hashes.push_back(to_hex(hash_span));
             since_seq = load_u64_be(entry + 32);

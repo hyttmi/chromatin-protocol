@@ -39,7 +39,8 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
             uint32_t ttl, const ConnectOpts& opts);
 
 int ls(const std::string& identity_dir, const std::string& namespace_hex,
-       const ConnectOpts& opts);
+       const ConnectOpts& opts, bool raw = false,
+       const std::string& type_filter = "");
 
 int exists(const std::string& identity_dir, const std::string& hash_hex,
            const std::string& namespace_hex, const ConnectOpts& opts);

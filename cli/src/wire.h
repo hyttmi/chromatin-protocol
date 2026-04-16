@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <string>
@@ -200,6 +201,41 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
            data[0] == 0x50 && data[1] == 0x55 && data[2] == 0x42 && data[3] == 0x4B;
 }
 
+// =============================================================================
+// Type label mapping (Phase 117)
+// =============================================================================
+
+/// CENV (client envelope) magic: "CENV" in ASCII
+inline constexpr std::array<uint8_t, 4> CENV_MAGIC = {0x43, 0x45, 0x4E, 0x56};
+
+/// Tombstone magic
+inline constexpr std::array<uint8_t, 4> TOMBSTONE_MAGIC_CLI = {0xDE, 0xAD, 0xBE, 0xEF};
+
+/// Delegation magic
+inline constexpr std::array<uint8_t, 4> DELEGATION_MAGIC_CLI = {0xDE, 0x1E, 0x6A, 0x7E};
+
+/// CDAT (chunk data) magic: "CDAT" in ASCII (Phase 119)
+inline constexpr std::array<uint8_t, 4> CDAT_MAGIC = {0x43, 0x44, 0x41, 0x54};
+
+/// Map 4-byte type prefix to human-readable label (per D-18).
+/// Returns: "CENV", "PUBK", "TOMB", "DLGT", "CDAT", or "DATA" for unknown.
+inline const char* type_label(const uint8_t* type) {
+    if (std::memcmp(type, CENV_MAGIC.data(), 4) == 0) return "CENV";
+    if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return "PUBK";
+    if (std::memcmp(type, TOMBSTONE_MAGIC_CLI.data(), 4) == 0) return "TOMB";
+    if (std::memcmp(type, DELEGATION_MAGIC_CLI.data(), 4) == 0) return "DLGT";
+    if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return "CDAT";
+    return "DATA";
+}
+
+/// Check if a type prefix should be hidden in default cdb ls output (per D-13).
+/// Hidden types: PUBK, CDAT, DLGT (defense-in-depth).
+inline bool is_hidden_type(const uint8_t* type) {
+    if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return true;
+    if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return true;
+    if (std::memcmp(type, DELEGATION_MAGIC_CLI.data(), 4) == 0) return true;
+    return false;
+}
 
 // =============================================================================
 // Hex utilities
