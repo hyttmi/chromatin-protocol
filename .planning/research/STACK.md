@@ -1,381 +1,319 @@
-# Stack Research: Relay v2 (WebSocket/JSON/TLS Gateway)
+# Stack Research: CLI Polish (v4.1.0)
 
-**Domain:** WebSocket relay gateway translating JSON clients to FlatBuffers node over UDS
-**Researched:** 2026-04-09
-**Confidence:** HIGH (core stack is proven, additions are standard components)
+**Domain:** CLI client enhancements -- contact groups, chunked large files, request pipelining, configurable node constants
+**Researched:** 2026-04-15
+**Confidence:** HIGH (no new dependencies, all patterns proven in existing codebase)
 
 ## Context
 
-Relay v2 replaces the old PQ-authenticated TCP relay with a WebSocket/JSON/TLS gateway. The database node (db/) is frozen. The relay must:
+The CLI client (`cli/`) is a standalone C++20 binary connecting to a chromatindb node via UDS or TCP. It already has: SQLite contacts, envelope encryption (segmented AEAD), chunked transport framing (1 MiB sub-frames), synchronous blocking I/O over Asio, and `config.json` for host/port defaults.
 
-1. Accept WSS connections from clients (TLS + WebSocket)
-2. Perform ML-DSA-87 challenge-response auth over WebSocket
-3. Translate JSON messages to FlatBuffers binary and vice versa
-4. Forward to the node via a single multiplexed UDS connection
-5. Track subscriptions and route notifications
+This document covers stack additions/changes needed for four new features:
+1. **Contact groups** -- SQLite schema extension
+2. **Chunked large files** -- >500 MiB without full memory buffering
+3. **Request pipelining** -- parallel downloads via concurrent I/O
+4. **Configurable node constants** -- 10 hardcoded values move to config.json with SIGHUP reload
 
-The existing C++20/Asio/coroutine stack is validated and stays. This document covers ONLY new additions.
+## Recommended Stack
 
-## Critical Decision: WebSocket Library
+### Core Technologies (No Changes)
 
-### Recommendation: Write a minimal RFC 6455 server (no third-party WebSocket library)
+The existing CLI stack requires ZERO new FetchContent or system dependencies.
 
-**Why not Boost.Beast:**
-- Boost.Beast requires Boost.Asio (boost:: namespace), NOT standalone Asio. This project uses standalone Asio (asio:: namespace) via OlivierLDff/asio.cmake with `ASIO_STANDALONE` defined. Switching to Boost.Asio would require changing every `asio::` reference in ~34,300 LOC of db/ code, which is frozen.
-- The beast-asio-standalone fork (vimpunk) is explicitly discouraged by its maintainer: "I don't recommend that you use this since the update frequency is going to be smaller." Tests don't work. Unmaintained.
+| Technology | Version | Current Usage | New Usage |
+|------------|---------|---------------|-----------|
+| SQLite3 | 3.53.0 (system) | contacts table | +groups table, +group_members table |
+| Standalone Asio | 1.38.0 | Synchronous blocking I/O | Async coroutine I/O for pipelining |
+| libsodium | system | ChaCha20-Poly1305, HKDF | Incremental SHA3-256 for streaming hash |
+| liboqs | 0.15.0 | ML-DSA-87, ML-KEM-1024, SHA3-256 | Same (signing chunks uses same path) |
+| nlohmann/json | 3.11.3 | config.json parsing | +node constants in config.json |
+| FlatBuffers | 25.2.10 | Wire format encode/decode | Same |
+| spdlog | 1.15.1 | Logging | Same |
 
-**Why not WebSocket++:**
-- Has real compatibility issues with recent standalone Asio (GitHub issue #794: compilation failures with executor model changes in Asio 1.28+). The project uses Asio 1.38.0.
-- CMake build still requires Boost for examples/tests (GitHub issue #1099: open, unresolved). Standalone Asio mode is second-class.
-- Callback-based API, not coroutine-native. Would require wrapping everything in coroutine adapters.
-- Header-only C++11 design -- not idiomatic with the project's C++20 coroutine patterns.
+### No New Dependencies Required
 
-**Why not eidheim/Simple-WebSocket-Server:**
-- C++11 callback-based, uses Boost.Asio, not standalone Asio coroutines.
+Every feature can be implemented with the existing stack. This is the correct approach because:
+- SQLite already handles contact data; groups are a schema addition, not a technology addition
+- Asio already supports async/coroutine I/O; the CLI just needs to use it
+- The envelope encryption already supports segmented AEAD (1 MiB segments); streaming just changes the I/O pattern
+- nlohmann/json already parses config.json; adding fields is trivial
 
-**Why a hand-rolled implementation works here:**
+## Feature-Specific Stack Analysis
 
-The relay only needs SERVER-side WebSocket (no client). The server-side subset of RFC 6455 is small:
+### 1. Contact Groups (SQLite Schema Extension)
 
-1. **HTTP Upgrade handshake** (~40 lines): Parse `Sec-WebSocket-Key`, respond with `SHA-1(key + magic)` Base64-encoded in `Sec-WebSocket-Accept`. OpenSSL (already needed for TLS) provides SHA-1 and Base64.
-2. **Frame read** (~60 lines): Read 2-14 byte header, unmask client payload (XOR with 4-byte key). Clients MUST mask; server MUST NOT mask.
-3. **Frame write** (~30 lines): Write unmasked frames to client. Text frames (opcode 0x1) for JSON messages.
-4. **Control frames** (~20 lines): Handle Ping (respond Pong), Pong (ignore), Close (echo close frame).
+**What's needed:** Two new tables in the existing `~/.chromatindb/contacts.db`.
 
-Total: ~150 lines of protocol logic, fully under project control, coroutine-native, zero dependency risk. The existing codebase already has hand-rolled binary protocol framing (db/net/framing.h) and a hand-rolled HTTP server (db/peer/metrics_collector.cpp Prometheus endpoint), so this pattern is proven.
+**Schema design:**
 
-**Confidence:** HIGH -- RFC 6455 server-side is well-specified, the codebase has precedent for hand-rolled protocols, and all third-party options have disqualifying compatibility issues.
+```sql
+CREATE TABLE IF NOT EXISTS groups (
+    name TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
 
-## Recommended Stack Additions
-
-### New System Dependencies
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| OpenSSL | 3.x (system) | TLS termination for WSS, SHA-1+Base64 for WS handshake | Industry standard, Asio SSL built on it, already on every Linux server. System package, not FetchContent (too large, tightly coupled to OS). |
-
-### Existing Technologies (Already Available, New Usage)
-
-| Technology | Current Usage | New Usage in Relay v2 |
-|------------|---------------|----------------------|
-| Standalone Asio 1.38.0 | TCP networking, UDS, C++20 coroutines | `asio::ssl::context` + `asio::ssl::stream` for TLS, WebSocket frame IO over TLS stream |
-| nlohmann/json 3.11.3 | Config file parsing | JSON message serialization/deserialization for all 38 client-allowed message types |
-| FlatBuffers 25.2.10 | Node wire format | Relay-side encoding/decoding for JSON-to-FlatBuffers translation |
-| liboqs 0.15.0 | ML-DSA-87, ML-KEM-1024 | ML-DSA-87 challenge-response auth verification (verify only, no signing by relay) |
-| spdlog 1.15.1 | Structured logging | Relay logging |
-| Catch2 | Unit testing | Relay unit tests |
-
-### No New FetchContent Dependencies
-
-The relay v2 requires ZERO new FetchContent dependencies. Everything it needs is either already fetched (Asio, nlohmann/json, FlatBuffers, liboqs, spdlog, Catch2) or is a system package (OpenSSL).
-
-## Detailed Component Analysis
-
-### 1. TLS Termination (Asio SSL)
-
-**How it works:** Standalone Asio includes `asio/ssl.hpp` which wraps OpenSSL. The headers are confirmed present at `asio/ssl/context.hpp`, `asio/ssl/stream.hpp`, etc. in the project's fetched Asio 1.38.0 source.
-
-**Pattern:**
-
-```cpp
-#include <asio/ssl.hpp>
-
-// Setup (once at relay startup)
-asio::ssl::context ssl_ctx(asio::ssl::context::tls_server);
-ssl_ctx.set_options(asio::ssl::context::default_workarounds |
-                    asio::ssl::context::no_sslv2 |
-                    asio::ssl::context::no_sslv3 |
-                    asio::ssl::context::no_tlsv1 |
-                    asio::ssl::context::no_tlsv1_1);
-ssl_ctx.use_certificate_chain_file(cert_path);
-ssl_ctx.use_private_key_file(key_path, asio::ssl::context::pem);
-
-// Per-connection: wrap accepted TCP socket in SSL stream
-asio::ssl::stream<asio::ip::tcp::socket> ssl_socket(std::move(tcp_socket), ssl_ctx);
-co_await ssl_socket.async_handshake(asio::ssl::stream_base::server,
-                                      asio::use_awaitable);
-// Then do WebSocket upgrade over ssl_socket
+CREATE TABLE IF NOT EXISTS group_members (
+    group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+    contact_name TEXT NOT NULL REFERENCES contacts(name) ON DELETE CASCADE,
+    PRIMARY KEY (group_name, contact_name)
+);
 ```
 
-**Separate compilation requirement:** The asio.cmake wrapper's `asio.cpp` only includes `asio/impl/src.hpp`, NOT `asio/ssl/impl/src.hpp`. The relay must provide its own SSL compilation unit:
+**Why this design:**
+- `ON DELETE CASCADE` on `group_members.group_name` ensures deleting a group removes all memberships
+- `ON DELETE CASCADE` on `group_members.contact_name` ensures deleting a contact removes them from all groups
+- SQLite3 3.53.0 fully supports foreign keys (available since 3.6.19). Must enable with `PRAGMA foreign_keys = ON` at connection open (SQLite disables FK enforcement by default per connection)
+- Composite primary key `(group_name, contact_name)` prevents duplicate memberships
+- No separate ID columns -- names are the natural keys, matching existing contacts table design
 
-```cpp
-// relay2/asio_ssl.cpp
-#include <asio/ssl/impl/src.hpp>
+**Integration point:** `ContactDB` class gains group methods. The `--share @team` syntax resolves a group name to the list of member KEM pubkeys, which feeds into the existing `envelope::encrypt()` recipient list.
+
+**SQLite API usage:** Same raw `sqlite3_*` C API already used in `contacts.cpp`. No ORM, no wrapper library. Keep it simple.
+
+**Critical: PRAGMA foreign_keys = ON** must be added to `ContactDB::ContactDB()` constructor, before `init_schema()`. Without this, `ON DELETE CASCADE` silently does nothing.
+
+**Confidence:** HIGH -- SQLite foreign keys are well-proven, schema is straightforward.
+
+### 2. Chunked Large Files (>500 MiB)
+
+**Problem:** Current flow reads entire file into memory (`read_file_bytes`), envelope-encrypts it (another copy), serializes to FlatBuffer (another copy). A 500 MiB file uses ~1.5 GB RAM.
+
+**Solution: Client-side multi-blob chunking with manifest.** Split the file into independently-encrypted chunks, each stored as a separate blob. A manifest blob ties them together.
+
+**Why NOT streaming single-blob encryption:**
+- FlatBuffers requires the complete `data` field at serialization time. The node's `encode_blob()` needs the full payload to build the FlatBuffer
+- The node's ingest pipeline computes `SHA3-256(namespace || data || ttl || timestamp)` over the COMPLETE blob data for signing. Streaming this would require the node to buffer the entire blob anyway
+- The node enforces `MAX_BLOB_DATA_SIZE = 500 MiB` as a protocol invariant -- cannot send larger single blobs
+
+**Chunk design:**
+
+Each chunk is an independent envelope-encrypted blob with magic prefix `CPAR` (0x43504152) for identification:
+
+```
+Chunk blob data: [CPAR:4][chunk_index:4BE][total_chunks:4BE][manifest_hash:32][file_data_segment]
 ```
 
-This ensures SSL symbols are compiled only for the relay binary, keeping the db binary free of OpenSSL dependency.
+Manifest blob (also envelope-encrypted):
 
-**Config additions to RelayConfig:**
-```json
-{
-  "cert_path": "/etc/chromatindb/relay.crt",
-  "key_path": "/etc/chromatindb/relay.key"
+```
+Manifest data: [CMAN:4][original_filename_len:2BE][original_filename][total_size:8BE][chunk_count:4BE][chunk_hash_0:32][chunk_hash_1:32]...
+```
+
+**Chunk size: 50 MiB.** Because:
+- 50 MiB per chunk means a 2 GB file = 40 chunks = 40 blobs. Manageable
+- Each chunk + envelope overhead + FlatBuffer fits well within `MAX_BLOB_DATA_SIZE` (500 MiB)
+- Memory per chunk: ~150 MiB peak (read 50 MiB + encrypt ~50 MiB + FlatBuffer ~50 MiB). Acceptable
+- Larger chunks (100 MiB) would reduce blob count but increase memory. 50 MiB is the sweet spot
+- Smaller chunks (10 MiB) would create too many blobs for very large files (200 blobs for 2 GB)
+
+**Streaming read pattern (no full-file buffering):**
+
+```cpp
+// Read file in 50 MiB chunks using ifstream
+std::ifstream file(path, std::ios::binary);
+std::vector<uint8_t> chunk_buf(CHUNK_SIZE);
+
+while (file.read(reinterpret_cast<char*>(chunk_buf.data()), CHUNK_SIZE) || file.gcount() > 0) {
+    size_t bytes_read = static_cast<size_t>(file.gcount());
+    auto chunk_data = build_chunk_payload(chunk_index, total_chunks, manifest_hash_placeholder, chunk_buf, bytes_read);
+    auto envelope = envelope::encrypt(chunk_data, recipients);
+    // sign + serialize + send over connection
 }
 ```
 
-**Gotcha -- ASIO_SEPARATE_COMPILATION:** The project defines `ASIO_SEPARATE_COMPILATION` (set by asio.cmake). When this is defined, Asio expects implementation code in exactly one translation unit. For SSL, this means `asio/ssl/impl/src.hpp` must be included in exactly one .cpp file in the relay, and any .cpp file using SSL headers must also see `ASIO_SEPARATE_COMPILATION` defined (which it will, since it's a PUBLIC compile definition on the asio target).
+**Two-pass upload for manifest:**
+1. First pass: upload all chunks, collect their blob hashes from WriteAck responses
+2. Second pass: build manifest with chunk hashes, upload manifest blob
+3. Return manifest hash as the file's "handle"
 
-**Confidence:** HIGH -- Asio SSL is mature, well-documented, and pattern is verified against source.
+**Download:** Read manifest blob, extract chunk hashes, fetch chunks (pipelined -- see section 3), reassemble in order.
 
-### 2. WebSocket Protocol (Hand-Rolled, ~150 Lines)
+**SHA3-256 for canonical signing:** Each chunk is independently signed. The existing `build_signing_input()` computes `SHA3-256(namespace || data || ttl || timestamp)` per chunk. No streaming hash needed here because each chunk is small enough (50 MiB) to fit in memory.
 
-**Upgrade handshake (over TLS stream):** After TLS handshake completes, the client sends a standard HTTP/1.1 upgrade request. The relay must:
+**No changes to node code.** The node stores chunks as regular blobs. The manifest is a regular blob. All client-side logic.
 
-1. Read HTTP request line + headers (same pattern as existing Prometheus endpoint in `metrics_collector.cpp`)
-2. Validate: `Connection: Upgrade`, `Upgrade: websocket`, `Sec-WebSocket-Version: 13`, presence of `Sec-WebSocket-Key`
-3. Compute accept: `Base64(SHA-1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`
-4. Respond with `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: <accept>\r\n\r\n`
+**Confidence:** HIGH -- multi-blob chunking with manifest is a well-established pattern (similar to git packfiles, S3 multipart upload). No protocol changes required.
 
-OpenSSL provides both SHA-1 (`EVP_sha1`) and Base64 (`EVP_EncodeBlock`) -- no additional deps needed.
+### 3. Request Pipelining (Parallel Downloads)
 
-**Frame format (server reads from client -- always masked):**
-```
-Byte 0: [FIN:1][RSV1:1][RSV2:1][RSV3:1][Opcode:4]
-Byte 1: [MASK:1][PayloadLen:7]
-  If PayloadLen == 126: next 2 bytes = BE uint16 actual length
-  If PayloadLen == 127: next 8 bytes = BE uint64 actual length
-Next 4 bytes: masking key (MUST be present for client-to-server)
-Remaining: masked payload (XOR each byte with mask[i % 4])
-```
+**Problem:** Current `get()` sends one ReadRequest, waits for ReadResponse, then sends the next. Sequential. Downloading 40 chunks of a large file takes 40 round trips.
 
-**Frame format (server writes to client -- never masked):**
-```
-Byte 0: [FIN:1][RSV1:1][RSV2:1][RSV3:1][Opcode:4]  -- FIN=1 always (no fragmentation)
-Byte 1: [0:1][PayloadLen:7]  -- MASK bit = 0
-  If PayloadLen == 126: next 2 bytes = BE uint16 actual length
-  If PayloadLen == 127: next 8 bytes = BE uint64 actual length
-Remaining: unmasked payload
-```
+**Solution: Send multiple ReadRequests using request_id correlation, receive responses out of order.**
 
-**Opcodes to implement:**
-- `0x1` (Text): JSON messages -- all application data
-- `0x8` (Close): Connection teardown with status code
-- `0x9` (Ping): Auto-respond with Pong (same payload)
-- `0xA` (Pong): Ignore (unsolicited keepalive ack from client)
+**The node already supports this.** From PROTOCOL.md:
+> "The node may process requests concurrently and responses may arrive in a different order than requests were sent. Clients must use request_id to correlate responses, not assume ordering."
 
-**Deliberately NOT implementing:**
-- `0x2` (Binary frames): Not needed -- all messages are JSON text
-- Fragmented messages (FIN=0 continuation frames): JSON messages are complete, no fragmentation needed
-- Per-message deflate (RSV1 extension): JSON messages are small, TLS handles compression
-- Subprotocol negotiation: Single protocol, no negotiation needed
+**Implementation approach -- synchronous pipelining (no async rewrite needed):**
 
-**Maximum frame size:** Cap at 110 MiB (matching `MAX_FRAME_SIZE` in db/net/framing.h) to handle large blob Data messages. In practice, JSON-encoded blob data (hex strings) will be roughly double the binary size, so the actual JSON frame limit should be ~220 MiB.
+The current `Connection` class uses synchronous (blocking) Asio I/O. Full async/coroutine conversion is overkill for the CLI (it's a command-line tool, not a server). Instead, use a pipeline window:
 
-**Confidence:** HIGH -- server-side only, no fragmentation, no extensions, well-specified subset.
+```cpp
+// Pipeline: send up to N requests before waiting for any response
+static constexpr uint32_t PIPELINE_DEPTH = 8;
 
-### 3. JSON Message Format (nlohmann/json)
+// Phase 1: Send up to PIPELINE_DEPTH requests
+std::map<uint32_t, std::string> pending;  // request_id -> hash_hex
+uint32_t rid = 1;
+size_t send_idx = 0;
 
-**Translation layer architecture:** The relay translates between JSON (client-facing) and the node's FlatBuffers binary wire format. Two translation paths exist:
+// Fill pipeline
+while (send_idx < hash_hexes.size() && pending.size() < PIPELINE_DEPTH) {
+    conn.send(MsgType::ReadRequest, payload, rid);
+    pending[rid] = hash_hexes[send_idx];
+    ++rid; ++send_idx;
+}
 
-**Path A -- Blob messages (types 8, 17, 32, 54):** These carry FlatBuffers-encoded `Blob` payloads. Translation uses `wire::encode_blob()` / `wire::decode_blob()` from `db/wire/codec.h`.
+// Phase 2: Receive responses and refill pipeline
+while (!pending.empty()) {
+    auto resp = conn.recv();
+    auto it = pending.find(resp->request_id);
+    // process response, remove from pending
+    pending.erase(it);
 
-**Path B -- Binary-struct messages (all other 34 types):** These carry hand-packed binary payloads with fields at fixed offsets (documented byte-by-byte in PROTOCOL.md). Translation is field-by-field pack/unpack.
-
-**JSON message envelope:**
-```json
-{
-  "type": "ReadRequest",
-  "request_id": 42,
-  "payload": { ... type-specific fields ... }
+    // Refill pipeline
+    if (send_idx < hash_hexes.size()) {
+        conn.send(MsgType::ReadRequest, payload, rid);
+        pending[rid] = hash_hexes[send_idx];
+        ++rid; ++send_idx;
+    }
 }
 ```
 
-**Binary field encoding in JSON:** All byte arrays (namespace_id, blob_hash, pubkey, signature, data) use hex encoding. This matches the existing codebase convention (`db/util/hex.h` provides `to_hex`/`from_hex`).
+**Why synchronous pipelining, not async coroutines:**
+- The CLI is a short-lived command-line tool. It connects, does work, disconnects
+- Synchronous send/recv is simpler to reason about than `co_await` chains
+- The bottleneck is network RTT, not CPU. Pipelining removes RTT serialization
+- Pipeline depth of 8 means 8x throughput improvement for sequential downloads
+- No need to change the `Connection` class from synchronous to async
 
-**Translation layer structure:**
+**Why pipeline depth 8:**
+- Too small (2-4): Still leaves network idle time between batches
+- Too large (32+): Memory pressure from 32 concurrent large responses in flight
+- 8 is standard for HTTP/2 default concurrent streams and a proven sweet spot
+- For chunked file downloads (50 MiB chunks), 8 in-flight = 400 MiB buffered. Acceptable
+
+**Request ID management:** The existing `Connection::send()` already accepts `request_id`. The existing `Connection::recv()` already returns `DecodedTransport` with `request_id`. No changes to the transport layer needed.
+
+**Chunked transport interaction:** When a response uses chunked framing (blob >1 MiB), the receiver must consume the entire chunked sequence (header + data sub-frames + sentinel) before receiving the next response. The current `Connection::recv()` already handles this correctly -- it detects `0x01` header byte and reads all sub-frames. Pipelining works because the node serializes chunked responses per-request_id on the wire.
+
+**Upload pipelining:** For chunked file uploads, send multiple chunks without waiting for each WriteAck. Same pipeline window pattern, but with `MsgType::Data` sends.
+
+**Confidence:** HIGH -- the protocol explicitly supports request_id pipelining, the transport layer already handles it, and synchronous pipeline windows are a proven pattern.
+
+### 4. Configurable Node Constants
+
+**Problem:** 10 hardcoded `constexpr` values in `db/peer/` control sync/peer behavior (PEX interval, max peers per exchange, sync timeouts, keepalive intervals, etc.). Operators want to tune these without recompiling.
+
+**Identified constants to make configurable:**
+
+| Constant | Current Value | Location | Config Key |
+|----------|--------------|----------|------------|
+| `PEX_INTERVAL_SEC` | 300 | pex_manager.h | `pex_interval_seconds` |
+| `MAX_PEERS_PER_EXCHANGE` | 8 | pex_manager.h | `max_peers_per_exchange` |
+| `MAX_DISCOVERED_PER_ROUND` | 3 | pex_manager.h | `max_discovered_per_round` |
+| `MAX_PERSISTED_PEERS` | 100 | pex_manager.h | `max_persisted_peers` |
+| `MAX_PERSIST_FAILURES` | 3 | pex_manager.h | `max_persist_failures` |
+| `KEEPALIVE_INTERVAL` | 30s | connection_manager.cpp | `keepalive_interval_seconds` |
+| `KEEPALIVE_TIMEOUT` | 60s | connection_manager.cpp | `keepalive_timeout_seconds` |
+| `MAX_HASHES_PER_REQUEST` | 64 | sync_orchestrator.h | `max_hashes_per_request` |
+| `BLOB_TRANSFER_TIMEOUT` | 120s | sync_orchestrator.h | `blob_transfer_timeout_seconds` |
+| `STRIKE_THRESHOLD` | 10 | connection_manager.h | `strike_threshold` |
+
+**Stack impact: NONE.** The node already uses nlohmann/json for config parsing and has SIGHUP reload infrastructure. Adding 10 more fields to `Config` struct and `load_config()` is mechanical.
+
+**Pattern (already established in config.h):**
 
 ```cpp
-// json_codec.h
-namespace chromatindb::relay2::json {
+// In Config struct:
+uint32_t pex_interval_seconds = 300;
+uint32_t max_peers_per_exchange = 8;
+// ... etc
 
-// Client JSON -> node binary
-std::vector<uint8_t> json_to_payload(wire::TransportMsgType type,
-                                      const nlohmann::json& j);
-
-// Node binary -> client JSON
-nlohmann::json payload_to_json(wire::TransportMsgType type,
-                                std::span<const uint8_t> payload);
-
-// Type string -> enum
-std::optional<wire::TransportMsgType> type_from_string(std::string_view name);
-
-// Enum -> type string
-std::string_view type_to_string(wire::TransportMsgType type);
-
-} // namespace chromatindb::relay2::json
+// In load_config():
+if (j.contains("pex_interval_seconds") && j["pex_interval_seconds"].is_number_unsigned())
+    cfg.pex_interval_seconds = j["pex_interval_seconds"].get<uint32_t>();
 ```
 
-**Example translations:**
+**SIGHUP reload:** The existing reload infrastructure already covers `max_peers`, `allowed_client_keys`, `allowed_peer_keys`, `rate_limit_*`, `metrics_bind`. Adding these 10 values to the SIGHUP handler is straightforward. Each component (PexManager, ConnectionManager, SyncOrchestrator) needs an `update_config()` method that atomically swaps the tunable values.
 
-ReadRequest:
-```json
-{"type":"ReadRequest","request_id":1,"payload":{"namespace":"a1b2...","hash":"d4e5..."}}
-```
-Binary: 64 bytes = `[namespace_id:32][blob_hash:32]`
+**Validation:** Add bounds checks in `validate_config()`. Examples:
+- `pex_interval_seconds`: min 10, max 3600 (prevent spamming or stalling)
+- `keepalive_interval_seconds`: min 5, max 300
+- `keepalive_timeout_seconds`: must be > `keepalive_interval_seconds`
+- `strike_threshold`: min 1, max 1000
+- `blob_transfer_timeout_seconds`: min 10, max 600
 
-Data (blob write):
-```json
-{"type":"Data","request_id":2,"payload":{"namespace":"a1b2...","pubkey":"...","data":"...","ttl":86400,"timestamp":1712678400,"signature":"..."}}
-```
-Binary: FlatBuffers-encoded Blob via `wire::encode_blob()`
-
-Subscribe:
-```json
-{"type":"Subscribe","request_id":3,"payload":{"namespace":"a1b2..."}}
-```
-Binary: 32 bytes = `[namespace_id:32]`
-
-Notification (node->client):
-```json
-{"type":"Notification","payload":{"namespace":"a1b2...","data":"..."}}
-```
-Binary: `[namespace_id:32][blob_data:variable]`
-
-**Performance note:** nlohmann/json is not the fastest JSON library, but relay message rates are bounded by WebSocket + TLS overhead and node processing speed. JSON parsing will not be the bottleneck. Hex encoding doubles the size of binary data, but the tradeoff (human-readable messages, any language can participate) is the entire point of Relay v2.
-
-**Confidence:** HIGH -- nlohmann/json is already in the project, hex encoding is a proven pattern, message formats are fully specified in PROTOCOL.md.
-
-### 4. Challenge-Response Auth
-
-**Flow:**
-1. Client connects WSS, completes TLS handshake
-2. Client sends WebSocket upgrade, relay accepts (101)
-3. Relay generates 32-byte random challenge via `randombytes_buf()` (libsodium), sends: `{"type":"AuthChallenge","challenge":"...hex..."}`
-4. Client signs challenge with ML-DSA-87, responds: `{"type":"AuthResponse","pubkey":"...hex...","signature":"...hex..."}`
-5. Relay verifies signature using `OQS_SIG_verify` (liboqs, already linked)
-6. Relay derives namespace = `SHA3-256(pubkey)` (existing `crypto::sha3_256`)
-7. Session authenticated, relay forwards to node via UDS with TrustedHello (node trusts relay)
-
-**No new dependencies.** liboqs verify + libsodium randombytes + SHA3-256 are all already available via chromatindb_lib.
-
-**Confidence:** HIGH -- all crypto primitives already used throughout the codebase.
-
-### 5. Multiplexed UDS Connection
-
-**Architecture change from old relay:** The old relay creates one UDS connection per client. Relay v2 uses a SINGLE UDS connection to the node, multiplexing all client traffic.
-
-**Multiplexing via request_id remapping:**
-- Relay maintains `relay_request_id -> (client_session, original_request_id)` map
-- Each client request is assigned a relay-global `request_id` before forwarding
-- Node responses are demultiplexed back to the correct client session
-- Atomic uint32 counter for relay-global request_id generation
-
-**Subscription routing:**
-- Relay tracks `namespace -> set<client_session>` for Subscribe/Unsubscribe
-- Node sends Notification (type 21) with first 32 bytes = namespace_id
-- Relay extracts namespace, looks up subscribed sessions, sends JSON notification to each
-- Maximum 256 subscriptions per client (matching existing relay limit)
-
-**UDS reconnection:** Single-connection multiplexing means UDS disconnect affects ALL clients. Relay should:
-- Queue client messages during brief UDS reconnect attempts (jittered backoff, matching existing pattern)
-- Disconnect all clients if UDS cannot be restored within timeout
-- This is simpler than old relay's per-session reconnect logic
-
-**Uses existing Asio UDS support** (`asio::local::stream_protocol::socket`) and existing Connection class patterns.
-
-**Confidence:** HIGH -- UDS already used, multiplexing is standard.
-
-## CMake Integration
-
-```cmake
-# In root CMakeLists.txt (new relay2 subdirectory):
-find_package(OpenSSL REQUIRED)
-
-add_subdirectory(relay2)
-
-# relay2/CMakeLists.txt:
-add_library(chromatindb_relay2_lib STATIC
-  asio_ssl.cpp         # asio/ssl/impl/src.hpp (separate compilation unit)
-  config/config.cpp
-  ws/handshake.cpp     # HTTP upgrade + WebSocket accept
-  ws/frame.cpp         # RFC 6455 frame read/write
-  ws/session.cpp       # Per-client WebSocket session lifecycle
-  json/codec.cpp       # JSON <-> FlatBuffers translation (38 types)
-  auth/challenge.cpp   # ML-DSA-87 challenge-response verify
-  core/relay.cpp       # Main relay logic, UDS multiplexing, subscription routing
-)
-
-target_include_directories(chromatindb_relay2_lib PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
-)
-
-target_link_libraries(chromatindb_relay2_lib PUBLIC
-  chromatindb_lib       # Reuse db/ for FlatBuffers codec, crypto, hex, identity
-  OpenSSL::SSL
-  OpenSSL::Crypto
-)
-```
-
-**What chromatindb_lib provides (no duplication):**
-- `TransportCodec::encode/decode` (FlatBuffers transport envelope)
-- `wire::encode_blob / decode_blob` (blob FlatBuffers codec)
-- `wire::TransportMsgType` enum and `is_client_allowed` filter logic
-- `crypto::sha3_256` (namespace derivation from pubkey)
-- `util::to_hex / from_hex` (hex encoding for JSON)
-- `identity::NodeIdentity` (relay's own signing identity)
-- `net::Connection` patterns (UDS connection to node)
-
-**OpenSSL is linked ONLY to the relay target**, not to the db target. The db binary remains OpenSSL-free.
+**Confidence:** HIGH -- extending existing config/reload pattern. No new libraries.
 
 ## Alternatives Considered
 
 | Recommended | Alternative | Why Not |
 |-------------|-------------|---------|
-| Hand-rolled WS (~150 lines) | Boost.Beast | Requires Boost.Asio namespace. Incompatible with standalone Asio. Would touch 34K LOC of frozen db/ code. |
-| Hand-rolled WS | beast-asio-standalone fork | Maintainer discourages use, tests broken, infrequent updates. |
-| Hand-rolled WS | WebSocket++ 0.8.2 | Broken with Asio 1.28+ executor changes (issue #794), callback-based, Boost needed for CMake. |
-| Hand-rolled WS | eidheim/Simple-WebSocket-Server | Uses Boost.Asio, C++11 callbacks, not coroutine-native. |
-| System OpenSSL (find_package) | FetchContent OpenSSL | OpenSSL is too large and OS-coupled for FetchContent. System package is correct. |
-| nlohmann/json (existing) | simdjson / RapidJSON | Already in project, adequate for relay message rates. YAGNI. |
-| Single multiplexed UDS | Per-client UDS (old pattern) | Wasteful -- each client opens separate node connection. Single connection with request_id mux is cleaner. |
+| SQLite FK + cascade for groups | Separate groups.json file | SQLite already in use for contacts, FK cascade handles cleanup automatically, atomic transactions for group + member ops |
+| 50 MiB client-side chunks + manifest | Streaming single-blob encryption | FlatBuffers requires complete data for serialization, node requires complete data for signing hash. Cannot stream a single blob |
+| 50 MiB chunk size | 10 MiB chunks | Too many blobs for large files (200 for 2 GB). More blobs = more metadata overhead, more signing operations |
+| 50 MiB chunk size | 100 MiB chunks | Higher peak memory per chunk (~300 MiB). 50 MiB keeps peak under 200 MiB |
+| Synchronous pipeline window | Full async/coroutine rewrite | CLI is short-lived tool, async complexity not justified. Synchronous pipeline achieves same throughput gain |
+| Pipeline depth 8 | Unbounded pipelining | Memory explosion with many large responses. 8 is proven sweet spot |
+| nlohmann/json config (existing) | TOML config | Node already uses JSON config. Using same format for consistency. No new dependency |
+| Config fields with SIGHUP | Environment variables | Inconsistent with existing node config pattern. Env vars cannot be reloaded without restart |
 
 ## What NOT to Use
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| Boost (any component) | Would contaminate standalone Asio codebase, massive dependency | Standalone Asio + hand-rolled WS |
-| libwebsockets | C library, callback-based, poor C++ integration | Hand-rolled WS |
-| uWebSockets | Brings its own event loop (us_loop), conflicts with Asio io_context | Hand-rolled WS |
-| Per-message deflate (WS extension) | JSON messages are small, adds complexity, TLS handles transport | Plain text frames |
-| Binary WS frames for JSON | Text frames (opcode 0x1) are correct for JSON per RFC 6455 | Text frames |
-| WebSocket subprotocol negotiation | Single protocol, no negotiation needed | Fixed JSON protocol |
-| OpenSSL in db/ target | Database node must remain OpenSSL-free (libsodium + liboqs only) | Link OpenSSL only to relay2 target |
-| PQ-authenticated transport (old pattern) | TLS is sufficient -- payloads are already PQ-signed blobs + PQ-encrypted envelopes | Standard TLS + challenge-response auth |
+| mmap for file reading | Complicates error handling (SIGBUS on truncated files), no benefit for sequential reads | `std::ifstream` with fixed-size buffer reads |
+| Separate database for groups | Unnecessary -- SQLite handles multiple tables in one file perfectly | Add tables to existing contacts.db |
+| SQLite WAL mode | CLI is single-process, single-thread access. WAL adds complexity for concurrent access that does not exist | Default journal mode (sufficient) |
+| Async Asio coroutines for CLI | CLI is a command-line tool, not a long-running server. Coroutine machinery adds complexity without benefit | Synchronous blocking I/O with pipeline window |
+| Thread pool for parallel downloads | Threading adds synchronization complexity. Pipeline window on single connection achieves the same throughput | Single-connection synchronous pipeline |
+| YAML/TOML for config | Different format from node's config.json. Would add a dependency | nlohmann/json (already used) |
+| SQLite ORM (sqlite_orm, etc.) | Additional dependency for simple CRUD. Raw sqlite3 API is already proven in contacts.cpp | Raw sqlite3_* C API |
+| Protocol changes for chunking | Node code is frozen. Chunking must be client-side only | CPAR/CMAN magic bytes in blob data |
 
 ## Version Compatibility
 
 | Package | Compatible With | Notes |
 |---------|-----------------|-------|
-| Standalone Asio 1.38.0 | OpenSSL 3.x | Asio SSL headers work with OpenSSL 1.1.x and 3.x. System OpenSSL 3.6.2 confirmed on build host. |
-| Standalone Asio 1.38.0 | `ASIO_SEPARATE_COMPILATION` | SSL needs its own `asio/ssl/impl/src.hpp` inclusion in one relay .cpp file. |
-| nlohmann/json 3.11.3 | C++20 | Full C++20 support, no issues. |
-| FlatBuffers 25.2.10 | Relay translation layer | Relay calls existing `encode_blob`/`decode_blob` + `TransportCodec`. No schema changes. |
-| liboqs 0.15.0 | Challenge-response auth | `OQS_SIG_verify` for ML-DSA-87. Already proven in db/ code. |
-| OpenSSL 3.6.2 (system) | Asio 1.38.0 SSL | Confirmed compatible. OpenSSL 3.x API used by Asio SSL. |
+| SQLite3 3.53.0 | Foreign key constraints | FK support since 3.6.19 (2009). Must enable with `PRAGMA foreign_keys = ON` per connection |
+| SQLite3 3.53.0 | `ON DELETE CASCADE` | Fully supported. Requires FK pragma enabled |
+| Standalone Asio 1.38.0 | Synchronous pipeline pattern | `send()` + `recv()` blocking calls work fine for pipelining. No async needed |
+| nlohmann/json 3.11.3 | Config extension | Adding fields to JSON parsing is trivial |
+| liboqs 0.15.0 | Per-chunk signing | Each chunk is independently signed with ML-DSA-87. No change to signing API |
+| libsodium (system) | Per-chunk envelope encryption | Each chunk is independently encrypted. Existing `envelope::encrypt()` works per chunk |
 
 ## Installation
 
 ```bash
-# System dependency (Arch Linux)
-sudo pacman -S openssl
-
-# No pip/npm/new FetchContent deps needed.
-# Everything else is already in CMakeLists.txt via FetchContent.
+# No new dependencies. Everything is already in cli/CMakeLists.txt.
+# The only change is adding new .cpp files for group commands and chunked file logic.
 ```
+
+## Integration Points
+
+### Contact Groups -> Envelope Encryption
+`--share @team` resolves group "team" -> member contacts -> KEM pubkeys -> `envelope::encrypt()` recipients.
+No changes to envelope code. Groups are purely a ContactDB concern.
+
+### Chunked Files -> Transport Layer
+Each chunk goes through the existing `Connection::send(MsgType::Data, ...)` path.
+If chunk envelope > 1 MiB, `Connection::send()` already uses chunked transport framing.
+Double framing is fine: application-level chunking (50 MiB file chunks) is orthogonal to transport-level chunking (1 MiB wire frames).
+
+### Pipelining -> Connection
+`Connection` already supports `request_id` on send and returns it on recv.
+Pipeline window is a higher-level pattern built ON TOP of the existing Connection API.
+No changes to Connection needed.
+
+### Node Config -> Existing SIGHUP Infrastructure
+New config fields are added to the existing `Config` struct, parsed in `load_config()`, validated in `validate_config()`, and propagated via the existing SIGHUP reload path.
 
 ## Sources
 
-- [Boost.Beast FAQ on standalone Asio](https://live.boost.org/doc/libs/1_87_0/libs/beast/doc/html/beast/design_choices/faq.html) -- confirms Beast requires Boost, not standalone Asio
-- [beast-asio-standalone fork](https://github.com/vimpunk/beast-asio-standalone) -- maintainer discourages use
-- [WebSocket++ standalone Asio compilation failure (issue #794)](https://github.com/zaphoyd/websocketpp/issues/794) -- broken with modern Asio executor model
-- [WebSocket++ CMake Boost dependency (issue #1099)](https://github.com/zaphoyd/websocketpp/issues/1099) -- open, unresolved
-- [OlivierLDff/asio.cmake](https://github.com/OlivierLDff/asio.cmake) -- CMake wrapper used by project, no SSL handling
-- [Standalone Asio SSL headers](https://github.com/chriskohlhoff/asio) -- full SSL support confirmed in asio/ssl/ directory
-- [Asio SSL documentation](https://dens.website/tutorials/cpp-asio/ssl-tls) -- TLS server pattern
-- [RFC 6455 WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455) -- server-side subset specification
-- [Boost.Beast vs WebSocket++ comparison](https://www.boost.org/doc/libs/1_86_0/libs/beast/doc/html/beast/design_choices/comparison_to_zaphoyd_studios_we.html) -- design differences
+- SQLite3 3.53.0 foreign key documentation: https://www.sqlite.org/foreignkeys.html -- verified FK pragma requirement (HIGH confidence)
+- chromatindb PROTOCOL.md request_id section -- confirms out-of-order response support (HIGH confidence)
+- Existing codebase: `cli/src/contacts.cpp` (SQLite patterns), `cli/src/connection.cpp` (transport), `cli/src/envelope.cpp` (segmented AEAD), `db/config/config.h` (config pattern) -- all verified via source inspection (HIGH confidence)
 
 ---
-*Stack research for: Relay v2 WebSocket/JSON/TLS Gateway*
-*Researched: 2026-04-09*
+*Stack research for: CLI Polish (v4.1.0)*
+*Researched: 2026-04-15*

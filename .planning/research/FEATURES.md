@@ -1,258 +1,207 @@
-# Feature Landscape: Relay v2 (WebSocket/JSON/TLS Gateway)
+# Feature Research: CLI Polish (v4.1.0)
 
-**Domain:** WebSocket relay gateway translating JSON clients to FlatBuffers database node
-**Researched:** 2026-04-09
-**Confidence:** HIGH (well-understood domain, existing node protocol frozen, clear architectural direction)
+**Domain:** Encrypted file-sharing CLI (comparable to age, GPG, croc, rclone, restic)
+**Researched:** 2026-04-15
+**Confidence:** HIGH
 
-## Context: What Already Exists
+## Feature Landscape
 
-The Relay v2 builds on top of a frozen, production-grade C++20 database node. Understanding what the node already provides defines the relay's scope.
+### Table Stakes (Users Expect These)
 
-| Existing Capability | Where | Relay Implication |
-|---------------------|-------|-------------------|
-| 63 wire message types (FlatBuffers) | `db/wire/transport_generated.h` | 38 client-allowed types need JSON translation |
-| Blocklist message filter (21 blocked types) | `relay/core/message_filter.h` | Reuse blocklist approach -- new node types pass through |
-| UDS local access (TrustedHello, no PQ) | `db/net/connection.h` | Relay connects to node via UDS with lightweight handshake |
-| request_id correlation (uint32) | Transport envelope | Map to JSON `id` field for request-response pairing |
-| Subscribe/Unsubscribe (namespace-scoped) | Types 19/20, 32-byte namespace IDs | Relay tracks per-client subscriptions for notification routing |
-| Notification fan-out (77-byte payload) | Type 21 | Relay must route notifications only to subscribed clients |
-| Per-connection send queue with drain | `db/net/connection.h` | Node already handles UDS send buffering |
-| ML-DSA-87 identity (2592-byte pubkeys) | `db/identity/identity.h` | Challenge-response auth uses relay's own identity |
+| Feature | Why Expected | Complexity | Notes |
+|---------|--------------|------------|-------|
+| Short executable name (`cdb`) | Every serious CLI tool uses a short name. `chromatindb-cli` is 15 chars -- unusable for daily work. GPG is 3 chars, age is 3, croc is 4, psql is 4. Smallstep's naming guide: ergonomics of typing matters, avoid shift key, avoid "tool/kit/util" suffixes. | LOW | Rename binary in CMakeLists.txt, update all usage strings and README. `cdb` collides with tinycdb (Dan Bernstein's constant database tool) but it is not installed by default on any major distro and is a completely different domain. Acceptable collision. |
+| Contact groups for batch sharing | GPG has `--group` in gpg.conf since GnuPG 2.0. age uses recipient files (`-R team.txt`). Every multi-recipient encryption tool provides some grouping mechanism. Typing `--share alice --share bob --share charlie` for every upload is painful and error-prone. | LOW | Purely local: new SQLite tables `groups` + `group_members`, new subcommands `cdb group create/add/rm/list/show`, resolve `--share @team` to member KEM pubkeys at encrypt time. Zero protocol changes. Zero node interaction. |
+| Chunked large file upload/download (>500 MiB) | restic chunks all files via CDC (512 KiB-8 MiB). rclone supports `--transfers N` parallel files and multi-threaded single-file uploads. croc streams files of any size via relay. Users moving backup archives, disk images, or video files expect multi-GiB to work. Current 500 MiB hard limit blocks real-world use cases. | HIGH | Split file into fixed-size chunks (50 MiB default), each independently envelope-encrypted. Requires CPAR manifest blob (chunk hashes + metadata). Download reads manifest first, then fetches chunks. Needs: manifest format, split logic, reassembly logic, progress reporting. No node changes -- each chunk is a regular blob. |
+| Request pipelining for parallel downloads | rclone defaults to `--transfers 4`. restic uses 2-5 concurrent file workers. croc uses multiple TCP ports for parallel data transfer. Sequential download of N chunks over a WAN link is unacceptably slow -- latency compounds linearly. | MEDIUM | The existing `Connection` class is synchronous (blocking `send`/`recv`). Pipelining requires sending N `ReadRequest` messages with distinct `request_id` values, then receiving responses in any order and dispatching by `request_id`. Needs a dedicated reader thread (simplest) or full async refactor (overkill). The wire format already has `request_id` -- this is HTTP/2-style multiplexing over a single AEAD channel. |
+| Progress reporting for large transfers | croc shows transfer progress with speed. rclone shows per-file progress with ETA. restic shows ETA + throughput. age does not (pipe-oriented). For multi-GiB files, silent operation = dead UX. | LOW | Track bytes sent/received against known total, print `\r`-overwritten line to stderr. Trivial implementation, high UX impact. |
 
-**Key architectural shift:** Old relay was per-client UDS (one UDS connection per client session). New relay uses a single multiplexed UDS connection to the node. This fundamentally changes how request routing works -- the relay must correlate responses from the node back to the correct WebSocket client.
+### Differentiators (Competitive Advantage)
 
-## Table Stakes
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| PQ-encrypted chunked files with per-chunk envelope encryption | No other CLI tool offers post-quantum encrypted chunked file transfer. age uses X25519 (classical). GPG uses RSA/ECC. restic uses AES-256-CTR. croc uses NaCl. This is unique for compliance-sensitive environments (CNSA 2.0, FIPS 203/204 transition). | Included in chunking work | Each chunk gets its own ML-KEM-1024 envelope. Chunk compromise does not reveal other chunks. Per-chunk independent key encapsulation. |
+| Named contact groups with `@group` syntax | GPG groups require editing gpg.conf manually with key fingerprints. age recipient files are loose text files with no validation. `cdb --share @engineering` with SQLite-backed groups and validated contacts is cleaner than either. | Included in groups work | Groups reference existing contacts in the SQLite database. Adding a contact to a group validates the contact exists and has a KEM pubkey. |
+| Group-aware reshare | `cdb reshare <hash> --share @newteam` re-encrypts an existing blob for a new group. No other tool in the comparison set has server-stored encrypted blobs with recipient rotation. | LOW | Existing `reshare` command already fetches, decrypts, re-encrypts. Just needs group resolution in the `--share` flag parser. |
+| Single-connection multiplexed pipelining | croc opens multiple TCP ports (9009-9013). rclone opens multiple backend connections. Both waste resources. `cdb` uses a single PQ-authenticated AEAD connection with `request_id` multiplexing -- zero extra handshakes, zero extra AEAD state. | Included in pipelining work | This is the HTTP/2 approach over a custom transport. More efficient than multi-connection, and preserves AEAD nonce ordering. |
 
-Features users expect. Missing any of these means the relay is non-functional or insecure.
+### Anti-Features (Commonly Requested, Often Problematic)
 
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| **WebSocket server (WSS)** | The entire point of the relay. Clients connect via standard WebSocket over TLS. Every browser, every language has a WebSocket client library. | LOW | Asio Beast WebSocket + asio::ssl |
-| **TLS termination** | WSS requires TLS. Config takes cert_path + key_path. No plaintext WebSocket option -- always TLS. | LOW | OpenSSL (via asio::ssl). Unavoidable for TLS. |
-| **JSON message format** | Clients send/receive JSON instead of binary FlatBuffers. Every message has `type`, `id` (request_id), and type-specific fields. Hex-encoded byte arrays for hashes/pubkeys/signatures. | MEDIUM | nlohmann/json (already in stack). 38 message types to define JSON schemas for. |
-| **JSON-to-FlatBuffers translation** | Relay converts inbound JSON to binary payloads the node understands, and outbound binary payloads to JSON for the client. This is the relay's core function. | HIGH | Must handle all 38 client-allowed message types. Each type has a unique wire format (documented in PROTOCOL.md). Most complex part of the relay. |
-| **ML-DSA-87 challenge-response auth** | Client proves identity by signing a random challenge with their ML-DSA-87 private key. Relay verifies signature. No PQ key exchange needed (TLS handles transport). | MEDIUM | liboqs for ML-DSA-87 verification. Challenge: relay sends 32 random bytes. Client returns pubkey + signature. Relay verifies. |
-| **Message type filtering** | Blocklist approach: block 21 peer-internal types (handshake, sync, PEX, internal signals), allow everything else. Same as old relay. Future node types pass through without relay changes. | LOW | Reuse existing blocklist logic from `relay/core/message_filter.h` |
-| **UDS connection to node** | Single UDS connection to the local chromatindb node. TrustedHello handshake (no PQ crypto to own node). | LOW | Existing UDS + TrustedHello code in `db/net/connection.h` |
-| **Request-response correlation** | Map client JSON `id` field to node's uint32 `request_id` in transport envelope. Route responses back to the correct WebSocket client. | MEDIUM | With multiplexed UDS: relay must maintain a mapping of {request_id -> client_session}. Allocate unique request_ids across all clients. |
-| **Subscription tracking** | Track which WebSocket clients are subscribed to which namespaces. When a Notification arrives from the node, route it only to subscribed clients. | MEDIUM | Per-client NamespaceSet (like old relay's `subscribed_namespaces_`). Intercept Subscribe/Unsubscribe JSON messages before forwarding to node. 256-namespace cap per client. |
-| **Notification routing** | When node sends Notification (type 21), extract namespace_id from first 32 bytes, look up which clients are subscribed, translate to JSON, and send to each. | MEDIUM | Depends on subscription tracking. Must be efficient -- O(subscribers) per notification, not O(clients). |
-| **Per-client bounded send queue** | Each WebSocket client gets a bounded outbound message queue. When the queue fills (client not reading fast enough), disconnect the client. Prevents slow clients from consuming unbounded relay memory. | MEDIUM | Queue cap (e.g., 1024 messages). Backpressure strategy: disconnect on overflow. No dropping -- chromatindb messages are not idempotent/replaceable. |
-| **Connection lifecycle management** | Accept WebSocket upgrade, run auth challenge, create session, forward messages, handle disconnect/timeout, clean up state. | MEDIUM | State machine: UPGRADING -> AUTHENTICATING -> ACTIVE -> CLOSING. Timeouts for auth (e.g., 10s). Graceful Goodbye forwarding. |
-| **Graceful shutdown** | SIGTERM/SIGINT: stop accepting new connections, send WebSocket close frames to all clients, wait for in-flight messages to drain, then exit. | LOW | Standard pattern. Close acceptor, iterate sessions, send close, wait with timeout, force-close stragglers. |
-| **Configuration** | JSON config file: bind address, port, TLS cert/key paths, UDS path, log level, log file, max connections. Fail-fast validation on startup. | LOW | Same pattern as old relay + node config. Add TLS fields. |
-| **Logging** | Structured logging with client identity (pubkey hash hex), connection events, auth results, errors. spdlog. | LOW | Same as old relay. Per-session context (pubkey hash, remote address). |
-
-## Differentiators
-
-Features that are not strictly required for function but significantly improve operational quality or developer experience.
-
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| **Multiplexed UDS (single connection)** | Old relay opened one UDS per client. With 100 clients, that was 100 UDS connections to the node, each with its own AEAD state. Single multiplexed UDS dramatically reduces node connection overhead. | HIGH | Core architectural decision. Requires request_id multiplexing, subscription aggregation on the node side, and careful response routing. This is the hardest feature in the relay. |
-| **SIGHUP config reload** | Reload TLS certs, log level, max connections without restart. Zero-downtime cert rotation. Operators expect this from the node -- relay should match. | LOW | Same coroutine-based SIGHUP pattern as the node. TLS context can be swapped atomically. |
-| **Health check endpoint** | HTTP GET /health on the WebSocket port (or separate port). Returns 200 if relay is connected to node and accepting clients. Useful for load balancers, monitoring. | LOW | Beast already handles HTTP upgrade -- non-upgrade GET requests can return health status before WebSocket handshake. |
-| **Prometheus /metrics endpoint** | HTTP GET /metrics with relay-specific counters: active clients, messages forwarded, auth failures, queue overflows, node connection status. Matches node's existing Prometheus endpoint. | LOW | Same pattern as node's `db/peer/metrics_collector.h`. Share counter naming convention (chromatindb_relay_ prefix). |
-| **Rate limiting per client** | Per-client message rate limiting (token bucket). Prevents a single client from flooding the relay and consuming all UDS bandwidth. | LOW | Same token bucket pattern as node's rate limiter. Configurable rate/burst per client. |
-| **Connection limits** | Max total connections, max connections per IP. Prevents resource exhaustion from connection floods. | LOW | Atomic counter for total. unordered_map<ip, count> for per-IP. Reject with HTTP 503 before WebSocket upgrade. |
-| **Auth timeout** | If client does not complete challenge-response within N seconds after WebSocket upgrade, disconnect. Prevents lingering unauthenticated connections. | LOW | Timer started at upgrade, cancelled on auth success. Default 10s. |
-| **Binary payload encoding** | JSON uses hex strings for byte arrays (hashes, pubkeys, signatures). This is human-readable but verbose. Support optional base64 encoding for large payloads (blob data, signatures) to reduce JSON size. Hex for 32-byte hashes, base64 for large fields. | LOW | Convention decision: hex for fixed-size identifiers (namespace_id, blob_hash), base64 for variable-length data (blob data, pubkey, signature). Document clearly. |
-| **UDS auto-reconnect** | If UDS connection to node drops, attempt reconnection with jittered backoff. During reconnect, hold client connections open (or send error). Better than immediately disconnecting all clients. | MEDIUM | Old relay had this (ACTIVE/RECONNECTING/DEAD lifecycle). Reimplement for multiplexed UDS. During RECONNECTING, queue or reject client messages. |
-
-## Anti-Features
-
-Features to explicitly NOT build. Each has been considered and rejected with rationale.
-
-| Anti-Feature | Why Tempting | Why Wrong | What to Do Instead |
-|--------------|-------------|-----------|-------------------|
-| **Per-client UDS connections** | Old relay did this. Simple 1:1 mapping. No multiplexing complexity. | Does not scale. 100 clients = 100 UDS connections = 100 TrustedHello handshakes = 100 AEAD states on the node. Node already has connection dedup logic that would interfere. | Single multiplexed UDS. Harder to build, dramatically better at scale. |
-| **WebSocket subprotocol negotiation** | RFC 6455 supports subprotocol negotiation. Could offer "chromatindb-json-v1" as a subprotocol. | Unnecessary complexity. There is exactly one protocol. No negotiation needed. Just use JSON over the WebSocket connection. Adding subprotocol headers adds nothing. | No subprotocol. JSON messages on the WebSocket. Period. |
-| **Message compression (permessage-deflate)** | WebSocket extension for per-message compression. Could reduce bandwidth. | Blob data is already encrypted (envelope encryption) -- encrypted data is incompressible. The JSON overhead for metadata messages is small. permessage-deflate adds CPU cost and memory per connection (zlib context). Node already decided wire compression is Out of Scope for this exact reason. | No compression. Encrypted payloads are incompressible. Metadata messages are small enough. |
-| **Binary WebSocket frames** | WebSocket supports both text (UTF-8) and binary frames. Could send binary for efficiency. | Defeats the purpose of the relay. The entire point is JSON accessibility -- any language, any tool (wscat, browser console) can interact. Binary frames require a codec. | Text frames only. JSON. Human-readable. Debuggable with standard tools. |
-| **HTTP REST API alongside WebSocket** | "Support both REST and WebSocket for flexibility." | Duplicates the entire message handling surface. REST requires separate request routing, cannot do pub/sub notifications, and adds a whole HTTP handler layer. The WebSocket JSON protocol already covers all operations. | WebSocket only (plus /health and /metrics as plain HTTP). All operations go through WebSocket. |
-| **Client-side keepalive (application-level)** | Old relay's PQ transport had Ping/Pong at the application layer. Could add JSON ping/pong. | WebSocket protocol has built-in Ping/Pong frames (opcode 0x9/0xA). Beast handles these automatically. Application-level keepalive is redundant. | Use WebSocket-level Ping/Pong. Beast's `auto_ping` or manual ping timer. No JSON-level keepalive. |
-| **Authentication via HTTP headers/tokens** | JWT, API keys, bearer tokens in the HTTP upgrade request. Standard for many WebSocket APIs. | chromatindb's identity model is ML-DSA-87 keypairs, not tokens. Adding a token layer would require a separate auth service, token issuance, token validation -- none of which exist. The challenge-response auth over WebSocket is simple and proves cryptographic identity. | Challenge-response over WebSocket after upgrade. Client proves they hold the ML-DSA-87 private key. No tokens, no external auth service. |
-| **Multi-node relay (connect to multiple db nodes)** | "Relay could load-balance across multiple nodes." | A relay is a gateway to ONE node. Multi-node would require routing logic, consistency decisions, and breaks the simple gateway model. The node's own peer mesh handles replication. | One relay = one node. Deploy multiple relays if needed (one per node). |
-| **Message queuing during UDS reconnect** | "Buffer client messages while reconnecting to node, replay when reconnected." | Unbounded memory risk. Clients could send megabytes of blob data during reconnect window. Order-sensitive protocol state could be violated. | Reject messages with an error response during RECONNECTING state. Client retries. Simple and safe. |
-| **Relay-to-relay communication** | "Relays should discover each other for redundancy." | Relay is a stateless gateway. It has no data to share with other relays. Client failover is the client's responsibility (connect to a different relay). | Independent relay instances. No relay mesh. Client decides which relay to connect to. |
-| **Automatic TLS cert provisioning (ACME/Let's Encrypt)** | "Relay should auto-provision TLS certs." | Adds HTTP-01/DNS-01 challenge handling, cert storage, renewal timers, ACME client library. Massive scope increase for something that certbot/caddy handle externally. | Operator provides cert_path + key_path. Use certbot/systemd timer externally. SIGHUP to reload new certs. |
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| Content-defined chunking (CDC) like restic | Deduplication across uploads, bandwidth savings on modified files | Massive complexity (Rabin fingerprint rolling hash, chunk index, dedup database). restic does CDC because dedup is its core value. For an encrypted blob store, each upload gets a fresh DEK + fresh ML-KEM encapsulation, so identical plaintext produces different ciphertext. ML-DSA-87 signatures are non-deterministic. Dedup is cryptographically impossible. | Fixed-size chunks (50 MiB). Simple, predictable, no dedup pretense. |
+| Parallel upload of multiple files in one command | `cdb put file1 file2 file3` with concurrent uploads | Each put requires ML-DSA-87 sign + ML-KEM encapsulate per recipient, which is CPU-bound (~10ms per recipient per chunk). Parallelizing requires thread pool for crypto + async network. Upload is CPU-bottlenecked, not I/O-bottlenecked. Over-engineering for v4.1.0. | Sequential put for multiple files. Parallel download (pipelining) is more valuable since download is I/O-bound. |
+| Auto-discovery of recipients from node | "Encrypt for all contacts on the node" | Dangerous default. Accidentally sharing with wrong people. Requires fetching all pubkeys from all namespaces, which is expensive and leaks who exists on the node. | Explicit `--share @group` or `--share name`. Never auto-share. |
+| Recursive directory upload | `cdb put ./mydir/` | Would need tar/zip, directory structure manifest, or per-file upload with metadata. Huge scope creep. age, GPG, croc all do not handle directories natively -- they rely on tar pipes. | `tar cf - mydir \| cdb put --stdin --share @team`. Document the pattern. |
+| Compression before encryption | Save bandwidth and storage | Standard practice (restic, rclone both compress before encrypting). However, adding zstd/brotli to CLI increases binary size and build deps. The node already has Brotli envelope support (suite 0x02) but CLI does not use it. Encrypted data is incompressible so compression must happen before encryption. | Defer to v4.2.0. Can be added as new envelope suite without protocol changes. Users can `zstd file && cdb put file.zst` today. |
+| Multi-connection parallel transfer | Open N TCP connections for throughput | Each connection requires a full PQ handshake (ML-KEM-1024 encapsulate + ML-DSA-87 sign), ~50ms. N connections = N AEAD states, N nonce counters, N send/recv buffers. Complexity for marginal gain on a single link. | Single connection with `request_id` multiplexing. Same throughput, less overhead. |
+| Streaming single-blob encryption (avoid buffering 500 MiB) | Memory efficiency for large single blobs | Blocked by FlatBuffer serialization requiring full blob data field at construction time. Would need a protocol change to support streaming writes (new message type for incremental data). The chunked approach solves this differently: each 50 MiB chunk fits in memory comfortably. | Chunked files. Each chunk is 50 MiB which is well within memory budget. The chunking approach removes the need for true streaming. |
 
 ## Feature Dependencies
 
 ```
-[WebSocket server (WSS)]
-    |
-    +--requires--> [TLS termination]
-    |
-    +--enables--> [Connection lifecycle management]
-                      |
-                      +--enables--> [Challenge-response auth]
-                      |                 |
-                      |                 +--enables--> [Session creation (ACTIVE state)]
-                      |
-                      +--enables--> [JSON message forwarding]
-                                        |
-                                        +--requires--> [JSON-to-FlatBuffers translation]
-                                        |
-                                        +--requires--> [Message type filtering]
-                                        |
-                                        +--requires--> [Request-response correlation]
-                                        |                   |
-                                        |                   +--requires--> [Multiplexed UDS]
-                                        |
-                                        +--requires--> [Subscription tracking]
-                                        |                   |
-                                        |                   +--enables--> [Notification routing]
-                                        |
-                                        +--requires--> [Per-client bounded send queue]
+[Executable Rename (cdb)]
+    (no dependencies -- build system only)
 
-[Multiplexed UDS]
-    |
-    +--requires--> [UDS connection to node]
-    |
-    +--enables--> [UDS auto-reconnect]
-    |
-    +--requires--> [Request ID allocation + response routing]
+[Contact Groups]
+    (no dependencies -- purely local SQLite)
 
-[Configuration]
-    +--enables--> [SIGHUP config reload]
+[Chunked Large Files]
+    requires --> [CPAR Manifest Format] (chunk metadata storage)
+    requires --> [Request Pipelining] (parallel chunk download)
+    requires --> [Progress Reporting] (unusable without progress for multi-GiB)
 
-[Logging]
-    (standalone, no dependencies)
+[Request Pipelining]
+    requires --> [Reader Thread / Async Recv] (cannot pipeline with synchronous recv)
+    enhances --> [Chunked Large Files] (parallel chunk download)
+    enhances --> [get with multiple hashes] (parallel blob download)
 
-[Graceful shutdown]
-    +--requires--> [Connection lifecycle management]
+[Progress Reporting]
+    enhances --> [Chunked Large Files]
+    enhances --> [get / put for any large blob]
 ```
 
-### Critical Path
+### Dependency Notes
 
-The hardest dependency chain is:
+- **Chunked Large Files requires Request Pipelining:** Downloading a 2 GiB file split into 40 chunks (50 MiB each) sequentially over a WAN link with 50ms RTT adds 2 seconds of pure latency overhead (40 round-trips). With 4-way pipelining, that drops to 500ms. Without pipelining, chunked download is a performance regression vs. the current single-blob approach.
+- **Request Pipelining requires async recv:** The current `Connection::recv()` blocks until one message arrives. To handle out-of-order responses for pipelined requests, the CLI needs a reader thread that receives messages and dispatches them by `request_id` to waiting callers. The send path stays synchronous (simpler, preserves AEAD nonce ordering).
+- **Chunked Large Files requires CPAR manifest:** A chunked file needs metadata so `cdb get` knows which blobs to fetch and in what order. The manifest blob stores: original filename, total size, chunk size, chunk count, ordered list of chunk `blob_hash` values. The manifest itself is envelope-encrypted with the same recipients as chunks.
+- **Contact Groups and Executable Rename have no dependencies:** Can be implemented first, independently, in any order. These are the quick wins.
 
-1. Multiplexed UDS with request_id routing (HIGH complexity)
-2. JSON-to-FlatBuffers translation for 38 message types (HIGH complexity, HIGH volume of work)
-3. Subscription tracking + notification routing on multiplexed UDS (MEDIUM complexity)
+## MVP Definition
 
-Everything else is LOW complexity and follows established patterns from the existing codebase.
+### Launch With (v4.1.0)
 
-## MVP Recommendation
+- [ ] Executable rename to `cdb` -- removes daily typing friction
+- [ ] Contact groups (`group create/add/rm/list/show`, `--share @groupname`) -- resolves most common multi-recipient pain
+- [ ] Chunked large file upload with CPAR manifest (50 MiB default chunks) -- removes 500 MiB ceiling
+- [ ] Request pipelining for parallel chunk download (reader thread + `request_id` dispatch, 4 concurrent requests) -- makes chunked download performant
+- [ ] Progress reporting for put/get of large files -- table stakes UX
 
-### Phase 1: Foundation (build order matters)
+### Add After Validation (v4.2.0)
 
-Prioritize in this order:
+- [ ] Compression before encryption (zstd, new envelope suite 0x03) -- when storage costs become a complaint
+- [ ] Configurable chunk size (`--chunk-size 50M`) -- when users hit specific network/memory profiles
+- [ ] Configurable pipeline depth (`--parallel 8`) -- when default 4 is insufficient for high-latency links
+- [ ] `cdb get --all <namespace>` bulk download -- when users need full namespace export
 
-1. **WebSocket server with TLS** -- the transport layer everything else sits on
-2. **Challenge-response authentication** -- must happen before any messages flow
-3. **UDS connection to node** -- single multiplexed connection
-4. **JSON message format definition** -- define the JSON schema for all 38 types
-5. **Configuration + logging** -- operational basics
+### Future Consideration (v5+)
 
-### Phase 2: Core Protocol
+- [ ] Parallel multi-file upload -- when users report slow batch uploads of many small files
+- [ ] Interactive TUI mode -- when CLI becomes primary daily interface
+- [ ] Recursive directory support via tar integration -- when directory workflows become common
 
-6. **JSON-to-FlatBuffers translation** -- the bulk of the work, type by type
-7. **Request-response correlation** -- request_id allocation and response routing
-8. **Message type filtering** -- blocklist, same as old relay
-9. **Per-client bounded send queue** -- backpressure
+## Feature Prioritization Matrix
 
-### Phase 3: Pub/Sub + Lifecycle
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Executable rename (`cdb`) | HIGH | LOW | P1 |
+| Contact groups | HIGH | LOW | P1 |
+| Progress reporting | MEDIUM | LOW | P1 |
+| Request pipelining (reader thread) | HIGH | MEDIUM | P1 |
+| Chunked large files (CPAR manifest) | HIGH | HIGH | P1 |
+| Compression before encryption | MEDIUM | MEDIUM | P2 |
+| Configurable chunk size | LOW | LOW | P2 |
+| Parallel multi-file upload | LOW | MEDIUM | P3 |
+| Recursive directory upload | LOW | HIGH | P3 |
 
-10. **Subscription tracking** -- intercept Subscribe/Unsubscribe
-11. **Notification routing** -- route notifications to subscribed clients
-12. **Connection lifecycle management** -- auth timeouts, graceful disconnect
-13. **Graceful shutdown** -- SIGTERM handling
+## Competitor Feature Analysis
 
-### Phase 4: Operational Polish
+| Feature | age | GPG | croc | rclone | restic | cdb (planned) |
+|---------|-----|-----|------|--------|--------|---------------|
+| **Recipient groups** | `-R file` (text files, no named groups) | `--group` in gpg.conf (named key ID aliases) | N/A (ephemeral code pairing) | N/A (config-level remotes) | N/A (single-user backup) | SQLite contact groups, `@name` syntax |
+| **Large file handling** | 64 KiB STREAM chunks, constant memory | Streams natively, no size limit | Streaming TCP relay, parallel ports | Multi-threaded per-file, `--transfers N` | CDC 512 KiB-8 MiB, pack files | 50 MiB envelope-encrypted chunks, CPAR manifest |
+| **Parallel transfers** | No (pipe-oriented) | No (single operation) | Yes (multi-port TCP, 9009-9013) | Yes (`--transfers 4` default) | Yes (2-5 concurrent workers) | Yes (`request_id` pipelining, single connection) |
+| **Streaming encryption** | Yes (64 KiB chunks, constant memory) | Yes (native streaming) | Yes (relay-mediated) | Yes (NaCl SecretBox 64 KiB chunks) | Yes (CDC + pack buffering) | Per-chunk (50 MiB in memory per chunk) |
+| **Post-quantum crypto** | No (X25519) | No (RSA/ECC) | No (PAKE + NaCl) | No (NaCl SecretBox) | No (AES-256) | Yes (ML-KEM-1024, ML-DSA-87, SHA3-256) |
+| **Executable name** | 3 chars | 3 chars | 4 chars | 6 chars | 6 chars | 3 chars |
+| **Progress reporting** | No | No | Yes (speed + progress) | Yes (detailed, per-file) | Yes (ETA + speed) | Planned |
+| **Contact/key management** | None (external files) | Keyring + trust model | None (ephemeral codes) | Config-level | None (repo keys) | SQLite contacts + named groups |
 
-14. **Health check endpoint** -- /health
-15. **Prometheus /metrics** -- operational observability
-16. **SIGHUP config reload** -- zero-downtime cert rotation
-17. **Rate limiting** -- per-client throttling
-18. **Connection limits** -- max total, max per-IP
-19. **UDS auto-reconnect** -- resilience
+## Design Decisions from Ecosystem Research
 
-### Defer
+### Chunk Size: 50 MiB (not 64 KiB like age, not CDC like restic)
 
-- **Binary payload encoding (base64):** Nice optimization, not needed for correctness. Add when someone complains about JSON size.
-- **Auth timeout:** Can use WebSocket-level idle timeout initially. Dedicated auth timeout is polish.
+age uses 64 KiB because it targets streaming to stdout with constant memory and seekable random access. restic uses CDC (512 KiB-8 MiB) for dedup. Neither applies here.
 
-## Message Type Translation Inventory
+chromatindb stores blobs on a node -- each chunk is a separate blob with full envelope overhead: 20-byte header + 1648 bytes per recipient stanza + 16 bytes AEAD tag per 1 MiB segment. At 64 KiB per chunk, a 1 GiB file produces 16,384 blobs requiring 16,384 separate ML-KEM encapsulations (~10ms each = 164 seconds of pure CPU time for a single recipient). At 50 MiB per chunk, 1 GiB produces 20 blobs with 20 encapsulations (~200ms). The overhead difference is 3 orders of magnitude.
 
-The 38 client-allowed message types, grouped by translation complexity:
+50 MiB fits comfortably in memory (well under the 500 MiB single-blob limit the node already handles). The per-chunk envelope overhead (1648 bytes/recipient) is negligible relative to 50 MiB of data.
 
-### Simple (fixed-size, straightforward mapping) -- 20 types
+**Decision: 50 MiB default chunk size.** Balances blob count, crypto overhead, and memory use.
 
-| Type | Name | Direction | Wire Size | JSON Fields |
-|------|------|-----------|-----------|-------------|
-| 5 | Ping | C->N | 0 | `{}` |
-| 6 | Pong | N->C | 0 | `{}` |
-| 7 | Goodbye | Both | 0 | `{}` |
-| 18 | DeleteAck | N->C | 0 | `{}` |
-| 35 | StatsRequest | C->N | 32 | namespace_id (hex) |
-| 36 | StatsResponse | N->C | 24 | blob_count, total_bytes, quota_bytes |
-| 37 | ExistsRequest | C->N | 64 | namespace_id, blob_hash (hex) |
-| 38 | ExistsResponse | N->C | 33 | exists (bool), blob_hash (hex) |
-| 39 | NodeInfoRequest | C->N | 0 | `{}` |
-| 43 | StorageStatusRequest | C->N | 0 | `{}` |
-| 44 | StorageStatusResponse | N->C | 44 | fields as integers |
-| 45 | NamespaceStatsRequest | C->N | 32 | namespace_id (hex) |
-| 46 | NamespaceStatsResponse | N->C | 41 | found, count, bytes, quota, seq |
-| 47 | MetadataRequest | C->N | 64 | namespace_id, blob_hash (hex) |
-| 49 | BatchExistsRequest | C->N | 36+N*32 | namespace_id, hashes[] (hex) |
-| 50 | BatchExistsResponse | N->C | N bytes | results[] (bool) |
-| 51 | DelegationListRequest | C->N | 32 | namespace_id (hex) |
-| 55 | PeerInfoRequest | C->N | 0 | `{}` |
-| 57 | TimeRangeRequest | C->N | 52 | namespace_id, start, end, limit |
+### Pipelining: Request ID Multiplexing Over Single Connection
 
-### Medium (variable-size, structured response) -- 12 types
+croc opens multiple TCP ports (9009-9013). rclone opens N backend connections (default 5). HTTP/2 multiplexes streams over a single TCP connection.
 
-| Type | Name | Direction | Notes |
-|------|------|-----------|-------|
-| 19 | Subscribe | C->N | Namespace list encoding |
-| 20 | Unsubscribe | C->N | Namespace list encoding |
-| 21 | Notification | N->C | 77-byte fixed, but relay intercepts for routing |
-| 30 | WriteAck | N->C | 41-byte, blob_hash + seq + status |
-| 31 | ReadRequest | C->N | 64-byte, namespace + hash |
-| 33 | ListRequest | C->N | 44-byte, namespace + cursor + limit |
-| 34 | ListResponse | N->C | Variable, array of hash+seq pairs |
-| 40 | NodeInfoResponse | N->C | Variable, length-prefixed strings + arrays |
-| 42 | NamespaceListResponse | N->C | Variable, namespace array + cursor |
-| 52 | DelegationListResponse | N->C | Variable, pk_hash+blob_hash pairs |
-| 56 | PeerInfoResponse | N->C | Trust-gated, variable |
-| 58 | TimeRangeResponse | N->C | Variable, hash+seq+timestamp triples |
+The chromatindb wire format already has a `request_id` field in every `TransportMessage`. This is purpose-built for multiplexing. The AEAD nonce counter is per-connection and monotonically increasing -- sending multiple requests is safe as long as sends are serialized (which they are on a single thread). Responses arrive asynchronously and are dispatched by `request_id`.
 
-### Complex (FlatBuffers encoding/decoding, large payloads) -- 6 types
+**Decision: Single connection, `request_id` multiplexing, dedicated reader thread.** Reader thread runs `recv()` in a loop, places responses into per-request-id queues (or a concurrent map). Sender thread fires N ReadRequests, then waits on its specific response queue. Default concurrency: 4 in-flight requests (matches rclone default).
 
-| Type | Name | Direction | Notes |
-|------|------|-----------|-------|
-| 8 | Data | C->N | FlatBuffer Blob. Must construct from JSON fields (namespace, pubkey, data, ttl, timestamp, signature). Largest payload (up to 100 MiB data field). |
-| 17 | Delete | C->N | FlatBuffer Blob (tombstone). Same encoding as Data but with tombstone magic + target hash. |
-| 32 | ReadResponse | N->C | Status byte + optional FlatBuffer Blob. Must decode Blob fields to JSON. |
-| 48 | MetadataResponse | N->C | Variable, includes pubkey (2592 bytes as hex = 5184 chars). |
-| 53 | BatchReadRequest | C->N | namespace + cap_bytes + count + hashes |
-| 54 | BatchReadResponse | N->C | Truncated flag + multiple status+hash+data entries. Most complex response. |
+### Group Storage: SQLite Tables (not flat files like age)
 
-### Translation Strategy
+age uses flat text files for recipient lists. GPG uses gpg.conf lines with key fingerprints. Both are fragile: no validation, no referential integrity, easy to have stale entries.
 
-All binary byte arrays in JSON use lowercase hex encoding. Rationale:
-- 32-byte hash -> 64-char hex string (manageable)
-- 2592-byte pubkey -> 5184-char hex string (large but acceptable for JSON)
-- Blob data (up to 100 MiB) -> base64 encoding (hex would double an already large payload)
+chromatindb already has a SQLite contact database at `~/.chromatindb/contacts.db`. Groups are a natural extension:
 
-**Decision: hex for fixed identifiers, base64 for blob data and signatures.** This balances human readability for identifiers with reasonable size for large payloads.
+```sql
+CREATE TABLE groups (
+    name TEXT PRIMARY KEY
+);
+CREATE TABLE group_members (
+    group_name TEXT REFERENCES groups(name) ON DELETE CASCADE,
+    contact_name TEXT REFERENCES contacts(name) ON DELETE CASCADE,
+    PRIMARY KEY (group_name, contact_name)
+);
+```
+
+Adding a contact to a group validates the contact exists. Deleting a contact cascades to group membership. Atomic operations. No stale references.
+
+**Decision: SQLite `groups` + `group_members` tables.** Consistent with existing contact storage.
+
+### Manifest Format: Envelope-Encrypted CPAR Blob
+
+A chunked file needs a manifest so `cdb get` can discover and reassemble chunks. The manifest is a regular blob with CPAR magic (0x43504152) containing:
+
+```
+CPAR (4 bytes magic)
+version (1 byte, 0x01)
+chunk_size (4 bytes BE, e.g., 52428800 for 50 MiB)
+total_size (8 bytes BE, original file size)
+chunk_count (4 bytes BE)
+filename_len (2 bytes BE)
+filename (UTF-8, variable)
+chunk_hashes (chunk_count * 32 bytes, ordered SHA3-256 blob hashes)
+```
+
+The manifest is then envelope-encrypted (CENV wrapping CPAR) with the same recipients as the chunks. This means:
+- The file structure (name, size, chunk list) is encrypted -- not leaked to the node
+- `cdb get <manifest_hash>` fetches and decrypts the manifest, then fetches chunks by hash
+- The manifest is small (< 2 KiB for typical files) so the overhead is negligible
+
+**Decision: CPAR magic, envelope-encrypted manifest.** Keeps metadata confidential while enabling chunk discovery.
 
 ## Sources
 
-- [Boost.Beast WebSocket documentation](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket.html)
-- [Beast async-ssl WebSocket server example](https://www.boost.org/doc/libs/master/libs/beast/example/websocket/server/async-ssl/websocket_server_async_ssl.cpp)
-- [WebSocket best practices for production (WebSocket.org)](https://websocket.org/guides/best-practices/)
-- [JSON event-based convention for WebSockets (Thoughtbot)](https://thoughtbot.com/blog/json-event-based-convention-websockets)
-- [Backpressure in WebSocket Streams (Skyline Codes)](https://skylinecodes.substack.com/p/backpressure-in-websocket-streams)
-- [WebSocket architecture best practices (Ably)](https://ably.com/topic/websocket-architecture-best-practices)
-- [WebSocket security: auth, TLS, rate limiting (WebSocket.org)](https://websocket.org/guides/security/)
-- [How to handle WebSocket rate limiting (OneUptime)](https://oneuptime.com/blog/post/2026-01-24-websocket-rate-limiting/view)
-- [How to handle graceful shutdown for WebSocket servers (OneUptime)](https://oneuptime.com/blog/post/2026-02-02-websocket-graceful-shutdown/view)
-- [Protocol translation patterns (OneUptime)](https://oneuptime.com/blog/post/2026-01-30-protocol-translation/view)
-- [PQ session protocol with ML-KEM + ML-DSA (Frontiers in Physics)](https://www.frontiersin.org/journals/physics/articles/10.3389/fphy.2025.1723966/full)
+- [age specification (C2SP)](https://github.com/C2SP/C2SP/blob/main/age.md) -- STREAM encryption, 64 KiB chunks, nonce format
+- [age GitHub](https://github.com/FiloSottile/age) -- recipient files, no built-in named groups
+- [age streaming encryption (DeepWiki)](https://deepwiki.com/FiloSottile/age/3.3-key-management) -- chunk structure, constant memory
+- [GPG Key-related Options](https://www.gnupg.org/documentation/manuals/gnupg/GPG-Key-related-Options.html) -- `--group` in gpg.conf
+- [GPG group feature tutorial (GPGTools)](https://gpgtools.tenderapp.com/kb/how-to/how-to-use-the-group-feature-to-encrypt-content-to-multiple-public-keys-by-using-a-single-address) -- group encryption workflow
+- [croc GitHub](https://github.com/schollz/croc) -- parallel multi-port TCP, streaming relay, PAKE
+- [rclone crypt documentation](https://rclone.org/crypt/) -- NaCl SecretBox, 64 KiB chunks
+- [rclone global flags](https://rclone.org/flags/) -- `--transfers` parallel file control
+- [rclone multi-threaded transfers](https://rcloneview.com/support/blog/multi-threaded-transfers-parallel-streams-rcloneview) -- per-file threading
+- [restic CDC foundation](https://restic.net/blog/2015-09-12/restic-foundation1-cdc/) -- content-defined chunking, 512 KiB-8 MiB
+- [restic tuning documentation](https://restic.readthedocs.io/en/stable/047_tuning_backup_parameters.html) -- read concurrency, backend connections
+- [restic restore concurrency issue](https://github.com/restic/restic/issues/5339) -- file-write concurrency discussion
+- [magic-wormhole file transfer protocol](https://magic-wormhole.readthedocs.io/en/latest/file-transfer-protocol.html) -- Transit object, memory limitations
+- [magic-wormhole large file issues](https://github.com/magic-wormhole/magic-wormhole/issues/327) -- RAM buffering for large files
+- [tinycdb man page](https://man.archlinux.org/man/cdb.1.en) -- `cdb` name collision assessment
+- [CLI naming conventions (Smallstep)](https://smallstep.com/blog/the-poetics-of-cli-command-names/) -- short names, ergonomics, typing feel
+- [CLI design guidelines](https://clig.dev/) -- naming, structure, subcommand patterns
+- [HTTP/2 multiplexing](https://blog.codavel.com/http2-multiplexing) -- stream muxing pattern for pipelining design
 
 ---
-*Feature research for: Relay v2 WebSocket/JSON/TLS Gateway (chromatindb v3.0.0)*
-*Researched: 2026-04-09*
+*Feature research for: chromatindb CLI Polish v4.1.0*
+*Researched: 2026-04-15*

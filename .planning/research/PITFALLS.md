@@ -1,262 +1,262 @@
 # Pitfalls Research
 
-**Domain:** WebSocket/JSON/TLS gateway relay for a FlatBuffers/AEAD binary protocol node (chromatindb Relay v2)
-**Researched:** 2026-04-09
-**Confidence:** HIGH (Asio Beast behavior verified via official docs + GitHub issues; binary-JSON translation pitfalls verified against existing wire protocol in PROTOCOL.md; backpressure/multiplexing pitfalls verified from existing codebase patterns and distributed systems literature)
+**Domain:** CLI polish features for chromatindb -- contact groups, chunked large files (>500 MiB), request pipelining, configurable node constants
+**Researched:** 2026-04-15
+**Confidence:** HIGH (verified against existing codebase envelope.cpp, connection.cpp, contacts.cpp, framing.h, config.h, peer_manager.h; streaming AEAD pitfalls verified via ImperialViolet, Google Tink docs, libsodium docs; AEAD nonce desync verified via hpke-js CVE GHSA-73g8-5h73-26h4 and existing node PEX SIGSEGV post-mortem; SQLite migration pitfalls verified via SQLite forum and ALTER TABLE docs)
 
 ## Critical Pitfalls
 
-### Pitfall 1: Beast WebSocket one-async-write-at-a-time rule
+### Pitfall 1: Streaming envelope encryption -- truncation attack from missing last-segment marker
 
 **What goes wrong:**
-Beast's `websocket::stream` asserts (then crashes) if a second `async_write` is initiated while one is already pending, even when both calls are on the same strand. This is not about thread safety -- strands serialize execution but do not prevent a coroutine from calling `async_write` while a previous `async_write` from a different coroutine is still in flight. In the relay, the node-to-client forwarding path and a concurrent Ping/challenge-response could both try to write to the same WebSocket stream simultaneously.
+The current envelope format (CENV v1) has no explicit last-segment marker. Segment count is implicit from `ciphertext_region = envelope_size - 20 - (N * 1648)`. For files stored as a single blob on the node, this is fine -- the node stores the complete envelope, and the envelope size is known at read time. But chunked large files (>500 MiB) will be split into multiple blobs, each containing a sub-range of the file. If an attacker can delete the final chunk blob (via tombstone), the recipient reassembles all-but-last chunks and gets a truncated file that decrypts successfully. Each segment authenticates independently with its nonce-derived index, so missing the final segment produces valid plaintext for segments 0..K-1 with no authentication error.
+
+This is the classic "segment truncation attack" documented by Adam Langley (ImperialViolet 2014) and mitigated in every serious streaming encryption library (Tink, age, libsodium secretstream). The current single-blob envelope sidesteps it because the blob size is tamper-evident. Multi-blob chunking breaks that assumption.
 
 **Why it happens:**
-Beast's WebSocket layer maintains internal framing state (opcode, fragmentation progress, mask state) that is not re-entrant. The library enforces "at most one active async read and one active async write" as a contract, not a suggestion. Violating it triggers `BOOST_ASSERT` in debug builds and undefined behavior in release builds. Developers familiar with raw TCP sockets (where queuing writes is the OS's job) or with the existing Connection class (which already solved this) miss that Beast requires the same discipline at the WebSocket layer.
+The original envelope was designed for single blobs where the node enforces data integrity. Extending to multi-blob chunked files changes the trust model: the envelope must now be self-authenticating against truncation even when the transport cannot guarantee all chunks arrive.
 
 **How to avoid:**
-Implement a per-client send queue with a single drain coroutine, identical to the existing `Connection::drain_send_queue()` pattern. Every outbound WebSocket message (forwarded node response, Pong, challenge, close frame) goes through the queue. The drain coroutine pops one message at a time and calls `ws.async_write()`. This is a proven pattern in the codebase -- reuse it directly.
+Mark the final segment. Two options:
+1. **Sentinel in nonce:** Set a bit in the final segment's nonce (e.g., high bit of the XOR'd segment index). This is how age does it. Requires envelope format version bump to v2.
+2. **Segment count in header:** Add a 4-byte segment count to the CENV header. Decryptor knows expected count upfront and rejects if fewer arrive. Simpler, no nonce space reduction.
 
-```
-// Pseudocode: single drain coroutine per WebSocket session
-while (!closed) {
-    while (!queue.empty()) {
-        auto msg = queue.pop_front();
-        co_await ws.async_write(asio::buffer(msg));
-    }
-    co_await signal.async_wait();  // wake on enqueue
-}
-```
+Option 2 is better for this codebase because: (a) the nonce space is already tight (12 bytes with 4 bytes for segment index leaves 8 bytes of randomness, already below the 96-bit ideal), (b) adding a header field is a clean protocol change, and (c) it lets the decryptor pre-validate expected chunk count before any crypto.
+
+Regardless of approach, the multi-blob chunk manifest (CPAR magic from BACKLOG.md) must include the total segment count so the CLI can reject incomplete reassemblies before attempting decryption.
 
 **Warning signs:**
-- Any code path that calls `ws.async_write()` outside the drain coroutine
-- Crashes in `pausation.hpp` or assertion failures in debug builds
-- Intermittent TSAN reports on WebSocket stream internal state
+- Decryption of partial chunk sets succeeds without error
+- No explicit validation of "did I get all chunks" before returning plaintext
+- Tests that only verify with all chunks present, never test missing-last-chunk
 
 **Phase to address:**
-Phase 1 (core WebSocket session scaffolding). The send queue must exist before any message forwarding is wired up.
+Chunked large file phase. Must be designed before implementing multi-blob chunking. The envelope format decision (v2 header with segment count) gates the implementation.
 
 ---
 
-### Pitfall 2: Binary blob data in JSON -- base64 blowup and encoding bugs
+### Pitfall 2: Request pipelining -- AEAD nonce desync on the CLI side
 
 **What goes wrong:**
-The relay must translate binary FlatBuffer payloads to JSON for WebSocket clients. Every message payload contains raw byte arrays (32-byte namespace IDs, 32-byte hashes, variable-length blob data up to 100 MiB, 2592-byte ML-DSA-87 public keys, 4627-byte signatures). Naively base64-encoding a 100 MiB blob produces 133 MiB of JSON text. Hex-encoding produces 200 MiB. Both create massive memory allocations, slow serialization, and exceed practical WebSocket message limits.
+The CLI uses synchronous blocking I/O with a single `send_counter_` / `recv_counter_` pair (connection.h:74-75). Currently, each command does one send, one recv, sequentially. Request pipelining means sending N ReadRequests before receiving any responses. This itself is safe for the send side (sends are still sequential). But the recv side is where it breaks: if the node responds out-of-order (it dispatches requests concurrently on its thread pool), and the CLI processes responses in the wrong order, the AEAD counter desynchronizes.
 
-Separately, encoding bugs are likely at field boundaries: the node uses big-endian integers for `seq_num` (uint64), `ttl` (uint32), `timestamp` (uint64), `limit` (uint32), and `count` (uint32). If the relay reads these as native-endian or parses JSON numbers with floating-point truncation (JavaScript clients cannot represent uint64 faithfully as `Number`), data silently corrupts. A uint64 `seq_num` of `2^53 + 1` round-trips through JavaScript `Number` as `2^53`, causing missed blobs in pagination.
+Critically: the node's server-side connection uses `request_id` for correlation but the AEAD layer is strictly sequential -- each encrypted frame increments the counter regardless of which request it responds to. The responses arrive in counter order on the wire even if the node processed them out-of-order internally, because the node's drain_send_queue coroutine serializes all outbound writes. So the nonce ordering is guaranteed by the node's architecture.
+
+The real danger is on the CLI side: if the pipelining implementation uses multiple threads to read responses (for parallel downloads to disk), two threads could call `recv_encrypted()` concurrently, each reading partial frame data and corrupting the recv_counter_ state. The existing single-threaded blocking CLI does not have this problem, but pipelining tempts developers into multithreading.
 
 **Why it happens:**
-JSON has no binary type. Base64 is the standard compromise but adds 33% overhead and two encode/decode passes. For small payloads (hashes, keys) this is fine. For 100 MiB blob data, it is catastrophic. Additionally, nlohmann/json has documented slow performance parsing large base64 strings (200ms+ for ~1 MB base64 in issue #3202).
-
-The uint64 truncation issue is intrinsic to JSON's number type (IEEE 754 double, 53-bit mantissa). Most JSON libraries silently truncate. The node's PROTOCOL.md uses uint64 for seq_num, timestamp, and storage_used -- all of which can exceed 2^53.
+The existing codebase had this exact bug before: the v1.0.0 PEX SIGSEGV was caused by AEAD nonce desync from concurrent SyncRejected writes on the node side. The fix was the drain_send_queue coroutine (serializing all writes). The CLI does not have this pattern because it was single-threaded. Pipelining introduces the same class of bug.
 
 **How to avoid:**
-1. **Use WebSocket binary frames for blob data.** Beast supports `ws.binary(true)` to set the opcode. Send ReadResponse, BatchReadResponse, and Data (type 8) payloads as binary WebSocket frames containing the raw FlatBuffer-encoded blob, not JSON. The JSON envelope carries metadata (type, request_id, status), and a separate binary frame carries the blob payload. This eliminates base64 overhead entirely for the hot path.
+Keep the CLI single-threaded for network I/O. Pipeline by:
+1. Send all N ReadRequests sequentially (incrementing send_counter_ normally)
+2. Receive all N responses sequentially in a single reader thread (incrementing recv_counter_ normally)
+3. Dispatch decryption and disk I/O to worker threads after the response bytes are received and decrypted
 
-2. **Use hex encoding for fixed-size crypto fields** (namespace_id, blob_hash, pubkey). These are always 32 or 2592 bytes. Hex is human-readable for debugging, and the 2x overhead on 32 bytes is 64 bytes -- negligible. Base64 is acceptable too, but pick one and document it.
+The parallelism is in the post-receive processing (envelope decrypt, file write), not in the network I/O. This matches the node's architecture: single reader coroutine, dispatches to thread pool for heavy work.
 
-3. **Encode uint64 as JSON strings.** `"seq_num": "18446744073709551615"` instead of `"seq_num": 18446744073709551615`. This prevents JavaScript/JSON floating-point truncation. nlohmann/json supports this natively via `json::string_t`.
-
-4. **Define the JSON schema once, up front.** Document every field name, type (hex string, decimal string, base64 string, number), and size constraint. Test round-trip fidelity for all 38 relay-allowed message types.
+Do NOT attempt concurrent recv() calls. Do NOT use multiple connections to the same node for pipelining -- each connection has separate AEAD state, but the node's max_clients limit and the handshake overhead make this wasteful.
 
 **Warning signs:**
-- Any `json["field"] = uint64_value` without string conversion for values that can exceed 2^53
-- Base64 encoding of blob data payloads (should be binary frames)
-- Tests that only use small payloads and miss the 100 MiB path
-- Missing schema documentation for any of the 38 message types
+- `recv_encrypted()` called from multiple threads
+- `std::thread` or `std::async` wrapping `recv()` calls
+- `recv_counter_` accessed without synchronization
+- Tests that pass with 1 pipelined request but fail intermittently with 10+
 
 **Phase to address:**
-Phase 2 (JSON schema definition + translation layer). Must be designed before any handlers are written. Binary frame decision for blob data must be made at schema design time, not retrofitted.
+Request pipelining phase. The single-reader-thread architecture must be established before any parallel download logic is added. Must be documented as an invariant.
 
 ---
 
-### Pitfall 3: Multiplexed UDS -- single point of failure for all clients
+### Pitfall 3: Chunked transport framing ambiguity -- 0x01 flag byte collision with FlatBuffer data
 
 **What goes wrong:**
-Relay v2 uses a single multiplexed UDS connection to the node, with `request_id` for demuxing responses. If the node restarts, crashes, or the UDS socket disconnects, every active client session loses its upstream. The relay must handle this without corrupting per-client state. Specific failure modes:
+The chunked transport protocol uses a first-byte sentinel: if `frame[0] == 0x01`, the frame is interpreted as a chunked header (`[0x01][type:1][request_id:4BE][total_size:8BE]`). But FlatBuffer-encoded TransportMessages can also start with 0x01 in their first byte (it is a valid FlatBuffer root table offset). Currently, the disambiguation works because a regular TransportMessage decoded via FlatBuffer never has a 14-byte frame that starts with 0x01 followed by a valid type byte at offset 1. But this is fragile -- it depends on FlatBuffer's internal encoding details.
 
-1. **Orphaned pending requests:** Client sends ReadRequest (request_id=42), relay forwards to node, node disconnects before responding. Client hangs forever waiting for request_id=42 response.
-2. **Subscription loss:** All client subscriptions are registered on the node's UDS connection. Node restart wipes all subscription state. Clients stop receiving notifications with no error.
-3. **Request ID collision after reconnect:** The relay reconnects to the node (new UDS connection, new AEAD nonce state). If the relay reuses request_id values that were in-flight on the old connection, responses from the new connection could be misrouted.
-4. **Reconnect storm:** If 1000 clients are connected and the UDS drops, all 1000 simultaneously need subscription replay. Batching or throttling is needed to avoid overwhelming the node.
+When extending chunked framing for larger files (>500 MiB), the total_size field (8 bytes at offset 6) will hold values exceeding the current MAX_BLOB_DATA_SIZE of 500 MiB. If the receiver validates `total_size <= MAX_BLOB_DATA_SIZE` before assembling, legitimate large-file transfers will be rejected. If it does not validate, a malicious sender could claim a multi-terabyte total_size and exhaust memory during reassembly.
 
 **Why it happens:**
-The old relay used per-client UDS connections -- each client session had its own independent UDS pipe to the node. Relay v2 changes to a single multiplexed connection for efficiency. This introduces a shared fate dependency: node connection health directly determines all client sessions' health.
+The 0x01 sentinel was designed when chunked framing was only for payloads between 1 MiB and 500 MiB. Extending to >500 MiB requires updating the node's MAX_BLOB_DATA_SIZE or separating the "chunked transport limit" from the "blob storage limit." These are currently the same constant (500 MiB), but for chunked files they must diverge: the node stores individual chunk blobs within MAX_BLOB_DATA_SIZE, while the transport carries chunk manifests that reference multiple blobs.
 
 **How to avoid:**
-1. **Pending request timeout + error response.** Every forwarded request gets a timer (e.g., 30 seconds). If no response arrives before timeout (either normal timeout or UDS disconnect), send an error response to the client: `{"type": "error", "request_id": 42, "reason": "upstream_timeout"}`. Never let a client hang.
-
-2. **Subscription replay on reconnect.** Track all client subscriptions in-relay (already done in v1 relay). On UDS reconnect, batch-replay all active subscriptions in a single Subscribe message. Gate forwarding until replay completes (the `replay_pending_` pattern from the existing relay).
-
-3. **Monotonic request_id with generation counter.** The relay assigns its own internal request_id values for the UDS connection, mapping them to per-client (client_id, client_request_id) tuples. Use a monotonically increasing counter that never wraps during a UDS session. On reconnect, the counter continues from where it left off -- no collision possible.
-
-4. **UDS reconnect is relay-internal.** Clients do not see UDS reconnects. The relay buffers or errors pending requests, replays subscriptions, and resumes. Only if UDS reconnection fails after max retries does the relay start disconnecting clients.
+1. **Do not change the chunked transport framing for this milestone.** Each chunk blob is an independent envelope-encrypted blob under 500 MiB. The chunked transport framing carries individual chunk blobs, not the entire file. The total_size in the chunked header refers to a single chunk blob's transport size, not the file size.
+2. **Add explicit size validation in the chunked reassembler.** `total_size` must be checked against a sane maximum (e.g., MAX_BLOB_DATA_SIZE + envelope overhead) before allocating the reassembly buffer. The existing `recv()` in connection.cpp:626 does `payload.reserve(static_cast<size_t>(total_size))` with NO validation -- fix this.
+3. **Document the framing invariant:** chunked transport carries individual messages (one blob per chunked sequence), never an entire multi-blob file.
 
 **Warning signs:**
-- Any code path where the relay forwards a request to node without setting a response timeout
-- Missing subscription replay logic on UDS reconnect
-- Request ID reuse or collision in the multiplexer mapping table
-- UDS disconnect causing immediate client disconnects instead of triggering reconnect
+- `payload.reserve(total_size)` without bounds checking -- current code has this bug
+- Attempting to send an entire multi-gigabyte file as a single chunked transport sequence
+- Tests that use small payloads and never exercise the reassembly buffer with adversarial total_size
 
 **Phase to address:**
-Phase 2-3 (multiplexer design + reconnect handling). The request_id mapping and timeout system must be designed alongside the translation layer. Reconnect logic builds on top.
+Chunked large file phase. The size validation fix should be addressed immediately as a pre-existing bug. The architectural decision (chunk blobs are independent, not one giant stream) must be established before implementation.
 
 ---
 
-### Pitfall 4: Backpressure inversion -- slow WebSocket client stalls all UDS reads
+### Pitfall 4: SQLite schema migration -- adding groups table without versioning corrupts existing contacts
 
 **What goes wrong:**
-The relay reads messages from the UDS connection (node responses, notifications) and routes them to specific WebSocket clients. If one client's WebSocket is slow (congested network, slow consumer), its per-client send queue fills up. Without proper backpressure, two bad outcomes:
+The current `contacts.cpp` calls `init_schema()` with a bare `CREATE TABLE IF NOT EXISTS contacts (...)`. Adding a `groups` table and a `group_members` junction table requires schema migration. The pitfalls:
 
-1. **Memory exhaustion:** The relay keeps reading from UDS and buffering messages for the slow client. With 100 MiB blobs and 1024-message queue, one slow client can consume 100 GiB of relay memory.
-2. **UDS read stall (head-of-line blocking):** If the relay stops reading from UDS to apply backpressure, ALL clients stall because the UDS connection is shared. Node-side send queue fills up, potentially causing the node to disconnect the relay.
-
-This is the fundamental tension of a multiplexed gateway: you cannot apply per-client backpressure on a shared upstream connection without affecting other clients.
+1. **No schema version tracking.** If a future change needs to ALTER the contacts table (e.g., adding a `created_at` column), there is no way to know which version of the schema the database has. `CREATE TABLE IF NOT EXISTS` silently succeeds even if the table has different columns than expected.
+2. **ALTER TABLE limitations in SQLite.** SQLite cannot drop columns (before 3.35.0), cannot change column types, and cannot add NOT NULL columns without defaults. If the initial groups schema is wrong, fixing it later requires the 12-step table recreation process (CREATE new, copy data, DROP old, RENAME new).
+3. **Missing foreign key enforcement.** SQLite has foreign keys disabled by default. `PRAGMA foreign_keys = ON` must be called per-connection. Without it, deleting a contact leaves orphaned group_members rows, and deleting a group leaves orphaned membership entries.
+4. **Concurrent CLI instances.** Two CLI processes could open the same contacts.db simultaneously. SQLite handles this via file locking, but the current code does not set a busy timeout. The second process gets SQLITE_BUSY and fails with a cryptic error.
 
 **Why it happens:**
-WebSocket has no built-in flow control (unlike TCP's window). The relay's UDS reader runs as a single coroutine that distributes messages. If it blocks on one client's full queue, the entire read loop stops. If it does not block, messages accumulate unbounded.
+The original contacts implementation was deliberately minimal (single table, no versioning) because it only needed contacts. Adding groups turns it into a relational schema with foreign keys, junction tables, and potential for future evolution. The migration infrastructure must be added now, before the schema has more than one table.
 
 **How to avoid:**
-1. **Bounded per-client send queue with disconnect-on-overflow.** This is the existing node pattern (MAX_SEND_QUEUE = 1024, disconnect on overflow). Apply it to WebSocket sessions. A slow client that falls behind gets disconnected. This is the correct trade-off for a relay -- one slow client must not degrade service for others.
-
-2. **UDS reader never blocks on client send.** The UDS read coroutine enqueues messages to per-client queues using try-enqueue semantics. If a client queue is full, the message for that client is dropped (for notifications) or the client is disconnected (for request responses, since dropping those corrupts client state). The UDS reader proceeds immediately to the next message.
-
-3. **Separate notification handling from request-response.** Notifications (type 21) are fire-and-forget -- dropping one is acceptable (client can poll to catch up). Request responses (ReadResponse, ListResponse, etc.) are client-initiated and must be delivered or errored. If a client's queue is full when a request response arrives, disconnect that client -- they are fatally behind.
-
-4. **Message size limits.** Reject or refuse to forward blob data exceeding a relay-configurable maximum (e.g., 10 MiB default). The node supports 100 MiB blobs, but the relay does not need to. Relays serving web clients should have lower limits.
+1. **Add a `schema_version` table immediately.** `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`. Check version on open: if 0 or missing, run v1 migration (current contacts table). If 1, run v2 migration (add groups + group_members). Each migration is idempotent and guarded by version check.
+2. **Enable foreign keys.** Call `PRAGMA foreign_keys = ON` after every `sqlite3_open()`. Add `ON DELETE CASCADE` to group_members.contact_name referencing contacts.name.
+3. **Set busy timeout.** Call `sqlite3_busy_timeout(db_, 5000)` (5 seconds) after open. This handles concurrent CLI instances gracefully.
+4. **Use transactions for migrations.** Wrap each migration step in `BEGIN EXCLUSIVE; ... COMMIT;`. If any step fails, the entire migration rolls back.
+5. **Get the groups schema right the first time.** Design the groups and group_members tables with all columns needed for v4.1.0. Do not plan to ALTER later.
 
 **Warning signs:**
-- UDS read coroutine that `co_await`s on any per-client operation
-- Missing `MAX_SEND_QUEUE` on WebSocket session send queues
-- No distinction between droppable (notification) and non-droppable (response) messages
-- Memory usage growing under load without client disconnections
+- No `schema_version` table in the database
+- `PRAGMA foreign_keys` not called after open
+- Migration code that does not check current version before altering
+- Tests that always start with a fresh database and never test upgrade from v1
 
 **Phase to address:**
-Phase 1 (session architecture). The per-client queue with overflow disconnect must be part of the initial session design. Retrofitting backpressure onto a working system is a rewrite.
+Contact groups phase. Schema versioning must be the first thing implemented, before adding any new tables. The groups table schema must be designed and reviewed before coding.
 
 ---
 
-### Pitfall 5: TLS certificate lifecycle -- reload without restart, but SSL_CTX is not atomic
+### Pitfall 5: Configurable node constants -- SIGHUP reload of sync parameters during active sync sessions
 
 **What goes wrong:**
-The relay terminates TLS for WebSocket clients. Certificates expire and need rotation. The relay must reload certificates on SIGHUP without dropping existing connections. The naive approach -- calling `SSL_CTX_use_certificate_chain_file()` on the active `ssl::context` -- is undefined behavior (OpenSSL maintainers explicitly warn against modifying an active SSL_CTX). Existing SSL objects may read partially-updated state.
+Ten hardcoded constants are moving to config.json (from peer_manager.h, sync_orchestrator.h, pex_manager.h, connection_manager.h):
 
-Additionally, if the relay creates a new `ssl::context` on SIGHUP, the TCP acceptor must be updated to use the new context for new connections. But the acceptor and its async_accept callback capture the old context by reference. This requires careful lifetime management.
+| Constant | Current Value | Risk on Hot Reload |
+|----------|--------------|-------------------|
+| SYNC_TIMEOUT | 30s | Active sync hangs if shortened mid-session |
+| BLOB_TRANSFER_TIMEOUT | 120s | In-flight blob transfer killed if shortened |
+| KEEPALIVE_INTERVAL | 30s | Timer restart races with keepalive coroutine |
+| KEEPALIVE_TIMEOUT | 60s | Mid-evaluation timeout check uses stale/new value inconsistently |
+| STRIKE_THRESHOLD | 10 | Lowering mid-session disconnects peers who were previously acceptable |
+| PEX_INTERVAL_SEC | 300 | Timer restart races with PEX coroutine |
+| MAX_PEERS_PER_EXCHANGE | 8 | Safe to change live |
+| MAX_DISCOVERED_PER_ROUND | 3 | Safe to change live |
+| MAX_PERSISTED_PEERS | 100 | Safe to change live (caps next persist write) |
+| MAX_HASHES_PER_REQUEST | 64 | Mid-sync change causes protocol mismatch with peer |
+
+The dangerous ones are timeouts and thresholds read inside active coroutines. If a sync coroutine reads SYNC_TIMEOUT at the start of a sync session, and SIGHUP changes it mid-session, the coroutine may use a mix of old and new values depending on when each read occurs. This is not a data race (single-threaded event loop), but it is a logic inconsistency.
+
+MAX_HASHES_PER_REQUEST is the most dangerous: if Node A sends 64 hashes per request and Node B has been reconfigured to expect 32, the mismatch does not cause a protocol error (the receiver accepts any count <= 64), but changing it to >64 would exceed the current protocol's implicit contract.
 
 **Why it happens:**
-SSL_CTX is reference-counted but not thread-safe for mutation. OpenSSL's internal state (certificate chain, private key, session cache) is read by SSL objects during handshake without synchronization. The relay's existing SIGHUP infrastructure (from the node) expects `reload_config()` to atomically swap configuration, but SSL_CTX does not support atomic swap.
+The node's existing SIGHUP handler already reloads several values (max_peers, rate limits, ACL, quotas) because those were designed for reload from the start. The sync/peer constants were not -- they are `static constexpr` in header files, read by coroutines that assume they never change. Moving them to runtime configuration requires analyzing every read site.
 
 **How to avoid:**
-1. **Atomic `shared_ptr<ssl::context>` swap.** Store the SSL context as `std::shared_ptr<asio::ssl::context>`. On SIGHUP, create an entirely new `ssl::context`, load the new cert/key into it, and atomically swap the shared_ptr (`std::atomic<std::shared_ptr>` or mutex-protected swap). Existing connections hold their own `shared_ptr` to the old context -- it stays alive until they disconnect. New connections get the new context.
+1. **Snapshot constants at session start.** Each sync session, PEX round, or keepalive cycle captures the current config values into local variables at the start. The session uses only those locals, never re-reads the config mid-session. This is the pattern the node already uses for quotas (effective_quota() is called at ingest time, not cached).
 
-2. **Validate cert/key before swap.** Load into a temporary `ssl::context` and call `SSL_CTX_check_private_key()` before publishing. Log an error and keep the old context if validation fails. Never leave the relay without a valid TLS context.
+2. **Validate ranges at config load time.** Each constant needs min/max validation:
+   - SYNC_TIMEOUT: min 5s, max 300s
+   - BLOB_TRANSFER_TIMEOUT: min 30s, max 600s
+   - KEEPALIVE_INTERVAL: min 10s, max 300s (must be < KEEPALIVE_TIMEOUT)
+   - KEEPALIVE_TIMEOUT: min 20s, max 600s (must be > KEEPALIVE_INTERVAL)
+   - STRIKE_THRESHOLD: min 3, max 100
+   - PEX_INTERVAL_SEC: min 60, max 3600
+   - MAX_HASHES_PER_REQUEST: min 1, max 64 (protocol hard limit)
 
-3. **Test with short-lived certs.** Use 1-minute validity certs in integration tests. SIGHUP after 30 seconds. Verify new connections use the new cert while existing connections continue on the old one.
+3. **Never exceed protocol invariants.** MAX_HASHES_PER_REQUEST must have a hard cap of 64 that config cannot override. This is a protocol-level constant, not a tuning parameter. Make the config validation reject values >64.
+
+4. **Test SIGHUP during active sync.** Integration test: start a long sync, SIGHUP mid-sync, verify sync completes with the values captured at session start and subsequent sessions use new values.
 
 **Warning signs:**
-- `ssl::context` stored as a plain reference or raw pointer passed to the acceptor
-- Any `SSL_CTX_use_*` call on a context that has active SSL objects
-- SIGHUP handler that blocks the event loop while loading cert files
-- Missing cert/key validation before swap
+- Constants read directly from config inside coroutine loops (not captured at session start)
+- Missing validation ranges for any configurable constant
+- MAX_HASHES_PER_REQUEST configurable above 64
+- KEEPALIVE_INTERVAL >= KEEPALIVE_TIMEOUT after reload (deadlock: keepalive always fires after timeout)
+- Tests that only verify SIGHUP with idle node, never during active sync
 
 **Phase to address:**
-Phase 3 (TLS termination). Must be designed when TLS support is added. Cannot be deferred to "later" because the acceptor's relationship to the SSL context is architectural.
+Configurable constants phase. The validation ranges and snapshot-at-session-start pattern must be established before any constant is made configurable. The config validation function (validate_config() in config.h) must be extended first.
 
 ---
 
-### Pitfall 6: JSON-to-FlatBuffers translation -- silent field truncation and missing validation
+### Pitfall 6: Chunked large files -- memory amplification from simultaneous chunk envelope encryption
 
 **What goes wrong:**
-The relay translates JSON messages from clients into binary payloads for the node's UDS connection. Each of the 38 relay-allowed message types has a specific binary layout documented in PROTOCOL.md (e.g., ReadRequest is exactly 64 bytes: 32-byte namespace + 32-byte hash; ListRequest is exactly 44 bytes: 32-byte namespace + 8-byte BE seq + 4-byte BE limit). Translation bugs include:
+The current `put` command reads the entire file into memory, builds the put payload, envelope-encrypts the whole thing, then sends. For a 500 MiB file, peak memory is roughly 3x file size (raw + payload + envelope). For chunked files >500 MiB, if each chunk is envelope-encrypted independently (as BACKLOG.md describes), and the CLI tries to encrypt multiple chunks in parallel for throughput, memory usage becomes `num_parallel_chunks * chunk_size * 3`. With 50 MiB chunks and 4 parallel encryptions, that is 600 MiB of peak memory just for the encryption buffers -- on top of whatever else the CLI is doing.
 
-1. **Hex decode produces wrong length.** Client sends `"namespace": "abcd"` (2 bytes decoded) instead of a 64-character hex string (32 bytes decoded). The relay constructs a 2-byte namespace field. The node sees a malformed payload and strikes the relay's UDS connection.
-2. **Integer encoding errors.** Client sends `"ttl": 3600` as a JSON number. Relay writes it as a 4-byte native-endian integer instead of big-endian. The node interprets it as a completely different value on little-endian machines (which is every x86 machine).
-3. **Missing fields silently zero-filled.** Client omits `"limit"` from a ListRequest. Relay writes 0 for the limit field. The node treats limit=0 as "use default 100", which might be correct -- or might mask a client bug.
-4. **Overflow on large numbers.** Client sends `"ttl": 4294967296` (exceeds uint32). Relay truncates to uint32 without error. Client expects permanent storage but gets TTL=0 (which IS permanent, by coincidence) or gets garbage.
+Even without parallelism, if the CLI reads a 2 GiB file fully into memory and then chunks it, the 2 GiB is held in memory for the entire duration of the upload.
 
 **Why it happens:**
-The node's binary protocol has strict byte-level layout requirements. JSON is flexible and forgiving. The translation layer must bridge this gap with strict validation. Every field in every message type needs: type checking, range validation, size validation, endianness conversion, and hex decoding. Missing any of these for any field in any of the 38 message types is a bug. With 38 types averaging 4-5 fields each, that is ~170 validation points.
+The current `read_file_bytes()` function reads the entire file into a `std::vector<uint8_t>`. This was fine for files up to 500 MiB. For multi-gigabyte files, the CLI must stream: read a chunk, encrypt it, send it, release the memory, then read the next chunk.
 
 **How to avoid:**
-1. **Table-driven translation.** Define each message type's JSON schema as a compile-time table: field name, JSON type, binary offset, binary size, encoding (hex/decimal/base64), range (min/max), required/optional. Write a single generic translator that processes the table. This prevents per-type copy-paste bugs.
-
-2. **Strict validation with explicit errors.** Every JSON-to-binary translation returns either a valid binary payload or a structured error. The error includes which field failed and why. Return this to the client as a JSON error response. Never forward a malformed payload to the node.
-
-3. **Round-trip tests for every message type.** For each of the 38 types: construct a JSON message, translate to binary, translate back to JSON, assert field equality. Add edge cases: maximum values, minimum values, empty optional fields, hex strings of wrong length, integer overflow.
-
-4. **Use the existing PROTOCOL.md as the source of truth.** It documents byte-level layouts for all message types. The translation layer is a mechanical transcription of that document. Any divergence is a bug.
+1. **Stream from disk.** Read one chunk at a time using `std::ifstream` with a fixed-size read buffer. Never hold more than one (or a small number of) chunk(s) in memory simultaneously.
+2. **Sequential chunk processing for MVP.** Encrypt and upload one chunk at a time. This limits peak memory to `chunk_size * 3` regardless of file size. Parallel chunk upload can be added later as an optimization, but the sequential path must work first and must be the default.
+3. **Chunk size selection matters.** Too small (1 MiB) means too many blobs on the node and too many round trips. Too large (200 MiB) means high memory usage. The BACKLOG.md suggests 10-50 MiB. 50 MiB is a good default: 150 MiB peak memory, ~40 chunks for a 2 GiB file, manageable for the node's storage.
+4. **Do not buffer the entire manifest until all chunks are uploaded.** Build the chunk manifest incrementally as each chunk is acknowledged. If the upload fails partway, the manifest is incomplete and the CLI reports partial upload (chunks already uploaded can be garbage-collected by TTL or tombstoned).
 
 **Warning signs:**
-- Per-type handler functions with copy-pasted encode/decode logic
-- Missing validation for any field in any message type
-- Tests that only cover 5-10 message types and miss the others
-- Hex string handling that does not validate length
-- Native-endian integer writes instead of explicit `store_u32_be` / `store_u64_be`
+- `read_file_bytes()` called for files >500 MiB
+- `std::vector<uint8_t>` holding the entire file contents
+- Chunk encryption parallelism without memory budgeting
+- Peak memory tests that only use small files
 
 **Phase to address:**
-Phase 2 (JSON schema + translation layer). The table-driven approach and round-trip tests must be part of the translation phase. This is the highest risk for subtle bugs.
+Chunked large file phase. The streaming read pattern must replace read_file_bytes() for the chunked path. The single-chunk-at-a-time architecture must be the starting point.
 
 ---
 
-### Pitfall 7: WebSocket close handshake vs. TCP close -- dangling async operations
+### Pitfall 7: Contact groups -- case sensitivity and name collision with contacts
 
 **What goes wrong:**
-Beast's WebSocket close requires a proper close handshake: send close frame, wait for peer's close frame, then shut down the TCP connection. If the relay just closes the TCP socket (like the node does for misbehaving peers), Beast's internal state may not be cleaned up, and pending async operations may complete with unexpected error codes. Specifically:
+The BACKLOG.md says `--share @team` resolves a group name. But contact names are also strings. If a user has a contact named "team" and a group named "team", `--share team` is ambiguous. If the `@` prefix is the only disambiguation, then `--share @alice` could be confused with a group named "alice" if the user forgets the `@`, or `--share alice` could fail to share with the contact alice if there is a group alice.
 
-1. `async_read` pending when `async_close` is initiated returns `operation_aborted` (not `websocket::error::closed`). Code that checks for `closed` misses the `aborted` case and may try to use the stream after it is destroyed.
-2. If the SSL shutdown is not performed before TCP close, some TLS implementations send RST instead of FIN, causing the client to see a connection error instead of a clean close.
-3. Destruction of the `websocket::stream` while an async operation is pending is undefined behavior.
+Additionally, contact names are case-sensitive in the current SQLite schema (`name TEXT PRIMARY KEY` -- SQLite TEXT comparison is case-sensitive by default). A user who adds "Alice" and then does `--share alice` gets "contact not found." Group names will have the same issue.
 
 **Why it happens:**
-The existing node connection uses raw TCP with AEAD framing. Close is simple: close the socket, drain the send queue, fire the close callback. WebSocket adds protocol-level close negotiation. SSL adds another layer (SSL_shutdown). The relay must perform a 3-layer shutdown sequence: WebSocket close frame -> SSL shutdown -> TCP close. Getting the ordering wrong or skipping a layer causes dangling operations.
+The current CLI has no namespace collision between contacts and groups because groups do not exist yet. Adding groups introduces a second namespace. The `@` prefix convention works if enforced consistently, but users will forget it.
 
 **How to avoid:**
-1. **Always initiate close via `async_close()` with a close reason code.** Never directly close the TCP socket for a WebSocket connection. The drain coroutine should detect the close state and call `async_close()` as its final action.
-
-2. **Handle both `operation_aborted` and `websocket::error::closed` in read loop.** Both indicate the connection is ending. Treat them the same: stop reading, let the close handshake complete, then clean up.
-
-3. **Timeout the close handshake.** If the client does not respond with its close frame within 5 seconds, force-close the TCP socket. A misbehaving client should not hold relay resources indefinitely.
-
-4. **Ensure `shared_from_this()` prevents premature destruction.** The WebSocket session must be kept alive (via shared_ptr captured in async operation completions) until all pending operations have completed. This is the same pattern as the existing Connection class.
+1. **Enforce `@` prefix for groups at all parse points.** `--share @team` is always a group. `--share alice` is always a contact. No ambiguity. Store group names in the database without the `@` prefix.
+2. **Case-insensitive lookup for both contacts and groups.** Use `COLLATE NOCASE` on the name columns: `name TEXT PRIMARY KEY COLLATE NOCASE`. This makes "Alice", "alice", and "ALICE" all refer to the same contact. Apply to both contacts and groups tables.
+3. **Reject names starting with `@`.** Contact names must not start with `@` (reserved for group syntax). Validate on `contact add`. Group names must not start with `@` either (the `@` is CLI syntax, not part of the name).
+4. **Unique constraint across namespaces is NOT needed.** A contact "alice" and a group "alice" can coexist because the `@` prefix disambiguates at the CLI level. But document this behavior explicitly.
 
 **Warning signs:**
-- Direct `socket.close()` or `lowest_layer().close()` calls on WebSocket connections
-- Missing `operation_aborted` handling in the read loop
-- Close handshake without a timeout timer
-- Session destructor that does not assert no pending operations
+- Group lookup that does not check the `@` prefix
+- Contact names stored with `@` prefix in the database
+- Case-sensitive lookups in either contacts or groups
+- Tests that always use lowercase names
 
 **Phase to address:**
-Phase 1 (session lifecycle). Close handling must be correct from the beginning. Retrofitting proper close semantics onto a working session is error-prone.
+Contact groups phase. The naming convention and case-insensitive collation must be decided before implementing the groups table. Retrofit COLLATE NOCASE onto the existing contacts table as part of the schema migration.
 
 ---
 
-### Pitfall 8: Challenge-response auth over WebSocket -- timing and state machine complexity
+### Pitfall 8: Request pipelining -- node responds with ErrorResponse (type 63) for some requests, breaking response parsing
 
 **What goes wrong:**
-Relay v2 uses ML-DSA-87 challenge-response for client authentication over WebSocket (replacing the PQ KEM handshake). The auth flow is: (1) client connects WebSocket, (2) relay sends challenge (random nonce), (3) client signs nonce with ML-DSA-87, (4) relay verifies signature and extracts client pubkey. This happens over an already-TLS-encrypted WebSocket. Pitfalls:
+When pipelining N ReadRequests, the CLI expects N ReadResponses. But the node can return ErrorResponse (type 63) for any individual request (e.g., blob not found, namespace not found, payload malformed). The ErrorResponse has a different payload format than ReadResponse. If the pipelining code assumes all responses are ReadResponse and tries to parse ErrorResponse as a ReadResponse, it gets garbage or a crash.
 
-1. **No auth timeout.** Client connects, relay sends challenge, client never responds. The WebSocket session sits authenticated=false forever, consuming relay resources. Without a timeout, this is a trivial DoS vector.
-2. **Message routing before auth complete.** If the relay's message handler does not check authentication state, a client could send a Data message before completing the challenge-response. The relay would forward it to the node as if from the relay's own identity.
-3. **Challenge replay.** If the relay uses a predictable or reused challenge nonce, a client could replay a previously captured signature. The nonce must be cryptographically random and single-use.
-4. **ML-DSA-87 verification is expensive (~1ms).** During auth, the relay must verify the signature. If done on the event loop, it blocks all other clients. Must be offloaded to a thread pool.
+Additionally, the node sends ErrorResponse with the original request_id, so correlation is preserved. But if the CLI's pipelining code does not check the response type before parsing, it will fail.
+
+This is compounded by the SyncNamespaceAnnounce (type 62) that the node sends immediately after handshake. If the CLI does not fully drain this message before starting pipelined requests, the first "response" it reads will be the announce, not a ReadResponse. The existing `drain_announce()` handles this for single requests, but it only drains one message. If the node sends additional unsolicited messages (e.g., BlobNotify for subscriptions), those would also appear in the response stream.
 
 **Why it happens:**
-The existing relay uses the node's PQ handshake (KEM + AEAD) which has built-in timeout and authentication gating via the Connection class. Relay v2 builds its own auth on top of WebSocket, losing the Connection class's built-in protections. The auth state machine must be reimplemented carefully.
+The current CLI uses a strict request-response pattern: send one request, receive one response, check its type. Pipelining requires receiving multiple responses and matching them by request_id, handling mixed types in the response stream. This is fundamentally different from the sequential model.
 
 **How to avoid:**
-1. **Auth timeout: 10 seconds from WebSocket connect to auth complete.** Start a timer on connection accept. If auth is not complete when the timer fires, close the WebSocket.
-2. **Auth gate on message handler.** The first thing the message handler checks is `authenticated_`. If false and the message is not an auth response, close the connection.
-3. **Cryptographic random nonce, 32 bytes, from `randombytes_buf()`.** Store per-session, discard after verification. No challenge reuse.
-4. **Offload ML-DSA-87 verify to `asio::thread_pool`.** Use the same `co_await asio::post(pool)` pattern the node uses for crypto offload. The event loop must not block on signature verification.
+1. **Match responses by request_id, not by position.** Assign unique request_ids (1, 2, 3...) to each pipelined request. When receiving responses, match by request_id and handle each response type independently.
+2. **Handle ErrorResponse in every response handler.** Every code path that reads a response must check for type 63 first. Extract the error code and message, report it for that specific request, and continue processing remaining responses.
+3. **Drain unsolicited messages.** After handshake, drain SyncNamespaceAnnounce. During pipelining, if an unsolicited message type (not matching any pending request_id) is received, log it and continue reading. Do not count it as a response to a pipelined request.
+4. **Track pending request_ids.** Maintain a set of outstanding request_ids. Each received response removes its request_id from the set. When the set is empty, all pipelined responses have been received. If a timeout expires with request_ids still pending, report which requests timed out.
 
 **Warning signs:**
-- Missing auth timeout timer
-- Message handler that does not check `authenticated_`
-- Challenge nonce generated with `std::mt19937` instead of `randombytes_buf()`
-- ML-DSA-87 verify called inline without thread pool offload
+- Response parsing that assumes a fixed type without checking
+- Missing ErrorResponse handling in the pipelining code
+- Tests that only pipeline requests for blobs that exist, never for missing blobs
+- No request_id tracking -- relying on response order instead of correlation
 
 **Phase to address:**
-Phase 2 (authentication). The auth timeout and gate must be in the first iteration of the auth flow. Crypto offload should be wired up at the same time.
+Request pipelining phase. The request_id-based correlation and mixed-type response handling must be designed before implementing parallel downloads.
 
 ---
 
@@ -264,99 +264,108 @@ Phase 2 (authentication). The auth timeout and gate must be in the first iterati
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Per-type handler functions instead of table-driven translation | Faster to write first 5 types | Copy-paste bugs across 38 types, schema changes require 38 edits | Never -- table-driven from day one |
-| Base64 for all binary fields including blob data | Uniform JSON format | 33% bandwidth overhead, 200ms+ parse time for large blobs, memory pressure | Only for fields <1 KB (hashes, keys). Never for blob data. |
-| Single `ssl::context` mutated on SIGHUP | Simpler code | Undefined behavior from OpenSSL, potential crashes under load | Never |
-| Shared mutable state between UDS reader and WebSocket writers | Avoids per-client queues | Data races, TSAN findings, intermittent crashes | Never -- per-client queues from day one |
-| Skipping WebSocket close handshake | Faster disconnect | RST instead of FIN, client-side errors, leaked async operations | Only on relay shutdown (force-close all) |
+| No schema versioning in SQLite | Simpler initial code | Cannot safely ALTER tables later, stuck with initial schema | Never -- add schema_version table now |
+| Read entire file into memory for chunked upload | Reuses existing read_file_bytes() | OOM for multi-gigabyte files, 3x memory amplification | Never for the chunked path |
+| Case-sensitive contact/group names | No code change needed | User confusion, "not found" errors for capitalization differences | Never -- use COLLATE NOCASE from the start |
+| Parallel recv() calls for pipelining | Simpler threading model | AEAD nonce desync, data corruption, intermittent crashes | Never -- single reader thread only |
+| MAX_HASHES_PER_REQUEST configurable above 64 | More flexibility | Protocol violation, peers reject oversized requests | Never -- hard cap at 64 |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Beast WebSocket + Asio SSL | Forgetting to disable `tcp_stream` timeouts after connection | Call `get_lowest_layer(ws).expires_never()` after upgrade |
-| Beast WebSocket binary mode | Setting `ws.binary(true)` globally instead of per-message | Set binary mode before each write based on message type |
-| nlohmann/json + uint64 | `json j = uint64_value` -- loses precision above 2^53 | `json j = std::to_string(uint64_value)` for fields >32 bits |
-| OpenSSL + SIGHUP | Modifying active SSL_CTX | Create new SSL_CTX, atomic swap shared_ptr, old stays alive via refcount |
-| UDS Connection + AEAD | Assuming UDS is plaintext -- it uses TrustedHello then AEAD | UDS messages are encrypted; reuse existing Connection class as-is |
-| FlatBuffers + JSON | Assuming FlatBuffer encoding is the JSON payload | FlatBuffer is the transport encoding; JSON fields map to the semantic data inside the FlatBuffer |
+| SQLite foreign keys | Assuming they work by default | `PRAGMA foreign_keys = ON` after every sqlite3_open() |
+| SQLite busy handling | No busy timeout -- SQLITE_BUSY crashes the CLI | `sqlite3_busy_timeout(db_, 5000)` after open |
+| Envelope segment nonce | Reusing segment nonce across chunk boundaries in multi-blob scheme | Each chunk blob gets its own random base_nonce, segment indices restart at 0 per chunk |
+| AEAD counter + pipelining | Multiple threads calling recv_encrypted() | Single reader thread, dispatch work after decryption |
+| Node's SyncNamespaceAnnounce | Not draining it before pipelined reads | drain_announce() before any pipelined request sequence |
+| Configurable KEEPALIVE_INTERVAL/TIMEOUT | Setting interval >= timeout via config | Validate KEEPALIVE_INTERVAL < KEEPALIVE_TIMEOUT at config load time |
+| Chunked recv total_size | No bounds check -- `payload.reserve(total_size)` directly | Validate total_size <= MAX_BLOB_DATA_SIZE + overhead before reserve (pre-existing bug in connection.cpp:626) |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Base64 encoding 100 MiB blobs | 133 MiB JSON strings, OOM, 200ms+ parse | Binary WebSocket frames for blob data | Any blob >1 MiB |
-| ML-DSA-87 verify on event loop | All clients stall during auth | Thread pool offload | >10 concurrent auth attempts |
-| Per-notification JSON serialization | CPU bound on high fan-out | Pre-serialize notification JSON, send to all subscribers | >100 subscribers to same namespace |
-| Unbounded UDS read buffering | Memory grows linearly with slow client count | Per-client queue with disconnect-on-overflow | >50 clients with 1+ slow |
-| nlohmann/json parse for every inbound message | CPU overhead per message | Parse once, validate schema, extract fields | >1000 msg/sec |
+| Full file buffering for multi-GiB uploads | OOM on machines with <8 GiB RAM | Stream from disk, one chunk at a time | Files >1 GiB |
+| Parallel chunk encryption without memory budget | Memory spikes to N * chunk_size * 3 | Sequential encrypt-send-release cycle for MVP | 4+ parallel chunks of 50 MiB |
+| Group membership resolution with N contacts | N individual SQLite queries per group | Single JOIN query: SELECT ... FROM group_members JOIN contacts | Groups with >20 members |
+| Pipelining without response timeout | CLI hangs forever if node drops one response | Per-request timeout timer, report timed-out request_ids | Any network instability |
+| SIGHUP reload parsing large config | JSON parse blocks event loop | Use the existing async SIGHUP pattern (coroutine member function) | Config file >1 MB (unlikely but possible with many namespace_quotas) |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Forwarding messages before auth complete | Unauthenticated writes to node, impersonation | Auth gate as first check in message handler |
-| Predictable challenge nonce | Auth replay attacks | `randombytes_buf()`, 32 bytes, single-use |
-| No auth timeout | DoS via connection exhaustion | 10-second timer from accept to auth complete |
-| Passing client-supplied request_id directly to node | Request ID collision between clients on multiplexed UDS | Relay assigns its own UDS request_ids, maintains mapping |
-| TLS config without `SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1` | Downgrade attacks | Require TLS 1.2+ minimum, prefer 1.3 |
-| No rate limiting on WebSocket message rate | DoS via message flood | Per-client message rate limit, disconnect on exceed |
+| No last-segment marker in multi-blob envelopes | Silent truncation: attacker deletes final chunk, recipient gets truncated file that decrypts "successfully" | Segment count in CENV v2 header or final-segment sentinel in nonce |
+| Chunk manifest not signed or integrity-protected | Attacker creates fake manifest pointing to wrong chunks, recipient reassembles corrupted file | Manifest blob is signed by the file owner like any other blob; verify namespace ownership on reassembly |
+| recv total_size unchecked in chunked reassembly | Memory exhaustion attack: malicious sender claims multi-TiB total_size | Validate total_size <= MAX_BLOB_DATA_SIZE + envelope overhead before allocating |
+| Group names as SQL injection vector | SQLite injection via crafted group name | Already mitigated by prepared statements (existing contacts code uses sqlite3_bind_text). Maintain this pattern. |
+| Config reload lowers STRIKE_THRESHOLD below current strike count | Instant mass disconnection of previously-acceptable peers | Snapshot threshold at connection start, or only apply new threshold to new connections |
+
+## UX Pitfalls
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Case-sensitive contact lookup | "contact not found" for capitalization typo | COLLATE NOCASE on name columns |
+| No progress indicator for multi-GiB uploads | User thinks CLI is frozen during long upload | Print chunk progress: "Uploading chunk 5/40 (250 MiB / 2.0 GiB)" |
+| Ambiguous --share syntax | User confuses contact name and group name | Enforce @prefix for groups, clear error on ambiguity |
+| Silent partial upload on network failure | User thinks upload completed | Report "uploaded 12/40 chunks -- partial upload, run cleanup or retry" |
+| SIGHUP reload success/failure invisible | Operator sends SIGHUP, does not know if it worked | Log reloaded values at INFO level (existing pattern, extend to new constants) |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **JSON schema:** All 38 relay-allowed message types have documented JSON schemas with field names, types, and validation rules
-- [ ] **Round-trip tests:** Every message type has JSON->binary->JSON round-trip test with edge cases (max values, empty optionals, wrong-length hex)
-- [ ] **Binary frames:** ReadResponse, BatchReadResponse, Data payloads use binary WebSocket frames (not base64 in JSON)
-- [ ] **uint64 as strings:** seq_num, timestamp, storage_used, total_blobs encoded as JSON strings, not numbers
-- [ ] **UDS reconnect:** Subscription replay, pending request timeout, request_id generation counter all tested
-- [ ] **Backpressure:** Per-client send queue overflow triggers disconnect, UDS reader never blocks on client writes
-- [ ] **TLS reload:** SIGHUP creates new ssl::context, old connections unaffected, cert validation before swap
-- [ ] **Close handshake:** WebSocket async_close with timeout, SSL shutdown, both operation_aborted and error::closed handled
-- [ ] **Auth timeout:** 10-second timer from accept, auth gate on all message handlers
-- [ ] **Crypto offload:** ML-DSA-87 verify uses thread pool, event loop never blocks on signature verification
+- [ ] **Schema versioning:** contacts.db has a schema_version table and migration from v1 (contacts only) to v2 (contacts + groups + group_members) is tested
+- [ ] **Foreign keys enabled:** `PRAGMA foreign_keys = ON` called after every sqlite3_open(); ON DELETE CASCADE on group_members; test that deleting a contact removes memberships
+- [ ] **Last-segment marker:** Multi-blob envelope format authenticates completeness; test with missing-last-chunk produces decryption error, not truncated file
+- [ ] **Chunked recv bounds check:** connection.cpp validates total_size before `reserve()`; test with adversarial total_size (e.g., UINT64_MAX)
+- [ ] **Pipelining response correlation:** Responses matched by request_id; ErrorResponse handled; test with mix of found/not-found blobs in single pipeline
+- [ ] **Config validation ranges:** All 10 configurable constants have min/max validation; test that invalid values are rejected at load time
+- [ ] **SIGHUP snapshot:** Active sync sessions use values captured at session start; test SIGHUP during active sync does not change behavior mid-session
+- [ ] **Streaming disk read:** Chunked upload reads one chunk at a time; peak memory is bounded; test with file larger than available RAM (or mock)
+- [ ] **Case-insensitive names:** Both contacts and groups use COLLATE NOCASE; test mixed-case lookup succeeds
+- [ ] **Progress reporting:** Multi-chunk uploads print progress per chunk; multi-blob downloads print progress per blob
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Concurrent async_write crash | LOW | Add send queue, fix in one session class |
-| Base64 blob encoding (already shipped) | MEDIUM | Add binary frame support, deprecate base64 blob responses, update all clients |
-| Multiplexer request_id collision | HIGH | Redesign mapping table, audit all forwarding paths |
-| Missing auth gate (exploited) | HIGH | Emergency patch, audit logs for unauthorized writes, rotate relay identity |
-| TLS cert mutation crash | MEDIUM | Switch to atomic shared_ptr swap, restart relay |
-| Translation bugs in shipped types | MEDIUM per type | Fix translation, add round-trip test, re-verify against PROTOCOL.md |
-| Backpressure missing (OOM in prod) | HIGH | Add per-client queues + overflow disconnect, requires session redesign |
-| Close handshake leak | LOW | Add async_close + timeout, fix read loop error handling |
+| Missing last-segment marker (shipped) | HIGH | Requires envelope format version bump, all existing multi-blob envelopes must be re-encrypted or accepted as legacy v1 |
+| AEAD nonce desync from parallel recv | HIGH | Connection is corrupted, must disconnect and reconnect; all in-flight data lost |
+| SQLite schema without versioning (already in use) | MEDIUM | Add schema_version table, detect v1 by table inspection, run migration |
+| Unchecked total_size in chunked recv | LOW | Add bounds check, existing data unaffected (bug only exploitable by malicious sender) |
+| Case-sensitive names (already have mixed-case data) | MEDIUM | ALTER to COLLATE NOCASE, deduplicate any conflicts (unlikely but must handle) |
+| Config reload mid-sync (values inconsistent) | LOW | Fix by adding snapshot-at-session-start; existing sessions may have had inconsistent behavior but would self-correct on next sync |
+| Memory exhaustion from unbounded chunk encryption | LOW | Switch to streaming read pattern; no persistent data corruption |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Beast async_write serialization | Phase 1: Session scaffolding | TSAN clean under concurrent sends; no assertions in debug build |
-| Binary data in JSON | Phase 2: JSON schema design | Round-trip tests for all 38 types; binary frames for blob data verified |
-| Multiplexed UDS failure | Phase 2-3: Multiplexer + reconnect | UDS disconnect test with 10+ pending requests; subscription replay verified |
-| Backpressure inversion | Phase 1: Session architecture | Slow-client test: one client paused, others unaffected; OOM test with 100 slow clients |
-| TLS cert reload | Phase 3: TLS termination | SIGHUP test with short-lived certs; existing connections survive reload |
-| JSON-FlatBuffers translation | Phase 2: Translation layer | 38 round-trip tests + edge cases; PROTOCOL.md fidelity check |
-| WebSocket close handshake | Phase 1: Session lifecycle | Graceful close test; abrupt client disconnect test; close timeout test |
-| Auth state machine | Phase 2: Authentication | Auth timeout test; pre-auth message rejection test; challenge uniqueness test |
+| Truncation attack (no last-segment marker) | Chunked large files | Test: delete final chunk blob, verify decryption fails; test: full reassembly succeeds |
+| AEAD nonce desync from parallel recv | Request pipelining | TSAN test with pipelined requests; verify recv_counter_ accessed from single thread only |
+| Chunked transport total_size unchecked | Chunked large files (or immediate pre-fix) | Test: send chunked header with total_size = UINT64_MAX, verify rejection |
+| SQLite schema migration | Contact groups | Test: open v1 database, verify migration to v2; test: open v2 database, verify no re-migration |
+| SIGHUP mid-sync inconsistency | Configurable constants | Integration test: SIGHUP during active sync, verify session uses original values |
+| Memory amplification from chunk buffering | Chunked large files | Memory usage test: upload 2 GiB file, verify peak memory < 300 MiB |
+| Group/contact name ambiguity | Contact groups | Test: contact "team" and group "team" coexist; --share @team gets group; --share team gets contact |
+| Pipelining mixed response types | Request pipelining | Test: pipeline 10 requests where 3 return ErrorResponse; verify all 10 handled correctly |
 
 ## Sources
 
-- [Beast WebSocket async_write assertion failure (GitHub #1080)](https://github.com/boostorg/beast/issues/1080) -- confirmed one-write-at-a-time rule
-- [Beast WebSocket concurrent writes (GitHub #1092)](https://github.com/boostorg/beast/issues/1092) -- strand does not serialize async_write
-- [Beast WebSocket write queue pattern (GitHub #2153)](https://github.com/boostorg/beast/issues/2153) -- external queue with drain recommended
-- [Beast WebSocket usage docs](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket.html) -- stream not thread-safe, no non-blocking mode
-- [Beast async_close behavior (GitHub #1071)](https://github.com/boostorg/beast/issues/1071) -- operation_aborted vs error::closed
-- [OpenSSL SSL_CTX hot reload (GitHub discussion #23185)](https://github.com/openssl/openssl/discussions/23185) -- refcounted contexts, never mutate active CTX
-- [nlohmann/json base64 performance (GitHub #3202)](https://github.com/nlohmann/json/discussions/3202) -- 200ms+ for ~1MB base64
-- [nlohmann/json large binary data (GitHub #3132)](https://github.com/nlohmann/json/discussions/3132) -- slow serialization for big arrays
-- [WebSocket backpressure analysis](https://dev.to/safal_bhandari/understanding-backpressure-in-web-socket-471m) -- hidden buffer accumulation
-- [Base64 vs Hex encoding overhead](https://securebin.ai/blog/base64-vs-hex-encoding/) -- 33% vs 100% size overhead
-- chromatindb codebase: `db/net/connection.cpp` drain_send_queue pattern (lines 854-898) -- proven send serialization
-- chromatindb codebase: `relay/core/relay_session.cpp` reconnect_loop (lines 207-297) -- existing UDS reconnect pattern
-- chromatindb codebase: `db/PROTOCOL.md` (lines 618-740) -- byte-level wire format for all client message types
+- [ImperialViolet: Encrypting Streams (Adam Langley, 2014)](https://www.imperialviolet.org/2014/06/27/streamingencryption.html) -- segment truncation attack, last-chunk marker requirement
+- [Google Tink: Streaming AEAD](https://developers.google.com/tink/streaming-aead) -- segments bound to location, cannot be reordered
+- [Google Tink: AES-GCM-HKDF Streaming](https://developers.google.com/tink/streaming-aead/aes_gcm_hkdf_streaming) -- segment nonce derivation, final segment authentication
+- [hpke-js AEAD nonce reuse CVE (GHSA-73g8-5h73-26h4)](https://github.com/dajiaji/hpke-js/security/advisories/GHSA-73g8-5h73-26h4) -- concurrent Seal() calls reuse nonce, total confidentiality loss
+- [CWE-364: Signal Handler Race Condition](https://cwe.mitre.org/data/definitions/364.html) -- async-signal-safe operations only in handlers
+- [HashiCorp Vault SIGHUP race (GitHub #27100)](https://github.com/hashicorp/vault/issues/27100) -- SIGHUP during startup race condition
+- [SQLite Forum: Schema Versioning and Migration](https://www.sqliteforum.com/p/sqlite-versioning-and-migration-strategies) -- ALTER TABLE limitations, version tracking
+- [David Rothlis: Declarative SQLite Schema Migration](https://david.rothlis.net/declarative-schema-migration-for-sqlite/) -- migration patterns for SQLite
+- chromatindb codebase: `cli/src/envelope.cpp` -- current CENV v1 segmented encryption (no last-segment marker)
+- chromatindb codebase: `cli/src/connection.cpp:626` -- chunked recv with unchecked total_size (pre-existing bug)
+- chromatindb codebase: `db/peer/peer_manager.h:76-88` -- hardcoded sync/peer constants to be made configurable
+- chromatindb codebase: v1.0.0 PEX SIGSEGV post-mortem -- AEAD nonce desync from concurrent writes (same class of bug)
+- chromatindb PROTOCOL.md: CENV envelope format (lines 1153-1283) -- segment nonce derivation, no last-segment marker
 
 ---
-*Pitfalls research for: WebSocket/JSON/TLS gateway relay (chromatindb Relay v2)*
-*Researched: 2026-04-09*
+*Pitfalls research for: CLI polish features (groups, chunked files, pipelining, configurable constants)*
+*Researched: 2026-04-15*
