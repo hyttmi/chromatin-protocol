@@ -1,4 +1,4 @@
-# Test target for chromatindb-cli
+# Test target for cdb
 # Included from cli/CMakeLists.txt via add_subdirectory(tests)
 
 add_executable(cli_tests

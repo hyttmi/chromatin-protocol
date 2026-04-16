@@ -17,7 +17,7 @@ struct Contact {
 };
 
 /// Local contact database backed by SQLite.
-/// Stored at ~/.chromatindb/contacts.db
+/// Stored at ~/.cdb/contacts.db
 class ContactDB {
 public:
     explicit ContactDB(const std::string& db_path);

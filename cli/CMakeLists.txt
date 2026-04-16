@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(chromatindb-cli LANGUAGES C CXX)
+project(cdb LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,7 +83,7 @@ target_include_directories(oqs PUBLIC
 # =============================================================================
 # CLI executable
 # =============================================================================
-add_executable(chromatindb-cli
+add_executable(cdb
   src/main.cpp
   src/commands.cpp
   src/identity.cpp
@@ -93,13 +93,13 @@ add_executable(chromatindb-cli
   src/contacts.cpp
 )
 
-target_include_directories(chromatindb-cli PRIVATE
+target_include_directories(cdb PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
 )
 
-target_compile_features(chromatindb-cli PUBLIC cxx_std_20)
+target_compile_features(cdb PUBLIC cxx_std_20)
 
-target_link_libraries(chromatindb-cli PRIVATE
+target_link_libraries(cdb PRIVATE
   oqs
   PkgConfig::sodium
   PkgConfig::sqlite3
@@ -107,11 +107,6 @@ target_link_libraries(chromatindb-cli PRIVATE
   asio::asio
   spdlog::spdlog
   nlohmann_json::nlohmann_json
-)
-
-# Also install as 'cdb' for convenience
-add_custom_command(TARGET chromatindb-cli POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E create_symlink chromatindb-cli ${CMAKE_BINARY_DIR}/cdb
 )
 
 # =============================================================================

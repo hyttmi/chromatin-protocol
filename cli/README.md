@@ -1,4 +1,4 @@
-# chromatindb-cli
+# cdb
 
 Post-quantum encrypted CLI client for chromatindb. All data is envelope-encrypted with ML-KEM-1024 before leaving the client. The node never sees plaintext.
 
@@ -11,42 +11,42 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
 
 # Generate identity (ML-DSA-87 signing + ML-KEM-1024 encryption)
-./chromatindb-cli keygen
+./cdb keygen
 
 # Publish your public key to the node
-./chromatindb-cli publish 192.168.1.73
+./cdb publish 192.168.1.73
 
 # Upload a file (envelope-encrypted for yourself)
-./chromatindb-cli put secret.pdf 192.168.1.73
+./cdb put secret.pdf 192.168.1.73
 
 # Download and decrypt
-./chromatindb-cli get <hash> 192.168.1.73
+./cdb get <hash> 192.168.1.73
 ```
 
 ## Config File
 
-Create `~/.chromatindb/config.json` to set default host:
+Create `~/.cdb/config.json` to set default host:
 
 ```json
 {"host": "192.168.1.73", "port": 4200}
 ```
 
-Then just: `chromatindb-cli put file.txt`
+Then just: `cdb put file.txt`
 
 ## Contacts
 
 ```bash
 # Add a contact by their namespace (fetches their published pubkey)
-chromatindb-cli contact add alice c8afff59... 192.168.1.73
+cdb contact add alice c8afff59... 192.168.1.73
 
 # Share a file with a contact by name
-chromatindb-cli put secret.pdf --share alice
+cdb put secret.pdf --share alice
 
 # Download all files from a contact
-chromatindb-cli get --all --from alice -o ~/downloads
+cdb get --all --from alice -o ~/downloads
 
 # List contacts
-chromatindb-cli contact list
+cdb contact list
 ```
 
 ## Commands
@@ -69,12 +69,14 @@ chromatindb-cli contact list
 | `revoke <pubkey>` | Revoke write access |
 | `delegations` | List active delegations |
 | `contact add/rm/list` | Manage local contacts |
+| `contact import/export` | Import/export contacts |
+| `group create/add/rm/list` | Manage contact groups |
 
 ## Global Flags
 
 | Flag | Description |
 |------|-------------|
-| `--identity <path>` | Identity directory (default: `~/.chromatindb/`) |
+| `--identity <path>` | Identity directory (default: `~/.cdb/`) |
 | `--uds <path>` | UDS socket path (tried first) |
 | `-p, --port <port>` | Port (default: 4200) |
 | `-q, --quiet` | Minimal output |

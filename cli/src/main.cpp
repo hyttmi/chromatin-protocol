@@ -14,7 +14,7 @@
 
 namespace fs = std::filesystem;
 
-static const char* VERSION = "0.1.0";
+static const char* VERSION = "1.0.0";
 
 static fs::path default_identity_dir() {
     const char* home = std::getenv("HOME");
@@ -22,7 +22,7 @@ static fs::path default_identity_dir() {
         std::fprintf(stderr, "Error: HOME environment variable not set\n");
         std::exit(1);
     }
-    return fs::path(home) / ".chromatindb";
+    return fs::path(home) / ".cdb";
 }
 
 /// Parse TTL string: plain seconds, or suffix with s/m/h/d.
@@ -47,7 +47,7 @@ static uint32_t parse_ttl(const char* s) {
 
 static void usage() {
     std::fprintf(stderr,
-        "Usage: chromatindb-cli <command> [options]\n"
+        "Usage: cdb <command> [options]\n"
         "\n"
         "Commands:\n"
         "  keygen       Generate identity keypair\n"
@@ -63,13 +63,14 @@ static void usage() {
         "  stats        Namespace statistics\n"
         "  publish      Publish pubkey to node\n"
         "  contact      Manage contacts (add/rm/list)\n"
+        "  group        Manage contact groups (create/add/rm/list)\n"
         "  delegate     Grant write access to another identity\n"
         "  revoke       Revoke write access\n"
         "  delegations  List active delegations\n"
         "  version      Print version\n"
         "\n"
         "Global options:\n"
-        "  --identity <path>   Identity directory (default: ~/.chromatindb/)\n"
+        "  --identity <path>   Identity directory (default: ~/.cdb/)\n"
         "  --uds <path>        UDS socket path\n"
         "  -p, --port <port>   Port (default: 4200)\n"
         "  -v, --verbose       Show info-level log output\n"
@@ -199,7 +200,7 @@ int main(int argc, char* argv[]) {
         // version (no identity needed)
         // =====================================================================
         if (command == "version") {
-            std::printf("chromatindb-cli %s\n", VERSION);
+            std::printf("cdb %s\n", VERSION);
             return 0;
         }
 
@@ -208,7 +209,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "keygen") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli keygen [--force]\n");
+                std::fprintf(stderr, "Usage: cdb keygen [--force]\n");
                 return 0;
             }
             while (arg_idx < argc) {
@@ -228,7 +229,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "whoami") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli whoami\n");
+                std::fprintf(stderr, "Usage: cdb whoami\n");
                 return 0;
             }
             return cmd::whoami(identity_dir_str);
@@ -239,7 +240,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "export-key") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli export-key\n");
+                std::fprintf(stderr, "Usage: cdb export-key\n");
                 return 0;
             }
             return cmd::export_key(identity_dir_str);
@@ -253,7 +254,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "put") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli put <file>... [host[:port]] [--share <name|file>...] [--ttl <duration>] [--stdin]\n");
+                std::fprintf(stderr, "Usage: cdb put <file>... [host[:port]] [--share <name|file>...] [--ttl <duration>] [--stdin]\n");
                 return 0;
             }
             std::vector<std::string> file_paths;
@@ -323,7 +324,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "get") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli get <hash>... [host[:port]] [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
+                std::fprintf(stderr, "Usage: cdb get <hash>... [host[:port]] [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -415,7 +416,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "rm") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli rm <hash> [host[:port]] [--namespace <hex>] [-y]\n");
+                std::fprintf(stderr, "Usage: cdb rm <hash> [host[:port]] [--namespace <hex>] [-y]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -471,7 +472,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "reshare") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli reshare <hash> [host[:port]] [--share <name|file>...] [--ttl <duration>] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb reshare <hash> [host[:port]] [--share <name|file>...] [--ttl <duration>] [--namespace <hex>]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -529,7 +530,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "ls") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli ls [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb ls [host[:port]] [--namespace <hex>]\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -561,7 +562,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "exists") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli exists <hash> [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb exists <hash> [host[:port]] [--namespace <hex>]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -601,7 +602,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "info") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli info [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb info [host[:port]]\n");
                 return 0;
             }
             while (arg_idx < argc) {
@@ -622,7 +623,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "stats") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli stats [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb stats [host[:port]]\n");
                 return 0;
             }
             while (arg_idx < argc) {
@@ -643,7 +644,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "delegate") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli delegate <pubkey_file> [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb delegate <pubkey_file> [host[:port]]\n");
                 return 0;
             }
             std::string pubkey_file;
@@ -672,7 +673,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "revoke") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli revoke <pubkey_file> [host[:port]] [-y]\n");
+                std::fprintf(stderr, "Usage: cdb revoke <pubkey_file> [host[:port]] [-y]\n");
                 return 0;
             }
             std::string pubkey_file;
@@ -716,7 +717,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "delegations") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli delegations [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb delegations [host[:port]] [--namespace <hex>]\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -745,7 +746,7 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "publish") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli publish [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb publish [host[:port]]\n");
                 return 0;
             }
             while (arg_idx < argc) {
@@ -768,9 +769,9 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "contact") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: chromatindb-cli contact add <name> <namespace> [host[:port]]\n"
-                             "       chromatindb-cli contact rm <name>\n"
-                             "       chromatindb-cli contact list\n");
+                std::fprintf(stderr, "Usage: cdb contact add <name> <namespace> [host[:port]]\n"
+                             "       cdb contact rm <name>\n"
+                             "       cdb contact list\n");
                 return 0;
             }
             if (arg_idx >= argc) {
