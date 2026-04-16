@@ -61,7 +61,7 @@ Plans:
   5. `add-peer` and `remove-peer` modify config.json and trigger SIGHUP automatically
 **Plans**: 2 plans
 Plans:
-- [ ] 118-01-PLAN.md — Config fields, component integration, SIGHUP reload, pidfile, tests
+- [x] 118-01-PLAN.md — Config fields, component integration, SIGHUP reload, pidfile, tests
 - [ ] 118-02-PLAN.md — Peer management subcommands (add-peer, remove-peer, list-peers)
 
 ### Phase 119: Chunked Large Files
@@ -130,7 +130,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 |-------|----------------|--------|-----------|
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
-| 118. Configurable Constants + Peer Management | 0/2 | Planning complete | - |
+| 118. Configurable Constants + Peer Management | 1/2 | In Progress|  |
 | 119. Chunked Large Files | 0/0 | Not started | - |
 | 120. Request Pipelining | 0/0 | Not started | - |
 | 121. Documentation | 0/0 | Not started | - |
