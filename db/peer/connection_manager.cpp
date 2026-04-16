@@ -59,10 +59,7 @@ bool ConnectionManager::should_accept_connection() const {
         if (p->is_client) ++client_count;
         else ++peer_count;
     }
-    // Include in-flight handshakes (not yet classified as peer or client)
-    auto pending = pending_handshakes_.load(std::memory_order_relaxed);
-    auto total = peer_count + client_count + pending;
-    return total < max_peers_ + max_clients_;
+    return peer_count < max_peers_ && client_count < max_clients_;
 }
 
 void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
@@ -221,20 +218,10 @@ void ConnectionManager::on_peer_disconnected(net::Connection::Ptr conn) {
     auto ns_hex = to_hex(conn->peer_pubkey(), 8);
     bool graceful = conn->received_goodbye();
 
-    // Find PeerInfo to check if client and whether it was ever registered
+    // Find PeerInfo to check if client
     bool was_client = false;
-    bool was_registered = false;
     for (const auto& p : peers_) {
-        if (p->connection == conn) {
-            was_client = p->is_client;
-            was_registered = true;
-            break;
-        }
-    }
-
-    // Connection closed before handshake completed — decrement pending counter
-    if (!was_registered) {
-        handshake_finished();
+        if (p->connection == conn) { was_client = p->is_client; break; }
     }
 
     spdlog::info("{} {} disconnected ({})",

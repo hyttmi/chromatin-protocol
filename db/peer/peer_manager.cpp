@@ -184,14 +184,9 @@ PeerManager::PeerManager(const config::Config& config,
     server_.set_pool(pool);
 
     // Wire server callbacks -- delegate to ConnectionManager
-    server_.set_accept_filter([this]() {
-        if (!conn_mgr_.should_accept_connection()) return false;
-        conn_mgr_.handshake_started();
-        return true;
-    });
+    server_.set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
 
     server_.set_on_connected([this](net::Connection::Ptr conn) {
-        conn_mgr_.handshake_finished();
         conn_mgr_.on_peer_connected(conn);
     });
 
@@ -204,13 +199,8 @@ PeerManager::PeerManager(const config::Config& config,
         uds_acceptor_ = std::make_unique<net::UdsAcceptor>(
             config.uds_path, identity, ioc);
 
-        uds_acceptor_->set_accept_filter([this]() {
-            if (!conn_mgr_.should_accept_connection()) return false;
-            conn_mgr_.handshake_started();
-            return true;
-        });
+        uds_acceptor_->set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
         uds_acceptor_->set_on_connected([this](net::Connection::Ptr conn) {
-            conn_mgr_.handshake_finished();
             conn_mgr_.on_peer_connected(conn);
         });
         uds_acceptor_->set_on_disconnected([this](net::Connection::Ptr conn) {
