@@ -95,45 +95,45 @@ Deferred to future release.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ERGO-01 | — | Pending |
-| ERGO-02 | — | Pending |
-| ERGO-03 | — | Pending |
-| CONT-01 | — | Pending |
-| CONT-02 | — | Pending |
-| CONT-03 | — | Pending |
-| CONT-04 | — | Pending |
-| CONT-05 | — | Pending |
-| CHUNK-01 | — | Pending |
-| CHUNK-02 | — | Pending |
-| CHUNK-03 | — | Pending |
-| CHUNK-04 | — | Pending |
-| CHUNK-05 | — | Pending |
-| PIPE-01 | — | Pending |
-| PIPE-02 | — | Pending |
-| PIPE-03 | — | Pending |
-| TYPE-01 | — | Pending |
-| TYPE-02 | — | Pending |
-| TYPE-03 | — | Pending |
-| TYPE-04 | — | Pending |
-| CONF-01 | — | Pending |
-| CONF-02 | — | Pending |
-| CONF-03 | — | Pending |
-| PEER-01 | — | Pending |
-| PEER-02 | — | Pending |
-| PEER-03 | — | Pending |
-| DOCS-01 | — | Pending |
-| DOCS-02 | — | Pending |
-| DOCS-03 | — | Pending |
-| DOCS-04 | — | Pending |
-| VERI-01 | — | Pending |
-| VERI-02 | — | Pending |
-| VERI-03 | — | Pending |
+| ERGO-01 | Phase 116 | Pending |
+| ERGO-02 | Phase 117 | Pending |
+| ERGO-03 | Phase 117 | Pending |
+| CONT-01 | Phase 116 | Pending |
+| CONT-02 | Phase 116 | Pending |
+| CONT-03 | Phase 116 | Pending |
+| CONT-04 | Phase 116 | Pending |
+| CONT-05 | Phase 116 | Pending |
+| CHUNK-01 | Phase 119 | Pending |
+| CHUNK-02 | Phase 119 | Pending |
+| CHUNK-03 | Phase 119 | Pending |
+| CHUNK-04 | Phase 119 | Pending |
+| CHUNK-05 | Phase 119 | Pending |
+| PIPE-01 | Phase 120 | Pending |
+| PIPE-02 | Phase 120 | Pending |
+| PIPE-03 | Phase 120 | Pending |
+| TYPE-01 | Phase 117 | Pending |
+| TYPE-02 | Phase 117 | Pending |
+| TYPE-03 | Phase 117 | Pending |
+| TYPE-04 | Phase 117 | Pending |
+| CONF-01 | Phase 118 | Pending |
+| CONF-02 | Phase 118 | Pending |
+| CONF-03 | Phase 118 | Pending |
+| PEER-01 | Phase 118 | Pending |
+| PEER-02 | Phase 118 | Pending |
+| PEER-03 | Phase 118 | Pending |
+| DOCS-01 | Phase 121 | Pending |
+| DOCS-02 | Phase 121 | Pending |
+| DOCS-03 | Phase 121 | Pending |
+| DOCS-04 | Phase 121 | Pending |
+| VERI-01 | Phase 122 | Pending |
+| VERI-02 | Phase 122 | Pending |
+| VERI-03 | Phase 122 | Pending |
 
 **Coverage:**
 - v4.1.0 requirements: 33 total
-- Mapped to phases: 0
-- Unmapped: 33
+- Mapped to phases: 33
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-16*
-*Last updated: 2026-04-16 after initial definition*
+*Last updated: 2026-04-16 after roadmap creation*
