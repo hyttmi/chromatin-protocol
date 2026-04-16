@@ -53,6 +53,21 @@ int contact_add(const std::string& identity_dir, const std::string& name,
 int contact_rm(const std::string& identity_dir, const std::string& name);
 int contact_list(const std::string& identity_dir);
 
+// Group commands
+int group_create(const std::string& identity_dir, const std::string& name);
+int group_add(const std::string& identity_dir, const std::string& group,
+              const std::vector<std::string>& contacts);
+int group_rm(const std::string& identity_dir, const std::string& group);
+int group_rm_member(const std::string& identity_dir, const std::string& group,
+                    const std::string& contact);
+int group_list(const std::string& identity_dir);
+int group_list_members(const std::string& identity_dir, const std::string& group);
+
+// Contact import/export
+int contact_import(const std::string& identity_dir, const std::string& json_path,
+                   const ConnectOpts& opts);
+int contact_export(const std::string& identity_dir);
+
 int delegate(const std::string& identity_dir, const std::string& pubkey_file,
              const ConnectOpts& opts);
 int revoke(const std::string& identity_dir, const std::string& pubkey_file,

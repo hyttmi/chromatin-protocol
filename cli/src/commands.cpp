@@ -172,18 +172,36 @@ static std::vector<std::vector<uint8_t>> load_recipient_kem_pubkeys(
     kem_pks.reserve(share_args.size());
 
     for (const auto& arg : share_args) {
-        if (fs::exists(arg)) {
-            // It's a file path — load pubkey from file
+        if (arg.size() > 1 && arg[0] == '@') {
+            // @group resolution
+            std::string group_name = arg.substr(1);
+            auto db_path = identity_dir + "/contacts.db";
+            ContactDB db(db_path);
+            auto members = db.group_members(group_name);
+            if (members.empty()) {
+                throw std::runtime_error("Group '@" + group_name + "' is empty or does not exist");
+            }
+            for (const auto& contact : members) {
+                if (contact.kem_pk.empty()) {
+                    throw std::runtime_error("contact " + contact.name + " has no encryption key");
+                }
+                kem_pks.push_back(contact.kem_pk);
+            }
+        } else if (fs::exists(arg)) {
+            // File path — load pubkey from file
             auto data = read_file_bytes(arg);
             auto [signing_pk, kem_pk] = Identity::load_public_keys(data);
             kem_pks.push_back(std::move(kem_pk));
         } else {
-            // Treat as contact name — look up in contacts db
+            // Contact name lookup
             auto db_path = identity_dir + "/contacts.db";
             ContactDB db(db_path);
             auto contact = db.get(arg);
             if (!contact) {
                 throw std::runtime_error("Unknown contact or file: " + arg);
+            }
+            if (contact->kem_pk.empty()) {
+                throw std::runtime_error("contact " + contact->name + " has no encryption key");
             }
             kem_pks.push_back(contact->kem_pk);
         }
@@ -1490,6 +1508,165 @@ int contact_list(const std::string& identity_dir) {
     for (const auto& c : contacts) {
         std::printf("%-20s %s\n", c.name.c_str(), c.namespace_hex.c_str());
     }
+    return 0;
+}
+
+// =============================================================================
+// group create
+// =============================================================================
+
+int group_create(const std::string& identity_dir, const std::string& name) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    db.group_create(name);
+    std::fprintf(stderr, "created group: %s\n", name.c_str());
+    return 0;
+}
+
+// =============================================================================
+// group add <group> <contact>...
+// =============================================================================
+
+int group_add(const std::string& identity_dir, const std::string& group,
+              const std::vector<std::string>& contacts) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    for (const auto& c : contacts) {
+        db.group_add_member(group, c);
+        std::fprintf(stderr, "added %s to group %s\n", c.c_str(), group.c_str());
+    }
+    return 0;
+}
+
+// =============================================================================
+// group rm <group> -- or -- group rm <group> <contact>
+// =============================================================================
+
+int group_rm(const std::string& identity_dir, const std::string& group) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    if (db.group_remove(group)) {
+        std::fprintf(stderr, "removed group: %s\n", group.c_str());
+        return 0;
+    }
+    std::fprintf(stderr, "Error: group not found: %s\n", group.c_str());
+    return 1;
+}
+
+int group_rm_member(const std::string& identity_dir, const std::string& group,
+                    const std::string& contact) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    if (db.group_remove_member(group, contact)) {
+        std::fprintf(stderr, "removed %s from group %s\n", contact.c_str(), group.c_str());
+        return 0;
+    }
+    std::fprintf(stderr, "Error: %s not in group %s\n", contact.c_str(), group.c_str());
+    return 1;
+}
+
+// =============================================================================
+// group list [<name>]
+// =============================================================================
+
+int group_list(const std::string& identity_dir) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    auto groups = db.group_list();
+    if (groups.empty()) {
+        std::fprintf(stderr, "no groups\n");
+        return 0;
+    }
+    for (const auto& [name, count] : groups) {
+        std::printf("%-20s %d member%s\n", name.c_str(), count, count == 1 ? "" : "s");
+    }
+    return 0;
+}
+
+int group_list_members(const std::string& identity_dir, const std::string& group) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    auto members = db.group_members(group);
+    if (members.empty()) {
+        std::fprintf(stderr, "no members in group: %s\n", group.c_str());
+        return 0;
+    }
+    for (const auto& c : members) {
+        std::printf("%-20s %s\n", c.name.c_str(), c.namespace_hex.c_str());
+    }
+    return 0;
+}
+
+// =============================================================================
+// contact import <file.json> [host[:port]]
+// =============================================================================
+
+int contact_import(const std::string& identity_dir, const std::string& json_path,
+                   const ConnectOpts& opts) {
+    std::ifstream f(json_path, std::ios::binary);
+    if (!f) {
+        std::fprintf(stderr, "Error: cannot open %s\n", json_path.c_str());
+        return 1;
+    }
+
+    auto json = nlohmann::json::parse(f, nullptr, false);
+    if (json.is_discarded() || !json.is_array()) {
+        std::fprintf(stderr, "Error: expected JSON array in %s\n", json_path.c_str());
+        return 1;
+    }
+
+    int imported = 0, failed = 0;
+    auto total = json.size();
+
+    for (const auto& entry : json) {
+        if (!entry.contains("name") || !entry["name"].is_string() ||
+            !entry.contains("namespace") || !entry["namespace"].is_string()) {
+            std::fprintf(stderr, "  skip: invalid entry (missing name or namespace)\n");
+            ++failed;
+            continue;
+        }
+
+        std::string name = entry["name"].get<std::string>();
+        std::string ns = entry["namespace"].get<std::string>();
+
+        if (ns.size() != 64) {
+            std::fprintf(stderr, "  skip: %s: namespace must be 64 hex chars\n", name.c_str());
+            ++failed;
+            continue;
+        }
+
+        int rc = contact_add(identity_dir, name, ns, opts);
+        if (rc != 0) {
+            std::fprintf(stderr, "  skip: %s: pubkey fetch failed\n", name.c_str());
+            ++failed;
+            continue;
+        }
+        ++imported;
+    }
+
+    std::fprintf(stderr, "Imported %d/%zu contacts. Failed: %d\n",
+                 imported, total, failed);
+    return (failed > 0 && imported == 0) ? 1 : 0;
+}
+
+// =============================================================================
+// contact export
+// =============================================================================
+
+int contact_export(const std::string& identity_dir) {
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    auto contacts = db.list();
+
+    auto json = nlohmann::json::array();
+    for (const auto& c : contacts) {
+        json.push_back({
+            {"name", c.name},
+            {"namespace", c.namespace_hex}
+        });
+    }
+
+    std::printf("%s\n", json.dump(2).c_str());
     return 0;
 }
 
