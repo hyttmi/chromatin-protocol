@@ -54,6 +54,11 @@ Config load_config(const std::filesystem::path& path) {
         cfg.compaction_interval_hours = j.value("compaction_interval_hours", cfg.compaction_interval_hours);
         cfg.uds_path = j.value("uds_path", cfg.uds_path);
         cfg.metrics_bind = j.value("metrics_bind", cfg.metrics_bind);
+        cfg.blob_transfer_timeout = j.value("blob_transfer_timeout", cfg.blob_transfer_timeout);
+        cfg.sync_timeout = j.value("sync_timeout", cfg.sync_timeout);
+        cfg.pex_interval = j.value("pex_interval", cfg.pex_interval);
+        cfg.strike_threshold = j.value("strike_threshold", cfg.strike_threshold);
+        cfg.strike_cooldown = j.value("strike_cooldown", cfg.strike_cooldown);
     } catch (const nlohmann::json::type_error& e) {
         throw std::runtime_error(
             std::string("Config type error: ") + e.what() +
@@ -71,7 +76,9 @@ Config load_config(const std::filesystem::path& path) {
         "worker_threads", "sync_cooldown_seconds", "max_sync_sessions",
         "namespace_quotas", "log_file", "log_max_size_mb", "log_max_files",
         "log_format", "compaction_interval_hours",
-        "uds_path", "metrics_bind"
+        "uds_path", "metrics_bind",
+        "blob_transfer_timeout", "sync_timeout", "pex_interval",
+        "strike_threshold", "strike_cooldown"
     };
     for (const auto& [key, _] : j.items()) {
         if (known_keys.find(key) == known_keys.end()) {
@@ -279,6 +286,26 @@ void validate_config(const Config& cfg) {
     if (cfg.max_sync_sessions < 1) {
         errors.push_back("max_sync_sessions must be >= 1 (got " +
                           std::to_string(cfg.max_sync_sessions) + ")");
+    }
+    if (cfg.blob_transfer_timeout < 10 || cfg.blob_transfer_timeout > 86400) {
+        errors.push_back("blob_transfer_timeout must be 10-86400 (got " +
+                          std::to_string(cfg.blob_transfer_timeout) + ")");
+    }
+    if (cfg.sync_timeout < 5 || cfg.sync_timeout > 3600) {
+        errors.push_back("sync_timeout must be 5-3600 (got " +
+                          std::to_string(cfg.sync_timeout) + ")");
+    }
+    if (cfg.pex_interval < 10 || cfg.pex_interval > 86400) {
+        errors.push_back("pex_interval must be 10-86400 (got " +
+                          std::to_string(cfg.pex_interval) + ")");
+    }
+    if (cfg.strike_threshold < 1 || cfg.strike_threshold > 1000) {
+        errors.push_back("strike_threshold must be 1-1000 (got " +
+                          std::to_string(cfg.strike_threshold) + ")");
+    }
+    if (cfg.strike_cooldown > 86400) {
+        errors.push_back("strike_cooldown must be 0-86400 (got " +
+                          std::to_string(cfg.strike_cooldown) + ")");
     }
 
     // log_format validation

@@ -48,6 +48,14 @@ struct Config {
     uint32_t compaction_interval_hours = 6;         // Compaction interval in hours (0 = disabled, minimum 1 when enabled)
     std::string uds_path;                           // Unix domain socket path (empty = disabled)
     std::string metrics_bind;                       // Prometheus /metrics HTTP endpoint (empty = disabled, "host:port" = enabled)
+    // Sync/peer tuning (Phase 118)
+    // SIGHUP-reloadable:
+    uint32_t blob_transfer_timeout = 600;           // seconds, per-blob timeout during sync transfer (raised from 120s)
+    uint32_t sync_timeout = 30;                     // seconds, timeout for sync protocol responses
+    uint32_t pex_interval = 300;                    // seconds, peer exchange interval
+    // Restart-only:
+    uint32_t strike_threshold = 10;                 // strikes before disconnecting misbehaving peer
+    uint32_t strike_cooldown = 300;                 // seconds banned after strike disconnect (not yet enforced)
     std::filesystem::path config_path;              // Path to config file (for SIGHUP reload)
 };
 

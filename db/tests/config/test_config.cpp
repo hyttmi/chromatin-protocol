@@ -1400,3 +1400,174 @@ TEST_CASE("metrics_bind is a known config key", "[config][metrics]") {
 
     std::filesystem::remove(tmp);
 }
+
+// ===== Phase 118: Configurable sync/peer constants =====
+
+TEST_CASE("Phase 118 config defaults", "[config]") {
+    Config cfg;
+    REQUIRE(cfg.blob_transfer_timeout == 600);
+    REQUIRE(cfg.sync_timeout == 30);
+    REQUIRE(cfg.pex_interval == 300);
+    REQUIRE(cfg.strike_threshold == 10);
+    REQUIRE(cfg.strike_cooldown == 300);
+}
+
+TEST_CASE("blob_transfer_timeout parses from JSON", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_btt.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"blob_transfer_timeout": 120})";
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.blob_transfer_timeout == 120);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("sync_timeout parses from JSON", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_st.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"sync_timeout": 60})";
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.sync_timeout == 60);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("pex_interval parses from JSON", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_pex.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"pex_interval": 600})";
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.pex_interval == 600);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("strike_threshold parses from JSON", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_strike.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"strike_threshold": 5})";
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.strike_threshold == 5);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("strike_cooldown parses from JSON", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_sc.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"strike_cooldown": 600})";
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.strike_cooldown == 600);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("validate_config: blob_transfer_timeout below minimum throws", "[config][validation]") {
+    Config cfg;
+    cfg.blob_transfer_timeout = 5;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("blob_transfer_timeout"));
+    }
+}
+
+TEST_CASE("validate_config: blob_transfer_timeout above maximum throws", "[config][validation]") {
+    Config cfg;
+    cfg.blob_transfer_timeout = 100000;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("blob_transfer_timeout"));
+    }
+}
+
+TEST_CASE("validate_config: sync_timeout below minimum throws", "[config][validation]") {
+    Config cfg;
+    cfg.sync_timeout = 2;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("sync_timeout"));
+    }
+}
+
+TEST_CASE("validate_config: sync_timeout above maximum throws", "[config][validation]") {
+    Config cfg;
+    cfg.sync_timeout = 5000;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("sync_timeout"));
+    }
+}
+
+TEST_CASE("validate_config: pex_interval below minimum throws", "[config][validation]") {
+    Config cfg;
+    cfg.pex_interval = 5;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("pex_interval"));
+    }
+}
+
+TEST_CASE("validate_config: pex_interval above maximum throws", "[config][validation]") {
+    Config cfg;
+    cfg.pex_interval = 100000;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("pex_interval"));
+    }
+}
+
+TEST_CASE("validate_config: strike_threshold zero throws", "[config][validation]") {
+    Config cfg;
+    cfg.strike_threshold = 0;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("strike_threshold"));
+    }
+}
+
+TEST_CASE("validate_config: strike_threshold above maximum throws", "[config][validation]") {
+    Config cfg;
+    cfg.strike_threshold = 1001;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("strike_threshold"));
+    }
+}
+
+TEST_CASE("validate_config: strike_cooldown above maximum throws", "[config][validation]") {
+    Config cfg;
+    cfg.strike_cooldown = 100000;
+    REQUIRE_THROWS_AS(validate_config(cfg), std::runtime_error);
+    try { validate_config(cfg); } catch (const std::runtime_error& e) {
+        REQUIRE_THAT(e.what(), Catch::Matchers::ContainsSubstring("strike_cooldown"));
+    }
+}
+
+TEST_CASE("validate_config: Phase 118 defaults pass validation", "[config][validation]") {
+    Config cfg;
+    REQUIRE_NOTHROW(validate_config(cfg));
+}
+
+TEST_CASE("Phase 118 keys are known config keys", "[config]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_p118_known.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({
+            "blob_transfer_timeout": 600,
+            "sync_timeout": 30,
+            "pex_interval": 300,
+            "strike_threshold": 10,
+            "strike_cooldown": 300
+        })";
+    }
+
+    // Should not produce "unknown config key" warnings
+    REQUIRE_NOTHROW(load_config(tmp));
+
+    std::filesystem::remove(tmp);
+}
