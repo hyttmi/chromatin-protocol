@@ -44,7 +44,7 @@ Requirements for CLI Polish + Node Improvements. Enterprise secure file sharing 
 
 ### Node — Configurable Constants
 
-- [ ] **CONF-01**: 10 hardcoded sync/peer constants moved to config.json with sensible defaults
+- [ ] **CONF-01**: 5 operator-relevant hardcoded sync/peer constants (blob_transfer_timeout, sync_timeout, pex_interval, strike_threshold, strike_cooldown) moved to config.json with sensible defaults
 - [ ] **CONF-02**: All new config fields SIGHUP-reloadable where safe
 - [ ] **CONF-03**: Validation with range checks (reject bad values)
 
@@ -136,4 +136,4 @@ Deferred to future release.
 
 ---
 *Requirements defined: 2026-04-16*
-*Last updated: 2026-04-16 after roadmap creation*
+*Last updated: 2026-04-16 after Phase 118 planning (CONF-01 scoped to 5 per D-01)*

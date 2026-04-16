@@ -47,7 +47,7 @@ The primary technical risk is the PID discovery mechanism for SIGHUP signaling f
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| CONF-01 | 10 hardcoded sync/peer constants moved to config.json with sensible defaults | Scoped to 5 per D-01/D-02. Config struct extension pattern verified in config.h (28+ existing fields). load_config parsing pattern in config.cpp. |
+| CONF-01 | 5 operator-relevant hardcoded sync/peer constants moved to config.json with sensible defaults | Scoped to 5 per D-01/D-02. Config struct extension pattern verified in config.h (28+ existing fields). load_config parsing pattern in config.cpp. |
 | CONF-02 | All new config fields SIGHUP-reloadable where safe | 3 of 5 reloadable per D-04. SIGHUP reload handler in peer_manager.cpp:488-671 already reloads 15+ fields -- proven extension point. |
 | CONF-03 | Validation with range checks (reject bad values) | validate_config() in config.cpp:239-368 has 15+ existing range checks -- pattern is "accumulate errors, throw all at once". |
 | PEER-01 | `chromatindb add-peer <addr>` adds peer to config and triggers SIGHUP | Requires: config.json editing (nlohmann/json read-modify-write), PID discovery (pidfile), SIGHUP send (kill(pid, SIGHUP)). |
@@ -409,17 +409,13 @@ Source: message_dispatcher.cpp:1189-1214 [VERIFIED: codebase inspection]
 | A3 | STRIKE_COOLDOWN_SEC should be stored as config even though no runtime enforcement exists | Pitfalls | Medium -- planner needs to decide: store only vs. implement basic ban timer |
 | A4 | list-peers subcommand needs its own minimal UDS client (not linking CLI code) | Pitfalls | Low -- the alternative (factor out common code) is more work but cleaner long-term |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **STRIKE_COOLDOWN_SEC has no runtime implementation**
-   - What we know: The constant is declared (300) but the strike system just disconnects. There is no "banned for N seconds" mechanism.
-   - What's unclear: Should Phase 118 implement a basic reconnection-rejection cooldown, or just store the config value as a placeholder?
-   - Recommendation: Store the config value and add a TODO comment. The reconnect backoff in Server already provides some natural cooldown. Implementing a proper ban timer is a separate feature.
+   - RESOLVED: Store the config value and document it as "not yet enforced" in the config.h comment. The reconnect backoff in Server already provides natural cooldown. Implementing a proper ban timer is a separate feature outside Phase 118 scope. The config field is loaded at startup (D-05: restart-only) so it will be ready when enforcement is added later.
 
 2. **list-peers UDS client complexity**
-   - What we know: The `chromatindb` binary currently doesn't have UDS client code. The CLI (`cdb`) has a full UDS client with TrustedHello + AEAD.
-   - What's unclear: How much handshake code needs to be duplicated.
-   - Recommendation: Implement a minimal synchronous UDS client in main.cpp (~100 lines). The TrustedHello exchange is simple: send [nonce:32][pubkey:2592], recv [nonce:32][pubkey:2592], HKDF derive keys, then send/recv AEAD-encrypted messages. Identity keys are loaded from data_dir.
+   - RESOLVED: Implement a full synchronous UDS client in main.cpp (~120 lines). The node binary already links all required libraries (liboqs, libsodium, Asio, FlatBuffers) and can reuse its own TransportCodec, auth_helpers, NodeIdentity, and crypto primitives directly. No code duplication from CLI needed -- the node binary's own headers provide all the building blocks. The TrustedHello + AEAD handshake follows the exact same protocol as cli/src/connection.cpp:399-534 but uses synchronous Asio I/O instead of the CLI's wrapper methods.
 
 ## Environment Availability
 
