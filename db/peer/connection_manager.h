@@ -4,6 +4,7 @@
 
 #include <asio.hpp>
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -52,6 +53,8 @@ public:
     void on_peer_connected(net::Connection::Ptr conn);
     void on_peer_disconnected(net::Connection::Ptr conn);
     bool should_accept_connection() const;
+    void handshake_started() { ++pending_handshakes_; }
+    void handshake_finished() { if (pending_handshakes_ > 0) --pending_handshakes_; }
 
     // Peer access (D-11: other components access peers through here)
     PeerInfo* find_peer(const net::Connection::Ptr& conn);
@@ -118,6 +121,7 @@ private:
     asio::steady_timer* keepalive_timer_ = nullptr;
     uint32_t max_peers_;
     uint32_t max_clients_ = 128;
+    std::atomic<uint32_t> pending_handshakes_{0};
 };
 
 } // namespace chromatindb::peer
