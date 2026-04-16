@@ -113,13 +113,6 @@ static constexpr size_t ENVELOPE_OVERHEAD =
     1 + crypto::AEAD::NONCE_SIZE + crypto::AEAD::TAG_SIZE;  // 29 bytes
 
 // =============================================================================
-// Schema version
-// =============================================================================
-
-// Increment when subdatabase layout or key/value format changes.
-// Node refuses to start if the on-disk version is newer than this constant.
-static constexpr uint32_t SCHEMA_VERSION = 2;
-static constexpr const char* SCHEMA_VERSION_KEY = "schema_version";
 
 // =============================================================================
 // Storage::Impl
@@ -134,7 +127,6 @@ struct Storage::Impl {
     mdbx::map_handle tombstone_map{0};
     mdbx::map_handle cursor_map{0};
     mdbx::map_handle quota_map{0};
-    mdbx::map_handle meta_map{0};
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
     std::string data_dir_;          // Stored for compact() reopen
@@ -194,76 +186,6 @@ struct Storage::Impl {
             tombstone_map = txn.create_map("tombstone");
             cursor_map = txn.create_map("cursor");
             quota_map = txn.create_map("quota");
-            meta_map = txn.create_map("meta");
-
-            // Schema version check/stamp
-            auto key_slice = mdbx::slice(SCHEMA_VERSION_KEY, std::strlen(SCHEMA_VERSION_KEY));
-            auto existing = txn.get(meta_map, key_slice, not_found_sentinel);
-            if (existing.data() != nullptr) {
-                if (existing.length() != sizeof(uint32_t)) {
-                    throw std::runtime_error("corrupt schema_version entry in meta map");
-                }
-                uint32_t on_disk = chromatindb::util::read_u32_be(
-                    static_cast<const uint8_t*>(existing.data()));
-                if (on_disk > SCHEMA_VERSION) {
-                    throw std::runtime_error(
-                        "database schema version " + std::to_string(on_disk) +
-                        " is newer than this binary (supports up to " +
-                        std::to_string(SCHEMA_VERSION) + "). Upgrade chromatindb.");
-                }
-                // Run migrations if on_disk < SCHEMA_VERSION
-                if (on_disk < 2) {
-                    spdlog::info("Migrating seq_map to schema v2 (adding blob_type index)...");
-                    auto cursor = txn.open_cursor(seq_map);
-                    size_t migrated = 0;
-                    bool has_entry = false;
-                    try {
-                        auto seek = cursor.to_first(false);
-                        has_entry = seek.done;
-                    } catch (...) {
-                        has_entry = false;
-                    }
-                    while (has_entry) {
-                        auto val = cursor.current(false).value;
-                        if (val.length() == 32) {
-                            auto key = cursor.current(false).key;
-                            if (key.length() == 40) {
-                                // Extend 32-byte value to 36 bytes with zero type prefix.
-                                // blob_key_ is not yet derived at this point, so we cannot
-                                // decrypt blob data to extract the real type. Zero type
-                                // ({0,0,0,0}) is acceptable: new blobs get correct types on
-                                // ingest, and zero-typed pre-existing blobs will not match
-                                // any type filter but will still be listed normally.
-                                std::array<uint8_t, 36> new_val;
-                                std::memcpy(new_val.data(), val.data(), 32);
-                                std::memset(new_val.data() + 32, 0, 4);
-                                cursor.upsert(key,
-                                              mdbx::slice(new_val.data(), new_val.size()));
-                                ++migrated;
-                            }
-                        }
-                        try {
-                            auto next = cursor.to_next(false);
-                            has_entry = next.done;
-                        } catch (...) {
-                            has_entry = false;
-                        }
-                    }
-                    spdlog::info("Migrated {} seq_map entries to schema v2", migrated);
-
-                    // Stamp version 2
-                    std::array<uint8_t, 4> ver_buf;
-                    chromatindb::util::store_u32_be(ver_buf.data(), 2);
-                    txn.upsert(meta_map, key_slice,
-                               mdbx::slice(ver_buf.data(), ver_buf.size()));
-                }
-            } else {
-                // First open or pre-versioned database: stamp current version
-                std::array<uint8_t, 4> ver_buf;
-                chromatindb::util::store_u32_be(ver_buf.data(), SCHEMA_VERSION);
-                txn.upsert(meta_map, key_slice,
-                            mdbx::slice(ver_buf.data(), ver_buf.size()));
-            }
 
             txn.commit();
         }
@@ -453,7 +375,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                     break;
                 }
                 auto v = cursor.current(false).value;
-                if (v.length() >= 32 &&
+                if (v.length() == 36 &&
                     std::memcmp(v.data(), precomputed_hash.data(), 32) == 0) {
                     existing_seq = chromatindb::util::read_u64_be(
                         static_cast<const uint8_t*>(k.data()) + 32);
@@ -631,7 +553,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                         break;
                     }
                     auto v = cursor.current(false).value;
-                    if (v.length() >= 32 &&
+                    if (v.length() == 36 &&
                         std::memcmp(v.data(),
                                     pb.content_hash.data(), 32) == 0) {
                         existing_seq = chromatindb::util::read_u64_be(
@@ -895,9 +817,9 @@ std::vector<wire::BlobData> Storage::get_blobs_by_seq(
                 break;
             }
 
-            // Extract hash from value (32 or 36 bytes)
+            // Extract hash from 36-byte value (hash:32 + type:4)
             auto val_data = cursor.current(false).value;
-            if (val_data.length() < 32) break;
+            if (val_data.length() != 36) break;
 
             // Fetch full blob
             auto blob_key = make_blob_key(
@@ -959,9 +881,9 @@ std::vector<BlobRef> Storage::get_blob_refs_since(
                 break;
             }
 
-            // Read hash from value (32 or 36 bytes)
+            // Read 36-byte value (hash:32 + type:4)
             auto val_data = cursor.current(false).value;
-            if (val_data.length() < 32) break;
+            if (val_data.length() != 36) break;
 
             // Skip zero-hash sentinels (deleted blobs)
             if (std::memcmp(val_data.data(), zero_hash.data(), 32) != 0) {
@@ -969,11 +891,8 @@ std::vector<BlobRef> Storage::get_blob_refs_since(
                 std::memcpy(ref.blob_hash.data(), val_data.data(), 32);
                 ref.seq_num = chromatindb::util::read_u64_be(
                     static_cast<const uint8_t*>(key_data.data()) + 32);
-                if (val_data.length() >= 36) {
-                    std::memcpy(ref.blob_type.data(),
-                                static_cast<const uint8_t*>(val_data.data()) + 32, 4);
-                }
-                // else: blob_type stays {0,0,0,0} from zero-initialization (pre-migration entries)
+                std::memcpy(ref.blob_type.data(),
+                            static_cast<const uint8_t*>(val_data.data()) + 32, 4);
                 results.push_back(ref);
 
                 if (max_count > 0 && results.size() >= max_count) {
@@ -1013,10 +932,10 @@ std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
             // Check namespace prefix
             if (std::memcmp(key_data.data(), ns.data(), 32) != 0) break;
 
-            // Read hash from value (32 or 36 bytes); skip zero-hash sentinels left
+            // Read hash from 36-byte value; skip zero-hash sentinels left
             // by delete_blob_data to preserve seq_num monotonicity
             auto val_data = cursor.current(false).value;
-            if (val_data.length() >= 32) {
+            if (val_data.length() == 36) {
                 static constexpr std::array<uint8_t, 32> zero_hash{};
                 if (std::memcmp(val_data.data(), zero_hash.data(), 32) != 0) {
                     std::array<uint8_t, 32> hash;
@@ -1192,7 +1111,7 @@ bool Storage::delete_blob_data(
                     break;
                 }
                 auto v = cursor.current(false).value;
-                if (v.length() >= 32 &&
+                if (v.length() == 36 &&
                     std::memcmp(v.data(), blob_hash.data(), 32) == 0) {
                     // Replace with zero sentinel (36 bytes to preserve value size)
                     std::array<uint8_t, 36> zero_sentinel{};
