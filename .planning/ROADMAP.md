@@ -12,7 +12,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 
 - [x] **Phase 116: CLI Rename + Contact Groups** - Rename executable to `cdb`, implement contact group CRUD with SQLite schema versioning (completed 2026-04-16)
 - [x] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs (completed 2026-04-16)
-- [ ] **Phase 118: Configurable Constants + Peer Management** - Move 10 hardcoded constants to config.json with SIGHUP reload, add peer management CLI
+- [ ] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI
 - [ ] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention
 - [ ] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection
 - [ ] **Phase 121: Documentation** - PROTOCOL.md, README.md, cli/README.md updated with all v4.1.0 features
@@ -54,15 +54,15 @@ Plans:
 **Depends on**: Phase 116
 **Requirements**: CONF-01, CONF-02, CONF-03, PEER-01, PEER-02, PEER-03
 **Success Criteria** (what must be TRUE):
-  1. All 10 previously hardcoded sync/peer constants are configurable in config.json with sensible defaults that match prior behavior
+  1. All 5 operator-relevant hardcoded sync/peer constants are configurable in config.json with sensible defaults that match prior behavior
   2. Changed config values take effect after SIGHUP without node restart (where safe to reload)
   3. Invalid config values are rejected with clear error messages and range check details
   4. Operator can add, remove, and list peers using `chromatindb add-peer`, `remove-peer`, and `list-peers` subcommands
   5. `add-peer` and `remove-peer` modify config.json and trigger SIGHUP automatically
 **Plans**: 2 plans
 Plans:
-- [x] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [ ] 118-01-PLAN.md — Config fields, component integration, SIGHUP reload, pidfile, tests
+- [ ] 118-02-PLAN.md — Peer management subcommands (add-peer, remove-peer, list-peers)
 
 ### Phase 119: Chunked Large Files
 **Goal**: Users can upload and download files larger than 500 MiB without full memory buffering, with automatic chunk management and truncation prevention
@@ -76,8 +76,8 @@ Plans:
   5. Envelope format v2 includes segment count, preventing a truncation attack where an attacker drops trailing chunks
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [ ] 119-01-PLAN.md — [To be planned]
+- [ ] 119-02-PLAN.md — [To be planned]
 
 ### Phase 120: Request Pipelining
 **Goal**: Multi-blob downloads complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
@@ -89,8 +89,8 @@ Plans:
   3. Pipeline depth is configurable with a sensible default of 8 in-flight requests
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [ ] 120-01-PLAN.md — [To be planned]
+- [ ] 120-02-PLAN.md — [To be planned]
 
 ### Phase 121: Documentation
 **Goal**: All v4.1.0 features are documented in PROTOCOL.md, README.md, and cli/README.md so operators and users have accurate reference material
@@ -99,12 +99,12 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. PROTOCOL.md documents the blob type indexing wire format (4-byte type field in ingest, ListRequest filter, ListResponse type per entry)
   2. PROTOCOL.md documents the new ListRequest/ListResponse format with type filtering
-  3. README.md documents all new node config fields (10 constants) and peer management CLI subcommands
+  3. README.md documents all new node config fields (5 constants) and peer management CLI subcommands
   4. cli/README.md documents contact groups, contact import, chunked file upload/download, request pipelining, and ls filtering
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [ ] 121-01-PLAN.md — [To be planned]
+- [ ] 121-02-PLAN.md — [To be planned]
 
 ### Phase 122: Verification
 **Goal**: All new functionality is proven correct through unit tests and a full end-to-end workflow against the live production node
@@ -116,8 +116,8 @@ Plans:
   3. E2E verification against live node at 192.168.1.73 completes full workflow: put chunked file with group sharing, pipelined get, ls filtering, peer management
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [ ] 122-01-PLAN.md — [To be planned]
+- [ ] 122-02-PLAN.md — [To be planned]
 
 ## Progress
 
@@ -130,7 +130,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 |-------|----------------|--------|-----------|
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
-| 118. Configurable Constants + Peer Management | 0/0 | Not started | - |
+| 118. Configurable Constants + Peer Management | 0/2 | Planning complete | - |
 | 119. Chunked Large Files | 0/0 | Not started | - |
 | 120. Request Pipelining | 0/0 | Not started | - |
 | 121. Documentation | 0/0 | Not started | - |
