@@ -47,7 +47,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
-- [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
+- [x] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 118: Configurable Constants + Peer Management
 **Goal**: Operators can tune node behavior via config.json and manage peers from the command line without editing config files manually
@@ -61,7 +61,7 @@ Plans:
   5. `add-peer` and `remove-peer` modify config.json and trigger SIGHUP automatically
 **Plans**: 2 plans
 Plans:
-- [ ] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
+- [x] 116-01-PLAN.md — Rename CLI to cdb + schema migration + test infrastructure
 - [ ] 116-02-PLAN.md — Group CRUD commands + share resolution + import/export
 
 ### Phase 119: Chunked Large Files
@@ -128,7 +128,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 116. CLI Rename + Contact Groups | 2/2 | Complete   | 2026-04-16 |
+| 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 0/0 | Not started | - |
 | 118. Configurable Constants + Peer Management | 0/0 | Not started | - |
 | 119. Chunked Large Files | 0/0 | Not started | - |
