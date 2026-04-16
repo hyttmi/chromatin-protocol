@@ -2412,3 +2412,126 @@ TEST_CASE("rebuild_quota_aggregates clears all entries", "[storage][resource]") 
     REQUIRE(rq2.total_bytes == q2.total_bytes);
     REQUIRE(rq3.total_bytes == q3.total_bytes);
 }
+
+// ============================================================================
+// Phase 117: Blob type indexing
+// ============================================================================
+
+TEST_CASE("BlobRef.blob_type populated after store_blob", "[storage][type_index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store a blob with CENV-like magic prefix
+    std::string payload = "\x43\x45\x4E\x56" + std::string("some envelope data");
+    auto blob = make_test_blob(0xE1, payload);
+    auto r = store.store_blob(blob);
+    REQUIRE(r.status == StoreResult::Status::Stored);
+
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xE1);
+    auto refs = store.get_blob_refs_since(ns, 0, 10);
+    REQUIRE(refs.size() == 1);
+    REQUIRE(refs[0].blob_type[0] == 0x43);
+    REQUIRE(refs[0].blob_type[1] == 0x45);
+    REQUIRE(refs[0].blob_type[2] == 0x4E);
+    REQUIRE(refs[0].blob_type[3] == 0x56);
+}
+
+TEST_CASE("Short blob data produces zero-padded type", "[storage][type_index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store blob with only 2 bytes of data
+    auto blob = make_test_blob(0xE2, "AB");
+    auto r = store.store_blob(blob);
+    REQUIRE(r.status == StoreResult::Status::Stored);
+
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xE2);
+    auto refs = store.get_blob_refs_since(ns, 0, 10);
+    REQUIRE(refs.size() == 1);
+    // extract_blob_type returns {0,0,0,0} for data < 4 bytes
+    REQUIRE(refs[0].blob_type[0] == 0);
+    REQUIRE(refs[0].blob_type[1] == 0);
+    REQUIRE(refs[0].blob_type[2] == 0);
+    REQUIRE(refs[0].blob_type[3] == 0);
+}
+
+TEST_CASE("Arbitrary 4-byte prefix stored and retrieved", "[storage][type_extensible]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Store blob with a custom/unknown type prefix
+    std::string payload = "\xCA\xFE\xBA\xBE" + std::string("custom data");
+    auto blob = make_test_blob(0xE3, payload);
+    auto r = store.store_blob(blob);
+    REQUIRE(r.status == StoreResult::Status::Stored);
+
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xE3);
+    auto refs = store.get_blob_refs_since(ns, 0, 10);
+    REQUIRE(refs.size() == 1);
+    REQUIRE(refs[0].blob_type[0] == 0xCA);
+    REQUIRE(refs[0].blob_type[1] == 0xFE);
+    REQUIRE(refs[0].blob_type[2] == 0xBA);
+    REQUIRE(refs[0].blob_type[3] == 0xBE);
+}
+
+TEST_CASE("store_blobs_atomic populates blob_type", "[storage][type_index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    // Create two blobs with different types
+    std::string payload1 = "\x50\x55\x42\x4B" + std::string(2592 + 1568, 'x'); // PUBK-like
+    std::string payload2 = std::string("\xDE\xAD\xBE\xEF", 4) + std::string(32, '\0'); // tombstone-like
+    auto blob1 = make_test_blob(0xE4, payload1);
+    auto blob2 = make_test_blob(0xE4, payload2);
+
+    auto encoded1 = chromatindb::wire::encode_blob(blob1);
+    auto hash1 = chromatindb::wire::blob_hash(encoded1);
+    auto encoded2 = chromatindb::wire::encode_blob(blob2);
+    auto hash2 = chromatindb::wire::blob_hash(encoded2);
+
+    std::vector<chromatindb::storage::PrecomputedBlob> pbs;
+    pbs.push_back({blob1, hash1, encoded1});
+    pbs.push_back({blob2, hash2, encoded2});
+
+    auto results = store.store_blobs_atomic(pbs);
+    REQUIRE(results.size() == 2);
+
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xE4);
+    auto refs = store.get_blob_refs_since(ns, 0, 10);
+    REQUIRE(refs.size() == 2);
+
+    // Check that each ref has the correct type (order may vary by seq_num)
+    bool found_pubk = false, found_tomb = false;
+    for (const auto& ref : refs) {
+        if (ref.blob_type[0] == 0x50 && ref.blob_type[1] == 0x55 &&
+            ref.blob_type[2] == 0x42 && ref.blob_type[3] == 0x4B) {
+            found_pubk = true;
+        }
+        if (ref.blob_type[0] == 0xDE && ref.blob_type[1] == 0xAD &&
+            ref.blob_type[2] == 0xBE && ref.blob_type[3] == 0xEF) {
+            found_tomb = true;
+        }
+    }
+    REQUIRE(found_pubk);
+    REQUIRE(found_tomb);
+}
+
+TEST_CASE("get_hashes_by_namespace handles 36-byte seq_map values", "[storage][type_index]") {
+    TempDir tmp;
+    Storage store(tmp.path.string());
+
+    std::string payload = "\x43\x45\x4E\x56" + std::string("data");
+    auto blob = make_test_blob(0xE5, payload);
+    auto r = store.store_blob(blob);
+    REQUIRE(r.status == StoreResult::Status::Stored);
+
+    std::array<uint8_t, 32> ns;
+    ns.fill(0xE5);
+    auto hashes = store.get_hashes_by_namespace(ns);
+    REQUIRE(hashes.size() == 1);
+    REQUIRE(hashes[0] == r.blob_hash);
+}
