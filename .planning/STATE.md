@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 116 context gathered
-last_updated: "2026-04-16T05:24:49.849Z"
+stopped_at: Phase 117 context gathered
+last_updated: "2026-04-16T06:16:23.908Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 7
@@ -76,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-16T02:37:45.490Z
-Stopped at: Phase 116 context gathered
-Resume file: .planning/phases/116-cli-rename-contact-groups/116-CONTEXT.md
+Last session: 2026-04-16T06:16:23.904Z
+Stopped at: Phase 117 context gathered
+Resume file: .planning/phases/117-blob-type-indexing-ls-filtering/117-CONTEXT.md
