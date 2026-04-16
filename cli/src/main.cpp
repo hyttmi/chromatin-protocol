@@ -771,7 +771,9 @@ int main(int argc, char* argv[]) {
             if (is_help_flag(argc, argv, arg_idx)) {
                 std::fprintf(stderr, "Usage: cdb contact add <name> <namespace> [host[:port]]\n"
                              "       cdb contact rm <name>\n"
-                             "       cdb contact list\n");
+                             "       cdb contact list\n"
+                             "       cdb contact import <file.json> [host[:port]]\n"
+                             "       cdb contact export\n");
                 return 0;
             }
             if (arg_idx >= argc) {
@@ -805,7 +807,87 @@ int main(int argc, char* argv[]) {
                 return cmd::contact_list(identity_dir_str);
             }
 
+            if (subcmd == "import") {
+                if (arg_idx >= argc) {
+                    std::fprintf(stderr, "Usage: contact import <file.json> [host[:port]]\n");
+                    return 1;
+                }
+                std::string json_path = argv[arg_idx++];
+                while (arg_idx < argc) {
+                    parse_host_port(argv[arg_idx++], opts.host, opts.port);
+                }
+                return cmd::contact_import(identity_dir_str, json_path, opts);
+            }
+
+            if (subcmd == "export") {
+                return cmd::contact_export(identity_dir_str);
+            }
+
             std::fprintf(stderr, "Unknown contact subcommand: %s\n", subcmd.c_str());
+            return 1;
+        }
+
+        // =====================================================================
+        // group create <name>
+        // group add <group> <contact>...
+        // group rm <group> [<contact>]
+        // group list [<group>]
+        // =====================================================================
+        if (command == "group") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: cdb group create <name>\n"
+                             "       cdb group add <group> <contact>...\n"
+                             "       cdb group rm <group> [<contact>]\n"
+                             "       cdb group list [<group>]\n");
+                return 0;
+            }
+            if (arg_idx >= argc) {
+                std::fprintf(stderr, "Usage: group <create|add|rm|list> ...\n");
+                return 1;
+            }
+            std::string subcmd = argv[arg_idx++];
+
+            if (subcmd == "create") {
+                if (arg_idx >= argc) {
+                    std::fprintf(stderr, "Usage: group create <name>\n");
+                    return 1;
+                }
+                return cmd::group_create(identity_dir_str, argv[arg_idx]);
+            }
+
+            if (subcmd == "add") {
+                if (arg_idx + 1 >= argc) {
+                    std::fprintf(stderr, "Usage: group add <group> <contact>...\n");
+                    return 1;
+                }
+                std::string group = argv[arg_idx++];
+                std::vector<std::string> contacts;
+                while (arg_idx < argc) {
+                    contacts.push_back(argv[arg_idx++]);
+                }
+                return cmd::group_add(identity_dir_str, group, contacts);
+            }
+
+            if (subcmd == "rm") {
+                if (arg_idx >= argc) {
+                    std::fprintf(stderr, "Usage: group rm <group> [<contact>]\n");
+                    return 1;
+                }
+                std::string group = argv[arg_idx++];
+                if (arg_idx < argc) {
+                    return cmd::group_rm_member(identity_dir_str, group, argv[arg_idx]);
+                }
+                return cmd::group_rm(identity_dir_str, group);
+            }
+
+            if (subcmd == "list") {
+                if (arg_idx < argc) {
+                    return cmd::group_list_members(identity_dir_str, argv[arg_idx]);
+                }
+                return cmd::group_list(identity_dir_str);
+            }
+
+            std::fprintf(stderr, "Unknown group subcommand: %s\n", subcmd.c_str());
             return 1;
         }
 
