@@ -57,7 +57,7 @@ static void usage() {
         "  get          Download and decrypt file\n"
         "  rm           Delete (tombstone)\n"
         "  reshare      Re-encrypt for new recipients\n"
-        "  ls           List blobs in namespace\n"
+        "  ls           List blobs (--raw for all, --type TYPE to filter)\n"
         "  exists       Check if blob exists\n"
         "  info         Node information\n"
         "  stats        Namespace statistics\n"
@@ -526,14 +526,22 @@ int main(int argc, char* argv[]) {
 
         // =====================================================================
         // ls [host[:port]]
-        //   --namespace <hex>
+        //   --namespace <hex>  --raw  --type <TYPE>
         // =====================================================================
         if (command == "ls") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb ls [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr,
+                    "Usage: cdb ls [host[:port]] [--namespace <hex>] [--raw] [--type <TYPE>]\n"
+                    "\n"
+                    "Options:\n"
+                    "  --namespace, -n <hex>  Filter by namespace\n"
+                    "  --raw                  Show all blobs including infrastructure types\n"
+                    "  --type <TYPE>          Filter by type: CENV, PUBK, TOMB, DLGT, CDAT\n");
                 return 0;
             }
             std::string namespace_hex;
+            bool raw = false;
+            std::string type_filter;
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -544,6 +552,16 @@ int main(int argc, char* argv[]) {
                     }
                     namespace_hex = argv[++arg_idx];
                     ++arg_idx;
+                } else if (std::strcmp(a, "--raw") == 0) {
+                    raw = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--type") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --type requires a type name (CENV, PUBK, TOMB, DLGT, CDAT)\n");
+                        return 1;
+                    }
+                    type_filter = argv[++arg_idx];
+                    ++arg_idx;
                 } else if (a[0] != '-') {
                     parse_host_port(a, opts.host, opts.port);
                     ++arg_idx;
@@ -553,7 +571,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            return cmd::ls(identity_dir_str, namespace_hex, opts);
+            return cmd::ls(identity_dir_str, namespace_hex, opts, raw, type_filter);
         }
 
         // =====================================================================
