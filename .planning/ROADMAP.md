@@ -12,7 +12,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 
 - [x] **Phase 116: CLI Rename + Contact Groups** - Rename executable to `cdb`, implement contact group CRUD with SQLite schema versioning (completed 2026-04-16)
 - [x] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs (completed 2026-04-16)
-- [ ] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI
+- [x] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI (completed 2026-04-16)
 - [ ] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention
 - [ ] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection
 - [ ] **Phase 121: Documentation** - PROTOCOL.md, README.md, cli/README.md updated with all v4.1.0 features
@@ -62,7 +62,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 118-01-PLAN.md — Config fields, component integration, SIGHUP reload, pidfile, tests
-- [ ] 118-02-PLAN.md — Peer management subcommands (add-peer, remove-peer, list-peers)
+- [x] 118-02-PLAN.md — Peer management subcommands (add-peer, remove-peer, list-peers)
 
 ### Phase 119: Chunked Large Files
 **Goal**: Users can upload and download files larger than 500 MiB without full memory buffering, with automatic chunk management and truncation prevention
@@ -130,7 +130,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 |-------|----------------|--------|-----------|
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
-| 118. Configurable Constants + Peer Management | 1/2 | In Progress|  |
+| 118. Configurable Constants + Peer Management | 2/2 | Complete   | 2026-04-16 |
 | 119. Chunked Large Files | 0/0 | Not started | - |
 | 120. Request Pipelining | 0/0 | Not started | - |
 | 121. Documentation | 0/0 | Not started | - |
