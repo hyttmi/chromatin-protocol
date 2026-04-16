@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct sqlite3;
@@ -40,8 +41,16 @@ public:
     /// List all contacts.
     std::vector<Contact> list() const;
 
+    // Group management
+    void group_create(const std::string& name);
+    bool group_remove(const std::string& name);
+    void group_add_member(const std::string& group, const std::string& contact);
+    bool group_remove_member(const std::string& group, const std::string& contact);
+    std::vector<Contact> group_members(const std::string& group) const;
+    std::vector<std::pair<std::string, int>> group_list() const;
+
 private:
-    void init_schema();
+    void migrate();
     sqlite3* db_ = nullptr;
 };
 
