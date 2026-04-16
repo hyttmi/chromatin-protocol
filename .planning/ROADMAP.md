@@ -46,7 +46,7 @@ Plans:
   4. ListRequest accepts an optional type filter and ListResponse includes the 4-byte type per entry
 **Plans**: 2 plans
 Plans:
-- [ ] 117-01-PLAN.md — Node-side type indexing: storage, wire protocol, dispatcher, tests
+- [x] 117-01-PLAN.md — Node-side type indexing: storage, wire protocol, dispatcher, tests
 - [ ] 117-02-PLAN.md — CLI ls filtering: type labels, hide list, --raw/--type flags
 
 ### Phase 118: Configurable Constants + Peer Management
@@ -129,7 +129,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
-| 117. Blob Type Indexing + ls Filtering | 0/2 | Not started | - |
+| 117. Blob Type Indexing + ls Filtering | 1/2 | In Progress|  |
 | 118. Configurable Constants + Peer Management | 0/0 | Not started | - |
 | 119. Chunked Large Files | 0/0 | Not started | - |
 | 120. Request Pipelining | 0/0 | Not started | - |

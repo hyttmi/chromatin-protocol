@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 117 context gathered
-last_updated: "2026-04-16T06:16:23.908Z"
-last_activity: 2026-04-16
+last_updated: "2026-04-16T07:38:43.655Z"
+last_activity: 2026-04-16 -- Phase 117 execution started
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 2
+  total_plans: 4
   completed_plans: 2
-  percent: 100
+  percent: 50
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 116 — CLI Rename + Contact Groups
+**Current focus:** Phase 117 — blob-type-indexing-ls-filtering
 
 ## Current Position
 
-Phase: 117
-Plan: Not started
-Status: Executing Phase 116
-Last activity: 2026-04-16
+Phase: 117 (blob-type-indexing-ls-filtering) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 117
+Last activity: 2026-04-16 -- Phase 117 execution started
 
 Progress: [----------] 0%
 
