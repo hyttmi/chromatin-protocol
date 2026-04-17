@@ -498,11 +498,18 @@ void PeerManager::reload_config() {
         return;
     }
 
+    // WR-01/WR-02: Validate everything upfront before mutating any state.
+    // This prevents partial application on late-discovered validation errors
+    // and ensures out-of-range values (e.g. pex_interval=1) are rejected on
+    // SIGHUP, not just at daemon startup.
     try {
+        config::validate_config(new_cfg);
         config::validate_allowed_keys(new_cfg.allowed_client_keys);
         config::validate_allowed_keys(new_cfg.allowed_peer_keys);
+        config::validate_allowed_keys(new_cfg.sync_namespaces);
+        config::validate_trusted_peers(new_cfg.trusted_peers);
     } catch (const std::exception& e) {
-        spdlog::error("config reload rejected (malformed key): {} (keeping current config)", e.what());
+        spdlog::error("config reload rejected (validation failed): {} (keeping current config)", e.what());
         return;
     }
 
@@ -562,13 +569,7 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: max_peers={}", new_cfg.max_peers);
     }
 
-    // Reload sync_namespaces
-    try {
-        config::validate_allowed_keys(new_cfg.sync_namespaces);
-    } catch (const std::exception& e) {
-        spdlog::error("config reload rejected (malformed sync_namespace): {} (keeping current)", e.what());
-        return;
-    }
+    // Reload sync_namespaces (already validated upfront above)
     sync_namespaces_.clear();
     for (const auto& hex : new_cfg.sync_namespaces) {
         sync_namespaces_.insert(hex_to_namespace(hex));
@@ -634,13 +635,7 @@ void PeerManager::reload_config() {
     chromatindb::logging::set_level(new_cfg.log_level);
     spdlog::info("config reload: log_level={}", new_cfg.log_level);
 
-    // Reload trusted_peers
-    try {
-        config::validate_trusted_peers(new_cfg.trusted_peers);
-    } catch (const std::exception& e) {
-        spdlog::error("config reload rejected (invalid trusted_peer): {} (keeping current)", e.what());
-        return;
-    }
+    // Reload trusted_peers (already validated upfront above)
     {
         std::set<std::string> new_trusted;
         for (const auto& ip_str : new_cfg.trusted_peers) {
