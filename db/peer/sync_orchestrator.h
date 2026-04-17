@@ -77,6 +77,11 @@ public:
     // Cancel all timers
     void cancel_timers();
 
+    // Cancel only the storage compaction timer.  Used by SIGHUP reload to
+    // restart compaction_loop with a new interval without killing the
+    // sync/expiry/cursor-compaction loops (which exit permanently on cancel).
+    void cancel_compaction_timer();
+
     // Config reload
     void set_sync_config(uint32_t cooldown, uint32_t max_sessions,
                          uint32_t safety_net_interval);

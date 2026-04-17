@@ -1273,6 +1273,10 @@ void SyncOrchestrator::cancel_timers() {
     if (compaction_timer_) compaction_timer_->cancel();
 }
 
+void SyncOrchestrator::cancel_compaction_timer() {
+    if (compaction_timer_) compaction_timer_->cancel();
+}
+
 // =============================================================================
 // Config reload
 // =============================================================================

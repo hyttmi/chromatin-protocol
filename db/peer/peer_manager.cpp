@@ -662,8 +662,12 @@ void PeerManager::reload_config() {
     } else {
         spdlog::info("config reload: compaction=disabled");
     }
-    // Cancel current timer to restart with new interval
-    sync_.cancel_timers();  // This cancels compaction timer too; loop will re-check
+    // CR-01: Cancel only the compaction timer to restart with new interval.
+    // Previously called cancel_timers() which also cancelled sync_timer_loop
+    // and cursor_compaction_loop -- those loops exit permanently on cancel
+    // (they co_return on ec), so SIGHUP would kill periodic sync and cursor
+    // compaction until daemon restart.
+    sync_.cancel_compaction_timer();
     if (old_compaction == 0 && new_cfg.compaction_interval_hours > 0) {
         asio::co_spawn(ioc_, sync_.compaction_loop(), asio::detached);
     }
