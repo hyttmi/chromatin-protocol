@@ -13,6 +13,11 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 
+# Shutdown: SIGTERM triggers graceful drain (bounded to 5s in-process).
+# Upper-bound the whole stop at 15s so ops tooling isn't blocked by stuck coroutines.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
 # Security hardening
 ProtectSystem=strict
 NoNewPrivileges=yes
