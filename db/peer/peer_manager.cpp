@@ -501,9 +501,10 @@ void PeerManager::reload_config() {
     // WR-01/WR-02: Validate everything upfront before mutating any state.
     // This prevents partial application on late-discovered validation errors
     // and ensures out-of-range values (e.g. pex_interval=1) are rejected on
-    // SIGHUP, not just at daemon startup.
+    // SIGHUP, not just at daemon startup.  bind_address is not reloaded at
+    // runtime (server is already bound), so skip that specific check.
     try {
-        config::validate_config(new_cfg);
+        config::validate_config(new_cfg, /*check_bind_address=*/false);
         config::validate_allowed_keys(new_cfg.allowed_client_keys);
         config::validate_allowed_keys(new_cfg.allowed_peer_keys);
         config::validate_allowed_keys(new_cfg.sync_namespaces);

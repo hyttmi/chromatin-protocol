@@ -243,7 +243,7 @@ void validate_trusted_peers(const std::vector<std::string>& peers) {
     }
 }
 
-void validate_config(const Config& cfg) {
+void validate_config(const Config& cfg, bool check_bind_address) {
     std::vector<std::string> errors;
 
     // Numeric range validation
@@ -367,22 +367,26 @@ void validate_config(const Config& cfg) {
                           cfg.log_level + "')");
     }
 
-    // bind_address validation
-    auto colon_pos = cfg.bind_address.rfind(':');
-    if (colon_pos == std::string::npos) {
-        errors.push_back("bind_address must contain ':' separating host and port (got '" +
-                          cfg.bind_address + "')");
-    } else {
-        auto port_str = cfg.bind_address.substr(colon_pos + 1);
-        try {
-            unsigned long port = std::stoul(port_str);
-            if (port < 1 || port > 65535) {
-                errors.push_back("bind_address port must be 1-65535 (got " +
-                                  std::to_string(port) + ")");
+    // bind_address validation (skipped on SIGHUP reload -- bind_address is not
+    // reloaded at runtime, so stale values or port 0 in the config file don't
+    // matter; checking would just produce misleading reload failures.)
+    if (check_bind_address) {
+        auto colon_pos = cfg.bind_address.rfind(':');
+        if (colon_pos == std::string::npos) {
+            errors.push_back("bind_address must contain ':' separating host and port (got '" +
+                              cfg.bind_address + "')");
+        } else {
+            auto port_str = cfg.bind_address.substr(colon_pos + 1);
+            try {
+                unsigned long port = std::stoul(port_str);
+                if (port < 1 || port > 65535) {
+                    errors.push_back("bind_address port must be 1-65535 (got " +
+                                      std::to_string(port) + ")");
+                }
+            } catch (...) {
+                errors.push_back("bind_address port is not a valid number (got '" +
+                                  port_str + "')");
             }
-        } catch (...) {
-            errors.push_back("bind_address port is not a valid number (got '" +
-                              port_str + "')");
         }
     }
 

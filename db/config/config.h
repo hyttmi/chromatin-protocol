@@ -78,7 +78,10 @@ void validate_trusted_peers(const std::vector<std::string>& peers);
 
 /// Validate all config field values (ranges, types, formats).
 /// Accumulates all errors and throws std::runtime_error with all of them.
+/// @param check_bind_address If false, skip bind_address validation.  Used on
+///        SIGHUP reload since bind_address is not reloaded at runtime and the
+///        test harness may construct reload configs with port 0 (ephemeral).
 /// @throws std::runtime_error if any validation fails.
-void validate_config(const Config& cfg);
+void validate_config(const Config& cfg, bool check_bind_address = true);
 
 } // namespace chromatindb::config
