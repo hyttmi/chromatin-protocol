@@ -208,3 +208,31 @@ Role enum (reserve space for future use cases — cost of reserved slots is zero
 
 Plans:
 - [ ] TBD (promote with `/gsd-plan-phase` when ready to start)
+
+### Phase 999.2: cdb rm idempotency + target-existence check (BACKLOG)
+
+**Goal:** Make `cdb rm` behave sanely when run multiple times against the same target, and give clear feedback when the target doesn't exist.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Current behaviour (observed 2026-04-18):
+
+- Each `cdb rm <hash>` signs a fresh tombstone blob. Because ML-DSA-87 signatures are non-deterministic, every invocation produces a different tombstone hash. Running `cdb rm` three times against the same target creates three distinct tombstones, all propagated via sync, all stored on every peer. Wasteful, and misleading to operators.
+- cdb does not check whether the target blob exists before signing the tombstone. Typos, already-deleted targets, and accidental double-deletes all "succeed" with no feedback.
+- `DeleteAck` has a status byte (0=stored, 1=duplicate) but cdb doesn't inspect it.
+
+**Suggested direction:**
+
+1. **Pre-check target existence** via an `Exists`/`GetBlob` probe before building the tombstone. If the target is not found, error out ("blob not found on node X") unless `--force` is passed.
+2. **Surface the DeleteAck status** in cdb output: distinguish "target deleted" from "already tombstoned" clearly.
+3. **Consider deterministic tombstones** — would require a hashing pre-image that doesn't include the signature, so two rm calls for the same target produce the same tombstone hash. Needs a protocol change and careful thought about security.
+4. **Optional**: add `cdb rm --dry-run` to print what would be deleted without signing.
+
+Also unresolved, related:
+
+- **Plain `cdb ls` (no flags) hitting PQ handshake timeout** when `config.json` has `default_node: home` and the remote isn't reachable or stalls during PQ. Needs a separate investigation trace — server-side log during the stall, reachability check. Could be a lingering issue in the PQ responder on the node side, or could be a race with the cdb connect timeout. File under this phase or split out if the root cause is orthogonal.
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready)
