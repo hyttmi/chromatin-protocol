@@ -138,13 +138,34 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 
 ## Backlog
 
-### Phase 999.1: Role-signalled handshake + fix ACL classifier (BACKLOG — ready to promote)
+### Phase 999.1: Role-signalled handshake + fix ACL classifier — ✅ RESOLVED 2026-04-18
 
-**Goal:** Add an explicit role field to the TrustedHello handshake so the node knows at connect time whether the initiator is a peer, client, or future role — rather than inferring role from which ACL allow-list an identity appears in (which silently misclassifies and blocks sync in open mode).
+**Status:** Completed inline on 2026-04-18 without a formal `/gsd-plan-phase` flow. All three observed bugs fixed; laptop↔server sync verified end-to-end in production; closed-mode ACL + live revocation tests pass (SIGSEGVs gone).
 
-**Requirements:** TBD (expand during `/gsd-plan-phase`)
+**Note on the design:** The final implementation carried the role byte in the AEAD-encrypted **AuthSignature payload** rather than the cleartext TrustedHello, which is stronger: the role is integrity-protected by the session keys, not visible to on-path observers, and the same machinery covers both lightweight and PQ handshakes without touching TrustedHello or KemPubkey wire layouts. Fail-closed on unknown role is preserved.
 
-**Plans:** 0 plans
+**Commits:**
+
+| Commit | Change |
+|---|---|
+| `f5fa13bf` | Add `Role` enum with reserved slots (Peer/Client + Observer/Admin/Relay reserved) |
+| `0eaa4377` | Role-signalled handshake: role byte in AuthSignature payload; both binaries updated; receiver routes ACL by declared role |
+| `34a4ad31` | Refactor `PeerInfo::is_client` bool → `net::Role` enum; fixed both revocation SIGSEGVs as a side effect |
+| `784b1260` | PROTOCOL.md: document the new AuthSignature layout + Role Signalling section |
+
+**Production verification:**
+
+- Laptop (337bf7...) connects to server (591782...); server log shows `handshake complete (responder, PQ, peer_role=peer)` and `Connected peer 1ec444e56d6afb24@192.168.1.173:59730`. Both sides classify correctly.
+- Blob put on one node propagates to the other; tombstone from `cdb rm` also propagates.
+- `cdb --node home` correctly negotiates `peer_role=client` against the server.
+
+**Tests:**
+
+- `[auth_helpers]` — 66 assertions, 12 cases, all pass (includes role round-trip + fail-closed on unknown role).
+- `[handshake]` — 48 assertions, 9 cases, pass.
+- `[peer]` — 75/76 pass. Two previously-failing SIGSEGVs (`closed mode rejects unauthorized peer`, `reload_config revokes connected peer`) fixed as intended side effect. Remaining failure is the pre-existing cosmetic `nodeinfo types_count` noted in project memory.
+
+#### Original design context (preserved for posterity)
 
 #### Observed bugs (all stem from the same classifier fragility)
 
@@ -207,7 +228,7 @@ Role enum (reserve space for future use cases — cost of reserved slots is zero
 - Live revocation test passes (correct ACL consulted during disconnect).
 
 Plans:
-- [ ] TBD (promote with `/gsd-plan-phase` when ready to start)
+- [x] Inline implementation (2026-04-18, commits f5fa13bf / 0eaa4377 / 34a4ad31 / 784b1260)
 
 ### Phase 999.2: cdb rm idempotency + target-existence check (BACKLOG)
 
