@@ -138,25 +138,73 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 
 ## Backlog
 
-### Phase 999.1: ACL enforcement + live revocation test SIGSEGVs (BACKLOG)
+### Phase 999.1: Role-signalled handshake + fix ACL classifier (BACKLOG — ready to promote)
 
-**Goal:** [Captured for future planning]
-**Requirements:** TBD
+**Goal:** Add an explicit role field to the TrustedHello handshake so the node knows at connect time whether the initiator is a peer, client, or future role — rather than inferring role from which ACL allow-list an identity appears in (which silently misclassifies and blocks sync in open mode).
+
+**Requirements:** TBD (expand during `/gsd-plan-phase`)
+
 **Plans:** 0 plans
 
-Two pre-existing test failures in `db/tests/peer/test_peer_manager.cpp` that cascade into SIGSEGVs during Catch2 test-case unwind. Both point to real bugs in ACL enforcement, not test flakiness:
+#### Observed bugs (all stem from the same classifier fragility)
 
-- **`test_peer_manager.cpp:213`** — "closed mode rejects unauthorized peer". Closed-mode peer ACL should reject connections from identities not in `allowed_peer_keys` during or immediately after handshake. Test expects rejection; actual behavior lets the connection stand.
-- **`test_peer_manager.cpp:359`** — "reload_config revokes connected peer". After reloading config to remove a peer's key, `ConnectionManager::disconnect_unauthorized_peers()` runs but silently returns without disconnecting. Suspected cause: inbound peer-node connection flagged `is_client=true`, so the revoke check (`connection_manager.cpp:371-373`) routes through the open-mode client ACL and the peer is deemed allowed.
+1. **Sync broken in open mode (production-observed 2026-04-18).** Laptop and server complete PQ handshake against each other, but both ends log `Connected client` and `syncs=0` forever. Root cause: `db/peer/connection_manager.cpp:80-83` treats *any* TCP connection as a client when `allowed_client_keys` is empty, because `AccessControl::is_client_allowed()` (`db/acl/access_control.cpp:50-51`) returns `true` unconditionally in open mode. `is_client = true` makes the node skip sync, PEX, and dedup for what are actually peer connections.
 
-Dormant in v2.2-era ACL code — predates phase 118 but means closed-mode enforcement and live revocation are unreliable. Security concern for any future closed-mode deployment.
+2. **`test_peer_manager.cpp:213` — "closed mode rejects unauthorized peer"** (SIGSEGV). Closed-mode peer ACL should reject connections from identities not in `allowed_peer_keys`. Same classifier bug routes the connection through the wrong ACL path.
 
-**Repro:** `./build/db/chromatindb_tests "*reload*"` and `./build/db/chromatindb_tests "*closed*"`
+3. **`test_peer_manager.cpp:359` — "reload_config revokes connected peer"** (SIGSEGV). `ConnectionManager::disconnect_unauthorized_peers()` runs but returns without disconnecting because `is_client=true` routes the check through the open-mode client ACL (`connection_manager.cpp:371-373`).
 
-**Suggested direction:**
-1. Instrument `disconnect_unauthorized_peers` with `is_client/ns/allowed` logs to confirm the misclassification hypothesis.
-2. If confirmed, fix the handshake/auth path that sets `is_client` — peer-mode auth should not produce `is_client=true`.
-3. Add regression tests for both scenarios after fix.
+**Repro:** `./build/db/chromatindb_tests "*reload*"` and `./build/db/chromatindb_tests "*closed*"`.
+
+#### Design: role byte in TrustedHello
+
+Extend TrustedHello payload to include an explicit 1-byte role prefix:
+
+```
+TrustedHello payload (new) = [role:1][nonce:32][pubkey:2592]
+```
+
+Role enum (reserve space for future use cases — cost of reserved slots is zero):
+
+| Value | Name      | Purpose                                                    |
+|-------|-----------|------------------------------------------------------------|
+| 0x00  | PEER      | Full node-to-node replication (sync, PEX, dedup)           |
+| 0x01  | CLIENT    | Read/write API access (blobs, queries, subscriptions)      |
+| 0x02  | OBSERVER  | (reserved) Read-only — metrics, backup, auditors           |
+| 0x03  | ADMIN     | (reserved) Privileged CLI — config reload, revoke          |
+| 0x04  | RELAY     | (reserved) Bridge/relay node                               |
+| 0x05..0xFE | —    | Reserved                                                    |
+| 0xFF  | —         | Reserved (sentinel / error)                                 |
+
+**Hard rule:** handshake MUST reject unknown role values (fail-closed), so old binaries can never misinterpret new ones.
+
+#### Behaviour changes
+
+- `chromatindb` node (initiator): peer-mode connect → send PEER. Reject inbound with unknown role.
+- `cdb` CLI (initiator): always sends CLIENT.
+- Receiver reads the role byte, stores `is_client` (and eventually `is_observer`, `is_admin`, ...) from the declared role.
+- Each role has its own ACL allow-list lookup — no more "first match wins across lists."
+- `disconnect_unauthorized_peers()` branches on role explicitly, fixing both revocation SIGSEGVs.
+
+#### Scope of the change
+
+- Wire format: new role byte in TrustedHello payload (`db/net/connection.cpp`, `db/PROTOCOL.md`).
+- Size validation: update `expected_size` check in lightweight handshake (+1 byte).
+- Role enum definition (new header, e.g. `db/net/role.h`).
+- Initiator signalling: chromatindb node sends PEER, `cdb` CLI sends CLIENT.
+- Receiver classification: remove ACL-based inference from `connection_manager.cpp:80-87`. Use received role.
+- ACL reshape: distinct allow-lists per role (or at minimum keep current `allowed_peer_keys` / `allowed_client_keys` and look up based on role).
+- Revocation path: fix `disconnect_unauthorized_peers` to use role rather than `is_client`.
+- Tests: regression tests for the two SIGSEGVs, plus new tests for role signalling (peer-connects-as-peer, client-connects-as-client, unknown-role-rejected, closed-ACL-rejects-unlisted-role).
+- PROTOCOL.md: document the new TrustedHello payload format.
+- Both binaries ship together — no backward compatibility with pre-role handshake.
+
+#### Immediate effect once shipped
+
+- Laptop↔server sync works in open mode (both are PEER).
+- Remote `cdb` over TCP works in closed-client-mode (explicit CLIENT role + client ACL check).
+- Closed-mode peer rejection test passes (correct ACL routed).
+- Live revocation test passes (correct ACL consulted during disconnect).
 
 Plans:
-- [ ] TBD (promote with /gsd-review-backlog when ready)
+- [ ] TBD (promote with `/gsd-plan-phase` when ready to start)
