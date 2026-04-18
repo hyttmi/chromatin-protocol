@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace chromatindb::cli {
@@ -29,6 +30,23 @@ public:
 
     /// Receive one transport message (AEAD-decrypt + decode).
     std::optional<DecodedTransport> recv();
+
+    /// Pipelined send. Equivalent to send(), except: if PIPELINE_DEPTH requests
+    /// are already in flight, blocks by pumping recv() until at least one slot
+    /// frees. Off-target replies drained during backpressure are stashed for
+    /// the next recv_for() call. Returns false on transport error.
+    bool send_async(MsgType type, std::span<const uint8_t> payload,
+                    uint32_t request_id);
+
+    /// Wait for the reply matching `request_id`. Returns immediately if it was
+    /// already stashed by a prior recv_for() / send_async() pump cycle, otherwise
+    /// loops over recv() and stashes off-target replies until the target arrives.
+    /// Returns std::nullopt on transport error (matches recv()).
+    ///
+    /// Precondition: each reply produced by recv() has already been
+    /// AEAD-decrypted and integrity-verified in recv_encrypted(); this pump
+    /// only routes already-authenticated replies (T-120-01).
+    std::optional<DecodedTransport> recv_for(uint32_t request_id);
 
     /// Close the connection.
     void close();
@@ -75,6 +93,11 @@ private:
     uint64_t recv_counter_ = 0;
     bool connected_ = false;
     bool is_uds_ = false;
+
+    // Pipelining: replies that arrived for a different rid than the caller is
+    // currently waiting on. Bounded by PIPELINE_DEPTH; no eviction needed (D-04).
+    std::unordered_map<uint32_t, DecodedTransport> pending_replies_;
+    size_t in_flight_ = 0;
 };
 
 } // namespace chromatindb::cli

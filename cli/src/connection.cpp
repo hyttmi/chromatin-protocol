@@ -35,6 +35,7 @@ static constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;  // 110 MiB
 static constexpr size_t SIGNING_PK_SIZE = Identity::SIGNING_PK_SIZE;  // 2592
 static constexpr size_t KEM_CT_SIZE     = 1568;
 static constexpr size_t NONCE_SIZE      = 32;
+static constexpr size_t PIPELINE_DEPTH = 8;  // PIPE-03
 
 // =============================================================================
 // SHA3-256 helper
@@ -705,6 +706,64 @@ std::optional<DecodedTransport> Connection::recv() {
 }
 
 // =============================================================================
+// send_async() / recv_for() — pipelining primitives
+// =============================================================================
+
+bool Connection::send_async(MsgType type, std::span<const uint8_t> payload,
+                            uint32_t request_id) {
+    if (!connected_) return false;
+
+    // Backpressure (D-06): pump recv() until we have a free slot. Each drained
+    // reply lands in pending_replies_ for the next recv_for() to consume.
+    // Single-sender invariant (D-09, PIPE-02) preserved by construction:
+    // the pump only calls recv() (which never invokes send_encrypted), so the
+    // sole writer of send_counter_ is still the caller of send().
+    while (in_flight_ >= PIPELINE_DEPTH) {
+        auto msg = recv();
+        if (!msg) return false;
+        // D-04: bounded by PIPELINE_DEPTH; insert_or_assign handles the
+        // pathological "two replies for the same rid" case without growth.
+        pending_replies_.insert_or_assign(msg->request_id, std::move(*msg));
+    }
+
+    if (!send(type, payload, request_id)) return false;
+    ++in_flight_;
+    return true;
+}
+
+std::optional<DecodedTransport> Connection::recv_for(uint32_t request_id) {
+    if (!connected_) return std::nullopt;
+
+    // Fast path: already stashed by a prior pump cycle.
+    if (auto it = pending_replies_.find(request_id);
+        it != pending_replies_.end()) {
+        DecodedTransport msg = std::move(it->second);
+        pending_replies_.erase(it);
+        if (in_flight_ > 0) --in_flight_;
+        return msg;
+    }
+
+    // Pump until target arrives.
+    while (true) {
+        auto msg = recv();
+        if (!msg) return std::nullopt;
+
+        if (msg->request_id == request_id) {
+            if (in_flight_ > 0) --in_flight_;
+            return msg;
+        }
+
+        // Off-target — stash for a future recv_for(). D-04: bounded.
+        // If a reply arrives for a rid no caller will ever ask for (server
+        // bug), it lingers until close() clears the map. Logging at debug
+        // makes this observable without spamming the normal path.
+        spdlog::debug("recv_for: stashing off-target reply rid={} (waiting for {})",
+                      msg->request_id, request_id);
+        pending_replies_.insert_or_assign(msg->request_id, std::move(*msg));
+    }
+}
+
+// =============================================================================
 // close()
 // =============================================================================
 
@@ -732,6 +791,8 @@ void Connection::close() {
     recv_key_.clear();
     send_counter_ = 0;
     recv_counter_ = 0;
+    pending_replies_.clear();
+    in_flight_ = 0;
 }
 
 } // namespace chromatindb::cli
