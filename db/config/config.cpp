@@ -164,6 +164,9 @@ Config parse_args(int argc, const char* argv[], Config base) {
             cfg.data_dir = argv[++i];
         } else if (arg == "--log-level" && i + 1 < argc) {
             cfg.log_level = argv[++i];
+        } else {
+            throw std::runtime_error("Unknown argument '" + arg +
+                "' (run options: --config <path>, --data-dir <path>, --log-level <lvl>)");
         }
     }
 

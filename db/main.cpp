@@ -10,6 +10,7 @@
 #include "db/net/protocol.h"
 #include "db/peer/peer_manager.h"
 #include "db/storage/storage.h"
+#include "db/util/address.h"
 #include "db/util/endian.h"
 #include "db/util/hex.h"
 
@@ -35,6 +36,7 @@
 
 namespace {
 
+using chromatindb::util::is_valid_host_port;
 using chromatindb::util::to_hex;
 
 void print_usage(const char* prog) {
@@ -58,6 +60,10 @@ void print_usage(const char* prog) {
               << "  --force             Overwrite existing identity\n\n"
               << "Show-key options:\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n\n"
+              << "Peer management:\n"
+              << "  add-peer <host:port>     Add bootstrap peer (e.g. 192.168.1.73:4200)\n"
+              << "  remove-peer <host:port>  Remove bootstrap peer\n"
+              << "  list-peers               Show configured + connected peers\n"
               << "Peer management options:\n"
               << "  --config <path>     Config file to edit (default: <data-dir>/config.json)\n"
               << "  --data-dir <path>   Data directory (default: ./data)\n";
@@ -78,6 +84,10 @@ int cmd_keygen(int argc, char* argv[]) {
             data_dir = argv[++i];
         } else if (arg == "--force") {
             force = true;
+        } else {
+            std::cerr << "Error: unknown argument '" << arg << "'\n"
+                      << "Usage: chromatindb keygen [--data-dir <path>] [--force]\n";
+            return 1;
         }
     }
 
@@ -109,6 +119,10 @@ int cmd_show_key(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--data-dir" && i + 1 < argc) {
             data_dir = argv[++i];
+        } else {
+            std::cerr << "Error: unknown argument '" << arg << "'\n"
+                      << "Usage: chromatindb show-key [--data-dir <path>]\n";
+            return 1;
         }
     }
 
@@ -131,8 +145,16 @@ int cmd_backup(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--data-dir" && i + 1 < argc) {
             data_dir = argv[++i];
-        } else if (dest_path.empty() && arg[0] != '-') {
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Error: unknown option '" << arg << "'\n"
+                      << "Usage: chromatindb backup <dest-path> [--data-dir <path>]\n";
+            return 1;
+        } else if (dest_path.empty()) {
             dest_path = arg;
+        } else {
+            std::cerr << "Error: unexpected argument '" << arg << "'\n"
+                      << "Usage: chromatindb backup <dest-path> [--data-dir <path>]\n";
+            return 1;
         }
     }
 
@@ -168,13 +190,26 @@ int cmd_add_peer(int argc, char* argv[]) {
             data_dir = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
-        } else if (address.empty() && arg[0] != '-') {
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Error: unknown option '" << arg << "'\n"
+                      << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+            return 1;
+        } else if (address.empty()) {
             address = arg;
+        } else {
+            std::cerr << "Error: unexpected argument '" << arg << "'\n"
+                      << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+            return 1;
         }
     }
 
     if (address.empty()) {
         std::cerr << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        return 1;
+    }
+
+    if (!is_valid_host_port(address)) {
+        std::cerr << "Error: '" << address << "' is not a valid host:port (e.g. 192.168.1.73:4200)\n";
         return 1;
     }
 
@@ -250,13 +285,26 @@ int cmd_remove_peer(int argc, char* argv[]) {
             data_dir = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
-        } else if (address.empty() && arg[0] != '-') {
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Error: unknown option '" << arg << "'\n"
+                      << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+            return 1;
+        } else if (address.empty()) {
             address = arg;
+        } else {
+            std::cerr << "Error: unexpected argument '" << arg << "'\n"
+                      << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+            return 1;
         }
     }
 
     if (address.empty()) {
         std::cerr << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        return 1;
+    }
+
+    if (!is_valid_host_port(address)) {
+        std::cerr << "Error: '" << address << "' is not a valid host:port (e.g. 192.168.1.73:4200)\n";
         return 1;
     }
 
@@ -457,6 +505,10 @@ int cmd_list_peers(int argc, char* argv[]) {
             data_dir = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
+        } else {
+            std::cerr << "Error: unknown argument '" << arg << "'\n"
+                      << "Usage: chromatindb list-peers [--config <path>] [--data-dir <path>]\n";
+            return 1;
         }
     }
 
