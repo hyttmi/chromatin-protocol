@@ -66,7 +66,7 @@ Plans:
 
 ### Phase 119: Chunked Large Files
 **Goal**: Users can upload and download files larger than 500 MiB without full memory buffering, with automatic chunk management and truncation prevention
-**Depends on**: Phase 117
+**Depends on**: Phase 120 (pipelining makes chunked transfers near wire-speed instead of RTT-bound)
 **Requirements**: CHUNK-01, CHUNK-02, CHUNK-03, CHUNK-04, CHUNK-05
 **Success Criteria** (what must be TRUE):
   1. User can upload a file >500 MiB and the CLI streams it in chunks without buffering the entire file in memory
@@ -80,8 +80,8 @@ Plans:
 - [ ] 119-02-PLAN.md — [To be planned]
 
 ### Phase 120: Request Pipelining
-**Goal**: Multi-blob downloads complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
-**Depends on**: Phase 119
+**Goal**: Multi-blob downloads (and uploads) complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
+**Depends on**: Phase 117 (stable ListResponse wire format)
 **Requirements**: PIPE-01, PIPE-02, PIPE-03
 **Success Criteria** (what must be TRUE):
   1. Downloading multiple blobs uses pipelined requests over a single PQ-encrypted connection (no new handshake per blob)
@@ -122,7 +122,12 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 116 -> 117 -> 118 -> 119 -> 120 -> 121 -> 122
+116 -> 117 -> 118 -> 120 -> 119 -> 121 -> 122
+
+Phase 120 (pipelining) is now executed before 119 (chunked large files) so that
+chunked uploads/downloads inherit pipelined request handling. Dependency was
+flipped 2026-04-18: 120 depends only on 117's stable wire format; 119 depends
+on 120 so the big-file path lands with near-wire-speed transfers from day one.
 
 Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in parallel with Phase 117 if desired.
 
