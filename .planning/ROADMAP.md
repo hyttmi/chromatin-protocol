@@ -236,3 +236,51 @@ Also unresolved, related:
 
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready)
+
+### Phase 999.3: cdb put of the same file creates duplicate blobs (BACKLOG)
+
+**Goal:** Decide and implement the right semantics for re-uploading the same file via `cdb put`. Today it creates a second blob with a different hash; the user expected overwrite/idempotency.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+**Observed (2026-04-18):**
+
+```
+./cdb put compile_commands.json --node home
+4a872238127a227378aa70461cabea7c5d28896c4c6a281467ca2bb06840437e
+
+./cdb put compile_commands.json --node home
+f375f5c3bb7fcfe0c19d214d55cabf509d63c4f5bfda3e3bd5bf27410cd433f1
+
+./cdb ls --node home
+4a872238127a227378aa70461cabea7c5d28896c4c6a281467ca2bb06840437e  CENV
+f375f5c3bb7fcfe0c19d214d55cabf509d63c4f5bfda3e3bd5bf27410cd433f1  CENV
+```
+
+Same file, different hashes, both stored side-by-side.
+
+**Why it happens:**
+
+The blob hash is `SHA3-256(namespace || data || ttl || timestamp)`. Even for byte-identical plaintext, each put produces a different blob hash because:
+
+1. **Timestamp**: every put uses `time(nullptr)` → different per second
+2. **Envelope encryption**: client-side encryption uses fresh random nonces each time → ciphertext differs
+3. **ML-DSA-87 signature**: non-deterministic → different blob encoding → different hash
+
+So storage dedup (keyed on encoded-blob hash) doesn't fire for logically-identical content.
+
+**Design options:**
+
+1. **Logical names / overwrite-by-name**: add an optional `--name <key>` flag. Putting the same name tombstones the previous version. Requires a name→hash index on the server and clear ownership/ACL semantics.
+2. **`--replace <old_hash>`**: explicit opt-in tombstone-then-put. Keeps immutability as the default.
+3. **Dedup by plaintext hash**: client hashes plaintext, sends it as a dedup key; server rejects if already present. Compromises zero-knowledge guarantees depending on implementation.
+4. **Do nothing, document the behaviour**: content-addressed + immutable is the correct model; expect callers to check existence first.
+
+**Suggested direction:** #2 as the cleanest short-term answer (explicit user intent), #1 as a longer-term convenience if we want overwrite-by-name as a first-class workflow.
+
+**Related:** Tombstones still propagate via sync (verified), so `--replace`'s delete step would work end-to-end.
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready)
