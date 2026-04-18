@@ -117,7 +117,6 @@ int main(int argc, char* argv[]) {
     std::string identity_dir_str;
     std::string node_name;
     cmd::ConnectOpts opts;
-    bool force = false;
     bool cli_host_set = false;
     bool cli_port_set = false;
 
@@ -162,10 +161,12 @@ int main(int argc, char* argv[]) {
             spdlog::set_level(spdlog::level::info);
         } else if (std::strcmp(arg, "-q") == 0 || std::strcmp(arg, "--quiet") == 0) {
             opts.quiet = true;
-        } else if (std::strcmp(arg, "--force") == 0) {
-            force = true;
         } else {
             // Not a global flag -- keep for per-command parsing.
+            // (--force is deliberately NOT global: each command interprets it
+            // differently — keygen = overwrite identity, rm = tombstone
+            // missing blob, get = overwrite local file — so each subcommand
+            // parses it locally.)
             remaining.push_back(argv[i]);
         }
     }
@@ -266,16 +267,17 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "Usage: cdb keygen [--force]\n");
                 return 0;
             }
+            bool keygen_force = false;
             while (arg_idx < argc) {
                 if (std::strcmp(argv[arg_idx], "--force") == 0) {
-                    force = true;
+                    keygen_force = true;
                 } else {
                     std::fprintf(stderr, "Unknown keygen option: %s\n", argv[arg_idx]);
                     return 1;
                 }
                 ++arg_idx;
             }
-            return cmd::keygen(identity_dir_str, force);
+            return cmd::keygen(identity_dir_str, keygen_force);
         }
 
         // =====================================================================
@@ -501,6 +503,7 @@ int main(int argc, char* argv[]) {
             std::string hash_hex;
             std::string namespace_hex;
             bool skip_confirm = false;
+            bool rm_force = false;
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -513,6 +516,9 @@ int main(int argc, char* argv[]) {
                     ++arg_idx;
                 } else if (std::strcmp(a, "-y") == 0 || std::strcmp(a, "--yes") == 0) {
                     skip_confirm = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--force") == 0) {
+                    rm_force = true;
                     ++arg_idx;
                 } else if (a[0] != '-' && hash_hex.empty()) {
                     hash_hex = a;
@@ -537,8 +543,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // `force` is captured in the global pre-pass (applies to keygen and rm).
-            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, force, opts);
+            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, rm_force, opts);
         }
 
         // =====================================================================
