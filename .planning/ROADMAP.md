@@ -258,3 +258,46 @@ Also unresolved, related:
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready)
 
+
+### Phase 999.3: Determine if we want per-namespace R / W / RW access modes (BACKLOG — research)
+
+**Goal:** Decide whether the node's ACL model should support per-namespace access modes (read-only, write-only, read-write) instead of the current coarser "access allowed for everything that passes ACL" semantics.
+
+**Requirements:** TBD — this phase is a design decision, not a build.
+
+**Plans:** 0 plans
+
+#### Current model
+
+- Node has two ACLs: `allowed_client_keys` and `allowed_peer_keys`. Membership is binary — allowed or not.
+- Once a peer is allowed, they can receive any sync for any namespace the node holds (modulo `sync_namespaces` filter, which is node-wide, not per-peer).
+- Once a client is allowed, they can read/write/delete any blob (subject to signature checks — writers must own the namespace key or be a delegate).
+- Delegation (`cdb delegate` / `cdb revoke`) grants write access to other identities within a namespace. There's no R vs W distinction in delegations today; a delegate has full write rights.
+
+#### What the proposal would add
+
+Per-namespace capability ACL:
+- **R**: can receive sync / fetch blobs from this namespace but cannot publish
+- **W**: can publish blobs to this namespace but cannot receive sync back
+- **RW**: current default — both
+
+Possible scopes where this applies:
+1. **Per-peer**: per-peer namespace filter with an R/W flag. A remote peer can mirror a namespace read-only, or act as an offsite write-target without being allowed to read back.
+2. **Per-client**: per-client per-namespace caps. Some clients are read-only (query-only tools), others are write-only (drop-box uploaders).
+3. **Per-delegation**: differentiate `cdb delegate --read` vs `cdb delegate --write`. Today delegate means W.
+
+#### Design questions to answer
+
+- Is there a real use case users are hitting today, or is this speculative? (Enterprise storage vault direction from `project_product_direction.md` might want this; LAN sync probably doesn't need it.)
+- Where does it live: in the ACL config (static) or in delegations (dynamic, signed)?
+- How does a write-only namespace interact with sync? Is the peer sending hashes (metadata read) acceptable, or does that count as "read"?
+- Does enforcement happen at dispatch time (node rejects ops it doesn't permit) or at handshake time (node refuses to even connect a peer with bad caps)?
+- What's the wire impact? New allow-list fields in config.json? New fields in `SyncNamespaceAnnounce`? Both?
+- Relationship to tombstones: write-only peers should still be able to send tombstones (otherwise deletion propagation breaks) — but that means they effectively have metadata-read on the hashes they tombstone. Worth thinking through.
+
+#### Suggested direction (to revisit in discussion)
+
+Start by gathering concrete use cases before committing to implementation. If the only motivation is theoretical completeness, punt; if there are real deployments that need it, design per-peer R/W as the first pass since that's the sync-boundary use case. Delegation R/W is a separate decision with different implications (who signs what).
+
+Plans:
+- [ ] TBD (promote with /gsd-discuss-phase when ready to research)
