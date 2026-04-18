@@ -662,24 +662,79 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
         return 1;
     }
 
+    // 120-02 / PIPE-01: Pipeline the get fan-out. Same two-phase shape as
+    // cmd::put above: Phase A fires ReadRequests up to Connection::kPipelineDepth,
+    // Phase B drains ReadResponses via recv() in arrival order (D-08), mapping
+    // each reply back to its hash via the batch-local rid_to_index.
     uint32_t rid = 1;
+    std::unordered_map<uint32_t, size_t> rid_to_index;  // batch-local
+    size_t next_to_send = 0;
+    size_t completed = 0;
     int errors = 0;
 
-    for (const auto& hash_hex : hash_hexes) {
-        auto hash = parse_hash(hash_hex);
+    while (completed < hash_hexes.size()) {
+        // Phase A: greedy fill the window.
+        if (next_to_send < hash_hexes.size() &&
+            rid_to_index.size() < Connection::kPipelineDepth) {
+            const auto& hash_hex = hash_hexes[next_to_send];
 
-        std::vector<uint8_t> payload(64);
-        std::memcpy(payload.data(), ns.data(), 32);
-        std::memcpy(payload.data() + 32, hash.data(), 32);
+            std::array<uint8_t, 32> hash;
+            try {
+                hash = parse_hash(hash_hex);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "Error: invalid hash %s: %s\n",
+                             hash_hex.c_str(), e.what());
+                ++errors;
+                ++completed;
+                ++next_to_send;
+                continue;
+            }
 
-        if (!conn.send(MsgType::ReadRequest, payload, rid++)) {
-            std::fprintf(stderr, "Error: failed to send ReadRequest for %s\n", hash_hex.c_str());
-            ++errors;
+            std::vector<uint8_t> payload(64);
+            std::memcpy(payload.data(), ns.data(), 32);
+            std::memcpy(payload.data() + 32, hash.data(), 32);
+
+            uint32_t this_rid = rid++;
+            if (!conn.send_async(MsgType::ReadRequest, payload, this_rid)) {
+                std::fprintf(stderr, "Error: failed to send ReadRequest for %s\n",
+                             hash_hex.c_str());
+                ++errors;
+                ++completed;
+                ++next_to_send;
+                continue;
+            }
+            rid_to_index[this_rid] = next_to_send;
+            ++next_to_send;
+            continue;  // keep filling before draining
+        }
+
+        // Phase B: drain one reply in arrival order.
+        auto resp = conn.recv();
+        if (!resp) {
+            for (auto& [pending_rid, idx] : rid_to_index) {
+                (void)pending_rid;
+                std::fprintf(stderr, "Error: connection lost while fetching %s\n",
+                             hash_hexes[idx].c_str());
+                ++errors;
+                ++completed;
+            }
+            rid_to_index.clear();
+            break;
+        }
+
+        auto it = rid_to_index.find(resp->request_id);
+        if (it == rid_to_index.end()) {
+            spdlog::debug("cmd::get: discarding reply for unknown rid {} (type {})",
+                          resp->request_id, static_cast<unsigned>(resp->type));
             continue;
         }
 
-        auto resp = conn.recv();
-        if (!resp || resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+        size_t hash_idx = it->second;
+        rid_to_index.erase(it);
+        ++completed;
+        const auto& hash_hex = hash_hexes[hash_idx];
+
+        if (resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
             resp->payload.empty()) {
             std::fprintf(stderr, "Error: bad response for %s\n", hash_hex.c_str());
             ++errors;
