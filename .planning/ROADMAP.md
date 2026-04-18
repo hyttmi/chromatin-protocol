@@ -135,3 +135,28 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 120. Request Pipelining | 0/0 | Not started | - |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
+
+## Backlog
+
+### Phase 999.1: ACL enforcement + live revocation test SIGSEGVs (BACKLOG)
+
+**Goal:** [Captured for future planning]
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Two pre-existing test failures in `db/tests/peer/test_peer_manager.cpp` that cascade into SIGSEGVs during Catch2 test-case unwind. Both point to real bugs in ACL enforcement, not test flakiness:
+
+- **`test_peer_manager.cpp:213`** — "closed mode rejects unauthorized peer". Closed-mode peer ACL should reject connections from identities not in `allowed_peer_keys` during or immediately after handshake. Test expects rejection; actual behavior lets the connection stand.
+- **`test_peer_manager.cpp:359`** — "reload_config revokes connected peer". After reloading config to remove a peer's key, `ConnectionManager::disconnect_unauthorized_peers()` runs but silently returns without disconnecting. Suspected cause: inbound peer-node connection flagged `is_client=true`, so the revoke check (`connection_manager.cpp:371-373`) routes through the open-mode client ACL and the peer is deemed allowed.
+
+Dormant in v2.2-era ACL code — predates phase 118 but means closed-mode enforcement and live revocation are unreliable. Security concern for any future closed-mode deployment.
+
+**Repro:** `./build/db/chromatindb_tests "*reload*"` and `./build/db/chromatindb_tests "*closed*"`
+
+**Suggested direction:**
+1. Instrument `disconnect_unauthorized_peers` with `is_client/ns/allowed` logs to confirm the misclassification hypothesis.
+2. If confirmed, fix the handshake/auth path that sets `is_client` — peer-mode auth should not produce `is_client=true`.
+3. Add regression tests for both scenarios after fix.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
