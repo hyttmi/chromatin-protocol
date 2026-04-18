@@ -294,10 +294,52 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "export-key") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb export-key\n");
+                std::fprintf(stderr,
+                    "Usage: cdb export-key [--format raw|hex|b64] [--out <file>]\n"
+                    "                      [--signing-only | --kem-only]\n"
+                    "\n"
+                    "Default: raw 4160-byte concatenation (signing || kem) to stdout.\n"
+                    "When stdout is a terminal and format is raw, refuses to print\n"
+                    "binary and suggests --out or redirect.\n");
                 return 0;
             }
-            return cmd::export_key(identity_dir_str);
+            std::string format = "raw";
+            std::string out_path;
+            bool signing_only = false;
+            bool kem_only = false;
+            while (arg_idx < argc) {
+                const char* a = argv[arg_idx];
+                if (std::strcmp(a, "--format") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --format requires raw|hex|b64\n");
+                        return 1;
+                    }
+                    format = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--out") == 0 || std::strcmp(a, "-o") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --out requires a file path\n");
+                        return 1;
+                    }
+                    out_path = argv[++arg_idx];
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--signing-only") == 0) {
+                    signing_only = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--kem-only") == 0) {
+                    kem_only = true;
+                    ++arg_idx;
+                } else {
+                    std::fprintf(stderr, "Unknown export-key option: %s\n", a);
+                    return 1;
+                }
+            }
+            if (signing_only && kem_only) {
+                std::fprintf(stderr, "Error: --signing-only and --kem-only are mutually exclusive\n");
+                return 1;
+            }
+            return cmd::export_key(identity_dir_str, format, out_path,
+                                   signing_only, kem_only);
         }
 
         // =====================================================================

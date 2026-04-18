@@ -175,11 +175,46 @@ bool Connection::connect_uds(const std::string& uds_path) {
 }
 
 bool Connection::connect_tcp(const std::string& host, uint16_t port) {
+    // Bounded connect: race an async_connect against a 5-second timer so a
+    // dead/unreachable host fails fast with a clear error instead of blocking
+    // on the kernel's default TCP SYN-retry ladder (30+ seconds).
+    static constexpr auto CONNECT_TIMEOUT = std::chrono::seconds(5);
+
     try {
         tcp_socket_.emplace(ioc_);
         asio::ip::tcp::resolver resolver(ioc_);
         auto endpoints = resolver.resolve(host, std::to_string(port));
-        asio::connect(*tcp_socket_, endpoints);
+
+        ioc_.restart();
+        std::error_code connect_ec = asio::error::would_block;
+        asio::steady_timer timer(ioc_);
+        timer.expires_after(CONNECT_TIMEOUT);
+        timer.async_wait([&](const std::error_code& ec) {
+            if (!ec && connect_ec == asio::error::would_block) {
+                // Timer fired before connect completed — cancel the socket.
+                std::error_code ignore;
+                tcp_socket_->close(ignore);
+            }
+        });
+        asio::async_connect(*tcp_socket_, endpoints,
+            [&](const std::error_code& ec, const asio::ip::tcp::endpoint&) {
+                connect_ec = ec;
+                timer.cancel();
+            });
+
+        ioc_.run();
+
+        if (connect_ec) {
+            if (connect_ec == asio::error::operation_aborted ||
+                connect_ec == asio::error::timed_out) {
+                spdlog::debug("TCP connect timeout: {}:{}", host, port);
+            } else {
+                spdlog::debug("TCP connect failed: {}", connect_ec.message());
+            }
+            tcp_socket_.reset();
+            return false;
+        }
+
         is_uds_ = false;
         return true;
     } catch (const std::exception& e) {

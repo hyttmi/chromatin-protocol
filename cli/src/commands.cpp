@@ -15,6 +15,8 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
+#include <unistd.h>
 
 namespace chromatindb::cli::cmd {
 
@@ -101,6 +103,45 @@ static std::array<uint8_t, 32> parse_hash(const std::string& hash_hex) {
 // ListResponse entry stride: hash:32 + seq:8BE + type:4 = 44 bytes (since Phase 117).
 // Kept as a named constant so every consumer references the same value.
 static constexpr size_t LIST_ENTRY_SIZE = 44;
+
+/// Format a byte count as "<humanized> (<raw> bytes)" for operator-facing output.
+/// Uses binary units (KiB/MiB/GiB) because everything in this project is block/
+/// page aligned. Returns the raw count unchanged below 1 KiB.
+static std::string humanize_bytes(uint64_t n) {
+    char buf[64];
+    if (n < 1024) {
+        std::snprintf(buf, sizeof(buf), "%llu bytes", (unsigned long long)n);
+        return buf;
+    }
+    constexpr const char* units[] = {"KiB", "MiB", "GiB", "TiB", "PiB"};
+    double v = static_cast<double>(n);
+    int u = -1;
+    do {
+        v /= 1024.0;
+        ++u;
+    } while (v >= 1024.0 && u + 1 < static_cast<int>(sizeof(units) / sizeof(units[0])) - 1);
+    std::snprintf(buf, sizeof(buf), "%.2f %s (%llu bytes)", v, units[u], (unsigned long long)n);
+    return buf;
+}
+
+/// Format an uptime in seconds as "1d2h3m4s" (dropping leading zero units).
+static std::string humanize_uptime(uint64_t secs) {
+    uint64_t d = secs / 86400;
+    uint64_t h = (secs % 86400) / 3600;
+    uint64_t m = (secs % 3600) / 60;
+    uint64_t s = secs % 60;
+    char buf[64];
+    if (d)      std::snprintf(buf, sizeof(buf), "%llud%lluh%llum%llus",
+                              (unsigned long long)d, (unsigned long long)h,
+                              (unsigned long long)m, (unsigned long long)s);
+    else if (h) std::snprintf(buf, sizeof(buf), "%lluh%llum%llus",
+                              (unsigned long long)h, (unsigned long long)m,
+                              (unsigned long long)s);
+    else if (m) std::snprintf(buf, sizeof(buf), "%llum%llus",
+                              (unsigned long long)m, (unsigned long long)s);
+    else        std::snprintf(buf, sizeof(buf), "%llus", (unsigned long long)s);
+    return buf;
+}
 
 /// Locate the PUBK blob in a namespace using the server-side type filter
 /// (flags bit 1, payload bytes 45-48 = PUBKEY_MAGIC). Returns the decoded blob
@@ -323,8 +364,8 @@ int keygen(const std::string& identity_dir, bool force) {
     fs::path dir(identity_dir);
 
     if (!force && fs::exists(dir / "identity.key")) {
-        std::fprintf(stderr, "Identity already exists at %s\n", dir.c_str());
-        std::fprintf(stderr, "Use --force to overwrite.\n");
+        std::fprintf(stderr, "Error: identity already exists at %s (use --force to overwrite)\n",
+                     dir.c_str());
         return 1;
     }
 
@@ -349,12 +390,87 @@ int whoami(const std::string& identity_dir) {
 // export-key
 // =============================================================================
 
-int export_key(const std::string& identity_dir) {
+static std::string base64_encode(std::span<const uint8_t> bytes) {
+    static constexpr char ALPHABET[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((bytes.size() + 2) / 3) * 4);
+    size_t i = 0;
+    for (; i + 3 <= bytes.size(); i += 3) {
+        uint32_t v = (uint32_t(bytes[i]) << 16) | (uint32_t(bytes[i + 1]) << 8) | bytes[i + 2];
+        out.push_back(ALPHABET[(v >> 18) & 0x3f]);
+        out.push_back(ALPHABET[(v >> 12) & 0x3f]);
+        out.push_back(ALPHABET[(v >> 6)  & 0x3f]);
+        out.push_back(ALPHABET[v         & 0x3f]);
+    }
+    if (i < bytes.size()) {
+        uint32_t v = uint32_t(bytes[i]) << 16;
+        if (i + 1 < bytes.size()) v |= uint32_t(bytes[i + 1]) << 8;
+        out.push_back(ALPHABET[(v >> 18) & 0x3f]);
+        out.push_back(ALPHABET[(v >> 12) & 0x3f]);
+        out.push_back(i + 1 < bytes.size() ? ALPHABET[(v >> 6) & 0x3f] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+int export_key(const std::string& identity_dir, const std::string& format,
+               const std::string& out_path, bool signing_only, bool kem_only) {
+
     auto id = Identity::load_from(identity_dir);
-    auto keys = id.export_public_keys();
-    std::cout.write(reinterpret_cast<const char*>(keys.data()),
-                    static_cast<std::streamsize>(keys.size()));
-    std::cout.flush();
+
+    // Select which slice of the 4160-byte export to emit.
+    // Layout: [signing_pk:2592][kem_pk:1568]
+    auto full = id.export_public_keys();
+    if (full.size() != 4160) {
+        std::fprintf(stderr, "Error: unexpected export size %zu (expected 4160)\n", full.size());
+        return 1;
+    }
+    std::span<const uint8_t> bytes(full.data(), full.size());
+    if (signing_only) bytes = bytes.subspan(0, 2592);
+    else if (kem_only) bytes = bytes.subspan(2592, 1568);
+
+    // Refuse to splatter raw binary onto an interactive terminal.
+    bool write_to_stdout = out_path.empty();
+    bool is_tty = write_to_stdout && ::isatty(fileno(stdout));
+    if (format == "raw" && is_tty) {
+        std::fprintf(stderr,
+            "Error: refusing to write raw binary to a terminal.\n"
+            "       Use --out <file>, redirect with '>', or pick --format hex|b64.\n");
+        return 1;
+    }
+
+    std::string encoded;  // backing storage for hex/b64; empty if raw
+    std::span<const uint8_t> to_write;
+    if (format == "raw") {
+        to_write = bytes;
+    } else if (format == "hex") {
+        encoded = to_hex(bytes) + "\n";
+        to_write = std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size());
+    } else if (format == "b64") {
+        encoded = base64_encode(bytes) + "\n";
+        to_write = std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size());
+    } else {
+        std::fprintf(stderr, "Error: unknown format '%s' (use raw|hex|b64)\n", format.c_str());
+        return 1;
+    }
+
+    if (!out_path.empty()) {
+        std::ofstream f(out_path, std::ios::binary);
+        if (!f) {
+            std::fprintf(stderr, "Error: cannot write to %s\n", out_path.c_str());
+            return 1;
+        }
+        f.write(reinterpret_cast<const char*>(to_write.data()),
+                static_cast<std::streamsize>(to_write.size()));
+        std::fprintf(stderr, "wrote %zu bytes to %s\n", to_write.size(), out_path.c_str());
+    } else {
+        std::cout.write(reinterpret_cast<const char*>(to_write.data()),
+                        static_cast<std::streamsize>(to_write.size()));
+        std::cout.flush();
+    }
     return 0;
 }
 
@@ -398,10 +514,19 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     static constexpr size_t MAX_FILE_SIZE = 500ULL * 1024 * 1024;
 
     if (from_stdin) {
-        files.push_back({"", "", read_stdin_bytes()});
+        auto stdin_bytes = read_stdin_bytes();
+        if (stdin_bytes.empty()) {
+            std::fprintf(stderr, "Error: stdin is empty (refusing to upload a 0-byte blob)\n");
+            return 1;
+        }
+        files.push_back({"", "", std::move(stdin_bytes)});
     } else {
         for (const auto& fp : file_paths) {
             auto fsize = fs::file_size(fp);
+            if (fsize == 0) {
+                std::fprintf(stderr, "Error: %s is empty (refusing to upload a 0-byte blob)\n", fp.c_str());
+                return 1;
+            }
             if (fsize > MAX_FILE_SIZE) {
                 std::fprintf(stderr, "Error: %s too large (%zu MiB, max ~500 MiB)\n",
                              fp.c_str(), static_cast<size_t>(fsize / (1024 * 1024)));
@@ -499,7 +624,7 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
         }
 
         if (resp->payload[0] != 0x01) {
-            std::fprintf(stderr, "%s: not found\n", hash_hex.c_str());
+            std::fprintf(stderr, "Error: blob not found: %s\n", hash_hex.c_str());
             ++errors;
             continue;
         }
@@ -545,8 +670,9 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
                 : output_dir + "/" + out_filename;
 
             if (!force_overwrite && fs::exists(out_path)) {
-                std::fprintf(stderr, "skip: %s already exists (use --force to overwrite)\n",
+                std::fprintf(stderr, "Error: %s already exists (use --force to overwrite)\n",
                              out_path.c_str());
+                ++errors;
                 continue;
             }
 
@@ -1178,15 +1304,18 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
     auto storage_used = read_u64();
     auto storage_max = read_u64();
 
-    std::printf("Version: %s\n", version.c_str());
-    std::printf("Git: %s\n", git_hash.c_str());
-    std::printf("Uptime: %lus\n", static_cast<unsigned long>(uptime));
-    std::printf("Peers: %u\n", peer_count);
+    std::printf("Version:    %s\n", version.c_str());
+    std::printf("Git:        %s\n", git_hash.c_str());
+    std::printf("Uptime:     %s\n", humanize_uptime(uptime).c_str());
+    std::printf("Peers:      %u\n", peer_count);
     std::printf("Namespaces: %u\n", namespace_count);
-    std::printf("Blobs: %lu\n", static_cast<unsigned long>(total_blobs));
-    std::printf("Storage: %lu / %lu bytes\n",
-                static_cast<unsigned long>(storage_used),
-                static_cast<unsigned long>(storage_max));
+    std::printf("Blobs:      %llu\n", (unsigned long long)total_blobs);
+    std::printf("Used:       %s\n", humanize_bytes(storage_used).c_str());
+    if (storage_max == 0) {
+        std::printf("Quota:      unlimited\n");
+    } else {
+        std::printf("Quota:      %s\n", humanize_bytes(storage_max).c_str());
+    }
 
     return 0;
 }
@@ -1244,9 +1373,13 @@ int stats(const std::string& identity_dir, const ConnectOpts& opts) {
     auto bytes = load_u64_be(resp->payload.data() + 8);
     auto quota = load_u64_be(resp->payload.data() + 16);
 
-    std::printf("Blobs: %lu\n", static_cast<unsigned long>(count));
-    std::printf("Size: %lu bytes\n", static_cast<unsigned long>(bytes));
-    std::printf("Quota: %lu bytes\n", static_cast<unsigned long>(quota));
+    std::printf("Blobs: %llu\n", (unsigned long long)count);
+    std::printf("Size:  %s\n", humanize_bytes(bytes).c_str());
+    if (quota == 0) {
+        std::printf("Quota: unlimited\n");
+    } else {
+        std::printf("Quota: %s\n", humanize_bytes(quota).c_str());
+    }
 
     return 0;
 }
@@ -1303,10 +1436,11 @@ int delegate(const std::string& identity_dir, const std::string& target,
         }
 
         auto hash_span = std::span<const uint8_t>(resp->payload.data(), 32);
+        auto hash_hex = to_hex(hash_span);
         if (!opts.quiet) {
-            std::fprintf(stderr, "delegated: %s (%s)\n",
-                         t.label.c_str(), to_hex(hash_span).c_str());
+            std::fprintf(stderr, "delegated: %s\n", t.label.c_str());
         }
+        std::printf("%s\n", hash_hex.c_str());
     }
 
     conn.close();
@@ -1481,11 +1615,29 @@ int delegations(const std::string& identity_dir, const std::string& namespace_he
         return 0;
     }
 
+    // Build delegate-namespace → contact-name lookup from the local contacts db.
+    std::map<std::string, std::string> ns_to_name;
+    {
+        auto db_path = identity_dir + "/contacts.db";
+        if (fs::exists(db_path)) {
+            ContactDB db(db_path);
+            for (const auto& c : db.list()) {
+                if (c.signing_pk.empty()) continue;
+                auto ns_arr = sha3_256(c.signing_pk);
+                ns_to_name[to_hex(std::span<const uint8_t>(ns_arr.data(), 32))] = c.name;
+            }
+        }
+    }
+
+    std::printf("%-20s  %-64s  %s\n", "DELEGATE", "NAMESPACE", "BLOB");
     for (uint32_t i = 0; i < count; ++i) {
         size_t off = 4 + i * 64;
         auto pk_hash = std::span<const uint8_t>(resp->payload.data() + off, 32);
         auto blob_hash = std::span<const uint8_t>(resp->payload.data() + off + 32, 32);
-        std::printf("%s  %s\n", to_hex(pk_hash).c_str(), to_hex(blob_hash).c_str());
+        auto ns_hex = to_hex(pk_hash);
+        const auto it = ns_to_name.find(ns_hex);
+        const std::string name = it != ns_to_name.end() ? it->second : "(unknown)";
+        std::printf("%-20s  %s  %s\n", name.c_str(), ns_hex.c_str(), to_hex(blob_hash).c_str());
     }
 
     return 0;
@@ -1509,7 +1661,7 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
             check_conn.close();
             if (existing) {
                 if (!opts.quiet) {
-                    std::fprintf(stderr, "already published: %s\n", ns_hex.c_str());
+                    std::fprintf(stderr, "already published\n");
                 }
                 std::printf("%s\n", ns_hex.c_str());
                 return 0;
@@ -1557,7 +1709,7 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
     }
 
     if (!opts.quiet) {
-        std::fprintf(stderr, "published: %s\n", ns_hex.c_str());
+        std::fprintf(stderr, "published\n");
     }
     std::printf("%s\n", ns_hex.c_str());
 

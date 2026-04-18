@@ -18,7 +18,14 @@ struct ConnectOpts {
 
 int keygen(const std::string& identity_dir, bool force);
 int whoami(const std::string& identity_dir);
-int export_key(const std::string& identity_dir);
+
+/// Export public key(s) in one of several formats.
+/// format: "raw" (binary), "hex", or "b64".
+/// out_path: if non-empty, write to file instead of stdout.
+/// signing_only / kem_only: restrict to just one key; default emits both
+/// (signing || kem). Mutually exclusive.
+int export_key(const std::string& identity_dir, const std::string& format,
+               const std::string& out_path, bool signing_only, bool kem_only);
 
 int put(const std::string& identity_dir, const std::vector<std::string>& file_paths,
         const std::vector<std::string>& share_pubkey_files,
