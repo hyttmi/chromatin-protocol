@@ -471,39 +471,52 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 if (has_more)
                     refs.resize(limit);
 
-                // Filter using type prefix from BlobRef (no full blob load for
-                // tombstone/delegation checks)
+                // Filter (type / expiry / delegation / tombstone) and — for
+                // every surviving entry — decode the stored blob to populate
+                // data_size / timestamp / ttl for ListResponse metadata. The
+                // non-raw path was already loading each blob for TTL expiry;
+                // we extend the raw path the same way so ls can surface size
+                // and timestamp without a second round-trip.
                 uint64_t now = static_cast<uint64_t>(std::time(nullptr));
                 std::vector<storage::BlobRef> filtered_refs;
                 filtered_refs.reserve(refs.size());
-                for (const auto& ref : refs) {
+                for (auto& ref : refs) {
                     if (!include_all) {
-                        // Skip tombstones using type prefix
+                        // Skip tombstones / delegations by type prefix alone.
                         if (std::memcmp(ref.blob_type.data(),
                                         wire::TOMBSTONE_MAGIC.data(), 4) == 0) {
                             continue;
                         }
-                        // Skip delegations using type prefix
                         if (std::memcmp(ref.blob_type.data(),
                                         wire::DELEGATION_MAGIC.data(), 4) == 0) {
                             continue;
                         }
-                        // Expiry check still needs blob metadata for TTL
-                        auto blob = storage_.get_blob(ns, ref.blob_hash);
-                        if (!blob || wire::is_blob_expired(*blob, now)) {
-                            continue;
-                        }
                     }
-                    // Apply type filter if requested
                     if (has_type_filter) {
                         if (std::memcmp(ref.blob_type.data(), type_filter.data(), 4) != 0) {
                             continue;
                         }
                     }
+
+                    // One MDBX read per surviving entry to pick up the author
+                    // timestamp and ciphertext size. Also serves as the expiry
+                    // check in non-raw mode.
+                    auto blob = storage_.get_blob(ns, ref.blob_hash);
+                    if (!blob) continue;
+                    if (!include_all && wire::is_blob_expired(*blob, now)) {
+                        continue;
+                    }
+                    ref.data_size = static_cast<uint64_t>(blob->data.size());
+                    ref.timestamp = blob->timestamp;
+                    ref.ttl = blob->ttl;
                     filtered_refs.push_back(ref);
                 }
 
-                constexpr size_t LIST_ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
+                // Wire entry (60 bytes):
+                //   hash:32 | seq:8BE | type:4 | size:8BE | timestamp:8BE
+                // TTL is intentionally omitted; expiry can be derived when
+                // needed via ReadRequest for the specific blob.
+                constexpr size_t LIST_ENTRY_SIZE = 60;
                 uint32_t count = static_cast<uint32_t>(filtered_refs.size());
                 auto body_size = chromatindb::util::checked_mul(static_cast<size_t>(count), LIST_ENTRY_SIZE);
                 if (!body_size) { record_strike_(conn, "ListResponse overflow"); co_await send_error_response(conn, ERROR_INTERNAL, wire::TransportMsgType_ListRequest, request_id, metrics_); co_return; }
@@ -516,6 +529,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     std::memcpy(response.data() + off, filtered_refs[i].blob_hash.data(), 32);
                     chromatindb::util::store_u64_be(response.data() + off + 32, filtered_refs[i].seq_num);
                     std::memcpy(response.data() + off + 40, filtered_refs[i].blob_type.data(), 4);
+                    chromatindb::util::store_u64_be(response.data() + off + 44, filtered_refs[i].data_size);
+                    chromatindb::util::store_u64_be(response.data() + off + 52, filtered_refs[i].timestamp);
                 }
                 response[*resp_size - 1] = has_more ? 1 : 0;
 

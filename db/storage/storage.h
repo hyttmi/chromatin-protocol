@@ -70,11 +70,16 @@ struct DelegationEntry {
 };
 
 /// Lightweight blob reference for list/pagination queries.
-/// Contains only hash and seq_num (no full blob data).
+/// hash / seq_num / blob_type come from the seq_map index (one MDBX read).
+/// data_size / timestamp / ttl are populated on demand by the caller decoding
+/// the stored blob when list-level metadata is required.
 struct BlobRef {
     std::array<uint8_t, 32> blob_hash{};
     uint64_t seq_num = 0;
-    std::array<uint8_t, 4> blob_type{};  // First 4 bytes of blob data (type prefix)
+    std::array<uint8_t, 4> blob_type{};
+    uint64_t data_size = 0;
+    uint64_t timestamp = 0;
+    uint32_t ttl = 0;
 };
 
 /// Pre-computed blob for atomic multi-blob storage.

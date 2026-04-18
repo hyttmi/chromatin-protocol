@@ -102,7 +102,7 @@ static std::array<uint8_t, 32> parse_hash(const std::string& hash_hex) {
 
 // ListResponse entry stride: hash:32 + seq:8BE + type:4 = 44 bytes (since Phase 117).
 // Kept as a named constant so every consumer references the same value.
-static constexpr size_t LIST_ENTRY_SIZE = 44;
+static constexpr size_t LIST_ENTRY_SIZE = 60;
 
 /// Format a byte count as "<humanized> (<raw> bytes)" for operator-facing output.
 /// Uses binary units (KiB/MiB/GiB) because everything in this project is block/
@@ -983,6 +983,7 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
     auto ns = resolve_namespace(id, namespace_hex, identity_dir);
 
     uint64_t since_seq = 0;
+    bool first_page = true;
 
     for (;;) {
         // Determine ListRequest payload size based on flags needed
@@ -1056,40 +1057,74 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             return 1;
         }
 
-        // Parse ListResponse: [count:4BE][entries: N * (hash:32 + seq:8BE + type:4)][has_more:1]
+        // Parse ListResponse:
+        //   [count:4BE]
+        //   [entries: N * (hash:32 | seq:8BE | type:4 | size:8BE | ts:8BE)]
+        //   [has_more:1]
         auto& p = resp->payload;
         if (p.size() < 5) {  // at least count(4) + has_more(1)
             std::fprintf(stderr, "Error: ListResponse too short\n");
             return 1;
         }
 
-        constexpr size_t ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
-
         uint32_t count = load_u32_be(p.data());
-        size_t entries_size = static_cast<size_t>(count) * ENTRY_SIZE;
+        size_t entries_size = static_cast<size_t>(count) * LIST_ENTRY_SIZE;
         if (p.size() < 4 + entries_size + 1) {
             std::fprintf(stderr, "Error: ListResponse truncated\n");
             return 1;
         }
 
+        // Header (only on the first page — suppress on subsequent pagination turns).
+        if (first_page) {
+            std::printf("%-64s  %-4s  %10s  %s\n",
+                        "HASH", "TYPE", "SIZE", "TIMESTAMP");
+            first_page = false;
+        }
+
         const uint8_t* entries = p.data() + 4;
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = entries + static_cast<size_t>(i) * ENTRY_SIZE;
+            const uint8_t* entry = entries + static_cast<size_t>(i) * LIST_ENTRY_SIZE;
             auto hash_span = std::span<const uint8_t>(entry, 32);
+            uint64_t seq = load_u64_be(entry + 32);
             const uint8_t* type_ptr = entry + 40;
+            uint64_t size = load_u64_be(entry + 44);
+            uint64_t ts   = load_u64_be(entry + 52);
 
             // Per D-21: --type bypasses hide list
             // Per D-13/D-22: default mode hides PUBK, CDAT, DLGT
             if (!raw && type_filter.empty() && is_hidden_type(type_ptr)) {
-                // Track seq for pagination even when skipping
-                since_seq = load_u64_be(entry + 32);
+                since_seq = seq;
                 continue;
             }
 
-            // Per D-12/D-18: hash + type label per line
-            std::printf("%s  %s\n", to_hex(hash_span).c_str(), type_label(type_ptr));
+            // Format timestamp as "YYYY-MM-DD HH:MM:SS" UTC.
+            char tsbuf[32] = "-";
+            if (ts > 0) {
+                std::time_t t = static_cast<std::time_t>(ts);
+                std::tm tm_utc{};
+                if (gmtime_r(&t, &tm_utc)) {
+                    std::strftime(tsbuf, sizeof(tsbuf), "%Y-%m-%d %H:%M:%S", &tm_utc);
+                }
+            }
 
-            since_seq = load_u64_be(entry + 32);
+            // Size: humanize only for non-tiny values; keep an aligned column.
+            char sizebuf[24];
+            if (size < 1024) {
+                std::snprintf(sizebuf, sizeof(sizebuf), "%llu", (unsigned long long)size);
+            } else {
+                double v = size;
+                const char* u = "K";
+                if (v >= 1024.0 * 1024.0) { v /= 1024.0 * 1024.0; u = "M"; }
+                else                      { v /= 1024.0;          u = "K"; }
+                if (v >= 1024.0)          { v /= 1024.0;          u = "G"; }
+                std::snprintf(sizebuf, sizeof(sizebuf), "%.1f%s", v, u);
+            }
+
+            std::printf("%s  %-4s  %10s  %s\n",
+                        to_hex(hash_span).c_str(), type_label(type_ptr),
+                        sizebuf, tsbuf);
+
+            since_seq = seq;
         }
 
         uint8_t has_more = p[4 + entries_size];
@@ -1140,15 +1175,14 @@ std::vector<std::string> list_hashes(const std::string& identity_dir,
         }
 
         auto& p = resp->payload;
-        constexpr size_t ENTRY_SIZE = 44;  // hash:32 + seq:8BE + type:4
 
         uint32_t count = load_u32_be(p.data());
-        size_t entries_size = static_cast<size_t>(count) * ENTRY_SIZE;
+        size_t entries_size = static_cast<size_t>(count) * LIST_ENTRY_SIZE;
         if (p.size() < 4 + entries_size + 1) return hashes;
 
         const uint8_t* entries = p.data() + 4;
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = entries + static_cast<size_t>(i) * ENTRY_SIZE;
+            const uint8_t* entry = entries + static_cast<size_t>(i) * LIST_ENTRY_SIZE;
             auto hash_span = std::span<const uint8_t>(entry, 32);
             hashes.push_back(to_hex(hash_span));
             since_seq = load_u64_be(entry + 32);
