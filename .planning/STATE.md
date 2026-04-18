@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 120 context gathered
-last_updated: "2026-04-18T12:20:25.431Z"
-last_activity: 2026-04-16
+last_updated: "2026-04-18T15:10:12.736Z"
+last_activity: 2026-04-18 -- Phase 120 execution started
 progress:
   total_phases: 16
   completed_phases: 3
-  total_plans: 6
+  total_plans: 8
   completed_plans: 6
-  percent: 100
+  percent: 75
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 118 — configurable-constants-peer-management
+**Current focus:** Phase 120 — request-pipelining
 
 ## Current Position
 
-Phase: 119
-Plan: Not started
-Status: Executing Phase 118
-Last activity: 2026-04-16
+Phase: 120 (request-pipelining) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 120
+Last activity: 2026-04-18 -- Phase 120 execution started
 
 Progress: [----------] 0%
 

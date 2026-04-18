@@ -89,7 +89,7 @@ Plans:
   3. Pipeline depth is configurable with a sensible default of 8 in-flight requests
 **Plans**: 2 plans
 Plans:
-- [ ] 120-01-PLAN.md — Connection::send_async + recv_for + correlation map + Catch2 [pipeline] tests
+- [x] 120-01-PLAN.md — Connection::send_async + recv_for + correlation map + Catch2 [pipeline] tests
 - [ ] 120-02-PLAN.md — Pipeline cmd::get and cmd::put onto send_async + arrival-order recv() drain
 
 ### Phase 121: Documentation
@@ -137,7 +137,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
 | 119. Chunked Large Files | 0/0 | Not started | - |
-| 120. Request Pipelining | 0/0 | Not started | - |
+| 120. Request Pipelining | 1/2 | In Progress|  |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
 
@@ -241,7 +241,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 0 plans
+**Plans:** 1/2 plans executed
 
 Current behaviour (observed 2026-04-18):
 
