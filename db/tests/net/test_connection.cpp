@@ -848,7 +848,7 @@ TEST_CASE("lightweight handshake rejects mismatched auth pubkey", "[connection][
         // Step 5: Send malicious AuthSignature with ATTACKER's pubkey
         auto attacker_sig = attacker.sign(session_keys.session_fingerprint);
         auto malicious_auth = chromatindb::net::encode_auth_payload(
-            attacker.public_key(), attacker_sig);
+            chromatindb::net::Role::Peer, attacker.public_key(), attacker_sig);
         auto malicious_msg = chromatindb::net::TransportCodec::encode(
             chromatindb::wire::TransportMsgType_AuthSignature, malicious_auth);
 

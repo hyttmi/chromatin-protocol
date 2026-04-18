@@ -4,6 +4,7 @@
 #include "db/net/framing.h"
 #include "db/net/handshake.h"
 #include "db/net/protocol.h"
+#include "db/net/role.h"
 
 #include <asio.hpp>
 #include <asio/awaitable.hpp>
@@ -91,6 +92,19 @@ public:
 
     /// Peer's signing public key (available after auth).
     const std::vector<uint8_t>& peer_pubkey() const { return peer_pubkey_; }
+
+    /// Role this side declares in its own AuthSignature payload.
+    /// Default Role::Peer (node-daemon default). Callers acting as clients
+    /// (e.g. cdb CLI, peer-management UDS clients) must set this to
+    /// Role::Client before the handshake starts.
+    void set_local_role(Role r) { local_role_ = r; }
+    Role local_role() const { return local_role_; }
+
+    /// Role the remote end declared in its AuthSignature payload.
+    /// Available only after the handshake has completed; callers should
+    /// check `is_authenticated()` first. This is what ACL/classifier code
+    /// should consult, never the ACL-list membership.
+    Role peer_role() const { return peer_role_; }
 
     /// Set message callback.
     void on_message(MessageCallback cb) { message_cb_ = std::move(cb); }
@@ -211,6 +225,8 @@ private:
     void set_recv_counter_for_test(uint64_t v) { recv_counter_ = v; }
 
     std::vector<uint8_t> peer_pubkey_;
+    Role local_role_ = Role::Peer;
+    Role peer_role_ = Role::Peer;
 
     std::string remote_addr_;
     std::string connect_address_;

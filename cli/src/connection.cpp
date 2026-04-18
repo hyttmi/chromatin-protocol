@@ -20,6 +20,14 @@ static constexpr uint8_t TYPE_AUTH_SIGNATURE  = 3;
 static constexpr uint8_t TYPE_TRUSTED_HELLO   = 23;
 
 // =============================================================================
+// Connection role (wire value, must match db/net/role.h)
+// cdb is always a CLIENT initiator; it doesn't act on the remote's declared
+// role, so only the value we send is named here.
+// =============================================================================
+
+static constexpr uint8_t ROLE_CLIENT = 0x01;
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -39,11 +47,15 @@ static constexpr size_t NONCE_SIZE      = 32;
 // =============================================================================
 
 static std::vector<uint8_t> encode_auth_payload(
+    uint8_t role,
     std::span<const uint8_t> signing_pubkey,
     std::span<const uint8_t> signature) {
 
     std::vector<uint8_t> payload;
-    payload.reserve(4 + signing_pubkey.size() + signature.size());
+    payload.reserve(1 + 4 + signing_pubkey.size() + signature.size());
+
+    // Role byte (cdb always sends ROLE_CLIENT)
+    payload.push_back(role);
 
     // 4-byte BE pubkey size
     uint8_t pk_size_be[4];
@@ -60,20 +72,27 @@ static std::vector<uint8_t> encode_auth_payload(
 }
 
 struct AuthPayload {
+    uint8_t role;
     std::vector<uint8_t> pubkey;
     std::vector<uint8_t> signature;
 };
 
 static std::optional<AuthPayload> decode_auth_payload(std::span<const uint8_t> data) {
-    if (data.size() < 4) return std::nullopt;
+    // Need at least role(1) + pk_size(4)
+    if (data.size() < 5) return std::nullopt;
 
-    uint32_t pk_size = load_u32_be(data.data());
+    // cdb doesn't route on the remote's declared role -- it trusts whatever
+    // the node reports and relies on the signature check for integrity.
+    uint8_t role = data[0];
+
+    uint32_t pk_size = load_u32_be(data.data() + 1);
     if (pk_size != SIGNING_PK_SIZE) return std::nullopt;
-    if (pk_size > data.size() - 4) return std::nullopt;
+    if (pk_size > data.size() - 5) return std::nullopt;
 
     AuthPayload result;
-    result.pubkey.assign(data.begin() + 4, data.begin() + 4 + pk_size);
-    result.signature.assign(data.begin() + 4 + pk_size, data.end());
+    result.role = role;
+    result.pubkey.assign(data.begin() + 5, data.begin() + 5 + pk_size);
+    result.signature.assign(data.begin() + 5 + pk_size, data.end());
     return result;
 }
 
@@ -355,7 +374,7 @@ bool Connection::handshake_pq() {
 
     // 7a: Send our AuthSignature (type=3)
     auto sig = identity_.sign(fingerprint);
-    auto auth_payload = encode_auth_payload(signing_pk, sig);
+    auto auth_payload = encode_auth_payload(ROLE_CLIENT, signing_pk, sig);
     auto auth_msg = encode_transport(TYPE_AUTH_SIGNATURE, auth_payload, 0);
     if (!send_encrypted(auth_msg)) {
         spdlog::warn("handshake: failed to send auth");
@@ -488,7 +507,7 @@ bool Connection::handshake_trusted() {
 
     // 6a: Send our AuthSignature
     auto sig = identity_.sign(fingerprint);
-    auto auth_payload = encode_auth_payload(signing_pk, sig);
+    auto auth_payload = encode_auth_payload(ROLE_CLIENT, signing_pk, sig);
     auto auth_msg = encode_transport(TYPE_AUTH_SIGNATURE, auth_payload, 0);
     if (!send_encrypted(auth_msg)) {
         spdlog::warn("handshake: failed to send auth (trusted)");

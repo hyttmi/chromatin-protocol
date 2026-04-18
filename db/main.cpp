@@ -679,8 +679,11 @@ int cmd_list_peers(int argc, char* argv[]) {
                 // Sign fingerprint
                 auto sig = identity.sign(fingerprint);
 
-                // Encode auth payload: [4B pubkey_size_be][pubkey][signature]
-                auto auth_payload = chromatindb::net::encode_auth_payload(signing_pk, sig);
+                // Encode auth payload: [role:1][4B pubkey_size_be][pubkey][signature].
+                // list-peers is a CLI-style UDS client — declare CLIENT role so
+                // the node routes it through the client ACL, not peer ACL.
+                auto auth_payload = chromatindb::net::encode_auth_payload(
+                    chromatindb::net::Role::Client, signing_pk, sig);
 
                 // Encode as TransportMessage type 3, encrypt, send
                 auto auth_msg = chromatindb::net::TransportCodec::encode(

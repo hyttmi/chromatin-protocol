@@ -106,7 +106,7 @@ TEST_CASE("Full handshake happy path", "[handshake]") {
     REQUIRE(init_err == HandshakeError::Success);
 
     // Step 4: Initiator creates encrypted auth message
-    auto init_auth = initiator.create_auth_message();
+    auto init_auth = initiator.create_auth_message(Role::Peer);
     REQUIRE(!init_auth.empty());
 
     // Step 5: Responder verifies initiator's auth
@@ -119,7 +119,7 @@ TEST_CASE("Full handshake happy path", "[handshake]") {
     REQUIRE(std::equal(init_pubkey.begin(), init_pubkey.end(), expected_pk.begin()));
 
     // Step 6: Responder creates encrypted auth message
-    auto resp_auth = responder.create_auth_message();
+    auto resp_auth = responder.create_auth_message(Role::Peer);
     REQUIRE(!resp_auth.empty());
 
     // Step 7: Initiator verifies responder's auth
@@ -160,11 +160,11 @@ TEST_CASE("Handshake with self (same identity) succeeds", "[handshake]") {
     auto init_err = initiator.receive_kem_ciphertext(kem_ct_msg);
     REQUIRE(init_err == HandshakeError::Success);
 
-    auto init_auth = initiator.create_auth_message();
+    auto init_auth = initiator.create_auth_message(Role::Peer);
     auto [resp_auth_err, _pk1] = responder.verify_peer_auth(init_auth);
     REQUIRE(resp_auth_err == HandshakeError::Success);
 
-    auto resp_auth = responder.create_auth_message();
+    auto resp_auth = responder.create_auth_message(Role::Peer);
     auto [init_auth_err, _pk2] = initiator.verify_peer_auth(resp_auth);
     REQUIRE(init_auth_err == HandshakeError::Success);
 }
@@ -193,7 +193,7 @@ TEST_CASE("Handshake auth failure with wrong identity", "[handshake]") {
         //
         // Test: initiator sends valid auth, responder verifies (should pass)
         // Then try with tampered auth (simulated imposter)
-        auto init_auth = initiator.create_auth_message();
+        auto init_auth = initiator.create_auth_message(Role::Peer);
 
         // Tamper with the encrypted auth message (flip a byte in ciphertext)
         auto tampered = init_auth;
@@ -358,7 +358,7 @@ TEST_CASE("verify_peer_auth rejects auth with mismatched pubkey", "[handshake][b
 
     // Encode attacker's auth payload: [attacker_pubkey_size LE][attacker_pubkey][attacker_sig]
     auto attacker_payload = encode_auth_payload(
-        attacker_id.public_key(), attacker_sig);
+        Role::Peer, attacker_id.public_key(), attacker_sig);
 
     // Wrap as TransportMessage (AuthSignature type)
     auto attacker_msg = TransportCodec::encode(

@@ -8,6 +8,7 @@
 #include "db/identity/identity.h"
 #include "db/net/framing.h"
 #include "db/net/protocol.h"
+#include "db/net/role.h"
 
 #include <array>
 #include <cstdint>
@@ -64,9 +65,10 @@ public:
     /// Step 2: Receive KemCiphertext from responder, derive session keys.
     HandshakeError receive_kem_ciphertext(std::span<const uint8_t> kem_ct_msg);
 
-    /// Step 3: Produce encrypted AuthSignature message (signing pubkey + signature).
-    /// Must be called after receive_kem_ciphertext succeeds.
-    std::vector<uint8_t> create_auth_message();
+    /// Step 3: Produce encrypted AuthSignature message (role + signing pubkey + signature).
+    /// Must be called after receive_kem_ciphertext succeeds. The role is the
+    /// initiator-declared connection role (peer, client, ...).
+    std::vector<uint8_t> create_auth_message(Role role);
 
     /// Step 4: Receive and verify responder's encrypted AuthSignature.
     /// Returns error code and responder's signing public key on success.
@@ -100,8 +102,8 @@ public:
     std::pair<HandshakeError, std::vector<uint8_t>> verify_peer_auth(
         std::span<const uint8_t> encrypted_auth_msg);
 
-    /// Step 3: Produce encrypted AuthSignature message.
-    std::vector<uint8_t> create_auth_message();
+    /// Step 3: Produce encrypted AuthSignature message (role + pubkey + signature).
+    std::vector<uint8_t> create_auth_message(Role role);
 
     /// Get the established session keys.
     SessionKeys take_session_keys();

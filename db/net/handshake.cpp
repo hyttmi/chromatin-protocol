@@ -163,12 +163,12 @@ HandshakeError HandshakeInitiator::receive_kem_ciphertext(
     return HandshakeError::Success;
 }
 
-std::vector<uint8_t> HandshakeInitiator::create_auth_message() {
+std::vector<uint8_t> HandshakeInitiator::create_auth_message(Role role) {
     // Sign the session fingerprint
     auto signature = identity_.sign(keys_.session_fingerprint);
 
-    // Encode: [pubkey_size][pubkey][signature]
-    auto auth_payload = encode_auth_payload(identity_.public_key(), signature);
+    // Encode: [role:1][pubkey_size:4BE][pubkey][signature]
+    auto auth_payload = encode_auth_payload(role, identity_.public_key(), signature);
 
     // Encode as TransportMessage
     auto msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
@@ -303,12 +303,12 @@ std::pair<HandshakeError, std::vector<uint8_t>> HandshakeResponder::verify_peer_
     return {HandshakeError::Success, std::move(auth->pubkey)};
 }
 
-std::vector<uint8_t> HandshakeResponder::create_auth_message() {
+std::vector<uint8_t> HandshakeResponder::create_auth_message(Role role) {
     // Sign the session fingerprint
     auto signature = identity_.sign(keys_.session_fingerprint);
 
-    // Encode auth payload
-    auto auth_payload = encode_auth_payload(identity_.public_key(), signature);
+    // Encode auth payload: [role:1][pubkey_size:4BE][pubkey][signature]
+    auto auth_payload = encode_auth_payload(role, identity_.public_key(), signature);
 
     // Encode as TransportMessage
     auto msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);

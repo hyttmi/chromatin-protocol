@@ -65,26 +65,16 @@ bool ConnectionManager::should_accept_connection() const {
 }
 
 void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
-    // ACL check: derive peer namespace hash and verify against allowed list.
-    // Branch on connection type: UDS = client, TCP = peer.
-    // Must happen BEFORE adding to peers_ so unauthorized peers never see data.
+    // ACL check: route based on the role the remote explicitly declared in
+    // its AuthSignature payload. UDS is additionally forced to client role --
+    // the UDS socket is permission-gated at the filesystem level and is only
+    // ever used by local CLI tools, never for node-to-node peering.
     auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
 
-    // ACL: UDS is always client. TCP checks client list first, then peer list.
-    bool is_client_conn = conn->is_uds();
-    bool allowed = false;
-
-    if (conn->is_uds()) {
-        allowed = acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns));
-    } else {
-        // TCP: check client ACL first (allows remote CLI access)
-        if (acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))) {
-            allowed = true;
-            is_client_conn = true;
-        } else {
-            allowed = acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
-        }
-    }
+    bool is_client_conn = conn->is_uds() || (conn->peer_role() == net::Role::Client);
+    bool allowed = is_client_conn
+        ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
+        : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
 
     if (!allowed) {
         auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);

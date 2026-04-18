@@ -317,7 +317,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
 
         // Sign session fingerprint with our signing key
         auto sig = identity_.sign(session_keys_.session_fingerprint);
-        auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+        auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
         auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
         if (!co_await send_encrypted(auth_msg)) {
             spdlog::warn("handshake: failed to send auth (lightweight initiator)");
@@ -357,9 +357,11 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
             co_return false;
         }
 
+        peer_role_ = auth->role;
         peer_pubkey_ = std::move(auth->pubkey);
         authenticated_ = true;
-        spdlog::info("handshake complete (initiator, lightweight, authenticated)");
+        spdlog::info("handshake complete (initiator, lightweight, authenticated, peer_role={})",
+                     role_name(peer_role_));
         co_return true;
 
     } else if (decoded->type == wire::TransportMsgType_PQRequired) {
@@ -391,7 +393,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
 
         // Auth exchange (same as PQ initiator)
         auto sig = identity_.sign(session_keys_.session_fingerprint);
-        auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+        auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
 
         auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
         if (!co_await send_encrypted(auth_msg)) {
@@ -423,9 +425,11 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
             co_return false;
         }
 
+        peer_role_ = auth->role;
         peer_pubkey_ = std::move(resp_pk);
         authenticated_ = true;
-        spdlog::info("handshake complete (initiator, PQ, trust mismatch)");
+        spdlog::info("handshake complete (initiator, PQ, trust mismatch, peer_role={})",
+                     role_name(peer_role_));
         co_return true;
 
     } else {
@@ -465,7 +469,7 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
 
     // Step 3: Send encrypted auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+    auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
 
     auto msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(msg)) {
@@ -498,9 +502,11 @@ asio::awaitable<bool> Connection::do_handshake_initiator_pq() {
         co_return false;
     }
 
+    peer_role_ = auth->role;
     peer_pubkey_ = std::move(resp_pk);
     authenticated_ = true;
-    spdlog::info("handshake complete (initiator, PQ)");
+    spdlog::info("handshake complete (initiator, PQ, peer_role={})",
+                 role_name(peer_role_));
     co_return true;
 }
 
@@ -584,16 +590,18 @@ asio::awaitable<bool> Connection::do_handshake_responder_trusted(
 
     // Send our auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+    auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
     auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(auth_msg)) {
         spdlog::warn("handshake: failed to send auth (lightweight responder)");
         co_return false;
     }
 
+    peer_role_ = auth->role;
     peer_pubkey_ = std::move(auth->pubkey);
     authenticated_ = true;
-    spdlog::info("handshake complete (responder, lightweight, authenticated)");
+    spdlog::info("handshake complete (responder, lightweight, authenticated, peer_role={})",
+                 role_name(peer_role_));
     co_return true;
 }
 
@@ -660,11 +668,12 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
         co_return false;
     }
 
+    peer_role_ = auth->role;
     peer_pubkey_ = std::move(init_pk);
 
     // Send our auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+    auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
 
     auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(auth_msg)) {
@@ -673,7 +682,8 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq_fallback(
     }
 
     authenticated_ = true;
-    spdlog::info("handshake complete (responder, PQ, trust mismatch)");
+    spdlog::info("handshake complete (responder, PQ, trust mismatch, peer_role={})",
+                 role_name(peer_role_));
     co_return true;
 }
 
@@ -726,11 +736,12 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
         co_return false;
     }
 
+    peer_role_ = auth->role;
     peer_pubkey_ = std::move(init_pk);
 
     // Send our auth
     auto sig = identity_.sign(session_keys_.session_fingerprint);
-    auto auth_payload = chromatindb::net::encode_auth_payload(identity_.public_key(), sig);
+    auto auth_payload = chromatindb::net::encode_auth_payload(local_role_, identity_.public_key(), sig);
 
     auto auth_msg = TransportCodec::encode(wire::TransportMsgType_AuthSignature, auth_payload);
     if (!co_await send_encrypted(auth_msg)) {
@@ -739,7 +750,8 @@ asio::awaitable<bool> Connection::do_handshake_responder_pq(
     }
 
     authenticated_ = true;
-    spdlog::info("handshake complete (responder, PQ)");
+    spdlog::info("handshake complete (responder, PQ, peer_role={})",
+                 role_name(peer_role_));
     co_return true;
 }
 
