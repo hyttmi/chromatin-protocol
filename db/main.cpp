@@ -13,6 +13,7 @@
 #include "db/util/address.h"
 #include "db/util/endian.h"
 #include "db/util/hex.h"
+#include "db/util/paths.h"
 
 #include <asio.hpp>
 #include <asio/local/stream_protocol.hpp>
@@ -37,6 +38,7 @@
 namespace {
 
 using chromatindb::util::is_valid_host_port;
+using chromatindb::util::resolve_config_path;
 using chromatindb::util::to_hex;
 
 void print_usage(const char* prog) {
@@ -65,8 +67,8 @@ void print_usage(const char* prog) {
               << "  remove-peer <host:port>  Remove bootstrap peer\n"
               << "  list-peers               Show configured + connected peers\n"
               << "Peer management options:\n"
-              << "  --config <path>     Config file to edit (default: <data-dir>/config.json)\n"
-              << "  --data-dir <path>   Data directory (default: ./data)\n";
+              << "  --config <path>     Config file (default: $CHROMATINDB_CONFIG or\n"
+              << "                      /etc/chromatindb/node.json or ./data/config.json)\n";
 }
 
 int cmd_version() {
@@ -180,31 +182,28 @@ int cmd_backup(int argc, char* argv[]) {
 }
 
 int cmd_add_peer(int argc, char* argv[]) {
-    std::string data_dir = "./data";
     std::string config_path;
     std::string address;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--data-dir" && i + 1 < argc) {
-            data_dir = argv[++i];
-        } else if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (!arg.empty() && arg[0] == '-') {
             std::cerr << "Error: unknown option '" << arg << "'\n"
-                      << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+                      << "Usage: chromatindb add-peer <host:port> [--config <path>]\n";
             return 1;
         } else if (address.empty()) {
             address = arg;
         } else {
             std::cerr << "Error: unexpected argument '" << arg << "'\n"
-                      << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+                      << "Usage: chromatindb add-peer <host:port> [--config <path>]\n";
             return 1;
         }
     }
 
     if (address.empty()) {
-        std::cerr << "Usage: chromatindb add-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        std::cerr << "Usage: chromatindb add-peer <host:port> [--config <path>]\n";
         return 1;
     }
 
@@ -213,9 +212,8 @@ int cmd_add_peer(int argc, char* argv[]) {
         return 1;
     }
 
-    // Resolve config path
     if (config_path.empty()) {
-        config_path = (std::filesystem::path(data_dir) / "config.json").string();
+        config_path = resolve_config_path();
     }
 
     try {
@@ -256,7 +254,9 @@ int cmd_add_peer(int argc, char* argv[]) {
 
         std::cout << "Added peer " << address << " to " << config_path << std::endl;
 
-        // Send SIGHUP to running node if pidfile exists (D-10)
+        // Send SIGHUP to running node if pidfile exists (D-10).
+        // data_dir comes from the config itself; fall back to ./data if absent.
+        std::string data_dir = j.value("data_dir", std::string{"./data"});
         auto pidfile = std::filesystem::path(data_dir) / "chromatindb.pid";
         if (std::filesystem::exists(pidfile)) {
             std::ifstream pf(pidfile);
@@ -275,42 +275,36 @@ int cmd_add_peer(int argc, char* argv[]) {
 }
 
 int cmd_remove_peer(int argc, char* argv[]) {
-    std::string data_dir = "./data";
     std::string config_path;
     std::string address;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--data-dir" && i + 1 < argc) {
-            data_dir = argv[++i];
-        } else if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (!arg.empty() && arg[0] == '-') {
             std::cerr << "Error: unknown option '" << arg << "'\n"
-                      << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+                      << "Usage: chromatindb remove-peer <host:port> [--config <path>]\n";
             return 1;
         } else if (address.empty()) {
             address = arg;
         } else {
             std::cerr << "Error: unexpected argument '" << arg << "'\n"
-                      << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+                      << "Usage: chromatindb remove-peer <host:port> [--config <path>]\n";
             return 1;
         }
     }
 
     if (address.empty()) {
-        std::cerr << "Usage: chromatindb remove-peer <host:port> [--config <path>] [--data-dir <path>]\n";
+        std::cerr << "Usage: chromatindb remove-peer <host:port> [--config <path>]\n";
         return 1;
     }
 
-    if (!is_valid_host_port(address)) {
-        std::cerr << "Error: '" << address << "' is not a valid host:port (e.g. 192.168.1.73:4200)\n";
-        return 1;
-    }
+    // No format validation on remove-peer -- the user must be able to delete
+    // pre-existing malformed entries (e.g. from older buggy add-peer).
 
-    // Resolve config path
     if (config_path.empty()) {
-        config_path = (std::filesystem::path(data_dir) / "config.json").string();
+        config_path = resolve_config_path();
     }
 
     try {
@@ -351,7 +345,9 @@ int cmd_remove_peer(int argc, char* argv[]) {
 
         std::cout << "Removed peer " << address << " from " << config_path << std::endl;
 
-        // Send SIGHUP to running node if pidfile exists (D-10)
+        // Send SIGHUP to running node if pidfile exists (D-10).
+        // data_dir comes from the config itself; fall back to ./data if absent.
+        std::string data_dir = j.value("data_dir", std::string{"./data"});
         auto pidfile = std::filesystem::path(data_dir) / "chromatindb.pid";
         if (std::filesystem::exists(pidfile)) {
             std::ifstream pf(pidfile);
@@ -496,28 +492,26 @@ static std::string format_duration(uint64_t ms) {
 }
 
 int cmd_list_peers(int argc, char* argv[]) {
-    std::string data_dir = "./data";
     std::string config_path;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--data-dir" && i + 1 < argc) {
-            data_dir = argv[++i];
-        } else if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else {
             std::cerr << "Error: unknown argument '" << arg << "'\n"
-                      << "Usage: chromatindb list-peers [--config <path>] [--data-dir <path>]\n";
+                      << "Usage: chromatindb list-peers [--config <path>]\n";
             return 1;
         }
     }
 
     if (config_path.empty()) {
-        config_path = (std::filesystem::path(data_dir) / "config.json").string();
+        config_path = resolve_config_path();
     }
 
     try {
         auto config = chromatindb::config::load_config(config_path);
+        const std::string& data_dir = config.data_dir;
         auto bootstrap_set = std::set<std::string>(
             config.bootstrap_peers.begin(), config.bootstrap_peers.end());
 

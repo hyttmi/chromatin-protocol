@@ -5,6 +5,7 @@ BINDIR="/usr/local/bin"
 UNITDIR="/usr/lib/systemd/system"
 SYSUSERSDIR="/usr/lib/sysusers.d"
 TMPFILESDIR="/usr/lib/tmpfiles.d"
+PROFILEDIR="/etc/profile.d"
 CONFDIR="/etc/chromatindb"
 DATADIR="/var/lib/chromatindb"
 SCRIPTDIR="$(cd "$(dirname "$0")" && pwd)"
@@ -30,6 +31,7 @@ do_uninstall() {
     rm -f "$UNITDIR/chromatindb.service"
     rm -f "$SYSUSERSDIR/chromatindb.conf"
     rm -f "$TMPFILESDIR/chromatindb.conf"
+    rm -f "$PROFILEDIR/chromatindb.sh"
     rm -f "$BINDIR/chromatindb"
 
     systemctl daemon-reload
@@ -61,6 +63,8 @@ do_install() {
     if [ ! -f "$CONFDIR/node.json" ]; then
         install -m 0644 "$SCRIPTDIR/config/node.json" "$CONFDIR/node.json"
     fi
+    # Install profile.d env so login shells pick up CHROMATINDB_CONFIG by default
+    install -m 0644 "$SCRIPTDIR/profile.d/chromatindb.sh" "$PROFILEDIR/chromatindb.sh"
     # Install systemd units
     install -m 0644 "$SCRIPTDIR/systemd/chromatindb.service" "$UNITDIR/chromatindb.service"
     systemctl daemon-reload
