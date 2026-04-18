@@ -6,6 +6,7 @@ add_executable(cli_tests
   test_wire.cpp
   test_envelope.cpp
   test_contacts.cpp
+  test_connection_pipelining.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/identity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/wire.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/envelope.cpp
