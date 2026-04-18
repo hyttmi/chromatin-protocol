@@ -116,61 +116,56 @@ int main(int argc, char* argv[]) {
     bool force = false;
     bool cli_host_set = false;
     bool cli_port_set = false;
-    int arg_idx = 1;
 
-    // Parse global options (before command)
-    while (arg_idx < argc && argv[arg_idx][0] == '-') {
-        const char* arg = argv[arg_idx];
+    // Pre-pass: extract global flags from anywhere in argv, then rebuild argv
+    // with only the command + per-command args. This lets global flags appear
+    // in any order -- e.g. both `cdb --node home put file` and
+    // `cdb put --node home file` work identically.
+    std::vector<char*> remaining;
+    remaining.reserve(argc);
+    remaining.push_back(argv[0]);  // Preserve program name at [0]
+    for (int i = 1; i < argc; ++i) {
+        const char* arg = argv[i];
+
+        auto need_value = [&](const char* flag_name) -> const char* {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "Error: %s requires a value\n", flag_name);
+                std::exit(1);
+            }
+            return argv[++i];
+        };
 
         if (std::strcmp(arg, "--identity") == 0) {
-            if (arg_idx + 1 >= argc) {
-                std::fprintf(stderr, "Error: --identity requires a path\n");
-                return 1;
-            }
-            identity_dir_str = argv[++arg_idx];
-            ++arg_idx;
+            identity_dir_str = need_value("--identity");
         } else if (std::strcmp(arg, "--node") == 0) {
-            if (arg_idx + 1 >= argc) {
-                std::fprintf(stderr, "Error: --node requires a name\n");
-                return 1;
-            }
-            node_name = argv[++arg_idx];
-            ++arg_idx;
+            node_name = need_value("--node");
         } else if (std::strcmp(arg, "--uds") == 0) {
-            if (arg_idx + 1 >= argc) {
-                std::fprintf(stderr, "Error: --uds requires a path\n");
-                return 1;
-            }
-            opts.uds_path = argv[++arg_idx];
-            ++arg_idx;
+            opts.uds_path = need_value("--uds");
         } else if (std::strcmp(arg, "-p") == 0 || std::strcmp(arg, "--port") == 0) {
-            if (arg_idx + 1 >= argc) {
-                std::fprintf(stderr, "Error: %s requires a port number\n", arg);
-                return 1;
-            }
-            int p = std::atoi(argv[++arg_idx]);
+            const char* v = need_value(arg);
+            int p = std::atoi(v);
             if (p <= 0 || p > 65535) {
-                std::fprintf(stderr, "Error: invalid port\n");
+                std::fprintf(stderr, "Error: invalid port '%s'\n", v);
                 return 1;
             }
             opts.port = static_cast<uint16_t>(p);
             cli_port_set = true;
-            ++arg_idx;
         } else if (std::strcmp(arg, "-v") == 0 || std::strcmp(arg, "--verbose") == 0) {
             spdlog::set_level(spdlog::level::info);
-            ++arg_idx;
         } else if (std::strcmp(arg, "-q") == 0 || std::strcmp(arg, "--quiet") == 0) {
             opts.quiet = true;
-            ++arg_idx;
         } else if (std::strcmp(arg, "--force") == 0) {
             force = true;
-            ++arg_idx;
         } else {
-            std::fprintf(stderr, "Unknown option: %s\n", arg);
-            usage();
-            return 1;
+            // Not a global flag -- keep for per-command parsing.
+            remaining.push_back(argv[i]);
         }
     }
+
+    // Per-command parsing operates on the filtered argv.
+    argc = static_cast<int>(remaining.size());
+    argv = remaining.data();
+    int arg_idx = 1;
 
     if (identity_dir_str.empty()) {
         identity_dir_str = default_identity_dir().string();
