@@ -10,6 +10,9 @@ struct ConnectOpts {
     std::string host = "127.0.0.1";
     uint16_t port = 4200;
     std::string uds_path = "/run/chromatindb/node.sock";
+    // Set to true when --uds was passed explicitly on the CLI, so the host
+    // resolver won't clobber it even when config.json resolves a default node.
+    bool uds_path_explicit = false;
     bool quiet = false;
 };
 
@@ -30,8 +33,11 @@ std::vector<std::string> list_hashes(const std::string& identity_dir,
                                       const std::string& namespace_hex,
                                       const ConnectOpts& opts);
 
+/// Sign and send a tombstone for the target blob.
+/// Pre-checks target existence (via Exists) and surfaces DeleteAck status
+/// (stored vs. already-tombstoned) unless `force` is true.
 int rm(const std::string& identity_dir, const std::string& hash_hex,
-       const std::string& namespace_hex, const ConnectOpts& opts);
+       const std::string& namespace_hex, bool force, const ConnectOpts& opts);
 
 int reshare(const std::string& identity_dir, const std::string& hash_hex,
             const std::string& namespace_hex,
@@ -69,10 +75,13 @@ int contact_import(const std::string& identity_dir, const std::string& json_path
                    const ConnectOpts& opts);
 int contact_export(const std::string& identity_dir);
 
-int delegate(const std::string& identity_dir, const std::string& pubkey_file,
+/// Grant write access. `target` is a contact name, `@group`, or pubkey file path.
+int delegate(const std::string& identity_dir, const std::string& target,
              const ConnectOpts& opts);
-int revoke(const std::string& identity_dir, const std::string& pubkey_file,
-           const ConnectOpts& opts);
+/// Revoke write access. `target` is a contact name, `@group`, or pubkey file path.
+/// Queries existing delegations first and only prompts for real delegates.
+int revoke(const std::string& identity_dir, const std::string& target,
+           bool skip_confirm, const ConnectOpts& opts);
 int delegations(const std::string& identity_dir, const std::string& namespace_hex,
                 const ConnectOpts& opts);
 

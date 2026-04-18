@@ -45,8 +45,8 @@ static uint32_t parse_ttl(const char* s) {
     return static_cast<uint32_t>(val);
 }
 
-static void usage() {
-    std::fprintf(stderr,
+static void usage(FILE* out = stderr) {
+    std::fprintf(out,
         "Usage: cdb <command> [options]\n"
         "\n"
         "Commands:\n"
@@ -62,7 +62,7 @@ static void usage() {
         "  info         Node information\n"
         "  stats        Namespace statistics\n"
         "  publish      Publish pubkey to node\n"
-        "  contact      Manage contacts (add/rm/list)\n"
+        "  contact      Manage contacts (add/rm/list/import/export)\n"
         "  group        Manage contact groups (create/add/rm/list)\n"
         "  delegate     Grant write access to another identity\n"
         "  revoke       Revoke write access\n"
@@ -72,10 +72,14 @@ static void usage() {
         "Global options:\n"
         "  --identity <path>   Identity directory (default: ~/.cdb/)\n"
         "  --node <name>       Use named node from config.json\n"
-        "  --uds <path>        UDS socket path\n"
+        "  --host <addr>       Target host (overrides config)\n"
         "  -p, --port <port>   Port (default: 4200)\n"
+        "  --uds <path>        UDS socket path (overrides host)\n"
         "  -v, --verbose       Show info-level log output\n"
         "  -q, --quiet         Minimal output\n"
+        "  -h, --help          Show this help\n"
+        "\n"
+        "Run `cdb <command> --help` for per-command options.\n"
     );
 }
 
@@ -141,6 +145,10 @@ int main(int argc, char* argv[]) {
             node_name = need_value("--node");
         } else if (std::strcmp(arg, "--uds") == 0) {
             opts.uds_path = need_value("--uds");
+            opts.uds_path_explicit = true;
+        } else if (std::strcmp(arg, "--host") == 0) {
+            parse_host_port(need_value("--host"), opts.host, opts.port);
+            cli_host_set = true;
         } else if (std::strcmp(arg, "-p") == 0 || std::strcmp(arg, "--port") == 0) {
             const char* v = need_value(arg);
             int p = std::atoi(v);
@@ -214,12 +222,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // If the user explicitly targeted a remote (via --node, --host/-p), or
-    // requested TCP directly, skip the UDS attempt entirely. Otherwise
-    // std::filesystem::exists() will throw on a UDS path the user can't
-    // stat (e.g. /run/chromatindb/node.sock owned by the chromatindb
-    // group), bailing before we ever try TCP.
-    if (!node_name.empty() || cli_host_set || cli_port_set) {
+    // Resolve the final transport. Explicit --uds always wins: the user said
+    // "talk to this socket", so honour that even if config.json also named a
+    // default node. Otherwise, any remote targeting (--node, --host, -p)
+    // disables the UDS probe so std::filesystem::exists() can't bail on a
+    // socket the user can't stat (e.g. root-owned /run/chromatindb/node.sock).
+    if (opts.uds_path_explicit) {
+        // Keep opts.uds_path; Connection::connect prefers UDS when set.
+    } else if (!node_name.empty() || cli_host_set || cli_port_set) {
         opts.uds_path.clear();
     }
 
@@ -230,11 +240,20 @@ int main(int argc, char* argv[]) {
 
     const std::string command = argv[arg_idx++];
 
+    if (command == "--help" || command == "-h" || command == "help") {
+        usage(stdout);
+        return 0;
+    }
+
     try {
         // =====================================================================
         // version (no identity needed)
         // =====================================================================
         if (command == "version") {
+            if (is_help_flag(argc, argv, arg_idx)) {
+                std::fprintf(stderr, "Usage: cdb version\n");
+                return 0;
+            }
             std::printf("cdb %s\n", VERSION);
             return 0;
         }
@@ -282,14 +301,14 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // put <file>... [host[:port]]
-        //   --share <pubkey_file> (repeatable)
+        // put <file>...
+        //   --share <name|@group|file> (repeatable)
         //   --ttl <seconds|Ns|Nm|Nh|Nd>
         //   --stdin
         // =====================================================================
         if (command == "put") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb put <file>... [host[:port]] [--share <name|file>...] [--ttl <duration>] [--stdin]\n");
+                std::fprintf(stderr, "Usage: cdb put <file>... [--share <name|@group|file>...] [--ttl <duration>] [--stdin]\n");
                 return 0;
             }
             std::vector<std::string> file_paths;
@@ -297,8 +316,6 @@ int main(int argc, char* argv[]) {
             uint32_t ttl = 0;
             bool from_stdin = false;
 
-            // Collect all args, defer host[:port] detection
-            std::vector<std::string> positionals;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--share") == 0) {
@@ -319,25 +336,18 @@ int main(int argc, char* argv[]) {
                     from_stdin = true;
                     ++arg_idx;
                 } else if (a[0] != '-') {
-                    positionals.push_back(a);
+                    if (!fs::exists(a)) {
+                        std::fprintf(stderr, "Error: file not found: %s\n", a);
+                        return 1;
+                    }
+                    if (fs::is_directory(a)) {
+                        std::fprintf(stderr, "Error: %s is a directory (put accepts files only)\n", a);
+                        return 1;
+                    }
+                    file_paths.push_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown put option: %s\n", a);
-                    return 1;
-                }
-            }
-
-            // Last positional that looks like host[:port] (contains : or no . in path)
-            // is the target. Everything else is a file path.
-            for (size_t i = 0; i < positionals.size(); ++i) {
-                // If it's an existing file, it's a file path
-                if (fs::exists(positionals[i])) {
-                    file_paths.push_back(positionals[i]);
-                } else if (i == positionals.size() - 1) {
-                    // Last non-file positional = host[:port]
-                    parse_host_port(positionals[i].c_str(), opts.host, opts.port);
-                } else {
-                    std::fprintf(stderr, "Error: file not found: %s\n", positionals[i].c_str());
                     return 1;
                 }
             }
@@ -352,14 +362,14 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // get <hash>... [host[:port]]
+        // get <hash>...
         //   --stdout
-        //   --namespace <hex>
+        //   --from <name|hex>
         //   -o, --output-dir <dir>
         // =====================================================================
         if (command == "get") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb get <hash>... [host[:port]] [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
+                std::fprintf(stderr, "Usage: cdb get <hash>... [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -368,7 +378,7 @@ int main(int argc, char* argv[]) {
             bool get_all = false;
             bool get_force = false;
 
-            std::vector<std::string> positionals;
+            std::vector<std::string> hash_hexes;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--stdout") == 0) {
@@ -395,24 +405,14 @@ int main(int argc, char* argv[]) {
                     get_force = true;
                     ++arg_idx;
                 } else if (a[0] != '-') {
-                    positionals.push_back(a);
+                    if (std::strlen(a) != 64) {
+                        std::fprintf(stderr, "Error: invalid hash: %s\n", a);
+                        return 1;
+                    }
+                    hash_hexes.emplace_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown get option: %s\n", a);
-                    return 1;
-                }
-            }
-
-            // Hashes are 64 hex chars. Last positional that isn't a hash = host[:port]
-            std::vector<std::string> hash_hexes;
-            for (size_t i = 0; i < positionals.size(); ++i) {
-                if (positionals[i].size() == 64) {
-                    hash_hexes.push_back(positionals[i]);
-                } else if (i == positionals.size() - 1) {
-                    parse_host_port(positionals[i].c_str(), opts.host, opts.port);
-                    cli_host_set = true;
-                } else {
-                    std::fprintf(stderr, "Error: invalid hash: %s\n", positionals[i].c_str());
                     return 1;
                 }
             }
@@ -446,12 +446,14 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // rm <hash> [host[:port]]
-        //   --namespace <hex>
+        // rm <hash>
+        //   --namespace <name|hex>
+        //   -y / --yes
+        //   --force (bypass target-existence check)
         // =====================================================================
         if (command == "rm") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb rm <hash> [host[:port]] [--namespace <hex>] [-y]\n");
+                std::fprintf(stderr, "Usage: cdb rm <hash> [--namespace <name|hex>] [-y] [--force]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -462,7 +464,7 @@ int main(int argc, char* argv[]) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
-                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        std::fprintf(stderr, "Error: --namespace requires a name or hex value\n");
                         return 1;
                     }
                     namespace_hex = argv[++arg_idx];
@@ -472,9 +474,6 @@ int main(int argc, char* argv[]) {
                     ++arg_idx;
                 } else if (a[0] != '-' && hash_hex.empty()) {
                     hash_hex = a;
-                    ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown rm option: %s\n", a);
@@ -496,18 +495,19 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, opts);
+            // `force` is captured in the global pre-pass (applies to keygen and rm).
+            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, force, opts);
         }
 
         // =====================================================================
-        // reshare <hash> [host[:port]]
-        //   --share <pubkey_file> (repeatable)
+        // reshare <hash>
+        //   --share <name|@group|file> (repeatable)
         //   --ttl <seconds>
-        //   --namespace <hex>
+        //   --namespace <name|hex>
         // =====================================================================
         if (command == "reshare") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb reshare <hash> [host[:port]] [--share <name|file>...] [--ttl <duration>] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb reshare <hash> [--share <name|@group|file>...] [--ttl <duration>] [--namespace <name|hex>]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -541,9 +541,6 @@ int main(int argc, char* argv[]) {
                 } else if (a[0] != '-' && hash_hex.empty()) {
                     hash_hex = a;
                     ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
-                    ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown reshare option: %s\n", a);
                     return 1;
@@ -560,18 +557,18 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // ls [host[:port]]
-        //   --namespace <hex>  --raw  --type <TYPE>
+        // ls
+        //   --namespace <name|hex>  --raw  --type <TYPE>
         // =====================================================================
         if (command == "ls") {
             if (is_help_flag(argc, argv, arg_idx)) {
                 std::fprintf(stderr,
-                    "Usage: cdb ls [host[:port]] [--namespace <hex>] [--raw] [--type <TYPE>]\n"
+                    "Usage: cdb ls [--namespace <name|hex>] [--raw] [--type <TYPE>]\n"
                     "\n"
                     "Options:\n"
-                    "  --namespace, -n <hex>  Filter by namespace\n"
-                    "  --raw                  Show all blobs including infrastructure types\n"
-                    "  --type <TYPE>          Filter by type: CENV, PUBK, TOMB, DLGT, CDAT\n");
+                    "  --namespace, -n <name|hex>  Filter by namespace (contact name or 64-hex)\n"
+                    "  --raw                       Show all blobs including infrastructure types\n"
+                    "  --type <TYPE>               Filter by type: CENV, PUBK, TOMB, DLGT, CDAT\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -582,7 +579,7 @@ int main(int argc, char* argv[]) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
-                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        std::fprintf(stderr, "Error: --namespace requires a name or hex value\n");
                         return 1;
                     }
                     namespace_hex = argv[++arg_idx];
@@ -597,9 +594,6 @@ int main(int argc, char* argv[]) {
                     }
                     type_filter = argv[++arg_idx];
                     ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
-                    ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown ls option: %s\n", a);
                     return 1;
@@ -610,12 +604,12 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // exists <hash> [host[:port]]
-        //   --namespace <hex>
+        // exists <hash>
+        //   --namespace <name|hex>
         // =====================================================================
         if (command == "exists") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb exists <hash> [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb exists <hash> [--namespace <name|hex>]\n");
                 return 0;
             }
             std::string hash_hex;
@@ -625,16 +619,13 @@ int main(int argc, char* argv[]) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
-                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        std::fprintf(stderr, "Error: --namespace requires a name or hex value\n");
                         return 1;
                     }
                     namespace_hex = argv[++arg_idx];
                     ++arg_idx;
                 } else if (a[0] != '-' && hash_hex.empty()) {
                     hash_hex = a;
-                    ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown exists option: %s\n", a);
@@ -651,126 +642,100 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // info [host[:port]]
+        // info
         // =====================================================================
         if (command == "info") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb info [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb info\n");
                 return 0;
             }
-            while (arg_idx < argc) {
-                const char* a = argv[arg_idx];
-                if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
-                    ++arg_idx;
-                } else {
-                    std::fprintf(stderr, "Unknown info option: %s\n", a);
-                    return 1;
-                }
+            if (arg_idx < argc) {
+                std::fprintf(stderr, "Unknown info option: %s\n", argv[arg_idx]);
+                return 1;
             }
             return cmd::info(identity_dir_str, opts);
         }
 
         // =====================================================================
-        // stats [host[:port]]
+        // stats
         // =====================================================================
         if (command == "stats") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb stats [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb stats\n");
                 return 0;
             }
-            while (arg_idx < argc) {
-                const char* a = argv[arg_idx];
-                if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
-                    ++arg_idx;
-                } else {
-                    std::fprintf(stderr, "Unknown stats option: %s\n", a);
-                    return 1;
-                }
+            if (arg_idx < argc) {
+                std::fprintf(stderr, "Unknown stats option: %s\n", argv[arg_idx]);
+                return 1;
             }
             return cmd::stats(identity_dir_str, opts);
         }
 
         // =====================================================================
-        // delegate <pubkey_file> [host[:port]]
+        // delegate <name|@group|pubkey_file>
         // =====================================================================
         if (command == "delegate") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb delegate <pubkey_file> [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb delegate <name|@group|pubkey_file>\n");
                 return 0;
             }
-            std::string pubkey_file;
+            std::string target;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
-                if (a[0] != '-' && pubkey_file.empty()) {
-                    pubkey_file = a;
-                    ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
+                if (a[0] != '-' && target.empty()) {
+                    target = a;
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown delegate option: %s\n", a);
                     return 1;
                 }
             }
-            if (pubkey_file.empty()) {
-                std::fprintf(stderr, "Error: delegate requires a pubkey file\n");
+            if (target.empty()) {
+                std::fprintf(stderr, "Error: delegate requires a contact name, @group, or pubkey file\n");
                 return 1;
             }
-            return cmd::delegate(identity_dir_str, pubkey_file, opts);
+            return cmd::delegate(identity_dir_str, target, opts);
         }
 
         // =====================================================================
-        // revoke <pubkey_file> [host[:port]]
+        // revoke <name|@group|pubkey_file>
+        //   -y / --yes
         // =====================================================================
         if (command == "revoke") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb revoke <pubkey_file> [host[:port]] [-y]\n");
+                std::fprintf(stderr, "Usage: cdb revoke <name|@group|pubkey_file> [-y]\n");
                 return 0;
             }
-            std::string pubkey_file;
+            std::string target;
             bool skip_confirm = false;
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "-y") == 0 || std::strcmp(a, "--yes") == 0) {
                     skip_confirm = true;
                     ++arg_idx;
-                } else if (a[0] != '-' && pubkey_file.empty()) {
-                    pubkey_file = a;
-                    ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
+                } else if (a[0] != '-' && target.empty()) {
+                    target = a;
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown revoke option: %s\n", a);
                     return 1;
                 }
             }
-            if (pubkey_file.empty()) {
-                std::fprintf(stderr, "Error: revoke requires a pubkey file\n");
+            if (target.empty()) {
+                std::fprintf(stderr, "Error: revoke requires a contact name, @group, or pubkey file\n");
                 return 1;
             }
 
-            if (!skip_confirm) {
-                std::fprintf(stderr, "Revoke delegation for %s? [y/N] ", pubkey_file.c_str());
-                int ch = std::fgetc(stdin);
-                if (ch != 'y' && ch != 'Y') {
-                    std::fprintf(stderr, "Aborted.\n");
-                    return 0;
-                }
-            }
-
-            return cmd::revoke(identity_dir_str, pubkey_file, opts);
+            return cmd::revoke(identity_dir_str, target, skip_confirm, opts);
         }
 
         // =====================================================================
-        // delegations [host[:port]]
-        //   --namespace <hex>
+        // delegations
+        //   --namespace <name|hex>
         // =====================================================================
         if (command == "delegations") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb delegations [host[:port]] [--namespace <hex>]\n");
+                std::fprintf(stderr, "Usage: cdb delegations [--namespace <name|hex>]\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -778,13 +743,10 @@ int main(int argc, char* argv[]) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--namespace") == 0 || std::strcmp(a, "-n") == 0 || std::strcmp(a, "--from") == 0) {
                     if (arg_idx + 1 >= argc) {
-                        std::fprintf(stderr, "Error: --namespace requires a hex value\n");
+                        std::fprintf(stderr, "Error: --namespace requires a name or hex value\n");
                         return 1;
                     }
                     namespace_hex = argv[++arg_idx];
-                    ++arg_idx;
-                } else if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown delegations option: %s\n", a);
@@ -795,22 +757,16 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // publish [host[:port]]
+        // publish
         // =====================================================================
         if (command == "publish") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb publish [host[:port]]\n");
+                std::fprintf(stderr, "Usage: cdb publish\n");
                 return 0;
             }
-            while (arg_idx < argc) {
-                const char* a = argv[arg_idx];
-                if (a[0] != '-') {
-                    parse_host_port(a, opts.host, opts.port);
-                    ++arg_idx;
-                } else {
-                    std::fprintf(stderr, "Unknown publish option: %s\n", a);
-                    return 1;
-                }
+            if (arg_idx < argc) {
+                std::fprintf(stderr, "Unknown publish option: %s\n", argv[arg_idx]);
+                return 1;
             }
             return cmd::publish(identity_dir_str, opts);
         }
@@ -822,28 +778,29 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "contact") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb contact add <name> <namespace> [host[:port]]\n"
+                std::fprintf(stderr, "Usage: cdb contact add <name> <namespace>\n"
                              "       cdb contact rm <name>\n"
                              "       cdb contact list\n"
-                             "       cdb contact import <file.json> [host[:port]]\n"
+                             "       cdb contact import <file.json>\n"
                              "       cdb contact export\n");
                 return 0;
             }
             if (arg_idx >= argc) {
-                std::fprintf(stderr, "Usage: contact <add|rm|list> ...\n");
+                std::fprintf(stderr, "Usage: contact <add|rm|list|import|export> ...\n");
                 return 1;
             }
             std::string subcmd = argv[arg_idx++];
 
             if (subcmd == "add") {
                 if (arg_idx + 1 >= argc) {
-                    std::fprintf(stderr, "Usage: contact add <name> <namespace_hex> [host[:port]]\n");
+                    std::fprintf(stderr, "Usage: contact add <name> <namespace_hex>\n");
                     return 1;
                 }
                 std::string name = argv[arg_idx++];
                 std::string ns_hex = argv[arg_idx++];
-                while (arg_idx < argc) {
-                    parse_host_port(argv[arg_idx++], opts.host, opts.port);
+                if (arg_idx < argc) {
+                    std::fprintf(stderr, "Error: unexpected argument: %s\n", argv[arg_idx]);
+                    return 1;
                 }
                 return cmd::contact_add(identity_dir_str, name, ns_hex, opts);
             }
@@ -862,12 +819,13 @@ int main(int argc, char* argv[]) {
 
             if (subcmd == "import") {
                 if (arg_idx >= argc) {
-                    std::fprintf(stderr, "Usage: contact import <file.json> [host[:port]]\n");
+                    std::fprintf(stderr, "Usage: contact import <file.json>\n");
                     return 1;
                 }
                 std::string json_path = argv[arg_idx++];
-                while (arg_idx < argc) {
-                    parse_host_port(argv[arg_idx++], opts.host, opts.port);
+                if (arg_idx < argc) {
+                    std::fprintf(stderr, "Error: unexpected argument: %s\n", argv[arg_idx]);
+                    return 1;
                 }
                 return cmd::contact_import(identity_dir_str, json_path, opts);
             }
