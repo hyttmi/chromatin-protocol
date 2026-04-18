@@ -17,6 +17,11 @@ namespace chromatindb::cli {
 /// Tries UDS first, falls back to TCP with full PQ handshake.
 class Connection {
 public:
+    /// Maximum in-flight requests for send_async (PIPE-03 / D-07).
+    /// Exposed publicly so pipelined callers in commands.cpp can size their
+    /// per-batch correlation maps without duplicating the constant.
+    static constexpr size_t kPipelineDepth = 8;
+
     explicit Connection(Identity& identity);
 
     /// Connect to node. Tries UDS path first, falls back to TCP.

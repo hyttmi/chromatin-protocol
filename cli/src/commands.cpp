@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <unordered_map>
 #include <unistd.h>
 
 namespace chromatindb::cli::cmd {
@@ -502,7 +503,6 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         return 1;
     }
 
-    uint32_t rid = 1;
     int errors = 0;
 
     // Build list of files to upload
@@ -537,32 +537,95 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         }
     }
 
-    for (auto& f : files) {
-        auto payload = build_put_payload(f.name, f.data);
-        auto envelope_data = envelope::encrypt(payload, recipient_spans);
+    // 120-02 / PIPE-01: Pipeline the put fan-out.
+    // Phase A: fire writes up to Connection::kPipelineDepth; backpressure is
+    //          handled inside send_async (it pumps recv() into pending_replies_
+    //          when in_flight_ == kPipelineDepth).
+    // Phase B: drain one WriteAck at a time via recv() in arrival order (D-08),
+    //          and look up which file each ack belongs to via the batch-local
+    //          rid_to_index map.
+    //
+    // recv() (not recv_for) is intentional: D-08 wants per-item lines in
+    // completion order, not request order. send_async's backpressure pump may
+    // have already stashed some acks in Connection::pending_replies_; draining
+    // those first is handled transparently by recv() -- the pumping helpers in
+    // 120-01 reuse the same pending_replies_ map. Single-reader invariant
+    // (PIPE-02 / D-09) is preserved: still exactly one caller of recv().
+    uint32_t rid = 1;
+    std::unordered_map<uint32_t, size_t> rid_to_index;  // batch-local
+    size_t next_to_send = 0;
+    size_t completed = 0;
 
-        auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-        auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
-        auto signature = id.sign(signing_input);
+    while (completed < files.size()) {
+        // Phase A: greedy fill the pipeline window. send_async blocks via its
+        // internal recv-pump when in_flight_ reaches depth, so the loop
+        // self-regulates.
+        if (next_to_send < files.size() &&
+            rid_to_index.size() < Connection::kPipelineDepth) {
+            auto& f = files[next_to_send];
 
-        BlobData blob{};
-        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
-        blob.data = std::move(envelope_data);
-        blob.ttl = ttl;
-        blob.timestamp = timestamp;
-        blob.signature = std::move(signature);
+            auto payload = build_put_payload(f.name, f.data);
+            auto envelope_data = envelope::encrypt(payload, recipient_spans);
 
-        auto flatbuf = encode_blob(blob);
+            auto timestamp = static_cast<uint64_t>(std::time(nullptr));
+            auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
+            auto signature = id.sign(signing_input);
 
-        if (!conn.send(MsgType::Data, flatbuf, rid++)) {
-            std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
-            ++errors;
+            BlobData blob{};
+            std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+            blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+            blob.data = std::move(envelope_data);
+            blob.ttl = ttl;
+            blob.timestamp = timestamp;
+            blob.signature = std::move(signature);
+
+            auto flatbuf = encode_blob(blob);
+
+            uint32_t this_rid = rid++;
+            if (!conn.send_async(MsgType::Data, flatbuf, this_rid)) {
+                std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
+                ++errors;
+                ++completed;
+                ++next_to_send;
+                continue;
+            }
+            rid_to_index[this_rid] = next_to_send;
+            ++next_to_send;
+            continue;  // keep filling the window before draining
+        }
+
+        // Phase B: drain one reply in arrival order (D-08 completion order,
+        // not request order). recv() returns whichever WriteAck landed first.
+        auto resp = conn.recv();
+        if (!resp) {
+            // Transport dead: every still-pending request becomes an error so
+            // the user sees exactly which files are uncertain.
+            for (auto& [pending_rid, idx] : rid_to_index) {
+                (void)pending_rid;
+                std::fprintf(stderr, "Error: connection lost while waiting for %s\n",
+                             files[idx].name.c_str());
+                ++errors;
+                ++completed;
+            }
+            rid_to_index.clear();
+            break;
+        }
+
+        auto it = rid_to_index.find(resp->request_id);
+        if (it == rid_to_index.end()) {
+            // Stray rid (server bug or orphaned reply). Mirrors the D-04
+            // stance in connection.cpp recv_for: log at debug, drop, continue.
+            spdlog::debug("cmd::put: discarding reply for unknown rid {} (type {})",
+                          resp->request_id, static_cast<unsigned>(resp->type));
             continue;
         }
 
-        auto resp = conn.recv();
-        if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+        size_t file_idx = it->second;
+        rid_to_index.erase(it);
+        ++completed;
+        auto& f = files[file_idx];
+
+        if (resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
             resp->payload.size() < 41) {
             std::fprintf(stderr, "Error: bad response for %s\n", f.name.c_str());
             ++errors;
@@ -573,7 +636,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         auto hash_hex = to_hex(hash_span);
         if (!opts.quiet && !f.name.empty() && files.size() > 1) {
             std::printf("%s  %s\n", hash_hex.c_str(), f.name.c_str());
-        } else {
+        } else if (!opts.quiet) {
             std::printf("%s\n", hash_hex.c_str());
         }
     }

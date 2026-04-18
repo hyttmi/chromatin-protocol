@@ -36,7 +36,10 @@ static constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;  // 110 MiB
 static constexpr size_t SIGNING_PK_SIZE = Identity::SIGNING_PK_SIZE;  // 2592
 static constexpr size_t KEM_CT_SIZE     = 1568;
 static constexpr size_t NONCE_SIZE      = 32;
-static constexpr size_t PIPELINE_DEPTH = 8;  // PIPE-03
+
+// PIPE-03 / D-07: pipeline depth now lives on Connection::kPipelineDepth
+// (cli/src/connection.h). That single definition is shared by send_async
+// below and by the per-batch rid_to_index maps in cmd::get / cmd::put.
 
 // =============================================================================
 // SHA3-256 helper
@@ -717,7 +720,7 @@ bool Connection::send_async(MsgType type, std::span<const uint8_t> payload,
     // Backpressure (D-06): drain replies until a slot frees. The pump only
     // drives recv(), never touches the send path, so single-sender invariant
     // (D-09, PIPE-02) for AEAD send_counter_ is preserved by construction.
-    while (in_flight_ >= PIPELINE_DEPTH) {
+    while (in_flight_ >= Connection::kPipelineDepth) {
         if (!pipeline::pump_one_for_backpressure(
                 [this] { return recv(); }, pending_replies_)) {
             return false;
