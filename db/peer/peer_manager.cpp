@@ -676,6 +676,33 @@ void PeerManager::reload_config() {
                  new_cfg.blob_transfer_timeout, new_cfg.sync_timeout, new_cfg.pex_interval);
     // NOTE: strike_threshold and strike_cooldown are NOT reloaded (D-05: restart required)
 
+    // Reload bootstrap_peers: detect newly-added entries, register them, and
+    // dial them immediately. Without this, `add-peer` + SIGHUP would update
+    // config.json but the new peer would never be connected until restart.
+    // Removals require daemon restart (active reconnect loops are not torn
+    // down here to keep the logic simple and correct).
+    {
+        auto& known = conn_mgr_.bootstrap_addresses();
+        std::vector<std::string> added;
+        for (const auto& addr : new_cfg.bootstrap_peers) {
+            if (known.insert(addr).second) {
+                pex_.known_addresses().insert(addr);
+                added.push_back(addr);
+            }
+        }
+        for (const auto& addr : added) {
+            server_.connect_once(addr);
+        }
+        if (!added.empty()) {
+            std::string joined;
+            for (size_t i = 0; i < added.size(); ++i) {
+                if (i > 0) joined += ", ";
+                joined += added[i];
+            }
+            spdlog::info("config reload: bootstrap_peers +{} ({})", added.size(), joined);
+        }
+    }
+
     // Reload metrics_bind
     metrics_collector_.set_metrics_bind(new_cfg.metrics_bind);
 }
