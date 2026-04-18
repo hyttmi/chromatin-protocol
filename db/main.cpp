@@ -719,18 +719,20 @@ int cmd_list_peers(int argc, char* argv[]) {
                     throw std::runtime_error("peer auth signature invalid");
                 }
 
-                // B6. Drain SyncNamespaceAnnounce (type 62)
-                auto announce_pt = recv_encrypted();
-                // Type 62 is expected; any other type is a warning but not fatal
-                (void)chromatindb::net::TransportCodec::decode(announce_pt);
+                // NOTE: The node only sends SyncNamespaceAnnounce (type 62) to
+                // peer-role connections, not clients. Since list-peers declares
+                // Role::Client, we must NOT wait for that message -- blocking on
+                // recv_encrypted() here would freeze the CLI. Proceed directly
+                // to PeerInfoRequest. (See connection_manager.cpp: announce_and_sync
+                // is only spawned when peer->role == Role::Peer.)
 
-                // B7. Send PeerInfoRequest (type 55, empty payload)
+                // B6. Send PeerInfoRequest (type 55, empty payload)
                 auto peer_req = chromatindb::net::TransportCodec::encode(
                     chromatindb::wire::TransportMsgType_PeerInfoRequest,
                     std::span<const uint8_t>{}, 1);
                 send_encrypted(peer_req);
 
-                // B8. Receive PeerInfoResponse (type 56), parse binary format
+                // B7. Receive PeerInfoResponse (type 56), parse binary format
                 auto resp_peer_pt = recv_encrypted();
                 auto resp_peer = chromatindb::net::TransportCodec::decode(resp_peer_pt);
                 if (!resp_peer || resp_peer->type != chromatindb::wire::TransportMsgType_PeerInfoResponse) {
