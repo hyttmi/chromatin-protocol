@@ -214,6 +214,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // If the user explicitly targeted a remote (via --node, --host/-p), or
+    // requested TCP directly, skip the UDS attempt entirely. Otherwise
+    // std::filesystem::exists() will throw on a UDS path the user can't
+    // stat (e.g. /run/chromatindb/node.sock owned by the chromatindb
+    // group), bailing before we ever try TCP.
+    if (!node_name.empty() || cli_host_set || cli_port_set) {
+        opts.uds_path.clear();
+    }
+
     if (arg_idx >= argc) {
         usage();
         return 1;

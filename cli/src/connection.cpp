@@ -126,8 +126,12 @@ Connection::Connection(Identity& identity)
 
 bool Connection::connect(const std::string& host, uint16_t port,
                          const std::string& uds_path) {
-    // Try UDS first if socket file exists
-    if (!uds_path.empty() && std::filesystem::exists(uds_path)) {
+    // Try UDS first if socket file exists. Use the error_code overload so a
+    // permission-denied stat (e.g. /run/chromatindb/node.sock owned by the
+    // chromatindb group) returns false instead of throwing -- we want to
+    // fall through to TCP, not abort the whole command.
+    std::error_code ec;
+    if (!uds_path.empty() && std::filesystem::exists(uds_path, ec) && !ec) {
         if (connect_uds(uds_path)) {
             spdlog::debug("connected via UDS: {}", uds_path);
             if (handshake_trusted()) {
