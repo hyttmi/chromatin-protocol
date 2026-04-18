@@ -529,9 +529,13 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
+    // DeleteAck's hash field is the tombstone's own hash (each rm creates a new
+    // non-deterministic tombstone). The user asked to delete `hash_hex`; print
+    // that so the output matches the intent. Stash the tombstone hash for -v.
     if (!opts.quiet) {
-        auto del_hash = std::span<const uint8_t>(resp->payload.data(), 32);
-        std::fprintf(stderr, "deleted: %s\n", to_hex(del_hash).c_str());
+        std::fprintf(stderr, "deleted: %s\n", hash_hex.c_str());
+        spdlog::debug("tombstone hash: {}",
+                      to_hex(std::span<const uint8_t>(resp->payload.data(), 32)));
     }
 
     return 0;
