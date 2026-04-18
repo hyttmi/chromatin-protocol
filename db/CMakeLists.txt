@@ -246,6 +246,7 @@ if(BUILD_TESTING)
     tests/test_daemon.cpp
     tests/util/test_endian.cpp
     tests/util/test_blob_helpers.cpp
+    tests/util/test_address.cpp
     tests/net/test_auth_helpers.cpp
     tests/crypto/test_verify_helpers.cpp
   )
