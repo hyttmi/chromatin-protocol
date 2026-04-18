@@ -301,3 +301,153 @@ Start by gathering concrete use cases before committing to implementation. If th
 
 Plans:
 - [ ] TBD (promote with /gsd-discuss-phase when ready to research)
+
+
+### Phase 999.4: cdb regression test suite (BACKLOG)
+
+**Goal:** End-to-end Catch2 tests that exercise the `cdb` binary against a local test node so the sweep's worth of fixes can't silently regress.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Surface this sweep found 20 independent UX/correctness bugs in `cdb`, one of which (B1 — the 40-byte ListResponse stride against a 44-byte server wire format) completely broke `contact add` and the `put --share @group` workflow. `cli/tests` exists in the tree but the post-sweep behavior has no coverage. A careless refactor could reintroduce any of:
+
+- stride mismatches on ListResponse consumers (the class of bug behind B1)
+- positional `host[:port]` re-appearing and silently overriding `--node`
+- `rm` losing its target-existence pre-check
+- `get --force` / `rm --force` scope regressions
+- error messages drifting away from the unified `Error: …` convention
+- 0-byte / directory / non-existent-file put paths
+
+**Suggested direction:**
+
+1. Add a Catch2 fixture that launches a fresh `chromatindb` on a random port + scratch datadir, waits for it to listen, tears it down in the destructor.
+2. Cover the full sweep matrix: identity/info, blob lifecycle (put/get/exists/rm + --force + empty/dir rejections), contacts/groups/sharing (including `put --share @group` end-to-end which is the workflow B1 killed), delegate/revoke with contact-name + @group + file, cross-node sync via a second fixture instance.
+3. Invoke the built `cdb` binary as a subprocess (not its internal functions) so argv parsing, stdout/stderr separation, and exit codes are all in scope — these are where most sweep findings lived.
+4. Wire into the existing CTest setup so it runs in the same target as the node's tests.
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+### Phase 999.5: cdb get handles PUBK (and non-envelope) blobs gracefully (BACKLOG)
+
+**Goal:** `cdb get <pubk_hash>` (or `get --all --from <self-ns>`) should say "this blob isn't a CENV envelope, nothing to decrypt" instead of `"Metadata length exceeds payload"`.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Current behaviour (observed during final sweep): `cdb get --all --from self` happily fetches the PUBK blob in its own namespace, then fails decoding because PUBK data isn't a CENV envelope with a length-prefixed metadata section. The error surfaces as `<hash>: Metadata length exceeds payload` — technically accurate but completely opaque to a user who just asked for "all my blobs".
+
+**Suggested direction:**
+
+1. In `get()`, after fetching a blob, inspect the type magic before attempting envelope decrypt / payload parse. For PUBK/TOMB/DLGT/CDAT (chunk), emit a structured message ("hash <h>: type PUBK, not user data") and skip — don't count as an error when combined with `--all`.
+2. Consider adding a `--type` filter to `get --all` that mirrors `ls --type` so the caller can opt into strict selection.
+3. For direct `get <hash>`, still error out (the user asked specifically) but with a clearer message than "Metadata length exceeds payload".
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+### Phase 999.6: cdb contact add — alias dedup / warn on namespace collision (BACKLOG)
+
+**Goal:** Decide and enforce whether `cdb contact add alice <ns>` and `cdb contact add bob <ns>` pointing at the same namespace is intentional (aliasing) or accidental (typo) — and surface it either way.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Observed during final sweep: adding two distinct names for the same namespace succeeds silently. This is either:
+
+- **Aliasing** — reasonable, a user might want `alice` and `alice-work` to point at the same key. In that case it should at least warn the first time.
+- **Accident** — user pasted the same namespace twice under different names; should be caught.
+
+**Suggested direction:**
+
+1. On `contact add`, query existing contacts for the same namespace. If any exist, print a one-line note to stderr: `"note: namespace already known as <existing-name>"` — informational, not blocking.
+2. Add `contact add --allow-duplicate-ns` if we want to silence the note explicitly.
+3. Consider a `contact resolve <ns>` subcommand that prints all names pointing at a namespace (handy for audit after delegate/revoke).
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+### Phase 999.7: cdb shell completion + man page (BACKLOG)
+
+**Goal:** Ship bash/zsh completion scripts and a proper `man cdb` page so the CLI feels like a first-class Unix tool.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Current state: every flag and subcommand is discoverable only by running `cdb --help` or the command with no args. No tab completion for subcommands, contact names, `@group` expansion, or hashes. No man page at all.
+
+**Suggested direction:**
+
+1. Generate completion scripts for bash and zsh that:
+   - Complete subcommand names at position 1
+   - Complete flags per-subcommand (e.g. `--share`, `--ttl`, `--type`)
+   - Dynamically complete contact names and group names by reading `~/.cdb/contacts.db` (via a helper `cdb contact list` in machine-readable mode)
+   - Complete `--node` with names from `~/.cdb/config.json`
+2. Author a single `cdb.1` man page. Keep it scannable — synopsis per subcommand, a "FILES" section pointing at `~/.cdb/`, an "EXAMPLES" section covering the enterprise workflow (`publish` → `contact add` → `put --share @team` → `get`).
+3. Install target: completions under `/usr/share/bash-completion/completions/cdb` and zsh equivalent; man page under `/usr/share/man/man1/cdb.1`.
+4. Probably warrants a `cdb contact list --format json` or similar machine-readable mode for the dynamic completion to consume cleanly.
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+### Phase 999.8: Bounded PQ handshake timeout on the cdb side (BACKLOG)
+
+**Goal:** `cdb <cmd>` against a node that accepts TCP but stalls mid-PQ-handshake should fail within a bounded window (same class as the 5s TCP connect timeout we just added), not hang indefinitely.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+M5 in the sweep added a 5s TCP connect timeout via `async_connect` + `steady_timer` in `Connection::connect_tcp`. That covers the "dead host / SYN timeout" case. But the handshake path (`handshake_pq` and `handshake_trusted`) uses synchronous `asio::read` calls with no deadline — if a node completes the TCP handshake but then never sends the KEM pubkey (or gets stuck mid-exchange), `cdb` blocks forever. The original sweep's backlog 999.2 observation about `cdb ls` stalling on handshake called this out.
+
+**Suggested direction:**
+
+1. Mirror the connect_tcp pattern: rewrap `asio::read` / `asio::write` in the handshake path with `async_read` / `async_write` + a per-phase deadline (maybe 10s total for PQ handshake).
+2. On timeout, close the socket and return a clear error: `"Error: PQ handshake timed out with <host>:<port> — is the node version compatible?"`
+3. Also consider a shorter deadline on `handshake_trusted` (UDS, same-host) since that should complete in milliseconds.
+4. Verify against a contrived "hang after TCP accept" test server (easy to build in a few lines of asio).
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+### Phase 999.9: Verify export-key TTY refusal in a real terminal (BACKLOG)
+
+**Goal:** Confirm the `export-key` default format guard (refuse to splatter raw 4160 bytes onto a TTY, suggest `--out` / `--format hex|b64`) actually triggers when run interactively.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+The M4 sweep fix added `isatty(fileno(stdout))` + a stderr hint that refuses raw binary when stdout is a terminal. The logic is straightforward, but it couldn't be exercised through the Bash tool during the sweep because the tool captures stdout over a pipe (so `isatty` returns 0 and the guard is bypassed). The guard's correctness was asserted by reading the code, not by observation.
+
+**Suggested direction:**
+
+1. Open a real terminal, run `cdb export-key` with no flags, confirm the stderr message fires and no binary is emitted.
+2. Verify the escape hatches: `cdb export-key > file.pub` writes 4160 bytes without complaint; `cdb export-key --format hex` prints hex to the TTY without complaint; `cdb export-key --out file.pub` writes to file.
+3. If anything doesn't behave, tighten the check (e.g. also look at `isatty(fileno(stderr))` to avoid pathological redirections).
+4. Consider adding an automated test that uses a pty via `openpty(3)` so this never has to be a manual step again.
+
+**Depends on:** none
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
