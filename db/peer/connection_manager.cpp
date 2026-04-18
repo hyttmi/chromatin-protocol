@@ -58,7 +58,7 @@ bool ConnectionManager::should_accept_connection() const {
     size_t peer_count = 0;
     size_t client_count = 0;
     for (const auto& p : peers_) {
-        if (p->is_client) ++client_count;
+        if (p->role == net::Role::Client) ++client_count;
         else ++peer_count;
     }
     return peer_count < max_peers_ && client_count < max_clients_;
@@ -66,20 +66,20 @@ bool ConnectionManager::should_accept_connection() const {
 
 void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     // ACL check: route based on the role the remote explicitly declared in
-    // its AuthSignature payload. UDS is additionally forced to client role --
-    // the UDS socket is permission-gated at the filesystem level and is only
-    // ever used by local CLI tools, never for node-to-node peering.
+    // its AuthSignature payload. UDS overrides to Client regardless of what
+    // was declared -- the UDS socket is permission-gated at the filesystem
+    // level and is only ever used by local CLI tools, never for node peering.
     auto peer_ns = crypto::sha3_256(conn->peer_pubkey());
 
-    bool is_client_conn = conn->is_uds() || (conn->peer_role() == net::Role::Client);
-    bool allowed = is_client_conn
+    net::Role role = conn->is_uds() ? net::Role::Client : conn->peer_role();
+    bool allowed = (role == net::Role::Client)
         ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
         : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
 
     if (!allowed) {
         auto full_hex = to_hex(std::span<const uint8_t>(peer_ns.data(), peer_ns.size()), 32);
         spdlog::warn("access denied ({}): namespace={} ip={}",
-                     is_client_conn ? "client" : "peer",
+                     net::role_name(role),
                      full_hex, conn->remote_address());
         if (!conn->connect_address().empty()) {
             server_.notify_acl_rejected(conn->connect_address());
@@ -93,7 +93,7 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     info.connection = conn;
     info.address = conn->remote_address();
     info.is_bootstrap = false;
-    info.is_client = is_client_conn;
+    info.role = role;
     info.strike_count = 0;
     info.syncing = false;
 
@@ -117,8 +117,9 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
 
     auto ns_hex = to_hex(conn->peer_pubkey(), 8);
 
-    // Connection dedup: skip for clients (UDS or TCP client connections)
-    if (!is_client_conn) {
+    // Connection dedup: skip for non-peer roles (clients, observers, etc.).
+    // Only PEER connections participate in node-to-node dedup.
+    if (role == net::Role::Peer) {
         for (auto it = peers_.begin(); it != peers_.end(); ++it) {
             auto existing_ns = crypto::sha3_256((*it)->connection->peer_pubkey());
             if (existing_ns == peer_ns) {
@@ -156,10 +157,10 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
                 break;
             }
         }
-    }  // !is_client_conn
+    }  // role == Peer
 
     spdlog::info("Connected {} {}@{}",
-                 is_client_conn ? "client" : "peer", ns_hex, info.address);
+                 net::role_name(role), ns_hex, info.address);
 
     // Set up message routing -- delegate to on_message_ callback
     conn->on_message([this](net::Connection::Ptr c, wire::TransportMsgType type,
@@ -172,9 +173,9 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
     peers_.back()->sync_inbox.clear();
     ++metrics_.peers_connected_total;
 
-    // Notify facade for cross-component actions (PEX tracking, persisted peers)
-    // Skip for clients — they shouldn't be added to PEX or reconnect lists.
-    if (!peers_.back()->is_client) {
+    // Notify facade for cross-component actions (PEX tracking, persisted peers).
+    // Only peer-role connections belong in PEX/reconnect/sync plumbing.
+    if (peers_.back()->role == net::Role::Peer) {
         on_connect_(conn, addr);
     }
 
@@ -197,9 +198,9 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
         }
     }
 
-    // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync
-    // Skip for client connections — they don't participate in replication.
-    if (!peers_.back()->is_client) {
+    // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync.
+    // Only peer-role connections participate in replication.
+    if (peers_.back()->role == net::Role::Peer) {
         asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
             co_await announce_and_sync(conn);
         }, asio::detached);
@@ -210,10 +211,14 @@ void ConnectionManager::on_peer_disconnected(net::Connection::Ptr conn) {
     auto ns_hex = to_hex(conn->peer_pubkey(), 8);
     bool graceful = conn->received_goodbye();
 
-    // Find PeerInfo to check if client
+    // Find PeerInfo to check if the disconnecting connection was a client.
+    // Client disconnects get simpler handling (no PEX cleanup, no reconnect).
     bool was_client = false;
     for (const auto& p : peers_) {
-        if (p->connection == conn) { was_client = p->is_client; break; }
+        if (p->connection == conn) {
+            was_client = (p->role == net::Role::Client);
+            break;
+        }
     }
 
     spdlog::info("{} {} disconnected ({})",
@@ -358,7 +363,7 @@ void ConnectionManager::disconnect_unauthorized_peers() {
 
     for (const auto& peer : peers_) {
         auto peer_ns = crypto::sha3_256(peer->connection->peer_pubkey());
-        bool peer_allowed = peer->is_client
+        bool peer_allowed = (peer->role == net::Role::Client)
             ? acl_.is_client_allowed(std::span<const uint8_t, 32>(peer_ns))
             : acl_.is_peer_allowed(std::span<const uint8_t, 32>(peer_ns));
         if (!peer_allowed) {
@@ -396,11 +401,11 @@ asio::awaitable<void> ConnectionManager::keepalive_loop() {
 
         auto now = std::chrono::steady_clock::now();
 
-        // Snapshot connections -- peers_ may change across co_await points
-        // Only keepalive for peers, not client connections
+        // Snapshot connections -- peers_ may change across co_await points.
+        // Only PEER-role connections get keepalive; clients are short-lived.
         std::vector<net::Connection::Ptr> tcp_peers;
         for (const auto& peer : peers_) {
-            if (!peer->is_client) {
+            if (peer->role == net::Role::Peer) {
                 tcp_peers.push_back(peer->connection);
             }
         }

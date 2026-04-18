@@ -33,7 +33,7 @@ struct PeerInfo {
     net::Connection::Ptr connection;
     std::string address;
     bool is_bootstrap = false;
-    bool is_client = false;  // True for UDS and TCP client connections (skip dedup/sync/PEX)
+    net::Role role = net::Role::Peer;  ///< Declared at handshake; drives ACL + sync routing.
     uint32_t strike_count = 0;
     bool syncing = false;
     // Sync message queue (timer-cancel pattern)

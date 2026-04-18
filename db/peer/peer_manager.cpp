@@ -587,7 +587,7 @@ void PeerManager::reload_config() {
             sync_namespaces_.begin(), sync_namespaces_.end());
         auto announce_payload = encode_namespace_list(ns_list);
         for (auto& peer : conn_mgr_.peers()) {
-            if (peer->is_client) continue;
+            if (peer->role != net::Role::Peer) continue;
             auto conn = peer->connection;
             auto payload_copy = announce_payload;
             asio::co_spawn(ioc_, [conn, p = std::move(payload_copy)]() -> asio::awaitable<void> {
@@ -597,7 +597,9 @@ void PeerManager::reload_config() {
         }
         spdlog::info("config reload: re-announced sync_namespaces to {} peers",
                      std::count_if(conn_mgr_.peers().begin(), conn_mgr_.peers().end(),
-                                   [](const std::unique_ptr<PeerInfo>& p) { return !p->is_client; }));
+                                   [](const std::unique_ptr<PeerInfo>& p) {
+                                       return p->role == net::Role::Peer;
+                                   }));
     }
 
     // Reload cursor config -> sync_
