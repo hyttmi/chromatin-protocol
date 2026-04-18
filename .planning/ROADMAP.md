@@ -89,8 +89,8 @@ Plans:
   3. Pipeline depth is configurable with a sensible default of 8 in-flight requests
 **Plans**: 2 plans
 Plans:
-- [ ] 120-01-PLAN.md — [To be planned]
-- [ ] 120-02-PLAN.md — [To be planned]
+- [ ] 120-01-PLAN.md — Connection::send_async + recv_for + correlation map + Catch2 [pipeline] tests
+- [ ] 120-02-PLAN.md — Pipeline cmd::get and cmd::put onto send_async + arrival-order recv() drain
 
 ### Phase 121: Documentation
 **Goal**: All v4.1.0 features are documented in PROTOCOL.md, README.md, and cli/README.md so operators and users have accurate reference material
