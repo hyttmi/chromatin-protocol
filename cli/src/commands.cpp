@@ -98,6 +98,60 @@ static std::array<uint8_t, 32> parse_hash(const std::string& hash_hex) {
     return hash;
 }
 
+// ListResponse entry stride: hash:32 + seq:8BE + type:4 = 44 bytes (since Phase 117).
+// Kept as a named constant so every consumer references the same value.
+static constexpr size_t LIST_ENTRY_SIZE = 44;
+
+/// Locate the PUBK blob in a namespace using the server-side type filter
+/// (flags bit 1, payload bytes 45-48 = PUBKEY_MAGIC). Returns the decoded blob
+/// or nullopt if the namespace has no PUBK. Uses request IDs 1 + 2 on `conn`.
+static std::optional<BlobData> find_pubkey_blob(
+    Connection& conn, std::span<const uint8_t, 32> ns) {
+
+    std::vector<uint8_t> list_payload(49, 0);
+    std::memcpy(list_payload.data(), ns.data(), 32);
+    // since_seq = 0 at offset 32 (zero-filled)
+    store_u32_be(list_payload.data() + 40, 100);
+    list_payload[44] = 0x02;  // flag: type_filter present
+    std::memcpy(list_payload.data() + 45, PUBKEY_MAGIC.data(), 4);
+
+    if (!conn.send(MsgType::ListRequest, list_payload, 1)) return std::nullopt;
+
+    auto list_resp = conn.recv();
+    if (!list_resp ||
+        list_resp->type != static_cast<uint8_t>(MsgType::ListResponse) ||
+        list_resp->payload.size() < 5) {
+        return std::nullopt;
+    }
+
+    uint32_t count = load_u32_be(list_resp->payload.data());
+    if (count == 0) return std::nullopt;
+
+    size_t entries_size = static_cast<size_t>(count) * LIST_ENTRY_SIZE;
+    if (list_resp->payload.size() < 4 + entries_size + 1) return std::nullopt;
+
+    auto hash_span = std::span<const uint8_t>(list_resp->payload.data() + 4, 32);
+
+    std::vector<uint8_t> read_payload(64);
+    std::memcpy(read_payload.data(), ns.data(), 32);
+    std::memcpy(read_payload.data() + 32, hash_span.data(), 32);
+
+    if (!conn.send(MsgType::ReadRequest, read_payload, 2)) return std::nullopt;
+
+    auto read_resp = conn.recv();
+    if (!read_resp ||
+        read_resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+        read_resp->payload.empty() ||
+        read_resp->payload[0] != 0x01) {
+        return std::nullopt;
+    }
+
+    auto blob = decode_blob(std::span<const uint8_t>(
+        read_resp->payload.data() + 1, read_resp->payload.size() - 1));
+    if (!blob || !is_pubkey_blob(blob->data)) return std::nullopt;
+    return blob;
+}
+
 /// Build the payload [metadata_len:4BE][metadata_json][file_data] for envelope.
 static std::vector<uint8_t> build_put_payload(
     const std::string& filename, const std::vector<uint8_t>& file_data) {
@@ -1340,55 +1394,19 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
     auto ns = id.namespace_id();
     auto ns_hex = to_hex(ns);
 
-    // Check if already published: list own namespace, look for PUBK blob
+    // Already published? Fetch via server-side PUBK type filter.
     {
         Connection check_conn(id);
         if (check_conn.connect(opts.host, opts.port, opts.uds_path)) {
-            // ListRequest: [namespace:32][since_seq:8BE=0][limit:4BE=100]
-            std::vector<uint8_t> list_payload(44, 0);
-            std::memcpy(list_payload.data(), ns.data(), 32);
-            store_u32_be(list_payload.data() + 40, 100);
-
-            if (check_conn.send(MsgType::ListRequest, list_payload, 1)) {
-                auto list_resp = check_conn.recv();
-                if (list_resp && list_resp->type == static_cast<uint8_t>(MsgType::ListResponse) &&
-                    list_resp->payload.size() >= 5) {
-
-                    uint32_t count = load_u32_be(list_resp->payload.data());
-                    uint32_t rid = 2;
-                    for (uint32_t i = 0; i < count; ++i) {
-                        size_t off = 4 + i * 40;
-                        auto hash = std::span<const uint8_t>(list_resp->payload.data() + off, 32);
-
-                        std::vector<uint8_t> read_payload(64);
-                        std::memcpy(read_payload.data(), ns.data(), 32);
-                        std::memcpy(read_payload.data() + 32, hash.data(), 32);
-
-                        if (!check_conn.send(MsgType::ReadRequest, read_payload, rid++))
-                            continue;
-
-                        auto read_resp = check_conn.recv();
-                        if (!read_resp || read_resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
-                            read_resp->payload.empty() || read_resp->payload[0] != 0x01)
-                            continue;
-
-                        auto blob_bytes = std::span<const uint8_t>(
-                            read_resp->payload.data() + 1, read_resp->payload.size() - 1);
-                        auto blob = decode_blob(blob_bytes);
-                        if (!blob) continue;
-
-                        if (is_pubkey_blob(blob->data)) {
-                            check_conn.close();
-                            if (!opts.quiet) {
-                                std::fprintf(stderr, "already published: %s\n", ns_hex.c_str());
-                            }
-                            std::printf("%s\n", ns_hex.c_str());
-                            return 0;
-                        }
-                    }
-                }
-            }
+            auto existing = find_pubkey_blob(check_conn, ns);
             check_conn.close();
+            if (existing) {
+                if (!opts.quiet) {
+                    std::fprintf(stderr, "already published: %s\n", ns_hex.c_str());
+                }
+                std::printf("%s\n", ns_hex.c_str());
+                return 0;
+            }
         }
     }
 
@@ -1447,88 +1465,39 @@ int contact_add(const std::string& identity_dir, const std::string& name,
                 const std::string& namespace_hex, const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
-    auto target_ns = *from_hex(namespace_hex);
-    if (target_ns.size() != 32) {
+    auto target_ns_vec = *from_hex(namespace_hex);
+    if (target_ns_vec.size() != 32) {
         std::fprintf(stderr, "Error: namespace must be 64 hex chars\n");
         return 1;
     }
+    auto target_ns = std::span<const uint8_t, 32>(target_ns_vec.data(), 32);
 
-    // Fetch blob list from target namespace to find PUBK blob
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
         std::fprintf(stderr, "Error: failed to connect\n");
         return 1;
     }
 
-    // ListRequest: [namespace:32][since_seq:8BE=0][limit:4BE=100]
-    std::vector<uint8_t> list_payload(44, 0);
-    std::memcpy(list_payload.data(), target_ns.data(), 32);
-    store_u32_be(list_payload.data() + 40, 100);
-
-    if (!conn.send(MsgType::ListRequest, list_payload, 1)) {
-        std::fprintf(stderr, "Error: failed to list namespace\n");
-        conn.close();
-        return 1;
-    }
-
-    auto list_resp = conn.recv();
-    if (!list_resp || list_resp->type != static_cast<uint8_t>(MsgType::ListResponse) ||
-        list_resp->payload.size() < 5) {
-        std::fprintf(stderr, "Error: bad ListResponse\n");
-        conn.close();
-        return 1;
-    }
-
-    uint32_t count = load_u32_be(list_resp->payload.data());
-
-    // Try each hash — fetch blob, check for PUBK magic
-    uint32_t rid = 2;
-    for (uint32_t i = 0; i < count; ++i) {
-        size_t off = 4 + i * 40;
-        auto hash = std::span<const uint8_t>(list_resp->payload.data() + off, 32);
-
-        // ReadRequest: [namespace:32][hash:32]
-        std::vector<uint8_t> read_payload(64);
-        std::memcpy(read_payload.data(), target_ns.data(), 32);
-        std::memcpy(read_payload.data() + 32, hash.data(), 32);
-
-        if (!conn.send(MsgType::ReadRequest, read_payload, rid++)) continue;
-
-        auto read_resp = conn.recv();
-        if (!read_resp || read_resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
-            read_resp->payload.empty() || read_resp->payload[0] != 0x01) {
-            continue;
-        }
-
-        auto blob_bytes = std::span<const uint8_t>(
-            read_resp->payload.data() + 1, read_resp->payload.size() - 1);
-        auto blob = decode_blob(blob_bytes);
-        if (!blob) continue;
-
-        if (is_pubkey_blob(blob->data)) {
-            // Found it! Extract signing_pk and kem_pk
-            std::vector<uint8_t> signing_pk(blob->data.begin() + 4, blob->data.begin() + 4 + 2592);
-            std::vector<uint8_t> kem_pk(blob->data.begin() + 4 + 2592, blob->data.end());
-
-            conn.close();
-
-            // Save to contacts db
-            auto db_path = identity_dir + "/contacts.db";
-            ContactDB db(db_path);
-            db.add(name, signing_pk, kem_pk);
-
-            auto ns_hex = to_hex(std::span<const uint8_t>(target_ns.data(), 32));
-            if (!opts.quiet) {
-                std::fprintf(stderr, "added contact: %s (%s)\n", name.c_str(), ns_hex.c_str());
-            }
-            return 0;
-        }
-    }
-
+    auto blob = find_pubkey_blob(conn, target_ns);
     conn.close();
-    std::fprintf(stderr, "Error: no published pubkey found in namespace %s\n",
-                 namespace_hex.c_str());
-    return 1;
+
+    if (!blob) {
+        std::fprintf(stderr, "Error: no published pubkey found in namespace %s\n",
+                     namespace_hex.c_str());
+        return 1;
+    }
+
+    std::vector<uint8_t> signing_pk(blob->data.begin() + 4, blob->data.begin() + 4 + 2592);
+    std::vector<uint8_t> kem_pk(blob->data.begin() + 4 + 2592, blob->data.end());
+
+    auto db_path = identity_dir + "/contacts.db";
+    ContactDB db(db_path);
+    db.add(name, signing_pk, kem_pk);
+
+    if (!opts.quiet) {
+        std::fprintf(stderr, "added contact: %s (%s)\n", name.c_str(), namespace_hex.c_str());
+    }
+    return 0;
 }
 
 // =============================================================================
