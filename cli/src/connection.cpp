@@ -1,4 +1,5 @@
 #include "cli/src/connection.h"
+#include "cli/src/pipeline_pump.h"
 #include "cli/src/wire.h"
 
 #include <oqs/oqs.h>
@@ -713,17 +714,14 @@ bool Connection::send_async(MsgType type, std::span<const uint8_t> payload,
                             uint32_t request_id) {
     if (!connected_) return false;
 
-    // Backpressure (D-06): pump recv() until we have a free slot. Each drained
-    // reply lands in pending_replies_ for the next recv_for() to consume.
-    // Single-sender invariant (D-09, PIPE-02) preserved by construction:
-    // the pump only calls recv() (which never invokes send_encrypted), so the
-    // sole writer of send_counter_ is still the caller of send().
+    // Backpressure (D-06): drain replies until a slot frees. The pump only
+    // drives recv(), never touches the send path, so single-sender invariant
+    // (D-09, PIPE-02) for AEAD send_counter_ is preserved by construction.
     while (in_flight_ >= PIPELINE_DEPTH) {
-        auto msg = recv();
-        if (!msg) return false;
-        // D-04: bounded by PIPELINE_DEPTH; insert_or_assign handles the
-        // pathological "two replies for the same rid" case without growth.
-        pending_replies_.insert_or_assign(msg->request_id, std::move(*msg));
+        if (!pipeline::pump_one_for_backpressure(
+                [this] { return recv(); }, pending_replies_)) {
+            return false;
+        }
     }
 
     if (!send(type, payload, request_id)) return false;
@@ -734,33 +732,11 @@ bool Connection::send_async(MsgType type, std::span<const uint8_t> payload,
 std::optional<DecodedTransport> Connection::recv_for(uint32_t request_id) {
     if (!connected_) return std::nullopt;
 
-    // Fast path: already stashed by a prior pump cycle.
-    if (auto it = pending_replies_.find(request_id);
-        it != pending_replies_.end()) {
-        DecodedTransport msg = std::move(it->second);
-        pending_replies_.erase(it);
-        if (in_flight_ > 0) --in_flight_;
-        return msg;
-    }
-
-    // Pump until target arrives.
-    while (true) {
-        auto msg = recv();
-        if (!msg) return std::nullopt;
-
-        if (msg->request_id == request_id) {
-            if (in_flight_ > 0) --in_flight_;
-            return msg;
-        }
-
-        // Off-target — stash for a future recv_for(). D-04: bounded.
-        // If a reply arrives for a rid no caller will ever ask for (server
-        // bug), it lingers until close() clears the map. Logging at debug
-        // makes this observable without spamming the normal path.
-        spdlog::debug("recv_for: stashing off-target reply rid={} (waiting for {})",
-                      msg->request_id, request_id);
-        pending_replies_.insert_or_assign(msg->request_id, std::move(*msg));
-    }
+    return pipeline::pump_recv_for(
+        request_id,
+        [this] { return recv(); },
+        pending_replies_,
+        in_flight_);
 }
 
 // =============================================================================
