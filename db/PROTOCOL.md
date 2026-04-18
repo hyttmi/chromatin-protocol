@@ -103,9 +103,9 @@ Initiator                              Responder
     |   Session fingerprint (NOT HKDF -- direct hash):
     |     SHA3-256(shared_secret || initiator_pubkey || responder_pubkey)  -->  32 bytes
     |                                      |
-    |--- [encrypted] AuthSignature ------->|  ML-DSA-87 public key (2592 bytes)
+    |--- [encrypted] AuthSignature ------->|  role (1 byte) + ML-DSA-87 pubkey (2592)
     |                                      |  + ML-DSA-87 signature over session fingerprint
-    |<-- [encrypted] AuthSignature --------|  ML-DSA-87 public key (2592 bytes)
+    |<-- [encrypted] AuthSignature --------|  role (1 byte) + ML-DSA-87 pubkey (2592)
     |                                      |  + ML-DSA-87 signature over session fingerprint
     |                                      |
     |   Session established.               |
@@ -122,11 +122,11 @@ Initiator                              Responder
 
 The HKDF salt is empty (zero-length). The shared secret from ML-KEM-1024 provides sufficient entropy as the sole IKM input.
 
-**Message 3 -- AuthSignature (encrypted):** The initiator sends its ML-DSA-87 signing public key (2592 bytes) and a signature over the session fingerprint. This is the first AEAD-encrypted frame, using the initiator-to-responder key with nonce counter 0.
+**Message 3 -- AuthSignature (encrypted):** The initiator sends its declared connection role (1 byte), its ML-DSA-87 signing public key (2592 bytes), and a signature over the session fingerprint. This is the first AEAD-encrypted frame, using the initiator-to-responder key with nonce counter 0.
 
-**Message 4 -- AuthSignature (encrypted):** The responder sends its ML-DSA-87 signing public key and signature. Encrypted with the responder-to-initiator key, nonce counter 0.
+**Message 4 -- AuthSignature (encrypted):** The responder sends its own role, ML-DSA-87 signing public key, and signature. Encrypted with the responder-to-initiator key, nonce counter 0.
 
-Both sides verify the peer's signature over the session fingerprint. After verification, AEAD nonce counters increment to 1 for both directions.
+Both sides verify the peer's signature over the session fingerprint. The receiver also consults the role byte to route the connection through the correct ACL allow-list (see "Role Signalling" below). Unknown role values MUST be rejected fail-closed so future role definitions are never misinterpreted by old binaries. After verification, AEAD nonce counters increment to 1 for both directions.
 
 ### Lightweight Handshake (Trusted Peers)
 
@@ -148,10 +148,11 @@ Initiator                              Responder
     |                                      |
     |   AEAD-encrypted from here:
     |                                      |
-    |--- [enc] AuthSignature ------------>|  ML-DSA-87 pubkey + signature(fingerprint)
-    |<-- [enc] AuthSignature -------------|  ML-DSA-87 pubkey + signature(fingerprint)
+    |--- [enc] AuthSignature ------------>|  role + ML-DSA-87 pubkey + signature(fingerprint)
+    |<-- [enc] AuthSignature -------------|  role + ML-DSA-87 pubkey + signature(fingerprint)
     |                                      |
     |   Both verify: AuthSignature pubkey matches TrustedHello pubkey.
+    |   Receiver uses role byte to pick the ACL allow-list.
     |   Session established.
 ```
 
@@ -177,11 +178,44 @@ UDS is an alternative transport for local process communication, enabling applic
 
 **Lifecycle:** The UDS acceptor starts alongside the TCP server during daemon startup and stops during shutdown. The socket file is removed when the acceptor stops.
 
+### Role Signalling
+
+Every `AuthSignature` payload starts with a 1-byte role field that declares the purpose of the connection. The receiver uses this role -- not ACL allow-list membership -- to decide whether the connection participates in peer-to-peer replication, client API access, or (when implemented) observer / admin / relay flows.
+
+**AuthSignature payload format:**
+
+```
+[role:1][pubkey_size:4 BE][pubkey:2592][signature:variable]
+```
+
+The role byte is carried inside the AEAD-encrypted AuthSignature frame, so its integrity is protected by the session keys -- an on-path attacker cannot flip the role without breaking the AEAD tag.
+
+**Role values:**
+
+| Value | Name | Purpose |
+|-------|------|---------|
+| 0x00 | PEER | Full node-to-node replication (sync, PEX, dedup, BlobNotify) |
+| 0x01 | CLIENT | Read/write API access (blobs, queries, subscriptions) |
+| 0x02 | OBSERVER | (reserved) Read-only -- metrics, backup dumpers, auditors |
+| 0x03 | ADMIN | (reserved) Privileged CLI -- config reload, revoke |
+| 0x04 | RELAY | (reserved) Bridge/relay node |
+| 0x05..0xFE | -- | Reserved for future roles |
+| 0xFF | -- | Reserved (sentinel / error) |
+
+**Rules:**
+
+- Initiators MUST declare their intended role. The `chromatindb` node sends `PEER` when dialing another node. The `cdb` CLI sends `CLIENT`.
+- Responders MUST fail-closed on unknown role values -- decoding returns a protocol error if the role byte is not in the currently-implemented set. This guarantees future role additions cannot be silently accepted by older binaries.
+- UDS connections are forced to `CLIENT` role on the receiver side regardless of what the initiator declared. The UDS socket is filesystem-permission-gated and is never used for node-to-node peering.
+- Reserved values (OBSERVER, ADMIN, RELAY, 0x05..0xFE, 0xFF) MUST be rejected until the implementing version ships the corresponding receiver-side logic.
+
+**ACL routing:** After the handshake completes, the receiver consults the appropriate allow-list based on the declared role -- `allowed_client_keys` for `CLIENT`, `allowed_peer_keys` for `PEER`, and so on. Open-mode allow-lists (empty) allow any identity for that role.
+
 ### Step 3: Encrypted Session
 
 All subsequent messages are AEAD-encrypted `TransportMessage` frames using the established session keys. Nonce counters continue incrementing from where the handshake left off.
 
-If the node has `allowed_peer_keys` configured (for TCP connections) or `allowed_client_keys` (for UDS connections), it checks the peer's signing public key namespace (`SHA3-256(peer_pubkey)`) against the appropriate access control list immediately after the handshake. Unauthorized connections are silently disconnected.
+If the node has `allowed_peer_keys` configured (for TCP peer-role connections) or `allowed_client_keys` (for client-role connections -- TCP or UDS), it checks the peer's signing public key namespace (`SHA3-256(peer_pubkey)`) against the appropriate access control list immediately after the handshake. The list to check is determined by the role the remote declared in its AuthSignature payload. Unauthorized connections are silently disconnected.
 
 ### Keepalive
 
@@ -851,7 +885,7 @@ All message types defined in the `TransportMsgType` enum:
 | 0 | None | Reserved / unset |
 | 1 | KemPubkey | ML-KEM-1024 ephemeral public key (handshake step 1) |
 | 2 | KemCiphertext | ML-KEM-1024 ciphertext (handshake step 2) |
-| 3 | AuthSignature | ML-DSA-87 public key + signature (handshake steps 3-4) |
+| 3 | AuthSignature | Role + ML-DSA-87 public key + signature (handshake steps 3-4). See "Role Signalling". |
 | 4 | AuthPubkey | Reserved (authentication handled by AuthSignature) |
 | 5 | Ping | Keepalive request (empty payload) |
 | 6 | Pong | Keepalive response (empty payload) |
