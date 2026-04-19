@@ -14,7 +14,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [x] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs (completed 2026-04-16)
 - [x] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI (completed 2026-04-16)
 - [ ] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention
-- [ ] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection
+- [x] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection (completed 2026-04-19)
 - [ ] **Phase 121: Documentation** - PROTOCOL.md, README.md, cli/README.md updated with all v4.1.0 features
 - [ ] **Phase 122: Verification** - Unit tests for all new features + E2E verification against live node at 192.168.1.73
 
@@ -90,7 +90,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 120-01-PLAN.md — Connection::send_async + recv_for + correlation map + Catch2 [pipeline] tests
-- [ ] 120-02-PLAN.md — Pipeline cmd::get and cmd::put onto send_async + arrival-order recv() drain
+- [x] 120-02-PLAN.md — Pipeline cmd::get and cmd::put onto send_async + arrival-order recv() drain
 
 ### Phase 121: Documentation
 **Goal**: All v4.1.0 features are documented in PROTOCOL.md, README.md, and cli/README.md so operators and users have accurate reference material
@@ -137,7 +137,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
 | 119. Chunked Large Files | 0/0 | Not started | - |
-| 120. Request Pipelining | 1/2 | In Progress|  |
+| 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
 
@@ -241,7 +241,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Current behaviour (observed 2026-04-18):
 
