@@ -15,8 +15,11 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [x] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI (completed 2026-04-16)
 - [x] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention (completed 2026-04-19)
 - [x] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection (completed 2026-04-19)
-- [ ] **Phase 121: Documentation** - PROTOCOL.md, README.md, cli/README.md updated with all v4.1.0 features
-- [ ] **Phase 122: Verification** - Unit tests for all new features + E2E verification against live node at 192.168.1.73
+- [ ] **Phase 121: Storage Concurrency Invariant** - Verify/enforce single-thread or strand-confined access to `db/storage/` before schema changes land on top
+- [ ] **Phase 122: Schema + Signing Cleanup** - Strip `namespace_id`, compress pubkey to 32-byte `signer_hint`, mandatory PUBK-first, new `owner_pubkeys` DBI (protocol-breaking)
+- [ ] **Phase 123: Tombstone Batching + Name-Tagged Overwrite** - `NAME` magic for mutable-name overwrite, `BOMB` batched tombstones, client-side semantics (client-only, depends on 122)
+- [ ] **Phase 124: CLI Adaptation to New Protocol** - `cdb` updated for new wire format, auto-PUBK on first write, `--name` overwrite flow, batched rm, live-node E2E verification
+- [ ] **Phase 125: MVP Documentation Update** - PROTOCOL.md, README.md, cli/README.md, db/ARCHITECTURE.md rewritten to match final v1 wire format and semantics
 
 ## Phase Details
 
@@ -93,37 +96,86 @@ Plans:
 - [x] 120-01-PLAN.md — Connection::send_async + recv_for + correlation map + Catch2 [pipeline] tests
 - [x] 120-02-PLAN.md — Pipeline cmd::get and cmd::put onto send_async + arrival-order recv() drain
 
-### Phase 121: Documentation
-**Goal**: All v4.1.0 features are documented in PROTOCOL.md, README.md, and cli/README.md so operators and users have accurate reference material
+### Phase 121: Storage Concurrency Invariant
+**Goal**: Prove storage is concurrency-safe (strand-confined or single-threaded guarantee) or fix it before the schema-change phases land — avoid debugging data corruption and protocol changes simultaneously.
 **Depends on**: Phase 120
+**Requirements**: TBD
+**Success Criteria** (what must be TRUE):
+  1. Every call path into `db/storage/` is traced and documented as either (a) invoked from one designated strand/thread, or (b) explicitly synchronized via mutex/atomic
+  2. If storage is reached from multiple strands today, an explicit strand is added (no code-only "it happens to work" guarantee)
+  3. Comment at `Storage::store_blob` (and friends) cites the guarantee mechanism so future code doesn't violate it
+  4. Catch2 stress test asserts concurrent ingests from multiple simulated connections don't corrupt state
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 122: Schema + Signing Cleanup — Strip namespace_id, Compress Pubkey, Mandatory PUBK
+**Goal**: One coordinated protocol-breaking change that shrinks every signed blob by ~2592 bytes (~35%) and removes redundant fields from the schema before the v1 freeze.
+**Depends on**: Phase 121
+**Requirements**: TBD
+**Success Criteria** (what must be TRUE):
+  1. `Blob.namespace_id` field removed from the schema (derived from `SHA3(pubkey)` on ingest)
+  2. Per-blob `pubkey` (2592 bytes) replaced by `signer_hint` (32 bytes) resolved via new `owner_pubkeys` DBI (owner writes) or existing `delegation_map` (delegate writes)
+  3. Signing canonical form updated (either `SHA3(SHA3(pubkey) || data || ttl || timestamp)` or `SHA3(pubkey || data || ttl || timestamp)` — decided during planning)
+  4. Node rejects any non-PUBK write to a namespace that has no registered PUBK blob (first-write-must-be-PUBK invariant)
+  5. New `owner_pubkeys` DBI populated the moment a PUBK blob is ingested
+  6. Verify path: receive blob → lookup signer pubkey via `signer_hint` → verify ML-DSA-87 signature; engine.cpp:190-193 `derived_ns == blob.namespace_id` check removed
+  7. All existing node ingest/read paths updated to work on the new format with no references to removed fields
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 123: Tombstone Batching + Name-Tagged Overwrite
+**Goal**: Ship mutable-name overwrite (`cdb put --name foo`) and shrink tombstone bloat 200–300× by amortizing PQ signatures across batches — entirely via new blob magics, no node changes required.
+**Depends on**: Phase 122
+**Requirements**: TBD
+**Success Criteria** (what must be TRUE):
+  1. New `NAME` magic (`0x4E414D45`) defined in `cli/src/wire.h` and `db/wire/codec.h`: payload `[magic:4][name_len:2][name:N][target_content_hash:32]`
+  2. New `BOMB` magic (batched tombstone) defined: payload `[magic:4][count:4][(target_hash:32 or seq:8) × count]`
+  3. `cdb put --name foo file` writes content blob + NAME blob tagging it
+  4. `cdb get foo` resolves name via local `~/.chromatindb/name_cache.json` with NAME-blob enumeration fallback
+  5. Overwrite = new NAME blob with higher seq; writer optionally emits BOMB blob to tombstone prior NAME + content
+  6. `cdb rm` accumulates pending tombstones for N seconds / K targets, then emits one BOMB blob per batch
+  7. Node treats NAME and BOMB as opaque signed blobs — no node code changes required for correctness; future 999.x phase can opt the node in for sync/query optimization
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 124: CLI Adaptation to New Protocol
+**Goal**: `cdb` updated to emit blobs in the new 122+123 wire format — signer_hint instead of inline pubkey, auto-PUBK on first write, NAME-tagged overwrite, BOMB batched deletes. No backward compat.
+**Depends on**: Phase 123
+**Requirements**: TBD
+**Success Criteria** (what must be TRUE):
+  1. First `cdb` write to any fresh namespace auto-publishes a PUBK blob before the user's blob
+  2. `build_blob()` in `cli/src/wire.cpp` emits `signer_hint:32` only; old inline-pubkey encoding path deleted entirely
+  3. `build_signing_input()` matches the final canonical form decided in Phase 122
+  4. Delegate writes use `SHA3(delegate_pubkey)` as signer_hint; node resolves via `delegation_map`
+  5. `cdb put --name` / `cdb get <name>` / batched `cdb rm` all working end-to-end
+  6. All existing CLI Catch2 tests pass under the new wire format; new tests cover auto-PUBK, NAME, BOMB paths
+  7. Live-node E2E verification against 192.168.1.73 (running post-122+123 node): put → get → put --name → get <name> → rm → ls all correct
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 125: MVP Documentation Update
+**Goal**: Rewrite PROTOCOL.md, README.md, cli/README.md, and db/ARCHITECTURE.md to describe the final v1 wire format, signing canonical form, storage model, and user workflows. Any doc that contradicts the shipping protocol is a bug.
+**Depends on**: Phase 124
 **Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04
 **Success Criteria** (what must be TRUE):
-  1. PROTOCOL.md documents the blob type indexing wire format (4-byte type field in ingest, ListRequest filter, ListResponse type per entry)
-  2. PROTOCOL.md documents the new ListRequest/ListResponse format with type filtering
-  3. README.md documents all new node config fields (5 constants) and peer management CLI subcommands
-  4. cli/README.md documents contact groups, contact import, chunked file upload/download, request pipelining, and ls filtering
-**Plans**: 2 plans
+  1. PROTOCOL.md fully documents the post-122 blob wire format, signing canonical form, namespace derivation, PUBK-first rule, signer_hint semantics, owner_pubkeys DBI, and the NAME + BOMB magics from 123
+  2. PROTOCOL.md also documents the pre-existing v4.1.0 features (blob type indexing, ListRequest/ListResponse, chunked CDAT/CPAR, request pipelining)
+  3. README.md describes all v4.1.0 features at the user/operator level, including config fields and peer management commands
+  4. cli/README.md covers every `cdb` subcommand: keygen, publish, put (including --name), get (by hash or name), rm (batched), ls (with filters), contact/group management, chunked uploads, pipelining
+  5. `db/ARCHITECTURE.md` exists and documents the 8 DBIs, ingest pipeline, sync protocol, and the concurrency/strand model from Phase 121
+  6. Inline code comments that reference removed fields (`namespace_id` in wire format, per-blob pubkey embedding, old signing input shape) are removed or updated
+**Plans**: 0 plans
 Plans:
-- [ ] 121-01-PLAN.md — [To be planned]
-- [ ] 121-02-PLAN.md — [To be planned]
-
-### Phase 122: Verification
-**Goal**: All new functionality is proven correct through unit tests and a full end-to-end workflow against the live production node
-**Depends on**: Phase 121
-**Requirements**: VERI-01, VERI-02, VERI-03
-**Success Criteria** (what must be TRUE):
-  1. All new node features (blob type indexing, configurable constants, peer management) have Catch2 unit tests that pass
-  2. All new CLI features (groups, import, chunking, pipelining, ls filtering) have unit tests that pass
-  3. E2E verification against live node at 192.168.1.73 completes full workflow: put chunked file with group sharing, pipelined get, ls filtering, peer management
-**Plans**: 2 plans
-Plans:
-- [ ] 122-01-PLAN.md — [To be planned]
-- [ ] 122-02-PLAN.md — [To be planned]
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
 
 ## Progress
 
 **Execution Order:**
-116 -> 117 -> 118 -> 120 -> 119 -> 121 -> 122
+116 -> 117 -> 118 -> 120 -> 119 -> 121 -> 122 -> 123 -> 124 -> 125
 
 Phase 120 (pipelining) is now executed before 119 (chunked large files) so that
 chunked uploads/downloads inherit pipelined request handling. Dependency was
@@ -501,93 +553,6 @@ Full findings in `.planning/phases/119-chunked-large-files/119-REVIEW.md`.
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
 
-### Phase 999.11: Schema + signing cleanup — strip namespace_id, compress pubkey, mandatory PUBK (BACKLOG — MVP-gating, protocol-breaking)
-
-**Goal:** One coordinated breaking change to the blob wire format and signing canonical form that shrinks every signed blob by ~2592 bytes (~35%) and removes a redundant field from the schema before we freeze it for v1.
-
-**Requirements:** TBD
-
-**Plans:** 0 plans
-
-**Motivation:** Pre-MVP audit found that `Blob.namespace_id` is always `SHA3(pubkey)` and therefore derivable on every verify path. `pubkey` (2592 bytes) is embedded in every blob when it's really per-namespace-owner and could live in a node-local index once published. Both were keeping the schema bigger than needed. This is the final window to make breaking changes cleanly.
-
-**What changes:**
-
-1. **`db/schemas/blob.fbs`** — drop `namespace_id:[ubyte]` field (saves 32 bytes/blob). Replace `pubkey:[ubyte] (required)` (2592 bytes) with `signer_hint:[ubyte]` (32 bytes) — points into either the `owner_pubkeys` DBI or the existing `delegation_map`.
-
-2. **Signing canonical form** — change from `SHA3-256(namespace_id || data || ttl || timestamp)` to either `SHA3-256(SHA3-256(pubkey) || data || ttl || timestamp)` (namespace derived inline) or `SHA3-256(pubkey || data || ttl || timestamp)` (one fewer hash, same security). Pick one and document.
-
-3. **Node ingest** — compute `derived_ns = SHA3(pubkey)` once per ingest, use as namespace for indexing. Remove the `derived_ns == blob.namespace_id` sanity check (engine.cpp:190-193) — no longer meaningful.
-
-4. **New `owner_pubkeys` DBI** — `[ns:32] → pubkey:2592`. Populated the moment a PUBK blob is ingested for a namespace.
-
-5. **Mandatory PUBK-first rule** — node rejects any write to a namespace unless a PUBK blob has already been ingested for it. This makes `signer_hint` → `pubkey` lookup always succeed. Adds ~7 KB one-time cost per namespace, saves ~2560 bytes on every subsequent write.
-
-6. **Verify flow** — receive blob → look up `signer_pubkey` via `signer_hint` (owner_pubkeys DBI for owner writes, delegation_map for delegate writes) → verify ML-DSA-87 signature under that pubkey → proceed.
-
-7. **`cdb publish` is no longer optional** — CLI must auto-publish PUBK on first namespace write. See 999.20.
-
-**Depends on:** none (but 999.12, 999.19, 999.20 all layer on top of this)
-
-Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
-
-### Phase 999.12: Tombstone batching + name-tagged overwrite (BACKLOG — MVP-gating, client-only)
-
-**Goal:** Ship the overwrite semantic using new blob magics entirely client-side, and shrink tombstone bloat 200–300× by batching multiple deletes under one signature.
-
-**Requirements:** TBD
-
-**Plans:** 0 plans
-
-**Motivation:** The node is intentionally dumb — anything a client can express as a signed blob with a new magic, the node stores and syncs for free. That means we can add mutable-name semantics (`cdb put --name foo`) and batched tombstones without changing the node, then have the node opt-in to understand the new magics for a sync/storage efficiency bonus later.
-
-**What changes:**
-
-1. **New `NAME` magic (`0x4E414D45`)** — payload: `[magic:4][name_len:2][name:N][target_content_hash:32]`. A NAME blob is a signed pointer from a name-in-a-namespace to a content-addressed blob.
-
-2. **New `BOMB` magic (batched tombstone)** — payload: `[magic:4][count:4][target_hash_0:32]...[target_hash_N:32]`. One signature amortized across up to 256 deletes per batch.
-
-3. **`cdb put --name foo file.bin`** — writes a normal content-addressed blob, then writes a NAME blob tagging it. Returns `foo` as the logical handle.
-
-4. **`cdb get foo`** — client enumerates NAME blobs in the namespace via `ls` filtered by NAME magic, picks highest `seq_num`, follows `target_content_hash`. Maintains a local `~/.chromatindb/name_cache.json` keyed by `(ns_hex, name)` → `(seq, target_hash)` for fast lookup without the full enumeration each time.
-
-5. **Overwrite semantics** — writing `--name foo` again emits a new NAME blob with a higher seq and (optionally) a BOMB blob tombstoning the prior NAME + prior content blob. Writer controls cleanup.
-
-6. **Batched delete** — CLI accumulates pending tombstones for N seconds or K deletes, then emits one BOMB blob. Per-tombstone on-wire cost drops from ~7 KB (individual tombstone) to ~50 bytes amortized.
-
-7. **Seq-based tombstone variant (optional optimization)** — BOMB payload can alternatively carry `[seq_be:8]` per dead entry instead of `[target_hash:32]`, 4× smaller. Requires receiver to resolve seq→hash via local sequence DBI on ingest. Writer picks whichever is denser for the batch.
-
-8. **Later node opt-in** — node learns NAME magic and maintains a derived `name_map` DBI for fast lookup, learns BOMB magic and updates `tombstone_map` from batch entries for sync-time filtering. Optional, non-breaking.
-
-**Depends on:** 999.11 (for compressed pubkey — affects BOMB/NAME blob sizes)
-
-Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
-
-### Phase 999.13: Storage concurrency invariant — verify + document (BACKLOG — MVP-gating, possibly invasive)
-
-**Goal:** Prove or fix the thread-safety invariant in `db/storage/`. Either add an explicit ASIO strand confining all storage access to one thread, or find and document the existing mechanism that makes concurrent ingests safe.
-
-**Requirements:** TBD
-
-**Plans:** 0 plans
-
-**Motivation:** `db/storage/storage.h:104` declares storage is NOT thread-safe. `db/engine/engine.cpp:105-339` calls `store_blob()` inside a co_await. The pre-MVP audit could not prove from code-reading alone that storage is protected from concurrent access under multi-connection ingest. If the protection is implicit (e.g., "only one io_context thread") it needs to be documented at the site where it's relied on; if there's no protection, this is a latent data-corruption bug.
-
-**Investigation steps:**
-
-1. Trace every call path into `store_blob()`, `delete_blob()`, `store_cursor()`, and friends. Identify what thread each is invoked from.
-2. Check if there's one strand per engine or if storage is reached from multiple strands.
-3. Look for `std::mutex` or `asio::strand` members on `Engine`, `Storage`, or `PeerManager`.
-4. If multiple connections can dispatch to storage concurrently, add an explicit strand (or a single storage-worker strand) before MVP.
-5. Add a comment at `Storage::store_blob` citing the guarantee mechanism.
-
-**Depends on:** none
-
-Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
-
 ### Phase 999.14: Dispatcher wire-size table (BACKLOG — internal, non-breaking)
 
 **Goal:** Centralize the min/max payload size checks scattered across `db/peer/message_dispatcher.cpp` into a single `db/wire/message_sizes.h` table and helper, so schema changes can't silently desync from dispatcher validation.
@@ -696,54 +661,3 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
 
-### Phase 999.19: Documentation update for MVP protocol (BACKLOG — MVP-gating, MUST-DO)
-
-**Goal:** Update PROTOCOL.md, README.md, cli/README.md, and every other document that describes the wire format, signing canonical form, or storage model to exactly match the post-999.11 + post-999.12 reality. Any doc that contradicts the new protocol is a bug.
-
-**Requirements:** TBD
-
-**Plans:** 0 plans
-
-**Motivation:** User requirement — documentation MUST reflect the new design before MVP ships. MVP without accurate docs is not MVP.
-
-**Scope (non-exhaustive):**
-
-1. `PROTOCOL.md` — full rewrite of the Blob section, signing canonical form section, namespace derivation section. New sections: PUBK-first rule, owner_pubkeys DBI, signer_hint semantics, NAME + BOMB magics (if 999.12 ships).
-2. `README.md` — user-facing feature description, updated to mention chunked files, pipelining, mutable names (if 999.12 ships).
-3. `cli/README.md` — updated command reference: `cdb publish` is now automatic, `cdb put --name`, `cdb get <name>`, `cdb rm` handles batched tombstones transparently.
-4. `db/ARCHITECTURE.md` if it exists, otherwise create it — document the 8 DBIs, the ingest pipeline, the sync protocol, the strand/concurrency model (post-999.13).
-5. Update any inline code comments that describe the OLD wire format or signing model (grep for `namespace_id`, `pubkey:2592`, `SHA3(namespace || data`).
-6. Remove or archive any doc section describing removed fields (`namespace_id` in wire format, per-blob pubkey embedding).
-
-**Depends on:** 999.11, 999.12, 999.13 (docs must describe the final wire format and invariants)
-
-Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
-
-### Phase 999.20: CLI adapted to new MVP protocol (BACKLOG — MVP-gating, MUST-DO)
-
-**Goal:** Update the `cdb` CLI to generate blobs in the new wire format (signer_hint instead of inline pubkey, new signing canonical form), enforce the PUBK-first rule on first-write, emit NAME-tagged blobs for `--name` flags, and emit BOMB batched tombstones.
-
-**Requirements:** TBD
-
-**Plans:** 0 plans
-
-**Motivation:** After 999.11 + 999.12 land on the node, the current CLI will be fully broken against the new protocol — it still embeds the full pubkey, uses the old signing canonical form, and writes individual tombstones. Entire CLI blob-encoding and signing paths need updating.
-
-**Scope:**
-
-1. **Identity / key management** — first run of `cdb` (or first write to a fresh namespace) auto-publishes a PUBK blob before anything else. `cdb publish` as a manual command can remain but is no longer required.
-2. **Blob encoding** (`cli/src/wire.h`, `cli/src/wire.cpp`) — new `build_blob()` emits signer_hint instead of full pubkey. Old inline-pubkey path deleted outright.
-3. **Signing canonical form** — `build_signing_input()` matches the new `SHA3(pubkey || data || ttl || timestamp)` (or whichever form 999.11 picks).
-4. **Delegation write path** — delegate's CLI uses `SHA3(delegate_pubkey)` as signer_hint; node looks up via delegation_map.
-5. **`cdb put --name foo file`** — emits a NAME magic blob after the content blob (if 999.12 ships).
-6. **`cdb get <name>`** — local name_map cache + NAME blob enumeration fallback.
-7. **`cdb rm`** — aggregates pending tombstones, emits one BOMB blob per batch.
-8. **Backward compatibility** — none. Per project memory rule `feedback_no_backward_compat.md`, old CLI and new CLI are incompatible; only the new one is supported post-MVP.
-9. **Regression tests** — every existing CLI Catch2 test re-verified against new wire format. New tests for PUBK-first auto-publish, NAME, BOMB.
-10. **Live-node verification** — full put → get → rm → ls round trip against the live node at 192.168.1.73 after the node is running 999.11+999.12 builds.
-
-**Depends on:** 999.11, 999.12 (node protocol defined first)
-
-Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
