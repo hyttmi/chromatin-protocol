@@ -15,7 +15,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [x] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI (completed 2026-04-16)
 - [x] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention (completed 2026-04-19)
 - [x] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection (completed 2026-04-19)
-- [ ] **Phase 121: Storage Concurrency Invariant** - Verify/enforce single-thread or strand-confined access to `db/storage/` before schema changes land on top
+- [x] **Phase 121: Storage Concurrency Invariant** - Verify/enforce single-thread or strand-confined access to `db/storage/` before schema changes land on top (completed 2026-04-19)
 - [ ] **Phase 122: Schema + Signing Cleanup** - Strip `namespace_id`, compress pubkey to 32-byte `signer_hint`, mandatory PUBK-first, new `owner_pubkeys` DBI (protocol-breaking)
 - [ ] **Phase 123: Tombstone Batching + Name-Tagged Overwrite** - `NAME` magic for mutable-name overwrite, `BOMB` batched tombstones, client-side semantics (client-only, depends on 122)
 - [ ] **Phase 124: CLI Adaptation to New Protocol** - `cdb` updated for new wire format, auto-PUBK on first write, `--name` overwrite flow, batched rm, live-node E2E verification
@@ -107,7 +107,7 @@ Plans:
   4. Catch2 stress test asserts concurrent ingests from multiple simulated connections don't corrupt state
 **Plans**: 1 plan
 Plans:
-- [ ] 121-01-PLAN.md — Trace audit + STORAGE_THREAD_CHECK() assertion + TSAN concurrent-ingest ship gate (conditional fix)
+- [x] 121-01-PLAN.md — Trace audit + STORAGE_THREAD_CHECK() assertion + TSAN concurrent-ingest ship gate (conditional fix)
 
 ### Phase 122: Schema + Signing Cleanup — Strip namespace_id, Compress Pubkey, Mandatory PUBK
 **Goal**: One coordinated protocol-breaking change that shrinks every signed blob by ~2592 bytes (~35%) and removes redundant fields from the schema before the v1 freeze.
@@ -191,7 +191,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
 | 119. Chunked Large Files | 3/3 | Complete    | 2026-04-19 |
 | 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
-| 121. Documentation | 0/0 | Not started | - |
+| 121. Documentation | 1/1 | Complete   | 2026-04-19 |
 | 122. Verification | 0/0 | Not started | - |
 
 ## Backlog
@@ -295,7 +295,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 3/3 plans complete
+**Plans:** 1/1 plans complete
 
 Current behaviour (observed 2026-04-18):
 
