@@ -12,6 +12,8 @@ add_executable(cli_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/wire.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/envelope.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/contacts.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/chunked.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/connection.cpp
 )
 
 target_include_directories(cli_tests PRIVATE

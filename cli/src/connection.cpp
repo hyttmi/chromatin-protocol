@@ -684,6 +684,18 @@ std::optional<DecodedTransport> Connection::recv() {
         uint32_t request_id = load_u32_be(pt->data() + 2);
         uint64_t total_size = load_u64_be(pt->data() + 6);
 
+        // Phase 119 / P-119-06 / T-119-06: clamp total_size before the
+        // reserve(). Without this an attacker-forged chunked-framing header
+        // (total_size = 2^64 - 1) would trigger a multi-EiB vector::reserve
+        // and crash or OOM the client. MAX_FRAME_SIZE (110 MiB) is the same
+        // cap applied to the single-frame path at line 282.
+        if (total_size > MAX_FRAME_SIZE) {
+            spdlog::warn(
+                "recv: chunked total_size {} exceeds MAX_FRAME_SIZE ({}); aborting",
+                total_size, MAX_FRAME_SIZE);
+            return std::nullopt;
+        }
+
         // Collect extra metadata from header (bytes after 14)
         std::vector<uint8_t> payload;
         payload.reserve(static_cast<size_t>(total_size));

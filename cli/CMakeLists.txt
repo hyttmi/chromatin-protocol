@@ -91,6 +91,7 @@ add_executable(cdb
   src/connection.cpp
   src/envelope.cpp
   src/contacts.cpp
+  src/chunked.cpp
 )
 
 target_include_directories(cdb PRIVATE
