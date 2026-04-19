@@ -733,7 +733,7 @@ Plans:
 **Scope:**
 
 1. **Identity / key management** — first run of `cdb` (or first write to a fresh namespace) auto-publishes a PUBK blob before anything else. `cdb publish` as a manual command can remain but is no longer required.
-2. **Blob encoding** (`cli/src/wire.h`, `cli/src/wire.cpp`) — new `build_blob()` emits signer_hint instead of full pubkey. Old inline-pubkey path removed or gated behind a legacy flag.
+2. **Blob encoding** (`cli/src/wire.h`, `cli/src/wire.cpp`) — new `build_blob()` emits signer_hint instead of full pubkey. Old inline-pubkey path deleted outright.
 3. **Signing canonical form** — `build_signing_input()` matches the new `SHA3(pubkey || data || ttl || timestamp)` (or whichever form 999.11 picks).
 4. **Delegation write path** — delegate's CLI uses `SHA3(delegate_pubkey)` as signer_hint; node looks up via delegation_map.
 5. **`cdb put --name foo file`** — emits a NAME magic blob after the content blob (if 999.12 ships).
