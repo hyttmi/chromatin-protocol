@@ -76,7 +76,7 @@ Plans:
   5. Envelope format v2 includes segment count, preventing a truncation attack where an attacker drops trailing chunks
 **Plans**: 2 plans
 Plans:
-- [ ] 119-01-PLAN.md — [To be planned]
+- [x] 119-01-PLAN.md — [To be planned]
 - [ ] 119-02-PLAN.md — [To be planned]
 
 ### Phase 120: Request Pipelining
@@ -136,7 +136,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
-| 119. Chunked Large Files | 0/0 | Not started | - |
+| 119. Chunked Large Files | 1/2 | In Progress|  |
 | 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
@@ -241,7 +241,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 2/2 plans complete
+**Plans:** 1/2 plans executed
 
 Current behaviour (observed 2026-04-18):
 

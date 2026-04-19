@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: Ready for next phase
+status: executing
 stopped_at: Phase 119 context gathered
-last_updated: "2026-04-19T04:34:59.430Z"
-last_activity: 2026-04-19 -- Phase 120 complete (live-node verification 5.4×–8.4× speedup)
+last_updated: "2026-04-19T05:33:31.474Z"
+last_activity: 2026-04-19 -- Phase 119 execution started
 progress:
   total_phases: 16
   completed_phases: 4
-  total_plans: 8
+  total_plans: 10
   completed_plans: 8
-  percent: 100
+  percent: 80
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 120 complete — next: select from remaining v4.1.0 phases
+**Current focus:** Phase 119 — chunked-large-files
 
 ## Current Position
 
-Phase: 120 (request-pipelining) — COMPLETE + VERIFIED
-Plan: 2 of 2 complete
-Status: Ready for next phase
-Last activity: 2026-04-19 -- Phase 120 complete (live-node verification 5.4×–8.4× speedup)
+Phase: 119 (chunked-large-files) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 119
+Last activity: 2026-04-19 -- Phase 119 execution started
 
 Progress: [##########] 100%
 
