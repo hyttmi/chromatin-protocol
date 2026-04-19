@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -167,6 +168,27 @@ std::array<uint8_t, 32> build_signing_input(
 /// SHA3-256 hash.
 std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data);
 
+/// Incremental SHA3-256 hasher. RAII wrapper around OQS_SHA3_sha3_256_inc_ctx,
+/// so the Phase 119 streaming-upload path can absorb 16 MiB plaintext chunks
+/// as they are read from disk (instead of concatenating and one-shot hashing,
+/// which would defeat D-11 bounded memory).
+///
+/// Single-use: call absorb() any number of times, then finalize() exactly once.
+/// After finalize() the object is done; subsequent absorb()/finalize() are
+/// undefined behavior and must not be invoked.
+class Sha3Hasher {
+public:
+    Sha3Hasher();
+    ~Sha3Hasher();
+    Sha3Hasher(const Sha3Hasher&) = delete;
+    Sha3Hasher& operator=(const Sha3Hasher&) = delete;
+    void absorb(std::span<const uint8_t> data);
+    std::array<uint8_t, 32> finalize();
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // =============================================================================
 // Tombstone
 // =============================================================================
@@ -202,6 +224,43 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
 }
 
 // =============================================================================
+// Chunked large files (Phase 119) — shared constants and manifest payload
+// =============================================================================
+
+/// Phase 119 limits (D-01, D-14). Public so chunked.cpp and wire.cpp share
+/// one canonical copy and tests can reference them by name.
+inline constexpr uint32_t MANIFEST_VERSION_V1      = 1;
+inline constexpr uint32_t MAX_CHUNKS               = 65536;              // 1 TiB / 16 MiB
+inline constexpr uint32_t CHUNK_SIZE_BYTES_DEFAULT = 16u * 1024u * 1024u;
+inline constexpr uint32_t CHUNK_SIZE_BYTES_MIN     =  1u * 1024u * 1024u;
+inline constexpr uint32_t CHUNK_SIZE_BYTES_MAX     = 256u * 1024u * 1024u;
+
+/// CPAR manifest payload. Wire shape (per D-13):
+///   [CPAR magic:4][FlatBuffer Manifest]
+///
+/// segment_count counts INTER-blob CDAT chunks (one CDAT = 16 MiB plaintext).
+/// Intentionally distinct from envelope.cpp's internal SEGMENT_SIZE, which
+/// counts INTRA-blob AEAD segments (1 MiB) inside one CENV envelope.
+struct ManifestData {
+    uint32_t version = MANIFEST_VERSION_V1;
+    uint32_t chunk_size_bytes = 0;
+    uint32_t segment_count = 0;                    // CHUNK-05 truncation guard
+    uint64_t total_plaintext_bytes = 0;
+    std::array<uint8_t, 32> plaintext_sha3{};      // CHUNK-05 defense-in-depth
+    std::vector<uint8_t> chunk_hashes;             // segment_count * 32 bytes
+    std::string filename;                           // may be empty (stdin case)
+};
+
+/// Encode a ManifestData as [CPAR magic:4][FlatBuffer Manifest]. Hand-coded
+/// to match the blob_vt style; no flatc. Never fails on well-formed input.
+std::vector<uint8_t> encode_manifest_payload(const ManifestData& m);
+
+/// Decode [CPAR magic:4][FlatBuffer Manifest] with the validation invariants
+/// required by P-119-04 / T-119-06. Returns nullopt on any failure. On
+/// success every ManifestData field passes the public caps defined above.
+std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data);
+
+// =============================================================================
 // Type label mapping (Phase 117)
 // =============================================================================
 
@@ -217,19 +276,30 @@ inline constexpr std::array<uint8_t, 4> DELEGATION_MAGIC_CLI = {0xDE, 0x1E, 0x6A
 /// CDAT (chunk data) magic: "CDAT" in ASCII (Phase 119)
 inline constexpr std::array<uint8_t, 4> CDAT_MAGIC = {0x43, 0x44, 0x41, 0x54};
 
+/// CPAR (chunked manifest) magic: "CPAR" in ASCII (Phase 119, CHUNK-02).
+/// Present on the OUTER blob.data (not inside the envelope) so Phase 117
+/// type indexing sees it pre-decrypt (D-13).
+inline constexpr std::array<uint8_t, 4> CPAR_MAGIC = {0x43, 0x50, 0x41, 0x52};
+
 /// Map 4-byte type prefix to human-readable label (per D-18).
-/// Returns: "CENV", "PUBK", "TOMB", "DLGT", "CDAT", or "DATA" for unknown.
+/// Returns: "CENV", "PUBK", "TOMB", "DLGT", "CDAT", "CPAR", or "DATA" for unknown.
 inline const char* type_label(const uint8_t* type) {
     if (std::memcmp(type, CENV_MAGIC.data(), 4) == 0) return "CENV";
     if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return "PUBK";
     if (std::memcmp(type, TOMBSTONE_MAGIC_CLI.data(), 4) == 0) return "TOMB";
     if (std::memcmp(type, DELEGATION_MAGIC_CLI.data(), 4) == 0) return "DLGT";
     if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return "CDAT";
+    if (std::memcmp(type, CPAR_MAGIC.data(), 4) == 0) return "CPAR";
     return "DATA";
 }
 
 /// Check if a type prefix should be hidden in default cdb ls output (per D-13).
 /// Hidden types: PUBK, CDAT, DLGT (defense-in-depth).
+///
+/// CPAR is deliberately NOT hidden: the manifest is the user-facing handle
+/// for a chunked file — the user runs `cdb get <manifest_hash>` to
+/// reassemble, so the manifest must appear in default `cdb ls` output. CDAT
+/// chunks stay hidden because the user never addresses them directly.
 inline bool is_hidden_type(const uint8_t* type) {
     if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return true;
     if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return true;

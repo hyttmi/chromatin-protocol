@@ -1,4 +1,5 @@
 #include "cli/src/commands.h"
+#include "cli/src/chunked.h"
 #include "cli/src/connection.h"
 #include "cli/src/contacts.h"
 #include "cli/src/envelope.h"
@@ -527,6 +528,26 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
                 std::fprintf(stderr, "Error: %s is empty (refusing to upload a 0-byte blob)\n", fp.c_str());
                 return 1;
             }
+            // Phase 119 / D-14: reject files above the hard 1 TiB cap up-front,
+            // before any transfer begins.
+            if (fsize > chunked::MAX_CHUNKED_FILE_SIZE) {
+                std::fprintf(stderr,
+                    "Error: %s too large (%llu bytes, max 1 TiB)\n",
+                    fp.c_str(),
+                    static_cast<unsigned long long>(fsize));
+                return 1;
+            }
+            // Phase 119 / D-02: files in [400 MiB, 1 TiB] take the chunked path.
+            // chunked::put_chunked streams the file, pipelines N × CDAT chunks +
+            // 1 × CPAR manifest over this same Connection, and prints the
+            // manifest hash to stdout.
+            if (fsize >= chunked::CHUNK_THRESHOLD_BYTES) {
+                auto fname = fs::path(fp).filename().string();
+                int rc = chunked::put_chunked(id, ns, recipient_spans, fp,
+                                               fname, ttl, conn, opts);
+                if (rc != 0) ++errors;
+                continue;   // skip the single-blob path for this file
+            }
             if (fsize > MAX_FILE_SIZE) {
                 std::fprintf(stderr, "Error: %s too large (%zu MiB, max ~500 MiB)\n",
                              fp.c_str(), static_cast<size_t>(fsize / (1024 * 1024)));
@@ -829,6 +850,11 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
+    // Phase 119: monotonic rid counter so the inserted ReadRequest (type-prefix
+    // dispatch) doesn't collide with the existing ExistsRequest and Delete rids.
+    // Each send step allocates a fresh rid; the counter is self-documenting.
+    uint32_t rid_counter = 1;
+
     // Pre-check target existence unless --force. Avoids creating redundant
     // tombstones for already-gone / never-existed blobs (backlog 999.2).
     if (!force) {
@@ -836,7 +862,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         std::memcpy(exists_payload.data(), ns.data(), 32);
         std::memcpy(exists_payload.data() + 32, target_hash.data(), 32);
 
-        if (!conn.send(MsgType::ExistsRequest, exists_payload, 1)) {
+        if (!conn.send(MsgType::ExistsRequest, exists_payload, rid_counter++)) {
             std::fprintf(stderr, "Error: failed to send ExistsRequest\n");
             conn.close();
             return 1;
@@ -859,6 +885,80 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         }
     }
 
+    // Phase 119 / CHUNK-04: before deleting, fetch the blob and check its
+    // outer 4-byte type prefix (D-13 outer-magic placement).
+    //
+    //   CDAT -> error: user tried to remove a raw chunk; tell them to
+    //           tombstone the CPAR manifest instead (defense-in-depth).
+    //   CPAR -> envelope-decrypt, decode_manifest_payload, delegate to
+    //           chunked::rm_chunked (which cascades chunks-first-then-manifest
+    //           per D-09).
+    //   other -> existing single-tombstone path continues unchanged.
+    //
+    // Accepted cost: one extra round-trip on every `cdb rm` invocation vs.
+    // adding a new wire message type, which would violate the dumb-DB
+    // principle (D-08). Documented in 119-01-SUMMARY.md.
+    {
+        std::vector<uint8_t> read_payload(64);
+        std::memcpy(read_payload.data(), ns.data(), 32);
+        std::memcpy(read_payload.data() + 32, target_hash.data(), 32);
+        uint32_t read_rid = rid_counter++;
+        if (!conn.send(MsgType::ReadRequest, read_payload, read_rid)) {
+            std::fprintf(stderr, "Error: failed to send ReadRequest\n");
+            conn.close();
+            return 1;
+        }
+        auto read_resp = conn.recv();
+        if (read_resp &&
+            read_resp->type == static_cast<uint8_t>(MsgType::ReadResponse) &&
+            !read_resp->payload.empty() && read_resp->payload[0] == 0x01) {
+            auto blob_bytes = std::span<const uint8_t>(
+                read_resp->payload.data() + 1, read_resp->payload.size() - 1);
+            auto target_blob = decode_blob(blob_bytes);
+            if (target_blob && target_blob->data.size() >= 4) {
+                if (std::memcmp(target_blob->data.data(),
+                                CDAT_MAGIC.data(), 4) == 0) {
+                    std::fprintf(stderr,
+                        "Error: %s is a raw chunk (CDAT). Remove the CPAR "
+                        "manifest instead.\n", hash_hex.c_str());
+                    conn.close();
+                    return 1;
+                }
+                if (std::memcmp(target_blob->data.data(),
+                                CPAR_MAGIC.data(), 4) == 0) {
+                    auto envelope_bytes = std::span<const uint8_t>(
+                        target_blob->data.data() + 4,
+                        target_blob->data.size() - 4);
+                    auto plain = envelope::decrypt(envelope_bytes,
+                                                    id.kem_seckey(),
+                                                    id.kem_pubkey());
+                    if (!plain) {
+                        std::fprintf(stderr,
+                            "Error: cannot decrypt manifest (not a recipient)\n");
+                        conn.close();
+                        return 1;
+                    }
+                    auto manifest = decode_manifest_payload(*plain);
+                    if (!manifest) {
+                        std::fprintf(stderr,
+                            "Error: invalid manifest for %s\n",
+                            hash_hex.c_str());
+                        conn.close();
+                        return 1;
+                    }
+                    std::span<const uint8_t, 32> ns_s(ns.data(), 32);
+                    std::span<const uint8_t, 32> th_s(target_hash.data(), 32);
+                    int rc = chunked::rm_chunked(id, ns_s, *manifest, th_s,
+                                                  conn, opts);
+                    conn.close();
+                    return rc;
+                }
+            }
+        }
+        // Non-CPAR / non-CDAT target, or the pre-read failed in a recoverable
+        // way. Fall through to the existing single-tombstone path.
+    }
+
     // Build and send tombstone
     auto tombstone_data = make_tombstone_data(
         std::span<const uint8_t, 32>(target_hash.data(), 32));
@@ -878,7 +978,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
 
     auto flatbuf = encode_blob(blob);
 
-    if (!conn.send(MsgType::Delete, flatbuf, 2)) {
+    if (!conn.send(MsgType::Delete, flatbuf, rid_counter++)) {
         std::fprintf(stderr, "Error: failed to send Delete\n");
         conn.close();
         return 1;
@@ -1137,8 +1237,9 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             else if (type_filter == "TOMB") filter_bytes = TOMBSTONE_MAGIC_CLI;
             else if (type_filter == "DLGT") filter_bytes = DELEGATION_MAGIC_CLI;
             else if (type_filter == "CDAT") filter_bytes = CDAT_MAGIC;
+            else if (type_filter == "CPAR") filter_bytes = CPAR_MAGIC;
             else {
-                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT\n",
+                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT, CPAR\n",
                              type_filter.c_str());
                 return 1;
             }
