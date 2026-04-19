@@ -443,3 +443,23 @@ TEST_CASE("chunked: refuse_if_exists permits fresh path in both modes", "[chunke
     REQUIRE(chunked::refuse_if_exists(tmp.string(), /*force=*/false));
     REQUIRE(chunked::refuse_if_exists(tmp.string(), /*force=*/true));
 }
+
+// =============================================================================
+// Plan 02 Task 2 — classify_blob_data dispatch helper
+// =============================================================================
+
+TEST_CASE("chunked: classify_blob_data distinguishes CPAR/CDAT/Other",
+          "[chunked]") {
+    std::vector<uint8_t> cpar = {0x43, 0x50, 0x41, 0x52, 0x00, 0x00};
+    std::vector<uint8_t> cdat = {0x43, 0x44, 0x41, 0x54, 0x00, 0x00};
+    std::vector<uint8_t> cenv = {0x43, 0x45, 0x4E, 0x56, 0x01, 0x02};
+    std::vector<uint8_t> short_bytes = {0x43};
+    std::vector<uint8_t> empty;
+
+    REQUIRE(chunked::classify_blob_data(cpar) == chunked::GetDispatch::CPAR);
+    REQUIRE(chunked::classify_blob_data(cdat) == chunked::GetDispatch::CDAT);
+    REQUIRE(chunked::classify_blob_data(cenv) == chunked::GetDispatch::Other);
+    REQUIRE(chunked::classify_blob_data(short_bytes) ==
+            chunked::GetDispatch::Other);
+    REQUIRE(chunked::classify_blob_data(empty) == chunked::GetDispatch::Other);
+}

@@ -777,6 +777,68 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
             continue;
         }
 
+        // Phase 119 / CHUNK-03: type-prefix dispatch before envelope::decrypt.
+        // Per D-13 the outer CDAT/CPAR magic lives on blob.data BEFORE the
+        // CENV envelope. CDAT -> error (raw chunks are never user-facing).
+        // CPAR -> envelope-decrypt the manifest and hand off to get_chunked,
+        // reusing THIS Connection (one PQ handshake per cdb get). Other ->
+        // fall through to the existing single-blob path unchanged.
+        switch (chunked::classify_blob_data(blob->data)) {
+            case chunked::GetDispatch::CDAT: {
+                std::fprintf(stderr,
+                    "Error: %s is a raw chunk (CDAT) — fetch the CPAR manifest instead\n",
+                    hash_hex.c_str());
+                ++errors;
+                continue;
+            }
+            case chunked::GetDispatch::CPAR: {
+                if (to_stdout) {
+                    // Streaming a multi-GiB plaintext to stdout bypasses the
+                    // plaintext_sha3 integrity gate. YAGNI for Phase 119 per
+                    // 119-CONTEXT Deferred Ideas. Future phase can add a
+                    // tee-to-stdout path that still integrity-verifies.
+                    std::fprintf(stderr,
+                        "Error: cdb get --stdout is not supported for chunked manifests (%s)\n",
+                        hash_hex.c_str());
+                    ++errors;
+                    continue;
+                }
+                auto envelope_bytes = std::span<const uint8_t>(
+                    blob->data.data() + 4, blob->data.size() - 4);
+                auto manifest_plain = envelope::decrypt(envelope_bytes,
+                    id.kem_seckey(), id.kem_pubkey());
+                if (!manifest_plain) {
+                    std::fprintf(stderr,
+                        "%s: cannot decrypt manifest (not a recipient)\n",
+                        hash_hex.c_str());
+                    ++errors;
+                    continue;
+                }
+                auto manifest = decode_manifest_payload(*manifest_plain);
+                if (!manifest) {
+                    std::fprintf(stderr,
+                        "Error: %s has an invalid CPAR manifest\n",
+                        hash_hex.c_str());
+                    ++errors;
+                    continue;
+                }
+                std::string out_filename = manifest->filename.empty()
+                                             ? hash_hex : manifest->filename;
+                auto out_path = output_dir.empty()
+                                  ? out_filename
+                                  : output_dir + "/" + out_filename;
+                int rc = chunked::get_chunked(
+                    id,
+                    std::span<const uint8_t, 32>(ns.data(), 32),
+                    *manifest, out_path, force_overwrite, conn, opts);
+                if (rc != 0) ++errors;
+                continue;
+            }
+            case chunked::GetDispatch::Other:
+                // Fall through to the existing envelope::is_envelope branch.
+                break;
+        }
+
         std::vector<uint8_t> plaintext;
         if (envelope::is_envelope(blob->data)) {
             auto decrypted = envelope::decrypt(blob->data, id.kem_seckey(), id.kem_pubkey());
