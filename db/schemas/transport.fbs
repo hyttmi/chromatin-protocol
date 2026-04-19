@@ -10,37 +10,27 @@ enum TransportMsgType : byte {
     Pong = 6,
     Goodbye = 7,
     Data = 8,
-    // Phase 5: Sync protocol
     SyncRequest = 9,
     SyncAccept = 10,
     NamespaceList = 11,
     BlobRequest = 12,
     BlobTransfer = 13,
     SyncComplete = 14,
-    // Phase 7: Peer exchange
     PeerListRequest = 15,
     PeerListResponse = 16,
-    // Phase 12: Blob deletion
     Delete = 17,
     DeleteAck = 18,
-    // Phase 14: Pub/Sub notifications
     Subscribe = 19,
     Unsubscribe = 20,
     Notification = 21,
-    // Phase 16: Storage capacity signaling
     StorageFull = 22,
-    // Phase 25: Transport optimization
     TrustedHello = 23,
     PQRequired = 24,
-    // Phase 35: Namespace quota signaling
     QuotaExceeded = 25,
-    // Phase 39: Set reconciliation
     ReconcileInit = 26,
     ReconcileRanges = 27,
     ReconcileItems = 28,
-    // Phase 40: Sync rate limiting
     SyncRejected = 29,
-    // Phase 57: Client protocol extensions
     WriteAck = 30,
     ReadRequest = 31,
     ReadResponse = 32,
@@ -48,40 +38,32 @@ enum TransportMsgType : byte {
     ListResponse = 34,
     StatsRequest = 35,
     StatsResponse = 36,
-    // Phase 63: Query extensions
     ExistsRequest = 37,
     ExistsResponse = 38,
     NodeInfoRequest = 39,
     NodeInfoResponse = 40,
-    // Phase 65: Node-level queries
     NamespaceListRequest = 41,
     NamespaceListResponse = 42,
     StorageStatusRequest = 43,
     StorageStatusResponse = 44,
     NamespaceStatsRequest = 45,
     NamespaceStatsResponse = 46,
-    // Phase 66: Blob-level queries
     MetadataRequest = 47,
     MetadataResponse = 48,
     BatchExistsRequest = 49,
     BatchExistsResponse = 50,
     DelegationListRequest = 51,
     DelegationListResponse = 52,
-    // Phase 67: Batch/range queries
     BatchReadRequest = 53,
     BatchReadResponse = 54,
     PeerInfoRequest = 55,
     PeerInfoResponse = 56,
     TimeRangeRequest = 57,
     TimeRangeResponse = 58,
-    // Phase 79: Push notifications
     BlobNotify = 59,
-    // Phase 80: Targeted blob fetch
     BlobFetch = 60,
     BlobFetchResponse = 61,
-    // Phase 86: Namespace filtering
     SyncNamespaceAnnounce = 62,
-    // Phase 999.2: Error response for malformed client requests
     ErrorResponse = 63
 }
 
