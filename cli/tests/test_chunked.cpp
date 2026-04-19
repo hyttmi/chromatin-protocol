@@ -1,10 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
+#include "cli/src/chunked.h"
+#include "cli/src/envelope.h"
+#include "cli/src/identity.h"
 #include "cli/src/wire.h"
 
 #include <flatbuffers/flatbuffers.h>
 
 #include <array>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -181,4 +187,94 @@ TEST_CASE("chunked: type_label returns CDAT and is_hidden_type returns true for 
     const uint8_t cdat[4] = {0x43, 0x44, 0x41, 0x54};
     REQUIRE(std::string(type_label(cdat)) == "CDAT");
     REQUIRE(is_hidden_type(cdat));
+}
+
+// =============================================================================
+// Task 2 tests — chunked.h free functions + outer-magic placement
+// =============================================================================
+
+TEST_CASE("chunked: outer-magic placement on blob.data (CDAT)", "[chunked]") {
+    // D-13: blob.data = [CDAT magic:4][CENV envelope(raw plaintext)].
+    // Test without network: build an envelope locally, prepend CDAT, verify
+    // the outer layout is exactly what the planner locked in.
+    auto id = Identity::generate();
+    std::vector<std::span<const uint8_t>> recipients;
+    auto kem_pk = id.kem_pubkey();
+    recipients.emplace_back(kem_pk);
+
+    std::vector<uint8_t> plaintext(32, 0xAB);
+    auto cenv = envelope::encrypt(plaintext, recipients);
+    REQUIRE(cenv.size() >= 4);
+    REQUIRE(envelope::is_envelope(cenv));
+
+    std::vector<uint8_t> blob_data;
+    blob_data.reserve(4 + cenv.size());
+    blob_data.insert(blob_data.end(), CDAT_MAGIC.begin(), CDAT_MAGIC.end());
+    blob_data.insert(blob_data.end(), cenv.begin(), cenv.end());
+
+    // Outer magic is CDAT, not CENV — Phase 117 type index sees a chunk.
+    REQUIRE(blob_data.size() >= 4);
+    REQUIRE(std::memcmp(blob_data.data(), CDAT_MAGIC.data(), 4) == 0);
+    // Bytes [4..) are the CENV envelope.
+    auto inner = std::span<const uint8_t>(blob_data.data() + 4,
+                                          blob_data.size() - 4);
+    REQUIRE(envelope::is_envelope(inner));
+}
+
+TEST_CASE("chunked: read_next_chunk reads full then short then EOF", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("cdb_chunked_test_" + std::to_string(::getpid()) + ".bin");
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+
+    // Write 45 bytes with a 16-byte "chunk" size so reads land at 16/16/13.
+    constexpr size_t CHUNK = 16;
+    constexpr size_t TOTAL = 45;
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        REQUIRE(out);
+        std::vector<uint8_t> data(TOTAL);
+        for (size_t i = 0; i < TOTAL; ++i) data[i] = static_cast<uint8_t>(i);
+        out.write(reinterpret_cast<const char*>(data.data()),
+                  static_cast<std::streamsize>(TOTAL));
+    }
+
+    std::ifstream f(tmp, std::ios::binary);
+    REQUIRE(f);
+    std::vector<uint8_t> buf;
+    REQUIRE(chunked::read_next_chunk(f, buf, CHUNK) == CHUNK);
+    REQUIRE(chunked::read_next_chunk(f, buf, CHUNK) == CHUNK);
+    REQUIRE(chunked::read_next_chunk(f, buf, CHUNK) == 13);
+    REQUIRE(chunked::read_next_chunk(f, buf, CHUNK) == 0);
+}
+
+TEST_CASE("chunked: plan_tombstone_targets orders chunks first, manifest last",
+          "[chunked]") {
+    ManifestData m;
+    m.version = MANIFEST_VERSION_V1;
+    m.chunk_size_bytes = CHUNK_SIZE_BYTES_DEFAULT;
+    m.segment_count = 3;
+    m.total_plaintext_bytes = 1024;
+    for (size_t i = 0; i < 32; ++i) m.plaintext_sha3[i] = 0;
+    m.chunk_hashes.resize(3 * 32);
+    // chunk 0 hash is all 0x10, chunk 1 is 0x11, chunk 2 is 0x12
+    for (size_t i = 0; i < 32; ++i) m.chunk_hashes[0 * 32 + i]  = 0x10;
+    for (size_t i = 0; i < 32; ++i) m.chunk_hashes[1 * 32 + i]  = 0x11;
+    for (size_t i = 0; i < 32; ++i) m.chunk_hashes[2 * 32 + i]  = 0x12;
+    std::array<uint8_t, 32> manifest_hash{};
+    for (size_t i = 0; i < 32; ++i) manifest_hash[i] = 0x99;
+
+    auto plan = chunked::plan_tombstone_targets(m,
+        std::span<const uint8_t, 32>(manifest_hash.data(), 32));
+
+    REQUIRE(plan.size() == 4);
+    // chunk 0 first
+    for (size_t i = 0; i < 32; ++i) REQUIRE(plan[0][i] == 0x10);
+    for (size_t i = 0; i < 32; ++i) REQUIRE(plan[1][i] == 0x11);
+    for (size_t i = 0; i < 32; ++i) REQUIRE(plan[2][i] == 0x12);
+    // manifest last
+    for (size_t i = 0; i < 32; ++i) REQUIRE(plan[3][i] == 0x99);
 }
