@@ -171,7 +171,8 @@ int put_chunked(
 
     // Phase 120-02 two-phase pump.
     // Phase A: greedy-fill up to Connection::kPipelineDepth.
-    // Phase B: drain one WriteAck via conn.recv() in arrival order, map
+    // Phase B: drain one WriteAck via conn.recv_next() in arrival order
+    //          (CR-01: decrements in_flight_), map
     //          the rid back to chunk_index, copy the final blob_hash into
     //          chunk_hashes at [chunk_index * 32 .. *32 + 32).
     uint32_t rid = 1;
@@ -239,8 +240,10 @@ int put_chunked(
             continue;  // keep filling before draining
         }
 
-        // Phase B: drain one WriteAck.
-        auto resp = conn.recv();
+        // Phase B: drain one WriteAck. recv_next() decrements in_flight_
+        // (CR-01 fix; plain recv() leaks the counter and stalls at 8
+        // in-flight). See 119-REVIEW.md §CR-01.
+        auto resp = conn.recv_next();
         if (!resp) {
             std::fprintf(stderr,
                 "Error: connection lost during chunked upload of %s\n",
