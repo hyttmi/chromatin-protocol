@@ -240,6 +240,7 @@ if(BUILD_TESTING)
     tests/peer/test_metrics_endpoint.cpp
     tests/peer/test_blob_push.cpp
     tests/storage/test_storage.cpp
+    tests/storage/test_storage_concurrency_tsan.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
     tests/wire/test_codec.cpp
