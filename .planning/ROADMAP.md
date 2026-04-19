@@ -13,7 +13,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [x] **Phase 116: CLI Rename + Contact Groups** - Rename executable to `cdb`, implement contact group CRUD with SQLite schema versioning (completed 2026-04-16)
 - [x] **Phase 117: Blob Type Indexing + ls Filtering** - Node indexes blob types on ingest, ListRequest type filter, `cdb ls` hides infrastructure blobs (completed 2026-04-16)
 - [x] **Phase 118: Configurable Constants + Peer Management** - Move 5 hardcoded constants to config.json with SIGHUP reload, add peer management CLI (completed 2026-04-16)
-- [ ] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention
+- [x] **Phase 119: Chunked Large Files** - Upload/download files >500 MiB via CDAT chunks + CPAR manifest with envelope v2 truncation prevention (completed 2026-04-19)
 - [x] **Phase 120: Request Pipelining** - Multi-blob pipelined downloads over single PQ connection (completed 2026-04-19)
 - [ ] **Phase 121: Documentation** - PROTOCOL.md, README.md, cli/README.md updated with all v4.1.0 features
 - [ ] **Phase 122: Verification** - Unit tests for all new features + E2E verification against live node at 192.168.1.73
@@ -77,7 +77,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 119-01-PLAN.md — [To be planned]
-- [ ] 119-02-PLAN.md — [To be planned]
+- [x] 119-02-PLAN.md — [To be planned]
 
 ### Phase 120: Request Pipelining
 **Goal**: Multi-blob downloads (and uploads) complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
@@ -136,7 +136,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
-| 119. Chunked Large Files | 1/2 | In Progress|  |
+| 119. Chunked Large Files | 2/2 | Complete   | 2026-04-19 |
 | 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
@@ -241,7 +241,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Current behaviour (observed 2026-04-18):
 
