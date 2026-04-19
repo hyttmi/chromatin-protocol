@@ -582,10 +582,14 @@ int get_chunked(
     // Returns true if the retry was successfully queued; false if the per-
     // chunk budget is exhausted (caller must unlink + error).
     auto retry_chunk = [&](uint32_t chunk_idx) -> bool {
-        if (attempts[chunk_idx] >= RETRY_ATTEMPTS - 1) return false;
-        ++attempts[chunk_idx];
+        // D-15: up to RETRY_ATTEMPTS (=3) retries per chunk with backoff
+        // 250/1000/4000 ms. Post-index (not pre-increment) so the first
+        // retry uses RETRY_BACKOFF_MS[0]=250ms — matches put_chunked
+        // (cli/src/chunked.cpp:215-217). See 119-REVIEW.md §WR-02.
+        if (attempts[chunk_idx] >= RETRY_ATTEMPTS) return false;
         std::this_thread::sleep_for(
             std::chrono::milliseconds(RETRY_BACKOFF_MS[attempts[chunk_idx]]));
+        ++attempts[chunk_idx];
         auto r = send_chunk_read(chunk_idx);
         if (!r) return false;
         rid_to_chunk_index[*r] = chunk_idx;
