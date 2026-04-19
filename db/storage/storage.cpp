@@ -130,6 +130,10 @@ struct Storage::Impl {
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
     std::string data_dir_;          // Stored for compact() reopen
+    // Thread-confinement assertion (Phase 121). Captures the owner tid on
+    // FIRST call to any public Storage method (lazy; Storage is constructed
+    // before ioc.run() on a different thread than the eventual owner).
+    chromatindb::storage::ThreadOwner thread_owner_{};
 
     Impl(const std::string& data_dir, crypto::SecureBytes master_key, Clock clk)
         : clock(std::move(clk)), data_dir_(data_dir) {
@@ -327,6 +331,11 @@ Storage::Storage(const std::string& data_dir, Clock clock)
           crypto::load_or_generate_master_key(data_dir),
           std::move(clock))) {
     rebuild_quota_aggregates();
+    // rebuild_quota_aggregates() just installed the construction thread as
+    // the owner. Clear it so the eventual io_context thread can install
+    // itself as owner on its first public-method call. This is the D-09
+    // "capture lazily on FIRST call after startup" carve-out.
+    impl_->thread_owner_.reset();
 }
 
 Storage::~Storage() = default;
@@ -334,6 +343,7 @@ Storage::Storage(Storage&& other) noexcept = default;
 Storage& Storage::operator=(Storage&& other) noexcept = default;
 
 StoreResult Storage::store_blob(const wire::BlobData& blob) {
+    STORAGE_THREAD_CHECK();
     auto encoded = wire::encode_blob(blob);
     auto hash = wire::blob_hash(encoded);
     return store_blob(blob, hash, encoded);
@@ -342,6 +352,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob) {
 StoreResult Storage::store_blob(const wire::BlobData& blob,
                                 const std::array<uint8_t, 32>& precomputed_hash,
                                 std::span<const uint8_t> precomputed_encoded) {
+    STORAGE_THREAD_CHECK();
     return store_blob(blob, precomputed_hash, precomputed_encoded, 0, 0, 0);
 }
 
@@ -351,6 +362,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                                 uint64_t max_storage_bytes,
                                 uint64_t quota_byte_limit,
                                 uint64_t quota_count_limit) {
+    STORAGE_THREAD_CHECK();
     try {
         auto blob_key = make_blob_key(blob.namespace_id.data(), precomputed_hash.data());
         auto key_slice = to_slice(blob_key);
@@ -521,6 +533,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
     uint64_t max_storage_bytes,
     uint64_t quota_byte_limit,
     uint64_t quota_count_limit) {
+    STORAGE_THREAD_CHECK();
     std::vector<StoreResult> results(blobs.size());
     if (blobs.empty()) return results;
 
@@ -752,6 +765,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
 std::optional<wire::BlobData> Storage::get_blob(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> hash) {
+    STORAGE_THREAD_CHECK();
     try {
         auto blob_key = make_blob_key(ns.data(), hash.data());
         auto txn = impl_->env.start_read();
@@ -780,6 +794,7 @@ std::optional<wire::BlobData> Storage::get_blob(
 bool Storage::has_blob(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> hash) {
+    STORAGE_THREAD_CHECK();
     try {
         auto blob_key = make_blob_key(ns.data(), hash.data());
         auto txn = impl_->env.start_read();
@@ -795,6 +810,7 @@ bool Storage::has_blob(
 std::vector<wire::BlobData> Storage::get_blobs_by_seq(
     std::span<const uint8_t, 32> ns,
     uint64_t since_seq) {
+    STORAGE_THREAD_CHECK();
     std::vector<wire::BlobData> results;
 
     try {
@@ -857,6 +873,7 @@ std::vector<BlobRef> Storage::get_blob_refs_since(
     std::span<const uint8_t, 32> ns,
     uint64_t since_seq,
     uint32_t max_count) {
+    STORAGE_THREAD_CHECK();
     std::vector<BlobRef> results;
 
     try {
@@ -914,6 +931,7 @@ std::vector<BlobRef> Storage::get_blob_refs_since(
 
 std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
     std::span<const uint8_t, 32> ns) {
+    STORAGE_THREAD_CHECK();
     std::vector<std::array<uint8_t, 32>> hashes;
 
     try {
@@ -956,6 +974,7 @@ std::vector<std::array<uint8_t, 32>> Storage::get_hashes_by_namespace(
 }
 
 std::vector<NamespaceInfo> Storage::list_namespaces() {
+    STORAGE_THREAD_CHECK();
     std::vector<NamespaceInfo> result;
 
     try {
@@ -1047,6 +1066,7 @@ std::vector<NamespaceInfo> Storage::list_namespaces() {
 bool Storage::delete_blob_data(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> blob_hash) {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_write();
         auto blob_key = make_blob_key(ns.data(), blob_hash.data());
@@ -1174,6 +1194,7 @@ bool Storage::delete_blob_data(
 bool Storage::has_valid_delegation(
     std::span<const uint8_t, 32> namespace_id,
     std::span<const uint8_t> delegate_pubkey) {
+    STORAGE_THREAD_CHECK();
     try {
         auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
         auto deleg_key = make_blob_key(namespace_id.data(), delegate_pk_hash.data());
@@ -1191,6 +1212,7 @@ bool Storage::has_valid_delegation(
 bool Storage::has_tombstone_for(
     std::span<const uint8_t, 32> ns,
     std::span<const uint8_t, 32> target_blob_hash) {
+    STORAGE_THREAD_CHECK();
     try {
         auto ts_key = make_blob_key(ns.data(), target_blob_hash.data());
         auto txn = impl_->env.start_read();
@@ -1204,6 +1226,7 @@ bool Storage::has_tombstone_for(
 }
 
 uint64_t Storage::count_tombstones() const {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_read();
         return txn.get_map_stat(impl_->tombstone_map).ms_entries;
@@ -1214,6 +1237,7 @@ uint64_t Storage::count_tombstones() const {
 }
 
 uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) const {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_read();
         auto cursor = txn.open_cursor(impl_->delegation_map);
@@ -1247,6 +1271,7 @@ uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) c
 }
 
 std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 32> namespace_id) const {
+    STORAGE_THREAD_CHECK();
     std::vector<DelegationEntry> entries;
     try {
         auto txn = impl_->env.start_read();
@@ -1285,6 +1310,7 @@ std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 
 }
 
 size_t Storage::run_expiry_scan() {
+    STORAGE_THREAD_CHECK();
     size_t purged = 0;
 
     try {
@@ -1396,6 +1422,7 @@ size_t Storage::run_expiry_scan() {
 }
 
 std::optional<uint64_t> Storage::get_earliest_expiry() const {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_read();
         auto cursor = txn.open_cursor(impl_->expiry_map);
@@ -1414,6 +1441,7 @@ std::optional<uint64_t> Storage::get_earliest_expiry() const {
 }
 
 uint64_t Storage::used_bytes() const {
+    STORAGE_THREAD_CHECK();
     // Returns mmap file geometry (mi_geo.current), NOT actual data volume.
     // Freed pages are reused internally by libmdbx's B-tree garbage collector.
     // The file only physically shrinks when freed space exceeds shrink_threshold
@@ -1423,6 +1451,7 @@ uint64_t Storage::used_bytes() const {
 }
 
 uint64_t Storage::used_data_bytes() const {
+    STORAGE_THREAD_CHECK();
     auto info = impl_->env.get_info();
     // mi_last_pgno is the last used page number (0-based).
     // Multiply by page size to get actual B-tree data occupancy.
@@ -1430,6 +1459,7 @@ uint64_t Storage::used_data_bytes() const {
 }
 
 void Storage::integrity_scan() {
+    STORAGE_THREAD_CHECK();
     try {
         // Collect stats in a scoped read transaction, then release it
         // before calling list_namespaces() (which opens its own read txn).
@@ -1477,6 +1507,7 @@ void Storage::integrity_scan() {
 std::optional<SyncCursor> Storage::get_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
     std::span<const uint8_t, 32> namespace_id) {
+    STORAGE_THREAD_CHECK();
     try {
         auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
         auto txn = impl_->env.start_read();
@@ -1494,6 +1525,7 @@ void Storage::set_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
     std::span<const uint8_t, 32> namespace_id,
     const SyncCursor& cursor) {
+    STORAGE_THREAD_CHECK();
     try {
         auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
         auto val = encode_cursor_value(cursor);
@@ -1509,6 +1541,7 @@ void Storage::set_sync_cursor(
 void Storage::delete_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
     std::span<const uint8_t, 32> namespace_id) {
+    STORAGE_THREAD_CHECK();
     try {
         auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
         auto txn = impl_->env.start_write();
@@ -1524,6 +1557,7 @@ void Storage::delete_sync_cursor(
 }
 
 size_t Storage::delete_peer_cursors(std::span<const uint8_t, 32> peer_hash) {
+    STORAGE_THREAD_CHECK();
     size_t deleted = 0;
     try {
         // Collect keys to delete first, then erase them
@@ -1562,6 +1596,7 @@ size_t Storage::delete_peer_cursors(std::span<const uint8_t, 32> peer_hash) {
 }
 
 size_t Storage::reset_all_round_counters() {
+    STORAGE_THREAD_CHECK();
     size_t count = 0;
     try {
         auto txn = impl_->env.start_write();
@@ -1592,6 +1627,7 @@ size_t Storage::reset_all_round_counters() {
 }
 
 std::vector<std::array<uint8_t, 32>> Storage::list_cursor_peers() {
+    STORAGE_THREAD_CHECK();
     std::vector<std::array<uint8_t, 32>> peers;
     try {
         auto txn = impl_->env.start_read();
@@ -1624,6 +1660,7 @@ std::vector<std::array<uint8_t, 32>> Storage::list_cursor_peers() {
 
 size_t Storage::cleanup_stale_cursors(
     const std::vector<std::array<uint8_t, 32>>& known_peer_hashes) {
+    STORAGE_THREAD_CHECK();
     // Build a set for O(1) lookups
     std::set<std::array<uint8_t, 32>> known_set(
         known_peer_hashes.begin(), known_peer_hashes.end());
@@ -1644,6 +1681,7 @@ size_t Storage::cleanup_stale_cursors(
 
 NamespaceQuota Storage::get_namespace_quota(
     std::span<const uint8_t, 32> ns) {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_read();
         auto ns_slice = mdbx::slice(ns.data(), 32);
@@ -1659,6 +1697,7 @@ NamespaceQuota Storage::get_namespace_quota(
 }
 
 void Storage::rebuild_quota_aggregates() {
+    STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_write();
 
@@ -1717,6 +1756,7 @@ void Storage::rebuild_quota_aggregates() {
 // =============================================================================
 
 CompactResult Storage::compact() {
+    STORAGE_THREAD_CHECK();
     CompactResult result;
     auto start = std::chrono::steady_clock::now();
 
@@ -1778,6 +1818,7 @@ CompactResult Storage::compact() {
 // =============================================================================
 
 bool Storage::backup(const std::string& dest_path) {
+    STORAGE_THREAD_CHECK();
     try {
         // Live compacted copy to destination — does NOT block concurrent reads/writes
         impl_->env.copy(dest_path, true);

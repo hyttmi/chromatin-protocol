@@ -82,10 +82,17 @@ public:
         return expected == cur;
     }
 
-    /// Test-only: reset the owner to the "no owner" sentinel.
-    void reset_for_test() noexcept {
+    /// Reset the owner to the "no owner" sentinel. Used by:
+    ///   - Unit tests, to exercise re-capture semantics without reconstruction.
+    ///   - The Storage constructor, to forget the thread that ran the startup
+    ///     `rebuild_quota_aggregates()` path so the eventual io_context thread
+    ///     can install itself as owner on its first real call.
+    void reset() noexcept {
         owner_.store(std::thread::id{}, std::memory_order_release);
     }
+
+    /// Test-only alias kept for backwards-compat with existing call sites.
+    void reset_for_test() noexcept { reset(); }
 
     /// Test-only: inspect the current owner (default-constructed id
     /// means no owner has been captured yet).

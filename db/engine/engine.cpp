@@ -190,6 +190,10 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     auto derived_ns = co_await crypto::offload(pool_, [&blob]() {
         return crypto::sha3_256(blob.pubkey);
     });
+    // CONC-04 (Phase 121): offload() resumes on the thread_pool worker.
+    // Storage is thread-confined (see db/storage/thread_check.h); bounce back
+    // to the caller's executor (io_context) before touching it.
+    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
     bool is_owner = (derived_ns == blob.namespace_id);
     bool is_delegate = false;
 
@@ -246,6 +250,8 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     auto content_hash = co_await crypto::offload(pool_, [&encoded]() {
         return wire::blob_hash(encoded);
     });
+    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     // Dedup check on event loop: skip expensive ML-DSA-87 verification for already-stored blobs.
     // Duplicates pay only ONE thread pool round-trip (blob_hash), not two.
@@ -268,6 +274,8 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         bool ok = crypto::Signer::verify(si, blob.signature, blob.pubkey);
         return std::pair{si, ok};
     });
+    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     if (!verify_ok) {
         spdlog::warn("Ingest rejected: invalid signature (ns {:02x}{:02x}...)",
@@ -397,6 +405,8 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
     auto derived_ns = co_await crypto::offload(pool_, [&delete_request]() {
         return crypto::sha3_256(delete_request.pubkey);
     });
+    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
     if (derived_ns != delete_request.namespace_id) {
         co_return IngestResult::rejection(IngestError::namespace_mismatch,
             "SHA3-256(pubkey) != namespace_id");
@@ -412,6 +422,8 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
                                               delete_request.pubkey);
             return std::pair{si, ok};
         });
+    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     if (!verify_ok) {
         co_return IngestResult::rejection(IngestError::invalid_signature,

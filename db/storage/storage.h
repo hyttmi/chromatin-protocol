@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "db/crypto/secure_bytes.h"
+#include "db/storage/thread_check.h"
 #include "db/wire/codec.h"
 
 namespace chromatindb::storage {
