@@ -74,10 +74,11 @@ Plans:
   3. Download of a CPAR manifest automatically reassembles all referenced chunks into the original file
   4. `cdb rm` of a manifest blob deletes the manifest and all associated CDAT chunk blobs
   5. Envelope format v2 includes segment count, preventing a truncation attack where an attacker drops trailing chunks
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
-- [x] 119-01-PLAN.md — [To be planned]
-- [x] 119-02-PLAN.md — [To be planned]
+- [x] 119-01-PLAN.md — Chunked upload (put_chunked), cascade delete (rm_chunked), manifest codec, Sha3Hasher, CPAR magic, cmd::put/cmd::rm dispatch
+- [x] 119-02-PLAN.md — Chunked download (get_chunked), cmd::get dispatch, post-reassembly SHA3 verify
+- [ ] 119-03-PLAN.md — Gap closure: CR-01 in_flight leak (pump_recv_any + recv_next + 5 call-site migrations) + WR-02/WR-03/IN-03 + live-node E2E gate
 
 ### Phase 120: Request Pipelining
 **Goal**: Multi-blob downloads (and uploads) complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
