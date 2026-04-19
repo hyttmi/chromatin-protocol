@@ -20,7 +20,7 @@ CLI:
 - ~~Rename executable to `cdb` (primary name)~~ — Validated in Phase 116
 - ~~Contact groups — `cdb put --share @team`~~ — Validated in Phase 116
 - ~~Contact import — `cdb contact import team.json` for bulk onboarding~~ — Validated in Phase 116
-- Chunked large files — >500 MiB via CDAT/CPAR multi-blob split
+- ~~Chunked large files — >500 MiB via CDAT/CPAR multi-blob split~~ — Validated in Phase 119
 - Request pipelining — parallel downloads over single PQ connection
 
 Node:
@@ -232,7 +232,7 @@ Documentation:
 - [ ] Rename CLI executable to `cdb` — v4.1.0
 - [ ] Contact groups for batch sharing — v4.1.0
 - [ ] Contact import for bulk onboarding — v4.1.0
-- [ ] Chunked large file support (>500 MiB via CDAT/CPAR multi-blob) — v4.1.0
+- [x] Chunked large file support (>500 MiB via CDAT/CPAR multi-blob) — v4.1.0 (validated in Phase 119)
 - [ ] Request pipelining (parallel downloads) — v4.1.0
 - [ ] Generic blob type indexing (first 4 bytes, ListRequest filter) — v4.1.0
 - [ ] Configurable node sync/peer constants (10 hardcoded values to config.json) — v4.1.0
