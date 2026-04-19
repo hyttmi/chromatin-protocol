@@ -104,6 +104,28 @@ Two concrete capabilities delivered:
   this phase. If the pattern becomes a real problem in practice, add a GC
   tool as its own phase (tracked in Deferred Ideas below).
 
+### Wire format — magic placement (post-research)
+
+- **D-13:** Magic is **outer**. `blob.data = [CDAT/CPAR magic:4][CENV envelope bytes]`
+  for both chunk and manifest blobs. The 4-byte prefix is in the clear so the
+  node can type-index it (consistent with Phase 117 / CENV convention). Node
+  still cannot read payload contents — the magic only identifies container
+  type, not data. Adds 4 bytes of wire overhead per blob — negligible.
+
+### File size ceiling and retry policy (post-research)
+
+- **D-14:** Hard cap = **1 TiB per logical file**. At 16 MiB chunks that's up to
+  65,536 chunks, producing a manifest of ~2 MiB chunk_hashes (comfortably under
+  the 500 MiB per-blob cap). CLI rejects files > 1 TiB at `stat()` time with a
+  clear error before any transfer begins.
+- **D-15:** Per-chunk retry = **up to 3 attempts with exponential backoff**
+  (e.g. 0.25 s / 1 s / 4 s) on transient network/transport errors. Each retry
+  signs a fresh chunk (ML-DSA-87 non-deterministic → new hash) so the manifest
+  builder must bind rid → final hash at the drain site, not at send time. On
+  final failure after 3 attempts, the whole put/get fails; chunks-first-then-
+  manifest ordering (D-09) makes re-running `cdb rm <manifest>` idempotent and
+  re-running `cdb put` is safe (produces new chunks, new manifest).
+
 ### Carried forward from Phase 120 (pipelining)
 
 - Pipelining depth = 8 (PIPE-03). Chunk upload uses `Connection::send_async`
