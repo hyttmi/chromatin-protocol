@@ -6,6 +6,9 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -277,4 +280,186 @@ TEST_CASE("chunked: plan_tombstone_targets orders chunks first, manifest last",
     for (size_t i = 0; i < 32; ++i) REQUIRE(plan[2][i] == 0x12);
     // manifest last
     for (size_t i = 0; i < 32; ++i) REQUIRE(plan[3][i] == 0x99);
+}
+
+// =============================================================================
+// Plan 02 Task 1 — get_chunked pure helpers (plan_chunk_read_targets,
+// verify_plaintext_sha3, refuse_if_exists) and out-of-order pwrite semantics
+// =============================================================================
+
+TEST_CASE("chunked: plan_chunk_read_targets preserves chunk_index order", "[chunked]") {
+    auto m = make_valid_manifest(3);
+    // set hashes to distinctive patterns so ordering is observable:
+    // chunk 0 => 0x00 XX, chunk 1 => 0x10 XX, chunk 2 => 0x20 XX
+    for (size_t i = 0; i < m.chunk_hashes.size(); ++i) {
+        m.chunk_hashes[i] = static_cast<uint8_t>((i / 32) * 0x10 + (i & 0x0F));
+    }
+    auto targets = chunked::plan_chunk_read_targets(m);
+    REQUIRE(targets.size() == 3);
+    // chunk 0's first byte = 0x00, chunk 1's first byte = 0x10, chunk 2's = 0x20
+    REQUIRE(targets[0][0] == 0x00);
+    REQUIRE(targets[1][0] == 0x10);
+    REQUIRE(targets[2][0] == 0x20);
+}
+
+TEST_CASE("chunked: verify_plaintext_sha3 matches when file hashes match", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_verify_ok_" + std::to_string(::getpid()));
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+
+    std::vector<uint8_t> data(32 * 1024 * 1024, 0xAB);   // 32 MiB
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        REQUIRE(f);
+        f.write(reinterpret_cast<const char*>(data.data()),
+                static_cast<std::streamsize>(data.size()));
+    }
+    auto expected = sha3_256(data);
+    REQUIRE(chunked::verify_plaintext_sha3(
+        tmp.string(),
+        std::span<const uint8_t, 32>(expected.data(), 32)));
+}
+
+TEST_CASE("chunked: verify_plaintext_sha3 rejects wrong hash", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_verify_bad_" + std::to_string(::getpid()));
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+
+    std::vector<uint8_t> data(1024, 0xCD);
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        REQUIRE(f);
+        f.write(reinterpret_cast<const char*>(data.data()),
+                static_cast<std::streamsize>(data.size()));
+    }
+    std::array<uint8_t, 32> wrong{};
+    wrong[0] = 0xFF;
+    REQUIRE_FALSE(chunked::verify_plaintext_sha3(
+        tmp.string(),
+        std::span<const uint8_t, 32>(wrong.data(), 32)));
+}
+
+TEST_CASE("chunked: verify_plaintext_sha3 false on missing file", "[chunked]") {
+    std::array<uint8_t, 32> any{};
+    REQUIRE_FALSE(chunked::verify_plaintext_sha3(
+        "/tmp/chunked_nonexistent_path_xyz_plan02_task1",
+        std::span<const uint8_t, 32>(any.data(), 32)));
+}
+
+TEST_CASE("chunked: pwrite out-of-order lands chunks at correct offsets", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_pwrite_test_" + std::to_string(::getpid()));
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+    std::error_code ec; fs::remove(tmp, ec);
+
+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+    REQUIRE(fd >= 0);
+    const size_t chunk_size = 64 * 1024;
+    const uint32_t N = 3;
+    REQUIRE(::ftruncate(fd, static_cast<off_t>(N * chunk_size)) == 0);
+
+    std::vector<uint8_t> c0(chunk_size, 0xA1);
+    std::vector<uint8_t> c1(chunk_size, 0xB2);
+    std::vector<uint8_t> c2(chunk_size, 0xC3);
+
+    // Write out-of-order: 2, 0, 1.
+    REQUIRE(::pwrite(fd, c2.data(), chunk_size, 2 * chunk_size)
+            == static_cast<ssize_t>(chunk_size));
+    REQUIRE(::pwrite(fd, c0.data(), chunk_size, 0 * chunk_size)
+            == static_cast<ssize_t>(chunk_size));
+    REQUIRE(::pwrite(fd, c1.data(), chunk_size, 1 * chunk_size)
+            == static_cast<ssize_t>(chunk_size));
+    ::close(fd);
+
+    std::ifstream f(tmp, std::ios::binary);
+    REQUIRE(f);
+    std::vector<uint8_t> buf(N * chunk_size);
+    f.read(reinterpret_cast<char*>(buf.data()),
+           static_cast<std::streamsize>(buf.size()));
+    REQUIRE(f.gcount() == static_cast<std::streamsize>(N * chunk_size));
+
+    for (size_t i = 0; i < chunk_size; ++i) REQUIRE(buf[i] == 0xA1);
+    for (size_t i = 0; i < chunk_size; ++i) REQUIRE(buf[chunk_size + i] == 0xB2);
+    for (size_t i = 0; i < chunk_size; ++i) REQUIRE(buf[2 * chunk_size + i] == 0xC3);
+}
+
+TEST_CASE("chunked: refuse_if_exists blocks pre-existing file without --force",
+          "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_overwrite_guard_" + std::to_string(::getpid()));
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+    std::error_code ec; fs::remove(tmp, ec);
+
+    {
+        std::ofstream f(tmp);
+        REQUIRE(f);
+        f << "pre-existing";
+    }
+    REQUIRE(fs::exists(tmp));
+    REQUIRE_FALSE(chunked::refuse_if_exists(tmp.string(), /*force=*/false));
+    // Helper MUST NOT delete the file: it is a pure existence probe.
+    REQUIRE(fs::exists(tmp));
+}
+
+TEST_CASE("chunked: refuse_if_exists permits overwrite with --force", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_overwrite_guard_force_" + std::to_string(::getpid()));
+    struct Guard {
+        fs::path p;
+        ~Guard() { std::error_code ec; fs::remove(p, ec); }
+    } guard{tmp};
+    std::error_code ec; fs::remove(tmp, ec);
+
+    {
+        std::ofstream f(tmp);
+        REQUIRE(f);
+        f << "pre-existing";
+    }
+    REQUIRE(chunked::refuse_if_exists(tmp.string(), /*force=*/true));
+}
+
+TEST_CASE("chunked: refuse_if_exists permits fresh path in both modes", "[chunked]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() /
+               ("chunked_overwrite_guard_fresh_" + std::to_string(::getpid()));
+    std::error_code ec; fs::remove(tmp, ec);   // ensure absent
+    REQUIRE(chunked::refuse_if_exists(tmp.string(), /*force=*/false));
+    REQUIRE(chunked::refuse_if_exists(tmp.string(), /*force=*/true));
+}
+
+// =============================================================================
+// Plan 02 Task 2 — classify_blob_data dispatch helper
+// =============================================================================
+
+TEST_CASE("chunked: classify_blob_data distinguishes CPAR/CDAT/Other",
+          "[chunked]") {
+    std::vector<uint8_t> cpar = {0x43, 0x50, 0x41, 0x52, 0x00, 0x00};
+    std::vector<uint8_t> cdat = {0x43, 0x44, 0x41, 0x54, 0x00, 0x00};
+    std::vector<uint8_t> cenv = {0x43, 0x45, 0x4E, 0x56, 0x01, 0x02};
+    std::vector<uint8_t> short_bytes = {0x43};
+    std::vector<uint8_t> empty;
+
+    REQUIRE(chunked::classify_blob_data(cpar) == chunked::GetDispatch::CPAR);
+    REQUIRE(chunked::classify_blob_data(cdat) == chunked::GetDispatch::CDAT);
+    REQUIRE(chunked::classify_blob_data(cenv) == chunked::GetDispatch::Other);
+    REQUIRE(chunked::classify_blob_data(short_bytes) ==
+            chunked::GetDispatch::Other);
+    REQUIRE(chunked::classify_blob_data(empty) == chunked::GetDispatch::Other);
 }

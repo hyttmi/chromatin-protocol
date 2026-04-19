@@ -7,15 +7,22 @@
 
 #include <spdlog/spdlog.h>
 
+#include <fcntl.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace chromatindb::cli::chunked {
 
@@ -422,6 +429,277 @@ int rm_chunked(
         return 1;
     }
     if (!opts.quiet) std::fprintf(stderr, "manifest tombstoned\n");
+    return 0;
+}
+
+// =============================================================================
+// Read side (Plan 02 — CHUNK-03 + CHUNK-05)
+// =============================================================================
+
+bool refuse_if_exists(const std::string& out_path, bool force_overwrite) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!force_overwrite && fs::exists(out_path, ec)) {
+        std::fprintf(stderr,
+                     "Error: %s already exists (use --force to overwrite)\n",
+                     out_path.c_str());
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::array<uint8_t, 32>> plan_chunk_read_targets(
+    const ManifestData& manifest) {
+    std::vector<std::array<uint8_t, 32>> out;
+    out.reserve(manifest.segment_count);
+    for (uint32_t i = 0; i < manifest.segment_count; ++i) {
+        std::array<uint8_t, 32> h{};
+        std::memcpy(h.data(),
+                    manifest.chunk_hashes.data() + static_cast<size_t>(i) * 32,
+                    32);
+        out.push_back(h);
+    }
+    return out;
+}
+
+bool verify_plaintext_sha3(const std::string& path,
+                           std::span<const uint8_t, 32> expected) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    Sha3Hasher hasher;
+    std::vector<uint8_t> buf(CHUNK_SIZE_BYTES_DEFAULT);
+    while (f) {
+        f.read(reinterpret_cast<char*>(buf.data()),
+               static_cast<std::streamsize>(buf.size()));
+        auto got = static_cast<std::size_t>(f.gcount());
+        if (got == 0) break;
+        hasher.absorb(std::span<const uint8_t>(buf.data(), got));
+    }
+    if (f.bad()) return false;
+    auto actual = hasher.finalize();
+    return std::memcmp(actual.data(), expected.data(), 32) == 0;
+}
+
+GetDispatch classify_blob_data(std::span<const uint8_t> blob_data) {
+    if (blob_data.size() >= 4 &&
+        std::memcmp(blob_data.data(), CPAR_MAGIC.data(), 4) == 0) {
+        return GetDispatch::CPAR;
+    }
+    if (blob_data.size() >= 4 &&
+        std::memcmp(blob_data.data(), CDAT_MAGIC.data(), 4) == 0) {
+        return GetDispatch::CDAT;
+    }
+    return GetDispatch::Other;
+}
+
+// =============================================================================
+// get_chunked — pipelined chunked download + post-reassembly SHA3 verify
+// =============================================================================
+//
+// D-06 cdb get auto-reassemble. D-08 arrival-order drain. D-12 unlink on
+// any failure. D-15 per-chunk retry (3 attempts, 250/1000/4000 ms backoff).
+// CHUNK-05 defense-in-depth plaintext_sha3 check.
+
+int get_chunked(
+    const Identity& id,
+    std::span<const uint8_t, 32> ns,
+    const ManifestData& manifest,
+    const std::string& out_path,
+    bool force_overwrite,
+    Connection& conn,
+    const cmd::ConnectOpts& opts) {
+
+    // Pre-flight: overwrite guard via the factored helper (D-12 semantics).
+    // MUST be the first statement — no Connection or fd access before this.
+    if (!refuse_if_exists(out_path, force_overwrite)) {
+        return 1;
+    }
+
+    // Open + preallocate. Focus Area 3: ftruncate up front surfaces ENOSPC
+    // before we start fetching, so no bandwidth is wasted on a download that
+    // cannot be persisted. O_EXCL for non-force mode belts-and-braces the
+    // refuse_if_exists check above against a TOCTOU race.
+    int flags = O_WRONLY | O_CREAT | (force_overwrite ? O_TRUNC : O_EXCL);
+    int fd = ::open(out_path.c_str(), flags, 0644);
+    if (fd < 0) {
+        std::fprintf(stderr, "Error: cannot open %s for write: %s\n",
+                     out_path.c_str(), std::strerror(errno));
+        return 1;
+    }
+    if (::ftruncate(fd, static_cast<off_t>(manifest.total_plaintext_bytes)) != 0) {
+        std::fprintf(stderr,
+            "Error: cannot preallocate %s (%llu bytes): %s\n",
+            out_path.c_str(),
+            static_cast<unsigned long long>(manifest.total_plaintext_bytes),
+            std::strerror(errno));
+        ::close(fd);
+        ::unlink(out_path.c_str());
+        return 1;
+    }
+
+    auto fail_unlink = [&](const char* where, const std::string& detail = {}) -> int {
+        if (detail.empty()) {
+            std::fprintf(stderr, "Error: %s\n", where);
+        } else {
+            std::fprintf(stderr, "Error: %s: %s\n", where, detail.c_str());
+        }
+        ::close(fd);
+        ::unlink(out_path.c_str());
+        return 1;
+    };
+
+    const auto targets = plan_chunk_read_targets(manifest);
+    const uint32_t N   = manifest.segment_count;
+
+    // Two-phase pipeline (Phase 120-02 shape). rid_to_chunk_index binds rid
+    // to chunk_index at send time; retries allocate a fresh rid and resend
+    // the same chunk_hash — ML-DSA-87 non-determinism on the server side is
+    // not an issue for reads (we are not re-signing; we are re-requesting).
+    uint32_t rid = 1;
+    std::unordered_map<uint32_t, uint32_t> rid_to_chunk_index;
+    std::vector<int> attempts(N, 0);
+    uint32_t next = 0;
+    uint32_t completed = 0;
+
+    auto send_chunk_read = [&](uint32_t chunk_idx) -> std::optional<uint32_t> {
+        std::vector<uint8_t> payload(64);
+        std::memcpy(payload.data(), ns.data(), 32);
+        std::memcpy(payload.data() + 32, targets[chunk_idx].data(), 32);
+        uint32_t this_rid = rid++;
+        if (conn.send_async(MsgType::ReadRequest, payload, this_rid)) {
+            return this_rid;
+        }
+        return std::nullopt;
+    };
+
+    // Retry a chunk that failed validation / decryption / transport.
+    // Returns true if the retry was successfully queued; false if the per-
+    // chunk budget is exhausted (caller must unlink + error).
+    auto retry_chunk = [&](uint32_t chunk_idx) -> bool {
+        if (attempts[chunk_idx] >= RETRY_ATTEMPTS - 1) return false;
+        ++attempts[chunk_idx];
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(RETRY_BACKOFF_MS[attempts[chunk_idx]]));
+        auto r = send_chunk_read(chunk_idx);
+        if (!r) return false;
+        rid_to_chunk_index[*r] = chunk_idx;
+        return true;
+    };
+
+    while (completed < N) {
+        // Phase A: greedy fill up to kPipelineDepth.
+        if (next < N &&
+            rid_to_chunk_index.size() < Connection::kPipelineDepth) {
+            auto r = send_chunk_read(next);
+            if (!r) {
+                return fail_unlink("initial ReadRequest send failed",
+                                    std::to_string(next));
+            }
+            rid_to_chunk_index[*r] = next;
+            ++next;
+            continue;
+        }
+
+        // Phase B: drain one reply in arrival order (D-08).
+        auto resp = conn.recv();
+        if (!resp) {
+            return fail_unlink("connection lost during chunked download");
+        }
+        auto it = rid_to_chunk_index.find(resp->request_id);
+        if (it == rid_to_chunk_index.end()) {
+            spdlog::debug("get_chunked: discarding reply for unknown rid {}",
+                          resp->request_id);
+            continue;
+        }
+        const uint32_t chunk_idx = it->second;
+        rid_to_chunk_index.erase(it);
+
+        // Response validation: must be a ReadResponse with payload[0] == 0x01.
+        if (resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+            resp->payload.empty() || resp->payload[0] != 0x01) {
+            if (retry_chunk(chunk_idx)) continue;
+            return fail_unlink("chunk read failed after retries",
+                               std::to_string(chunk_idx));
+        }
+        auto blob_bytes = std::span<const uint8_t>(
+            resp->payload.data() + 1, resp->payload.size() - 1);
+        auto blob = decode_blob(blob_bytes);
+        if (!blob) {
+            if (retry_chunk(chunk_idx)) continue;
+            return fail_unlink("chunk blob decode failed",
+                               std::to_string(chunk_idx));
+        }
+
+        // D-13 outer-magic defense-in-depth: blob.data starts with CDAT_MAGIC.
+        // If the node returned the wrong blob_type we are not going to retry —
+        // this is a corruption / substitution indicator, not a transient error.
+        if (blob->data.size() < 4 ||
+            std::memcmp(blob->data.data(), CDAT_MAGIC.data(), 4) != 0) {
+            return fail_unlink("chunk not tagged CDAT",
+                               std::to_string(chunk_idx));
+        }
+        auto cenv_bytes = std::span<const uint8_t>(
+            blob->data.data() + 4, blob->data.size() - 4);
+        auto pt = envelope::decrypt(cenv_bytes, id.kem_seckey(), id.kem_pubkey());
+        if (!pt) {
+            // Decrypt failure is not a transient transport error — the
+            // recipient set is fixed at put time. Fail fast.
+            return fail_unlink("chunk decrypt failed",
+                               std::to_string(chunk_idx));
+        }
+
+        // Bounds sanity: plaintext length must match chunk_size_bytes except
+        // for the last chunk, which may be short.
+        const uint64_t expected_off = static_cast<uint64_t>(chunk_idx) *
+                                       manifest.chunk_size_bytes;
+        uint64_t expected_len = manifest.chunk_size_bytes;
+        if (chunk_idx + 1 == N) {
+            expected_len = manifest.total_plaintext_bytes - expected_off;
+        }
+        if (pt->size() != expected_len) {
+            return fail_unlink("chunk plaintext length mismatch",
+                               std::to_string(chunk_idx));
+        }
+
+        // D-12: pwrite at offset — out-of-order arrival safe.
+        ssize_t w = ::pwrite(fd, pt->data(), pt->size(),
+                             static_cast<off_t>(expected_off));
+        if (w < 0 || static_cast<uint64_t>(w) != pt->size()) {
+            return fail_unlink("pwrite failed", std::strerror(errno));
+        }
+        ++completed;
+        if (!opts.quiet) {
+            std::fprintf(stderr, "chunk %u/%u saved\n", completed, N);
+        }
+    }
+
+    // Flush + close before re-reading for the integrity check.
+    if (::fsync(fd) != 0) {
+        // fsync failure is unusual; fall through to the re-read anyway — if
+        // the data is genuinely wrong the sha3 check will catch it. We do
+        // NOT fail here because the data may still be in page cache.
+        spdlog::warn("get_chunked: fsync({}) returned errno={}",
+                     out_path, errno);
+    }
+    ::close(fd);
+
+    // CHUNK-05 / D-04 defense-in-depth: recompute SHA3-256 over the output
+    // file and compare to manifest.plaintext_sha3. Mismatch => unlink.
+    if (!verify_plaintext_sha3(
+            out_path,
+            std::span<const uint8_t, 32>(manifest.plaintext_sha3.data(), 32))) {
+        std::fprintf(stderr,
+            "Error: plaintext_sha3 mismatch — aborting and removing %s\n",
+            out_path.c_str());
+        ::unlink(out_path.c_str());
+        return 1;
+    }
+
+    if (!opts.quiet) {
+        std::fprintf(stderr, "saved: %s (%llu bytes, %u chunks)\n",
+            out_path.c_str(),
+            static_cast<unsigned long long>(manifest.total_plaintext_bytes), N);
+    }
     return 0;
 }
 

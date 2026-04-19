@@ -103,4 +103,63 @@ std::vector<std::array<uint8_t, 32>> plan_tombstone_targets(
     const ManifestData& manifest,
     std::span<const uint8_t, 32> manifest_hash);
 
+// =============================================================================
+// Read side (Phase 119 Plan 02 — CHUNK-03 + CHUNK-05)
+// =============================================================================
+
+/// Pipelined chunked download. Reads N chunk_hashes from `manifest` over
+/// `conn`, envelope-decrypts each, pwrite()s at
+/// `chunk_index * manifest.chunk_size_bytes` into `out_path`, and after all
+/// chunks land verifies the re-read file SHA3-256 matches
+/// manifest.plaintext_sha3 (CHUNK-05 defense-in-depth). Returns 0 on
+/// success, non-zero on any failure; on failure the partial output file is
+/// unlink()'d (D-12).
+///
+/// Caller requirements:
+///  - `conn` is already connected and has just delivered the manifest blob
+///    (so ONE PQ handshake serves the whole get).
+///  - `out_path` is the fully-resolved output path. If `force_overwrite` is
+///    false and `out_path` exists, this function errors before sending
+///    any ReadRequest.
+int get_chunked(
+    const Identity& id,
+    std::span<const uint8_t, 32> ns,
+    const ManifestData& manifest,
+    const std::string& out_path,
+    bool force_overwrite,
+    Connection& conn,
+    const cmd::ConnectOpts& opts);
+
+// =============================================================================
+// Pure helpers exposed for unit tests (no socket, no disk beyond verify)
+// =============================================================================
+
+/// Refuse to overwrite an existing output file unless `force_overwrite` is set.
+/// Writes a single stderr "Error: <path> already exists (use --force to
+/// overwrite)" line when refusing. Returns true if the caller should proceed
+/// with open+write; false if the caller should abort with a non-zero return
+/// code. Factored out so tests can exercise the overwrite-guard invariant
+/// without constructing a real Connection. get_chunked calls this as its
+/// FIRST statement.
+bool refuse_if_exists(const std::string& out_path, bool force_overwrite);
+
+/// Ordered list of chunk hashes get_chunked will issue ReadRequests for.
+/// Pure derivation from manifest.chunk_hashes (split every 32 bytes, ordered
+/// by chunk_index). Exposed so tests can assert ordering.
+std::vector<std::array<uint8_t, 32>> plan_chunk_read_targets(
+    const ManifestData& manifest);
+
+/// Re-read `path` in 16 MiB increments, streaming into a Sha3Hasher, and
+/// compare to `expected`. Returns true on match, false on mismatch or any
+/// I/O error. Does not modify the file.
+bool verify_plaintext_sha3(const std::string& path,
+                           std::span<const uint8_t, 32> expected);
+
+/// 4-byte prefix classification for cdb get dispatch. Used by cmd::get to
+/// decide whether to invoke chunked::get_chunked (CPAR), reject (CDAT), or
+/// fall through to the existing single-blob path (Other, which covers CENV,
+/// PUBK, TOMB, DLGT, or any raw/unrecognized type).
+enum class GetDispatch { CPAR, CDAT, Other };
+GetDispatch classify_blob_data(std::span<const uint8_t> blob_data);
+
 } // namespace chromatindb::cli::chunked
