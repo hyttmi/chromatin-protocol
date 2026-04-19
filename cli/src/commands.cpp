@@ -732,8 +732,10 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
             continue;  // keep filling before draining
         }
 
-        // Phase B: drain one reply in arrival order.
-        auto resp = conn.recv();
+        // Phase B: drain one reply in arrival order. recv_next() decrements
+        // in_flight_ (CR-01 / WR-04 fix — plain recv() leaks the counter
+        // and would stall a get batch of 9+ hashes on the 9th).
+        auto resp = conn.recv_next();
         if (!resp) {
             for (auto& [pending_rid, idx] : rid_to_index) {
                 (void)pending_rid;
