@@ -1137,8 +1137,9 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             else if (type_filter == "TOMB") filter_bytes = TOMBSTONE_MAGIC_CLI;
             else if (type_filter == "DLGT") filter_bytes = DELEGATION_MAGIC_CLI;
             else if (type_filter == "CDAT") filter_bytes = CDAT_MAGIC;
+            else if (type_filter == "CPAR") filter_bytes = CPAR_MAGIC;
             else {
-                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT\n",
+                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT, CPAR\n",
                              type_filter.c_str());
                 return 1;
             }

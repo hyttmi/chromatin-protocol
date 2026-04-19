@@ -30,6 +30,23 @@ namespace blob_vt {
     constexpr flatbuffers::voffset_t SIGNATURE    = 14;
 }
 
+// Manifest (Phase 119): table {
+//   version:uint32;  chunk_size_bytes:uint32;  segment_count:uint32;
+//   total_plaintext_bytes:uint64;
+//   plaintext_sha3:[ubyte];  chunk_hashes:[ubyte];  filename:string;
+// }
+// VTable field offsets: 4, 6, 8, 10, 12, 14, 16 (one more slot than blob_vt
+// to carry filename). Hand-coded, mirroring blob_vt — no flatc dependency.
+namespace manifest_vt {
+    constexpr flatbuffers::voffset_t VERSION               = 4;
+    constexpr flatbuffers::voffset_t CHUNK_SIZE_BYTES      = 6;
+    constexpr flatbuffers::voffset_t SEGMENT_COUNT         = 8;
+    constexpr flatbuffers::voffset_t TOTAL_PLAINTEXT_BYTES = 10;
+    constexpr flatbuffers::voffset_t PLAINTEXT_SHA3        = 12;
+    constexpr flatbuffers::voffset_t CHUNK_HASHES          = 14;
+    constexpr flatbuffers::voffset_t FILENAME              = 16;
+}
+
 // =============================================================================
 // TransportMessage encode/decode
 // =============================================================================
@@ -287,6 +304,111 @@ std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
     result.insert(result.end(), signing_pk.begin(), signing_pk.end());
     result.insert(result.end(), kem_pk.begin(), kem_pk.end());
     return result;
+}
+
+// =============================================================================
+// Sha3Hasher (Phase 119 — incremental SHA3-256 for streaming plaintext_sha3)
+// =============================================================================
+
+struct Sha3Hasher::Impl {
+    OQS_SHA3_sha3_256_inc_ctx ctx;
+    bool finalized = false;
+    Impl() { OQS_SHA3_sha3_256_inc_init(&ctx); }
+    ~Impl() { if (!finalized) OQS_SHA3_sha3_256_inc_ctx_release(&ctx); }
+};
+
+Sha3Hasher::Sha3Hasher() : impl_(std::make_unique<Impl>()) {}
+Sha3Hasher::~Sha3Hasher() = default;
+
+void Sha3Hasher::absorb(std::span<const uint8_t> data) {
+    OQS_SHA3_sha3_256_inc_absorb(&impl_->ctx, data.data(), data.size());
+}
+
+std::array<uint8_t, 32> Sha3Hasher::finalize() {
+    std::array<uint8_t, 32> out{};
+    OQS_SHA3_sha3_256_inc_finalize(out.data(), &impl_->ctx);
+    OQS_SHA3_sha3_256_inc_ctx_release(&impl_->ctx);
+    impl_->finalized = true;
+    return out;
+}
+
+// =============================================================================
+// Manifest FlatBuffer encode/decode (Phase 119 — hand-coded, matching blob_vt)
+// =============================================================================
+
+std::vector<uint8_t> encode_manifest_payload(const ManifestData& m) {
+    size_t estimated = 64 + m.chunk_hashes.size() + m.filename.size();
+    flatbuffers::FlatBufferBuilder builder(estimated);
+    builder.ForceDefaults(true);
+
+    auto sha3   = builder.CreateVector(m.plaintext_sha3.data(), m.plaintext_sha3.size());
+    auto hashes = builder.CreateVector(m.chunk_hashes.data(),   m.chunk_hashes.size());
+    auto fname  = builder.CreateString(m.filename);
+
+    auto start = builder.StartTable();
+    builder.AddElement<uint32_t>(manifest_vt::VERSION,               m.version,               0);
+    builder.AddElement<uint32_t>(manifest_vt::CHUNK_SIZE_BYTES,      m.chunk_size_bytes,      0);
+    builder.AddElement<uint32_t>(manifest_vt::SEGMENT_COUNT,         m.segment_count,         0);
+    builder.AddElement<uint64_t>(manifest_vt::TOTAL_PLAINTEXT_BYTES, m.total_plaintext_bytes, 0);
+    builder.AddOffset(manifest_vt::PLAINTEXT_SHA3,  sha3);
+    builder.AddOffset(manifest_vt::CHUNK_HASHES,    hashes);
+    builder.AddOffset(manifest_vt::FILENAME,        fname);
+    auto root = builder.EndTable(start);
+    builder.Finish(flatbuffers::Offset<flatbuffers::Table>(root));
+
+    const auto* buf = builder.GetBufferPointer();
+    const auto  size = builder.GetSize();
+
+    std::vector<uint8_t> out;
+    out.reserve(4 + size);
+    out.insert(out.end(), CPAR_MAGIC.begin(), CPAR_MAGIC.end());
+    out.insert(out.end(), buf, buf + size);
+    return out;
+}
+
+std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data) {
+    if (data.size() < 4 ||
+        std::memcmp(data.data(), CPAR_MAGIC.data(), 4) != 0) {
+        return std::nullopt;
+    }
+    auto fb = data.subspan(4);
+    if (fb.size() < sizeof(flatbuffers::uoffset_t) + sizeof(flatbuffers::voffset_t) * 2) {
+        return std::nullopt;
+    }
+    auto root_offset = flatbuffers::ReadScalar<flatbuffers::uoffset_t>(fb.data());
+    if (root_offset >= fb.size()) return std::nullopt;
+
+    const auto* table = flatbuffers::GetRoot<flatbuffers::Table>(fb.data());
+    if (!table) return std::nullopt;
+
+    ManifestData m;
+    m.version               = table->GetField<uint32_t>(manifest_vt::VERSION, 0);
+    m.chunk_size_bytes      = table->GetField<uint32_t>(manifest_vt::CHUNK_SIZE_BYTES, 0);
+    m.segment_count         = table->GetField<uint32_t>(manifest_vt::SEGMENT_COUNT, 0);
+    m.total_plaintext_bytes = table->GetField<uint64_t>(manifest_vt::TOTAL_PLAINTEXT_BYTES, 0);
+
+    if (m.version != MANIFEST_VERSION_V1)                                     return std::nullopt;
+    if (m.segment_count == 0 || m.segment_count > MAX_CHUNKS)                 return std::nullopt;
+    if (m.chunk_size_bytes < CHUNK_SIZE_BYTES_MIN ||
+        m.chunk_size_bytes > CHUNK_SIZE_BYTES_MAX)                            return std::nullopt;
+    const uint64_t max_plain = static_cast<uint64_t>(m.segment_count) *
+                               static_cast<uint64_t>(m.chunk_size_bytes);
+    if (m.total_plaintext_bytes == 0 || m.total_plaintext_bytes > max_plain)  return std::nullopt;
+
+    const auto* sha3   = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        manifest_vt::PLAINTEXT_SHA3);
+    const auto* hashes = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        manifest_vt::CHUNK_HASHES);
+    const auto* fname  = table->GetPointer<const flatbuffers::String*>(
+        manifest_vt::FILENAME);
+    if (!sha3 || sha3->size() != 32)                                          return std::nullopt;
+    if (!hashes ||
+        hashes->size() != static_cast<uint64_t>(m.segment_count) * 32u)       return std::nullopt;
+
+    std::memcpy(m.plaintext_sha3.data(), sha3->data(), 32);
+    m.chunk_hashes.assign(hashes->begin(), hashes->end());
+    if (fname) m.filename.assign(fname->c_str(), fname->size());
+    return m;
 }
 
 } // namespace chromatindb::cli

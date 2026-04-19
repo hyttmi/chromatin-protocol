@@ -615,7 +615,7 @@ int main(int argc, char* argv[]) {
                     "Options:\n"
                     "  --namespace, -n <name|hex>  Filter by namespace (contact name or 64-hex)\n"
                     "  --raw                       Show all blobs including infrastructure types\n"
-                    "  --type <TYPE>               Filter by type: CENV, PUBK, TOMB, DLGT, CDAT\n");
+                    "  --type <TYPE>               Filter by type: CENV, PUBK, TOMB, DLGT, CDAT, CPAR\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -636,7 +636,7 @@ int main(int argc, char* argv[]) {
                     ++arg_idx;
                 } else if (std::strcmp(a, "--type") == 0) {
                     if (arg_idx + 1 >= argc) {
-                        std::fprintf(stderr, "Error: --type requires a type name (CENV, PUBK, TOMB, DLGT, CDAT)\n");
+                        std::fprintf(stderr, "Error: --type requires a type name (CENV, PUBK, TOMB, DLGT, CDAT, CPAR)\n");
                         return 1;
                     }
                     type_filter = argv[++arg_idx];
