@@ -99,15 +99,15 @@ Plans:
 ### Phase 121: Storage Concurrency Invariant
 **Goal**: Prove storage is concurrency-safe (strand-confined or single-threaded guarantee) or fix it before the schema-change phases land — avoid debugging data corruption and protocol changes simultaneously.
 **Depends on**: Phase 120
-**Requirements**: TBD
+**Requirements**: TBD (retroactive audit/hardening phase — no explicit REQUIREMENTS.md IDs apply)
 **Success Criteria** (what must be TRUE):
   1. Every call path into `db/storage/` is traced and documented as either (a) invoked from one designated strand/thread, or (b) explicitly synchronized via mutex/atomic
   2. If storage is reached from multiple strands today, an explicit strand is added (no code-only "it happens to work" guarantee)
   3. Comment at `Storage::store_blob` (and friends) cites the guarantee mechanism so future code doesn't violate it
   4. Catch2 stress test asserts concurrent ingests from multiple simulated connections don't corrupt state
-**Plans**: 0 plans
+**Plans**: 1 plan
 Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+- [ ] 121-01-PLAN.md — Trace audit + STORAGE_THREAD_CHECK() assertion + TSAN concurrent-ingest ship gate (conditional fix)
 
 ### Phase 122: Schema + Signing Cleanup — Strip namespace_id, Compress Pubkey, Mandatory PUBK
 **Goal**: One coordinated protocol-breaking change that shrinks every signed blob by ~2592 bytes (~35%) and removes redundant fields from the schema before the v1 freeze.
@@ -254,6 +254,7 @@ Role enum (reserve space for future use cases — cost of reserved slots is zero
 | 0x04  | RELAY     | (reserved) Bridge/relay node                               |
 | 0x05..0xFE | —    | Reserved                                                    |
 | 0xFF  | —         | Reserved (sentinel / error)                                 |
+```
 
 **Hard rule:** handshake MUST reject unknown role values (fail-closed), so old binaries can never misinterpret new ones.
 
@@ -660,4 +661,3 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
-
