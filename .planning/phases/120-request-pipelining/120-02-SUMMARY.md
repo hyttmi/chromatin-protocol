@@ -2,7 +2,7 @@
 phase: 120-request-pipelining
 plan: 02
 subsystem: cli-commands
-tags: [cdb, cli, pipelining, commands, get, put, checkpoint-pending]
+tags: [cdb, cli, pipelining, commands, get, put]
 
 # Dependency graph
 requires:
@@ -41,22 +41,21 @@ key-decisions:
   - "Added try/catch around parse_hash() in cmd::get. Pre-refactor, a bad hex would throw std::runtime_error and unwind the whole batch. Rule 2 fix: the plan's must-haves require 'one bad input does not sink the batch'."
 
 requirements-completed:
-  - PIPE-01  # multi-blob downloads pipelined over a single PQ connection (Task 3 human-verify still pending)
+  - PIPE-01  # multi-blob downloads pipelined over a single PQ connection (verified against live node)
 
 # Metrics
-duration: 8min  # code + build + tests; checkpoint wall-clock not yet measured
-completed: 2026-04-18
-checkpoint_status: pending-user  # Task 3 human-verify against 192.168.1.73
+duration: 8min  # code + build + tests
+completed: 2026-04-19
+checkpoint_status: approved  # Task 3 human-verify passed against 192.168.1.73
 ---
 
 # Phase 120 Plan 02: cmd::get / cmd::put Pipelining Summary
 
-**cmd::put and cmd::get now drive Connection::send_async with a batch-local rid_to_index map for arrival-order draining via recv(); Task 3 (manual wall-clock + correctness verification against the live node at 192.168.1.73) is pending human-verify.**
+**cmd::put and cmd::get now drive Connection::send_async with a batch-local rid_to_index map for arrival-order draining via recv(). Task 3 human-verify passed against live node 192.168.1.73 on 2026-04-19 — pipelined 8-blob get is 5.4×–8.4× faster than sequential, byte-identical outputs, failure-path and single-blob regressions clean.**
 
 ## Status
 
-- **Tasks 1 and 2: complete.** Build clean, full cli_tests suite green (49/49, including the 8 [pipeline] tests from 120-01), no regressions.
-- **Task 3 (checkpoint:human-verify, gate=blocking): pending.** Requires the user to run a sequential-vs-pipelined timing comparison + `diff -r` byte-identical check against the live node. Procedure in 120-02-PLAN.md `<how-to-verify>` (reproduced below).
+- **Tasks 1, 2, 3: complete.** Build clean, full cli_tests suite green (49/49, including the 8 [pipeline] tests from 120-01), no regressions. Live-node verification passed all seven checkpoint steps.
 
 ## Performance
 
@@ -184,18 +183,35 @@ The other CLI commands continue to use `Connection::send` / `Connection::recv` d
 
 The cost was minimal: one new line in `connection.h` (the `static constexpr` declaration), two edits in `connection.cpp` (delete the file-static, update the `while (in_flight_ >= …)` condition to `Connection::kPipelineDepth`).
 
-## Wall-Clock Numbers for Task 3
+## Wall-Clock Numbers for Task 3 — PASSED
 
-**Pending.** The gate-blocking checkpoint requires manual verification against the live node at `192.168.1.73`. I have NOT attempted the live-node test myself per the checkpoint protocol. The user will supply:
+Measured against live node `192.168.1.73` on 2026-04-19 with 8 × 64 KiB freshly uploaded blobs:
 
-- Sequential baseline wall-clock for 8-blob `cdb get` (against the parent commit of this plan, or equivalent sequential build)
-- Pipelined wall-clock for the same 8-blob batch against this plan's commit
-- Confirmation that pipelined `< 0.5 ×` sequential (expected: sequential ~800ms for 8 × ~100ms RTT, pipelined ~150-250ms)
-- Confirmation that `diff -r /tmp/seq /tmp/pipe` returns no differences
-- Confirmation that a bad-hash-in-batch test reports just the bad one and succeeds the rest
-- Confirmation that single-blob `cdb get <hash>` and `cdb put <file>` still work (depth-1 path)
+| Scenario | Binary | Wall-clock (`real`) |
+|----------|--------|---------------------|
+| Sequential baseline, 8-blob `cdb get` (run 1) | commit `3e9c9dce` | **0.662 s** |
+| Sequential baseline, 8-blob `cdb get` (run 2) | commit `3e9c9dce` | **1.026 s** |
+| Pipelined 8-blob `cdb get` (run 1) | HEAD (`3e962d54`) | **0.122 s** |
+| Pipelined 8-blob `cdb get` (run 2) | HEAD (`3e962d54`) | **0.122 s** |
+| Pipelined single-blob `cdb get` | HEAD | **0.091 s** |
 
-The full procedure is reproduced from the plan's `<how-to-verify>` block below for the checkpoint continuation agent's convenience.
+**Speedup:** pipelined wall-clock is ~18% of sequential (5.4×–8.4× faster) — well under the 50% threshold. Pipelined run variance was nil (both 0.122 s); sequential variance is node-load-dependent. Low LAN RTT (node is on the same subnet) meant replies often returned before the next request was sent, so per-item "saved:" lines happened to arrive in request order on this run — this is not a correctness concern: the code still drains via arrival-order `recv()` + rid_to_index, it's just that completion order == request order when RTT ≈ 0.
+
+**Correctness (`diff -r`):**
+- `diff -r /tmp/seq /tmp/pipe` → **no differences** (byte-identical) — run 1
+- `diff -r /tmp/seq2 /tmp/pipe2` → **no differences** (byte-identical) — run 2
+- Both runs printed 8 "saved: …" lines, exit code 0.
+
+**Failure-path sanity (bad hash in batch of 8):**
+- 7 good files saved ✓
+- 1 stderr `Error: blob not found: deadbeef000…` line ✓
+- Exit code **1** ✓
+- Other blobs' successes were not affected.
+
+**Single-blob regression (depth-1 path):**
+- `cdb get <one_hash>` → 91 ms, exit 0, file saved ✓
+
+**Conclusion:** all seven checkpoint steps passed. PIPE-01 delivered.
 
 ## Deviations from Plan
 
@@ -221,68 +237,20 @@ The full procedure is reproduced from the plan's `<how-to-verify>` block below f
 - 1 plan-directed behavior change (opts.quiet in cmd::put single-file path).
 - 0 blocking issues, 0 architectural changes.
 
-## Checkpoint Reached — Task 3
+## Checkpoint Task 3 — APPROVED
 
 **Type:** `checkpoint:human-verify` (gate=blocking)
-**Status:** Awaiting user
+**Status:** Passed — 2026-04-19 against live node `192.168.1.73`
 
-### Completed so far
+### Task summary
 
 | Task | Name | Commit | Status |
 |------|------|--------|--------|
 | 1 | Pipeline cmd::put | `4868f404` | committed |
 | 2 | Pipeline cmd::get | `4af3ad44` | committed |
+| 3 | Human-verify (blocking) | — | APPROVED (see Wall-Clock Numbers section above) |
 
-### Current Task
-
-Task 3: Human-verify pipelined `cdb get`/`cdb put` speedup against live test node `192.168.1.73`.
-
-### What was built
-
-Pipelined `cdb get` and `cdb put` (Tasks 1 and 2 of this plan, building on Phase 120-01's `Connection::send_async` / per-Connection correlation map). Multi-blob downloads/uploads now fire up to 8 requests in flight on a single PQ connection, draining replies in arrival order.
-
-### How to verify (reproduced from 120-02-PLAN.md)
-
-Manual verification against the live test node at **192.168.1.73** (live node available per project memory `reference_live_node.md`). The goal is to confirm PIPE-01 ("multi-blob downloads use pipelined requests over single PQ connection") delivers measurable wall-clock improvement vs. the prior sequential path.
-
-1. **Stage 8 small known blobs** on the test node. Either:
-   - Reuse 8 hashes already present, OR
-   - `cdb put a.bin b.bin c.bin d.bin e.bin f.bin g.bin h.bin --node 192.168.1.73` (each file ~64 KiB — small enough that wall-clock is RTT-dominated, large enough to be non-trivial). Capture the 8 returned hashes.
-
-2. **Sequential baseline** — check out the parent commit (`3e9c9dce`, before Task 1 landed), rebuild `cdb`, then time:
-   ```
-   time cdb get HASH1 HASH2 HASH3 HASH4 HASH5 HASH6 HASH7 HASH8 \
-     --node 192.168.1.73 --out-dir /tmp/seq
-   ```
-   Record `real` wall-clock.
-
-3. **Pipelined run** — return to this plan's HEAD (commit `4af3ad44`), rebuild, then run the same get against the same hashes:
-   ```
-   time cdb get HASH1 HASH2 HASH3 HASH4 HASH5 HASH6 HASH7 HASH8 \
-     --node 192.168.1.73 --out-dir /tmp/pipe
-   ```
-   Record `real` wall-clock.
-
-4. **Expected result:** pipelined wall-clock **< 50% of sequential**. Concretely, sequential ~800ms (8 × ~100ms RTT) → pipelined ~150-250ms (one RTT for the first reply + amortized per-blob processing). If pipelined is not measurably faster, something is wrong (likely: depth check off-by-one, or the greedy-fill check inverted/missing, causing send-drain-send-drain serial behavior).
-
-5. **Correctness checks:**
-   - `diff -r /tmp/seq /tmp/pipe` returns no differences.
-   - All 8 files present in both directories.
-   - Per-item lines printed (one per blob), `cdb` exit code 0.
-   - The order of per-item "saved: …" lines may differ between runs (D-08: completion order, not request order). Intended.
-
-6. **Failure-path sanity check:** include one bad hash in the batch:
-   ```
-   cdb get HASH1 HASH2 deadbeef00000000000000000000000000000000000000000000000000000000 HASH4 HASH5 HASH6 HASH7 HASH8 \
-     --node 192.168.1.73 --out-dir /tmp/badbatch
-   ```
-   The other 7 should succeed; the deadbeef hash should produce one stderr error line; exit code should be 1; 7 other files present.
-
-7. **Single-blob regression:** `time cdb get HASH1 --node 192.168.1.73 --out-dir /tmp/single` — succeeds in ~one RTT, exit 0, file present. Confirms depth-1 case still works.
-
-### Resume signal
-
-Type `approved` if pipelined wall-clock < 0.5 × sequential AND all correctness / failure-path / single-blob checks pass. Type `reject: <reason>` with the failure mode (e.g., "no speedup observed", "single-blob path broke", "byte mismatch in /tmp/seq vs /tmp/pipe") and the planner will revise.
+All seven checkpoint steps passed: 5.4×–8.4× pipelined speedup, byte-identical outputs via `diff -r` on two independent samples, failure-path with bad hash isolated correctly (7 saved + 1 error + exit 1), single-blob depth-1 path 91 ms / exit 0.
 
 ## Follow-ups for Phase 119 (Chunked Large Files)
 
