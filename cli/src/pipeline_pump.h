@@ -95,4 +95,51 @@ std::optional<DecodedTransport> pump_recv_for(
     }
 }
 
+// =============================================================================
+// Pump one reply in arrival order (not correlated to a specific rid)
+// =============================================================================
+//
+// Counterpart of pump_recv_for for callers that drain replies in arrival order
+// (D-08 — chunked uploads/downloads, cmd::put batches, cmd::get batches).
+//
+// Fast path: if anything was stashed by a prior send_async backpressure cycle
+// into `pending`, deliver one of those entries first (no wire I/O). Else call
+// `source()` for the next wire reply.
+//
+// On ANY non-nullopt return: decrement `in_flight` by one (both fast-path and
+// source-path represent one pipeline slot freeing). Guarded so `in_flight = 0`
+// never underflows — defense-in-depth against the CR-01 class of bug where an
+// errant caller could otherwise decrement past zero.
+//
+// On source error (nullopt) with empty `pending`: return nullopt and leave
+// `in_flight` UNTOUCHED (matches pump_recv_for's error semantic).
+//
+// Single-sender invariant (PIPE-02): this template only invokes `source()`
+// (which wraps recv()) — it never touches the send path, so send_counter_
+// and AEAD nonce monotonicity are preserved by construction.
+//
+// Note on the WR-01 window (carried forward from 119-REVIEW.md, out of scope
+// for this template): stale entries in `pending` left behind by a failed
+// send_async + pump_one_for_backpressure exchange are not cleaned up here —
+// in that narrow case the connection is already dead and the caller exits.
+template <typename Source>
+std::optional<DecodedTransport> pump_recv_any(
+    Source&& source,
+    std::unordered_map<uint32_t, DecodedTransport>& pending,
+    std::size_t& in_flight) {
+    // Fast path: deliver a stashed reply before touching the wire.
+    if (!pending.empty()) {
+        auto it = pending.begin();
+        DecodedTransport msg = std::move(it->second);
+        pending.erase(it);
+        if (in_flight > 0) --in_flight;
+        return msg;
+    }
+
+    auto msg = source();
+    if (!msg) return std::nullopt;
+    if (in_flight > 0) --in_flight;
+    return msg;
+}
+
 } // namespace chromatindb::cli::pipeline

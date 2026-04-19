@@ -174,3 +174,51 @@ TEST_CASE("pipeline: duplicate rid reply overwrites without growth", "[pipeline]
     REQUIRE(pending.size() == 1);
     REQUIRE(pending[5].type == 0x20);  // second write won
 }
+
+TEST_CASE("pipeline: pump_recv_any returns source msg when pending empty", "[pipeline]") {
+    ScriptedSource src;
+    src.queue.push_back(make_reply(42));
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    std::size_t in_flight = 3;
+
+    auto got = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE(got.has_value());
+    REQUIRE(got->request_id == 42);
+    REQUIRE(in_flight == 2);
+    REQUIRE(src.call_count == 1);
+}
+
+TEST_CASE("pipeline: pump_recv_any drains pending first, source not called", "[pipeline]") {
+    ScriptedSource src;
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    pending.emplace(9, make_reply(9));
+    std::size_t in_flight = 1;
+
+    auto got = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE(got.has_value());
+    REQUIRE(got->request_id == 9);
+    REQUIRE(in_flight == 0);
+    REQUIRE(pending.empty());
+    REQUIRE(src.call_count == 0);
+}
+
+TEST_CASE("pipeline: pump_recv_any on source error leaves in_flight untouched", "[pipeline]") {
+    ScriptedSource src;  // empty queue -> nullopt on first call
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    std::size_t in_flight = 5;
+
+    auto got = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE_FALSE(got.has_value());
+    REQUIRE(in_flight == 5);
+}
+
+TEST_CASE("pipeline: pump_recv_any does not underflow when in_flight is zero", "[pipeline]") {
+    ScriptedSource src;
+    src.queue.push_back(make_reply(1));
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    std::size_t in_flight = 0;
+
+    auto got = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE(got.has_value());
+    REQUIRE(in_flight == 0);  // guarded decrement — no wrap to SIZE_MAX
+}
