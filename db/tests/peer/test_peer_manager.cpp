@@ -2675,7 +2675,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         REQUIRE(!info_response.empty());
         CHECK(response_req_id == 77);
 
-        // Parse response: [version_len:1][version:N][git_hash_len:1][git_hash:N]...
+        // Parse response: [version_len:1][version:N][uptime:8][peer_count:4][namespace_count:4][total_blobs:8][storage_used:8][storage_max:8][types_count:1][supported_types:N]
         size_t off = 0;
 
         // Version string
@@ -2685,14 +2685,6 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         std::string version(info_response.begin() + off, info_response.begin() + off + version_len);
         off += version_len;
         CHECK(!version.empty());  // Has a version string
-
-        // Git hash string
-        REQUIRE(off < info_response.size());
-        uint8_t hash_len = info_response[off++];
-        REQUIRE(off + hash_len <= info_response.size());
-        std::string git_hash(info_response.begin() + off, info_response.begin() + off + hash_len);
-        off += hash_len;
-        CHECK(!git_hash.empty());  // Has a git hash string
 
         // Uptime (8 bytes big-endian) -- should be small (< 10 seconds)
         REQUIRE(off + 8 <= info_response.size());
@@ -2737,7 +2729,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         // Supported types
         REQUIRE(off + 1 <= info_response.size());
         uint8_t types_count = info_response[off++];
-        CHECK(types_count == 38);  // 38 client-facing types (20 base + 18 v1.4.0 query types)
+        CHECK(types_count == 39);  // Client-facing types (20 base + 18 v1.4.0 query types + ErrorResponse)
         REQUIRE(off + types_count <= info_response.size());
         // Verify at least Ping(5), Data(8), ExistsRequest(37), NodeInfoRequest(39) are present
         std::set<uint8_t> types(info_response.begin() + off, info_response.begin() + off + types_count);

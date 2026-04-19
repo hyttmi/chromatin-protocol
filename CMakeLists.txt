@@ -1,18 +1,30 @@
 cmake_minimum_required(VERSION 3.20)
 project(chromatindb VERSION 2.3.0 LANGUAGES C CXX)
 
-# Git hash for build identification
+# Append short git hash (and dirty marker) to the version when building inside
+# a git tree. Falls back to the bare PROJECT_VERSION when git is unavailable.
 execute_process(
-    COMMAND git describe --always --dirty
+    COMMAND git rev-parse --short=8 HEAD
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE CHROMATINDB_GIT_HASH
+    OUTPUT_VARIABLE _chromatindb_git_hash
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
 )
-if(NOT CHROMATINDB_GIT_HASH)
-    set(CHROMATINDB_GIT_HASH "unknown")
+execute_process(
+    COMMAND git diff-index --quiet HEAD --
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE _chromatindb_git_dirty
+    ERROR_QUIET
+)
+if(_chromatindb_git_hash)
+    if(NOT _chromatindb_git_dirty EQUAL 0)
+        set(CHROMATINDB_VERSION "${PROJECT_VERSION}-g${_chromatindb_git_hash}-dirty")
+    else()
+        set(CHROMATINDB_VERSION "${PROJECT_VERSION}-g${_chromatindb_git_hash}")
+    endif()
+else()
+    set(CHROMATINDB_VERSION "${PROJECT_VERSION}")
 endif()
-set(CHROMATINDB_VERSION "${PROJECT_VERSION}")
 set(CHROMATINDB_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(CHROMATINDB_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(CHROMATINDB_VERSION_PATCH ${PROJECT_VERSION_PATCH})

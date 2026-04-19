@@ -621,7 +621,6 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
             uint8_t catch_error = 0;
             try {
                 std::string version = CHROMATINDB_VERSION;
-                std::string git_hash = CHROMATINDB_GIT_HASH;
                 uint64_t uptime = metrics_collector_uptime_();
                 uint32_t peers = static_cast<uint32_t>(peers_.size());
                 auto namespaces = storage_.list_namespaces();
@@ -647,7 +646,6 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 uint8_t types_count = static_cast<uint8_t>(sizeof(supported));
 
                 size_t resp_size = 1 + version.size()
-                                 + 1 + git_hash.size()
                                  + 8 + 4 + 4 + 8 + 8 + 8
                                  + 1 + types_count;
                 std::vector<uint8_t> response(resp_size);
@@ -656,10 +654,6 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 response[off++] = static_cast<uint8_t>(version.size());
                 std::memcpy(response.data() + off, version.data(), version.size());
                 off += version.size();
-
-                response[off++] = static_cast<uint8_t>(git_hash.size());
-                std::memcpy(response.data() + off, git_hash.data(), git_hash.size());
-                off += git_hash.size();
 
                 chromatindb::util::store_u64_be(response.data() + off, uptime);
                 off += 8;

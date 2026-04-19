@@ -1446,8 +1446,6 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
 
     uint8_t ver_len = read_u8();
     auto version = read_string(ver_len);
-    uint8_t git_len = read_u8();
-    auto git_hash = read_string(git_len);
 
     auto uptime = read_u64();
     auto peer_count = read_u32();
@@ -1457,7 +1455,6 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
     auto storage_max = read_u64();
 
     std::printf("Version:    %s\n", version.c_str());
-    std::printf("Git:        %s\n", git_hash.c_str());
     std::printf("Uptime:     %s\n", humanize_uptime(uptime).c_str());
     std::printf("Peers:      %u\n", peer_count);
     std::printf("Namespaces: %u\n", namespace_count);

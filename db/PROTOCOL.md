@@ -862,10 +862,8 @@ Query node version, state, and supported message types for client capability dis
 | Field | Offset | Size | Encoding | Description |
 |-------|--------|------|----------|-------------|
 | version_len | 0 | 1 | uint8 | Length of version string |
-| version | 1 | version_len | UTF-8 | Node software version (e.g., "1.1.0") |
-| git_hash_len | 1 + version_len | 1 | uint8 | Length of git hash string |
-| git_hash | 2 + version_len | git_hash_len | UTF-8 | Build git commit hash |
-| uptime | 2 + version_len + git_hash_len | 8 | big-endian uint64 | Node uptime in seconds |
+| version | 1 | version_len | UTF-8 | Node software version (e.g., "2.3.0") |
+| uptime | 1 + version_len | 8 | big-endian uint64 | Node uptime in seconds |
 | peer_count | +8 | 4 | big-endian uint32 | Number of connected peers |
 | namespace_count | +4 | 4 | big-endian uint32 | Number of namespaces with stored blobs |
 | total_blobs | +4 | 8 | big-endian uint64 | Total blob count across all namespaces |

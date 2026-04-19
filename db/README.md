@@ -452,7 +452,7 @@ Stops and disables services, removes binaries, systemd units, and sysusers/tmpfi
 
 **Blob Existence Check** -- Clients send an ExistsRequest with a namespace and blob hash to check whether a blob exists without transferring its data. The node responds with a single-byte existence flag and the echoed blob hash. Tombstoned blobs are reported as not found.
 
-**Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version, git hash, uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. Clients use the supported types list for feature detection.
+**Node Capability Discovery** -- Clients send a NodeInfoRequest to retrieve the node's software version (e.g. `2.3.0-g784b1260` with a short git commit suffix when built from a git tree), uptime, peer count, namespace count, total blobs, storage usage, and a list of supported message types. Clients use the supported types list for feature detection.
 
 **Namespace Enumeration** -- Clients list all namespaces stored on a node via NamespaceListRequest. Paginated response with after-cursor and configurable limit (max 1000 per page). Each entry includes the namespace ID and blob count.
 
