@@ -60,6 +60,25 @@ std::vector<std::array<uint8_t, 32>> plan_tombstone_targets(
 
 namespace {
 
+// RAII guard that unlinks `path` on destruction unless release() was called.
+// Phase 119 WR-03 fix: any throw between ::close(fd) and verify_plaintext_sha3
+// in get_chunked (e.g. std::bad_alloc in the Sha3Hasher constructor) must not
+// leave a partial output file on disk (D-12). release() is called ONLY on the
+// successful-verify exit of get_chunked.
+struct UnlinkGuard {
+    std::string path;
+    bool armed = true;
+    explicit UnlinkGuard(std::string p) : path(std::move(p)) {}
+    ~UnlinkGuard() {
+        if (armed && !path.empty()) {
+            ::unlink(path.c_str());
+        }
+    }
+    UnlinkGuard(const UnlinkGuard&) = delete;
+    UnlinkGuard& operator=(const UnlinkGuard&) = delete;
+    void release() noexcept { armed = false; }
+};
+
 // Build one CDAT chunk blob's encoded FlatBuffer bytes from raw plaintext.
 // The encoded blob.data layout (D-13) is:
 //     [CDAT magic:4][CENV envelope(plaintext_chunk)]
@@ -532,6 +551,12 @@ int get_chunked(
                      out_path.c_str(), std::strerror(errno));
         return 1;
     }
+
+    // WR-03: RAII so a throw between ::close(fd) and verify_plaintext_sha3
+    // still unlinks the partial output (D-12). Only released on successful
+    // verify at the end of the function.
+    UnlinkGuard guard(out_path);
+
     if (::ftruncate(fd, static_cast<off_t>(manifest.total_plaintext_bytes)) != 0) {
         std::fprintf(stderr,
             "Error: cannot preallocate %s (%llu bytes): %s\n",
@@ -539,7 +564,7 @@ int get_chunked(
             static_cast<unsigned long long>(manifest.total_plaintext_bytes),
             std::strerror(errno));
         ::close(fd);
-        ::unlink(out_path.c_str());
+        // Partial output unlink is handled by UnlinkGuard on scope exit.
         return 1;
     }
 
@@ -550,7 +575,7 @@ int get_chunked(
             std::fprintf(stderr, "Error: %s: %s\n", where, detail.c_str());
         }
         ::close(fd);
-        ::unlink(out_path.c_str());
+        // Partial output unlink is handled by UnlinkGuard on scope exit.
         return 1;
     };
 
@@ -704,7 +729,7 @@ int get_chunked(
         std::fprintf(stderr,
             "Error: plaintext_sha3 mismatch — aborting and removing %s\n",
             out_path.c_str());
-        ::unlink(out_path.c_str());
+        // Partial output unlink is handled by UnlinkGuard on scope exit.
         return 1;
     }
 
@@ -713,6 +738,7 @@ int get_chunked(
             out_path.c_str(),
             static_cast<unsigned long long>(manifest.total_plaintext_bytes), N);
     }
+    guard.release();
     return 0;
 }
 
