@@ -2,7 +2,9 @@
 #include "cli/src/chunked.h"
 #include "cli/src/envelope.h"
 #include "cli/src/identity.h"
+#include "cli/src/pipeline_pump.h"
 #include "cli/src/wire.h"
+#include "cli/tests/pipeline_test_support.h"
 
 #include <flatbuffers/flatbuffers.h>
 
@@ -14,7 +16,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace chromatindb::cli;
@@ -462,4 +466,61 @@ TEST_CASE("chunked: classify_blob_data distinguishes CPAR/CDAT/Other",
     REQUIRE(chunked::classify_blob_data(short_bytes) ==
             chunked::GetDispatch::Other);
     REQUIRE(chunked::classify_blob_data(empty) == chunked::GetDispatch::Other);
+}
+
+TEST_CASE("chunked: CR-01 regression — 8 sends + 8 recv_next drains leave in_flight at 0", "[chunked]") {
+    using chromatindb::cli::testing::ScriptedSource;
+    using chromatindb::cli::testing::make_ack_reply;
+
+    // Simulate the exact shape that failed on the live node:
+    // put_chunked filled 8 in-flight CDAT writes, drained 8 replies
+    // via the OLD conn.recv() — which left in_flight at 8 because
+    // recv() never touched the counter. With pump_recv_any, the same
+    // drain pattern must bring in_flight back to 0.
+    ScriptedSource src;
+    for (uint32_t r = 1; r <= 8; ++r) src.queue.push_back(make_ack_reply(r));
+
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    std::size_t in_flight = 8;
+
+    // Drain 8 replies via pump_recv_any (the helper behind recv_next).
+    for (int i = 0; i < 8; ++i) {
+        auto got = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+        REQUIRE(got.has_value());
+    }
+
+    REQUIRE(in_flight == 0);  // no CR-01 leak
+    REQUIRE(pending.empty());
+    REQUIRE(src.call_count == 8);
+
+    // 9th drain against an empty source returns nullopt and does NOT underflow.
+    auto ninth = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE_FALSE(ninth.has_value());
+    REQUIRE(in_flight == 0);
+}
+
+TEST_CASE("chunked: CR-01 regression — drain with pending non-empty decrements in_flight from fast path", "[chunked]") {
+    using chromatindb::cli::testing::ScriptedSource;
+    using chromatindb::cli::testing::make_ack_reply;
+
+    // Simulate the case where send_async's backpressure pump stashed
+    // some replies into pending_replies_. The first pump_recv_any call
+    // must drain from pending (fast path), NOT touch source, and
+    // decrement in_flight.
+    ScriptedSource src;  // deliberately empty — source must not be called
+    std::unordered_map<uint32_t, DecodedTransport> pending;
+    pending.emplace(5, make_ack_reply(5));
+    pending.emplace(6, make_ack_reply(6));
+    std::size_t in_flight = 2;
+
+    auto got1 = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE(got1.has_value());
+    REQUIRE(in_flight == 1);
+    REQUIRE(src.call_count == 0);
+
+    auto got2 = pipeline::pump_recv_any(std::ref(src), pending, in_flight);
+    REQUIRE(got2.has_value());
+    REQUIRE(in_flight == 0);
+    REQUIRE(pending.empty());
+    REQUIRE(src.call_count == 0);
 }
