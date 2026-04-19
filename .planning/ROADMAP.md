@@ -78,7 +78,7 @@ Plans:
 Plans:
 - [x] 119-01-PLAN.md — Chunked upload (put_chunked), cascade delete (rm_chunked), manifest codec, Sha3Hasher, CPAR magic, cmd::put/cmd::rm dispatch
 - [x] 119-02-PLAN.md — Chunked download (get_chunked), cmd::get dispatch, post-reassembly SHA3 verify
-- [ ] 119-03-PLAN.md — Gap closure: CR-01 in_flight leak (pump_recv_any + recv_next + 5 call-site migrations) + WR-02/WR-03/IN-03 + live-node E2E gate
+- [x] 119-03-PLAN.md — Gap closure: CR-01 in_flight leak (pump_recv_any + recv_next + 5 call-site migrations) + WR-02/WR-03/IN-03 + live-node E2E gate
 
 ### Phase 120: Request Pipelining
 **Goal**: Multi-blob downloads (and uploads) complete faster by pipelining requests over a single PQ connection instead of sequential round-trips
@@ -137,7 +137,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 116. CLI Rename + Contact Groups | 2/2 | Complete    | 2026-04-16 |
 | 117. Blob Type Indexing + ls Filtering | 2/2 | Complete    | 2026-04-16 |
 | 118. Configurable Constants + Peer Management | 2/2 | Complete    | 2026-04-16 |
-| 119. Chunked Large Files | 2/2 | Complete   | 2026-04-19 |
+| 119. Chunked Large Files | 3/3 | Complete   | 2026-04-19 |
 | 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
 | 121. Documentation | 0/0 | Not started | - |
 | 122. Verification | 0/0 | Not started | - |
@@ -242,7 +242,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Current behaviour (observed 2026-04-18):
 
