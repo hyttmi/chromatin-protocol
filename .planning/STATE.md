@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 120 context gathered
-last_updated: "2026-04-18T15:10:12.736Z"
-last_activity: 2026-04-18 -- Phase 120 execution started
+status: ready
+stopped_at: Phase 120 complete — VERIFIED
+last_updated: "2026-04-19T06:17:00.000Z"
+last_activity: 2026-04-19 -- Phase 120 complete (pipelining verified against live node)
 progress:
   total_phases: 16
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 6
-  percent: 75
+  completed_phases: 4
+  total_plans: 10
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 120 — request-pipelining
+**Current focus:** Phase 120 complete — next: select from remaining v4.1.0 phases
 
 ## Current Position
 
-Phase: 120 (request-pipelining) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 120
-Last activity: 2026-04-18 -- Phase 120 execution started
+Phase: 120 (request-pipelining) — COMPLETE + VERIFIED
+Plan: 2 of 2 complete
+Status: Ready for next phase
+Last activity: 2026-04-19 -- Phase 120 complete (live-node verification 5.4×–8.4× speedup)
 
-Progress: [----------] 0%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
@@ -73,11 +73,10 @@ None.
 ### Blockers/Concerns
 
 - PITFALL: connection.cpp:626 has unchecked total_size in chunked reassembly -- fix in Phase 119
-- PITFALL: AEAD nonce desync -- single reader thread invariant for pipelining (Phase 120)
 - PITFALL: SQLite schema versioning needed before adding group tables (Phase 116)
 
 ## Session Continuity
 
-Last session: 2026-04-18T12:20:25.411Z
-Stopped at: Phase 120 context gathered
-Resume file: .planning/phases/120-request-pipelining/120-CONTEXT.md
+Last session: 2026-04-19T06:17:00.000Z
+Stopped at: Phase 120 complete + verified
+Resume file: .planning/phases/120-request-pipelining/120-VERIFICATION.md
