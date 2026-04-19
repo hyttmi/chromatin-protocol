@@ -457,3 +457,46 @@ The M4 sweep fix added `isatty(fileno(stdout))` + a stderr hint that refuses raw
 
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 999.10: Phase 119 chunked-file code review cleanup (BACKLOG)
+
+**Goal:** Close the 3 warning + 5 info findings from the post-119-03 code review that were deferred as non-blocking cleanup. None are observed in live testing; each is a correctness or legibility refinement to the chunked-file codepath.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Full findings in `.planning/phases/119-chunked-large-files/119-REVIEW.md`.
+
+**Warnings (3):**
+
+1. **WR-01 — `put_chunked` retry can send different plaintext than was hashed** (`cli/src/chunked.cpp:220-249`)
+   The first read feeds `hasher.absorb` before `send_async`; a retry re-reads from disk and sends whatever the file contains now, so the CDAT on the wire can diverge from `manifest.plaintext_sha3`. A subsequent `cdb get` then fails the final SHA3 check even though every chunk was received intact. Secondary: a retry with `got == 0` silently sends an empty plaintext as a valid signed CDAT. **Fix direction:** hash AFTER successful send, or reject retries where re-read size differs from first read (and reject `got == 0`).
+
+2. **WR-02 — `pump_recv_any` decrements `in_flight_` on unknown-rid replies** (`cli/src/pipeline_pump.h:126-143` + 5 caller sites)
+   Every returned message decrements `in_flight_`, including stray/duplicate replies the caller discards. Over time the pipeline window ceiling drifts above `kPipelineDepth`. Well-behaved nodes don't trigger this; it's defense-in-depth hardening. **Fix direction:** either add `Connection::credit_in_flight()` and have callers re-credit on unknown-rid, or move the decrement into the caller on a known-rid match (matches `pump_recv_for` semantics).
+
+3. **WR-03 — `decode_manifest_payload` lacks lower bound on `total_plaintext_bytes`** (`cli/src/wire.cpp:396`)
+   A manifest with large `segment_count` but tiny `total_plaintext_bytes` causes `expected_len = total - off` to underflow in `get_chunked:691-700`. The `pt->size() != expected_len` check still catches it (no memory corruption), but the error message misdirects. **Fix direction:** add `min_plain = (segment_count - 1) * chunk_size_bytes + 1` check during manifest decode.
+
+**Info (5):**
+
+4. **IN-01 — `rm_chunked` has no retry policy for tombstone sends** (`cli/src/chunked.cpp:391-403`)
+   `put_chunked` and `get_chunked` retry with the D-15 backoff ladder (250/1000/4000 ms). `rm_chunked` doesn't — a single dropped packet during tombstone fan-out leaves a chunk un-tombstoned and forces a full idempotent retry. **Fix direction:** mirror the `put_chunked` retry pattern, or explicitly document that D-10 idempotency is the sole recovery strategy.
+
+5. **IN-02 — Magic `41` WriteAck/DeleteAck threshold repeated at 5 sites** (`cli/src/chunked.cpp:283,338,426,452` + `cli/src/commands.cpp:653`)
+   `41 = hash:32 + seq:8BE + status:1`. Violates the "never copy-paste utilities" project-memory rule. **Fix direction:** extract `WRITE_ACK_MIN_SIZE` / `DELETE_ACK_MIN_SIZE` constants in `cli/src/wire.h`, replace all 5 sites.
+
+6. **IN-03 — `%llu` printf formats for `uint64_t`** (5 sites in `cli/src/chunked.cpp`)
+   Casts `uint64_t` → `unsigned long long` to satisfy `%llu`. Works on Linux x86_64 but verbose. **Fix direction:** adopt `PRIu64` from `<cinttypes>` or migrate to spdlog's native `uint64_t` formatters.
+
+7. **IN-04 — `Sha3Hasher::finalize` lacks double-call guard** (`cli/src/wire.cpp:313-333` + `cli/src/wire.h:179-190`)
+   The header documents "must be called exactly once" and `Impl::finalized` tracks state, but `finalize()` itself never checks. A second call would invoke `OQS_SHA3_sha3_256_inc_finalize` on a released context. Latent — all current callers call once — but cheap to enforce. **Fix direction:** `if (impl_->finalized) throw std::logic_error(...)` at the top of `finalize()`.
+
+8. **IN-05 — `put_chunked` stdin path is unreachable dead code** (`cli/src/chunked.cpp:141-168`)
+   `cmd::put` only dispatches to `put_chunked` for regular files (caps stdin at `MAX_FILE_SIZE` without going through chunked). The `filename.empty()` → `"<stdin>"` fallback at `chunked.cpp:352-353` can never fire. **Fix direction:** remove the `filename.empty()` handling, or add a comment stating `path` is always a regular file.
+
+**Depends on:** none (the live-node end-to-end path already works; these are hardening/cleanup)
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
