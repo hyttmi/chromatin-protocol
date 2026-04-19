@@ -213,8 +213,13 @@ int main(int argc, char* argv[]) {
                         opts.port = static_cast<uint16_t>(cfg["port"].get<unsigned>());
                     }
                 }
-            } catch (...) {
-                // Silently ignore malformed config
+            } catch (const std::exception& e) {
+                // IN-03 fix: narrow the catch and surface the error. Project-memory
+                // rule: "Don't suppress errors with || true". The UX of falling
+                // back to defaults on a bad config is preserved; the SILENCING
+                // was the violation.
+                std::fprintf(stderr, "Warning: ignoring malformed %s: %s\n",
+                             config_path.c_str(), e.what());
             }
         } else if (!node_name.empty()) {
             std::fprintf(stderr, "Error: --node requires config.json at %s\n",
