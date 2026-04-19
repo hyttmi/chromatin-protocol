@@ -616,8 +616,11 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         }
 
         // Phase B: drain one reply in arrival order (D-08 completion order,
-        // not request order). recv() returns whichever WriteAck landed first.
-        auto resp = conn.recv();
+        // not request order). recv_next() returns whichever WriteAck landed
+        // first AND decrements in_flight_ (CR-01 / WR-04 fix — plain recv()
+        // leaks the counter; a batch of 9+ small files would otherwise hang
+        // on file 9 when the pipeline window fills).
+        auto resp = conn.recv_next();
         if (!resp) {
             // Transport dead: every still-pending request becomes an error so
             // the user sees exactly which files are uncertain.
