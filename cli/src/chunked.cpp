@@ -606,8 +606,11 @@ int get_chunked(
             continue;
         }
 
-        // Phase B: drain one reply in arrival order (D-08).
-        auto resp = conn.recv();
+        // Phase B: drain one reply in arrival order (D-08). recv_next()
+        // decrements in_flight_ (CR-01 fix — plain recv() leaks the counter
+        // and stalls the download at 8 in-flight ReadRequests). See
+        // 119-REVIEW.md §CR-01.
+        auto resp = conn.recv_next();
         if (!resp) {
             return fail_unlink("connection lost during chunked download");
         }
