@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 119 context gathered
-last_updated: "2026-04-19T09:49:56.721Z"
-last_activity: 2026-04-19
+last_updated: "2026-04-19T14:11:31.833Z"
+last_activity: 2026-04-19 -- Phase 121 execution started
 progress:
-  total_phases: 16
+  total_phases: 25
   completed_phases: 5
-  total_plans: 11
+  total_plans: 12
   completed_plans: 11
-  percent: 100
+  percent: 92
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 119 — chunked-large-files
+**Current focus:** Phase 121 — storage-concurrency-invariant
 
 ## Current Position
 
-Phase: 120
-Plan: Not started
-Status: Executing Phase 119
-Last activity: 2026-04-19
+Phase: 121 (storage-concurrency-invariant) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 121
+Last activity: 2026-04-19 -- Phase 121 execution started
 
 Progress: [##########] 100%
 
