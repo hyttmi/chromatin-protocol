@@ -384,7 +384,10 @@ int rm_chunked(
             continue;
         }
 
-        auto resp = conn.recv();
+        // recv_next() decrements in_flight_ (CR-01 fix). Each DeleteAck drained
+        // here is ONE tombstone the node has committed; releasing the pipeline
+        // slot lets Phase A fire the next one. See 119-REVIEW.md §CR-01.
+        auto resp = conn.recv_next();
         if (!resp) {
             std::fprintf(stderr,
                 "Error: connection lost during chunk cascade-delete\n");
