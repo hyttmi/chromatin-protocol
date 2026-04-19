@@ -39,7 +39,9 @@ namespace chromatindb::peer {
 /// - BlobPushManager: BlobNotify/BlobFetch protocol, on_blob_ingested fan-out
 /// - MessageDispatcher: message routing switch, all query handlers
 ///
-/// Thread safety: NOT thread-safe. Runs on single io_context thread.
+/// Thread safety: thread-confined to the io_context executor. All Storage
+/// access is proxied through member functions on this thread; the Storage
+/// layer enforces this at runtime via STORAGE_THREAD_CHECK() (debug builds).
 class PeerManager {
 public:
     PeerManager(const config::Config& config,

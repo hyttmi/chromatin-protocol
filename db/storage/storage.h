@@ -102,7 +102,15 @@ struct PrecomputedBlob {
 /// - cursor:     [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
 /// - quota:      [namespace:32] -> [total_bytes_be:8][blob_count_be:8]
 ///
-/// Thread safety: NOT thread-safe. Caller must synchronize access.
+/// Thread safety: thread-confined to the io_context executor.
+/// Enforced by STORAGE_THREAD_CHECK() (db/storage/thread_check.h) which
+/// captures the owner thread on first call and asserts identity on every
+/// subsequent public method entry. Compiles to a no-op under NDEBUG.
+///
+/// Callers that offload work to a thread_pool (via db/crypto/thread_pool.h)
+/// MUST `co_await asio::post(ioc_, asio::use_awaitable)` before touching
+/// Storage again — see db/peer/peer_types.h:58 for the same pattern applied
+/// to NodeMetrics counters.
 class Storage {
 public:
     /// Open or create a storage engine at the given data directory.

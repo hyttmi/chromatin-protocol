@@ -32,7 +32,11 @@ struct SyncStats {
 /// Other methods remain synchronous helpers for the sync algorithm.
 /// The async orchestration (sending messages over connections) lives in PeerManager.
 ///
-/// Thread safety: NOT thread-safe. Caller must synchronize access.
+/// Thread safety: thread-confined to the io_context executor.
+/// `ingest_blobs()` is a coroutine that may `co_await crypto::offload(pool, ...)`;
+/// the resume continuation MUST post back to ioc_ before touching BlobEngine
+/// or Storage. STORAGE_THREAD_CHECK() at every Storage method catches
+/// violations in debug builds.
 class SyncProtocol {
 public:
     /// Construct with a BlobEngine, Storage, thread pool, and injectable clock.
