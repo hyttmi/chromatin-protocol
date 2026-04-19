@@ -53,6 +53,15 @@ public:
     /// only routes already-authenticated replies (T-120-01).
     std::optional<DecodedTransport> recv_for(uint32_t request_id);
 
+    /// Arrival-order counterpart of recv_for(rid). Returns the next reply —
+    /// either a stashed one from pending_replies_ or the next one off the
+    /// wire — and decrements in_flight_ by one. Used by chunked upload/download
+    /// drain loops and by cmd::put / cmd::get batch drains where the caller
+    /// routes replies by rid themselves (not by the Connection's correlation map).
+    /// Single-sender / single-reader invariant (PIPE-02) is preserved: this
+    /// method only invokes recv() under the hood.
+    std::optional<DecodedTransport> recv_next();
+
     /// Close the connection.
     void close();
 

@@ -754,6 +754,15 @@ std::optional<DecodedTransport> Connection::recv_for(uint32_t request_id) {
         in_flight_);
 }
 
+std::optional<DecodedTransport> Connection::recv_next() {
+    if (!connected_) return std::nullopt;
+
+    return pipeline::pump_recv_any(
+        [this] { return recv(); },
+        pending_replies_,
+        in_flight_);
+}
+
 // =============================================================================
 // close()
 // =============================================================================
