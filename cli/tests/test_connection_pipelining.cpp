@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "cli/src/pipeline_pump.h"
 #include "cli/src/wire.h"
+#include "cli/tests/pipeline_test_support.h"
 
-#include <deque>
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -10,41 +10,8 @@
 #include <vector>
 
 using namespace chromatindb::cli;
-
-namespace {
-
-DecodedTransport make_reply(uint32_t rid, uint8_t type = 0x42,
-                            std::vector<uint8_t> payload = {}) {
-    DecodedTransport m;
-    m.type = type;
-    m.request_id = rid;
-    m.payload = std::move(payload);
-    return m;
-}
-
-// Source fixture: a FIFO queue of replies. Each call dequeues one.
-// If the test asks for more than scripted, the source goes "dead" and
-// returns nullopt (simulates transport error). This also catches test
-// bugs that over-drain.
-struct ScriptedSource {
-    std::deque<DecodedTransport> queue;
-    bool dead = false;
-    int call_count = 0;
-
-    std::optional<DecodedTransport> operator()() {
-        ++call_count;
-        if (dead) return std::nullopt;
-        if (queue.empty()) {
-            dead = true;
-            return std::nullopt;
-        }
-        auto m = std::move(queue.front());
-        queue.pop_front();
-        return m;
-    }
-};
-
-} // namespace
+using chromatindb::cli::testing::ScriptedSource;
+using chromatindb::cli::testing::make_reply;
 
 TEST_CASE("pipeline: recv_for returns matching reply on direct hit", "[pipeline]") {
     ScriptedSource src;
