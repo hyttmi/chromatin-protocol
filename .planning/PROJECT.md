@@ -238,6 +238,7 @@ Documentation:
 - [ ] Configurable node sync/peer constants (10 hardcoded values to config.json) — v4.1.0
 - [ ] Node peer management CLI (add-peer/remove-peer/list-peers) — v4.1.0
 - [ ] PROTOCOL.md + README.md fully updated — v4.1.0
+- [x] Storage concurrency invariant proven (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate) — v4.1.0 (validated in Phase 121)
 
 ### Future
 
@@ -406,7 +407,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-15 after Phase 115 (Chunked Streaming for Large Blobs) complete*
+*Last updated: 2026-04-19 after Phase 121 (Storage Concurrency Invariant) complete*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
