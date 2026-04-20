@@ -1,3 +1,5 @@
+include "blob.fbs";
+
 namespace chromatindb.wire;
 
 enum TransportMsgType : byte {
@@ -64,13 +66,23 @@ enum TransportMsgType : byte {
     BlobFetch = 60,
     BlobFetchResponse = 61,
     SyncNamespaceAnnounce = 62,
-    ErrorResponse = 63
+    ErrorResponse = 63,
+    BlobWrite = 64
 }
 
 table TransportMessage {
     type: TransportMsgType;
     payload: [ubyte];
     request_id: uint32;
+}
+
+// Phase 122 D-07: direct-write envelope. `target_namespace` is 32 bytes (SHA3-256 of
+// signing pubkey for owner writes; delegate writes use the owner's namespace). The
+// inner Blob post-122 has no namespace_id field — this envelope carries the routing
+// identity at the transport layer.
+table BlobWriteBody {
+  target_namespace:[ubyte];  // 32 bytes
+  blob:Blob;
 }
 
 root_type TransportMessage;
