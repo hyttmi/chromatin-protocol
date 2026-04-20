@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -150,6 +151,69 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
 inline std::span<const uint8_t, 2592> extract_pubk_signing_pk(std::span<const uint8_t> data) {
     return std::span<const uint8_t, 2592>(data.data() + 4, 2592);
 }
+
+// =============================================================================
+// NAME (mutable name pointer — Phase 123 D-03)
+// =============================================================================
+
+/// 4-byte magic prefix identifying a NAME pointer blob.
+inline constexpr std::array<uint8_t, 4> NAME_MAGIC = {0x4E, 0x41, 0x4D, 0x45}; // "NAME"
+
+/// NAME payload minimum size: magic + name_len(0) + target_hash = 4 + 2 + 0 + 32 = 38.
+/// name_len == 0 is allowed structurally (empty-name edge case; resolution is
+/// still deterministic via D-04 opaque-byte memcmp).
+inline constexpr size_t NAME_MIN_DATA_SIZE = 4 + 2 + 0 + 32;
+
+/// Check if blob data is a NAME blob: magic prefix + structurally well-formed
+/// (declared name_len matches data.size() - 38).
+bool is_name(std::span<const uint8_t> data);
+
+/// Parsed NAME payload: the name as opaque bytes (D-04) + the target content hash.
+struct NamePayload {
+    std::span<const uint8_t> name;  ///< points INTO `data`; valid only while `data` lives
+    std::array<uint8_t, 32> target_hash;
+};
+
+/// Parse NAME payload: [NAME:4][name_len:2 BE][name:N][target_hash:32].
+/// Returns nullopt if data is not a NAME blob or is structurally malformed.
+std::optional<NamePayload> parse_name_payload(std::span<const uint8_t> data);
+
+/// Build NAME payload bytes: [NAME:4][name_len:2 BE][name][target_hash:32].
+/// @throws std::invalid_argument if name.size() > 65535.
+std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
+                                     std::span<const uint8_t, 32> target_hash);
+
+// =============================================================================
+// BOMB (batched tombstone — Phase 123 D-05)
+// =============================================================================
+
+/// 4-byte magic prefix identifying a BOMB (batched-tombstone) blob.
+inline constexpr std::array<uint8_t, 4> BOMB_MAGIC = {0x42, 0x4F, 0x4D, 0x42}; // "BOMB"
+
+/// BOMB payload minimum size: magic + count(0) = 4 + 4 = 8. BOMB-of-0 is
+/// structurally valid (accepted as no-op per A2 recommendation; no DoS
+/// amplification since the side-effect loop runs zero iterations).
+inline constexpr size_t BOMB_MIN_DATA_SIZE = 4 + 4;
+
+/// Check if blob data is a BOMB: magic prefix + structurally well-formed
+/// (data.size() == 8 + count*32, computed with size_t to prevent overflow).
+bool is_bomb(std::span<const uint8_t> data);
+
+/// Validate BOMB structural invariants (D-13(2)):
+///   data.size() >= 8
+///   data.size() == 8 + read_u32_be(data+4) * 32
+/// Currently an alias for is_bomb; kept as a separate entry point so the engine
+/// Step 1.7 check reads as "validate_bomb_structure" at the call site.
+bool validate_bomb_structure(std::span<const uint8_t> data);
+
+/// Extract BOMB target hashes as owning copies.
+/// @pre is_bomb(data).
+std::vector<std::array<uint8_t, 32>> extract_bomb_targets(std::span<const uint8_t> data);
+
+/// Build BOMB payload bytes: [BOMB:4][count:4 BE][target_hash:32]*count.
+/// @throws std::invalid_argument if targets.size() > UINT32_MAX (unreachable in
+/// practice but documented for safety).
+std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> targets);
 
 // =============================================================================
 // Generic blob type extraction

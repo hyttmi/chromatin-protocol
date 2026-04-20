@@ -15,6 +15,9 @@ constexpr uint8_t ERROR_INTERNAL             = 0x05;
 constexpr uint8_t ERROR_TIMEOUT              = 0x06;
 constexpr uint8_t ERROR_PUBK_FIRST_VIOLATION = 0x07;  // Phase 122 D-03: first write to namespace must be PUBK
 constexpr uint8_t ERROR_PUBK_MISMATCH        = 0x08;  // Phase 122 D-04: PUBK signing pubkey differs from registered owner
+constexpr uint8_t ERROR_BOMB_TTL_NONZERO        = 0x09;  // Phase 123 D-13(1): BOMB must have ttl=0 (permanent)
+constexpr uint8_t ERROR_BOMB_MALFORMED          = 0x0A;  // Phase 123 D-13(2): BOMB structural sanity failed
+constexpr uint8_t ERROR_BOMB_DELEGATE_NOT_ALLOWED = 0x0B;  // Phase 123 D-12: delegates cannot BOMB
 
 /// Map an error code byte to a human-readable string.
 /// Returns "unknown" for unrecognized values.
@@ -28,6 +31,9 @@ constexpr std::string_view error_code_string(uint8_t code) {
         case ERROR_TIMEOUT:              return "timeout";
         case ERROR_PUBK_FIRST_VIOLATION: return "pubk_first_violation";
         case ERROR_PUBK_MISMATCH:        return "pubk_mismatch";
+        case ERROR_BOMB_TTL_NONZERO:          return "bomb_ttl_nonzero";
+        case ERROR_BOMB_MALFORMED:            return "bomb_malformed";
+        case ERROR_BOMB_DELEGATE_NOT_ALLOWED: return "bomb_delegate_not_allowed";
         default:                         return "unknown";
     }
 }
