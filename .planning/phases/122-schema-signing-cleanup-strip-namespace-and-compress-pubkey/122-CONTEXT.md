@@ -72,7 +72,7 @@ One coordinated protocol-breaking change that (a) strips the `namespace_id` fiel
 
 ### Storage API Vocabulary
 
-- **D-10:** Mechanical rename `namespace_id` → `namespace` across all `Storage` public method signatures. No DBI byte-level change, no storage value layout change. The 32-byte namespace identifier is still the primary-key prefix; only the parameter name gains clarity ("namespace" is now a derived identity, not a wire field with `_id` suffix).
+- **D-10:** Mechanical rename `namespace_id` → `ns` across all `Storage` public method signatures (cannot use `namespace` since it is a C++ reserved keyword). No DBI byte-level change, no storage value layout change. The 32-byte namespace identifier is still the primary-key prefix; only the parameter name gains clarity (the parameter is now a derived identity, not a wire field with `_id` suffix; `ns` is the chosen short, keyword-safe spelling).
 
 ### Migration
 

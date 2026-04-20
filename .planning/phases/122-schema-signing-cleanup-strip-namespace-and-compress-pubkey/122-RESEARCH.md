@@ -582,26 +582,30 @@ This research was performed by reading current code directly — no training-dat
 | A2 | In-tree `blob_generated.h` is regenerated on build via CMake's `add_custom_command`, and developers typically commit both the `.fbs` and the regenerated `.h` together | Pitfall 2 | Low — confirmed by reading `db/CMakeLists.txt:129-151`; the commit pattern is inferred from `blob_generated.h` / `transport_generated.h` being present in-tree. |
 | A3 | `encode_blob_transfer` wire format change required for sync path | Pitfall 3 | Medium — this is reasoned from current code structure; plan should confirm during task decomposition by tracing what information is available at the `SyncProtocol::ingest_blobs` call site after the schema change. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Engine API: separate `target_namespace` parameter vs. combined struct?**
    - What we know: ingest()/delete_blob() have 4 callers today (message_dispatcher Data/Delete, sync_protocol ingest_blobs, tests). Post-122 they all need access to target_namespace.
    - What's unclear: cleaner to pass as second parameter, or introduce `struct IngestRequest { target_namespace; blob; }`?
    - Recommendation: separate parameter is less churn (smaller diff on test_engine.cpp's 77 cases).
+   - **RESOLVED: separate `target_namespace` parameter passed to `BlobEngine::ingest`. Adopted by 122-04-PLAN.md Task 1 (engine.h widening) and Task 2 (engine.cpp refactor).**
 
 2. **Should `encode_blob_transfer` use FlatBuffers for the outer envelope, or hand-rolled BE32 + concat like today?**
    - What we know: today's `encode_blob_transfer` is hand-rolled `[count:u32BE][len1:u32BE][blob1_flatbuf]...` at `sync_protocol.cpp:233-246`.
    - What's unclear: since inner blob is already FlatBuffers, the outer wrapper being hand-rolled is inconsistent, but changing it is scope creep.
    - Recommendation: stay hand-rolled but inject `[ns:32B]` prefix per blob: `[count:u32BE]([ns:32B][len:u32BE][blob])+`. Minimal diff.
+   - **RESOLVED: stay hand-rolled with per-blob `[ns:32B]` prefix. Adopted by 122-05-PLAN.md (sync wire format change in `encode_blob_transfer` / `decode_blob_transfer`).**
 
 3. **Naming of new TransportMsgType: `BlobWrite`, `SignedBlob`, or `Write`?**
    - What we know: D-08 defers to Claude's discretion; existing enum at `transport.fbs:3-68` uses PascalCase nouns (`Data`, `Delete`, `BlobTransfer`, `ReadRequest`).
    - Recommendation: `BlobWrite = 64` — matches the adjacent `BlobTransfer`, `BlobRequest`, `BlobFetch` naming; clearly indicates "direct client write of a blob" as distinct from sync's `BlobTransfer`.
+   - **RESOLVED: `BlobWrite = 64` TransportMsgType + `BlobWriteBody { target_namespace, blob }` table. Adopted by 122-01-PLAN.md (schema add) and 122-05-PLAN.md (dispatcher routing).**
 
 4. **Pre-existing test case that constructs BlobData with `namespace_id` filled with `0xFF` (test_engine.cpp:89) — post-122 semantics?**
    - What we know: today's test exercises "BlobEngine rejects namespace mismatch" by corrupting the field.
    - What's unclear: post-122 there's no namespace_id to corrupt. Test becomes "corrupt signer_hint" or "ingest with target_namespace that doesn't match any owner pubkey" → rejection path is "unknown signer" (D-09 fallthrough).
    - Recommendation: plan keeps the test renamed and rescoped: signer_hint that doesn't exist in owner_pubkeys AND no matching delegation → `no_delegation` or a new `unknown_signer` IngestError.
+   - **RESOLVED: rescope the test to use the existing `IngestError::no_delegation` value (no new enum value introduced). Unknown `signer_hint` with no matching delegation falls through to no_delegation per D-09. Adopted by 122-07-PLAN.md Task 1 cascade sweep (test_engine.cpp namespace_mismatch case rescoping).**
 
 ## Environment Availability
 

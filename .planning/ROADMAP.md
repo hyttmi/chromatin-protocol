@@ -124,12 +124,12 @@ Plans:
 **Plans**: 7 plans
 Plans:
 - [ ] 122-01-PLAN.md — Schema break + transport wire type (blob.fbs/transport.fbs + regen)
-- [ ] 122-02-PLAN.md — Storage owner_pubkeys DBI + 4 methods + D-10 mechanical rename + max_maps 9->10
+- [ ] 122-02-PLAN.md — Storage owner_pubkeys DBI + 5 methods (4 owner_pubkeys + 1 delegation hint resolver) + D-10 mechanical rename + max_maps 9->10
 - [ ] 122-03-PLAN.md — Codec + signing input rename + golden-vector + cross-namespace differs tests
 - [ ] 122-04-PLAN.md — Engine verify path refactor (PUBK-first gate, owner_pubkeys lookup, Step 4.5 register) + test_helpers cascade
 - [ ] 122-05-PLAN.md — Dispatcher BlobWrite routing + sync wire format (per-blob ns prefix) + sync ingest threading
-- [ ] 122-06-PLAN.md — Engine/sync/delegate-replay tests + TSAN cross-namespace race (D-12 a/b/c/d/e/f + D-13)
-- [ ] 122-07-PLAN.md — Schema-cascade test sweep + verify-path tests + grep regression + max_maps gate
+- [ ] 122-06-PLAN.md — Engine/sync/delegate-replay tests + TSAN cross-namespace race (D-12 a/b/c/d/e/f + D-13) [wave 6 — runs AFTER Plan 07's cascade cleanup]
+- [ ] 122-07-PLAN.md — Schema-cascade test sweep + verify-path tests + grep regression + max_maps gate [wave 5 — runs BEFORE Plan 06; makes test target link]
 
 ### Phase 123: Tombstone Batching + Name-Tagged Overwrite
 **Goal**: Ship mutable-name overwrite (`cdb put --name foo`) and shrink tombstone bloat 200–300× by amortizing PQ signatures across batches — entirely via new blob magics, no node changes required.
