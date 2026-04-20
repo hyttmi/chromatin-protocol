@@ -127,6 +127,7 @@ struct Storage::Impl {
     mdbx::map_handle tombstone_map{0};
     mdbx::map_handle cursor_map{0};
     mdbx::map_handle quota_map{0};
+    mdbx::map_handle owner_pubkeys_map{0};  // Phase 122: signer_hint -> ML-DSA-87 pubkey
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
     std::string data_dir_;          // Stored for compact() reopen
@@ -173,14 +174,14 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 9;  // 8 named sub-databases + 1 default
+        operate_params.max_maps = 10;  // 9 named sub-databases + 1 default (Phase 122: owner_pubkeys)
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;
 
         env = mdbx::env_managed(path, create_params, operate_params);
 
-        // Create/open all 7 sub-databases in a single write transaction
+        // Create/open all 8 sub-databases in a single write transaction
         {
             auto txn = env.start_write();
             blobs_map = txn.create_map("blobs");
@@ -190,6 +191,7 @@ struct Storage::Impl {
             tombstone_map = txn.create_map("tombstone");
             cursor_map = txn.create_map("cursor");
             quota_map = txn.create_map("quota");
+            owner_pubkeys_map = txn.create_map("owner_pubkeys");
 
             txn.commit();
         }
@@ -1192,12 +1194,12 @@ bool Storage::delete_blob_data(
 }
 
 bool Storage::has_valid_delegation(
-    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> ns,
     std::span<const uint8_t> delegate_pubkey) {
     STORAGE_THREAD_CHECK();
     try {
         auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
-        auto deleg_key = make_blob_key(namespace_id.data(), delegate_pk_hash.data());
+        auto deleg_key = make_blob_key(ns.data(), delegate_pk_hash.data());
         auto txn = impl_->env.start_read();
 
         auto val = txn.get(impl_->delegation_map, to_slice(deleg_key), not_found_sentinel);
@@ -1236,7 +1238,7 @@ uint64_t Storage::count_tombstones() const {
     }
 }
 
-uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) const {
+uint64_t Storage::count_delegations(std::span<const uint8_t, 32> ns) const {
     STORAGE_THREAD_CHECK();
     try {
         auto txn = impl_->env.start_read();
@@ -1244,7 +1246,7 @@ uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) c
 
         // Seek to lower bound: namespace prefix with zero hash suffix
         std::array<uint8_t, 64> lower_key{};
-        std::memcpy(lower_key.data(), namespace_id.data(), 32);
+        std::memcpy(lower_key.data(), ns.data(), 32);
         // remaining 32 bytes are zero -- sorts before any real delegate_pk_hash
 
         uint64_t count = 0;
@@ -1253,7 +1255,7 @@ uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) c
             auto key = cursor.current(false).key;
             // Check that the first 32 bytes still match our namespace
             if (key.length() < 32 ||
-                std::memcmp(key.data(), namespace_id.data(), 32) != 0) {
+                std::memcmp(key.data(), ns.data(), 32) != 0) {
                 break;  // Past our namespace prefix
             }
             ++count;
@@ -1270,7 +1272,7 @@ uint64_t Storage::count_delegations(std::span<const uint8_t, 32> namespace_id) c
     }
 }
 
-std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 32> namespace_id) const {
+std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 32> ns) const {
     STORAGE_THREAD_CHECK();
     std::vector<DelegationEntry> entries;
     try {
@@ -1279,7 +1281,7 @@ std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 
 
         // Seek to lower bound: namespace prefix with zero hash suffix
         std::array<uint8_t, 64> lower_key{};
-        std::memcpy(lower_key.data(), namespace_id.data(), 32);
+        std::memcpy(lower_key.data(), ns.data(), 32);
 
         auto result = cursor.lower_bound(to_slice(lower_key));
         while (result.done) {
@@ -1287,7 +1289,7 @@ std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 
             auto key = kv.key;
             // Check namespace prefix match (key = [namespace:32][delegate_pk_hash:32])
             if (key.length() < 64 ||
-                std::memcmp(key.data(), namespace_id.data(), 32) != 0) {
+                std::memcmp(key.data(), ns.data(), 32) != 0) {
                 break;
             }
             DelegationEntry entry;
@@ -1307,6 +1309,159 @@ std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 
         spdlog::error("Storage error in list_delegations: {}", e.what());
     }
     return entries;
+}
+
+// =============================================================================
+// Delegation-index helpers (Phase 122)
+// =============================================================================
+
+std::optional<std::array<uint8_t, 2592>> Storage::get_delegate_pubkey_by_hint(
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t, 32> signer_hint) {
+    STORAGE_THREAD_CHECK();
+    try {
+        // delegation_map composite key is [ns:32][delegate_pk_hash:32], where
+        // signer_hint definitionally equals SHA3-256(delegate_pubkey) -- so
+        // signer_hint == delegate_pk_hash. Same key shape as
+        // has_valid_delegation (above), but the value stored is the
+        // 32-byte delegation_blob_hash (see delegation upsert at the
+        // store_blob helper, ~storage.cpp:478-487), not the raw pubkey.
+        // To resolve the actual 2592-byte delegate pubkey we:
+        //   1) look up delegation_map[ns || signer_hint] -> blob_hash
+        //   2) load the delegation blob via blobs_map[ns || blob_hash]
+        //      (decrypt + decode handled by get_blob)
+        //   3) extract the delegate pubkey from the delegation data
+        //      ([magic:4][delegate_pk:2592]) using wire::extract_delegate_pubkey.
+        auto composite_key = make_blob_key(ns.data(), signer_hint.data());
+        std::array<uint8_t, 32> delegation_blob_hash;
+        {
+            auto txn = impl_->env.start_read();
+            auto val = txn.get(impl_->delegation_map, to_slice(composite_key),
+                               not_found_sentinel);
+            if (val.data() == nullptr) return std::nullopt;
+            if (val.length() != 32) {
+                spdlog::error(
+                    "delegation_map value has wrong size {} (expected 32 "
+                    "delegation_blob_hash): corruption?", val.length());
+                return std::nullopt;
+            }
+            std::memcpy(delegation_blob_hash.data(), val.data(), 32);
+        }
+
+        // Reuse get_blob for decrypt+decode (do not re-implement the AEAD
+        // envelope handling here -- per feedback_no_duplicate_code.md).
+        auto blob = get_blob(ns,
+                             std::span<const uint8_t, 32>(delegation_blob_hash));
+        if (!blob.has_value()) {
+            // Index entry exists but blob is gone -- expired / deleted under us.
+            return std::nullopt;
+        }
+        if (!wire::is_delegation(blob->data)) {
+            spdlog::error(
+                "delegation_map points at blob that is not a delegation "
+                "(ns {:02x}{:02x}..., hash {:02x}{:02x}...): index corruption?",
+                ns[0], ns[1],
+                delegation_blob_hash[0], delegation_blob_hash[1]);
+            return std::nullopt;
+        }
+        auto extracted = wire::extract_delegate_pubkey(blob->data);
+        if (extracted.size() != 2592) {
+            spdlog::error(
+                "extract_delegate_pubkey returned {} bytes (expected 2592)",
+                extracted.size());
+            return std::nullopt;
+        }
+        std::array<uint8_t, 2592> result;
+        std::memcpy(result.data(), extracted.data(), 2592);
+        return result;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_delegate_pubkey_by_hint: {}",
+                      e.what());
+        return std::nullopt;
+    }
+}
+
+// =============================================================================
+// Owner pubkey index API (Phase 122)
+// =============================================================================
+
+void Storage::register_owner_pubkey(
+    std::span<const uint8_t, 32> signer_hint,
+    std::span<const uint8_t, 2592> pubkey) {
+    STORAGE_THREAD_CHECK();
+    try {
+        auto txn = impl_->env.start_write();
+        auto key_slice = mdbx::slice(signer_hint.data(), 32);
+        auto existing = txn.get(impl_->owner_pubkeys_map, key_slice,
+                                not_found_sentinel);
+        if (existing.data() != nullptr) {
+            if (existing.length() == 2592 &&
+                std::memcmp(existing.data(), pubkey.data(), 2592) == 0) {
+                return;  // Idempotent on matching value (D-04).
+            }
+            // D-04: distinct pubkey for the same signer_hint -> mismatch.
+            // Engine ingest depends on this throwing so it can surface
+            // ErrorCode::PUBK_MISMATCH at the protocol layer.
+            throw std::runtime_error(
+                "register_owner_pubkey: signing pubkey mismatch -- "
+                "namespace already owned by different key");
+        }
+        txn.upsert(impl_->owner_pubkeys_map, key_slice,
+                   mdbx::slice(pubkey.data(), 2592));
+        txn.commit();
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in register_owner_pubkey: {}", e.what());
+        throw;  // D-04: engine relies on this throwing on mismatch.
+    }
+}
+
+std::optional<std::array<uint8_t, 2592>> Storage::get_owner_pubkey(
+    std::span<const uint8_t, 32> signer_hint) {
+    STORAGE_THREAD_CHECK();
+    try {
+        auto txn = impl_->env.start_read();
+        auto val = txn.get(impl_->owner_pubkeys_map,
+                           mdbx::slice(signer_hint.data(), 32),
+                           not_found_sentinel);
+        if (val.data() == nullptr) return std::nullopt;
+        if (val.length() != 2592) {
+            spdlog::error(
+                "owner_pubkeys entry has wrong size {} (expected 2592): "
+                "corruption?", val.length());
+            return std::nullopt;
+        }
+        std::array<uint8_t, 2592> result;
+        std::memcpy(result.data(), val.data(), 2592);
+        return result;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in get_owner_pubkey: {}", e.what());
+        return std::nullopt;
+    }
+}
+
+bool Storage::has_owner_pubkey(std::span<const uint8_t, 32> signer_hint) {
+    STORAGE_THREAD_CHECK();
+    try {
+        auto txn = impl_->env.start_read();
+        auto val = txn.get(impl_->owner_pubkeys_map,
+                           mdbx::slice(signer_hint.data(), 32),
+                           not_found_sentinel);
+        return val.data() != nullptr;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in has_owner_pubkey: {}", e.what());
+        return false;
+    }
+}
+
+uint64_t Storage::count_owner_pubkeys() const {
+    STORAGE_THREAD_CHECK();
+    try {
+        auto txn = impl_->env.start_read();
+        return txn.get_map_stat(impl_->owner_pubkeys_map).ms_entries;
+    } catch (const std::exception& e) {
+        spdlog::error("Storage error in count_owner_pubkeys: {}", e.what());
+        return 0;
+    }
 }
 
 size_t Storage::run_expiry_scan() {
@@ -1506,10 +1661,10 @@ void Storage::integrity_scan() {
 
 std::optional<SyncCursor> Storage::get_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
-    std::span<const uint8_t, 32> namespace_id) {
+    std::span<const uint8_t, 32> ns) {
     STORAGE_THREAD_CHECK();
     try {
-        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto key = make_cursor_key(peer_hash.data(), ns.data());
         auto txn = impl_->env.start_read();
         auto val = txn.get(impl_->cursor_map, to_slice(key), not_found_sentinel);
         if (val.data() == nullptr) return std::nullopt;
@@ -1523,11 +1678,11 @@ std::optional<SyncCursor> Storage::get_sync_cursor(
 
 void Storage::set_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
-    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> ns,
     const SyncCursor& cursor) {
     STORAGE_THREAD_CHECK();
     try {
-        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto key = make_cursor_key(peer_hash.data(), ns.data());
         auto val = encode_cursor_value(cursor);
         auto txn = impl_->env.start_write();
         txn.upsert(impl_->cursor_map, to_slice(key),
@@ -1540,10 +1695,10 @@ void Storage::set_sync_cursor(
 
 void Storage::delete_sync_cursor(
     std::span<const uint8_t, 32> peer_hash,
-    std::span<const uint8_t, 32> namespace_id) {
+    std::span<const uint8_t, 32> ns) {
     STORAGE_THREAD_CHECK();
     try {
-        auto key = make_cursor_key(peer_hash.data(), namespace_id.data());
+        auto key = make_cursor_key(peer_hash.data(), ns.data());
         auto txn = impl_->env.start_write();
         try {
             txn.erase(impl_->cursor_map, to_slice(key));
