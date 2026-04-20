@@ -131,7 +131,7 @@ Plans:
 **Requirements**: TBD
 **Success Criteria** (what must be TRUE):
   1. New `NAME` magic (`0x4E414D45`) defined in `cli/src/wire.h` and `db/wire/codec.h`: payload `[magic:4][name_len:2][name:N][target_content_hash:32]`
-  2. New `BOMB` magic (batched tombstone) defined: payload `[magic:4][count:4][(target_hash:32 or seq:8) × count]`
+  2. New `BOMB` magic (batched tombstone) defined: payload `[magic:4][count:4][(target_hash:32 or seq:8) × count]`. **BOMB blobs MUST be written with ttl=0 (permanent)**, same invariant as single-target tombstones — an expiring BOMB would let peers that missed the batch re-propagate the supposedly-deleted blobs. Enforce at ingest: reject any BOMB with ttl != 0.
   3. `cdb put --name foo file` writes content blob + NAME blob tagging it
   4. `cdb get foo` resolves name via local `~/.chromatindb/name_cache.json` with NAME-blob enumeration fallback
   5. Overwrite = new NAME blob with higher seq; writer optionally emits BOMB blob to tombstone prior NAME + content
