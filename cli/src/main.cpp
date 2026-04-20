@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -357,13 +358,26 @@ int main(int argc, char* argv[]) {
         // =====================================================================
         if (command == "put") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb put <file>... [--share <name|@group|file>...] [--ttl <duration>] [--stdin]\n");
+                std::fprintf(stderr,
+                    "Usage: cdb put <file>... [--share <name|@group|file>...] [--ttl <duration>]\n"
+                    "                 [--stdin] [--name <name>] [--replace]\n"
+                    "\n"
+                    "Options:\n"
+                    "  --name <name>   Tag the uploaded blob with a mutable user-facing name.\n"
+                    "                  Emits an extra NAME pointer blob (Phase 123). Name is\n"
+                    "                  1..65535 bytes of opaque UTF-8 (the shell quotes it).\n"
+                    "  --replace       With --name: also emit a BOMB-of-1 tombstoning the\n"
+                    "                  content of the prior NAME binding. No-op if there is\n"
+                    "                  no prior binding. Requires --name.\n");
                 return 0;
             }
             std::vector<std::string> file_paths;
             std::vector<std::string> share_files;
             uint32_t ttl = 0;
             bool from_stdin = false;
+            std::string name_value;
+            bool name_given = false;
+            bool replace = false;
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -383,6 +397,25 @@ int main(int argc, char* argv[]) {
                     ++arg_idx;
                 } else if (std::strcmp(a, "--stdin") == 0) {
                     from_stdin = true;
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--name") == 0) {
+                    if (arg_idx + 1 >= argc) {
+                        std::fprintf(stderr, "Error: --name requires a value\n");
+                        return 1;
+                    }
+                    name_value = argv[++arg_idx];
+                    name_given = true;
+                    if (name_value.empty()) {
+                        std::fprintf(stderr, "Error: --name value must be 1..65535 bytes (empty not allowed)\n");
+                        return 2;
+                    }
+                    if (name_value.size() > 65535) {
+                        std::fprintf(stderr, "Error: --name value exceeds 65535 bytes\n");
+                        return 2;
+                    }
+                    ++arg_idx;
+                } else if (std::strcmp(a, "--replace") == 0) {
+                    replace = true;
                     ++arg_idx;
                 } else if (a[0] != '-') {
                     if (!fs::exists(a)) {
@@ -406,19 +439,49 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
+            if (replace && !name_given) {
+                std::fprintf(stderr, "Error: --replace requires --name <name>\n");
+                return 2;
+            }
+
+            if (name_given && (file_paths.size() + (from_stdin ? 1 : 0)) > 1) {
+                std::fprintf(stderr,
+                    "Error: --name binds a single content blob; pass exactly one file\n"
+                    "       (or --stdin), not a batch.\n");
+                return 2;
+            }
+
+            std::optional<std::string> name_opt;
+            if (name_given) name_opt = name_value;
+
             return cmd::put(identity_dir_str, file_paths, share_files,
-                           ttl, from_stdin, opts);
+                           ttl, from_stdin, name_opt, replace, opts);
         }
 
         // =====================================================================
-        // get <hash>...
+        // get <name> | <hash>...
         //   --stdout
         //   --from <name|hex>
         //   -o, --output-dir <dir>
+        //
+        // Dispatch (Phase 123 D-09 NAME resolution): if a positional token is
+        // exactly 64 hex chars we treat it as a content hash (existing batch
+        // flow). Otherwise the first positional is a Phase-123 NAME — fetch
+        // via cmd::get_by_name with deterministic resolution (timestamp DESC,
+        // content_hash DESC tiebreak).
         // =====================================================================
         if (command == "get") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb get <hash>... [--from <name|ns>] [-o <dir>] [--stdout] [--all] [--force]\n");
+                std::fprintf(stderr,
+                    "Usage: cdb get <name> | <hash>... [--from <name|ns>] [-o <dir>]\n"
+                    "                                  [--stdout] [--all] [--force]\n"
+                    "\n"
+                    "Positionals:\n"
+                    "  <name>      Phase 123 NAME lookup. Enumerates NAME blobs in the\n"
+                    "              current namespace and picks the winner by\n"
+                    "              (blob.timestamp DESC, content_hash DESC). Fetches the\n"
+                    "              bound content blob. Only valid as a single positional.\n"
+                    "  <hash>...   One or more 64-hex content hashes (batch fetch).\n");
                 return 0;
             }
             std::string namespace_hex;
@@ -428,6 +491,7 @@ int main(int argc, char* argv[]) {
             bool get_force = false;
 
             std::vector<std::string> hash_hexes;
+            std::vector<std::string> positionals;  // raw, for name-vs-hash dispatch below
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
                 if (std::strcmp(a, "--stdout") == 0) {
@@ -454,16 +518,57 @@ int main(int argc, char* argv[]) {
                     get_force = true;
                     ++arg_idx;
                 } else if (a[0] != '-') {
-                    if (std::strlen(a) != 64) {
-                        std::fprintf(stderr, "Error: invalid hash: %s\n", a);
-                        return 1;
-                    }
-                    hash_hexes.emplace_back(a);
+                    positionals.emplace_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown get option: %s\n", a);
                     return 1;
                 }
+            }
+
+            // Dispatch: if the first positional is exactly 64 hex chars AND every
+            // positional is, we're in batch-hash mode. Otherwise, if the first
+            // positional exists and is NOT 64 hex chars, it's a NAME lookup — only
+            // one positional allowed.
+            auto is_64_hex = [](const std::string& s) {
+                if (s.size() != 64) return false;
+                for (char c : s) {
+                    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                              (c >= 'A' && c <= 'F');
+                    if (!ok) return false;
+                }
+                return true;
+            };
+
+            bool name_mode = false;
+            if (!positionals.empty() && !is_64_hex(positionals[0])) {
+                name_mode = true;
+            }
+
+            if (name_mode) {
+                if (positionals.size() > 1) {
+                    std::fprintf(stderr,
+                        "Error: cdb get <name> takes a single NAME positional "
+                        "(got %zu). Use <hash>... for batch fetch.\n",
+                        positionals.size());
+                    return 1;
+                }
+                if (get_all) {
+                    std::fprintf(stderr, "Error: --all is not compatible with NAME lookup\n");
+                    return 1;
+                }
+                return cmd::get_by_name(identity_dir_str, positionals[0],
+                                         namespace_hex, to_stdout,
+                                         output_dir, get_force, opts);
+            }
+
+            // Hash mode: every positional must be 64 hex chars.
+            for (auto& p : positionals) {
+                if (!is_64_hex(p)) {
+                    std::fprintf(stderr, "Error: invalid hash: %s\n", p.c_str());
+                    return 1;
+                }
+                hash_hexes.emplace_back(std::move(p));
             }
 
             if (get_all) {
@@ -486,7 +591,7 @@ int main(int argc, char* argv[]) {
             }
 
             if (hash_hexes.empty()) {
-                std::fprintf(stderr, "Error: get requires at least one blob hash (or use --all --from <ns>)\n");
+                std::fprintf(stderr, "Error: get requires at least one blob hash, a NAME, or --all --from <ns>\n");
                 return 1;
             }
 
@@ -495,20 +600,29 @@ int main(int argc, char* argv[]) {
         }
 
         // =====================================================================
-        // rm <hash>
+        // rm <hash>...
         //   --namespace <name|hex>
         //   -y / --yes
         //   --force (bypass target-existence check)
+        //
+        // Phase 123 D-06/D-07: ONE invocation emits ONE BOMB regardless of target
+        // count. Separate shell invocations produce separate BOMBs — no daemon,
+        // no cross-invocation coalescing. ≥1 target: one BOMB. Zero targets:
+        // usage error (exit 2).
         // =====================================================================
         if (command == "rm") {
             if (is_help_flag(argc, argv, arg_idx)) {
-                std::fprintf(stderr, "Usage: cdb rm <hash> [--namespace <name|hex>] [-y] [--force]\n");
+                std::fprintf(stderr,
+                    "Usage: cdb rm <hash>... [--namespace <name|hex>] [-y] [--force]\n"
+                    "\n"
+                    "Multiple targets in a single invocation are amortized into ONE\n"
+                    "batched BOMB tombstone (Phase 123). Exit 2 if no targets given.\n");
                 return 0;
             }
-            std::string hash_hex;
             std::string namespace_hex;
             bool skip_confirm = false;
             bool rm_force = false;
+            std::vector<std::string> hash_hexes;  // target_hashes (per acceptance grep)
 
             while (arg_idx < argc) {
                 const char* a = argv[arg_idx];
@@ -525,8 +639,12 @@ int main(int argc, char* argv[]) {
                 } else if (std::strcmp(a, "--force") == 0) {
                     rm_force = true;
                     ++arg_idx;
-                } else if (a[0] != '-' && hash_hex.empty()) {
-                    hash_hex = a;
+                } else if (a[0] != '-') {
+                    if (std::strlen(a) != 64) {
+                        std::fprintf(stderr, "Error: invalid hash (expected 64 hex chars): %s\n", a);
+                        return 1;
+                    }
+                    hash_hexes.emplace_back(a);
                     ++arg_idx;
                 } else {
                     std::fprintf(stderr, "Unknown rm option: %s\n", a);
@@ -534,13 +652,18 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (hash_hex.empty()) {
-                std::fprintf(stderr, "Error: rm requires a blob hash\n");
-                return 1;
+            if (hash_hexes.empty()) {
+                std::fprintf(stderr, "Error: rm requires at least one blob hash (no targets)\n");
+                return 2;
             }
 
             if (!skip_confirm) {
-                std::fprintf(stderr, "Delete blob %s? [y/N] ", hash_hex.c_str());
+                if (hash_hexes.size() == 1) {
+                    std::fprintf(stderr, "Delete blob %s? [y/N] ", hash_hexes[0].c_str());
+                } else {
+                    std::fprintf(stderr, "Delete %zu blobs via one BOMB tombstone? [y/N] ",
+                                 hash_hexes.size());
+                }
                 int ch = std::fgetc(stdin);
                 if (ch != 'y' && ch != 'Y') {
                     std::fprintf(stderr, "Aborted.\n");
@@ -548,7 +671,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            return cmd::rm(identity_dir_str, hash_hex, namespace_hex, rm_force, opts);
+            return cmd::rm_batch(identity_dir_str, hash_hexes, namespace_hex, rm_force, opts);
         }
 
         // =====================================================================
