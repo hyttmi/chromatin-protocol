@@ -157,8 +157,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         }
     }
 
-    // Step 0e: Max TTL enforcement (tombstones exempt — must be permanent)
-    if (max_ttl_seconds_ > 0 && !wire::is_tombstone(blob.data)) {
+    // Step 0e: Max TTL enforcement (tombstones + BOMBs exempt — must be permanent)
+    // Phase 123 D-13(1): BOMB is permanent like a single tombstone, exempt from max_ttl.
+    if (max_ttl_seconds_ > 0 && !wire::is_tombstone(blob.data) && !wire::is_bomb(blob.data)) {
         if (blob.ttl == 0) {
             co_return IngestResult::rejection(IngestError::invalid_ttl,
                 "permanent blobs not allowed (max_ttl_seconds=" +
@@ -192,6 +193,28 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
                 "first write to namespace must be PUBK");
         }
         // else: a PUBK blob is allowed to register a new namespace -- fall through.
+    }
+
+    // Step 1.7 (Phase 123 D-13): BOMB structural validation.
+    // Runs BEFORE crypto::offload — Pitfall #6 adversarial-flood defense
+    // (mirrors Phase 122 Step 1.5 PUBK-first discipline). Cheap integer checks
+    // only; uses helpers from Plan 01 — no inline payload re-parsing.
+    if (wire::is_bomb(blob.data)) {
+        if (blob.ttl != 0) {
+            spdlog::warn("Ingest rejected: BOMB with ttl={} (MUST be 0; ns {:02x}{:02x}...)",
+                         blob.ttl, target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::bomb_ttl_nonzero,
+                "BOMB must have ttl=0 (permanent)");
+        }
+        if (!wire::validate_bomb_structure(blob.data)) {
+            spdlog::warn("Ingest rejected: BOMB structural check failed (size={}, ns {:02x}{:02x}...)",
+                         blob.data.size(), target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::bomb_malformed,
+                "BOMB structural check failed (size mismatch or too short)");
+        }
+        // count == 0 is structurally valid (Plan 01 A2): side-effect loop runs
+        // zero iterations; no DoS amplification. Full PQ signature per empty BOMB
+        // makes this economically unattractive to attackers.
     }
 
     // Step 2 (Phase 122 D-09): resolve signing pubkey via owner_pubkeys DBI
@@ -277,6 +300,15 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             co_return IngestResult::rejection(IngestError::no_delegation,
                 "delegates cannot create tombstone blobs");
         }
+
+        // Phase 123 D-12: Delegates cannot emit BOMB blobs (batched-tombstone
+        // is owner-privileged, same rationale as single tombstones above).
+        if (wire::is_bomb(blob.data)) {
+            spdlog::warn("Ingest rejected: delegates cannot create BOMB blobs (ns {:02x}{:02x}...)",
+                         target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::bomb_delegate_not_allowed,
+                "delegates cannot create BOMB blobs");
+        }
     }
 
     // Encode blob ONCE -- reused for quota check, dedup, tombstone check, and storage.
@@ -346,7 +378,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             "ML-DSA-87 signature verification failed");
     }
 
-    // Step 3.5: Tombstone handling for incoming blobs
+    // Step 3.5: Tombstone / BOMB handling for incoming blobs
     // Reuse already-computed content_hash and encoded -- no redundant encode/hash.
     if (wire::is_tombstone(blob.data)) {
         // Tombstone blob arriving via sync or direct ingest.
@@ -355,6 +387,20 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         storage_.delete_blob_data(target_namespace, target_hash);
         spdlog::debug("Tombstone received: deleting target blob in ns {:02x}{:02x}...",
                        target_namespace[0], target_namespace[1]);
+    } else if (wire::is_bomb(blob.data)) {
+        // Phase 123 D-05 / D-14: BOMB (batched-tombstone) side-effect.
+        // Iterate the declared target_hashes and delete each. Runs on the
+        // io_context thread (post-back-to-ioc at :340 already happened). Each
+        // delete is a single MDBX txn; batch-txn optimization is YAGNI until
+        // measured. D-14: no per-target existence check — BOMB can legitimately
+        // pre-mark not-yet-received blobs. Regular-blob block-by-tombstone is
+        // skipped (BOMB IS a batched tombstone; no has_tombstone_for call).
+        auto targets = wire::extract_bomb_targets(blob.data);
+        for (const auto& target_hash : targets) {
+            storage_.delete_blob_data(target_namespace, target_hash);
+        }
+        spdlog::debug("BOMB received: deleted {} target blob(s) in ns {:02x}{:02x}...",
+                       targets.size(), target_namespace[0], target_namespace[1]);
     } else {
         // Regular blob: check if a tombstone blocks it.
         if (storage_.has_tombstone_for(target_namespace, content_hash)) {

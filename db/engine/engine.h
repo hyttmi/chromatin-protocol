@@ -36,7 +36,10 @@ enum class IngestError {
     timestamp_rejected,   ///< Blob timestamp too far in future or past.
     invalid_ttl,          ///< Tombstone with non-zero TTL.
     pubk_first_violation, ///< Phase 122 D-03: first write to namespace was non-PUBK.
-    pubk_mismatch         ///< Phase 122 D-04: incoming PUBK signing pubkey differs from registered owner.
+    pubk_mismatch,        ///< Phase 122 D-04: incoming PUBK signing pubkey differs from registered owner.
+    bomb_ttl_nonzero,     ///< Phase 123 D-13(1): BOMB with ttl != 0 (BOMB must be permanent).
+    bomb_malformed,       ///< Phase 123 D-13(2): BOMB header structural sanity failed (size mismatch).
+    bomb_delegate_not_allowed ///< Phase 123 D-12: delegates cannot emit BOMB blobs.
 };
 
 /// Status of a successful ingest.
