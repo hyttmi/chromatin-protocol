@@ -228,6 +228,8 @@ if(BUILD_TESTING)
     tests/crypto/test_signing.cpp
     tests/engine/test_engine.cpp
     tests/engine/test_verify_signer_hint.cpp
+    tests/engine/test_pubk_first.cpp
+    tests/engine/test_delegate_replay.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
