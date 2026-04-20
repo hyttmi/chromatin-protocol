@@ -811,7 +811,9 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
     REQUIRE(run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(deleg.signer_hint), deleg)).accepted);
 
     auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "sync-delegate-data");
-    REQUIRE(run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(delegate_blob.signer_hint), delegate_blob)).accepted);
+    // D-01: delegate writes to the OWNER's namespace (target_namespace = owner's ns).
+    // signer_hint = SHA3(delegate_pk) identifies the signer, not the target namespace.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), delegate_blob)).accepted);
 
     // Sync everything from node1 to node2
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -918,7 +920,9 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Delegate writes to node2 should now fail
     auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "post-revocation");
-    auto result = run_async(pool, engine2.ingest(std::span<const uint8_t, 32>(delegate_blob.signer_hint), delegate_blob));
+    // D-01: delegate writes to the OWNER's namespace (target_namespace = owner's ns).
+    // After revocation the delegation_map lookup misses → no_delegation.
+    auto result = run_async(pool, engine2.ingest(chromatindb::test::ns_span(owner), delegate_blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);
 }

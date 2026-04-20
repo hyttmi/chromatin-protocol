@@ -69,6 +69,12 @@ TEST_CASE("concurrent ingests are TSAN-clean and all succeed",
         identities.push_back(NodeIdentity::generate());
     }
 
+    // Phase 122 PUBK-first: register owner PUBKs BEFORE the concurrent burst
+    // so every non-PUBK write is allowed through the Step 1.5 gate.
+    for (const auto& id : identities) {
+        chromatindb::test::register_pubk(storage, id);
+    }
+
     asio::io_context ioc;
     std::atomic<int> completed{0};
     std::atomic<int> accepted{0};

@@ -1,5 +1,6 @@
 #include "db/wire/codec.h"
 #include "db/wire/blob_generated.h"
+#include "db/wire/transport_generated.h"
 #include "db/crypto/hash.h"
 #include "db/util/endian.h"
 #include <flatbuffers/flatbuffers.h>
@@ -62,6 +63,30 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
 
     // Share field-extraction with decode_blob_from_fb (feedback_no_duplicate_code.md).
     return decode_blob_from_fb(chromatindb::wire::GetBlob(buffer.data()));
+}
+
+std::vector<uint8_t> encode_blob_write_envelope(
+    std::span<const uint8_t, 32> target_namespace,
+    const BlobData& blob) {
+    // Estimate: outer envelope overhead (~64B) + inner blob body.
+    size_t estimated_size = blob.data.size() + 8192;
+    flatbuffers::FlatBufferBuilder builder(estimated_size);
+    builder.ForceDefaults(true);  // Deterministic: include zero-value fields
+
+    // Inner Blob table
+    auto sh = builder.CreateVector(blob.signer_hint.data(), blob.signer_hint.size());
+    auto dt = builder.CreateVector(blob.data.data(), blob.data.size());
+    auto sg = builder.CreateVector(blob.signature.data(), blob.signature.size());
+    auto fb_blob = chromatindb::wire::CreateBlob(builder, sh, dt, blob.ttl, blob.timestamp, sg);
+
+    // Outer BlobWriteBody envelope
+    auto ns_vec = builder.CreateVector(target_namespace.data(), 32);
+    auto body = chromatindb::wire::CreateBlobWriteBody(builder, ns_vec, fb_blob);
+    builder.Finish(body);
+
+    auto* ptr = builder.GetBufferPointer();
+    auto size = builder.GetSize();
+    return {ptr, ptr + size};
 }
 
 std::array<uint8_t, 32> build_signing_input(
