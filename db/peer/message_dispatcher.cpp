@@ -14,6 +14,8 @@
 #include "db/util/endian.h"
 #include "db/util/hex.h"
 #include "db/version.h"
+#include "db/wire/codec.h"
+#include "db/wire/transport_generated.h"
 
 #include <spdlog/spdlog.h>
 
@@ -148,7 +150,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         auto* peer = find_peer(conn);
         if (peer && !try_consume_tokens(*peer, payload.size(),
                                          rate_limit_bytes_per_sec_, rate_limit_burst_)) {
-            if (type == wire::TransportMsgType_Data || type == wire::TransportMsgType_Delete) {
+            if (type == wire::TransportMsgType_BlobWrite || type == wire::TransportMsgType_Delete) {
                 ++metrics_.rate_limited;
                 spdlog::warn("rate limit exceeded by peer {} ({} bytes, limit {}B/s), disconnecting",
                              conn->remote_address(), payload.size(), rate_limit_bytes_per_sec_);
@@ -325,17 +327,43 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_Delete) {
+        // Phase 122 D-07: Delete reuses the BlobWriteBody envelope — the inner Blob
+        // is a tombstone (data = [magic:4][target_hash:32]), structurally identical
+        // to a regular Blob; only `data` magic differs. target_namespace sits at the
+        // envelope layer, not inside the signed Blob (which no longer carries namespace_id).
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             uint8_t catch_error = 0;
             try {
-                auto blob = wire::decode_blob(payload);
+                // Verify envelope shape via FlatBuffers verifier.
+                auto verifier = flatbuffers::Verifier(payload.data(), payload.size());
+                if (!verifier.VerifyBuffer<wire::BlobWriteBody>(nullptr)) {
+                    spdlog::warn("malformed Delete envelope from {}: verifier rejected",
+                                 conn->remote_address());
+                    record_strike_(conn, "Delete: verifier rejected");
+                    catch_error = ERROR_DECODE_FAILED;
+                    throw std::runtime_error("verifier rejected");
+                }
+                auto* body = flatbuffers::GetRoot<wire::BlobWriteBody>(payload.data());
+                if (!body || !body->target_namespace() ||
+                    body->target_namespace()->size() != 32 || !body->blob()) {
+                    spdlog::warn("Delete from {} has malformed envelope",
+                                 conn->remote_address());
+                    record_strike_(conn, "Delete: malformed envelope");
+                    catch_error = ERROR_DECODE_FAILED;
+                    throw std::runtime_error("malformed envelope");
+                }
+                std::array<uint8_t, 32> target_namespace;
+                std::memcpy(target_namespace.data(), body->target_namespace()->data(), 32);
+
+                auto blob = wire::decode_blob_from_fb(body->blob());
+
                 if (!sync_namespaces_.empty() &&
-                    sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
+                    sync_namespaces_.find(target_namespace) == sync_namespaces_.end()) {
                     spdlog::debug("dropping delete for filtered namespace from {}",
                                   conn->remote_address());
                     co_return;
                 }
-                auto result = co_await engine_.delete_blob(blob);
+                auto result = co_await engine_.delete_blob(target_namespace, blob, conn);
                 co_await asio::post(ioc_, asio::use_awaitable);
                 if (result.accepted && result.ack.has_value()) {
                     auto ack = result.ack.value();
@@ -348,7 +376,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     if (ack.status == engine::IngestStatus::stored) {
                         uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                         on_blob_ingested_(
-                            blob.namespace_id,
+                            target_namespace,
                             ack.blob_hash,
                             ack.seq_num,
                             static_cast<uint32_t>(blob.data.size()),
@@ -360,13 +388,21 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     spdlog::warn("delete rejected from {}: {}",
                                  conn->remote_address(), result.error_detail);
                     record_strike_(conn, result.error_detail);
-                    co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_Delete, request_id, metrics_);
+                    uint8_t err_code = ERROR_VALIDATION_FAILED;
+                    if (*result.error == engine::IngestError::pubk_first_violation) {
+                        err_code = ERROR_PUBK_FIRST_VIOLATION;
+                    } else if (*result.error == engine::IngestError::pubk_mismatch) {
+                        err_code = ERROR_PUBK_MISMATCH;
+                    }
+                    co_await send_error_response(conn, err_code, wire::TransportMsgType_Delete, request_id, metrics_);
                 }
             } catch (const std::exception& e) {
-                spdlog::warn("malformed delete from {}: {}",
-                             conn->remote_address(), e.what());
-                record_strike_(conn, e.what());
-                catch_error = ERROR_DECODE_FAILED;
+                if (catch_error == 0) {
+                    spdlog::warn("malformed delete from {}: {}",
+                                 conn->remote_address(), e.what());
+                    record_strike_(conn, e.what());
+                    catch_error = ERROR_DECODE_FAILED;
+                }
             }
             if (catch_error) {
                 co_await send_error_response(conn, catch_error, wire::TransportMsgType_Delete, request_id, metrics_);
@@ -893,7 +929,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 const auto& blob = *blob_opt;
                 uint64_t data_size = blob.data.size();
-                uint16_t pubkey_len = static_cast<uint16_t>(blob.pubkey.size());
+                // Phase 122: the signed blob no longer carries the full 2592-byte
+                // pubkey inline — post-schema-change, the caller gets the 32-byte
+                // signer_hint (SHA3 of signing pubkey). To retrieve the full
+                // 2592-byte pubkey, clients fetch the PUBK blob from the namespace.
+                constexpr uint16_t signer_hint_len = 32;
 
                 uint64_t seq_num = 0;
                 auto refs = storage_.get_blob_refs_since(ns, 0, UINT32_MAX);
@@ -904,7 +944,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     }
                 }
 
-                size_t resp_size = 1 + 32 + 8 + 4 + 8 + 8 + 2 + pubkey_len;
+                size_t resp_size = 1 + 32 + 8 + 4 + 8 + 8 + 2 + signer_hint_len;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
@@ -925,11 +965,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 chromatindb::util::store_u64_be(response.data() + off, seq_num);
                 off += 8;
 
-                response[off++] = static_cast<uint8_t>(pubkey_len >> 8);
-                response[off++] = static_cast<uint8_t>(pubkey_len & 0xFF);
+                response[off++] = static_cast<uint8_t>(signer_hint_len >> 8);
+                response[off++] = static_cast<uint8_t>(signer_hint_len & 0xFF);
 
-                std::memcpy(response.data() + off, blob.pubkey.data(), pubkey_len);
-                off += pubkey_len;
+                std::memcpy(response.data() + off, blob.signer_hint.data(), signer_hint_len);
+                off += signer_hint_len;
 
                 co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
                                              std::span<const uint8_t>(response), request_id);
@@ -1336,18 +1376,43 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
-    if (type == wire::TransportMsgType_Data) {
+    if (type == wire::TransportMsgType_BlobWrite) {
+        // Phase 122 D-07/D-08: BlobWrite envelope carries target_namespace alongside
+        // the signed Blob (the inner Blob no longer has namespace_id). Pre-122
+        // TransportMsgType_Data direct-write branch was DELETED — no backward compat.
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             uint8_t catch_error = 0;
             try {
-                auto blob = wire::decode_blob(payload);
+                // Verify envelope shape via FlatBuffers verifier.
+                auto verifier = flatbuffers::Verifier(payload.data(), payload.size());
+                if (!verifier.VerifyBuffer<wire::BlobWriteBody>(nullptr)) {
+                    spdlog::warn("malformed BlobWrite envelope from {}: verifier rejected",
+                                 conn->remote_address());
+                    record_strike_(conn, "BlobWrite: verifier rejected");
+                    catch_error = ERROR_DECODE_FAILED;
+                    throw std::runtime_error("verifier rejected");
+                }
+                auto* body = flatbuffers::GetRoot<wire::BlobWriteBody>(payload.data());
+                if (!body || !body->target_namespace() ||
+                    body->target_namespace()->size() != 32 || !body->blob()) {
+                    spdlog::warn("BlobWrite from {} has malformed envelope",
+                                 conn->remote_address());
+                    record_strike_(conn, "BlobWrite: malformed envelope");
+                    catch_error = ERROR_DECODE_FAILED;
+                    throw std::runtime_error("malformed envelope");
+                }
+                std::array<uint8_t, 32> target_namespace;
+                std::memcpy(target_namespace.data(), body->target_namespace()->data(), 32);
+
+                auto blob = wire::decode_blob_from_fb(body->blob());
+
                 if (!sync_namespaces_.empty() &&
-                    sync_namespaces_.find(blob.namespace_id) == sync_namespaces_.end()) {
-                    spdlog::debug("dropping data for filtered namespace from {}",
+                    sync_namespaces_.find(target_namespace) == sync_namespaces_.end()) {
+                    spdlog::debug("dropping BlobWrite for filtered namespace from {}",
                                   conn->remote_address());
                     co_return;
                 }
-                auto result = co_await engine_.ingest(blob);
+                auto result = co_await engine_.ingest(target_namespace, blob, conn);
                 co_await asio::post(ioc_, asio::use_awaitable);
                 if (result.accepted && result.ack.has_value()) {
                     auto ack = result.ack.value();
@@ -1362,7 +1427,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     result.ack->status == engine::IngestStatus::stored) {
                     uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                     on_blob_ingested_(
-                        blob.namespace_id,
+                        target_namespace,
                         result.ack->blob_hash,
                         result.ack->seq_num,
                         static_cast<uint32_t>(blob.data.size()),
@@ -1385,25 +1450,37 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                         std::span<const uint8_t> empty{};
                         co_await conn->send_message(wire::TransportMsgType_QuotaExceeded, empty, request_id);
                     } else if (*result.error == engine::IngestError::timestamp_rejected) {
-                        spdlog::debug("Data from {}: timestamp rejected ({})",
+                        spdlog::debug("BlobWrite from {}: timestamp rejected ({})",
                                       conn->remote_address(),
                                       result.error_detail.empty() ? "unknown" : result.error_detail);
+                    } else if (*result.error == engine::IngestError::pubk_first_violation) {
+                        spdlog::warn("BlobWrite from {}: PUBK-first violation ({})",
+                                     conn->remote_address(), result.error_detail);
+                        record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_PUBK_FIRST_VIOLATION, wire::TransportMsgType_BlobWrite, request_id, metrics_);
+                    } else if (*result.error == engine::IngestError::pubk_mismatch) {
+                        spdlog::warn("BlobWrite from {}: PUBK mismatch ({})",
+                                     conn->remote_address(), result.error_detail);
+                        record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_PUBK_MISMATCH, wire::TransportMsgType_BlobWrite, request_id, metrics_);
                     } else {
                         spdlog::warn("invalid blob from peer {}: {}",
                                      conn->remote_address(),
                                      result.error_detail.empty() ? "validation failed" : result.error_detail);
                         record_strike_(conn, result.error_detail);
-                        co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_Data, request_id, metrics_);
+                        co_await send_error_response(conn, ERROR_VALIDATION_FAILED, wire::TransportMsgType_BlobWrite, request_id, metrics_);
                     }
                 }
             } catch (const std::exception& e) {
-                spdlog::warn("malformed data message from peer {}: {}",
-                             conn->remote_address(), e.what());
-                record_strike_(conn, e.what());
-                catch_error = ERROR_DECODE_FAILED;
+                if (catch_error == 0) {
+                    spdlog::warn("malformed BlobWrite from peer {}: {}",
+                                 conn->remote_address(), e.what());
+                    record_strike_(conn, e.what());
+                    catch_error = ERROR_DECODE_FAILED;
+                }
             }
             if (catch_error) {
-                co_await send_error_response(conn, catch_error, wire::TransportMsgType_Data, request_id, metrics_);
+                co_await send_error_response(conn, catch_error, wire::TransportMsgType_BlobWrite, request_id, metrics_);
             }
         }, asio::detached);
         return;

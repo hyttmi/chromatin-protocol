@@ -26,6 +26,13 @@ struct SyncStats {
     uint32_t quota_exceeded_count = 0;
 };
 
+/// Phase 122: the sync wire format carries target_namespace per blob — the
+/// inner Blob schema no longer has namespace_id. Plan 122-05 / Pitfall #3.
+struct NamespacedBlob {
+    std::array<uint8_t, 32> target_namespace{};
+    wire::BlobData blob;
+};
+
 /// Sync protocol logic: hash-list diff, expiry filtering, message encoding.
 ///
 /// ingest_blobs() is a coroutine (co_awaits async BlobEngine::ingest).
@@ -75,11 +82,13 @@ public:
     /// Set the callback for successful sync blob ingests (pub/sub notifications).
     void set_on_blob_ingested(OnBlobIngested callback);
 
-    /// Ingest received blobs. Validates and stores each non-expired blob.
+    /// Ingest received namespaced blobs. Validates and stores each non-expired blob.
     /// Returns stats: how many were accepted.
     /// Coroutine: co_awaits async BlobEngine::ingest() for each blob.
+    /// Phase 122: accepts NamespacedBlob because target_namespace is now carried
+    /// per-blob at the transport layer (not inside the Blob schema).
     asio::awaitable<SyncStats> ingest_blobs(
-        const std::vector<wire::BlobData>& blobs,
+        const std::vector<NamespacedBlob>& ns_blobs,
         std::shared_ptr<net::Connection> source = nullptr);
 
     // =========================================================================
@@ -105,18 +114,23 @@ public:
     static std::pair<std::array<uint8_t, 32>, std::vector<std::array<uint8_t, 32>>>
         decode_blob_request(std::span<const uint8_t> payload);
 
-    /// Encode blobs for transfer.
-    /// Wire format: [count:u32BE][len1:u32BE][blob1_flatbuf]...[lenN:u32BE][blobN_flatbuf]
+    /// Encode namespaced blobs for transfer.
+    /// Phase 122 Pitfall #3: per-blob 32-byte target_namespace prefix — the inner
+    /// Blob no longer carries namespace_id, so the receiver needs target_namespace
+    /// at the transport layer to route each blob.
+    /// Wire format: [count:u32BE]([ns:32B][len:u32BE][blob_flatbuf])+
     static std::vector<uint8_t> encode_blob_transfer(
-        const std::vector<wire::BlobData>& blobs);
+        const std::vector<NamespacedBlob>& ns_blobs);
 
-    /// Encode a single blob for transfer (count=1, reuses existing wire format).
+    /// Encode a single namespaced blob for transfer (count=1).
     /// Used for one-blob-at-a-time sync to keep memory bounded.
+    /// Wire format: [count:u32BE=1][ns:32B][len:u32BE][blob_flatbuf]
     static std::vector<uint8_t> encode_single_blob_transfer(
+        std::span<const uint8_t, 32> target_namespace,
         const wire::BlobData& blob);
 
-    /// Decode blobs from a transfer message.
-    static std::vector<wire::BlobData> decode_blob_transfer(
+    /// Decode namespaced blobs from a transfer message.
+    static std::vector<NamespacedBlob> decode_blob_transfer(
         std::span<const uint8_t> payload);
 
 private:

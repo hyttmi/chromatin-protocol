@@ -476,8 +476,10 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                 spdlog::debug("sync initiator {}: Phase C got msg type={}",
                               conn->remote_address(), static_cast<int>(msg->type));
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
-                    auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
+                    // Phase 122: decode_blob_transfer now returns
+                    // std::vector<NamespacedBlob> (per-blob [ns:32B] prefix).
+                    auto ns_blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+                    auto s = co_await sync_proto_.ingest_blobs(ns_blobs, conn);
                     peer = find_peer(conn);
                     if (!peer) co_return;
                     total_stats.blobs_received += s.blobs_received;
@@ -499,7 +501,8 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                                 continue;
                             }
                             auto bt_payload =
-                                sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                                sync::SyncProtocol::encode_single_blob_transfer(
+                                    std::span<const uint8_t, 32>(req_ns), *blob);
                             if (!co_await conn->send_message(
                                 wire::TransportMsgType_BlobTransfer, bt_payload)) {
                                 peer = find_peer(conn);
@@ -537,7 +540,8 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                         continue;
                     }
                     auto bt_payload =
-                        sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                        sync::SyncProtocol::encode_single_blob_transfer(
+                            std::span<const uint8_t, 32>(req_ns), *blob);
                     if (!co_await conn->send_message(
                         wire::TransportMsgType_BlobTransfer, bt_payload)) {
                         peer = find_peer(conn);
@@ -955,8 +959,10 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                 }
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
-                    auto blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
-                    auto s = co_await sync_proto_.ingest_blobs(blobs, conn);
+                    // Phase 122: decode_blob_transfer now returns
+                    // std::vector<NamespacedBlob> (per-blob [ns:32B] prefix).
+                    auto ns_blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
+                    auto s = co_await sync_proto_.ingest_blobs(ns_blobs, conn);
                     peer = find_peer(conn);
                     if (!peer) co_return;
                     total_stats.blobs_received += s.blobs_received;
@@ -978,7 +984,8 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                                 continue;
                             }
                             auto bt_payload =
-                                sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                                sync::SyncProtocol::encode_single_blob_transfer(
+                                    std::span<const uint8_t, 32>(req_ns), *blob);
                             if (!co_await conn->send_message(
                                 wire::TransportMsgType_BlobTransfer, bt_payload)) {
                                 peer = find_peer(conn);
@@ -1022,7 +1029,8 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                         continue;
                     }
                     auto bt_payload =
-                        sync::SyncProtocol::encode_single_blob_transfer(*blob);
+                        sync::SyncProtocol::encode_single_blob_transfer(
+                            std::span<const uint8_t, 32>(req_ns), *blob);
                     if (!co_await conn->send_message(
                         wire::TransportMsgType_BlobTransfer, bt_payload)) {
                         peer = find_peer(conn);

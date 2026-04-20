@@ -6,6 +6,9 @@
 #include <span>
 #include <vector>
 
+// Forward declaration to avoid pulling in the full generated header here.
+namespace chromatindb::wire { struct Blob; }
+
 namespace chromatindb::wire {
 
 /// Structured blob data for codec operations (Phase 122 shape).
@@ -26,6 +29,14 @@ std::vector<uint8_t> encode_blob(const BlobData& blob);
 /// Deserialize FlatBuffer bytes to BlobData.
 /// @throws std::runtime_error if buffer is invalid.
 BlobData decode_blob(std::span<const uint8_t> buffer);
+
+/// Deserialize a BlobData from an already-verified FlatBuffer Blob accessor.
+/// Used by envelope decoders (e.g. BlobWriteBody) that have verified the outer
+/// table and obtained `body->blob()` directly — this avoids re-verifying and
+/// re-parsing the inner Blob buffer. Shares field-extraction logic with
+/// `decode_blob` (feedback_no_duplicate_code.md).
+/// @throws std::runtime_error if fb_blob is null or has wrong-sized fields.
+BlobData decode_blob_from_fb(const chromatindb::wire::Blob* fb_blob);
 
 /// Build canonical signing input: SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
 /// Returns a 32-byte digest that is then signed -- independent of FlatBuffer format.
