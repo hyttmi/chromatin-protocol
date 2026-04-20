@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -69,7 +70,10 @@ inline uint64_t current_timestamp() {
 /// Sentinel value: pass this as timestamp to auto-use current system time.
 constexpr uint64_t TS_AUTO = UINT64_MAX;
 
-/// Build a properly signed BlobData using a NodeIdentity.
+/// Build a properly signed BlobData using a NodeIdentity (Phase 122 shape).
+/// signer_hint = SHA3(signing pubkey); for owner writes this equals namespace_id.
+/// target_namespace (= id.namespace_id()) is carried by the caller and threaded
+/// into the signing input per D-01.
 inline wire::BlobData make_signed_blob(
     const identity::NodeIdentity& id,
     const std::string& payload,
@@ -77,14 +81,15 @@ inline wire::BlobData make_signed_blob(
     uint64_t timestamp = TS_AUTO)
 {
     wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    auto hint = crypto::sha3_256(id.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
+    // For owner writes, target_namespace = SHA3(owner_pk) = signer_hint = id.namespace_id().
     auto signing_input = wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        id.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
 
     return blob;
@@ -97,14 +102,14 @@ inline wire::BlobData make_signed_tombstone(
     uint64_t timestamp = TS_AUTO)
 {
     wire::BlobData tombstone;
-    std::memcpy(tombstone.namespace_id.data(), id.namespace_id().data(), 32);
-    tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    auto hint = crypto::sha3_256(id.public_key());
+    std::memcpy(tombstone.signer_hint.data(), hint.data(), 32);
     tombstone.data = wire::make_tombstone_data(target_blob_hash);
     tombstone.ttl = 0;  // Permanent
     tombstone.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = wire::build_signing_input(
-        tombstone.namespace_id, tombstone.data, tombstone.ttl, tombstone.timestamp);
+        id.namespace_id(), tombstone.data, tombstone.ttl, tombstone.timestamp);
     tombstone.signature = id.sign(signing_input);
 
     return tombstone;
@@ -117,20 +122,22 @@ inline wire::BlobData make_signed_delegation(
     uint64_t timestamp = TS_AUTO)
 {
     wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    auto hint = crypto::sha3_256(owner.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data = wire::make_delegation_data(delegate.public_key());
     blob.ttl = 0;  // Permanent
     blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        owner.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = owner.sign(signing_input);
 
     return blob;
 }
 
 /// Build a properly signed blob written by a delegate to an owner's namespace.
+/// D-01 cross-namespace replay defense: signer is the delegate (signer_hint =
+/// SHA3(delegate_pk)) but target_namespace is the OWNER's namespace.
 inline wire::BlobData make_delegate_blob(
     const identity::NodeIdentity& owner,
     const identity::NodeIdentity& delegate,
@@ -139,17 +146,56 @@ inline wire::BlobData make_delegate_blob(
     uint64_t timestamp = TS_AUTO)
 {
     wire::BlobData blob;
-    // Target the owner's namespace
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    // Signed by delegate's key
-    blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    // Delegate signs; signer_hint = SHA3(delegate's signing pubkey).
+    auto hint = crypto::sha3_256(delegate.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
+    // target_namespace = OWNER's namespace (D-01 cross-namespace replay protection).
     auto signing_input = wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        owner.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = delegate.sign(signing_input);
+
+    return blob;
+}
+
+/// Build a PUBK blob for testing (Phase 122 D-03 / D-05).
+/// Body layout: [magic:4][signing_pk:2592][kem_pk:1568] = 4164 bytes.
+/// If kem_pk is nullopt, the KEM portion is zero-filled (sufficient for tests
+/// that don't exercise KEM). Pass an explicit kem_pk for KEM-rotation tests.
+///
+/// target_namespace = id.namespace_id() = SHA3(signing_pk) = signer_hint
+/// (owner self-publication).
+inline wire::BlobData make_pubk_blob(
+    const identity::NodeIdentity& id,
+    std::optional<std::array<uint8_t, 1568>> kem_pk = std::nullopt,
+    uint64_t timestamp = TS_AUTO)
+{
+    std::vector<uint8_t> pubk_data;
+    pubk_data.reserve(wire::PUBKEY_DATA_SIZE);
+    pubk_data.insert(pubk_data.end(),
+                     wire::PUBKEY_MAGIC.begin(), wire::PUBKEY_MAGIC.end());
+    auto spk = id.public_key();
+    pubk_data.insert(pubk_data.end(), spk.begin(), spk.end());
+    if (kem_pk.has_value()) {
+        pubk_data.insert(pubk_data.end(), kem_pk->begin(), kem_pk->end());
+    } else {
+        pubk_data.resize(wire::PUBKEY_DATA_SIZE, 0);  // zero-fill KEM portion
+    }
+
+    wire::BlobData blob;
+    auto hint = crypto::sha3_256(spk);
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
+    blob.data = std::move(pubk_data);
+    blob.ttl = 0;  // PUBK is permanent
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
+
+    // target_namespace = id.namespace_id() = SHA3(signing_pk) = signer_hint
+    auto signing_input = wire::build_signing_input(
+        id.namespace_id(), blob.data, blob.ttl, blob.timestamp);
+    blob.signature = id.sign(signing_input);
 
     return blob;
 }
