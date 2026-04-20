@@ -661,3 +661,33 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+### Phase 999.19: Admin tombstone GC subcommand — `chromatindb gc` (BACKLOG — post-MVP admin feature)
+
+**Goal:** Let node operators reclaim storage from accumulated tombstones on single-node or fully-caught-up-cluster deployments. Tombstones are `ttl=0` permanent by design so every peer learns of the delete via sync — on a standalone node there's nothing to propagate to, so they just accumulate. Same rationale extends to BOMB batched tombstones (Phase 123).
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+**Motivation:** Operator-side storage hygiene. Without this, a long-lived standalone node accumulates every tombstone it's ever ingested with no way to reclaim that space short of wiping the data dir. For enterprise single-vault deployments this matters within a year or two of runtime.
+
+**What changes:**
+
+1. New `chromatindb gc` subcommand in the daemon binary (same one-shot subcommand pattern as `db/main.cpp:170`, not the daemon loop). Constructs `Storage` directly, runs, exits.
+2. Safety gates — GC MUST refuse unless at least one of:
+   - `--standalone`: config has zero configured peers AND `storage.list_cursor_peers()` returns empty (no sync history).
+   - `--force` + proof-of-catchup: for every tombstone being gc'd, cross-check `storage.get_sync_cursor(peer, ns)` against the tombstone's seq for every known peer. Only gc tombstones where every peer has already synced past that seq.
+3. Options:
+   - `--dry-run`: report bytes that would be freed, no mutation.
+   - `--older-than Nd`: only gc tombstones whose timestamp is more than N days old (default: 90d).
+   - `--batch`: also gc BOMB tombstones (Phase 123). Skip if Phase 123 hasn't landed.
+4. Output: human-readable report — tombstone count, bytes reclaimed, oldest/newest tombstone timestamp.
+5. Tests: single-node happy path, multi-peer with catch-up, multi-peer without catch-up (must refuse), dry-run, `--older-than` filtering.
+
+**Depends on:** Phase 123 for `--batch` support (BOMB tombstones). Single-tombstone GC does not depend on 123.
+
+**NOT needed for MVP** — promote post-Phase 125 once protocol cleanup and CLI adaptation have settled. Worth considering for v4.2.0 or a dedicated "operator tooling" milestone.
+
+Plans:
+- [ ] TBD (promote with /gsd-plan-phase when ready to build)
