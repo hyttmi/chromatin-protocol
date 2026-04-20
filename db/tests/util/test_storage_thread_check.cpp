@@ -81,8 +81,8 @@ TEST_CASE("macro_expands_in_release_to_noop — NDEBUG branch is ((void)0)",
     // is emitted at the call site.
 #if defined(NDEBUG)
     // Release mode: macro must NOT touch ThreadOwner. Verify by constructing
-    // a ThreadOwner whose reset_for_test asserts if the macro tried to
-    // access it (it can't — release macro is ((void)0)).
+    // a ThreadOwner whose reset asserts if the macro tried to access it
+    // (it can't — release macro is ((void)0)).
     ThreadOwner owner;
     (void)STORAGE_THREAD_CHECK;  // Referenced but expands to nothing.
     REQUIRE(owner.owner_for_test() == std::thread::id{});
@@ -99,14 +99,14 @@ TEST_CASE("macro_expands_in_release_to_noop — NDEBUG branch is ((void)0)",
 #endif
 }
 
-TEST_CASE("reset_for_test — reset clears owner so next call captures again",
+TEST_CASE("reset — reset clears owner so next call captures again",
           "[thread_check][storage]") {
     ThreadOwner owner;
 
     REQUIRE(owner.try_check("install") == true);
     REQUIRE(owner.owner_for_test() == std::this_thread::get_id());
 
-    owner.reset_for_test();
+    owner.reset();
     REQUIRE(owner.owner_for_test() == std::thread::id{});
 
     // After reset, any thread can re-install.
