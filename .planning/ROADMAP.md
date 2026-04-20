@@ -117,7 +117,7 @@ Plans:
   1. `Blob.namespace_id` field removed from the schema (derived from `SHA3(pubkey)` on ingest)
   2. Per-blob `pubkey` (2592 bytes) replaced by `signer_hint` (32 bytes) resolved via new `owner_pubkeys` DBI (owner writes) or existing `delegation_map` (delegate writes)
   3. Signing canonical form updated (either `SHA3(SHA3(pubkey) || data || ttl || timestamp)` or `SHA3(pubkey || data || ttl || timestamp)` — decided during planning)
-  4. Node rejects any non-PUBK write to a namespace that has no registered PUBK blob (first-write-must-be-PUBK invariant)
+  4. **PUBK-first invariant enforced at the node protocol level (not CLI convention).** On every ingest, the node checks: if the target namespace has no row in the `owner_pubkeys` DBI, then the incoming blob MUST be a PUBK magic or the write is rejected with a protocol-level error. Enforcement lives in the node's ingest handler in `db/engine/engine.cpp` — not in the CLI. CLI compliance is nice; node enforcement is mandatory. Applies uniformly to direct writes, delegated writes, and replicated writes from peers (sync path must honor the same check). Reject code + test coverage required for: (a) non-PUBK as first write, (b) PUBK after PUBK (idempotent accept or reject — decided during planning), (c) cross-namespace race where two peers try to register different PUBKs for the same namespace.
   5. New `owner_pubkeys` DBI populated the moment a PUBK blob is ingested
   6. Verify path: receive blob → lookup signer pubkey via `signer_hint` → verify ML-DSA-87 signature; engine.cpp:190-193 `derived_ns == blob.namespace_id` check removed
   7. All existing node ingest/read paths updated to work on the new format with no references to removed fields
