@@ -24,9 +24,9 @@ namespace chromatindb::engine {
 
 /// Error codes for blob ingest rejection.
 enum class IngestError {
-    namespace_mismatch,   ///< SHA3-256(pubkey) != claimed namespace_id.
+    namespace_mismatch,   ///< Phase 122: SHA3-256(resolved_pubkey) != target_namespace.
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
-    malformed_blob,       ///< Structural issue (wrong pubkey size, empty sig).
+    malformed_blob,       ///< Structural issue (empty sig, malformed body).
     oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
     storage_error,        ///< Storage layer failed to write.
     tombstoned,           ///< Blob rejected because a tombstone exists for it.
@@ -34,7 +34,9 @@ enum class IngestError {
     storage_full,         ///< Storage capacity exceeded (max_storage_bytes).
     quota_exceeded,       ///< Namespace quota exceeded (byte or count limit).
     timestamp_rejected,   ///< Blob timestamp too far in future or past.
-    invalid_ttl           ///< Tombstone with non-zero TTL.
+    invalid_ttl,          ///< Tombstone with non-zero TTL.
+    pubk_first_violation, ///< Phase 122 D-03: first write to namespace was non-PUBK.
+    pubk_mismatch         ///< Phase 122 D-04: incoming PUBK signing pubkey differs from registered owner.
 };
 
 /// Status of a successful ingest.
@@ -65,8 +67,10 @@ struct IngestResult {
 
 /// Blob validation and ingestion engine.
 ///
-/// Validates blobs in fail-fast order (structural -> namespace -> signature)
-/// before storing. Accepts blobs for ANY valid namespace, not just the local node's.
+/// Phase 122 verify flow:
+///   structural -> PUBK-first gate -> owner_pubkeys lookup (owner)
+///              OR delegation_map lookup (delegate) -> sig verify.
+/// Accepts blobs for ANY valid namespace, not just the local node's.
 ///
 /// Thread safety: thread-confined to the io_context executor. BlobEngine
 /// holds references to Storage and a thread_pool; the pool is used for
@@ -105,35 +109,52 @@ public:
                           const std::map<std::string, std::pair<std::optional<uint64_t>,
                               std::optional<uint64_t>>>& overrides);
 
-    /// Validate and ingest a blob.
+    /// Validate and ingest a blob (Phase 122 post-refactor).
     ///
     /// Validation pipeline (fail-fast, cheap to expensive):
-    /// 1. Structural checks (pubkey size, signature non-empty)
-    /// 2. Namespace ownership (SHA3-256(pubkey) == namespace_id) -- offloaded to pool
+    /// 1. Structural checks (signature non-empty)
+    /// 1.5. PUBK-first gate (D-03): if target_namespace has no registered
+    ///      owner_pubkey, the incoming blob MUST have the PUBK magic; else
+    ///      reject with pubk_first_violation. Runs BEFORE any crypto offload.
+    /// 2. Resolve signing pubkey: owner_pubkeys[blob.signer_hint] (owner) or
+    ///    delegation_map[target_namespace || blob.signer_hint] (delegate).
     /// 3. Content hash (blob_hash) -- offloaded to pool, dedup check on event loop
-    /// 4. Signature verification (build_signing_input + verify) -- offloaded to pool
-    /// 5. Store to storage layer
+    /// 4. Signature verification using resolved pubkey + target_namespace in
+    ///    build_signing_input -- offloaded to pool.
+    /// 4.5. If accepted blob is a PUBK, register embedded signing pubkey via
+    ///      Storage::register_owner_pubkey (throws on D-04 mismatch).
+    /// 5. Store to storage layer.
     ///
     /// Two-dispatch pattern: duplicates pay only one pool round-trip (blob_hash).
     ///
+    /// @param target_namespace 32-byte target namespace from the transport envelope.
+    /// @param blob Signed BlobData (post-122 schema: signer_hint, not inline pubkey).
     /// @return IngestResult with WriteAck on success or error on rejection.
     asio::awaitable<IngestResult> ingest(
+        std::span<const uint8_t, 32> target_namespace,
         const wire::BlobData& blob,
         std::shared_ptr<net::Connection> source = nullptr);
 
-    /// Delete a blob by creating a signed tombstone.
+    /// Delete a blob by creating a signed tombstone (Phase 122 post-refactor).
     ///
     /// The delete_request BlobData must contain:
-    /// - namespace_id: target namespace
-    /// - pubkey: owner's ML-DSA-87 public key
-    /// - data: 32-byte target blob hash (raw bytes, not tombstone-encoded)
-    /// - ttl: 0
+    /// - signer_hint: SHA3-256 of signer's ML-DSA-87 public key
+    /// - data: tombstone body (4-byte magic + 32-byte target hash = 36 bytes)
+    /// - ttl: 0 (permanent)
     /// - timestamp: client's unix timestamp
-    /// - signature: over canonical form SHA3-256(namespace || data || 0 || timestamp)
+    /// - signature: over canonical form
+    ///   SHA3-256(target_namespace || tombstone_data || 0 || timestamp)
     ///
-    /// Validation: same pipeline as ingest (structural -> namespace -> signature).
+    /// Validation: owner_pubkeys lookup + delegation fallback + signature
+    /// (same as ingest, minus PUBK-first gate — tombstones are never PUBKs, so
+    /// a delete to a namespace without a registered owner falls through to
+    /// no_delegation).
     /// On success: deletes target blob if present, stores tombstone, returns ack.
+    ///
+    /// @param target_namespace 32-byte target namespace from the transport envelope.
+    /// @param delete_request Signed tombstone blob.
     asio::awaitable<IngestResult> delete_blob(
+        std::span<const uint8_t, 32> target_namespace,
         const wire::BlobData& delete_request,
         std::shared_ptr<net::Connection> source = nullptr);
 
