@@ -247,6 +247,7 @@ if(BUILD_TESTING)
     tests/storage/test_storage_concurrency_tsan.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
+    tests/sync/test_pubk_first_sync.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
     tests/test_schema_phase122.cpp
