@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 123 context gathered
-last_updated: "2026-04-20T16:04:13.030Z"
-last_activity: 2026-04-20 -- Phase 122 execution started
+last_updated: "2026-04-20T17:45:33.809Z"
+last_activity: 2026-04-20 -- Phase 123 execution started
 progress:
   total_phases: 26
   completed_phases: 7
-  total_plans: 19
+  total_plans: 23
   completed_plans: 19
-  percent: 100
+  percent: 83
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 122 — schema-signing-cleanup-strip-namespace-and-compress-pubkey
+**Current focus:** Phase 123 — tombstone-batching-and-name-tagged-overwrite
 
 ## Current Position
 
-Phase: 122 (schema-signing-cleanup-strip-namespace-and-compress-pubkey) — EXECUTING
-Plan: 1 of 7
-Status: Executing Phase 122
-Last activity: 2026-04-20 -- Phase 122 execution started
+Phase: 123 (tombstone-batching-and-name-tagged-overwrite) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 123
+Last activity: 2026-04-20 -- Phase 123 execution started
 
 Progress: [##########] 100%
 
@@ -83,4 +83,4 @@ Last session: --stopped-at
 Stopped at: Phase 123 context gathered
 Resume file: --resume-file
 
-**Planned Phase:** 122 (schema-signing-cleanup-strip-namespace-and-compress-pubkey) — 7 plans — 2026-04-20T04:26:37.533Z
+**Planned Phase:** 123 (tombstone-batching-and-name-tagged-overwrite) — 4 plans — 2026-04-20T17:39:07.680Z
