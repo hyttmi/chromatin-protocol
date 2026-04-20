@@ -43,6 +43,8 @@ TEST_CASE("timer fires at exact expiry", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
 
@@ -50,7 +52,7 @@ TEST_CASE("timer fires at exact expiry", "[event-expiry]") {
     auto blob = make_signed_blob(id, "expiry-test-1", 2, fake_time);
     {
         asio::io_context tmp_ioc;
-        auto result = chromatindb::test::run_async(pool, eng.ingest(blob, nullptr));
+        auto result = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), blob, nullptr));
         REQUIRE(result.accepted);
     }
 
@@ -90,6 +92,8 @@ TEST_CASE("chain rearm after scan", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
 
@@ -97,9 +101,9 @@ TEST_CASE("chain rearm after scan", "[event-expiry]") {
     auto blob1 = make_signed_blob(id, "chain-test-1", 2, fake_time);
     auto blob2 = make_signed_blob(id, "chain-test-2", 4, fake_time);
     {
-        auto r1 = chromatindb::test::run_async(pool, eng.ingest(blob1, nullptr));
+        auto r1 = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), blob1, nullptr));
         REQUIRE(r1.accepted);
-        auto r2 = chromatindb::test::run_async(pool, eng.ingest(blob2, nullptr));
+        auto r2 = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), blob2, nullptr));
         REQUIRE(r2.accepted);
     }
 
@@ -147,13 +151,15 @@ TEST_CASE("ingest rearm with shorter TTL", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
 
     // Store a far-future blob (600s TTL)
     auto far_blob = make_signed_blob(id, "far-future", 600, fake_time);
     {
-        auto r = chromatindb::test::run_async(pool, eng.ingest(far_blob, nullptr));
+        auto r = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), far_blob, nullptr));
         REQUIRE(r.accepted);
     }
 
@@ -166,7 +172,7 @@ TEST_CASE("ingest rearm with shorter TTL", "[event-expiry]") {
     // Now ingest a short-TTL blob (2s) via on_blob_ingested (simulating peer replication)
     auto short_blob = make_signed_blob(id, "short-lived", 2, fake_time);
     {
-        auto r = chromatindb::test::run_async(pool, eng.ingest(short_blob, nullptr));
+        auto r = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), short_blob, nullptr));
         REQUIRE(r.accepted);
     }
 
@@ -175,8 +181,10 @@ TEST_CASE("ingest rearm with shorter TTL", "[event-expiry]") {
 
     // Trigger the rearm by calling on_blob_ingested with the short expiry
     uint64_t short_expiry = fake_time + 2;
+    std::array<uint8_t, 32> ns_id;
+    std::memcpy(ns_id.data(), id.namespace_id().data(), 32);
     pm.on_blob_ingested(
-        short_blob.namespace_id, short_hash, 2,
+        ns_id, short_hash, 2,
         static_cast<uint32_t>(short_blob.data.size()),
         false, short_expiry, nullptr);
 
@@ -208,6 +216,8 @@ TEST_CASE("no timer when storage empty", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
 
@@ -237,13 +247,15 @@ TEST_CASE("no timer for TTL=0 only blobs", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
 
     // Store a permanent blob (TTL=0)
     auto perm_blob = make_signed_blob(id, "permanent-blob", 0);
     {
-        auto r = chromatindb::test::run_async(pool, eng.ingest(perm_blob, nullptr));
+        auto r = chromatindb::test::run_async(pool, eng.ingest(chromatindb::test::ns_span(id), perm_blob, nullptr));
         REQUIRE(r.accepted);
     }
 

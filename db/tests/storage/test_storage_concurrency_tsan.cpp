@@ -77,7 +77,8 @@ TEST_CASE("concurrent ingests are TSAN-clean and all succeed",
         asio::co_spawn(ioc, [&, c]() -> asio::awaitable<void> {
             for (int i = 0; i < kIngestsPerCoroutine; ++i) {
                 auto blob = build_unique_blob(identities[c], c, i);
-                auto result = co_await engine.ingest(blob);
+                auto result = co_await engine.ingest(
+                    std::span<const uint8_t, 32>(identities[c].namespace_id()), blob);
                 if (result.accepted) {
                     accepted.fetch_add(1, std::memory_order_relaxed);
                 }

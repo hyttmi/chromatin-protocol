@@ -19,9 +19,18 @@ namespace {
 
 using chromatindb::test::TempDir;
 
+/// Post-122: a 32-byte namespace filled with ns_byte.
+/// Test-only helper; real callers derive ns via SHA3(pubkey).
+inline std::array<uint8_t, 32> ns_from_byte(uint8_t ns_byte) {
+    std::array<uint8_t, 32> ns{};
+    ns.fill(ns_byte);
+    return ns;
+}
+
 /// Create a test BlobData with specified TTL and timestamp.
-/// Uses deterministic namespace derived from a counter for test isolation.
-/// Timestamp is in seconds. Default 1000.
+/// Post-122: signer_hint is 32 bytes all equal to ns_byte (so owner-write tests
+/// can use target_namespace = signer_hint cleanly). Storage does not verify
+/// signatures, so the signature here is a fake.
 chromatindb::wire::BlobData make_test_blob(
     uint8_t ns_byte,
     const std::string& payload,
@@ -29,8 +38,7 @@ chromatindb::wire::BlobData make_test_blob(
     uint64_t timestamp = 1000)
 {
     chromatindb::wire::BlobData blob;
-    blob.namespace_id.fill(ns_byte);
-    blob.pubkey.resize(2592, ns_byte);
+    blob.signer_hint.fill(ns_byte);
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = timestamp;
@@ -74,19 +82,18 @@ TEST_CASE("Storage store and retrieve blob round-trip", "[storage]") {
     auto blob = make_test_blob(0x01, "hello chromatindb");
     auto hash = compute_hash(blob);
 
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     auto retrieved = store.get_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash));
 
     REQUIRE(retrieved.has_value());
-    REQUIRE(retrieved->namespace_id == blob.namespace_id);
     REQUIRE(retrieved->data == blob.data);
     REQUIRE(retrieved->ttl == blob.ttl);
     REQUIRE(retrieved->timestamp == blob.timestamp);
-    REQUIRE(retrieved->pubkey == blob.pubkey);
+    REQUIRE(retrieved->signer_hint == blob.signer_hint);
     REQUIRE(retrieved->signature == blob.signature);
 }
 
@@ -96,8 +103,8 @@ TEST_CASE("Storage deduplicates by content hash", "[storage]") {
 
     auto blob = make_test_blob(0x01, "duplicate me");
 
-    REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob).status == StoreResult::Status::Duplicate);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob).status == StoreResult::Status::Duplicate);
 }
 
 TEST_CASE("Storage has_blob returns correct results", "[storage]") {
@@ -108,13 +115,13 @@ TEST_CASE("Storage has_blob returns correct results", "[storage]") {
     auto hash = compute_hash(blob);
 
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 }
 
@@ -141,18 +148,18 @@ TEST_CASE("Storage crash recovery -- data persists across close/reopen", "[stora
     // Store and close (destroy without explicit close)
     {
         Storage store(tmp.path.string());
-        REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
+        REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob).status == StoreResult::Status::Stored);
     }
 
     // Reopen from same path -- data should be intact
     {
         Storage store(tmp.path.string());
         REQUIRE(store.has_blob(
-            std::span<const uint8_t, 32>(blob.namespace_id),
+            std::span<const uint8_t, 32>(blob.signer_hint),
             std::span<const uint8_t, 32>(hash)));
 
         auto retrieved = store.get_blob(
-            std::span<const uint8_t, 32>(blob.namespace_id),
+            std::span<const uint8_t, 32>(blob.signer_hint),
             std::span<const uint8_t, 32>(hash));
         REQUIRE(retrieved.has_value());
         REQUIRE(retrieved->data == blob.data);
@@ -164,12 +171,12 @@ TEST_CASE("Storage move constructor works", "[storage]") {
     Storage store1(tmp.path.string());
 
     auto blob = make_test_blob(0x01, "move me");
-    store1.store_blob(blob);
+    store1.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     Storage store2(std::move(store1));
     auto hash = compute_hash(blob);
     REQUIRE(store2.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 }
 
@@ -185,13 +192,13 @@ TEST_CASE("Storage assigns monotonic seq_nums per namespace", "[storage][seq]") 
     auto blob2 = make_test_blob(0x01, "seq-2");
     auto blob3 = make_test_blob(0x01, "seq-3");
 
-    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3).status == StoreResult::Status::Stored);
 
     // All 3 blobs retrievable via seq range query from 0
     auto results = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blob1.namespace_id), 0);
+        std::span<const uint8_t, 32>(blob1.signer_hint), 0);
     REQUIRE(results.size() == 3);
     REQUIRE(results[0].data == blob1.data);
     REQUIRE(results[1].data == blob2.data);
@@ -206,14 +213,14 @@ TEST_CASE("Storage seq_nums are independent per namespace", "[storage][seq]") {
     auto blobA2 = make_test_blob(0x0A, "ns-A-blob-2");
     auto blobB1 = make_test_blob(0x0B, "ns-B-blob-1");
 
-    store.store_blob(blobA1);
-    store.store_blob(blobA2);
-    store.store_blob(blobB1);
+    store.store_blob(std::span<const uint8_t, 32>(blobA1.signer_hint), blobA1);
+    store.store_blob(std::span<const uint8_t, 32>(blobA2.signer_hint), blobA2);
+    store.store_blob(std::span<const uint8_t, 32>(blobB1.signer_hint), blobB1);
 
     auto resultsA = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blobA1.namespace_id), 0);
+        std::span<const uint8_t, 32>(blobA1.signer_hint), 0);
     auto resultsB = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blobB1.namespace_id), 0);
+        std::span<const uint8_t, 32>(blobB1.signer_hint), 0);
 
     REQUIRE(resultsA.size() == 2);
     REQUIRE(resultsB.size() == 1);
@@ -229,15 +236,15 @@ TEST_CASE("Storage get_blobs_by_seq with since_seq filters correctly", "[storage
     auto blob4 = make_test_blob(0x01, "range-4");
     auto blob5 = make_test_blob(0x01, "range-5");
 
-    store.store_blob(blob1);
-    store.store_blob(blob2);
-    store.store_blob(blob3);
-    store.store_blob(blob4);
-    store.store_blob(blob5);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3);
+    store.store_blob(std::span<const uint8_t, 32>(blob4.signer_hint), blob4);
+    store.store_blob(std::span<const uint8_t, 32>(blob5.signer_hint), blob5);
 
     // since_seq=3 -> blobs with seq > 3 -> blob4, blob5
     auto results = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blob1.namespace_id), 3);
+        std::span<const uint8_t, 32>(blob1.signer_hint), 3);
     REQUIRE(results.size() == 2);
     REQUIRE(results[0].data == blob4.data);
     REQUIRE(results[1].data == blob5.data);
@@ -248,10 +255,10 @@ TEST_CASE("Storage get_blobs_by_seq returns empty for high since_seq", "[storage
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x01, "only-one");
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     auto results = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blob.namespace_id), 999);
+        std::span<const uint8_t, 32>(blob.signer_hint), 999);
     REQUIRE(results.empty());
 }
 
@@ -274,13 +281,13 @@ TEST_CASE("Storage duplicate does not consume seq_num", "[storage][seq]") {
     auto blob1 = make_test_blob(0x01, "unique-1");
     auto blob2 = make_test_blob(0x01, "unique-2");
 
-    store.store_blob(blob1);
-    store.store_blob(blob1);  // duplicate
-    store.store_blob(blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);  // duplicate
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
 
     // Should be exactly 2 blobs, not 3
     auto results = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blob1.namespace_id), 0);
+        std::span<const uint8_t, 32>(blob1.signer_hint), 0);
     REQUIRE(results.size() == 2);
 }
 
@@ -294,7 +301,7 @@ TEST_CASE("Storage expiry scan with no expired blobs returns 0", "[storage][expi
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     auto blob = make_test_blob(0x01, "not-expired", 604800, 1000);
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     // Clock is at 1000, blob expires at 1000 + 604800 = 605800
     REQUIRE(store.run_expiry_scan() == 0);
@@ -307,11 +314,11 @@ TEST_CASE("Storage expiry scan purges expired blob", "[storage][expiry]") {
 
     auto blob = make_test_blob(0x01, "will-expire", 100, 1000);
     auto hash = compute_hash(blob);
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     // Before expiry
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
     REQUIRE(store.run_expiry_scan() == 0);
 
@@ -321,10 +328,10 @@ TEST_CASE("Storage expiry scan purges expired blob", "[storage][expiry]") {
 
     // Blob should be gone
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
     REQUIRE_FALSE(store.get_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)).has_value());
 }
 
@@ -338,9 +345,9 @@ TEST_CASE("Storage expiry scan selective purge", "[storage][expiry]") {
     auto blob2 = make_test_blob(0x01, "expires-second", 200, 1000);  // expires 1200
     auto blob3 = make_test_blob(0x01, "expires-last", 500, 1000);    // expires 1500
 
-    store.store_blob(blob1);
-    store.store_blob(blob2);
-    store.store_blob(blob3);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3);
 
     auto hash1 = compute_hash(blob1);
     auto hash3 = compute_hash(blob3);
@@ -351,10 +358,10 @@ TEST_CASE("Storage expiry scan selective purge", "[storage][expiry]") {
 
     // First two gone, third still here
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(blob1.signer_hint),
         std::span<const uint8_t, 32>(hash1)));
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(blob3.namespace_id),
+        std::span<const uint8_t, 32>(blob3.signer_hint),
         std::span<const uint8_t, 32>(hash3)));
 }
 
@@ -364,7 +371,7 @@ TEST_CASE("Storage expiry scan is idempotent", "[storage][expiry]") {
     Storage store(tmp.path.string(), [&]() -> uint64_t { return fake_time; });
 
     auto blob = make_test_blob(0x01, "purge-once", 100, 1000);
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     fake_time = 1101;
     REQUIRE(store.run_expiry_scan() == 1);
@@ -378,14 +385,14 @@ TEST_CASE("Storage TTL=0 blobs are never purged", "[storage][expiry]") {
 
     auto permanent = make_test_blob(0x01, "permanent", 0, 1000);
     auto hash = compute_hash(permanent);
-    store.store_blob(permanent);
+    store.store_blob(std::span<const uint8_t, 32>(permanent.signer_hint), permanent);
 
     // Advance far into the future
     fake_time = 99999999;
     REQUIRE(store.run_expiry_scan() == 0);
 
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(permanent.namespace_id),
+        std::span<const uint8_t, 32>(permanent.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 }
 
@@ -397,8 +404,8 @@ TEST_CASE("Storage mixed TTL=0 and TTL>0 expiry", "[storage][expiry]") {
     auto permanent = make_test_blob(0x01, "permanent-blob", 0, 1000);
     auto ephemeral = make_test_blob(0x01, "ephemeral-blob", 100, 1000);
 
-    store.store_blob(permanent);
-    store.store_blob(ephemeral);
+    store.store_blob(std::span<const uint8_t, 32>(permanent.signer_hint), permanent);
+    store.store_blob(std::span<const uint8_t, 32>(ephemeral.signer_hint), ephemeral);
 
     auto perm_hash = compute_hash(permanent);
     auto eph_hash = compute_hash(ephemeral);
@@ -407,10 +414,10 @@ TEST_CASE("Storage mixed TTL=0 and TTL>0 expiry", "[storage][expiry]") {
     REQUIRE(store.run_expiry_scan() == 1);  // Only ephemeral
 
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(permanent.namespace_id),
+        std::span<const uint8_t, 32>(permanent.signer_hint),
         std::span<const uint8_t, 32>(perm_hash)));
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(ephemeral.namespace_id),
+        std::span<const uint8_t, 32>(ephemeral.signer_hint),
         std::span<const uint8_t, 32>(eph_hash)));
 }
 
@@ -430,8 +437,8 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
     auto blob1 = make_test_blob(0x01, "will-expire-seq", 100, 1000);
     auto blob2 = make_test_blob(0x01, "will-survive-seq", 604800, 1000);
 
-    store.store_blob(blob1);  // seq 1
-    store.store_blob(blob2);  // seq 2
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);  // seq 1
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);  // seq 2
 
     // Expire blob1
     fake_time = 1101;
@@ -439,7 +446,7 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
 
     // get_blobs_by_seq should skip the gap and return only blob2
     auto results = store.get_blobs_by_seq(
-        std::span<const uint8_t, 32>(blob1.namespace_id), 0);
+        std::span<const uint8_t, 32>(blob1.signer_hint), 0);
     REQUIRE(results.size() == 1);
     REQUIRE(results[0].data == blob2.data);
 }
@@ -461,11 +468,11 @@ TEST_CASE("get_earliest_expiry returns earliest time", "[storage][earliest-expir
 
     // Blob expiring at 1100 (ts=1000, ttl=100)
     auto blob1 = make_test_blob(0x01, "early", 100, 1000);
-    store.store_blob(blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
 
     // Blob expiring at 2000 (ts=1000, ttl=1000)
     auto blob2 = make_test_blob(0x01, "late", 1000, 1000);
-    store.store_blob(blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
 
     auto earliest = store.get_earliest_expiry();
     REQUIRE(earliest.has_value());
@@ -477,7 +484,7 @@ TEST_CASE("get_earliest_expiry skips TTL=0 blobs", "[storage][earliest-expiry]")
     Storage store(tmp.path.string());
 
     auto permanent = make_test_blob(0x01, "permanent", 0, 1000);
-    store.store_blob(permanent);
+    store.store_blob(std::span<const uint8_t, 32>(permanent.signer_hint), permanent);
 
     REQUIRE_FALSE(store.get_earliest_expiry().has_value());
 }
@@ -489,8 +496,8 @@ TEST_CASE("get_earliest_expiry updates after scan", "[storage][earliest-expiry]"
 
     auto blob1 = make_test_blob(0x01, "first", 100, 1000);   // expires 1100
     auto blob2 = make_test_blob(0x01, "second", 200, 1000);  // expires 1200
-    store.store_blob(blob1);
-    store.store_blob(blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
 
     REQUIRE(*store.get_earliest_expiry() == 1100);
 
@@ -509,7 +516,7 @@ TEST_CASE("Storage store_blob returns seq_num and hash", "[storage][plan03]") {
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x01, "seq-hash-test");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     REQUIRE(result.status == StoreResult::Status::Stored);
     REQUIRE(result.seq_num == 1);
@@ -524,8 +531,8 @@ TEST_CASE("Storage duplicate returns existing seq_num", "[storage][plan03]") {
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x01, "dup-seq-test");
-    auto first = store.store_blob(blob);
-    auto second = store.store_blob(blob);
+    auto first = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
+    auto second = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     REQUIRE(first.status == StoreResult::Status::Stored);
     REQUIRE(second.status == StoreResult::Status::Duplicate);
@@ -543,32 +550,29 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
 
     // Create blobs with proper namespace IDs
     chromatindb::wire::BlobData blob1;
-    std::memcpy(blob1.namespace_id.data(), id1.namespace_id().data(), 32);
-    blob1.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
+    std::memcpy(blob1.signer_hint.data(), id1.namespace_id().data(), 32);
     blob1.data = {'a', 'b', 'c'};
     blob1.ttl = 604800;
     blob1.timestamp = 1000;
     blob1.signature.resize(4627, 0x42);
 
     chromatindb::wire::BlobData blob1b;
-    std::memcpy(blob1b.namespace_id.data(), id1.namespace_id().data(), 32);
-    blob1b.pubkey.assign(id1.public_key().begin(), id1.public_key().end());
+    std::memcpy(blob1b.signer_hint.data(), id1.namespace_id().data(), 32);
     blob1b.data = {'d', 'e', 'f'};
     blob1b.ttl = 604800;
     blob1b.timestamp = 1001;
     blob1b.signature.resize(4627, 0x42);
 
     chromatindb::wire::BlobData blob2;
-    std::memcpy(blob2.namespace_id.data(), id2.namespace_id().data(), 32);
-    blob2.pubkey.assign(id2.public_key().begin(), id2.public_key().end());
+    std::memcpy(blob2.signer_hint.data(), id2.namespace_id().data(), 32);
     blob2.data = {'x', 'y', 'z'};
     blob2.ttl = 604800;
     blob2.timestamp = 1000;
     blob2.signature.resize(4627, 0x42);
 
-    store.store_blob(blob1);
-    store.store_blob(blob1b);
-    store.store_blob(blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob1b.signer_hint), blob1b);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
 
     auto namespaces = store.list_namespaces();
     REQUIRE(namespaces.size() == 2);
@@ -576,11 +580,11 @@ TEST_CASE("Storage list_namespaces returns stored namespaces", "[storage][plan03
     // Find each namespace in the result
     bool found_ns1 = false, found_ns2 = false;
     for (const auto& ns_info : namespaces) {
-        if (ns_info.namespace_id == blob1.namespace_id) {
+        if (ns_info.namespace_id == blob1.signer_hint) {
             found_ns1 = true;
             REQUIRE(ns_info.latest_seq_num == 2);  // 2 blobs stored
         }
-        if (ns_info.namespace_id == blob2.namespace_id) {
+        if (ns_info.namespace_id == blob2.signer_hint) {
             found_ns2 = true;
             REQUIRE(ns_info.latest_seq_num == 1);  // 1 blob stored
         }
@@ -611,15 +615,15 @@ TEST_CASE("Storage get_hashes_by_namespace returns correct hashes", "[storage]")
     auto blob2 = make_test_blob(0x10, "payload-two");
     auto blob3 = make_test_blob(0x10, "payload-three");
 
-    auto r1 = store.store_blob(blob1);
-    auto r2 = store.store_blob(blob2);
-    auto r3 = store.store_blob(blob3);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
+    auto r3 = store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3);
     REQUIRE(r1.status == StoreResult::Status::Stored);
     REQUIRE(r2.status == StoreResult::Status::Stored);
     REQUIRE(r3.status == StoreResult::Status::Stored);
 
     auto hashes = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob1.namespace_id));
+        std::span<const uint8_t, 32>(blob1.signer_hint));
     REQUIRE(hashes.size() == 3);
 
     // Hashes should match store_blob results
@@ -636,12 +640,12 @@ TEST_CASE("Storage get_hashes_by_namespace returns hashes in seq order", "[stora
     auto blob2 = make_test_blob(0x20, "second");
     auto blob3 = make_test_blob(0x20, "third");
 
-    auto r1 = store.store_blob(blob1);
-    auto r2 = store.store_blob(blob2);
-    auto r3 = store.store_blob(blob3);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
+    auto r3 = store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3);
 
     auto hashes = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob1.namespace_id));
+        std::span<const uint8_t, 32>(blob1.signer_hint));
     REQUIRE(hashes.size() == 3);
 
     // seq order: r1 first, then r2, then r3
@@ -658,14 +662,14 @@ TEST_CASE("Storage get_hashes_by_namespace isolates namespaces", "[storage]") {
     auto blob_a2 = make_test_blob(0x30, "ns-a-two");
     auto blob_b1 = make_test_blob(0x31, "ns-b-one");
 
-    auto ra1 = store.store_blob(blob_a1);
-    auto ra2 = store.store_blob(blob_a2);
-    auto rb1 = store.store_blob(blob_b1);
+    auto ra1 = store.store_blob(std::span<const uint8_t, 32>(blob_a1.signer_hint), blob_a1);
+    auto ra2 = store.store_blob(std::span<const uint8_t, 32>(blob_a2.signer_hint), blob_a2);
+    auto rb1 = store.store_blob(std::span<const uint8_t, 32>(blob_b1.signer_hint), blob_b1);
 
     auto hashes_a = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob_a1.namespace_id));
+        std::span<const uint8_t, 32>(blob_a1.signer_hint));
     auto hashes_b = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob_b1.namespace_id));
+        std::span<const uint8_t, 32>(blob_b1.signer_hint));
 
     REQUIRE(hashes_a.size() == 2);
     REQUIRE(hashes_b.size() == 1);
@@ -679,13 +683,13 @@ TEST_CASE("Storage get_hashes_by_namespace dedup: duplicate blob has one hash en
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x40, "deduplicate-me");
-    auto r1 = store.store_blob(blob);
-    auto r2 = store.store_blob(blob);  // duplicate
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);  // duplicate
     REQUIRE(r1.status == StoreResult::Status::Stored);
     REQUIRE(r2.status == StoreResult::Status::Duplicate);
 
     auto hashes = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(hashes.size() == 1);  // Duplicate doesn't add second seq entry
     REQUIRE(hashes[0] == r1.blob_hash);
 }
@@ -696,10 +700,10 @@ TEST_CASE("Storage get_hashes_by_namespace matches blob_hash computation", "[sto
 
     auto blob = make_test_blob(0x50, "hash-check");
     auto expected_hash = compute_hash(blob);
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     auto hashes = store.get_hashes_by_namespace(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(hashes.size() == 1);
     REQUIRE(hashes[0] == expected_hash);
 }
@@ -721,23 +725,23 @@ TEST_CASE("Storage delete_blob_data removes existing blob", "[storage][tombstone
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x60, "to-delete");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     // Verify blob exists
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash)));
 
     // Delete it
     bool deleted = store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash));
     REQUIRE(deleted);
 
     // Verify blob is gone
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash)));
 }
 
@@ -763,12 +767,12 @@ TEST_CASE("Storage delete_blob_data cleans up expiry index", "[storage][tombston
 
     // Store a blob with TTL
     auto blob = make_test_blob(0x62, "expiry-cleanup", 3600, 1000);
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     // Delete the blob
     bool deleted = store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash));
     REQUIRE(deleted);
 
@@ -784,27 +788,26 @@ TEST_CASE("Storage has_tombstone_for finds tombstone", "[storage][tombstone]") {
 
     // Store a regular blob
     auto blob = make_test_blob(0x63, "regular-blob");
-    auto blob_result = store.store_blob(blob);
+    auto blob_result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
     // No tombstone yet
     REQUIRE_FALSE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 
     // Store a tombstone targeting this blob
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id = blob.namespace_id;
-    tombstone.pubkey = blob.pubkey;
+    tombstone.signer_hint = blob.signer_hint;
     tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
     tombstone.ttl = 0;
     tombstone.timestamp = 2000;
     tombstone.signature.resize(4627, 0x42);
-    store.store_blob(tombstone);
+    store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
 
     // Now tombstone should be found
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 }
 
@@ -817,20 +820,19 @@ TEST_CASE("Storage has_tombstone_for returns false for wrong target", "[storage]
     target.fill(0xAA);
 
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id.fill(0x64);
-    tombstone.pubkey.resize(2592, 0x64);
+    tombstone.signer_hint.fill(0x64);
     tombstone.data = chromatindb::wire::make_tombstone_data(target);
     tombstone.ttl = 0;
     tombstone.timestamp = 2000;
     tombstone.signature.resize(4627, 0x42);
-    store.store_blob(tombstone);
+    store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
 
     // Query for a different target hash
     std::array<uint8_t, 32> other_target{};
     other_target.fill(0xBB);
 
     REQUIRE_FALSE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(tombstone.signer_hint),
         std::span<const uint8_t, 32>(other_target)));
 }
 
@@ -847,8 +849,7 @@ chromatindb::wire::BlobData make_delegation_blob(
     uint64_t timestamp = 3000)
 {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    std::memcpy(blob.signer_hint.data(), owner.namespace_id().data(), 32);
     blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
     blob.ttl = 0;  // Permanent
     blob.timestamp = timestamp;
@@ -904,7 +905,7 @@ TEST_CASE("Delegation index: has_valid_delegation returns true after storing del
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg_blob = make_delegation_blob(owner, delegate);
-    auto result = store.store_blob(deleg_blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(deleg_blob.signer_hint), deleg_blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     REQUIRE(store.has_valid_delegation(
@@ -933,7 +934,7 @@ TEST_CASE("Delegation index: has_valid_delegation returns false for wrong namesp
     auto other_owner = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg_blob = make_delegation_blob(owner, delegate);
-    store.store_blob(deleg_blob);
+    store.store_blob(std::span<const uint8_t, 32>(deleg_blob.signer_hint), deleg_blob);
 
     REQUIRE_FALSE(store.has_valid_delegation(
         other_owner.namespace_id(),
@@ -949,7 +950,7 @@ TEST_CASE("Delegation index: has_valid_delegation returns false for wrong delega
     auto other_delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg_blob = make_delegation_blob(owner, delegate);
-    store.store_blob(deleg_blob);
+    store.store_blob(std::span<const uint8_t, 32>(deleg_blob.signer_hint), deleg_blob);
 
     REQUIRE_FALSE(store.has_valid_delegation(
         owner.namespace_id(),
@@ -964,7 +965,7 @@ TEST_CASE("Delegation index: delete_blob_data removes delegation index entry", "
     auto delegate = chromatindb::identity::NodeIdentity::generate();
 
     auto deleg_blob = make_delegation_blob(owner, delegate);
-    auto result = store.store_blob(deleg_blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(deleg_blob.signer_hint), deleg_blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     // Verify delegation exists
@@ -995,8 +996,8 @@ TEST_CASE("Delegation index: multiple delegations in same namespace", "[storage]
     auto deleg1 = make_delegation_blob(owner, delegate1, 3000);
     auto deleg2 = make_delegation_blob(owner, delegate2, 3001);
 
-    auto r1 = store.store_blob(deleg1);
-    auto r2 = store.store_blob(deleg2);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(deleg1.signer_hint), deleg1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(deleg2.signer_hint), deleg2);
     REQUIRE(r1.status == StoreResult::Status::Stored);
     REQUIRE(r2.status == StoreResult::Status::Stored);
 
@@ -1029,22 +1030,21 @@ TEST_CASE("Storage tombstone index - O(1) lookup finds stored tombstone", "[stor
 
     // Store a regular blob
     auto blob = make_test_blob(0x70, "target-blob");
-    auto blob_result = store.store_blob(blob);
+    auto blob_result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
     // Store a tombstone targeting that blob
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id = blob.namespace_id;
-    tombstone.pubkey = blob.pubkey;
+    tombstone.signer_hint = blob.signer_hint;
     tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
     tombstone.ttl = 0;
     tombstone.timestamp = 2000;
     tombstone.signature.resize(4627, 0x42);
-    store.store_blob(tombstone);
+    store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
 
     // O(1) indexed lookup should find it
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 }
 
@@ -1068,33 +1068,32 @@ TEST_CASE("Storage tombstone index - cleanup on tombstone deletion", "[storage][
 
     // Store a regular blob
     auto blob = make_test_blob(0x72, "target-for-delete");
-    auto blob_result = store.store_blob(blob);
+    auto blob_result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
     // Store a tombstone targeting that blob
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id = blob.namespace_id;
-    tombstone.pubkey = blob.pubkey;
+    tombstone.signer_hint = blob.signer_hint;
     tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
     tombstone.ttl = 0;
     tombstone.timestamp = 2000;
     tombstone.signature.resize(4627, 0x42);
-    auto ts_result = store.store_blob(tombstone);
+    auto ts_result = store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
 
     // Tombstone should be found
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 
     // Delete the tombstone blob
     bool deleted = store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(ts_result.blob_hash));
     REQUIRE(deleted);
 
     // Tombstone index entry should be cleaned
     REQUIRE_FALSE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 }
 
@@ -1105,50 +1104,48 @@ TEST_CASE("Storage tombstone index - multiple tombstones in same namespace", "[s
     // Store two regular blobs
     auto blob1 = make_test_blob(0x74, "multi-target-1");
     auto blob2 = make_test_blob(0x74, "multi-target-2");
-    auto r1 = store.store_blob(blob1);
-    auto r2 = store.store_blob(blob2);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
     REQUIRE(r1.status == StoreResult::Status::Stored);
     REQUIRE(r2.status == StoreResult::Status::Stored);
 
     // Store tombstones targeting each blob
     chromatindb::wire::BlobData ts1;
-    ts1.namespace_id = blob1.namespace_id;
-    ts1.pubkey = blob1.pubkey;
+    ts1.signer_hint = blob1.signer_hint;
     ts1.data = chromatindb::wire::make_tombstone_data(r1.blob_hash);
     ts1.ttl = 0;
     ts1.timestamp = 2000;
     ts1.signature.resize(4627, 0x42);
-    auto ts1_result = store.store_blob(ts1);
+    auto ts1_result = store.store_blob(std::span<const uint8_t, 32>(ts1.signer_hint), ts1);
 
     chromatindb::wire::BlobData ts2;
-    ts2.namespace_id = blob2.namespace_id;
-    ts2.pubkey = blob2.pubkey;
+    ts2.signer_hint = blob2.signer_hint;
     ts2.data = chromatindb::wire::make_tombstone_data(r2.blob_hash);
     ts2.ttl = 0;
     ts2.timestamp = 2001;
     ts2.signature.resize(4627, 0x42);
-    store.store_blob(ts2);
+    store.store_blob(std::span<const uint8_t, 32>(ts2.signer_hint), ts2);
 
     // Both tombstones should be found
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(blob1.signer_hint),
         std::span<const uint8_t, 32>(r1.blob_hash)));
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob2.namespace_id),
+        std::span<const uint8_t, 32>(blob2.signer_hint),
         std::span<const uint8_t, 32>(r2.blob_hash)));
 
     // Delete only the first tombstone
     bool deleted = store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(blob1.signer_hint),
         std::span<const uint8_t, 32>(ts1_result.blob_hash));
     REQUIRE(deleted);
 
     // First should be gone, second still present
     REQUIRE_FALSE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob1.namespace_id),
+        std::span<const uint8_t, 32>(blob1.signer_hint),
         std::span<const uint8_t, 32>(r1.blob_hash)));
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob2.namespace_id),
+        std::span<const uint8_t, 32>(blob2.signer_hint),
         std::span<const uint8_t, 32>(r2.blob_hash)));
 }
 
@@ -1162,30 +1159,28 @@ TEST_CASE("Storage tombstone index - cross-namespace isolation", "[storage][tomb
 
     // Tombstone in namespace 0x75
     chromatindb::wire::BlobData ts_a;
-    ts_a.namespace_id.fill(0x75);
-    ts_a.pubkey.resize(2592, 0x75);
+    ts_a.signer_hint.fill(0x75);
     ts_a.data = chromatindb::wire::make_tombstone_data(target);
     ts_a.ttl = 0;
     ts_a.timestamp = 2000;
     ts_a.signature.resize(4627, 0x42);
-    store.store_blob(ts_a);
+    store.store_blob(std::span<const uint8_t, 32>(ts_a.signer_hint), ts_a);
 
     // Tombstone in namespace 0x76
     chromatindb::wire::BlobData ts_b;
-    ts_b.namespace_id.fill(0x76);
-    ts_b.pubkey.resize(2592, 0x76);
+    ts_b.signer_hint.fill(0x76);
     ts_b.data = chromatindb::wire::make_tombstone_data(target);
     ts_b.ttl = 0;
     ts_b.timestamp = 2000;
     ts_b.signature.resize(4627, 0x42);
-    store.store_blob(ts_b);
+    store.store_blob(std::span<const uint8_t, 32>(ts_b.signer_hint), ts_b);
 
     // Both namespaces should find the tombstone
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(ts_a.namespace_id),
+        std::span<const uint8_t, 32>(ts_a.signer_hint),
         std::span<const uint8_t, 32>(target)));
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(ts_b.namespace_id),
+        std::span<const uint8_t, 32>(ts_b.signer_hint),
         std::span<const uint8_t, 32>(target)));
 
     // A third namespace without a tombstone should return false
@@ -1207,23 +1202,22 @@ TEST_CASE("Storage tombstone with TTL>0 is expired by expiry scan", "[storage][t
 
     // Store a regular blob
     auto blob = make_test_blob(0x70, "target-blob", 604800, 1000);
-    auto blob_result = store.store_blob(blob);
+    auto blob_result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
     // Store a tombstone targeting it with TTL=3600, timestamp=1000
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id = blob.namespace_id;
-    tombstone.pubkey = blob.pubkey;
+    tombstone.signer_hint = blob.signer_hint;
     tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
     tombstone.ttl = 3600;
     tombstone.timestamp = 1000;
     tombstone.signature.resize(4627, 0x42);
-    auto ts_result = store.store_blob(tombstone);
+    auto ts_result = store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
     REQUIRE(ts_result.status == StoreResult::Status::Stored);
 
     // Verify tombstone index is populated
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 
     // Advance clock past tombstone expiry (1000 + 3600 = 4600, so 4601)
@@ -1233,7 +1227,7 @@ TEST_CASE("Storage tombstone with TTL>0 is expired by expiry scan", "[storage][t
 
     // tombstone_map should be cleaned
     REQUIRE_FALSE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(blob_result.blob_hash)));
 }
 
@@ -1247,17 +1241,16 @@ TEST_CASE("Storage tombstone with TTL=0 is never expired", "[storage][tombstone-
     target.fill(0xAA);
 
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id.fill(0x78);
-    tombstone.pubkey.resize(2592, 0x78);
+    tombstone.signer_hint.fill(0x78);
     tombstone.data = chromatindb::wire::make_tombstone_data(target);
     tombstone.ttl = 0;
     tombstone.timestamp = 1000;
     tombstone.signature.resize(4627, 0x42);
-    store.store_blob(tombstone);
+    store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
 
     // Verify tombstone exists
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(tombstone.signer_hint),
         std::span<const uint8_t, 32>(target)));
 
     // Advance clock far into the future
@@ -1266,7 +1259,7 @@ TEST_CASE("Storage tombstone with TTL=0 is never expired", "[storage][tombstone-
 
     // Tombstone should still be there (permanent)
     REQUIRE(store.has_tombstone_for(
-        std::span<const uint8_t, 32>(tombstone.namespace_id),
+        std::span<const uint8_t, 32>(tombstone.signer_hint),
         std::span<const uint8_t, 32>(target)));
 }
 
@@ -1278,11 +1271,11 @@ TEST_CASE("Storage regular blob expiry unaffected by tombstone scan", "[storage]
     // Store a regular blob with TTL=100
     auto blob = make_test_blob(0x79, "regular-expiry", 100, 1000);
     auto hash = compute_hash(blob);
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     // Verify blob exists
     REQUIRE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 
     // Advance past expiry
@@ -1291,7 +1284,7 @@ TEST_CASE("Storage regular blob expiry unaffected by tombstone scan", "[storage]
 
     // Blob should be gone
     REQUIRE_FALSE(store.has_blob(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(hash)));
 }
 
@@ -1300,7 +1293,7 @@ TEST_CASE("Storage used_bytes - non-zero after storing data", "[storage][used-by
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0x73, "some-data-for-size");
-    store.store_blob(blob);
+    store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
 
     REQUIRE(store.used_bytes() > 0);
 }
@@ -1327,7 +1320,7 @@ TEST_CASE("Storage encryption at rest: raw mdbx value has version header", "[sto
     {
         Storage store(tmp.path.string());
         auto blob = make_test_blob(0xEE, "hello-encryption-test");
-        auto result = store.store_blob(blob);
+        auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
         REQUIRE(result.status == StoreResult::Status::Stored);
         hash = result.blob_hash;
     }
@@ -1371,7 +1364,7 @@ TEST_CASE("Storage encryption at rest: raw mdbx value is not plaintext", "[stora
     {
         Storage store(tmp.path.string());
         auto blob = make_test_blob(0xEF, payload);
-        auto result = store.store_blob(blob);
+        auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
         REQUIRE(result.status == StoreResult::Status::Stored);
         hash = result.blob_hash;
     }
@@ -1420,7 +1413,7 @@ TEST_CASE("Storage encryption at rest: round-trip through all read paths", "[sto
 
     // Store a blob
     auto blob = make_test_blob(0xF0, "round-trip-test");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     // get_blob returns correct data
@@ -1740,21 +1733,21 @@ TEST_CASE("store_blob increments quota aggregate", "[storage][quota]") {
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0xA1, "quota-test-data");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     auto quota = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota.blob_count == 1);
     REQUIRE(quota.total_bytes > 0);
 
     // Store a second blob in the same namespace
     auto blob2 = make_test_blob(0xA1, "quota-test-data-2");
-    auto result2 = store.store_blob(blob2);
+    auto result2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
     REQUIRE(result2.status == StoreResult::Status::Stored);
 
     auto quota2 = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota2.blob_count == 2);
     REQUIRE(quota2.total_bytes > quota.total_bytes);
 }
@@ -1764,18 +1757,18 @@ TEST_CASE("store_blob duplicate does not increment quota", "[storage][quota]") {
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0xA2, "dedup-quota-test");
-    auto r1 = store.store_blob(blob);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r1.status == StoreResult::Status::Stored);
 
     auto quota_after_first = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
 
     // Store same blob again (dedup)
-    auto r2 = store.store_blob(blob);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r2.status == StoreResult::Status::Duplicate);
 
     auto quota_after_dup = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota_after_dup.blob_count == quota_after_first.blob_count);
     REQUIRE(quota_after_dup.total_bytes == quota_after_first.total_bytes);
 }
@@ -1786,25 +1779,24 @@ TEST_CASE("store_blob tombstone does not increment quota", "[storage][quota]") {
 
     // Store a regular blob first
     auto blob = make_test_blob(0xA3, "tombstone-quota-test");
-    auto blob_result = store.store_blob(blob);
+    auto blob_result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(blob_result.status == StoreResult::Status::Stored);
 
     auto quota_before = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
 
     // Store a tombstone targeting the blob
     chromatindb::wire::BlobData tombstone;
-    tombstone.namespace_id = blob.namespace_id;
-    tombstone.pubkey = blob.pubkey;
+    tombstone.signer_hint = blob.signer_hint;
     tombstone.data = chromatindb::wire::make_tombstone_data(blob_result.blob_hash);
     tombstone.ttl = 0;
     tombstone.timestamp = 2000;
     tombstone.signature.resize(4627, 0x42);
-    auto ts_result = store.store_blob(tombstone);
+    auto ts_result = store.store_blob(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
     REQUIRE(ts_result.status == StoreResult::Status::Stored);
 
     auto quota_after = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     // Tombstone should NOT increase quota
     REQUIRE(quota_after.blob_count == quota_before.blob_count);
     REQUIRE(quota_after.total_bytes == quota_before.total_bytes);
@@ -1815,21 +1807,21 @@ TEST_CASE("delete_blob_data decrements quota aggregate", "[storage][quota]") {
     Storage store(tmp.path.string());
 
     auto blob = make_test_blob(0xA4, "delete-quota-test");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     auto quota_before = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota_before.blob_count == 1);
     REQUIRE(quota_before.total_bytes > 0);
 
     // Delete the blob
     REQUIRE(store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash)));
 
     auto quota_after = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota_after.blob_count == 0);
     REQUIRE(quota_after.total_bytes == 0);
 }
@@ -1841,11 +1833,11 @@ TEST_CASE("run_expiry_scan decrements quota aggregate", "[storage][quota]") {
 
     // Store a blob with TTL=100
     auto blob = make_test_blob(0xA5, "expiry-quota-test", 100, 1000);
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     auto quota_before = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota_before.blob_count == 1);
     REQUIRE(quota_before.total_bytes > 0);
 
@@ -1854,7 +1846,7 @@ TEST_CASE("run_expiry_scan decrements quota aggregate", "[storage][quota]") {
     REQUIRE(store.run_expiry_scan() == 1);
 
     auto quota_after = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota_after.blob_count == 0);
     REQUIRE(quota_after.total_bytes == 0);
 }
@@ -1866,19 +1858,19 @@ TEST_CASE("rebuild_quota_aggregates matches actual storage", "[storage][quota]")
     // Store multiple blobs
     auto blob1 = make_test_blob(0xA6, "rebuild-test-1");
     auto blob2 = make_test_blob(0xA6, "rebuild-test-2");
-    store.store_blob(blob1);
-    store.store_blob(blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
 
     // Get quota from normal increment path
     auto quota_incremental = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob1.namespace_id));
+        std::span<const uint8_t, 32>(blob1.signer_hint));
 
     // Rebuild from scratch
     store.rebuild_quota_aggregates();
 
     // Should match
     auto quota_rebuilt = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob1.namespace_id));
+        std::span<const uint8_t, 32>(blob1.signer_hint));
     REQUIRE(quota_rebuilt.blob_count == quota_incremental.blob_count);
     REQUIRE(quota_rebuilt.total_bytes == quota_incremental.total_bytes);
 }
@@ -1889,11 +1881,11 @@ TEST_CASE("rebuild_quota_aggregates clears stale entries", "[storage][quota]") {
 
     // Store and delete a blob
     auto blob = make_test_blob(0xA7, "stale-rebuild-test");
-    auto result = store.store_blob(blob);
+    auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(result.status == StoreResult::Status::Stored);
 
     REQUIRE(store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob.namespace_id),
+        std::span<const uint8_t, 32>(blob.signer_hint),
         std::span<const uint8_t, 32>(result.blob_hash)));
 
     // Rebuild
@@ -1901,7 +1893,7 @@ TEST_CASE("rebuild_quota_aggregates clears stale entries", "[storage][quota]") {
 
     // Namespace with no blobs should have zero quota
     auto quota = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob.namespace_id));
+        std::span<const uint8_t, 32>(blob.signer_hint));
     REQUIRE(quota.blob_count == 0);
     REQUIRE(quota.total_bytes == 0);
 }
@@ -1914,14 +1906,14 @@ TEST_CASE("multiple namespaces tracked independently", "[storage][quota]") {
     auto blob_ns2 = make_test_blob(0xB1, "ns2-data-1");
     auto blob_ns2b = make_test_blob(0xB1, "ns2-data-2");
 
-    store.store_blob(blob_ns1);
-    store.store_blob(blob_ns2);
-    store.store_blob(blob_ns2b);
+    store.store_blob(std::span<const uint8_t, 32>(blob_ns1.signer_hint), blob_ns1);
+    store.store_blob(std::span<const uint8_t, 32>(blob_ns2.signer_hint), blob_ns2);
+    store.store_blob(std::span<const uint8_t, 32>(blob_ns2b.signer_hint), blob_ns2b);
 
     auto quota_ns1 = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob_ns1.namespace_id));
+        std::span<const uint8_t, 32>(blob_ns1.signer_hint));
     auto quota_ns2 = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob_ns2.namespace_id));
+        std::span<const uint8_t, 32>(blob_ns2.signer_hint));
 
     REQUIRE(quota_ns1.blob_count == 1);
     REQUIRE(quota_ns2.blob_count == 2);
@@ -1929,13 +1921,13 @@ TEST_CASE("multiple namespaces tracked independently", "[storage][quota]") {
     // Deleting from ns1 shouldn't affect ns2
     auto hash = compute_hash(blob_ns1);
     store.delete_blob_data(
-        std::span<const uint8_t, 32>(blob_ns1.namespace_id),
+        std::span<const uint8_t, 32>(blob_ns1.signer_hint),
         std::span<const uint8_t, 32>(hash));
 
     auto quota_ns1_after = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob_ns1.namespace_id));
+        std::span<const uint8_t, 32>(blob_ns1.signer_hint));
     auto quota_ns2_after = store.get_namespace_quota(
-        std::span<const uint8_t, 32>(blob_ns2.namespace_id));
+        std::span<const uint8_t, 32>(blob_ns2.signer_hint));
 
     REQUIRE(quota_ns1_after.blob_count == 0);
     REQUIRE(quota_ns2_after.blob_count == 2);
@@ -1962,9 +1954,9 @@ TEST_CASE("integrity_scan on populated storage reports correct entry counts", "[
     auto blob2 = make_test_blob(0x10, "integrity-blob-2");
     auto blob3 = make_test_blob(0x20, "integrity-blob-3");
 
-    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3).status == StoreResult::Status::Stored);
 
     // integrity_scan should report blobs=3, seq=3 (at minimum)
     REQUIRE_NOTHROW(store.integrity_scan());
@@ -1980,9 +1972,9 @@ TEST_CASE("expiry scan decreases entry counts (GC correctness)", "[storage][inte
     auto blob2 = make_test_blob(0x30, "gc-test-2", 100, 9000);  // expires at 9100
     auto blob3 = make_test_blob(0x30, "gc-test-3", 0, 9000);    // TTL=0 = permanent
 
-    REQUIRE(store.store_blob(blob1).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob2).status == StoreResult::Status::Stored);
-    REQUIRE(store.store_blob(blob3).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2).status == StoreResult::Status::Stored);
+    REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3).status == StoreResult::Status::Stored);
 
     // Advance clock past expiry and run GC
     fake_now = 10000;  // 9000 + 100 = 9100, so 10000 > 9100
@@ -2038,7 +2030,7 @@ TEST_CASE("Storage::compact() on DB with data produces valid result", "[storage]
     // Store some blobs to increase DB size
     for (int i = 0; i < 20; ++i) {
         auto blob = make_test_blob(0x50, "compact-data-" + std::to_string(i));
-        REQUIRE(store.store_blob(blob).status == StoreResult::Status::Stored);
+        REQUIRE(store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob).status == StoreResult::Status::Stored);
     }
 
     auto before = store.used_bytes();
@@ -2064,7 +2056,7 @@ TEST_CASE("Storage::compact() after deletion produces smaller file", "[storage][
     std::vector<std::array<uint8_t, 32>> hashes;
     for (int i = 0; i < 200; ++i) {
         auto blob = make_test_blob(0x51, large_payload + std::to_string(i));
-        auto result = store.store_blob(blob);
+        auto result = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
         REQUIRE(result.status == StoreResult::Status::Stored);
         hashes.push_back(result.blob_hash);
     }
@@ -2099,7 +2091,7 @@ TEST_CASE("Storage::compact() DB is still functional after compaction", "[storag
 
     // Store blobs before compaction
     auto blob1 = make_test_blob(0x52, "before-compact-1");
-    auto r1 = store.store_blob(blob1);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
     REQUIRE(r1.status == StoreResult::Status::Stored);
 
     // Compact
@@ -2115,7 +2107,7 @@ TEST_CASE("Storage::compact() DB is still functional after compaction", "[storag
 
     // Verify new writes work after compaction
     auto blob2 = make_test_blob(0x52, "after-compact-1");
-    auto r2 = store.store_blob(blob2);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
     REQUIRE(r2.status == StoreResult::Status::Stored);
 
     // Verify new blob is retrievable
@@ -2149,30 +2141,32 @@ TEST_CASE("count_tombstones counts tombstone entries", "[storage][tombstone]") {
     BlobEngine eng(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, owner);
 
     // Store 2 regular blobs, then tombstone them
     auto blob1 = make_signed_blob(owner, "tombstone-test-1");
-    auto r1 = run_async(pool, eng.ingest(blob1));
+    auto r1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob1));
     REQUIRE(r1.accepted);
 
     auto blob2 = make_signed_blob(owner, "tombstone-test-2");
-    auto r2 = run_async(pool, eng.ingest(blob2));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob2));
     REQUIRE(r2.accepted);
 
     // Store tombstones for both
     auto ts1 = make_signed_tombstone(owner, r1.ack->blob_hash);
-    auto tr1 = run_async(pool, eng.delete_blob(ts1));
+    auto tr1 = run_async(pool, eng.delete_blob(chromatindb::test::ns_span(owner), ts1));
     REQUIRE(tr1.accepted);
 
     auto ts2 = make_signed_tombstone(owner, r2.ack->blob_hash);
-    auto tr2 = run_async(pool, eng.delete_blob(ts2));
+    auto tr2 = run_async(pool, eng.delete_blob(chromatindb::test::ns_span(owner), ts2));
     REQUIRE(tr2.accepted);
 
     CHECK(store.count_tombstones() == 2);
 
     // Store a regular blob -- should NOT affect tombstone count
     auto blob3 = make_signed_blob(owner, "regular-blob");
-    auto r3 = run_async(pool, eng.ingest(blob3));
+    auto r3 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob3));
     REQUIRE(r3.accepted);
     CHECK(store.count_tombstones() == 2);
 }
@@ -2197,16 +2191,16 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
 
     // owner1 delegates to delegate1 and delegate2
     auto d1 = make_signed_delegation(owner1, delegate1);
-    auto dr1 = run_async(pool, eng.ingest(d1));
+    auto dr1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), d1));
     REQUIRE(dr1.accepted);
 
     auto d2 = make_signed_delegation(owner1, delegate2);
-    auto dr2 = run_async(pool, eng.ingest(d2));
+    auto dr2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), d2));
     REQUIRE(dr2.accepted);
 
     // owner2 delegates to delegate1 only
     auto d3 = make_signed_delegation(owner2, delegate1);
-    auto dr3 = run_async(pool, eng.ingest(d3));
+    auto dr3 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), d3));
     REQUIRE(dr3.accepted);
 
     CHECK(store.count_delegations(owner1.namespace_id()) == 2);
@@ -2214,6 +2208,12 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
 
     // Unknown namespace returns 0
     auto unknown = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, owner1);
+    chromatindb::test::register_pubk(store, owner2);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
+    chromatindb::test::register_pubk(store, unknown);
     CHECK(store.count_delegations(unknown.namespace_id()) == 0);
 }
 
@@ -2239,14 +2239,18 @@ TEST_CASE("list_delegations returns entries for namespace with delegations", "[s
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, owner);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
 
     // Store 2 delegations
     auto d1 = make_signed_delegation(owner, delegate1);
-    auto dr1 = run_async(pool, eng.ingest(d1));
+    auto dr1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), d1));
     REQUIRE(dr1.accepted);
 
     auto d2 = make_signed_delegation(owner, delegate2);
-    auto dr2 = run_async(pool, eng.ingest(d2));
+    auto dr2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), d2));
     REQUIRE(dr2.accepted);
 
     auto entries = store.list_delegations(owner.namespace_id());
@@ -2289,15 +2293,20 @@ TEST_CASE("list_delegations does not return delegations from other namespaces", 
     auto owner2 = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    chromatindb::test::register_pubk(store, owner1);
+    chromatindb::test::register_pubk(store, owner2);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
 
     // owner1 delegates to delegate1
     auto d1 = make_signed_delegation(owner1, delegate1);
-    auto dr1 = run_async(pool, eng.ingest(d1));
+    auto dr1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), d1));
     REQUIRE(dr1.accepted);
 
     // owner2 delegates to delegate2
     auto d2 = make_signed_delegation(owner2, delegate2);
-    auto dr2 = run_async(pool, eng.ingest(d2));
+    auto dr2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), d2));
     REQUIRE(dr2.accepted);
 
     // list_delegations(owner1) should only return delegate1
@@ -2329,14 +2338,14 @@ TEST_CASE("store_blob rejects when capacity exceeded atomically", "[storage][res
     auto blob1 = make_test_blob(0xC1, "fill-capacity");
     auto encoded1 = chromatindb::wire::encode_blob(blob1);
     auto hash1 = chromatindb::wire::blob_hash(encoded1);
-    auto r1 = store.store_blob(blob1, hash1, encoded1);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1, hash1, encoded1);
     REQUIRE(r1.status == StoreResult::Status::Stored);
 
     // Now try to store another blob with max_storage_bytes set to 1 (below used_bytes)
     auto blob2 = make_test_blob(0xC1, "over-capacity");
     auto encoded2 = chromatindb::wire::encode_blob(blob2);
     auto hash2 = chromatindb::wire::blob_hash(encoded2);
-    auto r2 = store.store_blob(blob2, hash2, encoded2, 1, 0, 0);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2, hash2, encoded2, 1, 0, 0);
     REQUIRE(r2.status == StoreResult::Status::CapacityExceeded);
     REQUIRE(r2.blob_hash == hash2);
 }
@@ -2349,14 +2358,14 @@ TEST_CASE("store_blob rejects when quota exceeded atomically", "[storage][resour
     auto blob1 = make_test_blob(0xC2, "fill-quota-count");
     auto encoded1 = chromatindb::wire::encode_blob(blob1);
     auto hash1 = chromatindb::wire::blob_hash(encoded1);
-    auto r1 = store.store_blob(blob1, hash1, encoded1);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1, hash1, encoded1);
     REQUIRE(r1.status == StoreResult::Status::Stored);
 
     // Try to store second blob with count_limit=1
     auto blob2 = make_test_blob(0xC2, "over-quota-count");
     auto encoded2 = chromatindb::wire::encode_blob(blob2);
     auto hash2 = chromatindb::wire::blob_hash(encoded2);
-    auto r2 = store.store_blob(blob2, hash2, encoded2, 0, 0, 1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2, hash2, encoded2, 0, 0, 1);
     REQUIRE(r2.status == StoreResult::Status::QuotaExceeded);
     REQUIRE(r2.blob_hash == hash2);
 }
@@ -2369,12 +2378,12 @@ TEST_CASE("store_blob duplicate bypasses capacity check", "[storage][resource]")
     auto blob = make_test_blob(0xC3, "dedup-capacity");
     auto encoded = chromatindb::wire::encode_blob(blob);
     auto hash = chromatindb::wire::blob_hash(encoded);
-    auto r1 = store.store_blob(blob, hash, encoded);
+    auto r1 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob, hash, encoded);
     REQUIRE(r1.status == StoreResult::Status::Stored);
 
     // Try to store the same blob with max_storage_bytes=1 (would fail for new blobs)
     // Duplicate check runs before capacity check (Pitfall 4)
-    auto r2 = store.store_blob(blob, hash, encoded, 1, 0, 1);
+    auto r2 = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob, hash, encoded, 1, 0, 1);
     REQUIRE(r2.status == StoreResult::Status::Duplicate);
 }
 
@@ -2386,14 +2395,14 @@ TEST_CASE("rebuild_quota_aggregates clears all entries", "[storage][resource]") 
     auto blob1 = make_test_blob(0xD1, "rebuild-ns1");
     auto blob2 = make_test_blob(0xD2, "rebuild-ns2");
     auto blob3 = make_test_blob(0xD3, "rebuild-ns3");
-    store.store_blob(blob1);
-    store.store_blob(blob2);
-    store.store_blob(blob3);
+    store.store_blob(std::span<const uint8_t, 32>(blob1.signer_hint), blob1);
+    store.store_blob(std::span<const uint8_t, 32>(blob2.signer_hint), blob2);
+    store.store_blob(std::span<const uint8_t, 32>(blob3.signer_hint), blob3);
 
     // Verify all 3 namespaces have quota entries
-    auto q1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.namespace_id));
-    auto q2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.namespace_id));
-    auto q3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.namespace_id));
+    auto q1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.signer_hint));
+    auto q2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.signer_hint));
+    auto q3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.signer_hint));
     REQUIRE(q1.blob_count == 1);
     REQUIRE(q2.blob_count == 1);
     REQUIRE(q3.blob_count == 1);
@@ -2401,9 +2410,9 @@ TEST_CASE("rebuild_quota_aggregates clears all entries", "[storage][resource]") 
     // Rebuild and verify all quotas are still correct
     store.rebuild_quota_aggregates();
 
-    auto rq1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.namespace_id));
-    auto rq2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.namespace_id));
-    auto rq3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.namespace_id));
+    auto rq1 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob1.signer_hint));
+    auto rq2 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob2.signer_hint));
+    auto rq3 = store.get_namespace_quota(std::span<const uint8_t, 32>(blob3.signer_hint));
     REQUIRE(rq1.blob_count == 1);
     REQUIRE(rq2.blob_count == 1);
     REQUIRE(rq3.blob_count == 1);
@@ -2424,7 +2433,7 @@ TEST_CASE("BlobRef.blob_type populated after store_blob", "[storage][type_index]
     // Store a blob with CENV-like magic prefix
     std::string payload = "\x43\x45\x4E\x56" + std::string("some envelope data");
     auto blob = make_test_blob(0xE1, payload);
-    auto r = store.store_blob(blob);
+    auto r = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r.status == StoreResult::Status::Stored);
 
     std::array<uint8_t, 32> ns;
@@ -2443,7 +2452,7 @@ TEST_CASE("Short blob data produces zero-padded type", "[storage][type_index]") 
 
     // Store blob with only 2 bytes of data
     auto blob = make_test_blob(0xE2, "AB");
-    auto r = store.store_blob(blob);
+    auto r = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r.status == StoreResult::Status::Stored);
 
     std::array<uint8_t, 32> ns;
@@ -2464,7 +2473,7 @@ TEST_CASE("Arbitrary 4-byte prefix stored and retrieved", "[storage][type_extens
     // Store blob with a custom/unknown type prefix
     std::string payload = "\xCA\xFE\xBA\xBE" + std::string("custom data");
     auto blob = make_test_blob(0xE3, payload);
-    auto r = store.store_blob(blob);
+    auto r = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r.status == StoreResult::Status::Stored);
 
     std::array<uint8_t, 32> ns;
@@ -2493,8 +2502,8 @@ TEST_CASE("store_blobs_atomic populates blob_type", "[storage][type_index]") {
     auto hash2 = chromatindb::wire::blob_hash(encoded2);
 
     std::vector<chromatindb::storage::PrecomputedBlob> pbs;
-    pbs.push_back({blob1, hash1, encoded1});
-    pbs.push_back({blob2, hash2, encoded2});
+    pbs.push_back({blob1.signer_hint, blob1, hash1, encoded1});
+    pbs.push_back({blob2.signer_hint, blob2, hash2, encoded2});
 
     auto results = store.store_blobs_atomic(pbs);
     REQUIRE(results.size() == 2);
@@ -2526,7 +2535,7 @@ TEST_CASE("get_hashes_by_namespace handles 36-byte seq_map values", "[storage][t
 
     std::string payload = "\x43\x45\x4E\x56" + std::string("data");
     auto blob = make_test_blob(0xE5, payload);
-    auto r = store.store_blob(blob);
+    auto r = store.store_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     REQUIRE(r.status == StoreResult::Status::Stored);
 
     std::array<uint8_t, 32> ns;
