@@ -27,13 +27,11 @@ std::vector<uint8_t> encode_blob(const BlobData& blob) {
     return {ptr, ptr + size};
 }
 
-BlobData decode_blob(std::span<const uint8_t> buffer) {
-    auto verifier = flatbuffers::Verifier(buffer.data(), buffer.size());
-    if (!chromatindb::wire::VerifyBlobBuffer(verifier)) {
-        throw std::runtime_error("Invalid FlatBuffer blob data");
+BlobData decode_blob_from_fb(const chromatindb::wire::Blob* fb_blob) {
+    if (!fb_blob) {
+        throw std::runtime_error("Null FlatBuffer Blob accessor");
     }
 
-    auto fb_blob = chromatindb::wire::GetBlob(buffer.data());
     BlobData result;
 
     if (fb_blob->signer_hint() && fb_blob->signer_hint()->size() == 32) {
@@ -54,6 +52,16 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
     }
 
     return result;
+}
+
+BlobData decode_blob(std::span<const uint8_t> buffer) {
+    auto verifier = flatbuffers::Verifier(buffer.data(), buffer.size());
+    if (!chromatindb::wire::VerifyBlobBuffer(verifier)) {
+        throw std::runtime_error("Invalid FlatBuffer blob data");
+    }
+
+    // Share field-extraction with decode_blob_from_fb (feedback_no_duplicate_code.md).
+    return decode_blob_from_fb(chromatindb::wire::GetBlob(buffer.data()));
 }
 
 std::array<uint8_t, 32> build_signing_input(
