@@ -230,6 +230,7 @@ if(BUILD_TESTING)
     tests/engine/test_verify_signer_hint.cpp
     tests/engine/test_pubk_first.cpp
     tests/engine/test_delegate_replay.cpp
+    tests/engine/test_bomb_validation.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
