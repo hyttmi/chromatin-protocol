@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 122 context gathered
-last_updated: "2026-04-20T03:02:17.610Z"
-last_activity: 2026-04-19
+last_updated: "2026-04-20T04:34:10.017Z"
+last_activity: 2026-04-20 -- Phase 122 execution started
 progress:
   total_phases: 26
   completed_phases: 6
-  total_plans: 12
+  total_plans: 19
   completed_plans: 12
-  percent: 100
+  percent: 63
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 121 — storage-concurrency-invariant
+**Current focus:** Phase 122 — schema-signing-cleanup-strip-namespace-and-compress-pubkey
 
 ## Current Position
 
-Phase: 122
-Plan: Not started
-Status: Executing Phase 121
-Last activity: 2026-04-19
+Phase: 122 (schema-signing-cleanup-strip-namespace-and-compress-pubkey) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 122
+Last activity: 2026-04-20 -- Phase 122 execution started
 
 Progress: [##########] 100%
 
@@ -82,3 +82,5 @@ None.
 Last session: --stopped-at
 Stopped at: Phase 122 context gathered
 Resume file: --resume-file
+
+**Planned Phase:** 122 (schema-signing-cleanup-strip-namespace-and-compress-pubkey) — 7 plans — 2026-04-20T04:26:37.533Z
