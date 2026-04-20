@@ -1,7 +1,6 @@
 #include "db/wire/codec.h"
 #include "db/wire/blob_generated.h"
 #include "db/crypto/hash.h"
-#include "db/crypto/signing.h"
 #include "db/util/endian.h"
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/sha3.h>
@@ -11,17 +10,16 @@
 namespace chromatindb::wire {
 
 std::vector<uint8_t> encode_blob(const BlobData& blob) {
-    // Size builder to avoid reallocations: blob data + pubkey(2592) + sig(4627) + overhead(1024)
+    // Size builder to avoid reallocations: blob data + signer_hint(32) + sig(4627) + overhead(1024)
     size_t estimated_size = blob.data.size() + 8192;
     flatbuffers::FlatBufferBuilder builder(estimated_size);
     builder.ForceDefaults(true);  // Deterministic: include zero-value fields
 
-    auto ns = builder.CreateVector(blob.namespace_id.data(), blob.namespace_id.size());
-    auto pk = builder.CreateVector(blob.pubkey.data(), blob.pubkey.size());
+    auto sh = builder.CreateVector(blob.signer_hint.data(), blob.signer_hint.size());
     auto dt = builder.CreateVector(blob.data.data(), blob.data.size());
     auto sg = builder.CreateVector(blob.signature.data(), blob.signature.size());
 
-    auto fb_blob = chromatindb::wire::CreateBlob(builder, ns, pk, dt, blob.ttl, blob.timestamp, sg);
+    auto fb_blob = chromatindb::wire::CreateBlob(builder, sh, dt, blob.ttl, blob.timestamp, sg);
     builder.Finish(fb_blob);
 
     auto* ptr = builder.GetBufferPointer();
@@ -38,15 +36,10 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
     auto fb_blob = chromatindb::wire::GetBlob(buffer.data());
     BlobData result;
 
-    if (fb_blob->namespace_id() && fb_blob->namespace_id()->size() == 32) {
-        std::memcpy(result.namespace_id.data(), fb_blob->namespace_id()->data(), 32);
-    }
-
-    if (fb_blob->pubkey()) {
-        if (fb_blob->pubkey()->size() != chromatindb::crypto::Signer::PUBLIC_KEY_SIZE) {
-            throw std::runtime_error("Invalid pubkey size in FlatBuffer blob");
-        }
-        result.pubkey.assign(fb_blob->pubkey()->begin(), fb_blob->pubkey()->end());
+    if (fb_blob->signer_hint() && fb_blob->signer_hint()->size() == 32) {
+        std::memcpy(result.signer_hint.data(), fb_blob->signer_hint()->data(), 32);
+    } else {
+        throw std::runtime_error("Invalid signer_hint size in FlatBuffer blob (expected 32 bytes)");
     }
 
     if (fb_blob->data()) {
@@ -64,18 +57,21 @@ BlobData decode_blob(std::span<const uint8_t> buffer) {
 }
 
 std::array<uint8_t, 32> build_signing_input(
-    std::span<const uint8_t> namespace_id,
+    std::span<const uint8_t> target_namespace,
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp) {
 
-    // Incremental SHA3-256: hash namespace || data || ttl_be32 || timestamp_be64
+    // Incremental SHA3-256: hash target_namespace || data || ttl_be32 || timestamp_be64
     // directly into the sponge -- zero intermediate allocation.
+    // Phase 122 D-01: byte output IDENTICAL to pre-122 for the same input bytes;
+    // only the parameter name changes. Do NOT reorder absorption -- sponge order
+    // is part of the wire-protocol contract (Pitfall #8).
     OQS_SHA3_sha3_256_inc_ctx ctx;
     OQS_SHA3_sha3_256_inc_init(&ctx);
 
-    // Namespace
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), namespace_id.size());
+    // Target namespace
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, target_namespace.data(), target_namespace.size());
 
     // Data (may be up to 100 MiB -- fed directly, no copy)
     OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
