@@ -393,6 +393,12 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                         err_code = ERROR_PUBK_FIRST_VIOLATION;
                     } else if (*result.error == engine::IngestError::pubk_mismatch) {
                         err_code = ERROR_PUBK_MISMATCH;
+                    } else if (*result.error == engine::IngestError::bomb_ttl_nonzero) {
+                        err_code = ERROR_BOMB_TTL_NONZERO;
+                    } else if (*result.error == engine::IngestError::bomb_malformed) {
+                        err_code = ERROR_BOMB_MALFORMED;
+                    } else if (*result.error == engine::IngestError::bomb_delegate_not_allowed) {
+                        err_code = ERROR_BOMB_DELEGATE_NOT_ALLOWED;
                     }
                     co_await send_error_response(conn, err_code, wire::TransportMsgType_Delete, request_id, metrics_);
                 }
@@ -1463,6 +1469,21 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                                      conn->remote_address(), result.error_detail);
                         record_strike_(conn, result.error_detail);
                         co_await send_error_response(conn, ERROR_PUBK_MISMATCH, wire::TransportMsgType_BlobWrite, request_id, metrics_);
+                    } else if (*result.error == engine::IngestError::bomb_ttl_nonzero) {
+                        spdlog::warn("BlobWrite from {}: BOMB ttl!=0 ({})",
+                                     conn->remote_address(), result.error_detail);
+                        record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_BOMB_TTL_NONZERO, wire::TransportMsgType_BlobWrite, request_id, metrics_);
+                    } else if (*result.error == engine::IngestError::bomb_malformed) {
+                        spdlog::warn("BlobWrite from {}: BOMB malformed ({})",
+                                     conn->remote_address(), result.error_detail);
+                        record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_BOMB_MALFORMED, wire::TransportMsgType_BlobWrite, request_id, metrics_);
+                    } else if (*result.error == engine::IngestError::bomb_delegate_not_allowed) {
+                        spdlog::warn("BlobWrite from {}: delegate BOMB rejected ({})",
+                                     conn->remote_address(), result.error_detail);
+                        record_strike_(conn, result.error_detail);
+                        co_await send_error_response(conn, ERROR_BOMB_DELEGATE_NOT_ALLOWED, wire::TransportMsgType_BlobWrite, request_id, metrics_);
                     } else {
                         spdlog::warn("invalid blob from peer {}: {}",
                                      conn->remote_address(),
