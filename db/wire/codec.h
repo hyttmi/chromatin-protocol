@@ -8,10 +8,11 @@
 
 namespace chromatindb::wire {
 
-/// Structured blob data for codec operations.
+/// Structured blob data for codec operations (Phase 122 shape).
+/// signer_hint = SHA3-256(signing pubkey); resolves to a 2592-byte ML-DSA-87
+/// pubkey via Storage::get_owner_pubkey or delegation_map.
 struct BlobData {
-    std::array<uint8_t, 32> namespace_id{};
-    std::vector<uint8_t> pubkey;
+    std::array<uint8_t, 32> signer_hint{};
     std::vector<uint8_t> data;
     uint32_t ttl = 0;
     uint64_t timestamp = 0;
@@ -26,11 +27,14 @@ std::vector<uint8_t> encode_blob(const BlobData& blob);
 /// @throws std::runtime_error if buffer is invalid.
 BlobData decode_blob(std::span<const uint8_t> buffer);
 
-/// Build canonical signing input: SHA3-256(namespace || data || ttl_be32 || timestamp_be64).
+/// Build canonical signing input: SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
 /// Returns a 32-byte digest that is then signed -- independent of FlatBuffer format.
+/// Phase 122 D-01: byte output IDENTICAL to pre-122 for the same input bytes; only
+/// the parameter name changes. The signer commits to target_namespace (not signer_hint),
+/// preventing cross-namespace replay by delegates with multi-namespace authority.
 /// Uses incremental SHA3-256 hashing internally (zero intermediate allocation).
 std::array<uint8_t, 32> build_signing_input(
-    std::span<const uint8_t> namespace_id,
+    std::span<const uint8_t> target_namespace,
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp);
@@ -119,6 +123,13 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
     return data.size() == PUBKEY_DATA_SIZE &&
            data[0] == PUBKEY_MAGIC[0] && data[1] == PUBKEY_MAGIC[1] &&
            data[2] == PUBKEY_MAGIC[2] && data[3] == PUBKEY_MAGIC[3];
+}
+
+/// Extract the 2592-byte signing pubkey from a verified PUBK blob's data.
+/// @pre is_pubkey_blob(data) must be true. Caller is responsible.
+/// PUBK body: [magic:4][signing_pk:2592][kem_pk:1568] = 4164 bytes.
+inline std::span<const uint8_t, 2592> extract_pubk_signing_pk(std::span<const uint8_t> data) {
+    return std::span<const uint8_t, 2592>(data.data() + 4, 2592);
 }
 
 // =============================================================================
