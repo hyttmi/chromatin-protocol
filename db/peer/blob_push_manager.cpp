@@ -156,10 +156,15 @@ void BlobPushManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<u
                                              std::span<const uint8_t>(resp));
                 co_return;
             }
+            // Phase 122: wire format is [status:1][target_ns:32][blob_fb:...]
+            // when status == 0x00 (found). The post-122 Blob schema has no
+            // namespace_id, so the receiver needs target_namespace at the
+            // transport layer to route into engine_.ingest(target_ns, blob).
             auto encoded = wire::encode_blob(*blob);
-            std::vector<uint8_t> resp(1 + encoded.size());
+            std::vector<uint8_t> resp(1 + 32 + encoded.size());
             resp[0] = 0x00;  // D-03: found
-            std::memcpy(resp.data() + 1, encoded.data(), encoded.size());
+            std::memcpy(resp.data() + 1, ns.data(), 32);
+            std::memcpy(resp.data() + 1 + 32, encoded.data(), encoded.size());
             co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
                                          std::span<const uint8_t>(resp));
         } else {
@@ -180,15 +185,22 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
                        peer_display_name(conn));
         return;
     }
-    if (status != 0x00 || payload.size() < 2) return;
+    // Phase 122: BlobFetchResponse payload is [status:1][target_ns:32][blob_fb:...]
+    // when status == 0x00. Minimum size for found-response is 1 + 32 + 1 = 34.
+    if (status != 0x00 || payload.size() < 34) return;
 
-    // co_spawn with engine offload (same pattern as Data handler, CONC-03)
+    // co_spawn with engine offload (same pattern as BlobWrite handler, CONC-03)
     asio::co_spawn(ioc_, [this, conn, payload = std::move(payload)]() -> asio::awaitable<void> {
         try {
-            auto blob = wire::decode_blob(
-                std::span<const uint8_t>(payload.data() + 1, payload.size() - 1));
+            std::array<uint8_t, 32> target_namespace{};
+            std::memcpy(target_namespace.data(), payload.data() + 1, 32);
 
-            auto result = co_await engine_.ingest(blob, conn);
+            auto blob = wire::decode_blob(
+                std::span<const uint8_t>(payload.data() + 1 + 32,
+                                          payload.size() - 1 - 32));
+
+            auto result = co_await engine_.ingest(
+                std::span<const uint8_t, 32>(target_namespace), blob, conn);
 
             // CONC-03: Transfer back to IO thread before accessing state
             co_await asio::post(ioc_, asio::use_awaitable);
@@ -198,7 +210,7 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
             // SYNC-02: Uses composite namespace||hash key.
             {
                 auto decoded_hash = wire::blob_hash(wire::encode_blob(blob));
-                auto pending_key = make_pending_key(blob.namespace_id, decoded_hash);
+                auto pending_key = make_pending_key(target_namespace, decoded_hash);
                 pending_fetches_.erase(pending_key);
             }
 
@@ -207,7 +219,7 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
                     uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                     // Fan-out notification to other peers (source=conn excludes sender)
                     on_blob_ingested(
-                        blob.namespace_id,
+                        target_namespace,
                         result.ack->blob_hash,
                         result.ack->seq_num,
                         static_cast<uint32_t>(blob.data.size()),

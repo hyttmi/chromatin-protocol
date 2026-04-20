@@ -343,7 +343,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     catch_error = ERROR_DECODE_FAILED;
                     throw std::runtime_error("verifier rejected");
                 }
-                auto* body = wire::GetBlobWriteBody(payload.data());
+                auto* body = flatbuffers::GetRoot<wire::BlobWriteBody>(payload.data());
                 if (!body || !body->target_namespace() ||
                     body->target_namespace()->size() != 32 || !body->blob()) {
                     spdlog::warn("Delete from {} has malformed envelope",
@@ -929,7 +929,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 const auto& blob = *blob_opt;
                 uint64_t data_size = blob.data.size();
-                uint16_t pubkey_len = static_cast<uint16_t>(blob.pubkey.size());
+                // Phase 122: the signed blob no longer carries the full 2592-byte
+                // pubkey inline — post-schema-change, the caller gets the 32-byte
+                // signer_hint (SHA3 of signing pubkey). To retrieve the full
+                // 2592-byte pubkey, clients fetch the PUBK blob from the namespace.
+                constexpr uint16_t signer_hint_len = 32;
 
                 uint64_t seq_num = 0;
                 auto refs = storage_.get_blob_refs_since(ns, 0, UINT32_MAX);
@@ -940,7 +944,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     }
                 }
 
-                size_t resp_size = 1 + 32 + 8 + 4 + 8 + 8 + 2 + pubkey_len;
+                size_t resp_size = 1 + 32 + 8 + 4 + 8 + 8 + 2 + signer_hint_len;
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
@@ -961,11 +965,11 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 chromatindb::util::store_u64_be(response.data() + off, seq_num);
                 off += 8;
 
-                response[off++] = static_cast<uint8_t>(pubkey_len >> 8);
-                response[off++] = static_cast<uint8_t>(pubkey_len & 0xFF);
+                response[off++] = static_cast<uint8_t>(signer_hint_len >> 8);
+                response[off++] = static_cast<uint8_t>(signer_hint_len & 0xFF);
 
-                std::memcpy(response.data() + off, blob.pubkey.data(), pubkey_len);
-                off += pubkey_len;
+                std::memcpy(response.data() + off, blob.signer_hint.data(), signer_hint_len);
+                off += signer_hint_len;
 
                 co_await conn->send_message(wire::TransportMsgType_MetadataResponse,
                                              std::span<const uint8_t>(response), request_id);
@@ -1388,7 +1392,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                     catch_error = ERROR_DECODE_FAILED;
                     throw std::runtime_error("verifier rejected");
                 }
-                auto* body = wire::GetBlobWriteBody(payload.data());
+                auto* body = flatbuffers::GetRoot<wire::BlobWriteBody>(payload.data());
                 if (!body || !body->target_namespace() ||
                     body->target_namespace()->size() != 32 || !body->blob()) {
                     spdlog::warn("BlobWrite from {} has malformed envelope",
