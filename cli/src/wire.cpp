@@ -307,6 +307,56 @@ std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
 }
 
 // =============================================================================
+// NAME + BOMB (Phase 123) — mirrors db/wire/codec.cpp byte-for-byte.
+// Separate implementation because the CLI wire module is compiled independently
+// of chromatindb_lib; logic is identical, helpers come from cli/src/wire.h
+// (store_u16_be / store_u32_be).
+// =============================================================================
+
+std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
+                                     std::span<const uint8_t, 32> target_hash) {
+    if (name.size() > 65535) {
+        throw std::invalid_argument("make_name_data: name.size() exceeds 65535");
+    }
+    std::vector<uint8_t> result;
+    result.reserve(4 + 2 + name.size() + 32);
+    // Magic "NAME"
+    result.insert(result.end(), NAME_MAGIC_CLI.begin(), NAME_MAGIC_CLI.end());
+    // name_len as 2-byte big-endian
+    uint8_t len_be[2];
+    store_u16_be(len_be, static_cast<uint16_t>(name.size()));
+    result.push_back(len_be[0]);
+    result.push_back(len_be[1]);
+    // Name bytes (opaque — D-04)
+    result.insert(result.end(), name.begin(), name.end());
+    // Target content hash
+    result.insert(result.end(), target_hash.begin(), target_hash.end());
+    return result;
+}
+
+std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> targets) {
+    if (targets.size() > static_cast<size_t>(UINT32_MAX)) {
+        throw std::invalid_argument("make_bomb_data: target count exceeds UINT32_MAX");
+    }
+    std::vector<uint8_t> result;
+    result.reserve(8 + targets.size() * 32);
+    // Magic "BOMB"
+    result.insert(result.end(), BOMB_MAGIC_CLI.begin(), BOMB_MAGIC_CLI.end());
+    // count as 4-byte big-endian
+    uint8_t count_be[4];
+    store_u32_be(count_be, static_cast<uint32_t>(targets.size()));
+    result.push_back(count_be[0]);
+    result.push_back(count_be[1]);
+    result.push_back(count_be[2]);
+    result.push_back(count_be[3]);
+    // Target hashes
+    for (const auto& t : targets) {
+        result.insert(result.end(), t.begin(), t.end());
+    }
+    return result;
+}
+
+// =============================================================================
 // Sha3Hasher (Phase 119 — incremental SHA3-256 for streaming plaintext_sha3)
 // =============================================================================
 

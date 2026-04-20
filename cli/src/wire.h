@@ -204,6 +204,19 @@ std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_has
 std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_signing_pubkey);
 
 // =============================================================================
+// NAME + BOMB (Phase 123)
+// =============================================================================
+
+/// Build NAME payload bytes: [NAME:4][name_len:2 BE][name][target_hash:32].
+/// Name is opaque bytes (D-04). @throws std::invalid_argument if name.size() > 65535.
+std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
+                                     std::span<const uint8_t, 32> target_hash);
+
+/// Build BOMB payload bytes: [BOMB:4][count:4 BE][target_hash:32]*count.
+/// @throws std::invalid_argument if targets.size() > UINT32_MAX.
+std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> targets);
+
+// =============================================================================
 // Public key blob
 // =============================================================================
 
@@ -281,8 +294,17 @@ inline constexpr std::array<uint8_t, 4> CDAT_MAGIC = {0x43, 0x44, 0x41, 0x54};
 /// type indexing sees it pre-decrypt (D-13).
 inline constexpr std::array<uint8_t, 4> CPAR_MAGIC = {0x43, 0x50, 0x41, 0x52};
 
+/// NAME (mutable name pointer — Phase 123 D-03). Byte-identical to
+/// db/wire/codec.h NAME_MAGIC; the two modules are separately-compiled but
+/// logically paired.
+inline constexpr std::array<uint8_t, 4> NAME_MAGIC_CLI = {0x4E, 0x41, 0x4D, 0x45}; // "NAME"
+
+/// BOMB (batched tombstone — Phase 123 D-05). Byte-identical to codec.h BOMB_MAGIC.
+inline constexpr std::array<uint8_t, 4> BOMB_MAGIC_CLI = {0x42, 0x4F, 0x4D, 0x42}; // "BOMB"
+
 /// Map 4-byte type prefix to human-readable label (per D-18).
-/// Returns: "CENV", "PUBK", "TOMB", "DLGT", "CDAT", "CPAR", or "DATA" for unknown.
+/// Returns: "CENV", "PUBK", "TOMB", "DLGT", "CDAT", "CPAR", "NAME", "BOMB",
+/// or "DATA" for unknown.
 inline const char* type_label(const uint8_t* type) {
     if (std::memcmp(type, CENV_MAGIC.data(), 4) == 0) return "CENV";
     if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return "PUBK";
@@ -290,20 +312,28 @@ inline const char* type_label(const uint8_t* type) {
     if (std::memcmp(type, DELEGATION_MAGIC_CLI.data(), 4) == 0) return "DLGT";
     if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return "CDAT";
     if (std::memcmp(type, CPAR_MAGIC.data(), 4) == 0) return "CPAR";
+    if (std::memcmp(type, NAME_MAGIC_CLI.data(), 4) == 0) return "NAME";
+    if (std::memcmp(type, BOMB_MAGIC_CLI.data(), 4) == 0) return "BOMB";
     return "DATA";
 }
 
 /// Check if a type prefix should be hidden in default cdb ls output (per D-13).
-/// Hidden types: PUBK, CDAT, DLGT (defense-in-depth).
+/// Hidden types: PUBK, CDAT, DLGT, NAME (defense-in-depth + infrastructure).
 ///
 /// CPAR is deliberately NOT hidden: the manifest is the user-facing handle
 /// for a chunked file — the user runs `cdb get <manifest_hash>` to
 /// reassemble, so the manifest must appear in default `cdb ls` output. CDAT
 /// chunks stay hidden because the user never addresses them directly.
+///
+/// NAME is hidden (Phase 123 A4): NAME pointer blobs are infrastructure —
+/// users interact with `cdb get <name>` / `cdb put --name`, not with the
+/// raw NAME blobs. BOMB is NOT hidden (mirrors TOMB's default visibility —
+/// deletion records are auditable by default).
 inline bool is_hidden_type(const uint8_t* type) {
     if (std::memcmp(type, PUBKEY_MAGIC.data(), 4) == 0) return true;
     if (std::memcmp(type, CDAT_MAGIC.data(), 4) == 0) return true;
     if (std::memcmp(type, DELEGATION_MAGIC_CLI.data(), 4) == 0) return true;
+    if (std::memcmp(type, NAME_MAGIC_CLI.data(), 4) == 0) return true;
     return false;
 }
 

@@ -175,4 +175,93 @@ std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubk
     return result;
 }
 
+// =============================================================================
+// NAME (Phase 123 D-03)
+// =============================================================================
+
+bool is_name(std::span<const uint8_t> data) {
+    if (data.size() < NAME_MIN_DATA_SIZE) return false;
+    if (std::memcmp(data.data(), NAME_MAGIC.data(), NAME_MAGIC.size()) != 0) return false;
+    // name_len is 2-byte big-endian at offset 4.
+    uint16_t name_len = chromatindb::util::read_u16_be(data.subspan(4, 2));
+    // Total size must be exactly magic(4) + len_field(2) + name(name_len) + target_hash(32).
+    return data.size() == static_cast<size_t>(4) + 2 + name_len + 32;
+}
+
+std::optional<NamePayload> parse_name_payload(std::span<const uint8_t> data) {
+    if (!is_name(data)) return std::nullopt;
+
+    uint16_t name_len = chromatindb::util::read_u16_be(data.subspan(4, 2));
+    NamePayload out;
+    out.name = data.subspan(6, name_len);
+    std::memcpy(out.target_hash.data(), data.data() + 6 + name_len, 32);
+    return out;
+}
+
+std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
+                                     std::span<const uint8_t, 32> target_hash) {
+    if (name.size() > 65535) {
+        throw std::invalid_argument("make_name_data: name.size() exceeds 65535");
+    }
+    std::vector<uint8_t> result;
+    result.reserve(4 + 2 + name.size() + 32);
+    // Magic
+    result.insert(result.end(), NAME_MAGIC.begin(), NAME_MAGIC.end());
+    // name_len as 2-byte big-endian
+    chromatindb::util::write_u16_be(result, static_cast<uint16_t>(name.size()));
+    // Name bytes (opaque — D-04)
+    result.insert(result.end(), name.begin(), name.end());
+    // Target content hash
+    result.insert(result.end(), target_hash.begin(), target_hash.end());
+    return result;
+}
+
+// =============================================================================
+// BOMB (Phase 123 D-05)
+// =============================================================================
+
+bool is_bomb(std::span<const uint8_t> data) {
+    if (data.size() < BOMB_MIN_DATA_SIZE) return false;
+    if (std::memcmp(data.data(), BOMB_MAGIC.data(), BOMB_MAGIC.size()) != 0) return false;
+    // count is 4-byte big-endian at offset 4.
+    uint32_t count = chromatindb::util::read_u32_be(data.data() + 4);
+    // Compute expected size in size_t to avoid uint32 overflow for pathological counts.
+    size_t expected = size_t{8} + static_cast<size_t>(count) * size_t{32};
+    return data.size() == expected;
+}
+
+bool validate_bomb_structure(std::span<const uint8_t> data) {
+    return is_bomb(data);
+}
+
+std::vector<std::array<uint8_t, 32>> extract_bomb_targets(std::span<const uint8_t> data) {
+    // Precondition: is_bomb(data). Structural invariants already confirmed.
+    uint32_t count = chromatindb::util::read_u32_be(data.data() + 4);
+    std::vector<std::array<uint8_t, 32>> targets;
+    targets.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::array<uint8_t, 32> t{};
+        std::memcpy(t.data(), data.data() + 8 + static_cast<size_t>(i) * 32, 32);
+        targets.push_back(t);
+    }
+    return targets;
+}
+
+std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> targets) {
+    if (targets.size() > static_cast<size_t>(UINT32_MAX)) {
+        throw std::invalid_argument("make_bomb_data: target count exceeds UINT32_MAX");
+    }
+    std::vector<uint8_t> result;
+    result.reserve(8 + targets.size() * 32);
+    // Magic
+    result.insert(result.end(), BOMB_MAGIC.begin(), BOMB_MAGIC.end());
+    // count as 4-byte big-endian
+    chromatindb::util::write_u32_be(result, static_cast<uint32_t>(targets.size()));
+    // Target hashes
+    for (const auto& t : targets) {
+        result.insert(result.end(), t.begin(), t.end());
+    }
+    return result;
+}
+
 } // namespace chromatindb::wire
