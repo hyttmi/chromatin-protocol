@@ -80,21 +80,28 @@ void SyncProtocol::set_on_blob_ingested(OnBlobIngested callback) {
 }
 
 asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
-    const std::vector<wire::BlobData>& blobs,
+    const std::vector<NamespacedBlob>& ns_blobs,
     std::shared_ptr<net::Connection> source) {
     SyncStats stats;
     uint64_t now = clock_();
     uint32_t storage_full_count = 0;
     uint32_t quota_exceeded_count = 0;
 
-    for (const auto& blob : blobs) {
+    for (const auto& nb : ns_blobs) {
+        const auto& blob = nb.blob;
+        const auto& target_namespace = nb.target_namespace;
         // Skip expired blobs (SYNC-03)
         if (wire::is_blob_expired(blob, now)) {
             spdlog::debug("skipping expired blob during sync ingest");
             continue;
         }
 
-        auto result = co_await engine_.ingest(blob, source);
+        // Phase 122: target_namespace is threaded per-blob. The PUBK-first gate
+        // lives ONCE in engine.cpp Step 1.5 — sync delegates here, no duplicate
+        // check in this file (feedback_no_duplicate_code.md).
+        auto result = co_await engine_.ingest(
+            std::span<const uint8_t, 32>(target_namespace),
+            blob, source);
         if (result.accepted) {
             stats.blobs_received++;
             // Notify subscribers about successful sync-received ingest
@@ -103,7 +110,7 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
                 on_blob_ingested_) {
                 uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
                 on_blob_ingested_(
-                    blob.namespace_id,
+                    target_namespace,
                     result.ack->blob_hash,
                     result.ack->seq_num,
                     static_cast<uint32_t>(blob.data.size()),
@@ -231,13 +238,18 @@ SyncProtocol::decode_blob_request(std::span<const uint8_t> payload) {
 }
 
 std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
-    const std::vector<wire::BlobData>& blobs) {
-    // Format: [count:u32BE][len1:u32BE][blob1_flatbuf]...[lenN:u32BE][blobN_flatbuf]
+    const std::vector<NamespacedBlob>& ns_blobs) {
+    // Phase 122 Pitfall #3: per-blob [ns:32B] prefix so the receiver can route
+    // each blob without reading namespace_id from the blob schema (no longer
+    // present post-122).
+    // Format: [count:u32BE]([ns:32B][len:u32BE][blob_flatbuf])+
     std::vector<uint8_t> buf;
-    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(blobs.size()));
+    chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(ns_blobs.size()));
 
-    for (const auto& blob : blobs) {
-        auto encoded = wire::encode_blob(blob);
+    for (const auto& nb : ns_blobs) {
+        buf.insert(buf.end(),
+                   nb.target_namespace.begin(), nb.target_namespace.end());
+        auto encoded = wire::encode_blob(nb.blob);
         chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
         buf.insert(buf.end(), encoded.begin(), encoded.end());
     }
@@ -246,39 +258,51 @@ std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
 }
 
 std::vector<uint8_t> SyncProtocol::encode_single_blob_transfer(
+    std::span<const uint8_t, 32> target_namespace,
     const wire::BlobData& blob) {
+    // Phase 122 Pitfall #3: per-blob [ns:32B] prefix (see encode_blob_transfer).
     auto encoded = wire::encode_blob(blob);
     std::vector<uint8_t> buf;
-    buf.reserve(4 + 4 + encoded.size());
+    buf.reserve(4 + 32 + 4 + encoded.size());
     chromatindb::util::write_u32_be(buf, 1);  // count = 1
+    buf.insert(buf.end(), target_namespace.begin(), target_namespace.end());
     chromatindb::util::write_u32_be(buf, static_cast<uint32_t>(encoded.size()));
     buf.insert(buf.end(), encoded.begin(), encoded.end());
     return buf;
 }
 
-std::vector<wire::BlobData> SyncProtocol::decode_blob_transfer(
+std::vector<NamespacedBlob> SyncProtocol::decode_blob_transfer(
     std::span<const uint8_t> payload) {
     if (payload.size() < 4) return {};
 
     uint32_t count = chromatindb::util::read_u32_be(payload.data());
-    std::vector<wire::BlobData> blobs;
-    blobs.reserve(count);
+    std::vector<NamespacedBlob> ns_blobs;
+    ns_blobs.reserve(count);
 
     size_t offset = 4;
     for (uint32_t i = 0; i < count; ++i) {
-        auto next = chromatindb::util::checked_add(offset, size_t{4});
-        if (!next || *next > payload.size()) break;
-        uint32_t len = chromatindb::util::read_u32_be(payload.data() + offset);
-        offset += 4;
+        // Read [ns:32B]
+        auto ns_end = chromatindb::util::checked_add(offset, size_t{32});
+        if (!ns_end || *ns_end > payload.size()) break;
+        std::array<uint8_t, 32> ns{};
+        std::memcpy(ns.data(), payload.data() + offset, 32);
+        offset = *ns_end;
 
+        // Read [len:u32BE]
+        auto len_end = chromatindb::util::checked_add(offset, size_t{4});
+        if (!len_end || *len_end > payload.size()) break;
+        uint32_t len = chromatindb::util::read_u32_be(payload.data() + offset);
+        offset = *len_end;
+
+        // Read [blob_flatbuf]
         auto blob_end = chromatindb::util::checked_add(offset, static_cast<size_t>(len));
         if (!blob_end || *blob_end > payload.size()) break;
         auto blob = wire::decode_blob(payload.subspan(offset, len));
-        blobs.push_back(std::move(blob));
-        offset += len;
+        ns_blobs.push_back({ns, std::move(blob)});
+        offset = *blob_end;
     }
 
-    return blobs;
+    return ns_blobs;
 }
 
 } // namespace chromatindb::sync
