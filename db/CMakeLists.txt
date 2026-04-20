@@ -228,6 +228,8 @@ if(BUILD_TESTING)
     tests/crypto/test_signing.cpp
     tests/engine/test_engine.cpp
     tests/engine/test_verify_signer_hint.cpp
+    tests/engine/test_pubk_first.cpp
+    tests/engine/test_delegate_replay.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
@@ -243,8 +245,10 @@ if(BUILD_TESTING)
     tests/storage/test_owner_pubkeys.cpp
     tests/storage/test_storage.cpp
     tests/storage/test_storage_concurrency_tsan.cpp
+    tests/storage/test_pubk_first_tsan.cpp
     tests/sync/test_reconciliation.cpp
     tests/sync/test_sync_protocol.cpp
+    tests/sync/test_pubk_first_sync.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
     tests/test_schema_phase122.cpp
