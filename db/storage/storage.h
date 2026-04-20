@@ -108,9 +108,12 @@ struct PrecomputedBlob {
 /// subsequent public method entry. Compiles to a no-op under NDEBUG.
 ///
 /// Callers that offload work to a thread_pool (via db/crypto/thread_pool.h)
-/// MUST `co_await asio::post(ioc_, asio::use_awaitable)` before touching
-/// Storage again — see db/peer/peer_types.h:58 for the same pattern applied
-/// to NodeMetrics counters.
+/// MUST post back to the coroutine's executor before touching Storage:
+///
+///   co_await asio::post(co_await asio::this_coro::executor,
+///                       asio::use_awaitable);
+///
+/// See engine.cpp for the canonical example.
 class Storage {
 public:
     /// Open or create a storage engine at the given data directory.

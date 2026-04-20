@@ -71,8 +71,14 @@ struct IngestResult {
 /// Thread safety: thread-confined to the io_context executor. BlobEngine
 /// holds references to Storage and a thread_pool; the pool is used for
 /// crypto offload via `co_await crypto::offload(pool, ...)`, after which
-/// the coroutine MUST post back to ioc_ before touching Storage. Enforced
-/// for Storage by STORAGE_THREAD_CHECK() at every public Storage method.
+/// the coroutine MUST post back to the coroutine's executor before touching
+/// Storage:
+///
+///   co_await asio::post(co_await asio::this_coro::executor,
+///                       asio::use_awaitable);
+///
+/// See engine.cpp for the canonical example. Enforced for Storage by
+/// STORAGE_THREAD_CHECK() at every public Storage method.
 class BlobEngine {
 public:
     /// Construct a BlobEngine backed by the given storage.
