@@ -48,8 +48,9 @@ chromatindb::wire::BlobData make_delegation_blob_local(
     const chromatindb::identity::NodeIdentity& delegate,
     uint64_t timestamp = 3000) {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    // Post-122: signer_hint = SHA3(owner_pk); target_namespace is call-site param.
+    auto hint = chromatindb::crypto::sha3_256(owner.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
     blob.ttl = 0;  // Permanent.
     blob.timestamp = timestamp;
@@ -231,7 +232,7 @@ TEST_CASE("owner_pubkeys: get_delegate_pubkey_by_hint resolves hit + miss + wron
     // to populate delegation_map. This is the SAME code path the engine takes
     // when ingesting a delegation; do NOT bypass via raw MDBX upsert.
     auto deleg_blob = make_delegation_blob_local(owner, delegate);
-    auto r = store.store_blob(deleg_blob);
+    auto r = store.store_blob(std::span<const uint8_t, 32>(owner.namespace_id()), deleg_blob);
     REQUIRE(r.status == StoreResult::Status::Stored);
 
     auto ns_a = owner.namespace_id();

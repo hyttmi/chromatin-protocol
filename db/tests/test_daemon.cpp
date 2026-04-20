@@ -7,11 +7,14 @@
 
 #include "db/acl/access_control.h"
 #include "db/config/config.h"
+#include "db/crypto/hash.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
 #include "db/peer/peer_manager.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
+
+#include "db/tests/test_helpers.h"
 
 #include <asio.hpp>
 #include <asio/co_spawn.hpp>
@@ -65,16 +68,19 @@ chromatindb::wire::BlobData make_signed_blob(
     uint64_t timestamp = 0)
 {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-    blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    // Post-122: signer_hint = SHA3(id.public_key()) = id.namespace_id() for owner writes.
+    auto hint = chromatindb::crypto::sha3_256(id.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = (timestamp == 0)
         ? static_cast<uint64_t>(std::time(nullptr))
         : timestamp;
 
+    // target_namespace (the caller-carried ns) absorbs into sponge per D-01.
+    // For owner writes, target_namespace = id.namespace_id() = signer_hint.
     auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        id.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = id.sign(signing_input);
 
     return blob;
@@ -146,6 +152,8 @@ TEST_CASE("daemon starts with unreachable bootstrap peers", "[daemon]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -191,6 +199,9 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     // Use current time for blob timestamps so they are not considered expired during sync
@@ -198,12 +209,12 @@ TEST_CASE("two nodes sync blobs end-to-end", "[daemon][e2e]") {
 
     // Store a blob in node1 (signed by id1)
     auto blob1 = make_signed_blob(id1, "e2e-from-node1", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob1));
+    auto r1 = run_async(pool, eng1.ingest(std::span<const uint8_t, 32>(id1.namespace_id()), blob1));
     REQUIRE(r1.accepted);
 
     // Store a different blob in node2 (signed by id2) -- tests bidirectional sync
     auto blob2 = make_signed_blob(id2, "e2e-from-node2", 604800, now + 1);
-    auto r2 = run_async(pool, eng2.ingest(blob2));
+    auto r2 = run_async(pool, eng2.ingest(std::span<const uint8_t, 32>(id2.namespace_id()), blob2));
     REQUIRE(r2.accepted);
 
     // Create PeerManagers on shared io_context
@@ -257,6 +268,9 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -264,14 +278,14 @@ TEST_CASE("expired blobs not synced between nodes", "[daemon][e2e]") {
     // Store a blob that is valid now but will expire before sync (TTL=1 second).
     // Engine accepts it at ingest, but sync 2+ seconds later sees it as expired.
     auto expired_blob = make_signed_blob(id1, "should-not-sync", 1, now);
-    auto r1 = run_async(pool, eng1.ingest(expired_blob));
+    auto r1 = run_async(pool, eng1.ingest(std::span<const uint8_t, 32>(id1.namespace_id()), expired_blob));
     REQUIRE(r1.accepted);
     // Wait 2s so the blob expires before sync begins
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // Store a valid blob in node1 -- proves sync works for non-expired blobs
     auto valid_blob = make_signed_blob(id1, "should-sync", 604800, now);
-    auto r2 = run_async(pool, eng1.ingest(valid_blob));
+    auto r2 = run_async(pool, eng1.ingest(std::span<const uint8_t, 32>(id1.namespace_id()), valid_blob));
     REQUIRE(r2.accepted);
 
     asio::io_context ioc;
@@ -336,6 +350,10 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
     Storage store_c(tmp3.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng_a(store_a, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_a), chromatindb::test::make_pubk_blob(id_a))).accepted);
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_b), chromatindb::test::make_pubk_blob(id_b))).accepted);
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_c), chromatindb::test::make_pubk_blob(id_c))).accepted);
     BlobEngine eng_b(store_b, pool);
     BlobEngine eng_c(store_c, pool);
 
@@ -343,7 +361,7 @@ TEST_CASE("three nodes: peer discovery via PEX", "[daemon][e2e][pex]") {
 
     // Store a blob in Node A -- Node C should eventually get it through discovery
     auto blob_a = make_signed_blob(id_a, "from-node-a", 604800, now);
-    auto r_a = run_async(pool, eng_a.ingest(blob_a));
+    auto r_a = run_async(pool, eng_a.ingest(std::span<const uint8_t, 32>(id_a.namespace_id()), blob_a));
     REQUIRE(r_a.accepted);
 
     // Create PeerManagers on shared io_context

@@ -61,6 +61,8 @@ TEST_CASE("PeerManager starts with unreachable bootstrap", "[peer]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -90,6 +92,8 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -184,13 +188,16 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Store a blob in node1 -- should NOT reach node2 because node2 is unauthorized
     auto blob1 = make_signed_blob(id1, "closed-secret", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob1));
+    auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -251,13 +258,16 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Store a blob in node1
     auto blob1 = make_signed_blob(id1, "closed-authorized", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob1));
+    auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -324,6 +334,9 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -381,6 +394,8 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -429,6 +444,8 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -493,6 +510,10 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     Storage store_c(tmp3.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng_a(store_a, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_a), chromatindb::test::make_pubk_blob(id_a))).accepted);
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_b), chromatindb::test::make_pubk_blob(id_b))).accepted);
+    REQUIRE(run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_c), chromatindb::test::make_pubk_blob(id_c))).accepted);
     BlobEngine eng_b(store_b, pool);
     BlobEngine eng_c(store_c, pool);
 
@@ -500,7 +521,7 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
 
     // Store a blob in A -- C should NOT get it via PEX discovery
     auto blob_a = make_signed_blob(id_a, "closed-pex-test", 604800, now);
-    auto r_a = run_async(pool, eng_a.ingest(blob_a));
+    auto r_a = run_async(pool, eng_a.ingest(chromatindb::test::ns_span(id_a), blob_a));
     REQUIRE(r_a.accepted);
 
     asio::io_context ioc;
@@ -684,6 +705,9 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -727,7 +751,7 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     // Ingest a blob on node1 BEFORE subscription -- should NOT trigger notification
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob_pre = make_signed_blob(id1, "pre-subscribe", 604800, now);
-    auto result_pre = run_async(pool, eng1.ingest(blob_pre));
+    auto result_pre = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob_pre));
     REQUIRE(result_pre.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -774,6 +798,9 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -819,7 +846,7 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     // Verify: ingest without subscriptions produces no notifications
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "hello-no-sub", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob1));
+    auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1));
     REQUIRE(r1.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -854,6 +881,9 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -874,7 +904,7 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     // Store a blob in node2 before starting (will be synced to node1)
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id2, "sync-notify-test", 604800, now);
-    auto r = run_async(pool, eng2.ingest(blob));
+    auto r = run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), blob));
     REQUIRE(r.accepted);
 
     pm1.start();
@@ -933,6 +963,9 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -944,7 +977,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     // Store a blob in node1
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "will-be-tombstoned", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
+    auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(r.accepted);
     auto blob_hash = r.ack->blob_hash;
 
@@ -972,7 +1005,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
 
     // Delete the blob on node1 via tombstone
     auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
-    auto del_result = run_async(pool, eng1.delete_blob(tombstone));
+    auto del_result = run_async(pool, eng1.delete_blob(chromatindb::test::ns_span(id1), tombstone));
     REQUIRE(del_result.accepted);
 
     // Let sync propagate the tombstone to node2
@@ -1009,6 +1042,8 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -1026,7 +1061,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     // Ingest directly on the engine -- no peer connection, no subscription
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id, "no-subscribers", 604800, now);
-    auto r = run_async(pool, eng.ingest(blob));
+    auto r = run_async(pool, eng.ingest(chromatindb::test::ns_span(id), blob));
     REQUIRE(r.accepted);
 
     ioc.run_for(std::chrono::milliseconds(100));
@@ -1100,13 +1135,16 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Store a blob in node1
     auto blob = make_signed_blob(id1, "delete-me", 604800, now);
-    auto ingest_result = run_async(pool, eng1.ingest(blob));
+    auto ingest_result = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(ingest_result.accepted);
     auto blob_hash = ingest_result.ack->blob_hash;
 
@@ -1130,7 +1168,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
 
     // Now delete the blob on node1 via tombstone
     auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
-    auto delete_result = run_async(pool, eng1.delete_blob(tombstone));
+    auto delete_result = run_async(pool, eng1.delete_blob(chromatindb::test::ns_span(id1), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Let sync propagate the tombstone to node2.
@@ -1194,7 +1232,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         // Pre-load blob before starting PeerManagers so first sync hits storage full
         uint64_t now = static_cast<uint64_t>(std::time(nullptr));
         auto blob = make_signed_blob(id1, "test-storage-full", 604800, now);
-        auto r = run_async(pool, eng1.ingest(blob));
+        auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
         REQUIRE(r.accepted);
 
         asio::io_context ioc;
@@ -1261,8 +1299,8 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         // Store multiple blobs in node1
         auto blob1 = make_signed_blob(id1, "full-test-1", 604800, now);
         auto blob2 = make_signed_blob(id1, "full-test-2", 604800, now + 1);
-        auto r1 = run_async(pool, eng1.ingest(blob1));
-        auto r2 = run_async(pool, eng1.ingest(blob2));
+        auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1));
+        auto r2 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob2));
         REQUIRE(r1.accepted);
         REQUIRE(r2.accepted);
 
@@ -1319,13 +1357,16 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Store a blob in node1 -- will be synced to node2
     auto blob1 = make_signed_blob(id1, "metrics-test", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob1));
+    auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1));
     REQUIRE(r1.accepted);
 
     asio::io_context ioc;
@@ -1428,6 +1469,9 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -1435,7 +1479,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     // Store a blob on node2 -- will sync to node1
     std::string large_payload(500, 'X');  // 500 bytes payload
     auto blob = make_signed_blob(id2, large_payload, 604800, now);
-    auto r = run_async(pool, eng2.ingest(blob));
+    auto r = run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -1493,6 +1537,8 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -1540,6 +1586,9 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -1639,6 +1688,9 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -1702,6 +1754,9 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -1756,6 +1811,9 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -1763,9 +1821,9 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     // Store several blobs on both sides so sync takes noticeable duration
     for (int i = 0; i < 10; ++i) {
         auto b1 = make_signed_blob(id1, "n1-blob-" + std::to_string(i), 604800, now + static_cast<uint64_t>(i));
-        REQUIRE(run_async(pool, eng1.ingest(b1)).accepted);
+        REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), b1)).accepted);
         auto b2 = make_signed_blob(id2, "n2-blob-" + std::to_string(i), 604800, now + static_cast<uint64_t>(i));
-        REQUIRE(run_async(pool, eng2.ingest(b2)).accepted);
+        REQUIRE(run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), b2)).accepted);
     }
 
     asio::io_context ioc;
@@ -1824,6 +1882,9 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -1831,7 +1892,7 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     // Store a blob on node2 (500 bytes payload, >4KB encoded with ML-DSA signature)
     std::string large_payload(500, 'Z');
     auto blob = make_signed_blob(id2, large_payload, 604800, now);
-    auto r = run_async(pool, eng2.ingest(blob));
+    auto r = run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -1896,6 +1957,10 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id3), chromatindb::test::make_pubk_blob(id3))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -1903,8 +1968,8 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     // Store blobs from two different identities on node1
     auto blob_allowed = make_signed_blob(id1, "allowed-blob", 604800, now);
     auto blob_filtered = make_signed_blob(id3, "filtered-blob", 604800, now);
-    auto r1 = run_async(pool, eng1.ingest(blob_allowed));
-    auto r2 = run_async(pool, eng1.ingest(blob_filtered));
+    auto r1 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob_allowed));
+    auto r2 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id3), blob_filtered));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
 
@@ -1974,6 +2039,8 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -2050,14 +2117,17 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool, 0, cfg2.namespace_quota_bytes, cfg2.namespace_quota_count);
 
     // Pre-load 2 blobs on node1 -- node2 will accept first but reject second
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "quota-test-1", 604800, now);
     auto blob2 = make_signed_blob(id1, "quota-test-2", 604800, now + 1);
-    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
-    REQUIRE(run_async(pool, eng1.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob2)).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -2109,6 +2179,8 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     asio::io_context ioc;
     AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
@@ -2120,7 +2192,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     // First blob succeeds (no quota)
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id1, "before-sighup", 604800, now);
-    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob1)).accepted);
 
     // Write updated config with count quota of 1
     {
@@ -2134,7 +2206,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
 
     // Second blob should be rejected (count quota = 1, already have 1)
     auto blob2 = make_signed_blob(id1, "after-sighup", 604800, now + 1);
-    auto r2 = run_async(pool, eng1.ingest(blob2));
+    auto r2 = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -2158,6 +2230,8 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     // Node2 has a count quota of 1
     BlobEngine eng2(store2, pool, 0, 0, 1);
 
@@ -2165,12 +2239,12 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(id, "sync-quota-1", 604800, now);
     auto blob2 = make_signed_blob(id, "sync-quota-2", 604800, now + 1);
-    REQUIRE(run_async(pool, eng1.ingest(blob1)).accepted);
-    REQUIRE(run_async(pool, eng1.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id), blob1)).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id), blob2)).accepted);
 
     // Sync ingest on node2 -- first succeeds, second hits quota
     chromatindb::sync::SyncProtocol sync2(eng2, store2, pool);
-    auto stats = run_async(pool, sync2.ingest_blobs({blob1, blob2}));
+    auto stats = run_async(pool, sync2.ingest_blobs(std::vector<chromatindb::sync::NamespacedBlob>{{blob1.signer_hint, blob1}, {blob2.signer_hint, blob2}}));
 
     // One blob accepted, one rejected
     REQUIRE(stats.blobs_received == 1);
@@ -2209,6 +2283,9 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -2282,6 +2359,9 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2348,6 +2428,9 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2433,6 +2516,9 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2525,11 +2611,14 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     // Ingest a blob so we can test exists=true
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(server_id, "exists-test-data", 604800, now);
-    auto result = run_async(pool, eng.ingest(blob));
+    auto result = run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), blob));
     REQUIRE(result.accepted);
     auto stored_hash = result.ack->blob_hash;
 
@@ -2624,6 +2713,9 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2758,14 +2850,20 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), chromatindb::test::make_pubk_blob(owner1))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), chromatindb::test::make_pubk_blob(owner2))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner3), chromatindb::test::make_pubk_blob(owner3))).accepted);
 
     // Ingest one blob into each of 3 namespaces
     auto b1 = make_signed_blob(owner1, "ns1-data");
-    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), b1)).accepted);
     auto b2 = make_signed_blob(owner2, "ns2-data");
-    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), b2)).accepted);
     auto b3 = make_signed_blob(owner3, "ns3-data");
-    REQUIRE(run_async(pool, eng.ingest(b3)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner3), b3)).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2856,12 +2954,16 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     // Ingest 2 blobs
     auto b1 = make_signed_blob(owner, "status-data-1");
-    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b1)).accepted);
     auto b2 = make_signed_blob(owner, "status-data-2");
-    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b2)).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -2963,16 +3065,21 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
 
     // Ingest 3 regular blobs + 1 delegation
     auto b1 = make_signed_blob(owner, "stats-data-1");
-    REQUIRE(run_async(pool, eng.ingest(b1)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b1)).accepted);
     auto b2 = make_signed_blob(owner, "stats-data-2");
-    REQUIRE(run_async(pool, eng.ingest(b2)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b2)).accepted);
     auto b3 = make_signed_blob(owner, "stats-data-3");
-    REQUIRE(run_async(pool, eng.ingest(b3)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b3)).accepted);
     auto d1 = make_signed_delegation(owner, delegate1);
-    REQUIRE(run_async(pool, eng.ingest(d1)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), d1)).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -3087,11 +3194,15 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     // Ingest 1 blob
     std::string test_payload = "metadata-test-data";
     auto b1 = make_signed_blob(owner, test_payload);
-    auto r1 = run_async(pool, eng.ingest(b1));
+    auto r1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b1));
     REQUIRE(r1.accepted);
     auto stored_hash = r1.ack->blob_hash;
 
@@ -3219,15 +3330,19 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     // Ingest 2 blobs
     auto b1 = make_signed_blob(owner, "batch-exists-1");
-    auto r1 = run_async(pool, eng.ingest(b1));
+    auto r1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b1));
     REQUIRE(r1.accepted);
     auto hash1 = r1.ack->blob_hash;
 
     auto b2 = make_signed_blob(owner, "batch-exists-2");
-    auto r2 = run_async(pool, eng.ingest(b2));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b2));
     REQUIRE(r2.accepted);
     auto hash2 = r2.ack->blob_hash;
 
@@ -3311,12 +3426,18 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
 
     // Store 2 delegations
     auto d1 = make_signed_delegation(owner, delegate1);
-    REQUIRE(run_async(pool, eng.ingest(d1)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), d1)).accepted);
     auto d2 = make_signed_delegation(owner, delegate2);
-    REQUIRE(run_async(pool, eng.ingest(d2)).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), d2)).accepted);
 
     // Compute expected delegate pk hashes
     auto expected_hash1 = chromatindb::crypto::sha3_256(
@@ -3420,20 +3541,24 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     // Store 3 blobs with known data
     auto blob1 = make_signed_blob(owner, "batch-read-data-1");
-    auto r1 = run_async(pool, eng.ingest(blob1));
+    auto r1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob1));
     REQUIRE(r1.accepted);
     auto hash1 = r1.ack->blob_hash;
 
     auto blob2 = make_signed_blob(owner, "batch-read-data-2");
-    auto r2 = run_async(pool, eng.ingest(blob2));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob2));
     REQUIRE(r2.accepted);
     auto hash2 = r2.ack->blob_hash;
 
     auto blob3 = make_signed_blob(owner, "batch-read-data-3");
-    auto r3 = run_async(pool, eng.ingest(blob3));
+    auto r3 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), blob3));
     REQUIRE(r3.accepted);
     auto hash3 = r3.ack->blob_hash;
 
@@ -3538,6 +3663,9 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
 
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
@@ -3626,25 +3754,29 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     // Store blobs with known timestamps (seconds, must be within validation window)
     auto now = current_timestamp();
 
     // Blob 1: timestamp = now - 100 (100 seconds ago)
     auto b1 = make_signed_blob(owner, "time-range-data-1", 604800, now - 100);
-    auto r1 = run_async(pool, eng.ingest(b1));
+    auto r1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b1));
     REQUIRE(r1.accepted);
     auto hash1 = r1.ack->blob_hash;
 
     // Blob 2: timestamp = now - 50 (50 seconds ago)
     auto b2 = make_signed_blob(owner, "time-range-data-2", 604800, now - 50);
-    auto r2 = run_async(pool, eng.ingest(b2));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b2));
     REQUIRE(r2.accepted);
     auto hash2 = r2.ack->blob_hash;
 
     // Blob 3: timestamp = now - 10 (10 seconds ago) -- outside query range
     auto b3 = make_signed_blob(owner, "time-range-data-3", 604800, now - 10);
-    auto r3 = run_async(pool, eng.ingest(b3));
+    auto r3 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), b3));
     REQUIRE(r3.accepted);
     auto hash3 = r3.ack->blob_hash;
 
@@ -3761,6 +3893,9 @@ TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -3787,7 +3922,7 @@ TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]
     // Store a blob in node2 before connecting
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id2, "blobnotify-test", 604800, now);
-    auto r = run_async(pool, eng2.ingest(blob));
+    auto r = run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), blob));
     REQUIRE(r.accepted);
 
     pm1.start();
@@ -3838,6 +3973,9 @@ TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnoti
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     asio::io_context ioc;
@@ -3849,7 +3987,7 @@ TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnoti
     // First ingest a blob to delete later
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "will-delete-for-blobnotify", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
+    auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(r.accepted);
     auto blob_hash = r.ack->blob_hash;
 
@@ -3876,7 +4014,7 @@ TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnoti
 
     // Delete via engine (tombstone), then let it sync
     auto tombstone = make_signed_tombstone(id1, blob_hash, now + 1);
-    auto del = run_async(pool, eng1.delete_blob(tombstone));
+    auto del = run_async(pool, eng1.delete_blob(chromatindb::test::ns_span(id1), tombstone));
     REQUIRE(del.accepted);
 
     // Let tombstone sync
@@ -3934,6 +4072,10 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
     Storage store3(tmp3.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id3), chromatindb::test::make_pubk_blob(id3))).accepted);
     BlobEngine eng2(store2, pool);
     BlobEngine eng3(store3, pool);
 
@@ -3955,7 +4097,7 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
     // Store blob in node2 before connecting
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id2, "source-exclusion-test", 604800, now);
-    auto r = run_async(pool, eng2.ingest(blob));
+    auto r = run_async(pool, eng2.ingest(chromatindb::test::ns_span(id2), blob));
     REQUIRE(r.accepted);
 
     pm1.start();
@@ -4020,6 +4162,10 @@ TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
     Storage storeC(tmpC.path.string());
     asio::thread_pool pool{1};
     BlobEngine engA(storeA, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), chromatindb::test::make_pubk_blob(idA))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idB), chromatindb::test::make_pubk_blob(idB))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idC), chromatindb::test::make_pubk_blob(idC))).accepted);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
 
@@ -4049,7 +4195,7 @@ TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
     // Now write blob to A. B's periodic sync (3s, no cooldown) will pick it up.
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(idA, "blobfetch-roundtrip", 604800, now);
-    auto r = run_async(pool, engA.ingest(blob));
+    auto r = run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), blob));
     REQUIRE(r.accepted);
     REQUIRE(r.ack.has_value());
     auto expected_hash = r.ack->blob_hash;
@@ -4101,6 +4247,10 @@ TEST_CASE("BlobFetch skipped when blob already exists locally", "[peer][blobfetc
     Storage storeC(tmpC.path.string());
     asio::thread_pool pool{1};
     BlobEngine engA(storeA, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), chromatindb::test::make_pubk_blob(idA))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idB), chromatindb::test::make_pubk_blob(idB))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idC), chromatindb::test::make_pubk_blob(idC))).accepted);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
 
@@ -4127,8 +4277,8 @@ TEST_CASE("BlobFetch skipped when blob already exists locally", "[peer][blobfetc
     // Write blob to A AND C (pre-load on C)
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(idA, "dedup-test", 604800, now);
-    auto rA = run_async(pool, engA.ingest(blob));
-    auto rC = run_async(pool, engC.ingest(blob));
+    auto rA = run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), blob));
+    auto rC = run_async(pool, engC.ingest(chromatindb::test::ns_span(idA), blob));
     REQUIRE(rA.accepted);
     REQUIRE(rC.accepted);
 
@@ -4178,6 +4328,10 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
     Storage storeC(tmpC.path.string());
     asio::thread_pool pool{1};
     BlobEngine engA(storeA, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), chromatindb::test::make_pubk_blob(idA))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idB), chromatindb::test::make_pubk_blob(idB))).accepted);
+    REQUIRE(run_async(pool, engA.ingest(chromatindb::test::ns_span(idC), chromatindb::test::make_pubk_blob(idC))).accepted);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
 
@@ -4204,7 +4358,7 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
     // Write blob, let BlobFetch cycle run
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(idA, "connectivity-test", 604800, now);
-    run_async(pool, engA.ingest(blob));
+    run_async(pool, engA.ingest(chromatindb::test::ns_span(idA), blob));
 
     ioc.run_for(std::chrono::seconds(15));
 
@@ -4247,12 +4401,15 @@ TEST_CASE("sync-on-connect runs for initiator", "[peer-manager][safety-net]") {
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     // Store a blob in node1 BEFORE node2 connects
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "sync-on-connect-test", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
+    auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -4303,12 +4460,15 @@ TEST_CASE("reconnect within grace period preserves cursors", "[peer-manager][saf
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     // Store blob in node1
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "grace-period-test", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
+    auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -4379,11 +4539,14 @@ TEST_CASE("disconnected peer tracked in grace period", "[peer-manager][safety-ne
     Storage store2(tmp2.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, eng1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
     BlobEngine eng2(store2, pool);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(id1, "multi-reconnect-test", 604800, now);
-    auto r = run_async(pool, eng1.ingest(blob));
+    auto r = run_async(pool, eng1.ingest(chromatindb::test::ns_span(id1), blob));
     REQUIRE(r.accepted);
 
     asio::io_context ioc;
@@ -4449,19 +4612,23 @@ TEST_CASE("ReadRequest returns not-found for expired blob", "[peer][read][ttl]")
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Expired blob: timestamp 1000s ago, TTL 100s -> expired 900s ago (D-30)
     // Use store_blob directly to bypass engine's already-expired rejection
     auto expired_blob = make_signed_blob(owner, "expired-data", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     // Valid blob: timestamp now, TTL 1 day
     auto valid_blob = make_signed_blob(owner, "valid-data", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -4546,16 +4713,20 @@ TEST_CASE("ExistsRequest returns not-found for expired blob", "[peer][exists][tt
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-exists", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     auto valid_blob = make_signed_blob(owner, "valid-exists", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -4639,16 +4810,20 @@ TEST_CASE("BatchExistsRequest filters expired blobs", "[peer][batchexists][ttl]"
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-batchexists", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     auto valid_blob = make_signed_blob(owner, "valid-batchexists", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -4727,16 +4902,20 @@ TEST_CASE("BatchReadRequest returns not-found for expired blob", "[peer][batchre
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-batchread", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     auto valid_blob = make_signed_blob(owner, "valid-batchread", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -4845,15 +5024,19 @@ TEST_CASE("ListRequest filters expired blobs from results", "[peer][list][ttl]")
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-list", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
 
     auto valid_blob = make_signed_blob(owner, "valid-list", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -4941,17 +5124,21 @@ TEST_CASE("TimeRangeRequest filters expired blobs", "[peer][timerange][ttl]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     // Expired blob with timestamp in range but TTL expired
     auto expired_blob = make_signed_blob(owner, "expired-timerange", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
 
     // Valid blob with timestamp in range
     auto valid_blob = make_signed_blob(owner, "valid-timerange", 86400, now - 50);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -5044,16 +5231,20 @@ TEST_CASE("MetadataRequest returns not-found for expired blob", "[peer][metadata
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-metadata", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     auto valid_blob = make_signed_blob(owner, "valid-metadata", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 
@@ -5140,16 +5331,20 @@ TEST_CASE("BlobFetch returns not-found for expired blob", "[peer][blobfetch][ttl
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(server_id), chromatindb::test::make_pubk_blob(server_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(client_id), chromatindb::test::make_pubk_blob(client_id))).accepted);
+    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
 
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
     auto expired_blob = make_signed_blob(owner, "expired-blobfetch", 100, now - 1000);
-    auto sr1 = store.store_blob(expired_blob);
+    auto sr1 = store.store_blob(chromatindb::test::ns_span(owner), expired_blob);
     REQUIRE(sr1.status == chromatindb::storage::StoreResult::Status::Stored);
     auto expired_hash = sr1.blob_hash;
 
     auto valid_blob = make_signed_blob(owner, "valid-blobfetch", 86400, now);
-    auto r2 = run_async(pool, eng.ingest(valid_blob));
+    auto r2 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), valid_blob));
     REQUIRE(r2.accepted);
     auto valid_hash = r2.ack->blob_hash;
 

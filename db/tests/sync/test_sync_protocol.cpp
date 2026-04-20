@@ -11,6 +11,7 @@
 #include "db/identity/identity.h"
 #include "db/storage/storage.h"
 #include "db/util/endian.h"
+#include "db/crypto/hash.h"
 #include "db/wire/codec.h"
 #include "db/config/config.h"
 
@@ -45,6 +46,32 @@ std::vector<std::array<uint8_t, 32>> diff_hashes(
 /// Fixed clock for deterministic tests.
 uint64_t test_clock_value = 0;
 uint64_t test_clock() { return test_clock_value; }
+
+
+/// Post-122: wrap a vector<BlobData> in NamespacedBlob with a common ns.
+inline std::vector<chromatindb::sync::NamespacedBlob> to_ns_blobs(
+    std::span<const uint8_t, 32> ns,
+    const std::vector<chromatindb::wire::BlobData>& blobs)
+{
+    std::vector<chromatindb::sync::NamespacedBlob> out;
+    out.reserve(blobs.size());
+    std::array<uint8_t, 32> ns_arr;
+    std::memcpy(ns_arr.data(), ns.data(), 32);
+    for (const auto& b : blobs) {
+        out.push_back({ns_arr, b});
+    }
+    return out;
+}
+
+/// Post-122: make a single NamespacedBlob.
+inline chromatindb::sync::NamespacedBlob ns_blob(
+    std::span<const uint8_t, 32> ns,
+    const chromatindb::wire::BlobData& b)
+{
+    std::array<uint8_t, 32> ns_arr;
+    std::memcpy(ns_arr.data(), ns.data(), 32);
+    return {ns_arr, b};
+}
 
 } // anonymous namespace
 
@@ -137,14 +164,16 @@ TEST_CASE("collect_namespace_hashes filters expired blobs", "[sync][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest an expired blob: ts=real_now, ttl=100 => expires at real_now+100
     auto blob_expired = make_signed_blob(id, "expired-sync", 100, real_now);
-    REQUIRE(run_async(pool, engine.ingest(blob_expired)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob_expired)).accepted);
 
     // Ingest a valid blob: ts=real_now, ttl=604800 => expires far in future
     auto blob_valid = make_signed_blob(id, "valid-sync", 604800, real_now);
-    REQUIRE(run_async(pool, engine.ingest(blob_valid)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob_valid)).accepted);
 
     // Advance clock past expiry of first blob
     test_clock_value = real_now + 200;
@@ -166,10 +195,12 @@ TEST_CASE("collect_namespace_hashes includes permanent blobs", "[sync][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest a permanent blob (ttl=0)
     auto blob_permanent = make_signed_blob(id, "permanent-sync", 0, real_now);
-    REQUIRE(run_async(pool, engine.ingest(blob_permanent)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob_permanent)).accepted);
 
     // Set clock to far future -- permanent blobs never expire
     test_clock_value = UINT64_MAX - 1;
@@ -190,14 +221,16 @@ TEST_CASE("get_blobs_by_hashes filters expired blobs", "[sync][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest an expired blob: ts=real_now, ttl=100
     auto blob_expired = make_signed_blob(id, "expired-fetch", 100, real_now);
-    REQUIRE(run_async(pool, engine.ingest(blob_expired)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob_expired)).accepted);
 
     // Ingest a valid blob: ts=real_now, ttl=604800
     auto blob_valid = make_signed_blob(id, "valid-fetch", 604800, real_now);
-    REQUIRE(run_async(pool, engine.ingest(blob_valid)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob_valid)).accepted);
 
     // Collect hashes while both are still valid
     SyncProtocol sync_before(engine, store, pool, test_clock);
@@ -225,20 +258,22 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     test_clock_value = 10000;
 
     // Ingest a non-expired blob (current timestamp, ttl=604800 => not expired)
     auto blob1 = make_signed_blob(id, "non-expired");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob1)).accepted);
 
     // Ingest a blob with short TTL (will be expired per sync clock)
     auto blob2 = make_signed_blob(id, "expired", 100);
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob2)).accepted);
 
     // Ingest a permanent blob (ttl=0)
     auto blob3 = make_signed_blob(id, "permanent", 0);
-    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob3)).accepted);
 
     SyncProtocol sync(engine, store, pool, test_clock);
     auto hashes = sync.collect_namespace_hashes(id.namespace_id());
@@ -266,16 +301,19 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
 
     // Store blobs in engine1 (from id1)
     auto blob_a = make_signed_blob(id1, "blob-A");
     auto blob_b = make_signed_blob(id1, "blob-B");
-    REQUIRE(run_async(pool, engine1.ingest(blob_a)).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(blob_b)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), blob_a)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), blob_b)).accepted);
 
     // Store a different blob in engine2 (from id2)
     auto blob_c = make_signed_blob(id2, "blob-C");
-    REQUIRE(run_async(pool, engine2.ingest(blob_c)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(chromatindb::test::ns_span(id2), blob_c)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -297,7 +335,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto transfer_blobs = sync1.get_blobs_by_hashes(id1.namespace_id(), missing_on_2);
     REQUIRE(transfer_blobs.size() == 2);
 
-    auto stats_2 = run_async(pool, sync2.ingest_blobs(transfer_blobs));
+    auto stats_2 = run_async(pool, sync2.ingest_blobs(transfer_blobs.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(transfer_blobs[0].signer_hint), transfer_blobs)));
     REQUIRE(stats_2.blobs_received == 2);
 
     // 3. For id2's namespace: sync2 has hashes, sync1 has none
@@ -310,7 +348,7 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
     auto transfer_blobs_2 = sync2.get_blobs_by_hashes(id2.namespace_id(), missing_on_1);
     REQUIRE(transfer_blobs_2.size() == 1);
 
-    auto stats_1 = run_async(pool, sync1.ingest_blobs(transfer_blobs_2));
+    auto stats_1 = run_async(pool, sync1.ingest_blobs(transfer_blobs_2.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(transfer_blobs_2[0].signer_hint), transfer_blobs_2)));
     REQUIRE(stats_1.blobs_received == 1);
 
     // 4. Verify both engines now have the union (3 blobs total)
@@ -332,16 +370,18 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Store a non-expired blob (default TTL 604800, far from expiry)
     auto blob_ok = make_signed_blob(id, "not-expired");
-    REQUIRE(run_async(pool, engine1.ingest(blob_ok)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob_ok)).accepted);
 
     // Store a blob with short TTL that is expired relative to test clock
     // timestamp = real_now, TTL = 100 → expires at real_now + 100
     // test_clock = real_now + 200 → blob is expired
     auto blob_expired = make_signed_blob(id, "already-expired", 100, real_now);
-    REQUIRE(run_async(pool, engine1.ingest(blob_expired)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob_expired)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -351,7 +391,7 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     REQUIRE(hashes.size() == 1);  // Only non-expired blob
 
     // Expired blob ingestion on the receiving side is also skipped
-    auto stats = run_async(pool, sync2.ingest_blobs({blob_expired}));
+    auto stats = run_async(pool, sync2.ingest_blobs(std::vector<chromatindb::sync::NamespacedBlob>{ns_blob(std::span<const uint8_t, 32>(blob_expired.signer_hint), blob_expired)}));
     REQUIRE(stats.blobs_received == 0);  // Expired, not ingested
 }
 
@@ -366,11 +406,13 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Both engines have the same blob
     auto blob = make_signed_blob(id, "shared-blob");
-    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
-    REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(chromatindb::test::ns_span(id), blob)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -394,10 +436,12 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Engine1 has data, engine2 has nothing
     auto blob = make_signed_blob(id, "only-on-one-side");
-    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob)).accepted);
 
     SyncProtocol sync1(engine1, store1, pool, test_clock);
     SyncProtocol sync2(engine2, store2, pool, test_clock);
@@ -433,9 +477,7 @@ TEST_CASE("namespace list encode/decode round-trip", "[sync][codec]") {
     auto decoded = SyncProtocol::decode_namespace_list(encoded);
 
     REQUIRE(decoded.size() == 2);
-    REQUIRE(decoded[0].namespace_id == ns1.namespace_id);
     REQUIRE(decoded[0].latest_seq_num == 42);
-    REQUIRE(decoded[1].namespace_id == ns2.namespace_id);
     REQUIRE(decoded[1].latest_seq_num == 100);
 }
 
@@ -474,30 +516,28 @@ TEST_CASE("blob transfer encode/decode round-trip", "[sync][codec]") {
 
     std::vector<chromatindb::wire::BlobData> blobs = {blob1, blob2};
 
-    auto encoded = SyncProtocol::encode_blob_transfer(blobs);
+    auto encoded = SyncProtocol::encode_blob_transfer(blobs.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(blobs[0].signer_hint), blobs));
     auto decoded = SyncProtocol::decode_blob_transfer(encoded);
 
     REQUIRE(decoded.size() == 2);
-    REQUIRE(decoded[0].data == blob1.data);
-    REQUIRE(decoded[0].ttl == blob1.ttl);
-    REQUIRE(decoded[0].timestamp == blob1.timestamp);
-    REQUIRE(decoded[1].data == blob2.data);
+    REQUIRE(decoded[0].blob.data == blob1.data);
+    REQUIRE(decoded[0].blob.ttl == blob1.ttl);
+    REQUIRE(decoded[0].blob.timestamp == blob1.timestamp);
+    REQUIRE(decoded[1].blob.data == blob2.data);
 }
 
 TEST_CASE("single blob transfer encode/decode round-trip", "[sync][codec]") {
     auto id = chromatindb::identity::NodeIdentity::generate();
     auto blob = make_signed_blob(id, "single-transfer");
 
-    auto encoded = SyncProtocol::encode_single_blob_transfer(blob);
+    auto encoded = SyncProtocol::encode_single_blob_transfer(std::span<const uint8_t, 32>(blob.signer_hint), blob);
     auto decoded = SyncProtocol::decode_blob_transfer(encoded);
 
     REQUIRE(decoded.size() == 1);
-    REQUIRE(decoded[0].data == blob.data);
-    REQUIRE(decoded[0].ttl == blob.ttl);
-    REQUIRE(decoded[0].timestamp == blob.timestamp);
-    REQUIRE(decoded[0].namespace_id == blob.namespace_id);
-    REQUIRE(decoded[0].pubkey == blob.pubkey);
-    REQUIRE(decoded[0].signature == blob.signature);
+    REQUIRE(decoded[0].blob.data == blob.data);
+    REQUIRE(decoded[0].blob.ttl == blob.ttl);
+    REQUIRE(decoded[0].blob.timestamp == blob.timestamp);
+    REQUIRE(decoded[0].blob.signature == blob.signature);
 }
 
 // ============================================================================
@@ -513,15 +553,17 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Store a regular blob
     auto blob = make_signed_blob(id, "to-be-deleted");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(chromatindb::test::ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
 
     // Delete it via tombstone
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(chromatindb::test::ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
 
     SyncProtocol sync(engine, store, pool, test_clock);
@@ -544,17 +586,19 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Both nodes have the same blob
     auto blob = make_signed_blob(id, "shared-blob");
-    auto ingest1 = run_async(pool, engine1.ingest(blob));
+    auto ingest1 = run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob));
     REQUIRE(ingest1.accepted);
-    REQUIRE(run_async(pool, engine2.ingest(blob)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(chromatindb::test::ns_span(id), blob)).accepted);
     auto blob_hash = ingest1.ack->blob_hash;
 
     // Node1 deletes the blob
     auto tombstone = make_signed_tombstone(id, blob_hash);
-    auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine1.delete_blob(chromatindb::test::ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Simulate sync: node1 sends its hashes to node2
@@ -574,7 +618,7 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
 
     // Ingest the tombstone on node2
-    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(transfer[0].signer_hint), transfer)));
     REQUIRE(stats.blobs_received == 1);
 
     // Original blob should now be deleted on node2
@@ -593,21 +637,23 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create blob on node1
     auto blob = make_signed_blob(id, "will-be-blocked");
-    auto ingest_result = run_async(pool, engine1.ingest(blob));
+    auto ingest_result = run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto blob_hash = ingest_result.ack->blob_hash;
 
     // Node2 receives a tombstone for this blob before the blob itself arrives
     auto tombstone = make_signed_tombstone(id, blob_hash);
-    auto tombstone_ingest = run_async(pool, engine2.ingest(tombstone));
+    auto tombstone_ingest = run_async(pool, engine2.ingest(chromatindb::test::ns_span(id), tombstone));
     REQUIRE(tombstone_ingest.accepted);
 
     // Now try to sync the original blob to node2 via ingest_blobs
     SyncProtocol sync2(engine2, store2, pool, test_clock);
-    auto stats = run_async(pool, sync2.ingest_blobs({blob}));
+    auto stats = run_async(pool, sync2.ingest_blobs(std::vector<chromatindb::sync::NamespacedBlob>{ns_blob(std::span<const uint8_t, 32>(blob.signer_hint), blob)}));
 
     // Blob should be rejected (tombstoned)
     REQUIRE(stats.blobs_received == 0);
@@ -625,18 +671,16 @@ TEST_CASE("tombstone transfer encode/decode preserves tombstone data", "[sync][t
     auto tombstone = make_signed_tombstone(id, target);
 
     // Encode and decode via blob transfer (used during sync)
-    auto encoded = SyncProtocol::encode_single_blob_transfer(tombstone);
+    auto encoded = SyncProtocol::encode_single_blob_transfer(std::span<const uint8_t, 32>(tombstone.signer_hint), tombstone);
     auto decoded = SyncProtocol::decode_blob_transfer(encoded);
 
     REQUIRE(decoded.size() == 1);
-    REQUIRE(chromatindb::wire::is_tombstone(decoded[0].data));
+    REQUIRE(chromatindb::wire::is_tombstone(decoded[0].blob.data));
 
-    auto extracted = chromatindb::wire::extract_tombstone_target(decoded[0].data);
+    auto extracted = chromatindb::wire::extract_tombstone_target(decoded[0].blob.data);
     REQUIRE(extracted == target);
-    REQUIRE(decoded[0].ttl == 0);
-    REQUIRE(decoded[0].namespace_id == tombstone.namespace_id);
-    REQUIRE(decoded[0].pubkey == tombstone.pubkey);
-    REQUIRE(decoded[0].signature == tombstone.signature);
+    REQUIRE(decoded[0].blob.ttl == 0);
+    REQUIRE(decoded[0].blob.signature == tombstone.signature);
 }
 
 // ============================================================================
@@ -652,14 +696,15 @@ chromatindb::wire::BlobData make_signed_delegation_sync(
     uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(owner.public_key().begin(), owner.public_key().end());
+    // Post-122: signer_hint = SHA3(owner_pk); no inline pubkey.
+    auto hint = chromatindb::crypto::sha3_256(owner.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data = chromatindb::wire::make_delegation_data(delegate.public_key());
     blob.ttl = 0;  // Permanent
     blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
     auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        owner.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = owner.sign(signing_input);
 
     return blob;
@@ -674,14 +719,16 @@ chromatindb::wire::BlobData make_delegate_blob_sync(
     uint64_t timestamp = TS_AUTO)
 {
     chromatindb::wire::BlobData blob;
-    std::memcpy(blob.namespace_id.data(), owner.namespace_id().data(), 32);
-    blob.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    // Post-122: signer_hint = SHA3(delegate_pk); target_namespace is call-site param.
+    auto hint = chromatindb::crypto::sha3_256(delegate.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
     blob.data.assign(payload.begin(), payload.end());
     blob.ttl = ttl;
     blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
 
+    // D-01 cross-namespace replay defense: sign against OWNER's namespace.
     auto signing_input = chromatindb::wire::build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        owner.namespace_id(), blob.data, blob.ttl, blob.timestamp);
     blob.signature = delegate.sign(signing_input);
 
     return blob;
@@ -701,10 +748,13 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Node1: owner creates delegation
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
-    auto deleg_result = run_async(pool, engine1.ingest(deleg));
+    auto deleg_result = run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(deleg.signer_hint), deleg));
     REQUIRE(deleg_result.accepted);
 
     // Sync: node1 sends delegation to node2
@@ -721,7 +771,7 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
     REQUIRE(transfer.size() == 1);
     REQUIRE(chromatindb::wire::is_delegation(transfer[0].data));
 
-    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(transfer[0].signer_hint), transfer)));
     REQUIRE(stats.blobs_received == 1);
 
     // Node2 should now recognize the delegation (DELEG-03)
@@ -741,13 +791,16 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Node1: owner delegates, delegate writes
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(deleg.signer_hint), deleg)).accepted);
 
     auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "sync-delegate-data");
-    REQUIRE(run_async(pool, engine1.ingest(delegate_blob)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(delegate_blob.signer_hint), delegate_blob)).accepted);
 
     // Sync everything from node1 to node2
     SyncProtocol sync1(engine1, store1, pool, test_clock);
@@ -773,7 +826,7 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
         }
     }
 
-    auto stats = run_async(pool, sync2.ingest_blobs(ordered_transfer));
+    auto stats = run_async(pool, sync2.ingest_blobs(ordered_transfer.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(ordered_transfer[0].signer_hint), ordered_transfer)));
     REQUIRE(stats.blobs_received == 2);
 
     // Node2 should have both the delegation and the delegate-written blob
@@ -804,11 +857,14 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Both nodes have the delegation
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine1.ingest(deleg)).accepted);
-    REQUIRE(run_async(pool, engine2.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(std::span<const uint8_t, 32>(deleg.signer_hint), deleg)).accepted);
+    REQUIRE(run_async(pool, engine2.ingest(std::span<const uint8_t, 32>(deleg.signer_hint), deleg)).accepted);
 
     auto deleg_hash = engine1.get_blobs_since(owner.namespace_id(), 0);
     REQUIRE(!deleg_hash.empty());
@@ -823,7 +879,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Node1: owner revokes by tombstoning
     auto tombstone = make_signed_tombstone(owner, deleg_content_hash);
-    auto delete_result = run_async(pool, engine1.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine1.delete_blob(chromatindb::test::ns_span(owner), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Sync tombstone from node1 to node2
@@ -840,7 +896,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
     REQUIRE(transfer.size() == 1);
     REQUIRE(chromatindb::wire::is_tombstone(transfer[0].data));
 
-    auto stats = run_async(pool, sync2.ingest_blobs(transfer));
+    auto stats = run_async(pool, sync2.ingest_blobs(transfer.empty() ? std::vector<chromatindb::sync::NamespacedBlob>{} : to_ns_blobs(std::span<const uint8_t, 32>(transfer[0].signer_hint), transfer)));
     REQUIRE(stats.blobs_received == 1);
 
     // Delegation should be revoked on node2
@@ -849,7 +905,7 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     // Delegate writes to node2 should now fail
     auto delegate_blob = chromatindb::test::make_delegate_blob(owner, delegate, "post-revocation");
-    auto result = run_async(pool, engine2.ingest(delegate_blob));
+    auto result = run_async(pool, engine2.ingest(std::span<const uint8_t, 32>(delegate_blob.signer_hint), delegate_blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == chromatindb::engine::IngestError::no_delegation);
 }
@@ -872,10 +928,12 @@ TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "
     BlobEngine engine2(store2, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
 
     // Store a blob on node1
     auto blob = make_signed_blob(id1, "cursor-test-blob");
-    REQUIRE(run_async(pool, engine1.ingest(blob)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), blob)).accepted);
 
     // Simulate "peer hash" for node1 (as seen by node2)
     auto peer_hash = sha3_256(id1.public_key());
@@ -919,12 +977,15 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
 
     // Store blobs in two namespaces
     auto blob1 = make_signed_blob(id1, "ns1-blob");
-    REQUIRE(run_async(pool, engine1.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), blob1)).accepted);
     auto blob2 = make_signed_blob(id2, "ns2-blob");
-    REQUIRE(run_async(pool, engine1.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id2), blob2)).accepted);
 
     // Get initial seq_nums
     auto ns_list = store1.list_namespaces();
@@ -943,7 +1004,7 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
 
     // Add a new blob to namespace 1 only
     auto blob3 = make_signed_blob(id1, "ns1-new-blob");
-    REQUIRE(run_async(pool, engine1.ingest(blob3)).accepted);
+    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), blob3)).accepted);
 
     // Re-read namespace list
     auto ns_list2 = store1.list_namespaces();

@@ -29,6 +29,7 @@ using chromatindb::test::make_signed_delegation;
 using chromatindb::test::make_delegate_blob;
 using chromatindb::test::current_timestamp;
 using chromatindb::test::TS_AUTO;
+using chromatindb::test::ns_span;
 using chromatindb::util::to_hex;
 
 using chromatindb::engine::BlobEngine;
@@ -40,24 +41,6 @@ using chromatindb::storage::Storage;
 // Plan 03-01 Task 2: BlobEngine ingest pipeline
 // ============================================================================
 
-TEST_CASE("BlobEngine rejects blob with wrong pubkey size", "[engine]") {
-    TempDir tmp;
-    Storage store(tmp.path.string());
-    asio::thread_pool pool{1};
-    BlobEngine engine(store, pool);
-
-    auto id = chromatindb::identity::NodeIdentity::generate();
-    auto blob = make_signed_blob(id, "wrong-pubkey-size");
-
-    // Corrupt pubkey size
-    blob.pubkey.resize(100);
-
-    auto result = run_async(pool, engine.ingest(blob));
-    REQUIRE_FALSE(result.accepted);
-    REQUIRE(result.error.has_value());
-    REQUIRE(result.error.value() == IngestError::malformed_blob);
-}
-
 TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
@@ -65,33 +48,37 @@ TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "empty-sig");
 
     // Clear signature
     blob.signature.clear();
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::malformed_blob);
 }
 
-TEST_CASE("BlobEngine rejects namespace mismatch", "[engine]") {
+TEST_CASE("BlobEngine rejects unknown signer_hint (no_delegation)", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    auto blob = make_signed_blob(id, "wrong-namespace");
+    // Register PUBK so the namespace exists (PUBK-first gate passes).
+    auto pubk = chromatindb::test::make_pubk_blob(id);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(id), pubk)).accepted);
 
-    // Corrupt namespace_id
-    blob.namespace_id.fill(0xFF);
+    auto blob = make_signed_blob(id, "wrong-signer-hint");
+    // Corrupt signer_hint so owner_pubkeys lookup misses AND delegation_map misses.
+    blob.signer_hint.fill(0xFF);
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
-    // With delegation bypass, non-owner without delegation gets no_delegation
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
@@ -102,12 +89,14 @@ TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "bad-sig");
 
     // Flip first byte of signature
     blob.signature[0] ^= 0xFF;
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::invalid_signature);
@@ -120,9 +109,11 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "valid-blob");
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
     REQUIRE(result.ack.has_value());
     REQUIRE(result.ack->seq_num == 1);
@@ -141,10 +132,12 @@ TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "dup-blob");
 
-    auto first = run_async(pool, engine.ingest(blob));
-    auto second = run_async(pool, engine.ingest(blob));
+    auto first = run_async(pool, engine.ingest(ns_span(id), blob));
+    auto second = run_async(pool, engine.ingest(ns_span(id), blob));
 
     REQUIRE(first.accepted);
     REQUIRE(second.accepted);
@@ -163,12 +156,15 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
 
     auto blob1 = make_signed_blob(id1, "ns1-blob");
     auto blob2 = make_signed_blob(id2, "ns2-blob");
 
-    auto result1 = run_async(pool, engine.ingest(blob1));
-    auto result2 = run_async(pool, engine.ingest(blob2));
+    auto result1 = run_async(pool, engine.ingest(ns_span(id1), blob1));
+    auto result2 = run_async(pool, engine.ingest(ns_span(id2), blob2));
 
     REQUIRE(result1.accepted);
     REQUIRE(result2.accepted);
@@ -187,15 +183,17 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest 3 blobs with different data (unique payloads make unique blobs)
     auto blob1 = make_signed_blob(id, "seq-range-1");
     auto blob2 = make_signed_blob(id, "seq-range-2");
     auto blob3 = make_signed_blob(id, "seq-range-3");
 
-    auto r1 = run_async(pool, engine.ingest(blob1));
-    auto r2 = run_async(pool, engine.ingest(blob2));
-    auto r3 = run_async(pool, engine.ingest(blob3));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob1));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
+    auto r3 = run_async(pool, engine.ingest(ns_span(id), blob3));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
     REQUIRE(r3.accepted);
@@ -220,13 +218,15 @@ TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest 5 blobs
     for (int i = 0; i < 5; ++i) {
         auto blob = make_signed_blob(id,
             "max-count-" + std::to_string(i), 604800,
             current_timestamp() + static_cast<uint64_t>(i));
-        auto r = run_async(pool, engine.ingest(blob));
+        auto r = run_async(pool, engine.ingest(ns_span(id), blob));
         REQUIRE(r.accepted);
     }
 
@@ -269,10 +269,14 @@ TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
     auto id3 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id3), chromatindb::test::make_pubk_blob(id3))).accepted);
 
-    auto r1 = run_async(pool, engine.ingest(make_signed_blob(id1, "ns-list-1")));
-    auto r2 = run_async(pool, engine.ingest(make_signed_blob(id2, "ns-list-2")));
-    auto r3 = run_async(pool, engine.ingest(make_signed_blob(id3, "ns-list-3")));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id1), make_signed_blob(id1, "ns-list-1")));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id2), make_signed_blob(id2, "ns-list-2")));
+    auto r3 = run_async(pool, engine.ingest(ns_span(id3), make_signed_blob(id3, "ns-list-3")));
     REQUIRE(r1.accepted);
     REQUIRE(r2.accepted);
     REQUIRE(r3.accepted);
@@ -294,13 +298,16 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
 
     auto idA = chromatindb::identity::NodeIdentity::generate();
     auto idB = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(idA), chromatindb::test::make_pubk_blob(idA))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(idB), chromatindb::test::make_pubk_blob(idB))).accepted);
 
     // Ingest 4 blobs in namespace A
     for (int i = 0; i < 4; ++i) {
         auto blob = make_signed_blob(idA,
             "nsA-" + std::to_string(i), 604800,
             current_timestamp() + static_cast<uint64_t>(i));
-        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
+        REQUIRE(run_async(pool, engine.ingest(ns_span(idB), blob)).accepted);
     }
 
     // Ingest 2 blobs in namespace B
@@ -308,7 +315,7 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
         auto blob = make_signed_blob(idB,
             "nsB-" + std::to_string(i), 604800,
             current_timestamp() + static_cast<uint64_t>(i));
-        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
+        REQUIRE(run_async(pool, engine.ingest(ns_span(idB), blob)).accepted);
     }
 
     auto namespaces = engine.list_namespaces();
@@ -350,8 +357,10 @@ TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "get-by-hash");
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 
     auto found = engine.get_blob(id.namespace_id(), result.ack->blob_hash);
@@ -368,6 +377,8 @@ TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     // Don't ingest anything -- query a fake hash
     std::array<uint8_t, 32> fake_hash{};
     fake_hash.fill(0xDE);
@@ -387,6 +398,9 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     // Generate 2 identities
     auto idA = chromatindb::identity::NodeIdentity::generate();
     auto idB = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(idA), chromatindb::test::make_pubk_blob(idA))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(idB), chromatindb::test::make_pubk_blob(idB))).accepted);
 
     // Ingest 3 blobs for identity A
     std::vector<chromatindb::engine::WriteAck> acksA;
@@ -394,7 +408,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
         auto blob = make_signed_blob(idA,
             "e2e-A-" + std::to_string(i), 604800,
             current_timestamp() + static_cast<uint64_t>(i));
-        auto r = run_async(pool, engine.ingest(blob));
+        auto r = run_async(pool, engine.ingest(ns_span(idB), blob));
         REQUIRE(r.accepted);
         REQUIRE(r.ack->status == IngestStatus::stored);
         acksA.push_back(r.ack.value());
@@ -406,7 +420,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
         auto blob = make_signed_blob(idB,
             "e2e-B-" + std::to_string(i), 604800,
             current_timestamp() + static_cast<uint64_t>(i));
-        auto r = run_async(pool, engine.ingest(blob));
+        auto r = run_async(pool, engine.ingest(ns_span(idB), blob));
         REQUIRE(r.accepted);
         REQUIRE(r.ack->status == IngestStatus::stored);
         acksB.push_back(r.ack.value());
@@ -446,14 +460,10 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     std::vector<uint8_t> expected_vec(expected_data.begin(), expected_data.end());
     REQUIRE(firstA->data == expected_vec);
 
-    // Verify namespace mismatch still works: try ingesting with wrong namespace for B's pubkey
+    // Post-122: B's blob targeted at A's namespace -> unknown signer for that ns.
     auto bad_blob = make_signed_blob(idB, "should-fail");
-    // Set namespace to A's namespace (wrong for B's pubkey)
-    std::memcpy(bad_blob.namespace_id.data(), idA.namespace_id().data(), 32);
-
-    auto bad_result = run_async(pool, engine.ingest(bad_blob));
+    auto bad_result = run_async(pool, engine.ingest(ns_span(idA), bad_blob));
     REQUIRE_FALSE(bad_result.accepted);
-    // With delegation bypass, non-owner without delegation gets no_delegation
     REQUIRE(bad_result.error.value() == IngestError::no_delegation);
 }
 
@@ -468,17 +478,19 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     SECTION("blob with data > MAX_BLOB_DATA_SIZE is rejected") {
         chromatindb::wire::BlobData blob;
-        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
+        std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};  // Invalid sig, but we should never reach sig check
 
-        auto result = run_async(pool, engine.ingest(blob));
+        auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         REQUIRE_FALSE(result.accepted);
         REQUIRE(result.error.has_value());
         REQUIRE(result.error.value() == IngestError::oversized_blob);
@@ -486,14 +498,14 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
 
     SECTION("blob with data == MAX_BLOB_DATA_SIZE is not rejected for size") {
         chromatindb::wire::BlobData blob;
-        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
+        std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};  // Invalid sig
 
-        auto result = run_async(pool, engine.ingest(blob));
+        auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         // Should not be oversized_blob -- will fail on later validation step
         if (!result.accepted && result.error.has_value()) {
             REQUIRE(result.error.value() != IngestError::oversized_blob);
@@ -502,58 +514,60 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
 
     SECTION("blob with empty data is not rejected for size") {
         auto blob = make_signed_blob(id, "");
-        auto result = run_async(pool, engine.ingest(blob));
+        auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         // Empty data is valid, should be accepted
         REQUIRE(result.accepted);
     }
 
     SECTION("oversized_blob rejection happens before signature verification") {
         chromatindb::wire::BlobData blob;
-        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
+        std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         // Invalid signature -- if size check is first, we get oversized_blob, not invalid_signature
         blob.signature.resize(100, 0xFF);
 
-        auto result = run_async(pool, engine.ingest(blob));
+        auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         REQUIRE_FALSE(result.accepted);
         REQUIRE(result.error.value() == IngestError::oversized_blob);
     }
 
     SECTION("error_detail includes actual size") {
         chromatindb::wire::BlobData blob;
-        std::memcpy(blob.namespace_id.data(), id.namespace_id().data(), 32);
-        blob.pubkey.assign(id.public_key().begin(), id.public_key().end());
+        auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
+        std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
         blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};
 
-        auto result = run_async(pool, engine.ingest(blob));
+        auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         REQUIRE_FALSE(result.accepted);
         // error_detail should contain the actual size
         REQUIRE(result.error_detail.find(std::to_string(chromatindb::net::MAX_BLOB_DATA_SIZE + 1)) != std::string::npos);
     }
 }
 
-TEST_CASE("BlobEngine validation order: namespace/delegation before signature", "[engine]") {
+TEST_CASE("BlobEngine validation order: delegation before signature", "[engine]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    auto blob = make_signed_blob(id, "order-check");
+    REQUIRE(run_async(pool, engine.ingest(ns_span(id),
+        chromatindb::test::make_pubk_blob(id))).accepted);
 
-    // Corrupt BOTH namespace AND signature
-    blob.namespace_id.fill(0xFF);
+    auto blob = make_signed_blob(id, "order-check");
+    // Corrupt BOTH signer_hint AND signature.
+    blob.signer_hint.fill(0xFF);
     blob.signature[0] ^= 0xFF;
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
-    // Should be no_delegation (namespace/delegation checked before signature), not invalid_signature
+    // no_delegation (owner/delegation miss before sig verify), not invalid_signature.
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
@@ -600,10 +614,12 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest a blob first
     auto blob = make_signed_blob(id, "to-be-deleted");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
@@ -613,7 +629,7 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
 
     // Delete it
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
     REQUIRE(delete_result.ack.has_value());
     REQUIRE(delete_result.ack->status == IngestStatus::stored);
@@ -636,13 +652,15 @@ TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[en
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Delete a blob that was never stored (pre-emptive)
     std::array<uint8_t, 32> fake_hash{};
     fake_hash.fill(0xBB);
 
     auto tombstone = make_signed_tombstone(id, fake_hash);
-    auto result = run_async(pool, engine.delete_blob(tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(result.accepted);
     REQUIRE(result.ack->status == IngestStatus::stored);
 }
@@ -654,20 +672,22 @@ TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create a blob and delete it
     auto blob = make_signed_blob(id, "idempotent-delete");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto first_delete = run_async(pool, engine.delete_blob(tombstone));
+    auto first_delete = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(first_delete.accepted);
     REQUIRE(first_delete.ack->status == IngestStatus::stored);
 
     // Delete again -- should return duplicate
-    auto second_delete = run_async(pool, engine.delete_blob(tombstone));
+    auto second_delete = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(second_delete.accepted);
     REQUIRE(second_delete.ack->status == IngestStatus::duplicate);
 }
@@ -679,20 +699,22 @@ TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create and ingest a blob
     auto blob = make_signed_blob(id, "will-be-blocked");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
     // Delete it
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Try to re-ingest the same blob -- should be blocked
-    auto re_ingest = run_async(pool, engine.ingest(blob));
+    auto re_ingest = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(re_ingest.accepted);
     REQUIRE(re_ingest.error.has_value());
     REQUIRE(re_ingest.error.value() == IngestError::tombstoned);
@@ -705,6 +727,8 @@ TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create blob but DON'T ingest it yet
     auto blob = make_signed_blob(id, "pre-emptive-block");
@@ -715,11 +739,11 @@ TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
 
     // Create tombstone for it before it ever arrives
     auto tombstone = make_signed_tombstone(id, blob_content_hash);
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Now try to ingest the blob -- should be blocked
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(ingest_result.accepted);
     REQUIRE(ingest_result.error.value() == IngestError::tombstoned);
 }
@@ -731,10 +755,12 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest a regular blob
     auto blob = make_signed_blob(id, "sync-delete-target");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
@@ -744,7 +770,7 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
 
     // Create a tombstone and INGEST it (simulating sync receive)
     auto tombstone = make_signed_tombstone(id, target_hash);
-    auto tombstone_ingest = run_async(pool, engine.ingest(tombstone));
+    auto tombstone_ingest = run_async(pool, engine.ingest(ns_span(id), tombstone));
     REQUIRE(tombstone_ingest.accepted);
     REQUIRE(tombstone_ingest.ack->status == IngestStatus::stored);
 
@@ -759,7 +785,7 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
     REQUIRE(chromatindb::wire::is_tombstone(found_tombstone->data));
 }
 
-TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
+TEST_CASE("delete_blob rejects unknown signer_hint", "[engine][tombstone]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
@@ -767,20 +793,21 @@ TEST_CASE("delete_blob validates namespace ownership", "[engine][tombstone]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(attacker), chromatindb::test::make_pubk_blob(attacker))).accepted);
 
-    // Ingest a blob owned by 'owner'
     auto blob = make_signed_blob(owner, "owned-blob");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE(ingest_result.accepted);
 
-    // Attacker tries to delete it -- tombstone has wrong namespace
+    // Attacker signs a tombstone; attacker's signer_hint does not resolve to
+    // a registered owner_pubkey for owner's namespace, and no delegation exists.
     auto tombstone = make_signed_tombstone(attacker, ingest_result.ack->blob_hash);
-    // Override namespace to owner's namespace (simulating attack)
-    std::memcpy(tombstone.namespace_id.data(), owner.namespace_id().data(), 32);
 
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(ns_span(owner), tombstone));
     REQUIRE_FALSE(delete_result.accepted);
-    REQUIRE(delete_result.error.value() == IngestError::namespace_mismatch);
+    REQUIRE(delete_result.error.value() == IngestError::no_delegation);
 }
 
 TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
@@ -790,6 +817,8 @@ TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     std::array<uint8_t, 32> target{};
     target.fill(0xCC);
@@ -798,7 +827,7 @@ TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
     // Corrupt signature
     tombstone.signature[0] ^= 0xFF;
 
-    auto result = run_async(pool, engine.delete_blob(tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::invalid_signature);
 }
@@ -811,14 +840,16 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create and delete a blob
     auto blob = make_signed_blob(id, "expiry-test");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
 
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto delete_result = run_async(pool, engine.delete_blob(tombstone));
+    auto delete_result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(delete_result.accepted);
 
     // Advance time far past any TTL
@@ -844,9 +875,12 @@ TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]")
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = run_async(pool, engine.ingest(deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(result.accepted);
     REQUIRE(result.ack.has_value());
     REQUIRE(result.ack->status == IngestStatus::stored);
@@ -860,9 +894,12 @@ TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[e
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = run_async(pool, engine.ingest(deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(result.accepted);
 
     REQUIRE(store.has_valid_delegation(
@@ -878,17 +915,20 @@ TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine]
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto first = run_async(pool, engine.ingest(deleg));
-    auto second = run_async(pool, engine.ingest(deleg));
+    auto first = run_async(pool, engine.ingest(ns_span(owner), deleg));
+    auto second = run_async(pool, engine.ingest(ns_span(owner), deleg));
 
     REQUIRE(first.accepted);
     REQUIRE(second.accepted);
     REQUIRE(second.ack->status == IngestStatus::duplicate);
 }
 
-TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]") {
+TEST_CASE("Delegation blob from attacker rejected for owner's namespace", "[engine][delegation]") {
     TempDir tmp;
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
@@ -897,14 +937,20 @@ TEST_CASE("Delegation blob with wrong namespace rejected", "[engine][delegation]
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(attacker), chromatindb::test::make_pubk_blob(attacker))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
-    // Attacker tries to create a delegation in owner's namespace
+    // Attacker builds a delegation for delegate, but re-signs for owner's ns.
     auto deleg = make_signed_delegation(attacker, delegate);
-    std::memcpy(deleg.namespace_id.data(), owner.namespace_id().data(), 32);
+    auto signing_input = chromatindb::wire::build_signing_input(
+        owner.namespace_id(), deleg.data, deleg.ttl, deleg.timestamp);
+    deleg.signature = attacker.sign(signing_input);
 
-    auto result = run_async(pool, engine.ingest(deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE_FALSE(result.accepted);
-    // Attacker's pubkey doesn't own the namespace and has no delegation
+    // Attacker's signer_hint does not own owner's ns; no delegation exists.
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
@@ -916,11 +962,14 @@ TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]")
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     auto deleg = make_signed_delegation(owner, delegate);
     deleg.signature[0] ^= 0xFF;
 
-    auto result = run_async(pool, engine.ingest(deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::invalid_signature);
 }
@@ -933,9 +982,12 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     auto deleg = make_signed_delegation(owner, delegate);
-    auto result = run_async(pool, engine.ingest(deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(result.accepted);
 
     // Retrieve via get_blob -- proves it's a regular blob in storage
@@ -961,14 +1013,17 @@ TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
     // Delegate writes to owner's namespace
     auto blob = make_delegate_blob(owner, delegate, "delegate-write-1");
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE(result.accepted);
     REQUIRE(result.ack->status == IngestStatus::stored);
 }
@@ -981,10 +1036,13 @@ TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegat
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // No delegation -- delegate tries to write
     auto blob = make_delegate_blob(owner, delegate, "no-delegation");
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -997,30 +1055,32 @@ TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delega
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
-    // Owner creates delegation and a blob
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
     auto blob = make_signed_blob(owner, "owner-blob");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE(ingest_result.accepted);
 
-    // Delegate tries to delete -- uses delete_blob with delegate's key
     chromatindb::wire::BlobData del_req;
-    std::memcpy(del_req.namespace_id.data(), owner.namespace_id().data(), 32);
-    del_req.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    auto delegate_hint = chromatindb::crypto::sha3_256(delegate.public_key());
+    std::memcpy(del_req.signer_hint.data(), delegate_hint.data(), 32);
     del_req.data = chromatindb::wire::make_tombstone_data(ingest_result.ack->blob_hash);
     del_req.ttl = 0;
     del_req.timestamp = current_timestamp();
 
     auto signing_input = chromatindb::wire::build_signing_input(
-        del_req.namespace_id, del_req.data, del_req.ttl, del_req.timestamp);
+        owner.namespace_id(), del_req.data, del_req.ttl, del_req.timestamp);
     del_req.signature = delegate.sign(signing_input);
 
-    auto result = run_async(pool, engine.delete_blob(del_req));
+    auto result = run_async(pool, engine.delete_blob(ns_span(owner), del_req));
     REQUIRE_FALSE(result.accepted);
-    REQUIRE(result.error.value() == IngestError::namespace_mismatch);
+    // Delegate-signed tombstones rejected (delegate can ingest but not tombstone).
+    REQUIRE(result.error.value() == IngestError::no_delegation);
 }
 
 TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
@@ -1032,24 +1092,26 @@ TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
     auto other = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(other), chromatindb::test::make_pubk_blob(other))).accepted);
 
-    // Owner delegates to delegate
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
-    // Delegate tries to create a delegation blob for 'other' in owner's namespace
     chromatindb::wire::BlobData fake_deleg;
-    std::memcpy(fake_deleg.namespace_id.data(), owner.namespace_id().data(), 32);
-    fake_deleg.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    auto delegate_hint = chromatindb::crypto::sha3_256(delegate.public_key());
+    std::memcpy(fake_deleg.signer_hint.data(), delegate_hint.data(), 32);
     fake_deleg.data = chromatindb::wire::make_delegation_data(other.public_key());
     fake_deleg.ttl = 0;
     fake_deleg.timestamp = current_timestamp();
 
     auto signing_input = chromatindb::wire::build_signing_input(
-        fake_deleg.namespace_id, fake_deleg.data, fake_deleg.ttl, fake_deleg.timestamp);
+        owner.namespace_id(), fake_deleg.data, fake_deleg.ttl, fake_deleg.timestamp);
     fake_deleg.signature = delegate.sign(signing_input);
 
-    auto result = run_async(pool, engine.ingest(fake_deleg));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), fake_deleg));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1062,27 +1124,28 @@ TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegat
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
-    // Owner delegates
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
-    // Delegate tries to ingest a tombstone blob in owner's namespace
     std::array<uint8_t, 32> fake_target{};
     fake_target.fill(0xAA);
 
     chromatindb::wire::BlobData tomb;
-    std::memcpy(tomb.namespace_id.data(), owner.namespace_id().data(), 32);
-    tomb.pubkey.assign(delegate.public_key().begin(), delegate.public_key().end());
+    auto delegate_hint = chromatindb::crypto::sha3_256(delegate.public_key());
+    std::memcpy(tomb.signer_hint.data(), delegate_hint.data(), 32);
     tomb.data = chromatindb::wire::make_tombstone_data(fake_target);
     tomb.ttl = 0;
     tomb.timestamp = current_timestamp();
 
     auto signing_input = chromatindb::wire::build_signing_input(
-        tomb.namespace_id, tomb.data, tomb.ttl, tomb.timestamp);
+        owner.namespace_id(), tomb.data, tomb.ttl, tomb.timestamp);
     tomb.signature = delegate.sign(signing_input);
 
-    auto result = run_async(pool, engine.ingest(tomb));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), tomb));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1095,24 +1158,27 @@ TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegatio
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    auto deleg_result = run_async(pool, engine.ingest(deleg));
+    auto deleg_result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(deleg_result.accepted);
 
     // Delegate can write
     auto blob1 = make_delegate_blob(owner, delegate, "before-revocation");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
 
     // Owner revokes by tombstoning the delegation blob
     auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash);
-    auto del_result = run_async(pool, engine.delete_blob(tombstone));
+    auto del_result = run_async(pool, engine.delete_blob(ns_span(owner), tombstone));
     REQUIRE(del_result.accepted);
 
     // Delegate writes should now be rejected
     auto blob2 = make_delegate_blob(owner, delegate, "after-revocation");
-    auto result = run_async(pool, engine.ingest(blob2));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), blob2));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.value() == IngestError::no_delegation);
 }
@@ -1125,31 +1191,34 @@ TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delega
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // 1. Delegate
     auto deleg1 = make_signed_delegation(owner, delegate);
-    auto deleg1_result = run_async(pool, engine.ingest(deleg1));
+    auto deleg1_result = run_async(pool, engine.ingest(ns_span(owner), deleg1));
     REQUIRE(deleg1_result.accepted);
 
     // 2. Delegate writes
     auto blob1 = make_delegate_blob(owner, delegate, "round-1");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
 
     // 3. Revoke
     auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash);
-    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(ns_span(owner), tombstone)).accepted);
 
     // 4. Delegate blocked
     auto blob2 = make_delegate_blob(owner, delegate, "blocked");
-    REQUIRE_FALSE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE_FALSE(run_async(pool, engine.ingest(ns_span(owner), blob2)).accepted);
 
     // 5. Re-delegate (new timestamp -> new blob hash -> not blocked by old tombstone)
     auto deleg2 = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg2)).accepted);
 
     // 6. Delegate can write again
     auto blob3 = make_delegate_blob(owner, delegate, "round-2");
-    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob3)).accepted);
 }
 
 TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
@@ -1160,18 +1229,21 @@ TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Delegate, write, revoke
     auto deleg = make_signed_delegation(owner, delegate);
-    auto deleg_result = run_async(pool, engine.ingest(deleg));
+    auto deleg_result = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(deleg_result.accepted);
 
     auto blob = make_delegate_blob(owner, delegate, "persists-after-revoke");
-    auto blob_result = run_async(pool, engine.ingest(blob));
+    auto blob_result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE(blob_result.accepted);
 
     auto tombstone = make_signed_tombstone(owner, deleg_result.ack->blob_hash);
-    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(ns_span(owner), tombstone)).accepted);
 
     // Delegate's blob should still be retrievable
     auto found = engine.get_blob(owner.namespace_id(), blob_result.ack->blob_hash);
@@ -1187,14 +1259,17 @@ TEST_CASE("Owner can still write after creating delegation", "[engine][delegatio
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
     // Owner writes a regular blob -- should still work via ownership check
     auto blob = make_signed_blob(owner, "owner-still-writes");
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(owner), blob));
     REQUIRE(result.accepted);
 }
 
@@ -1207,31 +1282,35 @@ TEST_CASE("Multiple delegates: independent write and revocation", "[engine][dele
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
 
     // Delegate both
     auto deleg1 = make_signed_delegation(owner, delegate1);
     auto deleg2 = make_signed_delegation(owner, delegate2);
-    auto deleg1_result = run_async(pool, engine.ingest(deleg1));
-    auto deleg2_result = run_async(pool, engine.ingest(deleg2));
+    auto deleg1_result = run_async(pool, engine.ingest(ns_span(owner), deleg1));
+    auto deleg2_result = run_async(pool, engine.ingest(ns_span(owner), deleg2));
     REQUIRE(deleg1_result.accepted);
     REQUIRE(deleg2_result.accepted);
 
     // Both can write
     auto blob1 = make_delegate_blob(owner, delegate1, "d1-writes");
     auto blob2 = make_delegate_blob(owner, delegate2, "d2-writes");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob2)).accepted);
 
     // Revoke delegate1 only
     auto tombstone = make_signed_tombstone(owner, deleg1_result.ack->blob_hash);
-    REQUIRE(run_async(pool, engine.delete_blob(tombstone)).accepted);
+    REQUIRE(run_async(pool, engine.delete_blob(ns_span(owner), tombstone)).accepted);
 
     // delegate1 blocked, delegate2 still works
     auto blob3 = make_delegate_blob(owner, delegate1, "d1-blocked");
-    REQUIRE_FALSE(run_async(pool, engine.ingest(blob3)).accepted);
+    REQUIRE_FALSE(run_async(pool, engine.ingest(ns_span(owner), blob3)).accepted);
 
     auto blob4 = make_delegate_blob(owner, delegate2, "d2-still-works");
-    REQUIRE(run_async(pool, engine.ingest(blob4)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob4)).accepted);
 }
 
 // ============================================================================
@@ -1246,9 +1325,11 @@ TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") 
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "capacity-test");
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::storage_full);
@@ -1263,13 +1344,15 @@ TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create a tombstone targeting a random hash
     std::array<uint8_t, 32> random_hash{};
     random_hash.fill(0xAB);
     auto tombstone = make_signed_tombstone(id, random_hash);
 
-    auto result = run_async(pool, engine.ingest(tombstone));
+    auto result = run_async(pool, engine.ingest(ns_span(id), tombstone));
     // Tombstone should NOT be rejected with storage_full.
     // It may fail for other reasons (like the target not existing), but
     // the key assertion is that it does NOT fail with storage_full.
@@ -1286,9 +1369,11 @@ TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[e
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "unlimited-test");
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 }
 
@@ -1300,14 +1385,16 @@ TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]
     BlobEngine unlimited_engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, unlimited_engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "to-be-deleted");
-    auto ingest_result = run_async(pool, unlimited_engine.ingest(blob));
+    auto ingest_result = run_async(pool, unlimited_engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
 
     // Now create a capacity-limited engine and delete via tombstone
     BlobEngine limited_engine(store, pool, 1);
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto result = run_async(pool, limited_engine.delete_blob(tombstone));
+    auto result = run_async(pool, limited_engine.delete_blob(ns_span(id), tombstone));
     // delete_blob has no capacity check (it creates tombstones, which are inherently exempt)
     REQUIRE(result.accepted);
 }
@@ -1320,9 +1407,11 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
     BlobEngine engine(store, pool, 1ULL << 30);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "under-capacity-test");
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 }
 
@@ -1339,15 +1428,17 @@ TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engi
     BlobEngine engine(store, pool, 0, 10000, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // First ingest succeeds (under byte quota)
     auto blob1 = make_signed_blob(id, "fill-quota");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should be rejected for byte quota
     auto blob2 = make_signed_blob(id, "over-quota");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1361,15 +1452,17 @@ TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[eng
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // First blob succeeds (count 0 + 1 <= 1)
     auto blob1 = make_signed_blob(id, "first-blob");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should be rejected for count quota
     auto blob2 = make_signed_blob(id, "second-blob");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1383,8 +1476,10 @@ TEST_CASE("BlobEngine allows ingest when under quota", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 100ULL * 1024 * 1024, 1000);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "under-quota");
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 }
 
@@ -1396,15 +1491,17 @@ TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Fill the count quota
     auto blob = make_signed_blob(id, "fill-count-quota");
-    auto r1 = run_async(pool, engine.ingest(blob));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(r1.accepted);
 
     // Tombstone should bypass quota check
     auto tombstone = make_signed_tombstone(id, r1.ack->blob_hash);
-    auto r2 = run_async(pool, engine.ingest(tombstone));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), tombstone));
     // Tombstone must NOT be rejected with quota_exceeded
     if (!r2.accepted) {
         REQUIRE(r2.error.value() != IngestError::quota_exceeded);
@@ -1419,6 +1516,8 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
     BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Set per-namespace override to allow much more
     auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
@@ -1428,12 +1527,12 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
 
     // First blob should succeed (override allows it)
     auto blob1 = make_signed_blob(id, "override-allowed-1");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should also succeed
     auto blob2 = make_signed_blob(id, "override-allowed-2");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
     REQUIRE(r2.accepted);
 }
 
@@ -1445,6 +1544,8 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
     BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Set override with max_bytes=0 (exempt from byte quota)
     auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
@@ -1454,12 +1555,12 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
 
     // First blob should work
     auto blob1 = make_signed_blob(id, "exempt-blob-1");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(id), blob1));
     REQUIRE(r1.accepted);
 
     // Second blob should also work (exempt namespace)
     auto blob2 = make_signed_blob(id, "exempt-blob-2");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
     REQUIRE(r2.accepted);
 }
 
@@ -1471,6 +1572,8 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Set override with max_count=0 (exempt from count quota)
     auto ns_hex = to_hex(std::span<const uint8_t, 32>(id.namespace_id()));
@@ -1480,11 +1583,11 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
 
     // First blob succeeds
     auto blob1 = make_signed_blob(id, "exempt-count-1");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(id), blob1)).accepted);
 
     // Second blob also succeeds (exempt from count quota)
     auto blob2 = make_signed_blob(id, "exempt-count-2");
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(id), blob2)).accepted);
 }
 
 TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") {
@@ -1495,10 +1598,12 @@ TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") 
     BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     for (int i = 0; i < 5; ++i) {
         auto blob = make_signed_blob(id, "unlimited-" + std::to_string(i));
-        REQUIRE(run_async(pool, engine.ingest(blob)).accepted);
+        REQUIRE(run_async(pool, engine.ingest(ns_span(id), blob)).accepted);
     }
 }
 
@@ -1510,10 +1615,12 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // First blob succeeds (no quota)
     auto blob1 = make_signed_blob(id, "before-quota");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(id), blob1)).accepted);
 
     // Now set a count quota of 1 via set_quota_config (simulating SIGHUP)
     std::map<std::string, std::pair<std::optional<uint64_t>, std::optional<uint64_t>>> empty_overrides;
@@ -1521,7 +1628,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
 
     // Second blob should be rejected (count quota = 1, already have 1)
     auto blob2 = make_signed_blob(id, "after-quota");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(id), blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
 }
@@ -1539,15 +1646,18 @@ TEST_CASE("Delegate write counts against owner namespace quota", "[engine][quota
 
     // Count quota of 3: delegation blob (1) + delegate blob (2) + owner blob (3) = full
     BlobEngine engine(store, pool, 0, 0, 3);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation (counts as blob #1 in owner's namespace)
     auto deleg = make_signed_delegation(owner, delegate);
-    auto r0 = run_async(pool, engine.ingest(deleg));
+    auto r0 = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(r0.accepted);
 
     // Delegate writes blob (counts as blob #2 in OWNER's namespace)
     auto blob1 = make_delegate_blob(owner, delegate, "delegate-data-1");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(owner), blob1));
     REQUIRE(r1.accepted);
 
     // Verify quota usage on owner's namespace includes both blobs
@@ -1564,22 +1674,25 @@ TEST_CASE("Owner at count quota rejects delegate write", "[engine][quota][delega
 
     // Count quota of 3
     BlobEngine engine(store, pool, 0, 0, 3);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation (blob #1)
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
     // Delegate writes blob (blob #2)
     auto blob1 = make_delegate_blob(owner, delegate, "d1");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
 
     // Owner writes blob (blob #3 -- at quota)
     auto blob2 = make_signed_blob(owner, "o1");
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob2)).accepted);
 
     // Delegate's 2nd write should be rejected (quota full)
     auto blob3 = make_delegate_blob(owner, delegate, "d2");
-    auto r3 = run_async(pool, engine.ingest(blob3));
+    auto r3 = run_async(pool, engine.ingest(ns_span(owner), blob3));
     REQUIRE_FALSE(r3.accepted);
     REQUIRE(r3.error.has_value());
     REQUIRE(r3.error.value() == IngestError::quota_exceeded);
@@ -1594,32 +1707,35 @@ TEST_CASE("Mixed owner and delegate writes fill quota", "[engine][quota][delegat
 
     // Count quota of 4: delegation (1) + owner (2) + delegate (3) + owner (4) = full
     BlobEngine engine(store, pool, 0, 0, 4);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Delegation blob (#1)
     auto deleg = make_signed_delegation(owner, delegate);
-    REQUIRE(run_async(pool, engine.ingest(deleg)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg)).accepted);
 
     // Owner writes (#2)
     auto blob1 = make_signed_blob(owner, "owner-1");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
 
     // Delegate writes (#3)
     auto blob2 = make_delegate_blob(owner, delegate, "delegate-1");
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob2)).accepted);
 
     // Owner writes (#4 -- fills quota)
     auto blob3 = make_signed_blob(owner, "owner-2");
-    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob3)).accepted);
 
     // Next write from owner should be rejected
     auto blob4 = make_signed_blob(owner, "owner-3");
-    auto r4 = run_async(pool, engine.ingest(blob4));
+    auto r4 = run_async(pool, engine.ingest(ns_span(owner), blob4));
     REQUIRE_FALSE(r4.accepted);
     REQUIRE(r4.error.value() == IngestError::quota_exceeded);
 
     // Next write from delegate should also be rejected
     auto blob5 = make_delegate_blob(owner, delegate, "delegate-2");
-    auto r5 = run_async(pool, engine.ingest(blob5));
+    auto r5 = run_async(pool, engine.ingest(ns_span(owner), blob5));
     REQUIRE_FALSE(r5.accepted);
     REQUIRE(r5.error.value() == IngestError::quota_exceeded);
 }
@@ -1634,31 +1750,35 @@ TEST_CASE("Multiple delegates all count against owner quota", "[engine][quota][d
 
     // Count quota of 5: 2 delegation blobs + 3 data blobs = full
     BlobEngine engine(store, pool, 0, 0, 5);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
 
     // Delegate both (2 delegation blobs)
     auto deleg1 = make_signed_delegation(owner, delegate1);
     auto deleg2 = make_signed_delegation(owner, delegate2);
-    REQUIRE(run_async(pool, engine.ingest(deleg1)).accepted);
-    REQUIRE(run_async(pool, engine.ingest(deleg2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), deleg2)).accepted);
 
     // Each delegate writes one blob (2 data blobs = 4 total)
     auto blob1 = make_delegate_blob(owner, delegate1, "d1-writes");
     auto blob2 = make_delegate_blob(owner, delegate2, "d2-writes");
-    REQUIRE(run_async(pool, engine.ingest(blob1)).accepted);
-    REQUIRE(run_async(pool, engine.ingest(blob2)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob1)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob2)).accepted);
 
     // Owner writes one more (blob #5 = at quota)
     auto blob3 = make_signed_blob(owner, "owner-writes");
-    REQUIRE(run_async(pool, engine.ingest(blob3)).accepted);
+    REQUIRE(run_async(pool, engine.ingest(ns_span(owner), blob3)).accepted);
 
     // Any further write from either delegate should be rejected
     auto blob4 = make_delegate_blob(owner, delegate1, "d1-over");
-    auto r4 = run_async(pool, engine.ingest(blob4));
+    auto r4 = run_async(pool, engine.ingest(ns_span(owner), blob4));
     REQUIRE_FALSE(r4.accepted);
     REQUIRE(r4.error.value() == IngestError::quota_exceeded);
 
     auto blob5 = make_delegate_blob(owner, delegate2, "d2-over");
-    auto r5 = run_async(pool, engine.ingest(blob5));
+    auto r5 = run_async(pool, engine.ingest(ns_span(owner), blob5));
     REQUIRE_FALSE(r5.accepted);
     REQUIRE(r5.error.value() == IngestError::quota_exceeded);
 }
@@ -1674,20 +1794,23 @@ TEST_CASE("Delegate blob bytes count against owner byte quota", "[engine][quota]
     // A signed blob with ML-DSA-87 is ~7400 bytes encoded. Use 20000 bytes
     // to allow delegation blob + one data blob, but reject a second data blob.
     BlobEngine engine(store, pool, 0, 20000, 0);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
 
     // Owner creates delegation (uses ~7400 bytes of owner's byte quota)
     auto deleg = make_signed_delegation(owner, delegate);
-    auto r0 = run_async(pool, engine.ingest(deleg));
+    auto r0 = run_async(pool, engine.ingest(ns_span(owner), deleg));
     REQUIRE(r0.accepted);
 
     // Delegate writes one blob (uses another ~7400 bytes -- still under 20000)
     auto blob1 = make_delegate_blob(owner, delegate, "delegate-byte-1");
-    auto r1 = run_async(pool, engine.ingest(blob1));
+    auto r1 = run_async(pool, engine.ingest(ns_span(owner), blob1));
     REQUIRE(r1.accepted);
 
     // Third blob should exceed byte quota (3 * ~7400 > 20000)
     auto blob2 = make_delegate_blob(owner, delegate, "delegate-byte-2");
-    auto r2 = run_async(pool, engine.ingest(blob2));
+    auto r2 = run_async(pool, engine.ingest(ns_span(owner), blob2));
     REQUIRE_FALSE(r2.accepted);
     REQUIRE(r2.error.has_value());
     REQUIRE(r2.error.value() == IngestError::quota_exceeded);
@@ -1704,10 +1827,12 @@ TEST_CASE("Blob with timestamp 0 rejected as too far in past", "[engine][timesta
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Timestamp 0 (Unix epoch) is way past 30 days
     auto blob = make_signed_blob(id, "timestamp-zero", 604800, 0);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1721,13 +1846,15 @@ TEST_CASE("Blob with timestamp 1hr+1s in future rejected", "[engine][timestamp]"
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
     auto blob = make_signed_blob(id, "future-blob", 604800, now_ts + 3601);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1741,6 +1868,8 @@ TEST_CASE("Blob with timestamp exactly now passes timestamp check", "[engine][ti
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -1749,7 +1878,7 @@ TEST_CASE("Blob with timestamp exactly now passes timestamp check", "[engine][ti
     // Blob with current timestamp -- should pass timestamp check, then succeed
     // because make_signed_blob produces a validly signed blob.
     auto blob = make_signed_blob(id, "now-blob", 604800, now_ts);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     // Should NOT be timestamp_rejected (it passes timestamp check).
     // It should either be accepted or fail for a later reason -- but NOT timestamp.
     if (!result.accepted) {
@@ -1764,6 +1893,8 @@ TEST_CASE("Blob with timestamp 29 days in past passes timestamp check", "[engine
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -1771,7 +1902,7 @@ TEST_CASE("Blob with timestamp 29 days in past passes timestamp check", "[engine
 
     // Use TTL long enough that the blob is NOT yet expired (29d old + 30d TTL = expires tomorrow)
     auto blob = make_signed_blob(id, "29-days-ago", 30 * 24 * 3600, now_ts - 29 * 24 * 3600);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     // Should NOT be timestamp_rejected (within 30-day window and not yet expired)
     if (!result.accepted) {
         REQUIRE(result.error.value() != IngestError::timestamp_rejected);
@@ -1785,13 +1916,15 @@ TEST_CASE("Blob with timestamp 31 days in past rejected", "[engine][timestamp]")
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
     auto blob = make_signed_blob(id, "31-days-ago", 604800, now_ts - 31 * 24 * 3600);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1805,13 +1938,15 @@ TEST_CASE("Blob with timestamp 59 minutes in future passes timestamp check", "[e
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
     auto blob = make_signed_blob(id, "59-min-future", 604800, now_ts + 59 * 60);
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     // Should NOT be timestamp_rejected
     if (!result.accepted) {
         REQUIRE(result.error.value() != IngestError::timestamp_rejected);
@@ -1825,6 +1960,8 @@ TEST_CASE("Delete request with timestamp too far in future rejected", "[engine][
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -1832,12 +1969,12 @@ TEST_CASE("Delete request with timestamp too far in future rejected", "[engine][
 
     // First store a blob so we have a target hash
     auto blob = make_signed_blob(id, "to-delete-future", 604800, now_ts);
-    auto r0 = run_async(pool, engine.ingest(blob));
+    auto r0 = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(r0.accepted);
 
     // Create tombstone with timestamp far in future
     auto tombstone = make_signed_tombstone(id, r0.ack->blob_hash, now_ts + 3601);
-    auto result = run_async(pool, engine.delete_blob(tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1851,6 +1988,8 @@ TEST_CASE("Delete request with timestamp too far in past rejected", "[engine][ti
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto now_ts = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -1858,12 +1997,12 @@ TEST_CASE("Delete request with timestamp too far in past rejected", "[engine][ti
 
     // First store a blob so we have a target hash
     auto blob = make_signed_blob(id, "to-delete-past", 604800, now_ts);
-    auto r0 = run_async(pool, engine.ingest(blob));
+    auto r0 = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(r0.accepted);
 
     // Create tombstone with timestamp far in past
     auto tombstone = make_signed_tombstone(id, r0.ack->blob_hash, 0);
-    auto result = run_async(pool, engine.delete_blob(tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1881,27 +2020,29 @@ TEST_CASE("Tombstone with TTL > 0 rejected at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // First ingest a valid blob to get a target hash for the tombstone
     auto blob = make_signed_blob(id, "target-blob");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
     auto target_hash = ingest_result.ack->blob_hash;
 
     // Manually construct a tombstone-format blob with non-zero TTL
     chromatindb::wire::BlobData bad_tombstone;
-    std::memcpy(bad_tombstone.namespace_id.data(), id.namespace_id().data(), 32);
-    bad_tombstone.pubkey.assign(id.public_key().begin(), id.public_key().end());
+    auto _bad_tombstone_hint = chromatindb::crypto::sha3_256(id.public_key());
+        std::memcpy(bad_tombstone.signer_hint.data(), _bad_tombstone_hint.data(), 32);
     bad_tombstone.data = chromatindb::wire::make_tombstone_data(target_hash);
     bad_tombstone.ttl = 3600;  // Non-zero TTL -- invalid for tombstone
     bad_tombstone.timestamp = current_timestamp();
 
     auto signing_input = chromatindb::wire::build_signing_input(
-        bad_tombstone.namespace_id, bad_tombstone.data,
+        id.namespace_id(), bad_tombstone.data,
         bad_tombstone.ttl, bad_tombstone.timestamp);
     bad_tombstone.signature = id.sign(signing_input);
 
-    auto result = run_async(pool, engine.delete_blob(bad_tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), bad_tombstone));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::invalid_ttl);
@@ -1915,12 +2056,14 @@ TEST_CASE("Already-expired blob rejected at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Create a blob with timestamp=now-1000, ttl=100 => expired 900 seconds ago
     uint64_t now = current_timestamp();
     auto blob = make_signed_blob(id, "expired-data", 100, now - 1000);
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::timestamp_rejected);
@@ -1934,10 +2077,12 @@ TEST_CASE("Valid non-expired blob accepted at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     auto blob = make_signed_blob(id, "valid-data", 86400, current_timestamp());
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 }
 
@@ -1948,14 +2093,16 @@ TEST_CASE("Tombstone with TTL=0 accepted at delete_blob", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Ingest a blob, then delete with proper tombstone (ttl=0)
     auto blob = make_signed_blob(id, "to-delete");
-    auto ingest_result = run_async(pool, engine.ingest(blob));
+    auto ingest_result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(ingest_result.accepted);
 
     auto tombstone = make_signed_tombstone(id, ingest_result.ack->blob_hash);
-    auto result = run_async(pool, engine.delete_blob(tombstone));
+    auto result = run_async(pool, engine.delete_blob(ns_span(id), tombstone));
     REQUIRE(result.accepted);
 }
 
@@ -1971,9 +2118,11 @@ TEST_CASE("BlobEngine ingest rejects at capacity via store_blob", "[engine][reso
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
     auto blob = make_signed_blob(id, "capacity-atomic-test");
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE_FALSE(result.accepted);
     REQUIRE(result.error.has_value());
     REQUIRE(result.error.value() == IngestError::storage_full);
@@ -1986,10 +2135,12 @@ TEST_CASE("Permanent blob accepted regardless of timestamp age", "[engine][ttl]"
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
+    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
 
     // Permanent blob (ttl=0) with recent timestamp should always be accepted
     auto blob = make_signed_blob(id, "permanent-data", 0, current_timestamp());
 
-    auto result = run_async(pool, engine.ingest(blob));
+    auto result = run_async(pool, engine.ingest(ns_span(id), blob));
     REQUIRE(result.accepted);
 }

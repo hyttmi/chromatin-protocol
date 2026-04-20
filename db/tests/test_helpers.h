@@ -206,4 +206,18 @@ inline std::string listening_address(uint16_t port) {
     return "127.0.0.1:" + std::to_string(port);
 }
 
+/// Phase 122-07: convenience span for owner namespace_id.
+/// Many tests construct a NodeIdentity, then want to call
+/// `engine.ingest(ns_span(id), blob)`. The cascade replaces hundreds of
+/// pre-122 `engine.ingest(blob)` calls where target_namespace = signer_hint
+/// = SHA3(id.public_key()) = id.namespace_id() for owner writes.
+inline std::span<const uint8_t, 32> ns_span(const identity::NodeIdentity& id) {
+    return id.namespace_id();
+}
+
+/// Phase 122-07: convenience span for a raw 32-byte namespace array.
+inline std::span<const uint8_t, 32> ns_span(const std::array<uint8_t, 32>& ns) {
+    return std::span<const uint8_t, 32>(ns);
+}
+
 } // namespace chromatindb::test
